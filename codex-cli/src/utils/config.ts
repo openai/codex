@@ -63,7 +63,7 @@ export type MemoryConfig = {
   enabled: boolean;
 };
 
-// Represents full runtime config, including loaded instructions
+// Represents full runtime config, including loaded instructions.
 export type AppConfig = {
   apiKey?: string;
   model: string;
@@ -91,7 +91,7 @@ export function discoverProjectDocPath(startDir: string): string | null {
     }
   }
 
-  // 2) Fallback: walk up to the Git root and look there
+  // 2) Fallback: walk up to the Git root and look there.
   let dir = cwd;
   // eslint-disable-next-line no-constant-condition
   while (true) {
@@ -104,13 +104,13 @@ export function discoverProjectDocPath(startDir: string): string | null {
           return candidate;
         }
       }
-      // If Git root but no doc, stop looking
+      // If Git root but no doc, stop looking.
       return null;
     }
 
     const parent = dirname(dir);
     if (parent === dir) {
-      // Reached filesystem root without finding Git
+      // Reached filesystem root without finding Git.
       return null;
     }
     dir = parent;
@@ -157,7 +157,6 @@ export function loadProjectDoc(cwd: string, explicitPath?: string): string {
   }
 }
 
-// (Receives params for testing)
 export type LoadConfigOptions = {
   /** Working directory used for project doc discovery */
   cwd?: string;
@@ -210,7 +209,7 @@ export const loadConfig = (
     ? readFileSync(instructionsFilePathResolved, "utf-8")
     : DEFAULT_INSTRUCTIONS;
 
-  // Project doc -----------------------------------------------------------
+  // Project doc support.
   const shouldLoadProjectDoc =
     !options.disableProjectDoc &&
     process.env["CODEX_DISABLE_PROJECT_DOC"] !== "1";
