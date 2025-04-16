@@ -453,7 +453,7 @@ export default class TextBuffer {
         break;
       }
     }
-    
+
     // If the line contains only spaces up to the cursor, delete just one space
     if (onlySpaces && start > 0) {
       start--;
