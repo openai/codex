@@ -41,6 +41,7 @@
     "meow": "^13.2.0",
     "open": "^10.1.0",
     "openai": "^4.89.0",
+    "clipboardy": "^2.3.0",
     "react": "^18.2.0",
     "shell-quote": "^1.8.2",
     "use-interval": "1.4.0"

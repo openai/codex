@@ -15,6 +15,11 @@ export const RECOMMENDED_MODELS: Array<string> = ["o4-mini", "o3"];
 let modelsPromise: Promise<Array<string>> | null = null;
 
 async function fetchModels(): Promise<Array<string>> {
+  // Manual LLM mode: prompt user to list models manually
+  if (process.env["MANUAL_LLM"]) {
+    const { manualFetchModels } = await import("./manual-client");
+    return manualFetchModels();
+  }
   // If the user has not configured an API key we cannot hit the network.
   if (!OPENAI_API_KEY) {
     return RECOMMENDED_MODELS;
