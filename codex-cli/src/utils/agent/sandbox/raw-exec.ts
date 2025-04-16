@@ -122,13 +122,16 @@ export function exec(
       abortSignal.addEventListener("abort", abortHandler, { once: true });
     }
   }
-  if (!child.pid) {
-    return Promise.resolve({
-      stdout: "",
-      stderr: `likely failed because ${prog} could not be found`,
-      exitCode: 1,
-    });
-  }
+  // If spawning the child failed (e.g. the executable could not be found)
+  // `child.pid` will be undefined *and* an `error` event will be emitted on
+  // the ChildProcess instance.  We intentionally do **not** bail out early
+  // here.  Returning prematurely would leave the `error` event without a
+  // listener which – in Node.js – results in an "Unhandled 'error' event"
+  // process‑level exception that crashes the CLI.  Instead we continue with
+  // the normal promise flow below where we are guaranteed to attach both the
+  // `error` and `exit` handlers right away.  Either of those callbacks will
+  // resolve the promise and translate the failure into a regular
+  // ExecResult object so the rest of the agent loop can carry on gracefully.
 
   const stdoutChunks: Array<Buffer> = [];
   const stderrChunks: Array<Buffer> = [];
