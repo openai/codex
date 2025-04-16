@@ -1,11 +1,3 @@
-import type { SafeCommandReason } from "../../approvals";
-
-export type CommandReviewDetails = {
-  cmd: Array<string>;
-  cmdReadableText: string;
-  autoApproval: SafeCommandReason | null;
-};
-
 export enum ReviewDecision {
   YES = "yes",
   NO_CONTINUE = "no-continue",

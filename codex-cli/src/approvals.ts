@@ -75,19 +75,72 @@ export function canAutoApprove(
   writableRoots: ReadonlyArray<string>,
   env: NodeJS.ProcessEnv = process.env,
 ): SafetyAssessment {
-  try {
-    if (command[0] === "apply_patch") {
-      return command.length === 2 && typeof command[1] === "string"
-        ? canAutoApproveApplyPatch(command[1], writableRoots, policy)
-        : {
-            type: "reject",
-            reason: "Invalid apply_patch command",
-          };
+  if (command[0] === "apply_patch") {
+    return command.length === 2 && typeof command[1] === "string"
+      ? canAutoApproveApplyPatch(command[1], writableRoots, policy)
+      : {
+          type: "reject",
+          reason: "Invalid apply_patch command",
+        };
+  }
+
+  const isSafe = isSafeCommand(command);
+  if (isSafe != null) {
+    const { reason, group } = isSafe;
+    return {
+      type: "auto-approve",
+      reason,
+      group,
+      runInSandbox: false,
+    };
+  }
+
+  if (
+    command[0] === "bash" &&
+    command[1] === "-lc" &&
+    typeof command[2] === "string" &&
+    command.length === 3
+  ) {
+    const applyPatchArg = tryParseApplyPatch(command[2]);
+    if (applyPatchArg != null) {
+      return canAutoApproveApplyPatch(applyPatchArg, writableRoots, policy);
     }
 
-    const isSafe = isSafeCommand(command);
-    if (isSafe != null) {
-      const { reason, group } = isSafe;
+    let bashCmd;
+    try {
+      bashCmd = parse(command[2], env);
+    } catch (e) {
+      // In practice, there seem to be syntactically valid shell commands that
+      // shell-quote cannot parse, so we should not reject, but ask the user.
+      switch (policy) {
+        case "full-auto":
+          // In full-auto, we still run the command automatically, but must
+          // restrict it to the sandbox.
+          return {
+            type: "auto-approve",
+            reason: "Full auto mode",
+            group: "Running commands",
+            runInSandbox: true,
+          };
+        case "suggest":
+        case "auto-edit":
+          // In all other modes, since we cannot reason about the command, we
+          // should ask the user.
+          return {
+            type: "ask-user",
+          };
+      }
+    }
+
+    // bashCmd could be a mix of strings and operators, e.g.:
+    //   "ls || (true && pwd)" => [ 'ls', { op: '||' }, '(', 'true', { op: '&&' }, 'pwd', ')' ]
+    // We try to ensure that *every* command segment is deemed safe and that
+    // all operators belong to an allow‑list. If so, the entire expression is
+    // considered auto‑approvable.
+
+    const shellSafe = isEntireShellExpressionSafe(bashCmd);
+    if (shellSafe != null) {
+      const { reason, group } = shellSafe;
       return {
         type: "auto-approve",
         reason,
@@ -95,58 +148,16 @@ export function canAutoApprove(
         runInSandbox: false,
       };
     }
+  }
 
-    if (
-      command[0] === "bash" &&
-      command[1] === "-lc" &&
-      typeof command[2] === "string" &&
-      command.length === 3
-    ) {
-      const applyPatchArg = tryParseApplyPatch(command[2]);
-      if (applyPatchArg != null) {
-        return canAutoApproveApplyPatch(applyPatchArg, writableRoots, policy);
-      }
-
-      const bashCmd = parse(command[2], env);
-
-      // bashCmd could be a mix of strings and operators, e.g.:
-      //   "ls || (true && pwd)" => [ 'ls', { op: '||' }, '(', 'true', { op: '&&' }, 'pwd', ')' ]
-      // We try to ensure that *every* command segment is deemed safe and that
-      // all operators belong to an allow‑list. If so, the entire expression is
-      // considered auto‑approvable.
-
-      const shellSafe = isEntireShellExpressionSafe(bashCmd);
-      if (shellSafe != null) {
-        const { reason, group } = shellSafe;
-        return {
-          type: "auto-approve",
-          reason,
-          group,
-          runInSandbox: false,
-        };
-      }
-    }
-
-    return policy === "full-auto"
-      ? {
-          type: "auto-approve",
-          reason: "Full auto mode",
-          group: "Running commands",
-          runInSandbox: true,
-        }
-      : { type: "ask-user" };
-  } catch (err) {
-    if (policy === "full-auto") {
-      return {
+  return policy === "full-auto"
+    ? {
         type: "auto-approve",
         reason: "Full auto mode",
         group: "Running commands",
         runInSandbox: true,
-      };
-    } else {
-      return { type: "ask-user" };
-    }
-  }
+      }
+    : { type: "ask-user" };
 }
 
 function canAutoApproveApplyPatch(
