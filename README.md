@@ -49,7 +49,7 @@ npm install -g @openai/codex
 
 Next, set your OpenAI API key as an environment variable:
 
-```bash
+```shell
 export OPENAI_API_KEY="your-api-key-here"
 ```
 
