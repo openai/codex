@@ -443,9 +443,8 @@ export default class TextBuffer {
     const line = this.line(this.cursorRow);
     const arr = toCodePoints(line);
 
-    // Correction :
-    // Si le curseur est juste après un espace (ou plusieurs), on ne supprime que les séparateurs
-    // puis, au prochain appel, le mot précédent. On ne doit jamais supprimer toute la ligne.
+    // If the cursor is just after a space (or several spaces), we only delete the separators
+    // then, on the next call, the previous word. We should never delete the entire line.
     let start = this.cursorCol;
     let onlySpaces = true;
     for (let i = 0; i < start; i++) {
@@ -454,8 +453,8 @@ export default class TextBuffer {
         break;
       }
     }
-
-    // Si la ligne ne contient que des espaces jusqu'au curseur, ne supprime qu'un espace
+    
+    // If the line contains only spaces up to the cursor, delete just one space
     if (onlySpaces && start > 0) {
       start--;
     } else {
