@@ -26,7 +26,8 @@
   },
   "files": [
     "README.md",
-    "dist"
+    "dist",
+    "src"
   ],
   "dependencies": {
     "@inkjs/ui": "^2.0.0",
