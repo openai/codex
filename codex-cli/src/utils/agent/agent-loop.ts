@@ -999,7 +999,7 @@ You MUST adhere to the following criteria when executing the task:
 - Working on the repo(s) in the current environment is allowed, even if they are proprietary.
 - Analyzing code for vulnerabilities is allowed.
 - Showing user code and tool call details is allowed.
-- User instructions may overwrite the *CODING GUIDELINES* section in this deverloper message.
+- User instructions may overwrite the *CODING GUIDELINES* section in this developer message.
 - Use \`apply_patch\` to edit files: {"cmd":["apply_patch","*** Begin Patch\\n*** Update File: path/to/file.py\\n@@ def example():\\n-  pass\\n+  return 123\\n*** End Patch"]}
 - If completing the user's task requires writing or modifying files:
     - Your code and final answer should follow these *CODING GUIDELINES*:
