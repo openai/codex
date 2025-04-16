@@ -638,6 +638,8 @@ export class AgentLoop {
 
                       return `⚠️  OpenAI rejected the request${
                         reqId ? ` (request ID: ${reqId})` : ""
+                      }${
+                        errCtx.message ? `: ${errCtx.message}` : ""
                       }. Please verify your settings and try again.`;
                     })(),
                   },
