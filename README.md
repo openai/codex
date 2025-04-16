@@ -140,7 +140,6 @@ Both approaches are _transparent_ to everyday usage – you still run `codex` fr
 | Operating systems           | macOS 12+, Ubuntu 20.04+/Debian 10+, or Windows 11 **via WSL2** |
 | Node.js                     | **22 or newer** (LTS recommended)                               |
 | Git (optional, recommended) | 2.23+ for built‑in PR helpers                                   |
-| ripgrep (optional)          | `rg` accelerates large‑repo search                              |
 | RAM                         | 4‑GB minimum (8‑GB recommended)                                 |
 
 > Never run `sudo npm install -g`; fix npm permissions instead.

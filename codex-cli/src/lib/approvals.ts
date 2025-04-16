@@ -399,31 +399,6 @@ export function isSafeCommand(
         };
       }
       break;
-    case "oai":
-      switch (cmd1) {
-        case "show-lines":
-          return {
-            reason: "OAI show lines",
-            group: "Reading files",
-          };
-        case "find-files":
-          return {
-            reason: "OAI find files",
-            group: "Searching",
-          };
-        case "file-outline":
-          return {
-            reason: "OAI file outline",
-            group: "Reading files",
-          };
-        case "rg":
-          return {
-            reason: "OAI ripgrep",
-            group: "Searching",
-          };
-        default:
-          return null;
-      }
     default:
       return null;
   }
