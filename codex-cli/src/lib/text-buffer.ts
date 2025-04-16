@@ -1,4 +1,5 @@
 /* eslint‑disable no-bitwise */
+
 export type Direction =
   | "left"
   | "right"
