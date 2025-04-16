@@ -4,7 +4,7 @@ import type { AppRollout } from "./app";
 import type { CommandConfirmation } from "./utils/agent/agent-loop";
 import type { AppConfig } from "./utils/config";
 import type { ApprovalPolicy } from "@lib/approvals";
-import type { ResponseItem } from "openai/resources/responses/responses";
+import type { ResponseItem } from "@azure/openai";
 
 import App from "./app";
 import { runSinglePass } from "./cli_singlepass";
@@ -139,16 +139,17 @@ if (cli.flags.help) {
 // API key handling
 // ---------------------------------------------------------------------------
 
-const apiKey = process.env["OPENAI_API_KEY"];
+const apiKey = process.env["AZURE_OPENAI_API_KEY"];
+const apiEndpoint = process.env["AZURE_OPENAI_ENDPOINT"];
 
-if (!apiKey) {
+if (!apiKey || !apiEndpoint) {
   // eslint-disable-next-line no-console
   console.error(
-    `\n${chalk.red("Missing OpenAI API key.")}\n\n` +
-      `Set the environment variable ${chalk.bold("OPENAI_API_KEY")} ` +
-      `and re-run this command.\n` +
-      `You can create a key here: ${chalk.bold(
-        chalk.underline("https://platform.openai.com/account/api-keys"),
+    `\n${chalk.red("Missing Azure OpenAI API key or endpoint.")}\n\n` +
+      `Set the environment variables ${chalk.bold("AZURE_OPENAI_API_KEY")} ` +
+      `and ${chalk.bold("AZURE_OPENAI_ENDPOINT")} and re-run this command.\n` +
+      `You can create a key and endpoint here: ${chalk.bold(
+        chalk.underline("https://portal.azure.com/#view/Microsoft_Azure_OpenAI/OpenAI"),
       )}\n`,
   );
   process.exit(1);

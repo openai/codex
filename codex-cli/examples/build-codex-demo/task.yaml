@@ -5,7 +5,7 @@ description: |
   Functionality:
   - User types a prompt and hits enter to send
   - The prompt is added to the conversation history
-  - The backend calls the OpenAI API with stream: true
+  - The backend calls the Azure OpenAI API with stream: true
   - Tokens are streamed back and appended to the code viewer
   - Syntax highlighting updates in real time
   - When a full HTML file is received, it is rendered in a sandboxed iframe
@@ -13,12 +13,12 @@ description: |
   - Append each assistant and user message to preserve context across turns
   - Errors are displayed to user gracefully
   - Ensure there is a fixed layout is responsive and faithful to the screenshot design
-  - Be sure to parse the ouput from OpenAI call to strip the ```html tags code is returned within
+  - Be sure to parse the ouput from Azure OpenAI call to strip the ```html tags code is returned within
   - Use the system prompt shared in the API call below to ensure the AI only returns HTML
 
   Support a simple local backend that can:
-  - Read local env for OPENAI_API_KEY
-  - Expose an endpoint that streams completions from OpenAI
+  - Read local env for AZURE_OPENAI_API_KEY and AZURE_OPENAI_ENDPOINT
+  - Expose an endpoint that streams completions from Azure OpenAI
   - Backend should be a simple node.js app
   - App should be easy to run locally for development and testing
   - Minimal setup preferred — keep dependencies light unless justified
@@ -42,15 +42,16 @@ description: |
   - Code section is color-coded, likely for syntax highlighting
   - Interactive feel with the text input styled like a chat/message interface
 
-  Here's the latest OpenAI API and prompt to use:
+  Here's the latest Azure OpenAI API and prompt to use:
   ```
-  import OpenAI from "openai";
+  import { OpenAIClient, AzureKeyCredential } from "@azure/openai";
 
-  const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY,
-  });
+  const endpoint = process.env.AZURE_OPENAI_ENDPOINT;
+  const apiKey = process.env.AZURE_OPENAI_API_KEY;
 
-  const response = await openai.responses.create({
+  const client = new OpenAIClient(endpoint, new AzureKeyCredential(apiKey));
+
+  const response = await client.getCompletions({
     model: "gpt-4.1",
     input: [
       {
@@ -74,11 +75,11 @@ description: |
     top_p: 1
   });
 
-  console.log(response.output_text);
+  console.log(response.choices[0].text);
   ```
   Additional things to note:
-  - Strip any html and tags from the OpenAI response before rendering
-  - Assume the OpenAI API model response always wraps HTML in markdown-style triple backticks like ```html <code> ```
+  - Strip any html and tags from the Azure OpenAI response before rendering
+  - Assume the Azure OpenAI API model response always wraps HTML in markdown-style triple backticks like ```html <code> ```
   - The display code window should have syntax highlighting and line numbers.
   - Make sure to only display the code, not the backticks or ```html that wrap the code from the model.
   - Do not inject raw markdown; only parse and insert pure HTML into the iframe
