@@ -261,6 +261,13 @@ You can also define custom instructions:
 ## FAQ
 
 <details>
+<summary>OpenAI released a model called Codex in 2021 - is this related?</summary>
+
+In 2021, OpenAI released Codex, an AI system designed to generate code from natural language prompts. That original Codex model was deprecated as of March 2023 and is separate from the CLI tool.
+
+</details>
+
+<details>
 <summary>How do I stop Codex from touching my repo?</summary>
 
 Codex always runs in a **sandbox first**. If a proposed command or file change looks suspicious you can simply answer **n** when prompted and nothing happens to your working tree.
