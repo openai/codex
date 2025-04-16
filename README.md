@@ -11,18 +11,18 @@
 <summary><strong>Table&nbsp;of&nbsp;Contents</strong></summary>
 
 1. [Quickstart](#quickstart)
-1. [Why Codex?](#why-codex)
-1. [Features](#features)
-1. [System Requirements](#system-requirements)
-1. [Security Model & Permissions](#security-model--permissions)
-1. [CLI Reference](#cli-reference)
-1. [Memory & Project Docs](#memory--project-docs)
-1. [Non‑interactive / CI mode](#non‑interactive--ci-mode)
+1. [Why Codex?](#whycodex)
+1. [Security Model & Permissions](#securitymodelpermissions)
+1. [System Requirements](#systemrequirements)
+1. [CLI Reference](#clireference)
+1. [Memory & Project Docs](#memoryprojectdocs)
+1. [Non‑interactive / CI mode](#noninteractivecimode)
 1. [Recipes](#recipes)
 1. [Installation](#installation)
+1. [Configuration](#configuration)
 1. [FAQ](#faq)
 1. [Contributing](#contributing)
-1. [Security &amp; Responsible AI](#security--responsible-ai)
+1. [Security & Responsible AI](#securityresponsibleai)
 1. [License](#license)
 
 </details>
