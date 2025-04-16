@@ -47,6 +47,14 @@ Install globally:
 npm install -g @openai/codex
 ```
 
+Next, set your OpenAI API key as an environment variable:
+
+```bash
+export OPENAI_API_KEY="your-api-key-here"
+```
+
+> **Note:** This command sets the key only for your current terminal session. To make it permanent, add the `export` line to your shell's configuration file (e.g., `~/.zshrc`).
+
 Run interactively:
 
 ```shell
