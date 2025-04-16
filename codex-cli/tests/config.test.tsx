@@ -81,17 +81,17 @@ test("saves and loads config correctly", () => {
   expect(loadedConfig).toEqual(testConfig);
 });
 
-test("loads user instructions + project doc when codex.md is present", () => {
-  // 1) seed memfs: a config JSON, an instructions.md, and a codex.md in the cwd
+test("loads user instructions + project doc when vibe.md is present", () => {
+  // 1) seed memfs: a config JSON, an instructions.md, and a vibe.md in the cwd
   const userInstr = "here are user instructions";
   const projectDoc = "# Project Title\n\nSome project‑specific doc";
   // first, make config so loadConfig will see storedConfig
   memfs[testConfigPath] = JSON.stringify({ model: "mymodel" }, null, 2);
   // then user instructions:
   memfs[testInstructionsPath] = userInstr;
-  // and now our fake codex.md in the cwd:
-  const codexPath = join(testDir, "codex.md");
-  memfs[codexPath] = projectDoc;
+  // and now our fake vibe.md in the cwd:
+  const vibePath = join(testDir, "vibe.md");
+  memfs[vibePath] = projectDoc;
 
   // 2) loadConfig without disabling project‑doc, but with cwd=testDir
   const cfg = loadConfig(testConfigPath, testInstructionsPath, {

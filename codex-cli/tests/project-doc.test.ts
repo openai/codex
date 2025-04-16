@@ -9,7 +9,7 @@ let configPath: string;
 let instructionsPath: string;
 
 beforeEach(() => {
-  projectDir = mkdtempSync(join(tmpdir(), "codex-proj-"));
+  projectDir = mkdtempSync(join(tmpdir(), "vibe-proj-"));
   // Create fake .git dir to mark project root
   mkdirSync(join(projectDir, ".git"));
 
@@ -25,7 +25,7 @@ afterEach(() => {
 describe("project doc integration", () => {
   test("happy path: project doc gets merged into instructions", () => {
     const docContent = "# Project\nThis is my project.";
-    writeFileSync(join(projectDir, "codex.md"), docContent);
+    writeFileSync(join(projectDir, "vibe.md"), docContent);
 
     const cfg = loadConfig(configPath, instructionsPath, { cwd: projectDir });
     expect(cfg.instructions).toContain(docContent);
@@ -33,7 +33,7 @@ describe("project doc integration", () => {
 
   test("opt-out via flag prevents inclusion", () => {
     const docContent = "will be ignored";
-    writeFileSync(join(projectDir, "codex.md"), docContent);
+    writeFileSync(join(projectDir, "vibe.md"), docContent);
 
     const cfg = loadConfig(configPath, instructionsPath, {
       cwd: projectDir,
@@ -44,7 +44,7 @@ describe("project doc integration", () => {
 
   test("file larger than limit gets truncated and warns", () => {
     const big = "x".repeat(PROJECT_DOC_MAX_BYTES + 4096);
-    writeFileSync(join(projectDir, "codex.md"), big);
+    writeFileSync(join(projectDir, "vibe.md"), big);
 
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const cfg = loadConfig(configPath, instructionsPath, { cwd: projectDir });

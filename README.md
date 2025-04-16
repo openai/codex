@@ -1,9 +1,9 @@
-<h1 align="center">OpenAI Codex CLI</h1>
+<h1 align="center">OpenAI Vibe CLI</h1>
 <p align="center">Lightweight coding agent that runs in your terminal</p>
 
-<p align="center"><code>npm i -g @openai/codex</code></p>
+<p align="center"><code>npm i -g @openai/vibe</code></p>
 
-![Codex demo GIF using: codex "explain this codebase to me"](./.github/demo.gif)
+![Vibe demo GIF using: vibe "explain this codebase to me"](./.github/demo.gif)
 
 ---
 
@@ -11,7 +11,7 @@
 <summary><strong>Table&nbsp;of&nbsp;Contents</strong></summary>
 
 - [Quickstart](#quickstart)
-- [Why Codex?](#whycodex)
+- [Why Vibe?](#whyvibe)
 - [Security Model \& Permissions](#securitymodelpermissions)
   - [Platform sandboxing details](#platform-sandboxing-details)
 - [System Requirements](#systemrequirements)
@@ -44,7 +44,7 @@
 Install globally:
 
 ```shell
-npm install -g @openai/codex
+npm install -g @openai/vibe
 ```
 
 Next, set your OpenAI API key as an environment variable:
@@ -58,28 +58,28 @@ export OPENAI_API_KEY="your-api-key-here"
 Run interactively:
 
 ```shell
-codex
+vibe
 ```
 
 Or, run with a prompt as input (and optionally in `Full Auto` mode):
 
 ```shell
-codex "explain this codebase to me"
+vibe "explain this codebase to me"
 ```
 
 ```shell
-codex --approval-mode full-auto "create the fanciest todo-list app"
+vibe --approval-mode full-auto "create the fanciest todo-list app"
 ```
 
-That’s it – Codex will scaffold a file, run it inside a sandbox, install any
+That’s it – Vibe will scaffold a file, run it inside a sandbox, install any
 missing dependencies, and show you the live result. Approve the changes and
 they’ll be committed to your working directory.
 
 ---
 
-## Why Codex?
+## Why Vibe?
 
-Codex CLI is built for developers who already **live in the terminal** and want
+Vibe CLI is built for developers who already **live in the terminal** and want
 ChatGPT‑level reasoning **plus** the power to actually run code, manipulate
 files, and iterate – all under version control. In short, it’s _chat‑driven
 development_ that understands and executes your repo.
@@ -94,7 +94,7 @@ And it's **fully open-source** so you can see and contribute to how it develops!
 
 ## Security Model & Permissions
 
-Codex lets you decide _how much autonomy_ the agent receives and auto-approval policy via the
+Vibe lets you decide _how much autonomy_ the agent receives and auto-approval policy via the
 `--approval-mode` flag (or the interactive onboarding prompt):
 
 | Mode                      | What the agent may do without asking            | Still requires approval                                         |
@@ -104,7 +104,7 @@ Codex lets you decide _how much autonomy_ the agent receives and auto-approval p
 | **Full Auto**             | • Read/write files <br>• Execute shell commands | –                                                               |
 
 In **Full Auto** every command is run **network‑disabled** and confined to the
-current working directory (plus temporary files) for defense‑in‑depth. Codex
+current working directory (plus temporary files) for defense‑in‑depth. Vibe
 will also show a warning/confirmation if you start in **auto‑edit** or
 **full‑auto** while the directory is _not_ tracked by Git, so you always have a
 safety net.
@@ -114,22 +114,22 @@ the network enabled, once we’re confident in additional safeguards.
 
 ### Platform sandboxing details
 
-The hardening mechanism Codex uses depends on your OS:
+The hardening mechanism Vibe uses depends on your OS:
 
 - **macOS 12+** – commands are wrapped with **Apple Seatbelt** (`sandbox-exec`).
 
   - Everything is placed in a read‑only jail except for a small set of
-    writable roots (`$PWD`, `$TMPDIR`, `~/.codex`, etc.).
+    writable roots (`$PWD`, `$TMPDIR`, `~/.vibe`, etc.).
   - Outbound network is _fully blocked_ by default – even if a child process
     tries to `curl` somewhere it will fail.
 
-- **Linux** – we recommend using Docker for sandboxing, where Codex launches itself inside a **minimal
+- **Linux** – we recommend using Docker for sandboxing, where Vibe launches itself inside a **minimal
   container image** and mounts your repo _read/write_ at the same path. A
   custom `iptables`/`ipset` firewall script denies all egress except the
   OpenAI API. This gives you deterministic, reproducible runs without needing
-  root on the host. You can read more in [`run_in_container.sh`](./codex-cli/scripts/run_in_container.sh)
+  root on the host. You can read more in [`run_in_container.sh`](./vibe-cli/scripts/run_in_container.sh)
 
-Both approaches are _transparent_ to everyday usage – you still run `codex` from your repo root and approve/reject steps as usual.
+Both approaches are _transparent_ to everyday usage – you still run `vibe` from your repo root and approve/reject steps as usual.
 
 ---
 
@@ -150,9 +150,9 @@ Both approaches are _transparent_ to everyday usage – you still run `codex` fr
 
 | Command        | Purpose                             | Example                              |
 | -------------- | ----------------------------------- | ------------------------------------ |
-| `codex`        | Interactive REPL                    | `codex`                              |
-| `codex "…"`    | Initial prompt for interactive REPL | `codex "fix lint errors"`            |
-| `codex -q "…"` | Non‑interactive "quiet mode"        | `codex -q --json "explain utils.ts"` |
+| `vibe`        | Interactive REPL                    | `vibe`                              |
+| `vibe "…"`    | Initial prompt for interactive REPL | `vibe "fix lint errors"`            |
+| `vibe -q "…"` | Non‑interactive "quiet mode"        | `vibe -q --json "explain utils.ts"` |
 
 Key flags: `--model/-m`, `--approval-mode/-a`, and `--quiet/-q`.
 
@@ -160,11 +160,11 @@ Key flags: `--model/-m`, `--approval-mode/-a`, and `--quiet/-q`.
 
 ## Memory & Project Docs
 
-Codex merges Markdown instructions in this order:
+Vibe merges Markdown instructions in this order:
 
-1. `~/.codex/instructions.md` – personal global guidance
-2. `codex.md` at repo root – shared project notes
-3. `codex.md` in cwd – sub‑package specifics
+1. `~/.vibe/instructions.md` – personal global guidance
+2. `vibe.md` at repo root – shared project notes
+3. `vibe.md` in cwd – sub‑package specifics
 
 Disable with `--no-project-doc` or `CODEX_DISABLE_PROJECT_DOC=1`.
 
@@ -172,14 +172,14 @@ Disable with `--no-project-doc` or `CODEX_DISABLE_PROJECT_DOC=1`.
 
 ## Non‑interactive / CI mode
 
-Run Codex head‑less in pipelines. Example GitHub Action step:
+Run Vibe head‑less in pipelines. Example GitHub Action step:
 
 ```yaml
-- name: Update changelog via Codex
+- name: Update changelog via Vibe
   run: |
-    npm install -g @openai/codex
+    npm install -g @openai/vibe
     export OPENAI_API_KEY="${{ secrets.OPENAI_KEY }}"
-    codex -a auto-edit --quiet "update CHANGELOG for next release"
+    vibe -a auto-edit --quiet "update CHANGELOG for next release"
 ```
 
 Set `CODEX_QUIET_MODE=1` to silence interactive UI noise.
@@ -192,12 +192,12 @@ Below are a few bite‑size examples you can copy‑paste. Replace the text in q
 
 | ✨  | What you type                                                                   | What happens                                                               |
 | --- | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| 1   | `codex "Refactor the Dashboard component to React Hooks"`                       | Codex rewrites the class component, runs `npm test`, and shows the diff.   |
-| 2   | `codex "Generate SQL migrations for adding a users table"`                      | Infers your ORM, creates migration files, and runs them in a sandboxed DB. |
-| 3   | `codex "Write unit tests for utils/date.ts"`                                    | Generates tests, executes them, and iterates until they pass.              |
-| 4   | `codex "Bulk‑rename *.jpeg → *.jpg with git mv"`                                | Safely renames files and updates imports/usages.                           |
-| 5   | `codex "Explain what this regex does: ^(?=.*[A-Z]).{8,}$"`                      | Outputs a step‑by‑step human explanation.                                  |
-| 6   | `codex "Carefully review this repo, and propose 3 high impact well-scoped PRs"` | Suggests impactful PRs in the current codebase.                            |
+| 1   | `vibe "Refactor the Dashboard component to React Hooks"`                       | Vibe rewrites the class component, runs `npm test`, and shows the diff.   |
+| 2   | `vibe "Generate SQL migrations for adding a users table"`                      | Infers your ORM, creates migration files, and runs them in a sandboxed DB. |
+| 3   | `vibe "Write unit tests for utils/date.ts"`                                    | Generates tests, executes them, and iterates until they pass.              |
+| 4   | `vibe "Bulk‑rename *.jpeg → *.jpg with git mv"`                                | Safely renames files and updates imports/usages.                           |
+| 5   | `vibe "Explain what this regex does: ^(?=.*[A-Z]).{8,}$"`                      | Outputs a step‑by‑step human explanation.                                  |
+| 6   | `vibe "Carefully review this repo, and propose 3 high impact well-scoped PRs"` | Suggests impactful PRs in the current codebase.                            |
 
 ---
 
@@ -207,9 +207,9 @@ Below are a few bite‑size examples you can copy‑paste. Replace the text in q
 <summary><strong>From npm (Recommended)</strong></summary>
 
 ```bash
-npm install -g @openai/codex
+npm install -g @openai/vibe
 # or
-yarn global add @openai/codex
+yarn global add @openai/vibe
 ```
 
 </details>
@@ -219,8 +219,8 @@ yarn global add @openai/codex
 
 ```bash
 # Clone the repository and navigate to the CLI package
-git clone https://github.com/openai/codex.git
-cd codex/codex-cli
+git clone https://github.com/openai/vibe.git
+cd vibe/vibe-cli
 
 # Install dependencies and build
 npm install
@@ -239,10 +239,10 @@ npm link
 
 ## Configuration
 
-Codex looks for config files in **`~/.codex/`**.
+Vibe looks for config files in **`~/.vibe/`**.
 
 ```yaml
-# ~/.codex/config.yaml
+# ~/.vibe/config.yaml
 model: o4-mini # Default model
 fullAutoErrorMode: ask-user # or ignore-and-continue
 ```
@@ -250,7 +250,7 @@ fullAutoErrorMode: ask-user # or ignore-and-continue
 You can also define custom instructions:
 
 ```yaml
-# ~/.codex/instructions.md
+# ~/.vibe/instructions.md
 - Always respond with emojis
 - Only use git commands if I explicitly mention you should
 ```
@@ -260,16 +260,16 @@ You can also define custom instructions:
 ## FAQ
 
 <details>
-<summary>How do I stop Codex from touching my repo?</summary>
+<summary>How do I stop Vibe from touching my repo?</summary>
 
-Codex always runs in a **sandbox first**. If a proposed command or file change looks suspicious you can simply answer **n** when prompted and nothing happens to your working tree.
+Vibe always runs in a **sandbox first**. If a proposed command or file change looks suspicious you can simply answer **n** when prompted and nothing happens to your working tree.
 
 </details>
 
 <details>
 <summary>Does it work on Windows?</summary>
 
-Not directly, it requires [Linux on Windows (WSL2)](https://learn.microsoft.com/en-us/windows/wsl/install) – Codex is tested on macOS and Linux with Node ≥ 22.
+Not directly, it requires [Linux on Windows (WSL2)](https://learn.microsoft.com/en-us/windows/wsl/install) – Vibe is tested on macOS and Linux with Node ≥ 22.
 
 </details>
 
@@ -315,7 +315,7 @@ npm run format:fix
 2. **Add or update tests.**
    Every new feature or bug‑fix should come with test coverage that fails before your change and passes afterwards. 100 % coverage is not required, but aim for meaningful assertions.
 3. **Document behaviour.**
-   If your change affects user‑facing behaviour, update the README, inline help (`codex --help`), or relevant example projects.
+   If your change affects user‑facing behaviour, update the README, inline help (`vibe --help`), or relevant example projects.
 4. **Keep commits atomic.**
    Each commit should compile and the tests should pass. This makes reviews and potential rollbacks easier.
 
@@ -343,7 +343,7 @@ npm run format:fix
 
 If you run into problems setting up the project, would like feedback on an idea, or just want to say _hi_ – please open a Discussion or jump into the relevant issue. We are happy to help.
 
-Together we can make Codex CLI an incredible tool. **Happy hacking!** :rocket:
+Together we can make Vibe CLI an incredible tool. **Happy hacking!** :rocket:
 
 ### Developer Certificate of Origin (DCO)
 

@@ -23,7 +23,7 @@ export function execWithSeatbelt(
   let scopedWritePolicy: string;
   let policyTemplateParams: Array<string>;
   if (writableRoots.length > 0) {
-    // Add `~/.codex` to the list of writable roots
+    // Add `~/.vibe` to the list of writable roots
     // (if there's any already, not in read-only mode)
     getCommonRoots().map((root) => writableRoots.push(root));
     const { policies, params } = writableRoots

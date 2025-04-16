@@ -164,20 +164,20 @@ test("process_patch - readme edit", () => {
 
 \`\`\`sh
 # First, copy an error
-# Then, start codex with interactive mode
-codex
+# Then, start vibe with interactive mode
+vibe
 
 # Or you can pass in via command line argument
-codex "Fix this issue: $(pbpaste)"
+vibe "Fix this issue: $(pbpaste)"
 
 # Or even as a task (it should use your current repo and branch)
-codex -t "Fix this issue: $(pbpaste)"
+vibe -t "Fix this issue: $(pbpaste)"
 \`\`\`
 `;
   const patch = `*** Begin Patch
 *** Update File: README.md
 @@
-  codex -t "Fix this issue: $(pbpaste)"
+  vibe -t "Fix this issue: $(pbpaste)"
   \`\`\`
 +
 +hello
@@ -187,14 +187,14 @@ codex -t "Fix this issue: $(pbpaste)"
 
 \`\`\`sh
 # First, copy an error
-# Then, start codex with interactive mode
-codex
+# Then, start vibe with interactive mode
+vibe
 
 # Or you can pass in via command line argument
-codex "Fix this issue: $(pbpaste)"
+vibe "Fix this issue: $(pbpaste)"
 
 # Or even as a task (it should use your current repo and branch)
-codex -t "Fix this issue: $(pbpaste)"
+vibe -t "Fix this issue: $(pbpaste)"
 \`\`\`
 
 hello

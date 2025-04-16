@@ -78,7 +78,7 @@ export default function HelpOverlay({
           – interrupt current action
         </Text>
         <Text>
-          <Text color="yellow">Ctrl+C</Text> – quit Codex
+          <Text color="yellow">Ctrl+C</Text> – quit Vibe
         </Text>
       </Box>
 

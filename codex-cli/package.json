@@ -1,10 +1,10 @@
 {
   "private": true,
-  "name": "@openai/codex",
+  "name": "@openai/vibe",
   "version": "0.1.04160940",
   "license": "Apache-2.0",
   "bin": {
-    "codex": "dist/cli.js"
+    "vibe": "dist/cli.js"
   },
   "type": "module",
   "engines": {
@@ -74,6 +74,6 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/openai/codex"
+    "url": "https://github.com/openai/vibe"
   }
 }

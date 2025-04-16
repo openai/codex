@@ -27,7 +27,7 @@ import meow from "meow";
 import path from "path";
 import React from "react";
 
-// Call this early so `tail -F "$TMPDIR/oai-codex/codex-cli-latest.log"` works
+// Call this early so `tail -F "$TMPDIR/oai-vibe/vibe-cli-latest.log"` works
 // immediately. This must be run with DEBUG=1 for logging to work.
 initLogger();
 
@@ -39,7 +39,7 @@ initLogger();
 const cli = meow(
   `
   Usage
-    $ codex [options] <prompt>
+    $ vibe [options] <prompt>
 
   Options
     -h, --help                 Show usage and exit
@@ -52,7 +52,7 @@ const cli = meow(
     --auto-edit                Automatically approve file edits; still prompt for commands
     --full-auto                Automatically approve edits and commands when executed in the sandbox
 
-    --no-project-doc           Do not automatically include the repository's 'codex.md'
+    --no-project-doc           Do not automatically include the repository's 'vibe.md'
     --project-doc <file>       Include an additional markdown file at <file> as context
     --full-stdout              Do not truncate stdout/stderr from command outputs
 
@@ -67,8 +67,8 @@ const cli = meow(
                                with all other flags, except for --model.
 
   Examples
-    $ codex "Write and run a python program that prints ASCII art"
-    $ codex -q "fix build issues"
+    $ vibe "Write and run a python program that prints ASCII art"
+    $ vibe -q "fix build issues"
 `,
   {
     importMeta: import.meta,
@@ -102,11 +102,11 @@ const cli = meow(
         type: "string",
         aliases: ["a"],
         description:
-          "Determine the approval mode for Codex (default: suggest) Values: suggest, auto-edit, full-auto",
+          "Determine the approval mode for Vibe (default: suggest) Values: suggest, auto-edit, full-auto",
       },
       noProjectDoc: {
         type: "boolean",
-        description: "Disable automatic inclusion of project‑level codex.md",
+        description: "Disable automatic inclusion of project‑level vibe.md",
       },
       projectDoc: {
         type: "string",
@@ -223,7 +223,7 @@ if (quietMode) {
   if (!prompt || prompt.trim() === "") {
     // eslint-disable-next-line no-console
     console.error(
-      'Quiet mode requires a prompt string, e.g.,: codex -q "Fix bug #123 in the foobar project"',
+      'Quiet mode requires a prompt string, e.g.,: vibe -q "Fix bug #123 in the foobar project"',
     );
     process.exit(1);
   }

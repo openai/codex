@@ -7,7 +7,7 @@ import fs from "fs/promises";
 import os from "os";
 import path from "path";
 
-const SESSIONS_ROOT = path.join(os.homedir(), ".codex", "sessions");
+const SESSIONS_ROOT = path.join(os.homedir(), ".vibe", "sessions");
 
 async function saveRolloutToHomeSessions(
   items: Array<ResponseItem>,

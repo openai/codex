@@ -71,11 +71,11 @@ function now() {
 let logger: Logger;
 
 /**
- * Creates a .log file for this session, but also symlinks codex-cli-latest.log
+ * Creates a .log file for this session, but also symlinks vibe-cli-latest.log
  * to the current log file so you can reliably run:
  *
- * - Mac/Windows: `tail -F "$TMPDIR/oai-codex/codex-cli-latest.log"`
- * - Linux: `tail -F ~/.local/oai-codex/codex-cli-latest.log`
+ * - Mac/Windows: `tail -F "$TMPDIR/oai-vibe/vibe-cli-latest.log"`
+ * - Linux: `tail -F ~/.local/oai-vibe/vibe-cli-latest.log`
  */
 export function initLogger(): Logger {
   if (logger) {
@@ -89,20 +89,20 @@ export function initLogger(): Logger {
   const isWin = process.platform === "win32";
 
   // On Mac and Windows, os.tmpdir() returns a user-specifc folder, so prefer
-  // it there. On Linux, use ~/.local/oai-codex so logs are not world-readable.
+  // it there. On Linux, use ~/.local/oai-vibe so logs are not world-readable.
   const logDir =
     isMac || isWin
-      ? path.join(os.tmpdir(), "oai-codex")
-      : path.join(os.homedir(), ".local", "oai-codex");
+      ? path.join(os.tmpdir(), "oai-vibe")
+      : path.join(os.homedir(), ".local", "oai-vibe");
   fsSync.mkdirSync(logDir, { recursive: true });
-  const logFile = path.join(logDir, `codex-cli-${now()}.log`);
+  const logFile = path.join(logDir, `vibe-cli-${now()}.log`);
   // Write the empty string so the file exists and can be tail'd.
   fsSync.writeFileSync(logFile, "");
 
-  // Symlink to codex-cli-latest.log on UNIX because Windows is funny about
+  // Symlink to vibe-cli-latest.log on UNIX because Windows is funny about
   // symlinks.
   if (!isWin) {
-    const latestLink = path.join(logDir, "codex-cli-latest.log");
+    const latestLink = path.join(logDir, "vibe-cli-latest.log");
     try {
       fsSync.symlinkSync(logFile, latestLink, "file");
     } catch (err: unknown) {

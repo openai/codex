@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# run.sh — Create a new run_N directory for a Codex task, optionally bootstrapped from a template,
-# then launch Codex with the task description from task.yaml.
+# run.sh — Create a new run_N directory for a Vibe task, optionally bootstrapped from a template,
+# then launch Vibe with the task description from task.yaml.
 #
 # Usage:
 #   ./run.sh                  # Prompts to confirm new run
@@ -59,7 +59,7 @@ fi
 
 cd "run_$new_run_number"
 
-# Launch Codex
+# Launch Vibe
 echo "Launching..."
 description=$(yq -o=json '.' ../../task.yaml | jq -r '.description')
-codex "$description"
+vibe "$description"

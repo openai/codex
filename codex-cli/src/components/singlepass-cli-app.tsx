@@ -29,7 +29,7 @@ import React, { useEffect, useState, useRef } from "react";
 const MAX_CONTEXT_CHARACTER_LIMIT = 2_000_000;
 
 // --- prompt history support (same as for rest of CLI) ---
-const PROMPT_HISTORY_KEY = "__codex_singlepass_prompt_history";
+const PROMPT_HISTORY_KEY = "__vibe_singlepass_prompt_history";
 function loadPromptHistory(): Array<string> {
   try {
     if (typeof localStorage !== "undefined") {
@@ -46,7 +46,7 @@ function loadPromptHistory(): Array<string> {
     if (process && process.env && process.env["HOME"]) {
       const p = path.join(
         process.env["HOME"],
-        ".codex_singlepass_history.json",
+        ".vibe_singlepass_history.json",
       );
       if (fsSync.existsSync(p)) {
         return JSON.parse(fsSync.readFileSync(p, "utf8"));
@@ -71,7 +71,7 @@ function savePromptHistory(history: Array<string>) {
     if (process && process.env && process.env["HOME"]) {
       const p = path.join(
         process.env["HOME"],
-        ".codex_singlepass_history.json",
+        ".vibe_singlepass_history.json",
       );
       fsSync.writeFileSync(p, JSON.stringify(history), "utf8");
     }
@@ -586,7 +586,7 @@ export function SinglePassApp({
         <Box borderStyle="round" flexDirection="column" paddingX={1} width={80}>
           <Text>
             <Text bold color="magenta">
-              OpenAI <Text bold>Codex</Text>
+              OpenAI <Text bold>Vibe</Text>
             </Text>{" "}
             <Text dimColor>(full context mode)</Text>
           </Text>

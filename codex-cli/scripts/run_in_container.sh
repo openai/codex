@@ -32,21 +32,21 @@ if [ -z "$WORK_DIR" ]; then
   exit 1
 fi
 
-# Remove any existing container named 'codex'.
-docker rm -f codex || true
+# Remove any existing container named 'vibe'.
+docker rm -f vibe || true
 
 # Run the container with the specified directory mounted at the same path inside the container.
-docker run --name codex -d \
+docker run --name vibe -d \
   -e OPENAI_API_KEY \
   --cap-add=NET_ADMIN \
   --cap-add=NET_RAW \
   -v "$WORK_DIR:$WORK_DIR" \
-  codex \
+  vibe \
   sleep infinity
 
 # Initialize the firewall inside the container.
-docker exec codex bash -c "sudo /usr/local/bin/init_firewall.sh"
+docker exec vibe bash -c "sudo /usr/local/bin/init_firewall.sh"
 
 # Execute the provided command in the container, ensuring it runs in the work directory.
 # We use a parameterized bash command to safely handle the command and directory.
-docker exec codex bash -c "cd \"$WORK_DIR\" && codex --dangerously-auto-approve-everything -q \"$@\""
+docker exec vibe bash -c "cd \"$WORK_DIR\" && vibe --dangerously-auto-approve-everything -q \"$@\""

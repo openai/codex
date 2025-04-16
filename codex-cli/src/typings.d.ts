@@ -1,6 +1,6 @@
 // Project‑local declaration stubs for external libraries that do not ship
 // with TypeScript type definitions. These are intentionally minimal – they
-// cover only the APIs that the Codex codebase relies on. If full type
+// cover only the APIs that the Vibe codebase relies on. If full type
 // packages (e.g. `@types/shell‑quote`) are introduced later these stubs will
 // be overridden automatically by the higher‑priority package typings.
 
@@ -14,14 +14,14 @@ declare module "shell-quote" {
   export type Token = string | { op: string };
 
   // Historically the original `shell-quote` library exports several internal
-  // type definitions. We recreate the few that Codex‑Lib imports so that the
+  // type definitions. We recreate the few that Vibe‑Lib imports so that the
   // TypeScript compiler can resolve them.
 
   /*
    * The real `shell‑quote` types define `ControlOperator` as the literal set
    * of operator strings that can appear in the parsed output. Re‑creating the
    * exhaustive union is unnecessary for our purposes – modelling it as a
-   * plain string is sufficient for type‑checking the Codex codebase while
+   * plain string is sufficient for type‑checking the Vibe codebase while
    * still preserving basic safety (the operator string gets validated at
    * runtime anyway).
    */
@@ -33,7 +33,7 @@ declare module "shell-quote" {
   /**
    * Parse a shell command string into tokens. The implementation provided by
    * the `shell‑quote` package supports additional token kinds (glob, comment,
-   * redirection …) which we deliberately omit here because Codex never
+   * redirection …) which we deliberately omit here because Vibe never
    * inspects them.
    */
   export function parse(

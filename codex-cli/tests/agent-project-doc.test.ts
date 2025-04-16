@@ -89,11 +89,11 @@ let projectDir: string;
 
 beforeEach(() => {
   // Create a fresh temporary directory to act as an isolated git repo.
-  projectDir = mkdtempSync(join(tmpdir(), "codex-proj-"));
+  projectDir = mkdtempSync(join(tmpdir(), "vibe-proj-"));
   mkdirSync(join(projectDir, ".git")); // mark as project root
 
   // Write a small project doc that we expect to be included in the prompt.
-  writeFileSync(join(projectDir, "codex.md"), "# Test Project\nHello docs!\n");
+  writeFileSync(join(projectDir, "vibe.md"), "# Test Project\nHello docs!\n");
 
   lastCreateParams = null; // reset captured SDK params
 });
@@ -103,7 +103,7 @@ afterEach(() => {
 });
 
 describe("AgentLoop", () => {
-  it("passes codex.md contents through the instructions parameter", async () => {
+  it("passes vibe.md contents through the instructions parameter", async () => {
     const config = loadConfig(undefined, undefined, { cwd: projectDir });
 
     // Sanity‑check that loadConfig picked up the project doc. This is *not* the

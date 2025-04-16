@@ -1,3 +1,3 @@
 #!/bin/bash
 
-docker build -t codex -f codex-cli/Dockerfile codex-cli
+docker build -t vibe -f vibe-cli/Dockerfile vibe-cli

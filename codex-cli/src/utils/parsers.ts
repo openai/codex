@@ -27,7 +27,7 @@ const SAFE_SHELL_OPERATORS: ReadonlySet<string> = new Set([
 // (which might not have the @lib alias configured) from failing at import
 // time. If the modules cannot be loaded we fall back to permissive stub
 // implementations so that basic functionality – like unit‑testing small UI
-// helpers – continues to work without the full codex‑lib dependency tree.
+// helpers – continues to work without the full vibe‑lib dependency tree.
 
 let isSafeCommand: (cmd: Array<string>) => SafeCommandReason | null = () =>
   null;

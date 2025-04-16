@@ -52,8 +52,8 @@ describe("TerminalChatResponseItem", () => {
     );
 
     const frame = lastFrameStripped();
-    // assistant messages are labelled "codex" in the UI
-    expect(frame.toLowerCase()).toContain("codex");
+    // assistant messages are labelled "vibe" in the UI
+    expect(frame.toLowerCase()).toContain("vibe");
     expect(frame).toContain("Sure thing");
   });
 });
