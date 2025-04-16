@@ -97,7 +97,7 @@ describe("AgentLoop – rate‑limit handling", () => {
       // is in progress.
       const runPromise = agent.run(userMsg as any);
 
-      // The agent waits 15 000 ms between retries (rate‑limit back‑off) and does
+      // The agent waits 15 000 ms between retries (rate‑limit back‑off) and does
       // this four times (after attempts 1‑4). Fast‑forward a bit more to cover
       // any additional small `setTimeout` calls inside the implementation.
       await vi.advanceTimersByTimeAsync(61_000); // 4 * 15s + 1s safety margin
@@ -105,7 +105,7 @@ describe("AgentLoop – rate‑limit handling", () => {
       // Ensure the promise settles without throwing.
       await expect(runPromise).resolves.not.toThrow();
 
-      // Flush the 10 ms staging delay used when emitting items.
+      // Flush the 10 ms staging delay used when emitting items.
       await vi.advanceTimersByTimeAsync(20);
 
       // The OpenAI client should have been called the maximum number of retry
