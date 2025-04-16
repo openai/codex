@@ -15,8 +15,8 @@ import { load as loadYaml, dump as dumpYaml } from "js-yaml";
 import { homedir } from "os";
 import { dirname, join, extname, resolve as resolvePath } from "path";
 
-export const DEFAULT_AGENTIC_MODEL = "o4-mini";
-export const DEFAULT_FULL_CONTEXT_MODEL = "gpt-4.1";
+export const DEFAULT_AGENTIC_MODEL = "claude-3-7-sonnet-latest";
+export const DEFAULT_FULL_CONTEXT_MODEL = "claude-3-7-sonnet-latest";
 export const DEFAULT_APPROVAL_MODE = AutoApprovalMode.SUGGEST;
 export const DEFAULT_INSTRUCTIONS = "";
 

@@ -244,7 +244,7 @@ Codex looks for config files in **`~/.codex/`**.
 
 ```yaml
 # ~/.codex/config.yaml
-model: o4-mini # Default model
+model: claude-3-7-sonnet-latest # Default model
 fullAutoErrorMode: ask-user # or ignore-and-continue
 ```
 
@@ -284,7 +284,7 @@ Not directly. It requires [Windows Subsystem for Linux (WSL2)](https://learn.mic
 <details>
 <summary>Which models are supported?</summary>
 
-Any model available with [Responses API](https://platform.openai.com/docs/api-reference/responses). The default is `o4-mini`, but pass `--model gpt-4o` or set `model: gpt-4o` in your config file to override.
+Any model available with [Responses API](https://platform.openai.com/docs/api-reference/responses). The default is `claude-3-7-sonnet-latest`, but pass `--model gpt-4o` or set `model: gpt-4o` in your config file to override.
 
 </details>
 
