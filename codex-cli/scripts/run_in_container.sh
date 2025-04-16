@@ -20,6 +20,8 @@ if [ "$1" = "--work_dir" ]; then
   shift 2
 fi
 
+WORK_DIR=$(realpath "$WORK_DIR")
+
 # Ensure a command is provided.
 if [ "$#" -eq 0 ]; then
   echo "Usage: $0 [--work_dir directory] \"COMMAND\""
@@ -49,4 +51,9 @@ docker exec codex bash -c "sudo /usr/local/bin/init_firewall.sh"
 
 # Execute the provided command in the container, ensuring it runs in the work directory.
 # We use a parameterized bash command to safely handle the command and directory.
-docker exec codex bash -c "cd \"$WORK_DIR\" && codex --dangerously-auto-approve-everything -q \"$@\""
+
+quoted_args=""
+for arg in "$@"; do
+  quoted_args+=" $(printf '%q' "$arg")"
+done
+docker exec codex bash -c "cd \"$WORK_DIR\" && codex --dangerously-auto-approve-everything -q ${quoted_args}"

@@ -35,8 +35,7 @@ ENV NPM_CONFIG_PREFIX=/usr/local/share/npm-global
 ENV PATH=$PATH:/usr/local/share/npm-global/bin
 
 # Install codex
-COPY dist/codex.tgz codex.tgz
-RUN npm install -g codex.tgz
+RUN npm install -i -g @openai/codex
 
 # Copy and set up firewall script
 COPY scripts/init_firewall.sh /usr/local/bin/
