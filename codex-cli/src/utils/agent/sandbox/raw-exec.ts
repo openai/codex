@@ -72,7 +72,22 @@ export function exec(
     detached: true,
   };
 
-  const child: ChildProcess = spawn(prog, command.slice(1), fullOptions);
+  // Declare `child` here so it's in scope for abort handlers and callbacks
+  let child: ChildProcess;
+  try {
+    child = spawn(prog, command.slice(1), fullOptions);
+  } catch (err) {
+    if (isLoggingEnabled()) {
+      log(`raw-exec: spawn failed for command ${command.join(" ")} - ${String(err)}`);
+    }
+
+    return Promise.resolve({
+      stdout: "",
+      stderr: String(err),
+      exitCode: 1,
+    })
+  }
+
   // If an AbortSignal is provided, ensure the spawned process is terminated
   // when the signal is triggered so that cancellations propagate down to any
   // long‑running child processes. We default to SIGTERM to give the process a
