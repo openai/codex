@@ -130,7 +130,7 @@ Both approaches are _transparent_ to everyday usage – you still run `codex` fr
 | Requirement                 | Details                                                         |
 | --------------------------- | --------------------------------------------------------------- |
 | Operating systems           | macOS 12+, Ubuntu 20.04+/Debian 10+, or Windows 11 **via WSL2** |
-| Node.js                     | **22 newer** (LTS recommended)                                  |
+| Node.js                     | **22 or newer** (LTS recommended)                               |
 | Git (optional, recommended) | 2.23+ for built‑in PR helpers                                   |
 | ripgrep (optional)          | `rg` accelerates large‑repo search                              |
 | RAM                         | 4‑GB minimum (8‑GB recommended)                                 |
@@ -276,7 +276,7 @@ Any model available with [Responses API](https://platform.openai.com/docs/api-re
 
 ## Contributing
 
-This project is under active development and the code will likely change pretty siginificantly. We'll update this message once that's complete!
+This project is under active development and the code will likely change pretty significantly. We'll update this message once that's complete!
 
 More broadly We welcome contributions – whether you are opening your very first pull request or you’re a seasoned maintainer. At the same time we care about reliability and long‑term maintainability, so the bar for merging code is intentionally **high**. The guidelines below spell out what “high‑quality” means in practice and should make the whole process transparent and friendly.
 
