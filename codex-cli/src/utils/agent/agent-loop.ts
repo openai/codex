@@ -22,6 +22,12 @@ import { handleExecCommand } from "./handle-exec-command.js";
 import { randomUUID } from "node:crypto";
 import OpenAI, { APIConnectionTimeoutError } from "openai";
 
+// Wait time before retrying after rate limit errors (ms).
+const RATE_LIMIT_RETRY_WAIT_MS = parseInt(
+  process.env["OPENAI_RATE_LIMIT_RETRY_WAIT_MS"] || "15000",
+  10,
+);
+
 export type CommandConfirmation = {
   review: ReviewDecision;
   applyPatch?: ApplyPatchCommand | undefined;
@@ -479,8 +485,9 @@ export class AgentLoop {
         }
         // Send request to OpenAI with retry on timeout
         let stream;
+
         // Retry loop for transient errors. Up to MAX_RETRIES attempts.
-        const MAX_RETRIES = 3;
+        const MAX_RETRIES = 5;
         for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
           try {
             let reasoning: Reasoning | undefined;
@@ -589,7 +596,18 @@ export class AgentLoop {
               this.onLoading(false);
               return;
             }
+
             if (isRateLimit) {
+              if (attempt < MAX_RETRIES) {
+                log(
+                  `OpenAI rate limit exceeded (attempt ${attempt}/${MAX_RETRIES}), retrying in ${RATE_LIMIT_RETRY_WAIT_MS} ms...`,
+                );
+                // eslint-disable-next-line no-await-in-loop
+                await new Promise((resolve) =>
+                  setTimeout(resolve, RATE_LIMIT_RETRY_WAIT_MS),
+                );
+                continue;
+              }
               this.onItem({
                 id: `error-${Date.now()}`,
                 type: "message",
@@ -597,13 +615,14 @@ export class AgentLoop {
                 content: [
                   {
                     type: "input_text",
-                    text: "⚠️  Rate limit reached while contacting OpenAI. Please wait a moment and try again.",
+                    text: "⚠️  Rate limit reached while contacting OpenAI. Please try again later.",
                   },
                 ],
               });
               this.onLoading(false);
               return;
             }
+
             const isClientError =
               (typeof status === "number" &&
                 status >= 400 &&
