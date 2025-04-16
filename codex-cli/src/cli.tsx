@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import "dotenv/config";
 
 // Hack to suppress deprecation warnings (punycode)
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
