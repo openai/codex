@@ -22,14 +22,14 @@ vi.mock("openai", () => {
   };
 });
 
-vi.mock("@lib/approvals.js", () => ({
+vi.mock("../src/approvals.js", () => ({
   __esModule: true,
   alwaysApprovedCommands: new Set<string>(),
   canAutoApprove: () => ({ type: "auto-approve", runInSandbox: false } as any),
   isSafeCommand: () => null,
 }));
 
-vi.mock("@lib/format-command.js", () => ({
+vi.mock("../src/format-command.js", () => ({
   __esModule: true,
   formatCommandForDisplay: (c: Array<string>) => c.join(" "),
 }));

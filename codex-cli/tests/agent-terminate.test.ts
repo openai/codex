@@ -49,7 +49,7 @@ vi.mock("openai", () => {
 
 // --- Helpers referenced by handle‑exec‑command -----------------------------
 
-vi.mock("@lib/approvals.js", () => {
+vi.mock("../src/approvals.js", () => {
   return {
     __esModule: true,
     alwaysApprovedCommands: new Set<string>(),
@@ -59,7 +59,7 @@ vi.mock("@lib/approvals.js", () => {
   };
 });
 
-vi.mock("@lib/format-command.js", () => {
+vi.mock("../src/format-command.js", () => {
   return {
     __esModule: true,
     formatCommandForDisplay: (cmd: Array<string>) => cmd.join(" "),

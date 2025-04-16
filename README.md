@@ -49,7 +49,7 @@ npm install -g @openai/codex
 
 Next, set your OpenAI API key as an environment variable:
 
-```bash
+```shell
 export OPENAI_API_KEY="your-api-key-here"
 ```
 
@@ -294,7 +294,7 @@ Any model available with [Responses API](https://platform.openai.com/docs/api-re
 
 This project is under active development and the code will likely change pretty significantly. We'll update this message once that's complete!
 
-More broadly We welcome contributions – whether you are opening your very first pull request or you’re a seasoned maintainer. At the same time we care about reliability and long‑term maintainability, so the bar for merging code is intentionally **high**. The guidelines below spell out what “high‑quality” means in practice and should make the whole process transparent and friendly.
+More broadly we welcome contributions – whether you are opening your very first pull request or you’re a seasoned maintainer. At the same time we care about reliability and long‑term maintainability, so the bar for merging code is intentionally **high**. The guidelines below spell out what “high‑quality” means in practice and should make the whole process transparent and friendly.
 
 ### Development workflow
 
@@ -302,7 +302,19 @@ More broadly We welcome contributions – whether you are opening your very firs
 - Keep your changes focused. Multiple unrelated fixes should be opened as separate PRs.
 - Use `npm run test:watch` during development for super‑fast feedback.
 - We use **Vitest** for unit tests, **ESLint** + **Prettier** for style, and **TypeScript** for type‑checking.
-- Make sure all your commits are signed off with `git commit -s ...`, see [Developer Certificate of Origin (DCO)](#developer-certificate-of-origin-dco) for more details.
+- Before pushing, run the full test/type/lint suite:
+
+  ```bash
+  npm test && npm run lint && npm run typecheck
+  ```
+
+- If you have **not** yet signed the Contributor License Agreement (CLA), add a PR comment containing the exact text
+
+  ```text
+  I have read the CLA Document and I hereby sign the CLA
+  ```
+
+  The CLA‑Assistant bot will turn the PR status green once all authors have signed.
 
 ```bash
 # Watch mode (tests rerun on change)
@@ -318,20 +330,15 @@ npm run format:fix
 
 ### Writing high‑impact code changes
 
-1. **Start with an issue.**
-   Open a new one or comment on an existing discussion so we can agree on the solution before code is written.
-2. **Add or update tests.**
-   Every new feature or bug‑fix should come with test coverage that fails before your change and passes afterwards. 100 % coverage is not required, but aim for meaningful assertions.
-3. **Document behaviour.**
-   If your change affects user‑facing behaviour, update the README, inline help (`codex --help`), or relevant example projects.
-4. **Keep commits atomic.**
-   Each commit should compile and the tests should pass. This makes reviews and potential rollbacks easier.
+1. **Start with an issue.** Open a new one or comment on an existing discussion so we can agree on the solution before code is written.
+2. **Add or update tests.** Every new feature or bug‑fix should come with test coverage that fails before your change and passes afterwards. 100 % coverage is not required, but aim for meaningful assertions.
+3. **Document behaviour.** If your change affects user‑facing behaviour, update the README, inline help (`codex --help`), or relevant example projects.
+4. **Keep commits atomic.** Each commit should compile and the tests should pass. This makes reviews and potential rollbacks easier.
 
 ### Opening a pull request
 
 - Fill in the PR template (or include similar information) – **What? Why? How?**
-- Run **all** checks locally (`npm test && npm run lint && npm run typecheck`).
-  CI failures that could have been caught locally slow down the process.
+- Run **all** checks locally (`npm test && npm run lint && npm run typecheck`). CI failures that could have been caught locally slow down the process.
 - Make sure your branch is up‑to‑date with `main` and that you have resolved merge conflicts.
 - Mark the PR as **Ready for review** only when you believe it is in a merge‑able state.
 
@@ -353,21 +360,20 @@ If you run into problems setting up the project, would like feedback on an idea,
 
 Together we can make Codex CLI an incredible tool. **Happy hacking!** :rocket:
 
-### Developer Certificate of Origin (DCO)
+### Contributor License Agreement (CLA)
 
-All commits **must** include a `Signed‑off‑by:` footer.  
-This one‑line self‑certification tells us you wrote the code and can contribute it under the repo’s license.
+All contributors **must** accept the CLA. The process is lightweight:
 
-#### How to sign (recommended flow)
+1. Open your pull request.
+2. Paste the following comment (or reply `recheck` if you’ve signed before):
 
-```bash
-# squash your work into ONE signed commit
-git reset --soft origin/main          # stage all changes
-git commit -s -m "Your concise message"
-git push --force-with-lease           # updates the PR
-```
+   ```text
+   I have read the CLA Document and I hereby sign the CLA
+   ```
 
-> We enforce **squash‑and‑merge only**, so a single signed commit is enough for the whole PR.
+3. The CLA‑Assistant bot records your signature in the repo and marks the status check as passed.
+
+No special Git commands, email attachments, or commit footers required.
 
 #### Quick fixes
 

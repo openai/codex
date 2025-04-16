@@ -1,4 +1,4 @@
-import TextBuffer from "../src/lib/text-buffer";
+import TextBuffer from "../src/text-buffer";
 import { describe, it, expect } from "vitest";
 
 describe("TextBuffer – basic editing parity with Rust suite", () => {

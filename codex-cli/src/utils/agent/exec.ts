@@ -5,7 +5,7 @@ import { process_patch } from "./apply-patch.js";
 import { SandboxType } from "./sandbox/interface.js";
 import { execWithSeatbelt } from "./sandbox/macos-seatbelt.js";
 import { exec as rawExec } from "./sandbox/raw-exec.js";
-import { formatCommandForDisplay } from "@lib/format-command.js";
+import { formatCommandForDisplay } from "../../format-command.js";
 import fs from "fs";
 import os from "os";
 

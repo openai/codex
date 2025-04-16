@@ -1,4 +1,4 @@
-import TextBuffer from "../src/lib/text-buffer";
+import TextBuffer from "../src/text-buffer";
 import { describe, it, expect, vi } from "vitest";
 
 /* -------------------------------------------------------------------------

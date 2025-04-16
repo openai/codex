@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { useTerminalSize } from "../../hooks/use-terminal-size";
-import TextBuffer from "../../lib/text-buffer.js";
+import TextBuffer from "../../text-buffer.js";
 import chalk from "chalk";
 import { Box, Text, useInput, useStdin } from "ink";
 import { EventEmitter } from "node:events";

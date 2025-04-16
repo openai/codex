@@ -1,4 +1,4 @@
-import TextBuffer from "../src/lib/text-buffer";
+import TextBuffer from "../src/text-buffer";
 import { describe, it, expect } from "vitest";
 
 // The purpose of this test‑suite is NOT to make the implementation green today
