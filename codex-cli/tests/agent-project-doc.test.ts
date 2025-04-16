@@ -112,7 +112,7 @@ describe("AgentLoop", () => {
     expect(config.instructions).toContain("Hello docs!");
 
     const agent = new AgentLoop({
-      model: "o3-mini", // arbitrary
+      model: "o3", // arbitrary
       instructions: config.instructions,
       config,
       approvalPolicy: { mode: "suggest" } as any,

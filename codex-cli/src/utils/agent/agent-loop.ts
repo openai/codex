@@ -492,7 +492,7 @@ export class AgentLoop {
             let reasoning: Reasoning | undefined;
             if (this.model.startsWith("o")) {
               reasoning = { effort: "high" };
-              if (this.model === "o3-mini" || this.model === "o4-mini") {
+              if (this.model === "o3" || this.model === "o4-mini") {
                 // @ts-expect-error waiting for API type update
                 reasoning.summary = "auto";
               }
@@ -642,9 +642,16 @@ export class AgentLoop {
                           }>
                         )?.requestId;
 
+                      const errorDetails = [
+                        `Status: ${status || "unknown"}`,
+                        `Code: ${errCtx.code || "unknown"}`,
+                        `Type: ${errCtx.type || "unknown"}`,
+                        `Message: ${errCtx.message || "unknown"}`,
+                      ].join(", ");
+
                       return `⚠️  OpenAI rejected the request${
                         reqId ? ` (request ID: ${reqId})` : ""
-                      }. Please verify your settings and try again.`;
+                      }. Error details: ${errorDetails}. Please verify your settings and try again.`;
                     })(),
                   },
                 ],
