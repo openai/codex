@@ -248,7 +248,7 @@ async function execCommand(
   };
 }
 
-const isInContainer = async (): Promise<boolean> => {
+const isInLinux = async (): Promise<boolean> => {
   try {
     await access("/proc/1/cgroup");
     return true;
@@ -261,7 +261,7 @@ async function getSandbox(runInSandbox: boolean): Promise<SandboxType> {
   if (runInSandbox) {
     if (process.platform === "darwin") {
       return SandboxType.MACOS_SEATBELT;
-    } else if (await isInContainer()) {
+    } else if (await isInLinux()) {
       return SandboxType.NONE;
     }
     throw new Error("Sandbox was mandated, but no sandbox is available!");
