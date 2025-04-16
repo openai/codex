@@ -51,14 +51,15 @@ export function renderTaskContext(taskContext: TaskContext): string {
  * For each file, we embed the content in a CDATA section.
  */
 function renderFilesToXml(files: Array<FileContent>): string {
-  let xmlContent = "<files>";
-  for (const fc of files) {
-    xmlContent += `
+  const fileContents = files
+    .map(
+      (fc) => `
       <file>
         <path>${fc.path}</path>
         <content><![CDATA[${fc.content}]]></content>
-      </file>`;
-  }
-  xmlContent += "\n</files>";
-  return xmlContent;
+      </file>`,
+    )
+    .join("");
+
+  return `<files>\n${fileContents}\n</files>`;
 }
