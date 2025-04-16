@@ -1,6 +1,6 @@
-import type { SafetyAssessment } from "./approvals";
+import type { SafetyAssessment } from "../src/lib/approvals";
 
-import { canAutoApprove } from "./approvals";
+import { canAutoApprove } from "../src/lib/approvals";
 import { describe, test, expect } from "vitest";
 
 describe("canAutoApprove()", () => {
