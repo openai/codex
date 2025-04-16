@@ -7,6 +7,9 @@ build/
 out/
 storybook-static/
 
+# ignore README for publishing
+codex-cli/README.md
+
 # editor
 .vscode/
 .idea/
