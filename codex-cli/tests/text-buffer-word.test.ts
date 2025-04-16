@@ -1,4 +1,4 @@
-import TextBuffer from "../src/lib/text-buffer.js";
+import TextBuffer from "../src/text-buffer.js";
 import { describe, test, expect } from "vitest";
 
 describe("TextBuffer – word‑wise navigation & deletion", () => {

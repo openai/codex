@@ -3,11 +3,13 @@ import type {
   ExecInput,
   ExecOutputMetadata,
 } from "./agent/sandbox/interface.js";
-import type { SafeCommandReason } from "@lib/approvals.js";
 import type { ResponseFunctionToolCall } from "openai/resources/responses/responses.mjs";
 
+import { isSafeCommand, type SafeCommandReason } from "../approvals.js";
 import { log } from "node:console";
 import process from "process";
+import { parse } from "shell-quote";
+import { formatCommandForDisplay } from "src/format-command.js";
 
 // The console utility import is intentionally explicit to avoid bundlers from
 // including the entire `console` module when only the `log` function is
@@ -22,52 +24,6 @@ const SAFE_SHELL_OPERATORS: ReadonlySet<string> = new Set([
   "|",
   ";",
 ]);
-
-// Lazily resolve heavy dependencies at runtime to avoid test environments
-// (which might not have the @lib alias configured) from failing at import
-// time. If the modules cannot be loaded we fall back to permissive stub
-// implementations so that basic functionality – like unit‑testing small UI
-// helpers – continues to work without the full codex‑lib dependency tree.
-
-let isSafeCommand: (cmd: Array<string>) => SafeCommandReason | null = () =>
-  null;
-let shellQuoteParse:
-  | ((cmd: string, env?: Record<string, string | undefined>) => Array<unknown>)
-  | undefined;
-let formatCommandForDisplay: (cmd: Array<string>) => string = (cmd) =>
-  cmd.join(" ");
-
-async function loadLibs(): Promise<void> {
-  try {
-    const approvals = await import("@lib/approvals.js");
-    if (typeof approvals.isSafeCommand === "function") {
-      isSafeCommand = approvals.isSafeCommand;
-    }
-  } catch {
-    // ignore – keep stub
-  }
-  try {
-    const fmt = await import("@lib/format-command.js");
-    if (typeof fmt.formatCommandForDisplay === "function") {
-      formatCommandForDisplay = fmt.formatCommandForDisplay;
-    }
-  } catch {
-    // ignore – keep stub
-  }
-  try {
-    const sq = await import("shell-quote");
-    if (typeof sq.parse === "function") {
-      shellQuoteParse = sq.parse as typeof shellQuoteParse;
-    }
-  } catch {
-    // ignore – keep stub
-  }
-}
-
-// Trigger the dynamic import in the background; callers that need the real
-// implementation should await the returned promise (parsers currently does not
-// require this for correctness during tests).
-void loadLibs();
 
 export function parseToolCallOutput(toolCallOutput: string): {
   output: string;
@@ -175,10 +131,9 @@ function computeAutoApproval(cmd: Array<string>): SafeCommandReason | null {
     cmd.length === 3 &&
     cmd[0] === "bash" &&
     cmd[1] === "-lc" &&
-    typeof cmd[2] === "string" &&
-    shellQuoteParse
+    typeof cmd[2] === "string"
   ) {
-    const parsed = shellQuoteParse(cmd[2], process.env ?? {});
+    const parsed = parse(cmd[2], process.env ?? {});
     if (parsed.length === 0) {
       return null;
     }

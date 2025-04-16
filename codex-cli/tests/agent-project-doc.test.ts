@@ -51,7 +51,7 @@ vi.mock("openai", () => {
 // The AgentLoop pulls these helpers in order to decide whether a command can
 // be auto‑approved. None of that matters for this test, so we stub the module
 // with minimal no‑op implementations.
-vi.mock("@lib/approvals.js", () => {
+vi.mock("../src/approvals.js", () => {
   return {
     __esModule: true,
     alwaysApprovedCommands: new Set<string>(),
@@ -61,7 +61,7 @@ vi.mock("@lib/approvals.js", () => {
   };
 });
 
-vi.mock("@lib/format-command.js", () => {
+vi.mock("../src/format-command.js", () => {
   return {
     __esModule: true,
     formatCommandForDisplay: (cmd: Array<string>) => cmd.join(" "),

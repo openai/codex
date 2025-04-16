@@ -1,5 +1,5 @@
+import type { ApprovalPolicy } from "./approvals";
 import type { AppConfig } from "./utils/config";
-import type { ApprovalPolicy } from "@lib/approvals";
 import type { ResponseItem } from "openai/resources/responses/responses";
 
 import TerminalChat from "./components/chat/terminal-chat";

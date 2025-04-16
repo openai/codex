@@ -1,7 +1,7 @@
 import type { CommandConfirmation } from "./agent-loop.js";
 import type { AppConfig } from "../config.js";
 import type { ExecInput } from "./sandbox/interface.js";
-import type { ApplyPatchCommand, ApprovalPolicy } from "@lib/approvals.js";
+import type { ApplyPatchCommand, ApprovalPolicy } from "../../approvals.js";
 import type { ResponseInputItem } from "openai/resources/responses/responses.mjs";
 
 import { exec, execApplyPatch } from "./exec.js";
@@ -9,8 +9,8 @@ import { isLoggingEnabled, log } from "./log.js";
 import { ReviewDecision } from "./review.js";
 import { FullAutoErrorMode } from "../auto-approval-mode.js";
 import { SandboxType } from "./sandbox/interface.js";
-import { canAutoApprove } from "@lib/approvals.js";
-import { formatCommandForDisplay } from "@lib/format-command.js";
+import { canAutoApprove } from "../../approvals.js";
+import { formatCommandForDisplay } from "../../format-command.js";
 import { access } from "fs/promises";
 
 // ---------------------------------------------------------------------------

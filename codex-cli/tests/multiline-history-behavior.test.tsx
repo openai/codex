@@ -34,12 +34,12 @@ vi.mock("../src/utils/input-utils.js", () => ({
   })),
 }));
 
-// Mock the optional @lib/* dependencies so the dynamic import in parsers.ts
+// Mock the optional ../src/* dependencies so the dynamic import in parsers.ts
 // does not fail during the test environment where the alias isn't configured.
-vi.mock("@lib/format-command.js", () => ({
+vi.mock("../src/format-command.js", () => ({
   formatCommandForDisplay: (cmd: Array<string>) => cmd.join(" "),
 }));
-vi.mock("@lib/approvals.js", () => ({
+vi.mock("../src/approvals.js", () => ({
   isSafeCommand: (_cmd: Array<string>) => null,
 }));
 

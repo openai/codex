@@ -74,12 +74,12 @@ vi.mock("openai", () => {
 });
 
 // Stub helpers referenced indirectly so we do not pull in real FS/network
-vi.mock("@lib/approvals.js", () => ({
+vi.mock("../src/approvals.js", () => ({
   __esModule: true,
   isSafeCommand: () => null,
 }));
 
-vi.mock("@lib/format-command.js", () => ({
+vi.mock("../src/format-command.js", () => ({
   __esModule: true,
   formatCommandForDisplay: (c: Array<string>) => c.join(" "),
 }));

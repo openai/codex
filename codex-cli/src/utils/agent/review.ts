@@ -1,4 +1,4 @@
-import type { SafeCommandReason } from "@lib/approvals";
+import type { SafeCommandReason } from "../../approvals";
 
 export type CommandReviewDetails = {
   cmd: Array<string>;

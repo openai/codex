@@ -1,6 +1,6 @@
 import type { ReviewDecision } from "./review.js";
+import type { ApplyPatchCommand, ApprovalPolicy } from "../../approvals.js";
 import type { AppConfig } from "../config.js";
-import type { ApplyPatchCommand, ApprovalPolicy } from "@lib/approvals.js";
 import type {
   ResponseFunctionToolCall,
   ResponseInputItem,

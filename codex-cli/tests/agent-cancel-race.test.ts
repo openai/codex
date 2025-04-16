@@ -67,11 +67,11 @@ vi.mock("openai", () => {
 });
 
 // Stubs for external helpers referenced indirectly.
-vi.mock("@lib/approvals.js", () => ({
+vi.mock("../src/approvals.js", () => ({
   __esModule: true,
   isSafeCommand: () => null,
 }));
-vi.mock("@lib/format-command.js", () => ({
+vi.mock("../src/format-command.js", () => ({
   __esModule: true,
   formatCommandForDisplay: (c: Array<string>) => c.join(" "),
 }));

@@ -22,7 +22,7 @@ describe("rawExec – invalid command handling", () => {
 // ---------------------------------------------------------------------------
 
 // Mock approvals and logging helpers so the test focuses on execution flow.
-vi.mock("@lib/approvals.js", () => {
+vi.mock("../src/approvals.js", () => {
   return {
     __esModule: true,
     canAutoApprove: () =>
@@ -31,7 +31,7 @@ vi.mock("@lib/approvals.js", () => {
   };
 });
 
-vi.mock("@lib/format-command.js", () => {
+vi.mock("../src/format-command.js", () => {
   return {
     __esModule: true,
     formatCommandForDisplay: (cmd: Array<string>) => cmd.join(" "),

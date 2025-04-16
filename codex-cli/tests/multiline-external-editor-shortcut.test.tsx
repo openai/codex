@@ -1,6 +1,6 @@
 import { renderTui } from "./ui-test-helpers.js";
 import MultilineTextEditor from "../src/components/chat/multiline-editor.js";
-import TextBuffer from "../src/lib/text-buffer.js";
+import TextBuffer from "../src/text-buffer.js";
 import * as React from "react";
 import { describe, it, expect, vi } from "vitest";
 

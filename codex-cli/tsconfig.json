@@ -11,9 +11,6 @@
     ],
     "types": ["node"],
     "baseUrl": "./",
-    "paths": {
-      "@lib/*": ["./src/lib/*"]
-    },
     "resolveJsonModule": false, // ESM doesn't yet support JSON modules.
     "jsx": "react",
     "declaration": true,
