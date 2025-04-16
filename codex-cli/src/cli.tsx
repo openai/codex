@@ -45,6 +45,7 @@ const cli = meow(
   `
   Usage
     $ codex [options] <prompt>
+    $ codex completion <bash|zsh|fish>
 
   Options
     -h, --help                 Show usage and exit
@@ -74,6 +75,7 @@ const cli = meow(
   Examples
     $ codex "Write and run a python program that prints ASCII art"
     $ codex -q "fix build issues"
+    $ codex completion bash
 `,
   {
     importMeta: import.meta,
@@ -136,6 +138,38 @@ const cli = meow(
   },
 );
 
+// Handle 'completion' subcommand before any prompting or API calls
+if (cli.input[0] === 'completion') {
+  const shell = cli.input[1] || 'bash';
+  const scripts: Record<string,string> = {
+    bash: `# bash completion for codex
+_codex_completion() {
+  local cur
+  cur="\${COMP_WORDS[COMP_CWORD]}"
+  COMPREPLY=( $(compgen -o default -o filenames -- "\${cur}") )
+}
+complete -F _codex_completion codex`,
+    zsh: `# zsh completion for codex
+#compdef codex
+
+_codex() {
+  _arguments '*:filename:_files'
+}
+_codex`,
+    fish: `# fish completion for codex
+complete -c codex -a '(_fish_complete_path)' -d 'file path'`,
+  };
+  const script = scripts[shell];
+  if (!script) {
+    // eslint-disable-next-line no-console
+    console.error(`Unsupported shell: ${shell}`);
+    process.exit(1);
+  }
+  // eslint-disable-next-line no-console
+  console.log(script);
+  process.exit(0);
+}
+// Show help if requested
 if (cli.flags.help) {
   cli.showHelp();
 }
