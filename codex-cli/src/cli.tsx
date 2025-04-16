@@ -55,6 +55,7 @@ const cli = meow(
     --no-project-doc           Do not automatically include the repository's 'codex.md'
     --project-doc <file>       Include an additional markdown file at <file> as context
     --full-stdout              Do not truncate stdout/stderr from command outputs
+    --use-openrouter           Use OpenRouter API for model access
 
   Dangerous options
     --dangerously-auto-approve-everything
@@ -118,13 +119,17 @@ const cli = meow(
           "Disable truncation of command stdout/stderr messages (show everything)",
         aliases: ["no-truncate"],
       },
+      useOpenRouter: {
+        type: "boolean",
+        description: "Use OpenRouter API for model access",
+      },
 
       // Experimental mode where whole directory is loaded in context and model is requested
       // to make code edits in a single pass.
       fullContext: {
         type: "boolean",
         aliases: ["f"],
-        description: `Run in full-context editing approach. The model is given the whole code 
+        description: `Run in full-context editing approach. The model is given the whole code
           directory as context and performs changes in one go without acting.`,
       },
     },
@@ -140,15 +145,20 @@ if (cli.flags.help) {
 // ---------------------------------------------------------------------------
 
 const apiKey = process.env["OPENAI_API_KEY"];
+const openRouterApiKey = process.env["OPENROUTER_API_KEY"];
 
-if (!apiKey) {
+// Only require OpenAI API key if OpenRouter API key is not provided
+if (!apiKey && !openRouterApiKey) {
   // eslint-disable-next-line no-console
   console.error(
-    `\n${chalk.red("Missing OpenAI API key.")}\n\n` +
-      `Set the environment variable ${chalk.bold("OPENAI_API_KEY")} ` +
-      `and re-run this command.\n` +
-      `You can create a key here: ${chalk.bold(
+    `\n${chalk.red("Missing API key.")}\n\n` +
+      `Set either the environment variable ${chalk.bold("OPENAI_API_KEY")} ` +
+      `or ${chalk.bold("OPENROUTER_API_KEY")} and re-run this command.\n` +
+      `You can create an OpenAI key here: ${chalk.bold(
         chalk.underline("https://platform.openai.com/account/api-keys"),
+      )}\n` +
+      `You can create an OpenRouter key here: ${chalk.bold(
+        chalk.underline("https://openrouter.ai/keys"),
       )}\n`,
   );
   process.exit(1);
@@ -168,17 +178,20 @@ const imagePaths = cli.flags.image as Array<string> | undefined;
 
 config = {
   apiKey,
+  openRouterApiKey,
   ...config,
   model: model ?? config.model,
+  useOpenRouter: cli.flags.useOpenRouter ?? config.useOpenRouter,
 };
 
-if (!(await isModelSupportedForResponses(config.model))) {
+if (!(await isModelSupportedForResponses(config.model, config.useOpenRouter))) {
   // eslint-disable-next-line no-console
   console.error(
     `The model "${config.model}" does not appear in the list of models ` +
-      `available to your account. Double‑check the spelling (use\n` +
-      `  openai models list\n` +
-      `to see the full list) or choose another model with the --model flag.`,
+      `available to your account. Double‑check the spelling or choose another model with the --model flag.\n` +
+      `${config.useOpenRouter ?
+        "For OpenRouter models, use format like 'anthropic/claude-3-opus' or 'meta-llama/llama-3-70b-instruct'." :
+        "Use 'openai models list' to see the full list of OpenAI models."}`,
   );
   process.exit(1);
 }

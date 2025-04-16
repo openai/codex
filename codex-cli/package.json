@@ -27,6 +27,7 @@
   ],
   "dependencies": {
     "@inkjs/ui": "^2.0.0",
+    "axios": "^1.6.7",
     "chalk": "^5.2.0",
     "diff": "^7.0.0",
     "file-type": "^20.1.0",

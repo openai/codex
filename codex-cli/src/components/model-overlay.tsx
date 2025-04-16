@@ -1,7 +1,9 @@
 import TypeaheadOverlay from "./typeahead-overlay.js";
 import {
   getAvailableModels,
+  getAvailableOpenRouterModels,
   RECOMMENDED_MODELS,
+  OPENROUTER_RECOMMENDED_MODELS,
 } from "../utils/model-utils.js";
 import { Box, Text, useInput } from "ink";
 import React, { useEffect, useState } from "react";
@@ -19,6 +21,7 @@ type Props = {
   hasLastResponse: boolean;
   onSelect: (model: string) => void;
   onExit: () => void;
+  useOpenRouter?: boolean;
 };
 
 export default function ModelOverlay({
@@ -26,6 +29,7 @@ export default function ModelOverlay({
   hasLastResponse,
   onSelect,
   onExit,
+  useOpenRouter = false,
 }: Props): JSX.Element {
   const [items, setItems] = useState<Array<{ label: string; value: string }>>(
     [],
@@ -33,22 +37,43 @@ export default function ModelOverlay({
 
   useEffect(() => {
     (async () => {
-      const models = await getAvailableModels();
+      let models: string[] = [];
+      let recommended: string[] = [];
+      
+      if (useOpenRouter) {
+        // Get both OpenAI and OpenRouter models when OpenRouter is enabled
+        const openAIModels = await getAvailableModels();
+        const openRouterModels = await getAvailableOpenRouterModels();
+        models = [...openAIModels, ...openRouterModels];
+        
+        // Combine recommended models from both sources
+        recommended = [
+          ...RECOMMENDED_MODELS.filter(m => openAIModels.includes(m)),
+          ...OPENROUTER_RECOMMENDED_MODELS.filter(m => openRouterModels.includes(m))
+        ];
+      } else {
+        // Only get OpenAI models when OpenRouter is disabled
+        models = await getAvailableModels();
+        recommended = RECOMMENDED_MODELS.filter((m) => models.includes(m));
+      }
 
-      // Split the list into recommended and “other” models.
-      const recommended = RECOMMENDED_MODELS.filter((m) => models.includes(m));
+      // Filter out models that are already in the recommended list
       const others = models.filter((m) => !recommended.includes(m));
 
       const ordered = [...recommended, ...others.sort()];
 
       setItems(
         ordered.map((m) => ({
-          label: recommended.includes(m) ? `⭐ ${m}` : m,
+          label: recommended.includes(m) 
+            ? `⭐ ${m}` 
+            : m.includes('/') 
+              ? `🔄 ${m}` // Mark OpenRouter models with a special icon
+              : m,
           value: m,
         })),
       );
     })();
-  }, []);
+  }, [useOpenRouter]);
 
   // ---------------------------------------------------------------------------
   // If the conversation already contains a response we cannot change the model
@@ -95,9 +120,16 @@ export default function ModelOverlay({
     <TypeaheadOverlay
       title="Switch model"
       description={
-        <Text>
-          Current model: <Text color="greenBright">{currentModel}</Text>
-        </Text>
+        <Box flexDirection="column">
+          <Text>
+            Current model: <Text color="greenBright">{currentModel}</Text>
+          </Text>
+          {useOpenRouter && (
+            <Text>
+              <Text color="cyan">OpenRouter</Text> enabled: Models with <Text color="cyan">🔄</Text> prefix are from OpenRouter
+            </Text>
+          )}
+        </Box>
       }
       initialItems={items}
       currentValue={currentModel}

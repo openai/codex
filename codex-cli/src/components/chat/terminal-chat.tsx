@@ -268,6 +268,7 @@ export default function TerminalChat({
               colorsByPolicy,
               agent,
               initialImagePaths,
+              useOpenRouter: config.useOpenRouter,
             }}
           />
         ) : (
@@ -322,6 +323,7 @@ export default function TerminalChat({
           <ModelOverlay
             currentModel={model}
             hasLastResponse={Boolean(lastResponseId)}
+            useOpenRouter={config.useOpenRouter}
             onSelect={(newModel) => {
               if (isLoggingEnabled()) {
                 log(

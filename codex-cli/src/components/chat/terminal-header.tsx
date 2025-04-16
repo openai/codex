@@ -13,6 +13,7 @@ export interface TerminalHeaderProps {
   colorsByPolicy: Record<string, string | undefined>;
   agent?: AgentLoop;
   initialImagePaths?: Array<string>;
+  useOpenRouter?: boolean;
 }
 
 const TerminalHeader: React.FC<TerminalHeaderProps> = ({
@@ -24,6 +25,7 @@ const TerminalHeader: React.FC<TerminalHeaderProps> = ({
   colorsByPolicy,
   agent,
   initialImagePaths,
+  useOpenRouter,
 }) => {
   return (
     <>
@@ -61,6 +63,7 @@ const TerminalHeader: React.FC<TerminalHeaderProps> = ({
             </Text>
             <Text dimColor>
               <Text color="blueBright">↳</Text> model: <Text bold>{model}</Text>
+              {useOpenRouter && <Text color="cyan"> (via OpenRouter)</Text>}
             </Text>
             <Text dimColor>
               <Text color="blueBright">↳</Text> approval:{" "}

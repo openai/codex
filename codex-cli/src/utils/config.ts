@@ -36,8 +36,16 @@ export const OPENAI_TIMEOUT_MS =
 export const OPENAI_BASE_URL = process.env["OPENAI_BASE_URL"] || "";
 export let OPENAI_API_KEY = process.env["OPENAI_API_KEY"] || "";
 
+// OpenRouter configuration
+export const OPENROUTER_BASE_URL = process.env["OPENROUTER_BASE_URL"] || "https://openrouter.ai/api/v1";
+export let OPENROUTER_API_KEY = process.env["OPENROUTER_API_KEY"] || "";
+
 export function setApiKey(apiKey: string): void {
   OPENAI_API_KEY = apiKey;
+}
+
+export function setOpenRouterApiKey(apiKey: string): void {
+  OPENROUTER_API_KEY = apiKey;
 }
 
 // Formatting (quiet mode-only).
@@ -49,6 +57,7 @@ export type StoredConfig = {
   approvalMode?: AutoApprovalMode;
   fullAutoErrorMode?: FullAutoErrorMode;
   memory?: MemoryConfig;
+  useOpenRouter?: boolean;
 };
 
 // Minimal config written on first run.  An *empty* model string ensures that
@@ -70,6 +79,8 @@ export type AppConfig = {
   instructions: string;
   fullAutoErrorMode?: FullAutoErrorMode;
   memory?: MemoryConfig;
+  useOpenRouter?: boolean;
+  openRouterApiKey?: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -253,6 +264,7 @@ export const loadConfig = (
         ? DEFAULT_FULL_CONTEXT_MODEL
         : DEFAULT_AGENTIC_MODEL),
     instructions: combinedInstructions,
+    useOpenRouter: storedConfig.useOpenRouter ?? false,
   };
 
   // -----------------------------------------------------------------------
@@ -342,11 +354,17 @@ export const saveConfig = (
 
   const ext = extname(targetPath).toLowerCase();
   if (ext === ".yaml" || ext === ".yml") {
-    writeFileSync(targetPath, dumpYaml({ model: config.model }), "utf-8");
+    writeFileSync(targetPath, dumpYaml({
+      model: config.model,
+      useOpenRouter: config.useOpenRouter
+    }), "utf-8");
   } else {
     writeFileSync(
       targetPath,
-      JSON.stringify({ model: config.model }, null, 2),
+      JSON.stringify({
+        model: config.model,
+        useOpenRouter: config.useOpenRouter
+      }, null, 2),
       "utf-8",
     );
   }

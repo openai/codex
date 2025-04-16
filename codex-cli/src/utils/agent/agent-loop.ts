@@ -9,7 +9,7 @@ import type {
 import type { Reasoning } from "openai/resources.mjs";
 
 import { log, isLoggingEnabled } from "./log.js";
-import { OPENAI_BASE_URL, OPENAI_TIMEOUT_MS } from "../config.js";
+import { OPENAI_BASE_URL, OPENAI_TIMEOUT_MS, OPENROUTER_BASE_URL, OPENROUTER_API_KEY } from "../config.js";
 import { parseToolCallArguments } from "../parsers.js";
 import {
   ORIGIN,
@@ -238,6 +238,11 @@ export class AgentLoop {
     // Configure OpenAI client with optional timeout (ms) from environment
     const timeoutMs = OPENAI_TIMEOUT_MS;
     const apiKey = this.config.apiKey ?? process.env["OPENAI_API_KEY"] ?? "";
+
+    // Determine if we should use OpenRouter
+    const useOpenRouter = this.config.useOpenRouter ?? false;
+    const openRouterApiKey = this.config.openRouterApiKey ?? OPENROUTER_API_KEY ?? "";
+
     this.oai = new OpenAI({
       // The OpenAI JS SDK only requires `apiKey` when making requests against
       // the official API.  When running unit‑tests we stub out all network
@@ -245,12 +250,13 @@ export class AgentLoop {
       // the property if we actually have a value to avoid triggering runtime
       // errors inside the SDK (it validates that `apiKey` is a non‑empty
       // string when the field is present).
-      ...(apiKey ? { apiKey } : {}),
-      baseURL: OPENAI_BASE_URL,
+      ...(useOpenRouter ? { apiKey: openRouterApiKey } : (apiKey ? { apiKey } : {})),
+      baseURL: useOpenRouter ? OPENROUTER_BASE_URL : OPENAI_BASE_URL,
       defaultHeaders: {
         originator: ORIGIN,
         version: CLI_VERSION,
         session_id: this.sessionId,
+        ...(useOpenRouter ? { 'HTTP-Referer': 'https://github.com/openai/codex' } : {}),
       },
       ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
     });
