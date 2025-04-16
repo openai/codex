@@ -43,7 +43,6 @@
     "openai": "^4.89.0",
     "react": "^18.2.0",
     "shell-quote": "^1.8.2",
-    "terminal-image": "^3.1.1",
     "use-interval": "1.4.0"
   },
   "devDependencies": {
@@ -55,7 +54,7 @@
     "@types/shell-quote": "^1.7.5",
     "@typescript-eslint/eslint-plugin": "^7.18.0",
     "@typescript-eslint/parser": "^7.18.0",
-    "esbuild": "^0.23.1",
+    "esbuild": "^0.25.2",
     "eslint-plugin-import": "^2.31.0",
     "eslint-plugin-react": "^7.32.2",
     "eslint-plugin-react-hooks": "^4.6.0",
