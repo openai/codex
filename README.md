@@ -268,7 +268,7 @@ Not directly, it requires [Linux on Windows (WSL2)](https://learn.microsoft.com/
 <details>
 <summary>Which models are supported?</summary>
 
-Any model available with [Responses API](https://platform.openai.com/docs/api-reference/responses). The default is `o3`, but pass `--model gpt-4o` or set `model: gpt-4o` in your config file to override.
+Any model available with [Responses API](https://platform.openai.com/docs/api-reference/responses). The default is `o4-mini`, but pass `--model gpt-4o` or set `model: gpt-4o` in your config file to override.
 
 </details>
 
