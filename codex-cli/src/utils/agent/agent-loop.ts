@@ -38,9 +38,7 @@ type AgentLoopParams = {
   onItem: (item: ResponseItem) => void;
   onLoading: (loading: boolean) => void;
 
-  /**
-   * Used to reach out to the user only if the command is not auto-approved.
-   */
+  /** Called when the command is not auto-approved to request explicit user review. */
   getCommandConfirmation: (
     command: Array<string>,
     applyPatch: ApplyPatchCommand | undefined,
@@ -53,12 +51,12 @@ export class AgentLoop {
   private instructions?: string;
   private approvalPolicy: ApprovalPolicy;
   private config: AppConfig;
-  // Using `InstanceType<typeof OpenAI>` sidesteps typing issues with the
-  // OpenAI package under the TS 5+ `moduleResolution=bundler` setup.
-  // OpenAI client instance. We keep the concrete type to avoid sprinkling
-  // `any` across the implementation while still allowing paths where the
-  // OpenAI SDK types may not perfectly match. The `typeof OpenAI` pattern
-  // captures the instance shape without resorting to `any`.
+
+  // Using `InstanceType<typeof OpenAI>` sidesteps typing issues with the OpenAI package under
+  // the TS 5+ `moduleResolution=bundler` setup. OpenAI client instance. We keep the concrete
+  // type to avoid sprinkling `any` across the implementation while still allowing paths where
+  // the OpenAI SDK types may not perfectly match. The `typeof OpenAI` pattern captures the
+  // instance shape without resorting to `any`.
   private oai: OpenAI;
 
   private onItem: (item: ResponseItem) => void;
@@ -688,7 +686,7 @@ export class AgentLoop {
             // process and surface each item (no‑op until we can depend on streaming events)
             if (event.type === "response.output_item.done") {
               const item = event.item;
-              // ① if it's a reasoning item, annotate it
+              // 1) if it's a reasoning item, annotate it
               type ReasoningItem = { type?: string; duration_ms?: number };
               const maybeReasoning = item as ReasoningItem;
               if (maybeReasoning.type === "reasoning") {
@@ -776,7 +774,7 @@ export class AgentLoop {
         // thinking times so UIs and tests can surface/verify them.
         // const thinkingEnd = Date.now();
 
-        // ① Per‑turn measurement – exact time spent between request and
+        // 1) Per‑turn measurement – exact time spent between request and
         //    response for *this* command.
         // this.onItem({
         //   id: `thinking-${thinkingEnd}`,
@@ -792,7 +790,7 @@ export class AgentLoop {
         //   ],
         // });
 
-        // ② Session‑wide cumulative counter so users can track overall wait
+        // 2) Session‑wide cumulative counter so users can track overall wait
         //    time across multiple turns.
         // this.cumulativeThinkingMs += thinkingEnd - thinkingStart;
         // this.onItem({
@@ -975,6 +973,7 @@ export class AgentLoop {
 }
 
 const prefix = `You are operating as and within the Codex CLI, a terminal-based agentic coding assistant built by OpenAI. It wraps OpenAI models to enable natural language interaction with a local codebase. You are expected to be precise, safe, and helpful.
+
 You can:
 - Receive user prompts, project context, and files.
 - Stream responses and emit function calls (e.g., shell commands, code edits).

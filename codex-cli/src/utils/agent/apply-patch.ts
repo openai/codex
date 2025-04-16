@@ -1,3 +1,6 @@
+// Based on reference implementation from
+// https://cookbook.openai.com/examples/gpt4-1_prompting_guide#reference-implementation-apply_patchpy
+
 import fs from "fs";
 import path from "path";
 
