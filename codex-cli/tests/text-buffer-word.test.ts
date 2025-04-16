@@ -84,6 +84,15 @@ describe("TextBuffer – word‑wise navigation & deletion", () => {
     expect(col).toBe(11);
   });
 
+  test("deleteWordLeft after trailing space only deletes the last word, not the whole line", () => {
+    const tb = new TextBuffer("I want you to refactor my view ");
+    tb.move("end"); // Place caret after the space
+    tb.deleteWordLeft();
+    expect(tb.getText()).toBe("I want you to refactor my ");
+    const [, col] = tb.getCursor();
+    expect(col).toBe("I want you to refactor my ".length);
+  });
+
   test("deleteWordLeft removes the previous word and positions the caret correctly", () => {
     const tb = new TextBuffer("hello world");
 

@@ -443,17 +443,30 @@ export default class TextBuffer {
     const line = this.line(this.cursorRow);
     const arr = toCodePoints(line);
 
-    // Step 1 – skip over any separators sitting *immediately* to the left of
-    // the caret so that consecutive deletions wipe runs of whitespace first
-    // then words.
+    // Correction :
+    // Si le curseur est juste après un espace (ou plusieurs), on ne supprime que les séparateurs
+    // puis, au prochain appel, le mot précédent. On ne doit jamais supprimer toute la ligne.
     let start = this.cursorCol;
-    while (start > 0 && !isWordChar(arr[start - 1])) {
-      start--;
+    let onlySpaces = true;
+    for (let i = 0; i < start; i++) {
+      if (isWordChar(arr[i])) {
+        onlySpaces = false;
+        break;
+      }
     }
 
-    // Step 2 – now skip the word characters themselves.
-    while (start > 0 && isWordChar(arr[start - 1])) {
+    // Si la ligne ne contient que des espaces jusqu'au curseur, ne supprime qu'un espace
+    if (onlySpaces && start > 0) {
       start--;
+    } else {
+      // Step 1 – skip over any separators sitting *immediately* to the left of the caret
+      while (start > 0 && !isWordChar(arr[start - 1])) {
+        start--;
+      }
+      // Step 2 – skip the word characters themselves
+      while (start > 0 && isWordChar(arr[start - 1])) {
+        start--;
+      }
     }
 
     this.lines[this.cursorRow] =
