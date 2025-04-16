@@ -636,9 +636,16 @@ export class AgentLoop {
                           }>
                         )?.requestId;
 
+                      const errorDetails = [
+                        `Status: ${status || "unknown"}`,
+                        `Code: ${errCtx.code || "unknown"}`,
+                        `Type: ${errCtx.type || "unknown"}`,
+                        `Message: ${errCtx.message || "unknown"}`,
+                      ].join(", ");
+
                       return `⚠️  OpenAI rejected the request${
                         reqId ? ` (request ID: ${reqId})` : ""
-                      }. Please verify your settings and try again.`;
+                      }. Error details: ${errorDetails}. Please verify your settings and try again.`;
                     })(),
                   },
                 ],
