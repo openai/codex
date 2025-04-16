@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e
 
 # Usage:
 #   ./run_in_container.sh [--work_dir directory] "COMMAND"
@@ -8,7 +9,7 @@
 #     ./run_in_container.sh "echo Hello, world!"
 
 # Default the work directory to WORKSPACE_ROOT_DIR if not provided.
-WORK_DIR="${WORKSPACE_ROOT_DIR}"
+WORK_DIR="${WORKSPACE_ROOT_DIR:-$(pwd)}"
 
 # Parse optional flag.
 if [ "$1" = "--work_dir" ]; then
@@ -19,6 +20,8 @@ if [ "$1" = "--work_dir" ]; then
   WORK_DIR="$2"
   shift 2
 fi
+
+WORK_DIR=$(realpath "$WORK_DIR")
 
 # Ensure a command is provided.
 if [ "$#" -eq 0 ]; then
@@ -33,14 +36,14 @@ if [ -z "$WORK_DIR" ]; then
 fi
 
 # Remove any existing container named 'codex'.
-docker rm -f codex || true
+docker rm -f codex 2>/dev/null || true
 
 # Run the container with the specified directory mounted at the same path inside the container.
 docker run --name codex -d \
   -e OPENAI_API_KEY \
   --cap-add=NET_ADMIN \
   --cap-add=NET_RAW \
-  -v "$WORK_DIR:$WORK_DIR" \
+  -v "$WORK_DIR:/app$WORK_DIR" \
   codex \
   sleep infinity
 
@@ -49,4 +52,9 @@ docker exec codex bash -c "sudo /usr/local/bin/init_firewall.sh"
 
 # Execute the provided command in the container, ensuring it runs in the work directory.
 # We use a parameterized bash command to safely handle the command and directory.
-docker exec codex bash -c "cd \"$WORK_DIR\" && codex --dangerously-auto-approve-everything -q \"$@\""
+
+quoted_args=""
+for arg in "$@"; do
+  quoted_args+=" $(printf '%q' "$arg")"
+done
+docker exec -it codex bash -c "cd \"/app$WORK_DIR\" && codex --full-auto ${quoted_args}"
