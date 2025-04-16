@@ -243,7 +243,7 @@ npm link
 Codex looks for config files in **`~/.codex/`**.
 
 ```yaml
-# ~/.codex/config.yaml
+# ~/.codex/config.json
 model: o4-mini # Default model
 fullAutoErrorMode: ask-user # or ignore-and-continue
 ```
