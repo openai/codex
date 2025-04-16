@@ -1,4 +1,4 @@
-#!/usr/bin/env -S NODE_OPTIONS=--no-deprecation node
+#!/bin/sh NODE_OPTIONS=--no-deprecation exec node "$(dirname "$0")/../dist/cli.js" "$@"
 
 import type { AppRollout } from "./app";
 import type { CommandConfirmation } from "./utils/agent/agent-loop";
