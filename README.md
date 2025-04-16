@@ -270,7 +270,7 @@ Codex always runs in a **sandbox first**. If a proposed command or file change l
 <details>
 <summary>Does it work on Windows?</summary>
 
-Not directly, it requires [Linux on Windows (WSL2)](https://learn.microsoft.com/en-us/windows/wsl/install) – Codex is tested on macOS and Linux with Node ≥ 22.
+Not directly. It requires [Windows Subsystem for Linux (WSL2)](https://learn.microsoft.com/en-us/windows/wsl/install) – Codex has been tested on macOS and Linux with Node ≥ 22.
 
 </details>
 
