@@ -60,7 +60,7 @@ describe("handleExecCommand – invalid executable", () => {
       getConfirmation,
     );
 
-    expect(metadata['exit_code']).not.toBe(0);
+    expect(metadata["exit_code"]).not.toBe(0);
     expect(String(outputText).length).toBeGreaterThan(0);
   });
 });
