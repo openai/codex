@@ -1,7 +1,6 @@
 {
-  "private": true,
   "name": "@openai/codex",
-  "version": "0.1.04160940",
+  "version": "0.1.04161241",
   "license": "Apache-2.0",
   "bin": {
     "codex": "dist/cli.js"
@@ -20,10 +19,15 @@
     "test:watch": "vitest --watch",
     "typecheck": "tsc --noEmit",
     "build": "node build.mjs",
-    "build:dev": "NODE_ENV=development node build.mjs --dev && NODE_OPTIONS=--enable-source-maps node dist/cli-dev.js"
+    "build:dev": "NODE_ENV=development node build.mjs --dev && NODE_OPTIONS=--enable-source-maps node dist/cli-dev.js",
+    "release:readme": "cp ../README.md ./README.md",
+    "release:version": "codex -a full-auto 'update the CLI_VERSION in codex-cli/src/utils/session.ts and the version in package.json to use the current timestamp (MMDDHHmm format)'",
+    "release": "npm run release:readme && npm run build && npm publish"
   },
   "files": [
-    "dist"
+    "README.md",
+    "dist",
+    "src"
   ],
   "dependencies": {
     "@inkjs/ui": "^2.0.0",
