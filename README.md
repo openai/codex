@@ -188,7 +188,7 @@ Set `CODEX_QUIET_MODE=1` to silence interactive UI noise.
 
 ## Recipes
 
-Below are a few bite‑size examples you can copy‑paste. Replace the text in quotes with your own task.
+Below are a few bite‑size examples you can copy‑paste. Replace the text in quotes with your own task. See the [prompting guide](https://github.com/openai/codex/blob/main/codex-cli/examples/prompting_guide.md) for more tips and usage patterns.
 
 | ✨  | What you type                                                                   | What happens                                                               |
 | --- | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
