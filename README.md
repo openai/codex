@@ -10,20 +10,30 @@
 <details>
 <summary><strong>Table&nbsp;of&nbsp;Contents</strong></summary>
 
-1. [Quickstart](#quickstart)
-1. [Why Codex?](#why-codex)
-1. [Features](#features)
-1. [System Requirements](#system-requirements)
-1. [Security Model & Permissions](#security-model--permissions)
-1. [CLI Reference](#cli-reference)
-1. [Memory & Project Docs](#memory--project-docs)
-1. [Non‑interactive / CI mode](#non‑interactive--ci-mode)
-1. [Recipes](#recipes)
-1. [Installation](#installation)
-1. [FAQ](#faq)
-1. [Contributing](#contributing)
-1. [Security &amp; Responsible AI](#security--responsible-ai)
-1. [License](#license)
+- [Quickstart](#quickstart)
+- [Why Codex?](#whycodex)
+- [Security Model \& Permissions](#securitymodelpermissions)
+  - [Platform sandboxing details](#platform-sandboxing-details)
+- [System Requirements](#systemrequirements)
+- [CLI Reference](#clireference)
+- [Memory \& Project Docs](#memoryprojectdocs)
+- [Non‑interactive / CI mode](#noninteractivecimode)
+- [Recipes](#recipes)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [FAQ](#faq)
+- [Contributing](#contributing)
+  - [Development workflow](#development-workflow)
+  - [Writing high‑impact code changes](#writing-highimpact-code-changes)
+  - [Opening a pull request](#opening-a-pull-request)
+  - [Review process](#review-process)
+  - [Community values](#community-values)
+  - [Getting help](#getting-help)
+  - [Developer Certificate of Origin (DCO)](#developer-certificate-of-origin-dco)
+    - [How to sign (recommended flow)](#how-to-sign-recommended-flow)
+    - [Quick fixes](#quick-fixes)
+- [Security \& Responsible AI](#securityresponsibleai)
+- [License](#license)
 
 </details>
 
@@ -314,12 +324,6 @@ npm run format:fix
 1. One maintainer will be assigned as a primary reviewer.
 2. We may ask for changes – please do not take this personally. We value the work, we just also value consistency and long‑term maintainability.
 3. When there is consensus that the PR meets the bar, a maintainer will squash‑and‑merge.
-
-### Triaging labels
-
-- `good first issue` – great for newcomers, usually well‑scoped and low risk.
-- `help wanted` – higher impact, still looking for outside contributors.
-- `discussion` – exploring the problem/solution space; code contributions are discouraged until the direction is clear.
 
 ### Community values
 
