@@ -33,6 +33,7 @@
     "@inkjs/ui": "^2.0.0",
     "chalk": "^5.2.0",
     "diff": "^7.0.0",
+    "dotenv": "^16.1.4",
     "file-type": "^20.1.0",
     "ink": "^5.2.0",
     "ink-select-input": "^6.0.0",

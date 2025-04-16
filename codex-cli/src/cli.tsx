@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import "dotenv/config";
 
 import type { AppRollout } from "./app";
 import type { ApprovalPolicy } from "./approvals";
