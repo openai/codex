@@ -27,10 +27,8 @@
   ],
   "dependencies": {
     "@inkjs/ui": "^2.0.0",
-    "@types/express": "^5.0.1",
     "chalk": "^5.2.0",
     "diff": "^7.0.0",
-    "express": "^5.1.0",
     "file-type": "^20.1.0",
     "ink": "^5.2.0",
     "ink-select-input": "^6.0.0",
