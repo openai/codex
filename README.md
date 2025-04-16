@@ -85,7 +85,6 @@ files, and iterate – all under version control. In short, it’s _chat‑drive
 development_ that understands and executes your repo.
 
 - **Zero setup** — bring your OpenAI API key and it just works!
-- **Multiple model providers** — supports both OpenAI and [OpenRouter](OPENROUTER_SUPPORT.md) models (Claude, Llama, etc.)
 - **Full auto-approval, while safe + secure** by running network-disabled and directory-sandboxed
 - **Multimodal** — pass in screenshots or diagrams to implement features ✨
 
@@ -150,12 +149,11 @@ Both approaches are _transparent_ to everyday usage – you still run `codex` fr
 
 ## CLI Reference
 
-| Command                  | Purpose                             | Example                                                |
-| ------------------------ | ----------------------------------- | ------------------------------------------------------ |
-| `codex`                  | Interactive REPL                    | `codex`                                                |
-| `codex "…"`              | Initial prompt for interactive REPL | `codex "fix lint errors"`                              |
-| `codex -q "…"`           | Non‑interactive "quiet mode"        | `codex -q --json "explain utils.ts"`                   |
-| `codex --use-openrouter` | Use OpenRouter models               | `codex --use-openrouter --model "anthropic/claude-3"` |
+| Command        | Purpose                             | Example                              |
+| -------------- | ----------------------------------- | ------------------------------------ |
+| `codex`        | Interactive REPL                    | `codex`                              |
+| `codex "…"`    | Initial prompt for interactive REPL | `codex "fix lint errors"`            |
+| `codex -q "…"` | Non‑interactive "quiet mode"        | `codex -q --json "explain utils.ts"` |
 
 Key flags: `--model/-m`, `--approval-mode/-a`, and `--quiet/-q`.
 
@@ -201,7 +199,6 @@ Below are a few bite‑size examples you can copy‑paste. Replace the text in q
 | 4   | `codex "Bulk‑rename *.jpeg → *.jpg with git mv"`                                | Safely renames files and updates imports/usages.                           |
 | 5   | `codex "Explain what this regex does: ^(?=.*[A-Z]).{8,}$"`                      | Outputs a step‑by‑step human explanation.                                  |
 | 6   | `codex "Carefully review this repo, and propose 3 high impact well-scoped PRs"` | Suggests impactful PRs in the current codebase.                            |
-| 7   | `codex --use-openrouter --model "anthropic/claude-3-opus"`                      | Uses Claude via OpenRouter for enhanced reasoning capabilities.            |
 
 ---
 
@@ -249,7 +246,6 @@ Codex looks for config files in **`~/.codex/`**.
 # ~/.codex/config.yaml
 model: o4-mini # Default model
 fullAutoErrorMode: ask-user # or ignore-and-continue
-useOpenRouter: false # Set to true to use OpenRouter models
 ```
 
 You can also define custom instructions:
@@ -282,8 +278,6 @@ Not directly, it requires [Linux on Windows (WSL2)](https://learn.microsoft.com/
 <summary>Which models are supported?</summary>
 
 Any model available with [Responses API](https://platform.openai.com/docs/api-reference/responses). The default is `o4-mini`, but pass `--model gpt-4o` or set `model: gpt-4o` in your config file to override.
-
-Codex also supports [OpenRouter](https://openrouter.ai/) models! See [OPENROUTER_SUPPORT.md](OPENROUTER_SUPPORT.md) for details on how to use models like Claude, Llama, and more.
 
 </details>
 
