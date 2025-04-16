@@ -154,7 +154,7 @@ Both approaches are _transparent_ to everyday usage – you still run `codex` fr
 | ------------------------ | ----------------------------------- | ------------------------------------------------------ |
 | `codex`                  | Interactive REPL                    | `codex`                                                |
 | `codex "…"`              | Initial prompt for interactive REPL | `codex "fix lint errors"`                              |
-| `codex -q "…"`           | Non‑interactive "quiet mode"        | `codex -p --json "explain utils.ts"`                   |
+| `codex -q "…"`           | Non‑interactive "quiet mode"        | `codex -q --json "explain utils.ts"`                   |
 | `codex --use-openrouter` | Use OpenRouter models               | `codex --use-openrouter --model "anthropic/claude-3"` |
 
 Key flags: `--model/-m`, `--approval-mode/-a`, and `--quiet/-q`.
