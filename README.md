@@ -12,7 +12,6 @@
 
 1. [Quickstart](#quickstart)
 1. [Why Codex?](#why-codex)
-1. [Features](#features)
 1. [System Requirements](#system-requirements)
 1. [Security Model & Permissions](#security-model--permissions)
 1. [CLI Reference](#cli-reference)
@@ -59,7 +58,7 @@ they’ll be committed to your working directory.
 
 ---
 
-## Why Codex?
+<h2 id="why-codex">Why Codex?</h2>
 
 Codex CLI is built for developers who already **live in the terminal** and want
 ChatGPT‑level reasoning **plus** the power to actually run code, manipulate
@@ -74,7 +73,7 @@ And it's **fully open-source** so you can see and contribute to how it develops!
 
 ---
 
-## Security Model & Permissions
+<h2 id="security-model--permissions">Security Model & Permissions</h2>
 
 Codex lets you decide _how much autonomy_ the agent receives and auto-approval policy via the
 `--approval-mode` flag (or the interactive onboarding prompt):
@@ -115,7 +114,7 @@ Both approaches are _transparent_ to everyday usage – you still run `codex` fr
 
 ---
 
-## System Requirements
+<h2 id="system-requirements">System Requirements</h2>
 
 | Requirement                 | Details                                                         |
 | --------------------------- | --------------------------------------------------------------- |
@@ -129,7 +128,7 @@ Both approaches are _transparent_ to everyday usage – you still run `codex` fr
 
 ---
 
-## CLI Reference
+<h2 id="cli-reference">CLI Reference</h2>
 
 | Command        | Purpose                             | Example                              |
 | -------------- | ----------------------------------- | ------------------------------------ |
@@ -141,7 +140,7 @@ Key flags: `--model/-m`, `--approval-mode/-a`, and `--quiet/-q`.
 
 ---
 
-## Memory & Project Docs
+<h2 id="memory--project-docs">Memory & Project Docs</h2>
 
 Codex merges Markdown instructions in this order:
 
@@ -153,7 +152,7 @@ Disable with `--no-project-doc` or `CODEX_DISABLE_PROJECT_DOC=1`.
 
 ---
 
-## Non‑interactive / CI mode
+<h2 id="non‑interactive--ci-mode">Non‑interactive / CI mode</h2>
 
 Run Codex head‑less in pipelines. Example GitHub Action step:
 
@@ -360,7 +359,7 @@ The **DCO check** blocks merges until every commit in the PR carries the footer 
 
 ---
 
-## Security &amp; Responsible AI
+<h2 id="security--responsible-ai">Security &amp; Responsible AI</h2>
 
 Have you discovered a vulnerability or have concerns about model output? Please e‑mail **security@openai.com** and we will respond promptly.
 
