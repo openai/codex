@@ -152,7 +152,7 @@ describe("AgentLoop – automatic retry on 5xx errors", () => {
 
     await new Promise((r) => setTimeout(r, 20));
 
-    expect(openAiState.createSpy).toHaveBeenCalledTimes(3);
+    expect(openAiState.createSpy).toHaveBeenCalledTimes(5);
 
     const sysMsg = received.find(
       (i) =>
