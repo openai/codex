@@ -105,8 +105,7 @@ function TextInput({
       }
 
       const newValue = originalValue || "";
-
-      if (previousState.cursorOffset > newValue.length - 1) {
+      if (previousState.cursorOffset === 0 || previousState.cursorOffset > newValue.length - 1) {
         return {
           cursorOffset: newValue.length,
           cursorWidth: 0,
