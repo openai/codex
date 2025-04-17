@@ -64,8 +64,6 @@ const cli = meow(
 
     --auto-edit                Automatically approve file edits; still prompt for commands
     --full-auto                Automatically approve edits and commands when executed in the sandbox
-    --fully-non-interactive    Run in completely non-interactive mode, automatically approving all
-                               actions, including commands, with no user interaction
 
     --no-project-doc           Do not automatically include the repository's 'codex.md'
     --project-doc <file>       Include an additional markdown file at <file> as context
@@ -75,8 +73,7 @@ const cli = meow(
   Dangerous options
     --dangerously-auto-approve-everything
                                Automatically approve all commands without prompting and 
-                               with streamlined output formatting. Commands still run in
-                               the sandbox for safety.
+                               with streamlined output formatting.
 
   Experimental options
     -f, --full-context         Launch in "full-context" mode which loads the entire repository
@@ -111,7 +108,7 @@ const cli = meow(
       dangerouslyAutoApproveEverything: {
         type: "boolean",
         description:
-          "Automatically approve all commands without prompting with minimized output formatting. This is safer than it sounds, as commands still run in the sandbox.",
+          "Automatically approve all commands without prompting with minimized output formatting. This is EXTREMELY DANGEROUS and should only be used in trusted environments.",
       },
       autoEdit: {
         type: "boolean",
