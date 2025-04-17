@@ -15,8 +15,7 @@ import { describe, it, expect, vi } from "vitest";
 // ---------------------------------------------------------------------------
 
 let receivedItems: Array<{ label: string; value: string }> | null = null;
-
-vi.mock("./select-input/select-input.js", () => {
+vi.mock("../src/components/select-input/select-input.js", () => {
   return {
     default: (props: any) => {
       receivedItems = props.items;
