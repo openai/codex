@@ -228,8 +228,11 @@ cd codex/codex-cli
 npm install
 npm run build
 
-# Run the locally‑built CLI directly
+# Get the usage and the options
 node ./dist/cli.js --help
+
+# Run the locally‑built CLI directly
+node ./dist/cli.js
 
 # Or link the command globally for convenience
 npm link
