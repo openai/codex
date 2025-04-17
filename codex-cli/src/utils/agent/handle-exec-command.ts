@@ -74,6 +74,7 @@ export async function handleExecCommand(
   args: ExecInput,
   config: AppConfig,
   policy: ApprovalPolicy,
+  additionalWritableRoots: Array<string>,
   getCommandConfirmation: (
     command: Array<string>,
     applyPatch: ApplyPatchCommand | undefined,
@@ -91,6 +92,7 @@ export async function handleExecCommand(
       args,
       /* applyPatch */ undefined,
       /* runInSandbox */ false,
+      additionalWritableRoots,
       abortSignal,
     ).then(convertSummaryToResult);
   }
@@ -138,6 +140,7 @@ export async function handleExecCommand(
     args,
     applyPatch,
     runInSandbox,
+    additionalWritableRoots,
     abortSignal,
   );
   // If the operation was aborted in the meantime, propagate the cancellation
@@ -170,7 +173,7 @@ export async function handleExecCommand(
     } else {
       // The user has approved the command, so we will run it outside of the
       // sandbox.
-      const summary = await execCommand(args, applyPatch, false, abortSignal);
+      const summary = await execCommand(args, applyPatch, false, additionalWritableRoots, abortSignal);
       return convertSummaryToResult(summary);
     }
   } else {
@@ -202,6 +205,7 @@ async function execCommand(
   execInput: ExecInput,
   applyPatchCommand: ApplyPatchCommand | undefined,
   runInSandbox: boolean,
+  additionalWritableRoots: Array<string>,
   abortSignal?: AbortSignal,
 ): Promise<ExecCommandSummary> {
   let { workdir } = execInput;
@@ -239,7 +243,7 @@ async function execCommand(
   const execResult =
     applyPatchCommand != null
       ? execApplyPatch(applyPatchCommand.patch)
-      : await exec(execInput, await getSandbox(runInSandbox), abortSignal);
+      : await exec({ ...execInput, additionalWritableRoots }, await getSandbox(runInSandbox), abortSignal);
   const duration = Date.now() - start;
   const { stdout, stderr, exitCode } = execResult;
 

@@ -35,6 +35,7 @@ type Props = {
   prompt?: string;
   imagePaths?: Array<string>;
   approvalPolicy: ApprovalPolicy;
+  additionalWritableRoots: Array<string>;
   fullStdout: boolean;
 };
 
@@ -49,6 +50,7 @@ export default function TerminalChat({
   prompt: _initialPrompt,
   imagePaths: _initialImagePaths,
   approvalPolicy: initialApprovalPolicy,
+  additionalWritableRoots,
   fullStdout,
 }: Props): React.ReactElement {
   const [model, setModel] = useState<string>(config.model);
@@ -106,6 +108,7 @@ export default function TerminalChat({
       config,
       instructions: config.instructions,
       approvalPolicy,
+      additionalWritableRoots,
       onLastResponseId: setLastResponseId,
       onItem: (item) => {
         log(`onItem: ${JSON.stringify(item)}`);

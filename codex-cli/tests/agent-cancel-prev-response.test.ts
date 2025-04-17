@@ -99,6 +99,7 @@ describe("cancel clears previous_response_id", () => {
       model: "any",
       instructions: "",
       approvalPolicy: { mode: "auto" } as any,
+      additionalWritableRoots: [],
       onItem: () => {},
       onLoading: () => {},
       getCommandConfirmation: async () => ({ review: "yes" } as any),
