@@ -1,4 +1,5 @@
 import type { CommandConfirmation } from "../../utils/agent/agent-loop.js";
+import type { ToolCallResult } from "../../utils/agent/tool-executor";
 import type { AppConfig } from "../../utils/config.js";
 import type { ApplyPatchCommand, ApprovalPolicy } from "@lib/approvals.js";
 import type { ColorName } from "chalk";
@@ -7,6 +8,7 @@ import type { ReviewDecision } from "src/utils/agent/review.ts";
 
 import TerminalChatInput from "./terminal-chat-input.js";
 import { TerminalChatToolCallCommand } from "./terminal-chat-tool-call-item.js";
+import { TerminalChatToolExecutionItem } from "./terminal-chat-tool-execution-item";
 import {
   calculateContextPercentRemaining,
   uniqueById,
@@ -17,6 +19,7 @@ import { useTerminalSize } from "../../hooks/use-terminal-size.js";
 import { AgentLoop } from "../../utils/agent/agent-loop.js";
 import { log, isLoggingEnabled } from "../../utils/agent/log.js";
 import { createInputItem } from "../../utils/input-utils.js";
+import { McpManager } from "../../utils/mcp-manager"; // Use McpManager
 import { getAvailableModels } from "../../utils/model-utils.js";
 import { CLI_VERSION } from "../../utils/session.js";
 import { shortCwd } from "../../utils/short-path.js";
@@ -27,7 +30,7 @@ import HistoryOverlay from "../history-overlay.js";
 import ModelOverlay from "../model-overlay.js";
 import { formatCommandForDisplay } from "@lib/format-command.js";
 import { Box, Text } from "ink";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useRef, useReducer } from "react"; // Added useRef, useReducer
 import { inspect } from "util";
 
 type Props = {
@@ -36,6 +39,7 @@ type Props = {
   imagePaths?: Array<string>;
   approvalPolicy: ApprovalPolicy;
   fullStdout: boolean;
+  withMcpTools?: boolean;
 };
 
 const colorsByPolicy: Record<ApprovalPolicy, ColorName | undefined> = {
@@ -50,6 +54,7 @@ export default function TerminalChat({
   imagePaths: _initialImagePaths,
   approvalPolicy: initialApprovalPolicy,
   fullStdout,
+  withMcpTools = true,
 }: Props): React.ReactElement {
   const [model, setModel] = useState<string>(config.model);
   const [lastResponseId, setLastResponseId] = useState<string | null>(null);
@@ -60,11 +65,20 @@ export default function TerminalChat({
     initialApprovalPolicy,
   );
   const [thinkingSeconds, setThinkingSeconds] = useState(0);
+  const [toolResults, setToolResults] = useState<Array<ToolCallResult>>([]);
   const { requestConfirmation, confirmationPrompt, submitConfirmation } =
     useConfirmation();
   const [overlayMode, setOverlayMode] = useState<
-    "none" | "history" | "model" | "approval" | "help"
+    "none" | "history" | "model" | "approval" | "help" | "mcp"
   >("none");
+
+  // Create MCP Manager instance if enabled - This instance is *only* for displaying tools info
+  // AgentLoop will create its own internal instance.
+  const [mcpManagerForDisplay] = useState<McpManager | undefined>(() =>
+    withMcpTools
+      ? new McpManager({ debugMode: Boolean(process.env["MCP_DEBUG"]) })
+      : undefined,
+  );
 
   const [initialPrompt, setInitialPrompt] = useState(_initialPrompt);
   const [initialImagePaths, setInitialImagePaths] =
@@ -74,8 +88,187 @@ export default function TerminalChat({
 
   // Keep a single AgentLoop instance alive across renders;
   // recreate only when model/instructions/approvalPolicy change.
-  const agentRef = React.useRef<AgentLoop>();
-  const [, forceUpdate] = React.useReducer((c) => c + 1, 0); // trigger re‑render
+  const agentRef = useRef<AgentLoop>(); // Changed from React.useRef
+  const [, forceUpdate] = useReducer((c) => c + 1, 0); // Changed from React.useReducer
+
+  // Track MCP Manager initialization state (for the display instance)
+  const [mcpManagerInitialized, setMcpManagerInitialized] = useState(
+    !withMcpTools,
+  ); // Initialize true if not using MCP
+
+  // Initialize MCP Manager (for display) if enabled
+  useEffect(() => {
+    if (!mcpManagerForDisplay) {
+      return;
+    } // Use the display instance
+
+    const initManager = async () => {
+      try {
+        // Add timeout for initialization
+        const initPromise = mcpManagerForDisplay.initialize(); // Use the display instance
+        const timeoutPromise = new Promise((_, reject) => {
+          setTimeout(
+            () =>
+              reject(
+                new Error("MCP initialization timed out after 10 seconds"),
+              ),
+            10000,
+          );
+        });
+
+        await Promise.race([initPromise, timeoutPromise]);
+        const availableTools = mcpManagerForDisplay.getAvailableTools(); // Use the display instance
+        log(
+          `MCP Manager (for display) initialized with ${availableTools.length} tools`,
+        );
+
+        // Add a system message showing available tools
+        if (availableTools.length > 0) {
+          const toolCategories: Record<string, Array<string>> = {};
+
+          // Group tools by server/category
+          for (const tool of availableTools) {
+            const parts = tool.name.split("__");
+            if (parts.length === 3) {
+              // Format: mcp__server__tool
+              const serverName = parts[1] || "unknown";
+              // Initialize the category if it doesn't exist
+              if (!toolCategories[serverName]) {
+                toolCategories[serverName] = [];
+              }
+              if (parts[2]) {
+                toolCategories[serverName].push(parts[2]); // Just the tool name without prefix
+              }
+            } else {
+              // Non-standard format, just use the whole name
+              const otherCategory = "other";
+              if (!toolCategories[otherCategory]) {
+                toolCategories[otherCategory] = [];
+              }
+              toolCategories[otherCategory].push(tool.name);
+            }
+          }
+
+          // Create a formatted message of tools by category
+          // Create a simpler message that doesn't focus on tools
+          let toolsMessage =
+            "💡 I can now help with a wider range of tasks including:\n";
+
+          // Map capabilities rather than tool names
+          const capabilities = [];
+
+          // Safely check for fetch capabilities
+          if (
+            Object.keys(toolCategories).some((cat) => {
+              return (
+                cat.includes("fetch") ||
+                (toolCategories[cat] &&
+                  Array.isArray(toolCategories[cat]) &&
+                  toolCategories[cat].some(
+                    (t) => typeof t === "string" && t.includes("fetch"),
+                  ))
+              );
+            })
+          ) {
+            capabilities.push(
+              "• Accessing web content and current information",
+            );
+          }
+
+          // Safely check for vision capabilities
+          if (
+            Object.keys(toolCategories).some((cat) => {
+              return (
+                cat.includes("vision") ||
+                cat.includes("image") ||
+                (toolCategories[cat] &&
+                  Array.isArray(toolCategories[cat]) &&
+                  toolCategories[cat].some(
+                    (t) =>
+                      typeof t === "string" &&
+                      (t.includes("vision") || t.includes("image")),
+                  ))
+              );
+            })
+          ) {
+            capabilities.push("• Analyzing images and visual content");
+          }
+
+          // Add a generic capability for other tool types
+          if (
+            Object.keys(toolCategories).length > 0 &&
+            capabilities.length < 2
+          ) {
+            // Avoid redundancy if fetch/vision already listed
+            capabilities.push("• Finding information from specialized sources");
+          }
+
+          // Add all capabilities
+          toolsMessage += capabilities.join("\n");
+
+          // Add a friendly instruction that doesn't mention tools
+          toolsMessage +=
+            "\n\nJust ask your questions naturally - I'll handle the rest!";
+
+          // Find the fetch tool if available
+          const fetchToolName = "fetch";
+          const fetchTool = availableTools.find((t: { name: string }) =>
+            t.name.includes(fetchToolName),
+          );
+
+          // Create a properly typed system message
+          const createSystemMessage = (
+            id: string,
+            text: string,
+          ): ResponseItem => ({
+            id,
+            type: "message",
+            role: "system",
+            status: "completed" as const, // Status for ResponseOutputMessage
+            content: [
+              {
+                type: "input_text",
+                text,
+              },
+            ],
+          });
+
+          const messages: Array<ResponseItem> = [
+            createSystemMessage(`mcp-tools-${Date.now()}`, toolsMessage),
+          ];
+
+          // Add a more minimal, elegant message
+          if (fetchTool) {
+            messages.push(
+              createSystemMessage(
+                `mcp-examples-${Date.now()}`,
+                `Try asking about:
+• "What's happening in the news today?"
+• "Show me the weather for San Francisco"
+• "What's on the React homepage?"`,
+              ),
+            );
+          }
+
+          setItems((prev) => [...prev, ...messages]);
+        }
+
+        // Mark manager as initialized
+        setMcpManagerInitialized(true);
+      } catch (err) {
+        log(`Error initializing Mcp manager (for display): ${err}`);
+        // Even if there's an error, mark as initialized so we can create the agent
+        setMcpManagerInitialized(true);
+      }
+    };
+
+    initManager();
+
+    // Clean up on unmount
+    return () => {
+      mcpManagerForDisplay?.dispose(); // Use the display instance
+    };
+  }, [mcpManagerForDisplay]); // Depend on the display instance
 
   // ────────────────────────────────────────────────────────────────
   // DEBUG: log every render w/ key bits of state
@@ -88,7 +281,17 @@ export default function TerminalChat({
     );
   }
 
+  // Effect to create/recreate AgentLoop when dependencies change
   useEffect(() => {
+    // Wait for MCP Manager (for display) to be initialized if MCP tools are enabled
+    // This ensures the initial tool message is shown before the agent starts.
+    if (withMcpTools && !mcpManagerInitialized) {
+      log(
+        "Waiting for Mcp manager (for display) initialization before creating AgentLoop",
+      );
+      return;
+    }
+
     if (isLoggingEnabled()) {
       log("creating NEW AgentLoop");
       log(
@@ -96,6 +299,7 @@ export default function TerminalChat({
           config.instructions,
         )} approvalPolicy=${approvalPolicy}`,
       );
+      // AgentLoop now initializes its own McpManager, no need to log tools here
     }
 
     // Tear down any existing loop before creating a new one
@@ -116,6 +320,11 @@ export default function TerminalChat({
         });
       },
       onLoading: setLoading,
+      onToolCall: (result) => {
+        // Handle tool call results
+        log(`onToolCall: ${JSON.stringify(result)}`);
+        setToolResults((prev) => [...prev, result]);
+      },
       getCommandConfirmation: async (
         command: Array<string>,
         applyPatch: ApplyPatchCommand | undefined,
@@ -147,7 +356,15 @@ export default function TerminalChat({
       agentRef.current = undefined;
       forceUpdate(); // re‑render after teardown too
     };
-  }, [model, config, approvalPolicy, requestConfirmation]);
+  }, [
+    model,
+    config,
+    approvalPolicy,
+    // mcpManagerInitialized gates the creation, ensuring display init happens first
+    mcpManagerInitialized,
+    withMcpTools, // Recreate if MCP tools are toggled
+    requestConfirmation, // Include requestConfirmation from useConfirmation hook
+  ]);
 
   // whenever loading starts/stops, reset or start a timer — but pause the
   // timer while a confirmation overlay is displayed so we don't trigger a
@@ -196,6 +413,11 @@ export default function TerminalChat({
       ) {
         return;
       }
+      // Ensure agent is ready before processing initial input
+      if (!agent) {
+        log("Agent not ready yet for initial prompt processing");
+        return;
+      }
       const inputItems = [
         await createInputItem(initialPrompt || "", initialImagePaths || []),
       ];
@@ -204,8 +426,14 @@ export default function TerminalChat({
       setInitialImagePaths([]);
       agent?.run(inputItems);
     };
-    processInitialInputItems();
-  }, [agent, initialPrompt, initialImagePaths]);
+    // Add a small delay or check agent readiness before processing
+    // This ensures the agentRef is populated after the effect that creates it runs.
+    const timeoutId = setTimeout(() => {
+      processInitialInputItems();
+    }, 100); // Adjust delay as needed, or use a more robust readiness check
+
+    return () => clearTimeout(timeoutId);
+  }, [agent, initialPrompt, initialImagePaths]); // Keep dependencies
 
   // ────────────────────────────────────────────────────────────────
   // In-app warning if CLI --model isn't in fetched list
@@ -220,6 +448,7 @@ export default function TerminalChat({
             id: `unknown-model-${Date.now()}`,
             type: "message",
             role: "system",
+            status: "completed" as const,
             content: [
               {
                 type: "input_text",
@@ -275,6 +504,19 @@ export default function TerminalChat({
             <Text color="gray">Initializing agent…</Text>
           </Box>
         )}
+
+        {/* Render tool results */}
+        {toolResults.length > 0 && (
+          <Box flexDirection="column" marginY={1}>
+            {toolResults.map((result, index) => (
+              <TerminalChatToolExecutionItem
+                key={`tool-result-${index}`}
+                toolResult={result}
+              />
+            ))}
+          </Box>
+        )}
+
         {agent && (
           <TerminalChatInput
             loading={loading}
@@ -345,6 +587,7 @@ export default function TerminalChat({
                   id: `switch-model-${Date.now()}`,
                   type: "message",
                   role: "system",
+                  status: "completed" as const,
                   content: [
                     {
                       type: "input_text",
@@ -376,6 +619,7 @@ export default function TerminalChat({
                   id: `switch-approval-${Date.now()}`,
                   type: "message",
                   role: "system",
+                  status: "completed" as const,
                   content: [
                     {
                       type: "input_text",

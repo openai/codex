@@ -74,5 +74,10 @@ esbuild
     sourcemap: isDevBuild ? "inline" : true,
     plugins,
     inject: ["./require-shim.js"],
+    // Exclude Node built-in modules and external packages from bundling
+    external: [
+      "readline/promises", 
+      "@modelcontextprotocol/sdk*"
+    ],
   })
   .catch(() => process.exit(1));

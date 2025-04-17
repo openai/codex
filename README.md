@@ -237,6 +237,39 @@ You can also define custom instructions:
 - Only use git commands if I explicitly mention you should
 ```
 
+### MCP Integration
+
+Codex supports the Model Context Protocol (MCP) for extending its capabilities with external tools and resources.
+
+#### Initializing the MCP Manager
+
+```typescript
+// Basic initialization
+const mcpManager = new McpManager();
+await mcpManager.initialize();
+
+// With debug mode enabled
+const mcpManagerDebug = new McpManager({ debugMode: true });
+await mcpManagerDebug.initialize();
+
+// You can also enable debug mode via environment variable
+// MCP_DEBUG=1 codex
+```
+
+#### Using the HTTP Server API
+
+You can expose MCP functionality over HTTP:
+
+```typescript
+// Start an HTTP server on port 3000
+const mcpManager = new McpManager();
+await mcpManager.initialize();
+await mcpManager.serve({ port: 3000 });
+
+// This allows other applications to connect to your MCP server
+// via SSE transport at http://localhost:3000/mcp
+```
+
 ---
 
 ## FAQ

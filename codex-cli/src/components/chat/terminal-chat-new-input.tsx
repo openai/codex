@@ -23,7 +23,8 @@ const suggestions = [
   "are there any bugs in my code?",
 ];
 
-const typeHelpText = `ctrl+c to exit | "/clear" to reset context | "/help" for commands | ↑↓ to recall history | ctrl+x to open external editor | enter to send`;
+const typeHelpText =
+  'ctrl+c to exit | "/clear" to reset context | "/help" for commands | ↑↓ to recall history | ctrl+x to open external editor | enter to send';
 
 // Enable verbose logging for the history‑navigation logic when the
 // DEBUG_TCI environment variable is truthy.  The traces help while debugging

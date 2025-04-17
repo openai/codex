@@ -1,15 +1,15 @@
-import type { AppConfig } from "./utils/config";
-import type { ApprovalPolicy } from "@lib/approvals";
-import type { ResponseItem } from "openai/resources/responses/responses";
+import type { AppConfig } from './utils/config';
+import type { ApprovalPolicy } from '@lib/approvals';
+import type { ResponseItem } from 'openai/resources/responses/responses';
 
-import TerminalChat from "./components/chat/terminal-chat";
-import TerminalChatPastRollout from "./components/chat/terminal-chat-past-rollout";
-import { checkInGit } from "./utils/check-in-git";
-import { CLI_VERSION, type TerminalChatSession } from "./utils/session.js";
-import { onExit } from "./utils/terminal";
-import { ConfirmInput } from "@inkjs/ui";
-import { Box, Text, useApp, useStdin } from "ink";
-import React, { useMemo, useState } from "react";
+import TerminalChat from './components/chat/terminal-chat';
+import TerminalChatPastRollout from './components/chat/terminal-chat-past-rollout';
+import { checkInGit } from './utils/check-in-git';
+import { CLI_VERSION, type TerminalChatSession } from './utils/session.js';
+import { onExit } from './utils/terminal';
+import { ConfirmInput } from '@inkjs/ui';
+import { Box, Text, useApp, useStdin } from 'ink';
+import React, { useMemo, useState } from 'react';
 
 export type AppRollout = {
   session: TerminalChatSession;
@@ -23,6 +23,7 @@ type Props = {
   rollout?: AppRollout;
   approvalPolicy: ApprovalPolicy;
   fullStdout: boolean;
+  withMcpTools?: boolean;
 };
 
 export default function App({
@@ -32,6 +33,7 @@ export default function App({
   imagePaths,
   approvalPolicy,
   fullStdout,
+  withMcpTools = true,
 }: Props): JSX.Element {
   const app = useApp();
   const [accepted, setAccepted] = useState(() => false);
@@ -56,7 +58,7 @@ export default function App({
       <Box flexDirection="column">
         <Box borderStyle="round" paddingX={1} width={64}>
           <Text>
-            ● OpenAI <Text bold>Codex</Text>{" "}
+            ● OpenAI <Text bold>Codex</Text>{' '}
             <Text dimColor>
               (research preview) <Text color="blueBright">v{CLI_VERSION}</Text>
             </Text>
@@ -81,7 +83,7 @@ export default function App({
               onExit();
               // eslint-disable-next-line
               console.error(
-                "Quitting! Run again to accept or from inside a git repo",
+                'Quitting! Run again to accept or from inside a git repo',
               );
             }}
             onConfirm={() => setAccepted(true)}
@@ -98,6 +100,7 @@ export default function App({
       imagePaths={imagePaths}
       approvalPolicy={approvalPolicy}
       fullStdout={fullStdout}
+      withMcpTools={withMcpTools}
     />
   );
 }
