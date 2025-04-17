@@ -7,6 +7,7 @@ If you want to get started using the Codex CLI directly, skip this and refer to 
 ## Structure
 
 Each example contains the following:
+
 ```
 example‑name/
 ├── run.sh           # helper script that launches a new Codex session for the task
@@ -16,7 +17,8 @@ example‑name/
 ```
 
 **run.sh**: a convenience wrapper that does three things:
-- Creates `runs/run_N`, where *N* is the number of a run.
+
+- Creates `runs/run_N`, where _N_ is the number of a run.
 - Copies the contents of `template/` into that folder (if present).
 - Launches the Codex CLI with the description from `task.yaml`.
 
@@ -27,16 +29,18 @@ example‑name/
 ## Running an example
 
 1. **Run the helper script**:
+
 ```
 cd camerascii
 ./run.sh
 ```
-2. **Interact with the Codex CLI**: the CLI will open with the prompt: “*Take a look at the screenshot details and implement a webpage that uses a webcam to style the video feed accordingly…*” Confirm the commands Codex CLI requests to generate `index.html`.
 
-3. **Check its work**: when Codex is done, open ``runs/run_1/index.html`` in a browser.  Your webcam feed should now be rendered as a cascade of ASCII glyphs. If the outcome isn't what you expect, try running it again, or adjust the task prompt.
+2. **Interact with the Codex CLI**: the CLI will open with the prompt: “_Take a look at the screenshot details and implement a webpage that uses a webcam to style the video feed accordingly…_” Confirm the commands Codex CLI requests to generate `index.html`.
 
+3. **Check its work**: when Codex is done, open `runs/run_1/index.html` in a browser. Your webcam feed should now be rendered as a cascade of ASCII glyphs. If the outcome isn't what you expect, try running it again, or adjust the task prompt.
 
 ## Other examples
+
 Besides **camerascii**, you can experiment with:
 
 - **build‑codex‑demo**: recreate the original 2021 Codex YouTube demo.

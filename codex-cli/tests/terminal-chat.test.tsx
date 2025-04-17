@@ -15,7 +15,7 @@ describe("TerminalChat model validation", () => {
         config={config}
         approvalPolicy="suggest"
         fullStdout={false}
-      />
+      />,
     );
     // Simulate opening model overlay and selecting an invalid model
     // (You would need to simulate the overlay and selection logic here)

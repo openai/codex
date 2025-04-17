@@ -50,7 +50,7 @@ export default function ModelOverlay({
         })),
       );
     })();
-  }, [setModels]);
+  }, []);
 
   // ---------------------------------------------------------------------------
   // If the conversation already contains a response we cannot change the model
@@ -62,49 +62,35 @@ export default function ModelOverlay({
 
   // Always register input handling so hooks are called consistently.
   useInput((_input, key) => {
-    if (hasLastResponse && (key.escape || key.return)) {
+    if (key.escape || key.return) {
       onExit();
     }
   });
 
   if (hasLastResponse) {
     return (
-      <Box
-        flexDirection="column"
-        borderStyle="round"
-        borderColor="gray"
-        width={80}
-      >
-        <Box paddingX={1}>
-          <Text bold color="red">
-            Unable to switch model
-          </Text>
-        </Box>
-        <Box paddingX={1}>
-          <Text>
-            You can only pick a model before the assistant sends its first
-            response. To use a different model please start a new chat.
-          </Text>
-        </Box>
-        <Box paddingX={1}>
-          <Text dimColor>press esc or enter to close</Text>
-        </Box>
+      <Box flexDirection="column">
+        <Text>
+          {`You cannot change the model after the first response. Start a new `}
+          <Link onClick={onExit}>new chat</Link>
+          {` to use a different model.`}
+        </Text>
       </Box>
     );
   }
 
   return (
-    <TypeaheadOverlay
-      title="Switch model"
-      description={
-        <Text>
-          Current model: <Text color="greenBright">{currentModel}</Text>
-        </Text>
-      }
-      initialItems={items}
-      currentValue={currentModel}
+    <SelectInput
+      items={items}
+      value={currentModel}
       onSelect={onSelect}
-      onExit={onExit}
+      onHighlight={(_item, index) => {
+        // HACK: Ink does not currently support scrolling the list to the
+        // highlighted item so we have to do it ourselves.
+        if (process.stdout.isTTY) {
+          process.stdout.write(`\x1b[${index}A`);
+        }
+      }}
     />
   );
 }

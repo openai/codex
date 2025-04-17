@@ -35,11 +35,11 @@ python cluster_prompts.py
 
 This will
 
-* create embeddings with the `text-embedding-3-small` model, 
-* pick a suitable number *k* via silhouette score (K‑Means),
-* ask `gpt‑4o‑mini` to label & describe each cluster,
-* store the results in `analysis.md`,
-* and save two plots to `plots/` (`cluster_sizes.png` and `tsne.png`).
+- create embeddings with the `text-embedding-3-small` model, 
+- pick a suitable number *k* via silhouette score (K‑Means),
+- ask `gpt‑4o‑mini` to label & describe each cluster,
+- store the results in `analysis.md`,
+- and save two plots to `plots/` (`cluster_sizes.png` and `tsne.png`).
 
 The script prints a short success message once done.
 
@@ -47,17 +47,17 @@ The script prints a short success message once done.
 
 ## 3. Command‑line options
 
-| flag | default | description |
-|------|---------|-------------|
-| `--csv` | `prompts.csv` | path to the input CSV (must contain a `prompt` column; an `act` column is used as context if present) |
-| `--cache` | _(none)_ | embed­ding cache path (JSON). Speeds up repeated runs – new texts are appended automatically. |
-| `--cluster-method` | `kmeans` | `kmeans` (with automatic *k*) or `dbscan` |
-| `--k-max` | `10` | upper bound for *k* when `kmeans` is selected |
-| `--dbscan-min-samples` | `3` | min samples parameter for DBSCAN |
-| `--embedding-model` | `text-embedding-3-small` | any OpenAI embedding model |
-| `--chat-model` | `gpt-4o-mini` | chat model used to generate cluster names / descriptions |
-| `--output-md` | `analysis.md` | where to write the Markdown report |
-| `--plots-dir` | `plots` | directory for generated PNGs |
+| flag                   | default                  | description                                                                                           |
+| ---------------------- | ------------------------ | ----------------------------------------------------------------------------------------------------- |
+| `--csv`                | `prompts.csv`            | path to the input CSV (must contain a `prompt` column; an `act` column is used as context if present) |
+| `--cache`              | _(none)_                 | embed­ding cache path (JSON). Speeds up repeated runs – new texts are appended automatically.         |
+| `--cluster-method`     | `kmeans`                 | `kmeans` (with automatic *k*) or `dbscan`                                                             |
+| `--k-max`              |  `10`                    | upper bound for *k* when `kmeans` is selected                                                         |
+| `--dbscan-min-samples` | `3`                      | min samples parameter for DBSCAN                                                                      |
+| `--embedding-model`    | `text-embedding-3-small` | any OpenAI embedding model                                                                            |
+| `--chat-model`         | `gpt-4o-mini`            | chat model used to generate cluster names / descriptions                                              |
+| `--output-md`          | `analysis.md`            | where to write the Markdown report                                                                    |
+| `--plots-dir`          | `plots`                  | directory for generated PNGs                                                                          |
 
 Example with customised options:
 
@@ -78,11 +78,11 @@ python cluster_prompts.py \
 
 ### analysis.md
 
-* Overview table: cluster label, generated name, member count and description.
-* Detailed section for every cluster with five representative example prompts.
-* Separate lists for
-  * **Noise / outliers** (label `‑1` when DBSCAN is used) and
-  * **Potentially ambiguous prompts** (only with K‑Means) – these are items that
+- Overview table: cluster label, generated name, member count and description.
+- Detailed section for every cluster with five representative example prompts.
+- Separate lists for
+  - **Noise / outliers** (label `‑1` when DBSCAN is used) and
+  - **Potentially ambiguous prompts** (only with K‑Means) – these are items that
     lie almost equally close to two centroids and might belong to multiple
     groups.
 
@@ -94,10 +94,10 @@ Quick bar‑chart visualisation of how many prompts ended up in each cluster.
 
 ## 5. Troubleshooting
 
-* **Rate‑limits / quota errors** – lower the number of prompts per run or switch
+- **Rate‑limits / quota errors** – lower the number of prompts per run or switch
   to a larger quota account.
-* **Authentication errors** – make sure `OPENAI_API_KEY` is exported in the
+- **Authentication errors** – make sure `OPENAI_API_KEY` is exported in the
   shell where you run the script.
-* **Inadequate clusters** – try the other clustering method, adjust `--k-max`
+- **Inadequate clusters** – try the other clustering method, adjust `--k-max`
   or tune DBSCAN parameters (`eps` range is inferred, `min_samples` exposed via
   CLI).

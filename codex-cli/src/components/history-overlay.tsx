@@ -169,8 +169,8 @@ function buildLists(items: Array<ResponseItem>): {
     const cmdArray: Array<string> | undefined = Array.isArray(argsObj?.["cmd"])
       ? (argsObj!["cmd"] as Array<string>)
       : Array.isArray(argsObj?.["command"])
-      ? (argsObj!["command"] as Array<string>)
-      : undefined;
+        ? (argsObj!["command"] as Array<string>)
+        : undefined;
 
     if (cmdArray && cmdArray.length > 0) {
       commands.push(cmdArray.join(" "));
