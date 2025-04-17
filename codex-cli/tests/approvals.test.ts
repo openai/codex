@@ -10,8 +10,10 @@ describe("canAutoApprove()", () => {
   };
 
   const writeablePaths: Array<string> = [];
-  const check = (command: ReadonlyArray<string>, policy: "suggest" | "auto-edit" | "full-auto" = "suggest"): SafetyAssessment =>
-    canAutoApprove(command, policy, writeablePaths, env);
+  const check = (
+    command: ReadonlyArray<string>,
+    policy: "suggest" | "auto-edit" | "full-auto" = "suggest",
+  ): SafetyAssessment => canAutoApprove(command, policy, writeablePaths, env);
 
   test("simple commands in suggest mode should require approval", () => {
     // In suggest mode, all commands should require approval
@@ -46,7 +48,9 @@ describe("canAutoApprove()", () => {
     // In suggest mode, all bash commands should require approval
     expect(check(["bash", "-lc", "ls"])).toEqual({ type: "ask-user" });
     expect(check(["bash", "-lc", "ls $HOME"])).toEqual({ type: "ask-user" });
-    expect(check(["bash", "-lc", "git show ab9811cb90"])).toEqual({ type: "ask-user" });
+    expect(check(["bash", "-lc", "git show ab9811cb90"])).toEqual({
+      type: "ask-user",
+    });
   });
 
   test("bash commands in auto-edit mode", () => {
@@ -81,7 +85,9 @@ describe("canAutoApprove()", () => {
     });
 
     // In auto-edit mode, commands with redirects should still require approval
-    expect(check(["bash", "-lc", "echo hello > file.txt"], "auto-edit")).toEqual({
+    expect(
+      check(["bash", "-lc", "echo hello > file.txt"], "auto-edit"),
+    ).toEqual({
       type: "ask-user",
     });
 
