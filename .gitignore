@@ -1,9 +1,5 @@
 # deps
 node_modules
-# Allow the lightweight shim we add for lodash/isEqual.js within the vendored
-# `node_modules` directory.
-!codex-cli/node_modules/lodash/isEqual.js
-!codex-cli/node_modules/lodash/package.json
 
 # build
 dist/
