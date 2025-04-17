@@ -14,7 +14,7 @@ import chalk, { type ForegroundColorName } from "chalk";
 import { Box, Text } from "ink";
 import { parse, setOptions } from "marked";
 import TerminalRenderer from "marked-terminal";
-import React, { useMemo } from "react";
+import React, { useMemo, useState, useEffect } from "react";
 
 export default function TerminalChatResponseItem({
   item,
@@ -73,7 +73,7 @@ export function TerminalChatResponseReasoning({
   message: ResponseReasoningItem & { duration_ms?: number };
 }): React.ReactElement | null {
   // prefer the real duration if present
-  const thinkingTime = message.duration_ms
+  const initialThinkingTime = message.duration_ms
     ? Math.round(message.duration_ms / 1000)
     : Math.max(
         1,
@@ -83,9 +83,17 @@ export function TerminalChatResponseReasoning({
             .reduce((a, b) => a + b, 0) / 300,
         ),
       );
-  if (thinkingTime <= 0) {
+  if (initialThinkingTime <= 0) {
     return null;
   }
+
+  const [thinkingTime, setThinkingTime] = useState(initialThinkingTime);
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setThinkingTime((prevTime) => prevTime + 1);
+    }, 1000);
+    return () => clearInterval(timer); // Cleanup interval on unmount
+  }, []);
 
   return (
     <Box gap={1} flexDirection="column">
