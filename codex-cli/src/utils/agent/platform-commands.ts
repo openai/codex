@@ -3,6 +3,8 @@
  */
 
 import { log, isLoggingEnabled } from "./log.js";
+import * as path from "path";
+import * as fs from "fs";
 
 /**
  * Map of Unix commands to their Windows equivalents
@@ -42,6 +44,12 @@ const OPTION_MAP: Record<string, Record<string, string>> = {
  * @returns The adapted command array
  */
 export function adaptCommandForPlatform(command: Array<string>): Array<string> {
+  // First, check if we need to adapt Go commands for sandbox compatibility
+  const adaptedForSandbox = adaptGoCommandForSandbox(command);
+  if (adaptedForSandbox) {
+    return adaptedForSandbox;
+  }
+
   // If not on Windows, return the original command
   if (process.platform !== "win32") {
     return command;
@@ -83,4 +91,37 @@ export function adaptCommandForPlatform(command: Array<string>): Array<string> {
   }
 
   return adaptedCommand;
+}
+
+/**
+ * Adapts Go commands to work within the sandbox environment on macOS.
+ * This solves the issue where Go tries to create temporary directories in
+ * system locations that are not accessible from the sandbox.
+ *
+ * @param command The command array to adapt
+ * @returns The adapted command array or null if no adaptation is needed
+ */
+function adaptGoCommandForSandbox(command: Array<string>): Array<string> | null {
+  // Only adapt on macOS and when the command is Go-related
+  if (process.platform !== "darwin" || command.length === 0 || command[0] !== "go") {
+    return null;
+  }
+
+  // Create a tmp directory in the current working directory for Go to use
+  const tmpDir = path.join(process.cwd(), ".tmp");
+  try {
+    if (!fs.existsSync(tmpDir)) {
+      fs.mkdirSync(tmpDir, { recursive: true });
+    }
+  } catch (error) {
+    log(`Warning: Failed to create temporary directory for Go: ${error}`);
+    return null;
+  }
+
+  if (isLoggingEnabled()) {
+    log(`Adapting Go command for macOS sandbox: setting GOTMPDIR=${tmpDir}`);
+  }
+
+  // Prepend environment variable to the command
+  return ["env", `GOTMPDIR=${tmpDir}`, ...command];
 }
