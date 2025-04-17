@@ -8,12 +8,10 @@
     "rules": {
       "recommended": true,
       "suspicious": {
-        "noConsole": "error"
+        "noConsoleLog": "error"
       },
-      "correctness": {
-        "noDebugger": {
-          "level": "error"
-        }
+      "all": {
+        "noDebugger": "error"
       }
     }
   },
