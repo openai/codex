@@ -1,7 +1,7 @@
 <h1 align="center">OpenAI Codex CLI</h1>
 <p align="center">Lightweight coding agent that runs in your terminal</p>
 
-<p align="center"><code>npm i -g @openai/codex</code></p>
+<p align="center"><code>npm i -g @openai/codex</code> or <code>pnpm add -g @openai/codex</code></p>
 
 ![Codex demo GIF using: codex "explain this codebase to me"](./.github/demo.gif)
 
@@ -191,7 +191,7 @@ Run Codex head‑less in pipelines. Example GitHub Action step:
 ```yaml
 - name: Update changelog via Codex
   run: |
-    npm install -g @openai/codex
+    npm install -g @openai/codex  # or pnpm add -g @openai/codex
     export OPENAI_API_KEY="${{ secrets.OPENAI_KEY }}"
     codex -a auto-edit --quiet "update CHANGELOG for next release"
 ```
@@ -225,6 +225,8 @@ Below are a few bite‑size examples you can copy‑paste. Replace the text in q
 npm install -g @openai/codex
 # or
 yarn global add @openai/codex
+# or
+pnpm add -g @openai/codex
 ```
 
 </details>
@@ -235,20 +237,21 @@ yarn global add @openai/codex
 ```bash
 # Clone the repository and navigate to the CLI package
 git clone https://github.com/openai/codex.git
-cd codex/codex-cli
+cd codex
 
-# Install dependencies and build
-npm install
-npm run build
+# Install dependencies and build using pnpm workspaces
+pnpm install
+pnpm run build
 
 # Get the usage and the options
-node ./dist/cli.js --help
+node ./codex-cli/dist/cli.js --help
 
 # Run the locally‑built CLI directly
-node ./dist/cli.js
+node ./codex-cli/dist/cli.js
 
 # Or link the command globally for convenience
-npm link
+cd codex-cli
+pnpm link --global
 ```
 
 </details>
@@ -326,14 +329,16 @@ More broadly we welcome contributions – whether you are opening your very firs
 
 ### Development workflow
 
+> **Note:** This project uses pnpm workspaces. Make sure you have pnpm installed (`npm install -g pnpm`) before starting development.
+
 - Create a _topic branch_ from `main` – e.g. `feat/interactive-prompt`.
 - Keep your changes focused. Multiple unrelated fixes should be opened as separate PRs.
-- Use `npm run test:watch` during development for super‑fast feedback.
+- Use `pnpm run test:watch` during development for super‑fast feedback.
 - We use **Vitest** for unit tests, **ESLint** + **Prettier** for style, and **TypeScript** for type‑checking.
 - Before pushing, run the full test/type/lint suite:
 
   ```bash
-  npm test && npm run lint && npm run typecheck
+  pnpm test && pnpm run lint && pnpm run typecheck
   ```
 
 - If you have **not** yet signed the Contributor License Agreement (CLA), add a PR comment containing the exact text
@@ -346,14 +351,14 @@ More broadly we welcome contributions – whether you are opening your very firs
 
 ```bash
 # Watch mode (tests rerun on change)
-npm run test:watch
+pnpm run test:watch
 
 # Type‑check without emitting files
-npm run typecheck
+pnpm run typecheck
 
 # Automatically fix lint + prettier issues
-npm run lint:fix
-npm run format:fix
+pnpm run lint:fix
+pnpm run format:fix
 ```
 
 ### Writing high‑impact code changes
@@ -366,7 +371,7 @@ npm run format:fix
 ### Opening a pull request
 
 - Fill in the PR template (or include similar information) – **What? Why? How?**
-- Run **all** checks locally (`npm test && npm run lint && npm run typecheck`). CI failures that could have been caught locally slow down the process.
+- Run **all** checks locally (`pnpm test && pnpm run lint && pnpm run typecheck`). CI failures that could have been caught locally slow down the process.
 - Make sure your branch is up‑to‑date with `main` and that you have resolved merge conflicts.
 - Mark the PR as **Ready for review** only when you believe it is in a merge‑able state.
 
@@ -424,7 +429,7 @@ To publish a new version of the CLI, run the release scripts defined in `codex-c
    git add codex-cli/src/utils/session.ts codex-cli/package.json
    git commit -s -m "chore(release): codex-cli v$(node -p \"require('./codex-cli/package.json').version\")"
    ```
-5. Copy README, build, and publish to npm: `npm run release`
+5. Copy README, build, and publish to npm: `pnpm run release`
 6. Push to branch: `git push origin HEAD`
 
 ---

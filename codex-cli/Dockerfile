@@ -21,7 +21,7 @@ RUN apt update && apt install -y \
   sudo \
   unzip \
   ripgrep \
-  zsh 
+  zsh
 
 # Ensure default node user has access to /usr/local/share
 RUN mkdir -p /usr/local/share/npm-global && \
@@ -32,13 +32,16 @@ ARG USERNAME=node
 # Set up non-root user
 USER node
 
+# Install pnpm
+RUN npm install -g pnpm
+
 # Install global packages
-ENV NPM_CONFIG_PREFIX=/usr/local/share/npm-global
-ENV PATH=$PATH:/usr/local/share/npm-global/bin
+ENV PNPM_HOME=/usr/local/share/pnpm-global
+ENV PATH=$PATH:$PNPM_HOME
 
 # Install codex
 COPY dist/codex.tgz codex.tgz
-RUN npm install -g codex.tgz
+RUN pnpm add -g codex.tgz
 
 # Copy and set up firewall script
 COPY scripts/init_firewall.sh /usr/local/bin/

@@ -7,7 +7,7 @@
   },
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=20"
   },
   "scripts": {
     "format": "prettier --check src tests",
@@ -22,7 +22,7 @@
     "build:dev": "NODE_ENV=development node build.mjs --dev && NODE_OPTIONS=--enable-source-maps node dist/cli-dev.js",
     "release:readme": "cp ../README.md ./README.md",
     "release:version": "codex -a full-auto 'update the CLI_VERSION in codex-cli/src/utils/session.ts and the version in package.json to use the current timestamp (YYMMDDHHmm format)'",
-    "release": "npm run release:readme && npm run release:version && npm run build && npm publish"
+    "release": "pnpm run release:readme && pnpm run release:version && pnpm run build && pnpm publish"
   },
   "files": [
     "README.md",
@@ -45,7 +45,8 @@
     "react": "^18.2.0",
     "shell-quote": "^1.8.2",
     "to-rotated": "^1.0.0",
-    "use-interval": "1.4.0"
+    "use-interval": "1.4.0",
+    "zod": "^3.22.4"
   },
   "devDependencies": {
     "@eslint/js": "^9.22.0",
@@ -69,14 +70,7 @@
     "vitest": "^3.0.9",
     "whatwg-url": "^14.2.0"
   },
-  "resolutions": {
-    "braces": "^3.0.3",
-    "micromatch": "^4.0.8",
-    "semver": "^7.7.1"
-  },
-  "overrides": {
-    "punycode": "^2.3.1"
-  },
+
   "repository": {
     "type": "git",
     "url": "https://github.com/openai/codex"

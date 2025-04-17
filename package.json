@@ -1,11 +1,26 @@
 {
+  "name": "codex-monorepo",
+  "private": true,
   "description": "Tools for repo-wide maintenance.",
   "scripts": {
-    "release": "cd codex-cli && npm run release",
+    "release": "pnpm --filter @openai/codex run release",
     "format": "prettier --check *.json *.md .github/workflows/*.yml",
-    "format:fix": "prettier --write *.json *.md .github/workflows/*.yml"
+    "format:fix": "prettier --write *.json *.md .github/workflows/*.yml",
+    "build": "pnpm --filter @openai/codex run build",
+    "dev": "pnpm --filter @openai/codex run dev",
+    "test": "pnpm --filter @openai/codex run test"
   },
   "devDependencies": {
     "prettier": "^3.5.3"
+  },
+  "engines": {
+    "node": ">=20",
+    "pnpm": ">=8.0.0"
+  },
+  "resolutions": {
+    "braces": "^3.0.3",
+    "micromatch": "^4.0.8",
+    "semver": "^7.7.1",
+    "punycode": "^2.3.1"
   }
 }
