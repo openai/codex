@@ -204,6 +204,15 @@ async function execCommand(
   runInSandbox: boolean,
   abortSignal?: AbortSignal,
 ): Promise<ExecCommandSummary> {
+  let { workdir } = execInput;
+  if (workdir) {
+    try {
+      await access(workdir);
+    } catch (e) {
+      log(`EXEC workdir=${workdir} not found, use process.cwd() instead`);
+      workdir = process.cwd();
+    }
+  }
   if (isLoggingEnabled()) {
     if (applyPatchCommand != null) {
       log("EXEC running apply_patch command");
