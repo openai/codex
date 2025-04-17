@@ -1,6 +1,6 @@
 import type * as fsType from "fs";
 
-import { loadConfig, saveConfig } from "../src/utils/config.js"; // parent import first
+import { loadConfig, saveConfig, DEFAULT_RATE_LIMIT_MAX_RETRIES, DEFAULT_RATE_LIMIT_INITIAL_RETRY_DELAY_MS, DEFAULT_RATE_LIMIT_MAX_RETRY_DELAY_MS, DEFAULT_RATE_LIMIT_JITTER_FACTOR } from "../src/utils/config.js"; // parent import first
 import { tmpdir } from "os";
 import { join } from "path";
 import { test, expect, beforeEach, afterEach, vi } from "vitest";
@@ -61,6 +61,12 @@ test("loads default config if files don't exist", () => {
   expect(config).toEqual({
     model: "o4-mini",
     instructions: "",
+    rateLimits: {
+      maxRetries: DEFAULT_RATE_LIMIT_MAX_RETRIES,
+      initialRetryDelayMs: DEFAULT_RATE_LIMIT_INITIAL_RETRY_DELAY_MS,
+      maxRetryDelayMs: DEFAULT_RATE_LIMIT_MAX_RETRY_DELAY_MS,
+      jitterFactor: DEFAULT_RATE_LIMIT_JITTER_FACTOR,
+    },
   });
 });
 
@@ -68,6 +74,12 @@ test("saves and loads config correctly", () => {
   const testConfig = {
     model: "test-model",
     instructions: "test instructions",
+    rateLimits: {
+      maxRetries: DEFAULT_RATE_LIMIT_MAX_RETRIES,
+      initialRetryDelayMs: DEFAULT_RATE_LIMIT_INITIAL_RETRY_DELAY_MS,
+      maxRetryDelayMs: DEFAULT_RATE_LIMIT_MAX_RETRY_DELAY_MS,
+      jitterFactor: DEFAULT_RATE_LIMIT_JITTER_FACTOR,
+    },
   };
   saveConfig(testConfig, testConfigPath, testInstructionsPath);
 
