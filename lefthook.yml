@@ -1,0 +1,17 @@
+# lefthook.yml
+# Refer for explanation to following link:
+# https://lefthook.dev/configuration/
+
+pre-commit:
+  parallel: true
+  commands:
+    format:
+      glob: "*.{json,md,yml}"
+      run: pnpm format:fix {staged_files}
+    cli-lint:
+      root: "codex-cli/"
+      glob: "src/**/*.{ts,tsx,js,jsx}"
+      run: pnpm lint:fix {staged_files}
+    cli-typecheck:
+      root: "codex-cli/"
+      run: pnpm typecheck

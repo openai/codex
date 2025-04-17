@@ -3,9 +3,11 @@
   "scripts": {
     "release": "cd codex-cli && npm run release",
     "format": "prettier --check *.json *.md .github/workflows/*.yml",
-    "format:fix": "prettier --write *.json *.md .github/workflows/*.yml"
+    "format:fix": "prettier --write *.json *.md .github/workflows/*.yml",
+    "prepare": "lefthook install"
   },
   "devDependencies": {
+    "lefthook": "^1.11.10",
     "prettier": "^3.5.3"
   }
 }

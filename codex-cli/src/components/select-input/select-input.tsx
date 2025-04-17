@@ -172,7 +172,7 @@ function SelectInput<V>({
 
   return (
     <Box flexDirection="column">
-      {slicedItems.map((item, index) => {
+      {slicedItems.map((item: Item<V>, index: number) => {
         const isSelected = index === selectedIndex;
 
         return (

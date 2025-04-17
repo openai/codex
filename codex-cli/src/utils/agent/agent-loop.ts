@@ -494,8 +494,8 @@ export class AgentLoop {
             if (this.model.startsWith("o")) {
               reasoning = { effort: "high" };
               if (this.model === "o3" || this.model === "o4-mini") {
-                // @ts-expect-error waiting for API type update
-                reasoning.summary = "auto";
+                // Add summary property to reasoning
+                (reasoning as { effort: string; summary?: string }).summary = "auto";
               }
             }
             const mergedInstructions = [prefix, this.instructions]
