@@ -198,6 +198,14 @@ Run Codex head‑less in pipelines. Example GitHub Action step:
 
 Set `CODEX_QUIET_MODE=1` to silence interactive UI noise.
 
+## Tracing / Verbose Logging
+
+Setting the environment variable `DEBUG=true` prints full API request and response details:
+
+```shell
+DEBUG=true codex
+```
+
 ---
 
 ## Recipes
