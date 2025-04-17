@@ -2,23 +2,22 @@
 
 import type { ResponseItem } from "openai/resources/responses/responses";
 
-import { loadConfig } from "../config";
+import { loadConfig, SESSIONS_DIR } from "../config";
 import fs from "fs/promises";
-import os from "os";
 import path from "path";
 
-const SESSIONS_ROOT = path.join(os.homedir(), ".codex", "sessions");
+// Use the platform-specific sessions directory from config
 
 async function saveRolloutToHomeSessions(
   items: Array<ResponseItem>,
 ): Promise<void> {
-  await fs.mkdir(SESSIONS_ROOT, { recursive: true });
+  await fs.mkdir(SESSIONS_DIR, { recursive: true });
 
   const sessionId = crypto.randomUUID();
   const timestamp = new Date().toISOString();
   const ts = timestamp.replace(/[:.]/g, "-").slice(0, 10);
   const filename = `rollout-${ts}-${sessionId}.json`;
-  const filePath = path.join(SESSIONS_ROOT, filename);
+  const filePath = path.join(SESSIONS_DIR, filename);
   const config = loadConfig();
 
   try {
