@@ -190,13 +190,29 @@ export default function TerminalChatInput({
         return;
       }
 
-      const images: Array<string> = [];
-      const text = inputValue
-        .replace(/!\[[^\]]*?\]\(([^)]+)\)/g, (_m, p1: string) => {
+      // detect image file paths for dynamic inclusion
+      const images: string[] = [];
+      let text = inputValue;
+      // markdown-style image syntax: ![alt](path)
+      text = text.replace(/!\[[^\]]*?\]\(([^)]+)\)/g, (_m, p1: string) => {
+        images.push(p1.startsWith("file://") ? fileURLToPath(p1) : p1);
+        return "";
+      });
+      // quoted file paths ending with common image extensions (e.g. '/path/to/img.png')
+      text = text.replace(/['"]([^'"]+?\.(?:png|jpe?g|gif|bmp|webp|svg))['"]/gi,
+        (_m, p1: string) => {
           images.push(p1.startsWith("file://") ? fileURLToPath(p1) : p1);
           return "";
-        })
-        .trim();
+        },
+      );
+      // bare file paths ending with common image extensions (e.g. foo.png, ./dir/bar.jpg)
+      text = text.replace(/\b(?:\.\/|\/)?[\w\/\-.]+\.(?:png|jpe?g|gif|bmp|webp|svg)\b/gi,
+        (match: string) => {
+          images.push(match.startsWith("file://") ? fileURLToPath(match) : match);
+          return "";
+        },
+      );
+      text = text.trim();
 
       const inputItem = await createInputItem(text, images);
       submitInput([inputItem]);
