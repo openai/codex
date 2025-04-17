@@ -36,7 +36,7 @@
   - [Releasing `codex`](#releasing-codex)
 - [Security \& Responsible AI](#securityresponsibleai)
 - [License](#license)
-- [⚠️ Zero Data Retention (ZDR) Organization Limitation](#zero-data-retention-zdr-organization-limitation)
+- [Zero Data Retention (ZDR) Organization Limitation](#zero-data-retention-zdr-organization-limitation)
 
 </details>
 
@@ -308,7 +308,7 @@ Any model available with [Responses API](https://platform.openai.com/docs/api-re
 
 ---
 
-## ⚠️ Zero Data Retention (ZDR) Organization Limitation
+## Zero Data Retention (ZDR) Organization Limitation
 
 > **Note:** Codex CLI does **not** currently support OpenAI organizations with [Zero Data Retention (ZDR)](https://platform.openai.com/docs/guides/your-data#zero-data-retention) enabled.
 
@@ -321,7 +321,7 @@ OpenAI rejected the request. Error details: Status: 400, Code: unsupported_param
 **Why?**
 
 - Codex CLI relies on the Responses API with `store:true` to enable internal reasoning steps.
-- The Responses API requires a 30-day retention period by default, or when `store:true` is set.
+- As noted in the [docs](https://platform.openai.com/docs/guides/your-data#responses-api), the Responses API requires a 30-day retention period by default, or when the store parameter is set to true.
 - ZDR organizations cannot use `store:true`, so requests will fail.
 
 **What can I do?**
