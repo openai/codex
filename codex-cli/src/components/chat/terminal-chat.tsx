@@ -1,22 +1,19 @@
-import type { ApplyPatchCommand, ApprovalPolicy } from "../../approvals.js";
-import type { CommandConfirmation } from "../../utils/agent/agent-loop.js";
-import type { AppConfig } from "../../utils/config.js";
 import type { ColorName } from "chalk";
 import type { ResponseItem } from "openai/resources/responses/responses.mjs";
 import type { ReviewDecision } from "src/utils/agent/review.ts";
+import type { ApplyPatchCommand, ApprovalPolicy } from "../../approvals.js";
+import type { CommandConfirmation } from "../../utils/agent/agent-loop.js";
+import type { AppConfig } from "../../utils/config.js";
 
-import TerminalChatInput from "./terminal-chat-input.js";
-import { TerminalChatToolCallCommand } from "./terminal-chat-tool-call-item.js";
-import {
-  calculateContextPercentRemaining,
-  uniqueById,
-} from "./terminal-chat-utils.js";
-import TerminalMessageHistory from "./terminal-message-history.js";
+import { Box, Text } from "ink";
+import { exec } from "node:child_process";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { inspect } from "util";
 import { formatCommandForDisplay } from "../../format-command.js";
 import { useConfirmation } from "../../hooks/use-confirmation.js";
 import { useTerminalSize } from "../../hooks/use-terminal-size.js";
 import { AgentLoop } from "../../utils/agent/agent-loop.js";
-import { log, isLoggingEnabled } from "../../utils/agent/log.js";
+import { isLoggingEnabled, log } from "../../utils/agent/log.js";
 import { createInputItem } from "../../utils/input-utils.js";
 import { getAvailableModels } from "../../utils/model-utils.js";
 import { CLI_VERSION } from "../../utils/session.js";
@@ -26,10 +23,13 @@ import ApprovalModeOverlay from "../approval-mode-overlay.js";
 import HelpOverlay from "../help-overlay.js";
 import HistoryOverlay from "../history-overlay.js";
 import ModelOverlay from "../model-overlay.js";
-import { Box, Text } from "ink";
-import React, { useEffect, useMemo, useState, useRef } from "react";
-import { inspect } from "util";
-import { exec } from "node:child_process";
+import TerminalChatInput from "./terminal-chat-input.js";
+import { TerminalChatToolCallCommand } from "./terminal-chat-tool-call-item.js";
+import {
+  calculateContextPercentRemaining,
+  uniqueById,
+} from "./terminal-chat-utils.js";
+import TerminalMessageHistory from "./terminal-message-history.js";
 
 type Props = {
   config: AppConfig;
@@ -52,6 +52,8 @@ export default function TerminalChat({
   approvalPolicy: initialApprovalPolicy,
   fullStdout,
 }: Props): React.ReactElement {
+  // Desktop notification setting
+  const notify = config.notify;
   const [model, setModel] = useState<string>(config.model);
   const [lastResponseId, setLastResponseId] = useState<string | null>(null);
   const [items, setItems] = useState<Array<ResponseItem>>([]);
@@ -178,6 +180,11 @@ export default function TerminalChat({
   // Notify desktop with a preview when an assistant response arrives
   const prevLoadingRef = useRef<boolean>(false);
   useEffect(() => {
+    // Only notify when notifications are enabled
+    if (!notify) {
+      prevLoadingRef.current = loading;
+      return;
+    }
     if (
       prevLoadingRef.current &&
       !loading &&
@@ -192,7 +199,12 @@ export default function TerminalChat({
         const last = assistantMessages[assistantMessages.length - 1];
         if (last) {
           const text = last.content
-            .map((c) => c.text)
+            .map((c) => {
+              if (c.type === "output_text") {
+                return c.text;
+              }
+              return "";
+            })
             .join("")
             .trim();
           const preview = text.replace(/\n/g, " ").slice(0, 100);
@@ -206,7 +218,7 @@ export default function TerminalChat({
       }
     }
     prevLoadingRef.current = loading;
-  }, [loading, confirmationPrompt, items]);
+  }, [notify, loading, confirmationPrompt, items]);
 
   // Let's also track whenever the ref becomes available
   const agent = agentRef.current;

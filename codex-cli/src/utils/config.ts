@@ -49,6 +49,8 @@ export type StoredConfig = {
   approvalMode?: AutoApprovalMode;
   fullAutoErrorMode?: FullAutoErrorMode;
   memory?: MemoryConfig;
+  /** Whether to enable desktop notifications for responses */
+  notify?: boolean;
 };
 
 // Minimal config written on first run.  An *empty* model string ensures that
@@ -70,6 +72,8 @@ export type AppConfig = {
   instructions: string;
   fullAutoErrorMode?: FullAutoErrorMode;
   memory?: MemoryConfig;
+  /** Whether to enable desktop notifications for responses */
+  notify: boolean;
 };
 
 // ---------------------------------------------------------------------------
@@ -312,6 +316,8 @@ export const loadConfig = (
   if (storedConfig.fullAutoErrorMode) {
     config.fullAutoErrorMode = storedConfig.fullAutoErrorMode;
   }
+  // Notification setting: enable desktop notifications when set in config
+  config.notify = storedConfig.notify === true;
 
   return config;
 };

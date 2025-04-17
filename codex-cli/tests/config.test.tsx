@@ -61,6 +61,7 @@ test("loads default config if files don't exist", () => {
   expect(config).toEqual({
     model: "o4-mini",
     instructions: "",
+    notify: false,
   });
 });
 
@@ -68,6 +69,7 @@ test("saves and loads config correctly", () => {
   const testConfig = {
     model: "test-model",
     instructions: "test instructions",
+    notify: false,
   };
   saveConfig(testConfig, testConfigPath, testInstructionsPath);
 

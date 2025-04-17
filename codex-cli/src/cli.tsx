@@ -125,6 +125,11 @@ const cli = meow(
           "Disable truncation of command stdout/stderr messages (show everything)",
         aliases: ["no-truncate"],
       },
+      // Notification
+      notify: {
+        type: "boolean",
+        description: "Enable desktop notifications for responses",
+      },
 
       // Experimental mode where whole directory is loaded in context and model is requested
       // to make code edits in a single pass.
@@ -209,6 +214,7 @@ config = {
   apiKey,
   ...config,
   model: model ?? config.model,
+  notify: Boolean(cli.flags.notify),
 };
 
 if (!(await isModelSupportedForResponses(config.model))) {
