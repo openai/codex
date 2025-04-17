@@ -55,3 +55,5 @@ Thumbs.db
 Icon?
 .Spotlight-V100/
 
+# package-lock is disabled in published code's .npmrc
+codex-cli/package-lock.json
