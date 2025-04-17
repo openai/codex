@@ -106,6 +106,17 @@ And it's **fully open-source** so you can see and contribute to how it develops!
 
 ---
 
+## Funding Opportunity
+
+We’re excited to launch a **$1 million initiative** supporting open source projects that use Codex CLI and other OpenAI models.
+
+- Grants are awarded in **$25,000** API credit increments.
+- Applications are reviewed **on a rolling basis**.
+
+**Interested? [Apply here](https://openai.com/form/codex-open-source-fund/).**
+
+---
+
 ## Security Model & Permissions
 
 Codex lets you decide _how much autonomy_ the agent receives and auto-approval policy via the
