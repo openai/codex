@@ -1,4 +1,5 @@
 import type { ReviewDecision } from "../../utils/agent/review.js";
+import type { HistoryEntry } from "../../utils/storage/command-history.js";
 import type {
   ResponseInputItem,
   ResponseItem,
@@ -6,14 +7,19 @@ import type {
 
 import { TerminalChatCommandReview } from "./terminal-chat-command-review.js";
 import { log, isLoggingEnabled } from "../../utils/agent/log.js";
+import { loadConfig } from "../../utils/config.js";
 import { createInputItem } from "../../utils/input-utils.js";
 import { setSessionId } from "../../utils/session.js";
+import {
+  loadCommandHistory,
+  addToHistory,
+} from "../../utils/storage/command-history.js";
 import { clearTerminal, onExit } from "../../utils/terminal.js";
 import Spinner from "../vendor/ink-spinner.js";
 import TextInput from "../vendor/ink-text-input.js";
 import { Box, Text, useApp, useInput, useStdin } from "ink";
 import { fileURLToPath } from "node:url";
-import React, { useCallback, useState, Fragment } from "react";
+import React, { useCallback, useState, Fragment, useEffect } from "react";
 import { useInterval } from "use-interval";
 
 const suggestions = [
@@ -59,9 +65,19 @@ export default function TerminalChatInput({
   const app = useApp();
   const [selectedSuggestion, setSelectedSuggestion] = useState<number>(0);
   const [input, setInput] = useState("");
-  const [history, setHistory] = useState<Array<string>>([]);
+  const [history, setHistory] = useState<Array<HistoryEntry>>([]);
   const [historyIndex, setHistoryIndex] = useState<number | null>(null);
   const [draftInput, setDraftInput] = useState<string>("");
+
+  // Load command history on component mount
+  useEffect(() => {
+    async function loadHistory() {
+      const historyEntries = await loadCommandHistory();
+      setHistory(historyEntries);
+    }
+
+    loadHistory();
+  }, []);
 
   useInput(
     (_input, _key) => {
@@ -79,7 +95,7 @@ export default function TerminalChatInput({
               newIndex = Math.max(0, historyIndex - 1);
             }
             setHistoryIndex(newIndex);
-            setInput(history[newIndex] ?? "");
+            setInput(history[newIndex]?.command ?? "");
           }
           return;
         }
@@ -95,7 +111,7 @@ export default function TerminalChatInput({
             setInput(draftInput);
           } else {
             setHistoryIndex(newIndex);
-            setInput(history[newIndex] ?? "");
+            setInput(history[newIndex]?.command ?? "");
           }
           return;
         }
@@ -188,6 +204,32 @@ export default function TerminalChatInput({
         ]);
 
         return;
+      } else if (inputValue === "/clearhistory") {
+        setInput("");
+
+        // Import clearCommandHistory function to avoid circular dependencies
+        // Using dynamic import to lazy-load the function
+        import("../../utils/storage/command-history.js").then(
+          async ({ clearCommandHistory }) => {
+            await clearCommandHistory();
+            setHistory([]);
+
+            // Emit a system message to confirm the history clear action
+            setItems((prev) => [
+              ...prev,
+              {
+                id: `clearhistory-${Date.now()}`,
+                type: "message",
+                role: "system",
+                content: [
+                  { type: "input_text", text: "Command history cleared" },
+                ],
+              },
+            ]);
+          },
+        );
+
+        return;
       }
 
       const images: Array<string> = [];
@@ -200,12 +242,18 @@ export default function TerminalChatInput({
 
       const inputItem = await createInputItem(text, images);
       submitInput([inputItem]);
-      setHistory((prev) => {
-        if (prev[prev.length - 1] === value) {
-          return prev;
-        }
-        return [...prev, value];
+
+      // Get config for history persistence
+      const config = loadConfig();
+
+      // Add to history and update state
+      const updatedHistory = await addToHistory(value, history, {
+        maxSize: config.history?.maxSize ?? 1000,
+        saveHistory: config.history?.saveHistory ?? true,
+        sensitivePatterns: config.history?.sensitivePatterns ?? [],
       });
+
+      setHistory(updatedHistory);
       setHistoryIndex(null);
       setDraftInput("");
       setSelectedSuggestion(0);
@@ -223,6 +271,7 @@ export default function TerminalChatInput({
       openApprovalOverlay,
       openModelOverlay,
       openHelpOverlay,
+      history, // Add history to the dependency array
     ],
   );
 

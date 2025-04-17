@@ -49,6 +49,9 @@ export default function HelpOverlay({
         <Text>
           <Text color="cyan">/clear</Text> – clear screen &amp; context
         </Text>
+        <Text>
+          <Text color="cyan">/clearhistory</Text> – clear command history
+        </Text>
 
         <Box marginTop={1}>
           <Text bold dimColor>
