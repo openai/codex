@@ -8,70 +8,70 @@
 //   2.  The caret (highlighted inverse character) is still kept in view after
 //       the horizontal shrink so that editing remains possible.
 
-import { renderTui } from "./ui-test-helpers.js";
-import MultilineTextEditor from "../src/components/chat/multiline-editor.js";
-import * as React from "react";
-import { describe, it, expect } from "vitest";
+import * as React from 'react'
+import { describe, expect, it } from 'vitest'
+import MultilineTextEditor from '../src/components/chat/multiline-editor.js'
+import { renderTui } from './ui-test-helpers.js'
 
 // Helper to synchronously type text then flush Ink's timers so that the next
 // `lastFrame()` call sees the updated UI.
 async function type(
   stdin: NodeJS.WritableStream,
   text: string,
-  flush: () => Promise<void>,
+  flush: () => Promise<void>
 ) {
-  stdin.write(text);
-  await flush();
+  stdin.write(text)
+  await flush()
 }
 
-describe("MultilineTextEditor – dynamic width", () => {
+describe('MultilineTextEditor – dynamic width', () => {
   // The dynamic horizontal scroll logic is still flaky – mark as an expected
   // *failing* test so it doesn't break CI until the feature is aligned with
   // the Rust implementation.
-  it("keeps the caret visible when the terminal width shrinks", async () => {
+  it('keeps the caret visible when the terminal width shrinks', async () => {
     // Fake an initial terminal width large enough that no horizontal
     // scrolling is required while we type the long alphabet sequence.
-    process.stdout.columns = 40; // width seen by useTerminalSize (after padding)
+    process.stdout.columns = 40 // width seen by useTerminalSize (after padding)
 
     const { stdin, lastFrame, flush, cleanup } = renderTui(
       React.createElement(MultilineTextEditor, {
-        initialText: "",
+        initialText: '',
         // width *omitted* – component should fall back to terminal columns
         height: 3,
-      }),
-    );
+      })
+    )
 
     // Ensure initial render completes.
-    await flush();
+    await flush()
 
     // Type the alphabet – longer than the width we'll shrink to.
-    const alphabet = "abcdefghijklmnopqrstuvwxyz";
-    await type(stdin, alphabet, flush);
+    const alphabet = 'abcdefghijklmnopqrstuvwxyz'
+    await type(stdin, alphabet, flush)
 
     // The cursor (block) now sits on the far right after the 'z'. Verify that
     // the character 'z' is visible in the current frame.
-    expect(lastFrame()?.includes("z")).toBe(true);
+    expect(lastFrame()?.includes('z')).toBe(true)
 
     /* -----------------------  Simulate resize  ----------------------- */
 
     // Shrink the reported terminal width so that the previously visible slice
     // would no longer include the cursor *unless* the editor re‑computes
     // scroll offsets on re‑render.
-    process.stdout.columns = 20; // shrink significantly (remember: padding‑8)
-    process.stdout.emit("resize"); // notify listeners
+    process.stdout.columns = 20 // shrink significantly (remember: padding‑8)
+    process.stdout.emit('resize') // notify listeners
 
     // Allow Ink to schedule the state update and then perform the re‑render.
-    await flush();
-    await flush();
+    await flush()
+    await flush()
 
     // After the resize the editor should have scrolled horizontally so that
     // the caret (and thus the 'z' character that is block‑highlighted) remains
     // visible in the rendered slice.
-    const frameAfter = lastFrame() || "";
+    const frameAfter = lastFrame() || ''
     // eslint-disable-next-line no-console
-    console.log("FRAME AFTER RESIZE:\n" + frameAfter);
-    expect(frameAfter.includes("z")).toBe(true);
+    console.log('FRAME AFTER RESIZE:\n' + frameAfter)
+    expect(frameAfter.includes('z')).toBe(true)
 
-    cleanup();
-  });
-});
+    cleanup()
+  })
+})

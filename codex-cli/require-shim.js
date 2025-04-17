@@ -7,5 +7,5 @@
  * This is not compatible with ESM, so we need to shim require() to use the
  * CommonJS module loader.
  */
-import { createRequire } from "module";
-globalThis.require = createRequire(import.meta.url);
+import { createRequire } from 'module'
+globalThis.require = createRequire(import.meta.url)

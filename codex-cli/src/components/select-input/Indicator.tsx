@@ -1,10 +1,10 @@
-import figures from "figures";
-import { Box, Text } from "ink";
-import React from "react";
+import figures from 'figures'
+import { Box, Text } from 'ink'
+import React from 'react'
 
 export type Props = {
-  readonly isSelected?: boolean;
-};
+  readonly isSelected?: boolean
+}
 
 function Indicator({ isSelected = false }: Props): JSX.Element {
   return (
@@ -15,7 +15,7 @@ function Indicator({ isSelected = false }: Props): JSX.Element {
         <Text> </Text>
       )}
     </Box>
-  );
+  )
 }
 
-export default Indicator;
+export default Indicator

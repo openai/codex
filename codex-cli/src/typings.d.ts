@@ -4,14 +4,14 @@
 // packages (e.g. `@types/shell‑quote`) are introduced later these stubs will
 // be overridden automatically by the higher‑priority package typings.
 
-declare module "shell-quote" {
+declare module 'shell-quote' {
   /**
    * Very small subset of the return tokens produced by `shell‑quote` that are
    * relevant for our inspection of shell operators. A token can either be a
    * simple string (command/argument) or an operator object such as
    * `{ op: "&&" }`.
    */
-  export type Token = string | { op: string };
+  export type Token = string | { op: string }
 
   // Historically the original `shell-quote` library exports several internal
   // type definitions. We recreate the few that Codex‑Lib imports so that the
@@ -25,10 +25,10 @@ declare module "shell-quote" {
    * still preserving basic safety (the operator string gets validated at
    * runtime anyway).
    */
-  export type ControlOperator = "&&" | "||" | "|" | ";" | string;
+  export type ControlOperator = '&&' | '||' | '|' | ';' | string
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  export type ParseEntry = string | { op: ControlOperator } | any;
+  export type ParseEntry = string | { op: ControlOperator } | any
 
   /**
    * Parse a shell command string into tokens. The implementation provided by
@@ -38,17 +38,17 @@ declare module "shell-quote" {
    */
   export function parse(
     cmd: string,
-    env?: Record<string, string | undefined>,
-  ): Array<Token>;
+    env?: Record<string, string | undefined>
+  ): Array<Token>
 
   /**
    * Quote an array of arguments such that it can be copied & pasted into a
    * POSIX‑compatible shell.
    */
-  export function quote(args: ReadonlyArray<string>): string;
+  export function quote(args: ReadonlyArray<string>): string
 }
 
-declare module "diff" {
+declare module 'diff' {
   /**
    * Minimal stub for the `diff` library which we use only for generating a
    * unified patch between two in‑memory strings.
@@ -60,6 +60,6 @@ declare module "diff" {
     newStr: string,
     oldHeader?: string,
     newHeader?: string,
-    options?: { context?: number },
-  ): string;
+    options?: { context?: number }
+  ): string
 }

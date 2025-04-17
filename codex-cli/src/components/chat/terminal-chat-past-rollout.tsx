@@ -1,23 +1,23 @@
-import type { TerminalChatSession } from "../../utils/session.js";
-import type { ResponseItem } from "openai/resources/responses/responses";
+import type { ResponseItem } from 'openai/resources/responses/responses'
+import type { TerminalChatSession } from '../../utils/session.js'
 
-import TerminalChatResponseItem from "./terminal-chat-response-item";
-import { Box, Text } from "ink";
-import React from "react";
+import { Box, Text } from 'ink'
+import React from 'react'
+import TerminalChatResponseItem from './terminal-chat-response-item'
 
 export default function TerminalChatPastRollout({
   session,
   items,
 }: {
-  session: TerminalChatSession;
-  items: Array<ResponseItem>;
+  session: TerminalChatSession
+  items: Array<ResponseItem>
 }): React.ReactElement {
-  const { version, id: sessionId, model } = session;
+  const { version, id: sessionId, model } = session
   return (
     <Box flexDirection="column">
       <Box borderStyle="round" paddingX={1} width={64}>
         <Text>
-          ● OpenAI <Text bold>Codex</Text>{" "}
+          ● OpenAI <Text bold>Codex</Text>{' '}
           <Text dimColor>
             (research preview) <Text color="blueBright">v{version}</Text>
           </Text>
@@ -31,14 +31,14 @@ export default function TerminalChatPastRollout({
         flexDirection="column"
       >
         <Text>
-          <Text color="magenta">●</Text> localhost{" "}
-          <Text dimColor>· session:</Text>{" "}
+          <Text color="magenta">●</Text> localhost{' '}
+          <Text dimColor>· session:</Text>{' '}
           <Text color="magentaBright" dimColor>
             {sessionId}
           </Text>
         </Text>
         <Text dimColor>
-          <Text color="blueBright">↳</Text> When / Who:{" "}
+          <Text color="blueBright">↳</Text> When / Who:{' '}
           <Text bold>
             {session.timestamp} <Text dimColor>/</Text> {session.user}
           </Text>
@@ -53,9 +53,9 @@ export default function TerminalChatPastRollout({
             items.map((item, key) => (
               <TerminalChatResponseItem key={key} item={item} />
             )),
-          [items],
+          [items]
         )}
       </Box>
     </Box>
-  );
+  )
 }

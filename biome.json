@@ -26,11 +26,6 @@
     }
   },
   "files": {
-    "include": [
-      "./**/*.{js,ts,tsx,json,md,yml,yaml}",
-      ".github/**/*.{js,ts,tsx,json,md,yml,yaml}",
-      "codex-cli/{src,tests}/**/*.{js,ts,tsx,json,md,yml,yaml}"
-    ],
     "ignore": ["package-lock.yaml", "**/node_modules", "**/dist", "**/.next"]
   }
 }

@@ -1,18 +1,18 @@
-import type { AgentLoop } from "../../utils/agent/agent-loop.js";
+import type { AgentLoop } from '../../utils/agent/agent-loop.js'
 
-import { Box, Text } from "ink";
-import path from "node:path";
-import React from "react";
+import path from 'node:path'
+import { Box, Text } from 'ink'
+import React from 'react'
 
 export interface TerminalHeaderProps {
-  terminalRows: number;
-  version: string;
-  PWD: string;
-  model: string;
-  approvalPolicy: string;
-  colorsByPolicy: Record<string, string | undefined>;
-  agent?: AgentLoop;
-  initialImagePaths?: Array<string>;
+  terminalRows: number
+  version: string
+  PWD: string
+  model: string
+  approvalPolicy: string
+  colorsByPolicy: Record<string, string | undefined>
+  agent?: AgentLoop
+  initialImagePaths?: Array<string>
 }
 
 const TerminalHeader: React.FC<TerminalHeaderProps> = ({
@@ -30,14 +30,14 @@ const TerminalHeader: React.FC<TerminalHeaderProps> = ({
       {terminalRows < 10 ? (
         // Compact header for small terminal windows
         <Text>
-          ● Codex v{version} – {PWD} – {model} –{" "}
+          ● Codex v{version} – {PWD} – {model} –{' '}
           <Text color={colorsByPolicy[approvalPolicy]}>{approvalPolicy}</Text>
         </Text>
       ) : (
         <>
           <Box borderStyle="round" paddingX={1} width={64}>
             <Text>
-              ● OpenAI <Text bold>Codex</Text>{" "}
+              ● OpenAI <Text bold>Codex</Text>{' '}
               <Text dimColor>
                 (research preview) <Text color="blueBright">v{version}</Text>
               </Text>
@@ -51,9 +51,9 @@ const TerminalHeader: React.FC<TerminalHeaderProps> = ({
             flexDirection="column"
           >
             <Text>
-              localhost <Text dimColor>session:</Text>{" "}
+              localhost <Text dimColor>session:</Text>{' '}
               <Text color="magentaBright" dimColor>
-                {agent?.sessionId ?? "<no-session>"}
+                {agent?.sessionId ?? '<no-session>'}
               </Text>
             </Text>
             <Text dimColor>
@@ -63,14 +63,14 @@ const TerminalHeader: React.FC<TerminalHeaderProps> = ({
               <Text color="blueBright">↳</Text> model: <Text bold>{model}</Text>
             </Text>
             <Text dimColor>
-              <Text color="blueBright">↳</Text> approval:{" "}
+              <Text color="blueBright">↳</Text> approval:{' '}
               <Text bold color={colorsByPolicy[approvalPolicy]} dimColor>
                 {approvalPolicy}
               </Text>
             </Text>
             {initialImagePaths?.map((img, idx) => (
               <Text key={img ?? idx} color="gray">
-                <Text color="blueBright">↳</Text> image:{" "}
+                <Text color="blueBright">↳</Text> image:{' '}
                 <Text bold>{path.basename(img)}</Text>
               </Text>
             ))}
@@ -78,7 +78,7 @@ const TerminalHeader: React.FC<TerminalHeaderProps> = ({
         </>
       )}
     </>
-  );
-};
+  )
+}
 
-export default TerminalHeader;
+export default TerminalHeader

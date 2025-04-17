@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from 'zod'
 
 /**
  * Represents a file operation, including modifications, deletes, and moves.
@@ -30,9 +30,9 @@ export const FileOperationSchema = z.object({
    * Mutually exclusive with 'updated_full_content' and 'delete'.
    */
   move_to: z.string().nullable().optional(),
-});
+})
 
-export type FileOperation = z.infer<typeof FileOperationSchema>;
+export type FileOperation = z.infer<typeof FileOperationSchema>
 
 /**
  * Container for one or more FileOperation objects.
@@ -42,6 +42,6 @@ export const EditedFilesSchema = z.object({
    * A list of file operations that are applied in order.
    */
   ops: z.array(FileOperationSchema),
-});
+})
 
-export type EditedFiles = z.infer<typeof EditedFilesSchema>;
+export type EditedFiles = z.infer<typeof EditedFilesSchema>

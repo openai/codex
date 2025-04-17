@@ -1,10 +1,7 @@
-import TypeaheadOverlay from "./typeahead-overlay.js";
-import {
-  getAvailableModels,
-  RECOMMENDED_MODELS,
-} from "../utils/model-utils.js";
-import { Box, Text, useInput } from "ink";
-import React, { useEffect, useState } from "react";
+import { Box, Text, useInput } from 'ink'
+import React, { useEffect, useState } from 'react'
+import { RECOMMENDED_MODELS, getAvailableModels } from '../utils/model-utils.js'
+import TypeaheadOverlay from './typeahead-overlay.js'
 
 /**
  * Props for <ModelOverlay>.
@@ -15,11 +12,11 @@ import React, { useEffect, useState } from "react";
  * the user to close it.
  */
 type Props = {
-  currentModel: string;
-  hasLastResponse: boolean;
-  onSelect: (model: string) => void;
-  onExit: () => void;
-};
+  currentModel: string
+  hasLastResponse: boolean
+  onSelect: (model: string) => void
+  onExit: () => void
+}
 
 export default function ModelOverlay({
   currentModel,
@@ -28,27 +25,27 @@ export default function ModelOverlay({
   onExit,
 }: Props): JSX.Element {
   const [items, setItems] = useState<Array<{ label: string; value: string }>>(
-    [],
-  );
+    []
+  )
 
   useEffect(() => {
-    (async () => {
-      const models = await getAvailableModels();
+    ;(async () => {
+      const models = await getAvailableModels()
 
       // Split the list into recommended and “other” models.
-      const recommended = RECOMMENDED_MODELS.filter((m) => models.includes(m));
-      const others = models.filter((m) => !recommended.includes(m));
+      const recommended = RECOMMENDED_MODELS.filter((m) => models.includes(m))
+      const others = models.filter((m) => !recommended.includes(m))
 
-      const ordered = [...recommended, ...others.sort()];
+      const ordered = [...recommended, ...others.sort()]
 
       setItems(
         ordered.map((m) => ({
           label: recommended.includes(m) ? `⭐ ${m}` : m,
           value: m,
-        })),
-      );
-    })();
-  }, []);
+        }))
+      )
+    })()
+  }, [])
 
   // ---------------------------------------------------------------------------
   // If the conversation already contains a response we cannot change the model
@@ -61,9 +58,9 @@ export default function ModelOverlay({
   // Always register input handling so hooks are called consistently.
   useInput((_input, key) => {
     if (hasLastResponse && (key.escape || key.return)) {
-      onExit();
+      onExit()
     }
-  });
+  })
 
   if (hasLastResponse) {
     return (
@@ -88,7 +85,7 @@ export default function ModelOverlay({
           <Text dimColor>press esc or enter to close</Text>
         </Box>
       </Box>
-    );
+    )
   }
 
   return (
@@ -104,5 +101,5 @@ export default function ModelOverlay({
       onSelect={onSelect}
       onExit={onExit}
     />
-  );
+  )
 }

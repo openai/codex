@@ -6,4 +6,4 @@
 // rewrites the path to point at the generated `.js` file automatically, so
 // having this shim in the source tree is completely transparent for
 // production builds.
-export { AutoApprovalMode, FullAutoErrorMode } from "./auto-approval-mode.ts";
+export { AutoApprovalMode, FullAutoErrorMode } from './auto-approval-mode.ts'

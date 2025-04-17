@@ -1,8 +1,8 @@
 /* eslint-disable no-console */
 
-import type { FileContent } from "./context_files.js";
+import type { FileContent } from './context_files.js'
 
-import path from "path";
+import path from 'path'
 
 /**
  * Builds file-size and total-size maps for the provided files, keyed by absolute path.
@@ -15,44 +15,44 @@ import path from "path";
  */
 export function computeSizeMap(
   root: string,
-  files: Array<FileContent>,
+  files: Array<FileContent>
 ): [Record<string, number>, Record<string, number>] {
-  const rootAbs = path.resolve(root);
-  const fileSizeMap: Record<string, number> = {};
-  const totalSizeMap: Record<string, number> = {};
+  const rootAbs = path.resolve(root)
+  const fileSizeMap: Record<string, number> = {}
+  const totalSizeMap: Record<string, number> = {}
 
   for (const fc of files) {
-    const pAbs = path.resolve(fc.path);
-    const length = fc.content.length;
+    const pAbs = path.resolve(fc.path)
+    const length = fc.content.length
 
     // Record size in fileSizeMap
-    fileSizeMap[pAbs] = length;
+    fileSizeMap[pAbs] = length
 
     // Ascend from pAbs up to root, adding size along the way.
-    let current = pAbs;
+    let current = pAbs
 
     // eslint-disable-next-line no-constant-condition
     while (true) {
-      totalSizeMap[current] = (totalSizeMap[current] ?? 0) + length;
+      totalSizeMap[current] = (totalSizeMap[current] ?? 0) + length
       if (current === rootAbs) {
-        break;
+        break
       }
 
-      const parent = path.dirname(current);
+      const parent = path.dirname(current)
       // If we've reached the top or gone outside root, break.
       if (parent === current) {
         // e.g. we're at "/" in a *nix system or some root in Windows.
-        break;
+        break
       }
       // If we have gone above the root (meaning the parent no longer starts with rootAbs), break.
       if (!parent.startsWith(rootAbs) && parent !== rootAbs) {
-        break;
+        break
       }
-      current = parent;
+      current = parent
     }
   }
 
-  return [fileSizeMap, totalSizeMap];
+  return [fileSizeMap, totalSizeMap]
 }
 
 /**
@@ -66,42 +66,42 @@ export function computeSizeMap(
  */
 export function buildChildrenMap(
   root: string,
-  totalSizeMap: Record<string, number>,
+  totalSizeMap: Record<string, number>
 ): Record<string, Array<string>> {
-  const rootAbs = path.resolve(root);
-  const childrenMap: Record<string, Array<string>> = {};
+  const rootAbs = path.resolve(root)
+  const childrenMap: Record<string, Array<string>> = {}
 
   // Initialize all potential keys so that each path has an entry.
   for (const p of Object.keys(totalSizeMap)) {
     if (!childrenMap[p]) {
-      childrenMap[p] = [];
+      childrenMap[p] = []
     }
   }
 
   for (const p of Object.keys(totalSizeMap)) {
     if (p === rootAbs) {
-      continue;
+      continue
     }
-    const parent = path.dirname(p);
+    const parent = path.dirname(p)
 
     // If the parent is also tracked in totalSizeMap, we record p as a child.
     if (totalSizeMap[parent] !== undefined && parent !== p) {
       if (!childrenMap[parent]) {
-        childrenMap[parent] = [];
+        childrenMap[parent] = []
       }
 
-      childrenMap[parent].push(p);
+      childrenMap[parent].push(p)
     }
   }
 
   // Sort the children.
   for (const val of Object.values(childrenMap)) {
     val.sort((a, b) => {
-      return a.localeCompare(b);
-    });
+      return a.localeCompare(b)
+    })
   }
 
-  return childrenMap;
+  return childrenMap
 }
 
 /**
@@ -122,36 +122,36 @@ export function printSizeTree(
   totalSizeMap: Record<string, number>,
   prefix: string,
   isLast: boolean,
-  contextLimit: number,
+  contextLimit: number
 ): void {
-  const connector = isLast ? "└──" : "├──";
-  const label = path.basename(current) || current;
-  const totalSz = totalSizeMap[current] ?? 0;
+  const connector = isLast ? '└──' : '├──'
+  const label = path.basename(current) || current
+  const totalSz = totalSizeMap[current] ?? 0
   const percentageOfLimit =
-    contextLimit > 0 ? (totalSz / contextLimit) * 100 : 0;
+    contextLimit > 0 ? (totalSz / contextLimit) * 100 : 0
 
   if (fileSizeMap[current] !== undefined) {
     // It's a file
-    const fileSz = fileSizeMap[current];
+    const fileSz = fileSizeMap[current]
     console.log(
       `${prefix}${connector} ${label} [file: ${fileSz} bytes, cumulative: ${totalSz} bytes, ${percentageOfLimit.toFixed(
-        2,
-      )}% of limit]`,
-    );
+        2
+      )}% of limit]`
+    )
   } else {
     // It's a directory
     console.log(
       `${prefix}${connector} ${label} [dir: ${totalSz} bytes, ${percentageOfLimit.toFixed(
-        2,
-      )}% of limit]`,
-    );
+        2
+      )}% of limit]`
+    )
   }
 
-  const newPrefix = prefix + (isLast ? "    " : "│   ");
-  const children = childrenMap[current] || [];
+  const newPrefix = prefix + (isLast ? '    ' : '│   ')
+  const children = childrenMap[current] || []
   for (let i = 0; i < children.length; i++) {
-    const child = children[i];
-    const childIsLast = i === children.length - 1;
+    const child = children[i]
+    const childIsLast = i === children.length - 1
     printSizeTree(
       child!,
       childrenMap,
@@ -159,8 +159,8 @@ export function printSizeTree(
       totalSizeMap,
       newPrefix,
       childIsLast,
-      contextLimit,
-    );
+      contextLimit
+    )
   }
 }
 
@@ -174,35 +174,35 @@ export function printSizeTree(
 export function printDirectorySizeBreakdown(
   directory: string,
   files: Array<FileContent>,
-  contextLimit = 300_000,
+  contextLimit = 300_000
 ): void {
-  const rootAbs = path.resolve(directory);
-  const [fileSizeMap, totalSizeMap] = computeSizeMap(rootAbs, files);
-  const childrenMap = buildChildrenMap(rootAbs, totalSizeMap);
+  const rootAbs = path.resolve(directory)
+  const [fileSizeMap, totalSizeMap] = computeSizeMap(rootAbs, files)
+  const childrenMap = buildChildrenMap(rootAbs, totalSizeMap)
 
-  console.log("\nContext size breakdown by directory and file:");
+  console.log('\nContext size breakdown by directory and file:')
 
-  const rootTotal = totalSizeMap[rootAbs] ?? 0;
+  const rootTotal = totalSizeMap[rootAbs] ?? 0
   const rootPct =
-    contextLimit > 0 ? ((rootTotal / contextLimit) * 100).toFixed(2) : "0";
+    contextLimit > 0 ? ((rootTotal / contextLimit) * 100).toFixed(2) : '0'
 
-  const rootLabel = path.basename(rootAbs) || rootAbs;
-  console.log(`${rootLabel} [dir: ${rootTotal} bytes, ${rootPct}% of limit]`);
+  const rootLabel = path.basename(rootAbs) || rootAbs
+  console.log(`${rootLabel} [dir: ${rootTotal} bytes, ${rootPct}% of limit]`)
 
-  const rootChildren = childrenMap[rootAbs] || [];
-  rootChildren.sort((a, b) => a.localeCompare(b));
+  const rootChildren = childrenMap[rootAbs] || []
+  rootChildren.sort((a, b) => a.localeCompare(b))
 
   for (let i = 0; i < rootChildren.length; i++) {
-    const child = rootChildren[i];
-    const childIsLast = i === rootChildren.length - 1;
+    const child = rootChildren[i]
+    const childIsLast = i === rootChildren.length - 1
     printSizeTree(
       child!,
       childrenMap,
       fileSizeMap,
       totalSizeMap,
-      "",
+      '',
       childIsLast,
-      contextLimit,
-    );
+      contextLimit
+    )
   }
 }

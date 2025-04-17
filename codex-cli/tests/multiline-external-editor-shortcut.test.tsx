@@ -1,64 +1,64 @@
-import { renderTui } from "./ui-test-helpers.js";
-import MultilineTextEditor from "../src/components/chat/multiline-editor.js";
-import TextBuffer from "../src/text-buffer.js";
-import * as React from "react";
-import { describe, it, expect, vi } from "vitest";
+import * as React from 'react'
+import { describe, expect, it, vi } from 'vitest'
+import MultilineTextEditor from '../src/components/chat/multiline-editor.js'
+import TextBuffer from '../src/text-buffer.js'
+import { renderTui } from './ui-test-helpers.js'
 
 async function type(
   stdin: NodeJS.WritableStream,
   text: string,
-  flush: () => Promise<void>,
+  flush: () => Promise<void>
 ) {
-  stdin.write(text);
-  await flush();
+  stdin.write(text)
+  await flush()
 }
 
-describe("MultilineTextEditor – external editor shortcut", () => {
-  it("fires openInExternalEditor on Ctrl‑E (single key)", async () => {
+describe('MultilineTextEditor – external editor shortcut', () => {
+  it('fires openInExternalEditor on Ctrl‑E (single key)', async () => {
     const spy = vi
-      .spyOn(TextBuffer.prototype as any, "openInExternalEditor")
-      .mockResolvedValue(undefined);
+      .spyOn(TextBuffer.prototype as any, 'openInExternalEditor')
+      .mockResolvedValue(undefined)
 
     const { stdin, flush, cleanup } = renderTui(
       React.createElement(MultilineTextEditor, {
-        initialText: "hello",
+        initialText: 'hello',
         width: 20,
         height: 3,
-      }),
-    );
+      })
+    )
 
     // Ensure initial render.
-    await flush();
+    await flush()
 
     // Send Ctrl‑E → should fire immediately
-    await type(stdin, "\x05", flush); // Ctrl‑E (ENQ / 0x05)
-    expect(spy).toHaveBeenCalledTimes(1);
+    await type(stdin, '\x05', flush) // Ctrl‑E (ENQ / 0x05)
+    expect(spy).toHaveBeenCalledTimes(1)
 
-    spy.mockRestore();
-    cleanup();
-  });
+    spy.mockRestore()
+    cleanup()
+  })
 
-  it("fires openInExternalEditor on Ctrl‑X (single key)", async () => {
+  it('fires openInExternalEditor on Ctrl‑X (single key)', async () => {
     const spy = vi
-      .spyOn(TextBuffer.prototype as any, "openInExternalEditor")
-      .mockResolvedValue(undefined);
+      .spyOn(TextBuffer.prototype as any, 'openInExternalEditor')
+      .mockResolvedValue(undefined)
 
     const { stdin, flush, cleanup } = renderTui(
       React.createElement(MultilineTextEditor, {
-        initialText: "hello",
+        initialText: 'hello',
         width: 20,
         height: 3,
-      }),
-    );
+      })
+    )
 
     // Ensure initial render.
-    await flush();
+    await flush()
 
     // Send Ctrl‑X → should fire immediately
-    await type(stdin, "\x18", flush); // Ctrl‑X (SUB / 0x18)
-    expect(spy).toHaveBeenCalledTimes(1);
+    await type(stdin, '\x18', flush) // Ctrl‑X (SUB / 0x18)
+    expect(spy).toHaveBeenCalledTimes(1)
 
-    spy.mockRestore();
-    cleanup();
-  });
-});
+    spy.mockRestore()
+    cleanup()
+  })
+})

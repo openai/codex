@@ -1,8 +1,8 @@
-import { OPENAI_API_KEY } from "./config";
-import OpenAI from "openai";
+import OpenAI from 'openai'
+import { OPENAI_API_KEY } from './config'
 
-const MODEL_LIST_TIMEOUT_MS = 2_000; // 2 seconds
-export const RECOMMENDED_MODELS: Array<string> = ["o4-mini", "o3"];
+const MODEL_LIST_TIMEOUT_MS = 2_000 // 2 seconds
+export const RECOMMENDED_MODELS: Array<string> = ['o4-mini', 'o3']
 
 /**
  * Background model loader / cache.
@@ -12,28 +12,28 @@ export const RECOMMENDED_MODELS: Array<string> = ["o4-mini", "o3"];
  * lifetime of the process and the results are cached for subsequent calls.
  */
 
-let modelsPromise: Promise<Array<string>> | null = null;
+let modelsPromise: Promise<Array<string>> | null = null
 
 async function fetchModels(): Promise<Array<string>> {
   // If the user has not configured an API key we cannot hit the network.
   if (!OPENAI_API_KEY) {
-    return RECOMMENDED_MODELS;
+    return RECOMMENDED_MODELS
   }
 
   try {
-    const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
-    const list = await openai.models.list();
+    const openai = new OpenAI({ apiKey: OPENAI_API_KEY })
+    const list = await openai.models.list()
 
-    const models: Array<string> = [];
+    const models: Array<string> = []
     for await (const model of list as AsyncIterable<{ id?: string }>) {
-      if (model && typeof model.id === "string") {
-        models.push(model.id);
+      if (model && typeof model.id === 'string') {
+        models.push(model.id)
       }
     }
 
-    return models.sort();
+    return models.sort()
   } catch {
-    return [];
+    return []
   }
 }
 
@@ -41,15 +41,15 @@ export function preloadModels(): void {
   if (!modelsPromise) {
     // Fire‑and‑forget – callers that truly need the list should `await`
     // `getAvailableModels()` instead.
-    void getAvailableModels();
+    void getAvailableModels()
   }
 }
 
 export async function getAvailableModels(): Promise<Array<string>> {
   if (!modelsPromise) {
-    modelsPromise = fetchModels();
+    modelsPromise = fetchModels()
   }
-  return modelsPromise;
+  return modelsPromise
 }
 
 /**
@@ -58,33 +58,33 @@ export async function getAvailableModels(): Promise<Array<string>> {
  * `/models` endpoint the first time it is required and then cached in‑process.
  */
 export async function isModelSupportedForResponses(
-  model: string | undefined | null,
+  model: string | undefined | null
 ): Promise<boolean> {
   if (
-    typeof model !== "string" ||
-    model.trim() === "" ||
+    typeof model !== 'string' ||
+    model.trim() === '' ||
     RECOMMENDED_MODELS.includes(model)
   ) {
-    return true;
+    return true
   }
 
   try {
     const models = await Promise.race<Array<string>>([
       getAvailableModels(),
       new Promise<Array<string>>((resolve) =>
-        setTimeout(() => resolve([]), MODEL_LIST_TIMEOUT_MS),
+        setTimeout(() => resolve([]), MODEL_LIST_TIMEOUT_MS)
       ),
-    ]);
+    ])
 
     // If the timeout fired we get an empty list → treat as supported to avoid
     // false negatives.
     if (models.length === 0) {
-      return true;
+      return true
     }
 
-    return models.includes(model.trim());
+    return models.includes(model.trim())
   } catch {
     // Network or library failure → don't block start‑up.
-    return true;
+    return true
   }
 }

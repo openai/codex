@@ -1,4 +1,4 @@
-import { quote } from "shell-quote";
+import { quote } from 'shell-quote'
 
 /**
  * Format the args of an exec command for display as a single string. Prefer
@@ -30,24 +30,24 @@ export function formatCommandForDisplay(command: Array<string>): string {
   try {
     if (
       command.length === 3 &&
-      command[0] === "bash" &&
-      command[1] === "-lc" &&
-      typeof command[2] === "string"
+      command[0] === 'bash' &&
+      command[1] === '-lc' &&
+      typeof command[2] === 'string'
     ) {
-      let inner = command[2];
+      let inner = command[2]
 
       // Some callers wrap the actual command in single quotes (e.g. `'echo foo'`).
       // For display purposes we want to drop those outer quotes so that the
       // rendered command looks exactly like what the user typed.
       if (inner.startsWith("'") && inner.endsWith("'")) {
-        inner = inner.slice(1, -1);
+        inner = inner.slice(1, -1)
       }
 
-      return inner;
+      return inner
     }
 
-    return quote(command);
+    return quote(command)
   } catch (err) {
-    return command.join(" ");
+    return command.join(' ')
   }
 }

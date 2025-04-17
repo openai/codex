@@ -1,46 +1,46 @@
-import type { Instance } from "ink";
-import type React from "react";
+import type { Instance } from 'ink'
+import type React from 'react'
 
-let inkRenderer: Instance | null = null;
+let inkRenderer: Instance | null = null
 
 // Track whether the clean‑up routine has already executed so repeat calls are
 // silently ignored. This can happen when different exit paths (e.g. the raw
 // Ctrl‑C handler and the process "exit" event) both attempt to tidy up.
-let didRunOnExit = false;
+let didRunOnExit = false
 
 export function setInkRenderer(renderer: Instance): void {
-  inkRenderer = renderer;
+  inkRenderer = renderer
 
-  if (process.env["CODEX_FPS_DEBUG"]) {
-    let last = Date.now();
+  if (process.env['CODEX_FPS_DEBUG']) {
+    let last = Date.now()
     const logFrame = () => {
-      const now = Date.now();
+      const now = Date.now()
       // eslint-disable-next-line no-console
-      console.error(`[fps] frame in ${now - last}ms`);
-      last = now;
-    };
+      console.error(`[fps] frame in ${now - last}ms`)
+      last = now
+    }
 
     // Monkey‑patch the public rerender/unmount methods so we know when Ink
     // flushes a new frame.  React’s internal renders eventually call
     // `rerender()` so this gives us a good approximation without poking into
     // private APIs.
-    const origRerender = renderer.rerender.bind(renderer);
+    const origRerender = renderer.rerender.bind(renderer)
     renderer.rerender = (node: React.ReactNode) => {
-      logFrame();
-      return origRerender(node);
-    };
+      logFrame()
+      return origRerender(node)
+    }
 
-    const origClear = renderer.clear.bind(renderer);
+    const origClear = renderer.clear.bind(renderer)
     renderer.clear = () => {
-      logFrame();
-      return origClear();
-    };
+      logFrame()
+      return origClear()
+    }
   }
 }
 
 export function clearTerminal(): void {
-  if (process.env["CODEX_QUIET_MODE"] === "1") {
-    return;
+  if (process.env['CODEX_QUIET_MODE'] === '1') {
+    return
   }
 
   // When using the alternate screen the content never scrolls, so we rarely
@@ -48,7 +48,7 @@ export function clearTerminal(): void {
   // (e.g. via Ctrl‑L) but avoid unnecessary clears on every render to minimise
   // flicker.
   if (inkRenderer) {
-    inkRenderer.clear();
+    inkRenderer.clear()
   }
 }
 
@@ -59,10 +59,10 @@ export function onExit(): void {
   // duplicate log messages and increases the risk of confusing side‑effects
   // should future clean‑up steps become non‑idempotent.
   if (didRunOnExit) {
-    return;
+    return
   }
 
-  didRunOnExit = true;
+  didRunOnExit = true
 
   // First make sure Ink is properly unmounted so it can restore any terminal
   // state it modified (e.g. raw‑mode on stdin). Failing to do so leaves the
@@ -74,7 +74,7 @@ export function onExit(): void {
   // *before* we restore the primary screen buffer.
   if (inkRenderer) {
     try {
-      inkRenderer.unmount();
+      inkRenderer.unmount()
     } catch {
       /* best‑effort – continue even if Ink throws */
     }

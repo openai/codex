@@ -1,13 +1,13 @@
-import { parseApplyPatch } from "../../parse-apply-patch";
-import { shortenPath } from "../../utils/short-path";
-import chalk from "chalk";
-import { Text } from "ink";
-import React from "react";
+import chalk from 'chalk'
+import { Text } from 'ink'
+import React from 'react'
+import { parseApplyPatch } from '../../parse-apply-patch'
+import { shortenPath } from '../../utils/short-path'
 
 export function TerminalChatToolCallCommand({
   commandForDisplay,
 }: {
-  commandForDisplay: string;
+  commandForDisplay: string
 }): React.ReactElement {
   // -------------------------------------------------------------------------
   // Colorize diff output inside the command preview: we detect individual
@@ -17,17 +17,17 @@ export function TerminalChatToolCallCommand({
   // -------------------------------------------------------------------------
 
   const colorizedCommand = commandForDisplay
-    .split("\n")
+    .split('\n')
     .map((line) => {
-      if (line.startsWith("+") && !line.startsWith("++")) {
-        return chalk.green(line);
+      if (line.startsWith('+') && !line.startsWith('++')) {
+        return chalk.green(line)
       }
-      if (line.startsWith("-") && !line.startsWith("--")) {
-        return chalk.red(line);
+      if (line.startsWith('-') && !line.startsWith('--')) {
+        return chalk.red(line)
       }
-      return line;
+      return line
     })
-    .join("\n");
+    .join('\n')
 
   return (
     <>
@@ -36,32 +36,32 @@ export function TerminalChatToolCallCommand({
         <Text dimColor>$</Text> {colorizedCommand}
       </Text>
     </>
-  );
+  )
 }
 
 export function TerminalChatToolCallApplyPatch({
   commandForDisplay,
   patch,
 }: {
-  commandForDisplay: string;
-  patch: string;
+  commandForDisplay: string
+  patch: string
 }): React.ReactElement {
-  const ops = React.useMemo(() => parseApplyPatch(patch), [patch]);
-  const firstOp = ops?.[0];
+  const ops = React.useMemo(() => parseApplyPatch(patch), [patch])
+  const firstOp = ops?.[0]
 
   const title = React.useMemo(() => {
     if (!firstOp) {
-      return "";
+      return ''
     }
-    return capitalize(firstOp.type);
-  }, [firstOp]);
+    return capitalize(firstOp.type)
+  }, [firstOp])
 
   const filePath = React.useMemo(() => {
     if (!firstOp) {
-      return "";
+      return ''
     }
-    return shortenPath(firstOp.path || ".");
-  }, [firstOp]);
+    return shortenPath(firstOp.path || '.')
+  }, [firstOp])
 
   if (ops == null) {
     return (
@@ -74,7 +74,7 @@ export function TerminalChatToolCallApplyPatch({
         </Text>
         <Text dimColor>{commandForDisplay}</Text>
       </>
-    );
+    )
   }
 
   if (!firstOp) {
@@ -88,7 +88,7 @@ export function TerminalChatToolCallApplyPatch({
         </Text>
         <Text dimColor>{commandForDisplay}</Text>
       </>
-    );
+    )
   }
 
   return (
@@ -100,7 +100,7 @@ export function TerminalChatToolCallApplyPatch({
         <Text dimColor>$</Text> {commandForDisplay}
       </Text>
     </>
-  );
+  )
 }
 
-const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)

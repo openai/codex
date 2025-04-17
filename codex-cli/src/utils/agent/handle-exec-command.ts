@@ -1,17 +1,17 @@
-import type { CommandConfirmation } from "./agent-loop.js";
-import type { AppConfig } from "../config.js";
-import type { ExecInput } from "./sandbox/interface.js";
-import type { ApplyPatchCommand, ApprovalPolicy } from "../../approvals.js";
-import type { ResponseInputItem } from "openai/resources/responses/responses.mjs";
+import type { ResponseInputItem } from 'openai/resources/responses/responses.mjs'
+import type { ApplyPatchCommand, ApprovalPolicy } from '../../approvals.js'
+import type { AppConfig } from '../config.js'
+import type { CommandConfirmation } from './agent-loop.js'
+import type { ExecInput } from './sandbox/interface.js'
 
-import { exec, execApplyPatch } from "./exec.js";
-import { isLoggingEnabled, log } from "./log.js";
-import { ReviewDecision } from "./review.js";
-import { FullAutoErrorMode } from "../auto-approval-mode.js";
-import { SandboxType } from "./sandbox/interface.js";
-import { canAutoApprove } from "../../approvals.js";
-import { formatCommandForDisplay } from "../../format-command.js";
-import { access } from "fs/promises";
+import { access } from 'fs/promises'
+import { canAutoApprove } from '../../approvals.js'
+import { formatCommandForDisplay } from '../../format-command.js'
+import { FullAutoErrorMode } from '../auto-approval-mode.js'
+import { exec, execApplyPatch } from './exec.js'
+import { isLoggingEnabled, log } from './log.js'
+import { ReviewDecision } from './review.js'
+import { SandboxType } from './sandbox/interface.js'
 
 // ---------------------------------------------------------------------------
 // Session‑level cache of commands that the user has chosen to always approve.
@@ -22,7 +22,7 @@ import { access } from "fs/promises";
 // for a given class of command we will genuinely stop prompting them for
 // subsequent, equivalent invocations during the same CLI session.
 // ---------------------------------------------------------------------------
-const alwaysApprovedCommands = new Set<string>();
+const alwaysApprovedCommands = new Set<string>()
 
 // ---------------------------------------------------------------------------
 // Helper: Given the argv-style representation of a command, return a stable
@@ -41,34 +41,34 @@ function deriveCommandKey(cmd: Array<string>): string {
     maybeFlag,
     coreInvocation,
     /* …ignore the rest… */
-  ] = cmd;
+  ] = cmd
 
-  if (coreInvocation?.startsWith("apply_patch")) {
-    return "apply_patch";
+  if (coreInvocation?.startsWith('apply_patch')) {
+    return 'apply_patch'
   }
 
-  if (maybeShell === "bash" && maybeFlag === "-lc") {
+  if (maybeShell === 'bash' && maybeFlag === '-lc') {
     // If the command was invoked through `bash -lc "<script>"` we extract the
     // base program name from the script string.
-    const script = coreInvocation ?? "";
-    return script.split(/\s+/)[0] || "bash";
+    const script = coreInvocation ?? ''
+    return script.split(/\s+/)[0] || 'bash'
   }
 
   // For every other command we fall back to using only the program name (the
   // first argv element).  This guarantees we always return a *string* even if
   // `coreInvocation` is undefined.
   if (coreInvocation) {
-    return coreInvocation.split(/\s+/)[0]!;
+    return coreInvocation.split(/\s+/)[0]!
   }
 
-  return JSON.stringify(cmd);
+  return JSON.stringify(cmd)
 }
 
 type HandleExecCommandResult = {
-  outputText: string;
-  metadata: Record<string, unknown>;
-  additionalItems?: Array<ResponseInputItem>;
-};
+  outputText: string
+  metadata: Record<string, unknown>
+  additionalItems?: Array<ResponseInputItem>
+}
 
 export async function handleExecCommand(
   args: ExecInput,
@@ -76,13 +76,13 @@ export async function handleExecCommand(
   policy: ApprovalPolicy,
   getCommandConfirmation: (
     command: Array<string>,
-    applyPatch: ApplyPatchCommand | undefined,
+    applyPatch: ApplyPatchCommand | undefined
   ) => Promise<CommandConfirmation>,
-  abortSignal?: AbortSignal,
+  abortSignal?: AbortSignal
 ): Promise<HandleExecCommandResult> {
-  const { cmd: command } = args;
+  const { cmd: command } = args
 
-  const key = deriveCommandKey(command);
+  const key = deriveCommandKey(command)
 
   // 1) If the user has already said "always approve", skip
   //    any policy & never sandbox.
@@ -91,8 +91,8 @@ export async function handleExecCommand(
       args,
       /* applyPatch */ undefined,
       /* runInSandbox */ false,
-      abortSignal,
-    ).then(convertSummaryToResult);
+      abortSignal
+    ).then(convertSummaryToResult)
   }
 
   // 2) Otherwise fall back to the normal policy
@@ -101,53 +101,48 @@ export async function handleExecCommand(
   // working directory so that edits are constrained to the project root.  If
   // the caller wishes to broaden or restrict the set it can be made
   // configurable in the future.
-  const safety = canAutoApprove(command, policy, [process.cwd()]);
+  const safety = canAutoApprove(command, policy, [process.cwd()])
 
-  let runInSandbox: boolean;
+  let runInSandbox: boolean
   switch (safety.type) {
-    case "ask-user": {
+    case 'ask-user': {
       const review = await askUserPermission(
         args,
         safety.applyPatch,
-        getCommandConfirmation,
-      );
+        getCommandConfirmation
+      )
       if (review != null) {
-        return review;
+        return review
       }
 
-      runInSandbox = false;
-      break;
+      runInSandbox = false
+      break
     }
-    case "auto-approve": {
-      runInSandbox = safety.runInSandbox;
-      break;
+    case 'auto-approve': {
+      runInSandbox = safety.runInSandbox
+      break
     }
-    case "reject": {
+    case 'reject': {
       return {
-        outputText: "aborted",
+        outputText: 'aborted',
         metadata: {
-          error: "command rejected",
-          reason: "Command rejected by auto-approval system.",
+          error: 'command rejected',
+          reason: 'Command rejected by auto-approval system.',
         },
-      };
+      }
     }
   }
 
-  const { applyPatch } = safety;
-  const summary = await execCommand(
-    args,
-    applyPatch,
-    runInSandbox,
-    abortSignal,
-  );
+  const { applyPatch } = safety
+  const summary = await execCommand(args, applyPatch, runInSandbox, abortSignal)
   // If the operation was aborted in the meantime, propagate the cancellation
   // upward by returning an empty (no‑op) result so that the agent loop will
   // exit cleanly without emitting spurious output.
   if (abortSignal?.aborted) {
     return {
-      outputText: "",
+      outputText: '',
       metadata: {},
-    };
+    }
   }
   if (
     summary.exitCode !== 0 &&
@@ -163,81 +158,81 @@ export async function handleExecCommand(
     const review = await askUserPermission(
       args,
       safety.applyPatch,
-      getCommandConfirmation,
-    );
+      getCommandConfirmation
+    )
     if (review != null) {
-      return review;
+      return review
     } else {
       // The user has approved the command, so we will run it outside of the
       // sandbox.
-      const summary = await execCommand(args, applyPatch, false, abortSignal);
-      return convertSummaryToResult(summary);
+      const summary = await execCommand(args, applyPatch, false, abortSignal)
+      return convertSummaryToResult(summary)
     }
   } else {
-    return convertSummaryToResult(summary);
+    return convertSummaryToResult(summary)
   }
 }
 
 function convertSummaryToResult(
-  summary: ExecCommandSummary,
+  summary: ExecCommandSummary
 ): HandleExecCommandResult {
-  const { stdout, stderr, exitCode, durationMs } = summary;
+  const { stdout, stderr, exitCode, durationMs } = summary
   return {
     outputText: stdout || stderr,
     metadata: {
       exit_code: exitCode,
       duration_seconds: Math.round(durationMs / 100) / 10,
     },
-  };
+  }
 }
 
 type ExecCommandSummary = {
-  stdout: string;
-  stderr: string;
-  exitCode: number;
-  durationMs: number;
-};
+  stdout: string
+  stderr: string
+  exitCode: number
+  durationMs: number
+}
 
 async function execCommand(
   execInput: ExecInput,
   applyPatchCommand: ApplyPatchCommand | undefined,
   runInSandbox: boolean,
-  abortSignal?: AbortSignal,
+  abortSignal?: AbortSignal
 ): Promise<ExecCommandSummary> {
   if (isLoggingEnabled()) {
     if (applyPatchCommand != null) {
-      log("EXEC running apply_patch command");
+      log('EXEC running apply_patch command')
     } else {
-      const { cmd, workdir, timeoutInMillis } = execInput;
+      const { cmd, workdir, timeoutInMillis } = execInput
       // Seconds are a bit easier to read in log messages and most timeouts
       // are specified as multiples of 1000, anyway.
       const timeout =
         timeoutInMillis != null
           ? Math.round(timeoutInMillis / 1000).toString()
-          : "undefined";
+          : 'undefined'
       log(
         `EXEC running \`${formatCommandForDisplay(
-          cmd,
-        )}\` in workdir=${workdir} with timeout=${timeout}s`,
-      );
+          cmd
+        )}\` in workdir=${workdir} with timeout=${timeout}s`
+      )
     }
   }
 
   // Note execApplyPatch() and exec() are coded defensively and should not
   // throw. Any internal errors should be mapped to a non-zero value for the
   // exitCode field.
-  const start = Date.now();
+  const start = Date.now()
   const execResult =
     applyPatchCommand != null
       ? execApplyPatch(applyPatchCommand.patch)
-      : await exec(execInput, await getSandbox(runInSandbox), abortSignal);
-  const duration = Date.now() - start;
-  const { stdout, stderr, exitCode } = execResult;
+      : await exec(execInput, await getSandbox(runInSandbox), abortSignal)
+  const duration = Date.now() - start
+  const { stdout, stderr, exitCode } = execResult
 
   if (isLoggingEnabled()) {
     log(
-      `EXEC exit=${exitCode} time=${duration}ms:\n\tSTDOUT: ${stdout}\n\tSTDERR: ${stderr}`,
-    );
+      `EXEC exit=${exitCode} time=${duration}ms:\n\tSTDOUT: ${stdout}\n\tSTDERR: ${stderr}`
+    )
   }
 
   return {
@@ -245,28 +240,28 @@ async function execCommand(
     stderr,
     exitCode,
     durationMs: duration,
-  };
+  }
 }
 
 const isInContainer = async (): Promise<boolean> => {
   try {
-    await access("/proc/1/cgroup");
-    return true;
+    await access('/proc/1/cgroup')
+    return true
   } catch {
-    return false;
+    return false
   }
-};
+}
 
 async function getSandbox(runInSandbox: boolean): Promise<SandboxType> {
   if (runInSandbox) {
-    if (process.platform === "darwin") {
-      return SandboxType.MACOS_SEATBELT;
+    if (process.platform === 'darwin') {
+      return SandboxType.MACOS_SEATBELT
     } else if (await isInContainer()) {
-      return SandboxType.NONE;
+      return SandboxType.NONE
     }
-    throw new Error("Sandbox was mandated, but no sandbox is available!");
+    throw new Error('Sandbox was mandated, but no sandbox is available!')
   } else {
-    return SandboxType.NONE;
+    return SandboxType.NONE
   }
 }
 
@@ -278,18 +273,18 @@ async function askUserPermission(
   applyPatchCommand: ApplyPatchCommand | undefined,
   getCommandConfirmation: (
     command: Array<string>,
-    applyPatch: ApplyPatchCommand | undefined,
-  ) => Promise<CommandConfirmation>,
+    applyPatch: ApplyPatchCommand | undefined
+  ) => Promise<CommandConfirmation>
 ): Promise<HandleExecCommandResult | null> {
   const { review: decision, customDenyMessage } = await getCommandConfirmation(
     args.cmd,
-    applyPatchCommand,
-  );
+    applyPatchCommand
+  )
 
   if (decision === ReviewDecision.ALWAYS) {
     // Persist this command so we won't ask again during this session.
-    const key = deriveCommandKey(args.cmd);
-    alwaysApprovedCommands.add(key);
+    const key = deriveCommandKey(args.cmd)
+    alwaysApprovedCommands.add(key)
   }
 
   // Any decision other than an affirmative (YES / ALWAYS) aborts execution.
@@ -297,19 +292,19 @@ async function askUserPermission(
     const note =
       decision === ReviewDecision.NO_CONTINUE
         ? customDenyMessage?.trim() || "No, don't do that — keep going though."
-        : "No, don't do that — stop for now.";
+        : "No, don't do that — stop for now."
     return {
-      outputText: "aborted",
+      outputText: 'aborted',
       metadata: {},
       additionalItems: [
         {
-          type: "message",
-          role: "user",
-          content: [{ type: "input_text", text: note }],
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: note }],
         },
       ],
-    };
+    }
   } else {
-    return null;
+    return null
   }
 }

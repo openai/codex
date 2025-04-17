@@ -1,11 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-import { useTerminalSize } from "../../hooks/use-terminal-size";
-import TextBuffer from "../../text-buffer.js";
-import chalk from "chalk";
-import { Box, Text, useInput, useStdin } from "ink";
-import { EventEmitter } from "node:events";
-import React, { useRef, useState } from "react";
+import { EventEmitter } from 'node:events'
+import chalk from 'chalk'
+import { Box, Text, useInput, useStdin } from 'ink'
+import React, { useRef, useState } from 'react'
+import { useTerminalSize } from '../../hooks/use-terminal-size'
+import TextBuffer from '../../text-buffer.js'
 
 /* --------------------------------------------------------------------------
  * Polyfill missing `ref()` / `unref()` methods on the mock `Stdin` stream
@@ -24,13 +24,13 @@ import React, { useRef, useState } from "react";
 // monkey‑patch internals of Node's `EventEmitter` solely for the benefit of
 // Ink's stdin stub – type‑safety is not a primary concern at this boundary.
 //
-const proto: any = EventEmitter.prototype;
+const proto: any = EventEmitter.prototype
 
-if (typeof proto["ref"] !== "function") {
-  proto["ref"] = function ref() {};
+if (typeof proto['ref'] !== 'function') {
+  proto['ref'] = function ref() {}
 }
-if (typeof proto["unref"] !== "function") {
-  proto["unref"] = function unref() {};
+if (typeof proto['unref'] !== 'function') {
+  proto['unref'] = function unref() {}
 }
 
 /*
@@ -44,22 +44,22 @@ if (typeof proto["unref"] !== "function") {
 
 // Preserve original emit to avoid infinite recursion.
 // eslint‑disable‑next‑line @typescript-eslint/no‑unsafe‑assignment
-const originalEmit = proto["emit"] as (...args: Array<any>) => boolean;
+const originalEmit = proto['emit'] as (...args: Array<any>) => boolean
 
-proto["emit"] = function patchedEmit(
+proto['emit'] = function patchedEmit(
   this: any,
   event: string,
   ...args: Array<any>
 ): boolean {
-  if (event === "data") {
-    const chunk = args[0] as string;
+  if (event === 'data') {
+    const chunk = args[0] as string
 
     if (
-      process.env["TEXTBUFFER_DEBUG"] === "1" ||
-      process.env["TEXTBUFFER_DEBUG"] === "true"
+      process.env['TEXTBUFFER_DEBUG'] === '1' ||
+      process.env['TEXTBUFFER_DEBUG'] === 'true'
     ) {
       // eslint-disable-next-line no-console
-      console.log("[MultilineTextEditor:stdin] data", JSON.stringify(chunk));
+      console.log('[MultilineTextEditor:stdin] data', JSON.stringify(chunk))
     }
     // Store carriage returns as‑is so that Ink can distinguish between plain
     // <Enter> ("\r") and a bare line‑feed ("\n").  This matters because Ink's
@@ -71,72 +71,72 @@ proto["emit"] = function patchedEmit(
     // `.setRawMode()` and `isTTY` similar to the real TTY stream.
     if (
       !(this as any)._inkIsStub &&
-      typeof (this as any).setRawMode === "function" &&
-      typeof (this as any).isTTY === "boolean" &&
-      typeof (this as any).read !== "function"
+      typeof (this as any).setRawMode === 'function' &&
+      typeof (this as any).isTTY === 'boolean' &&
+      typeof (this as any).read !== 'function'
     ) {
-      (this as any)._inkIsStub = true;
+      ;(this as any)._inkIsStub = true
 
       // Provide a minimal `read()` shim so Ink can pull queued chunks.
-      (this as any).read = function read() {
-        const ret = (this as any)._inkBuffered ?? null;
-        (this as any)._inkBuffered = null;
+      ;(this as any).read = function read() {
+        const ret = (this as any)._inkBuffered ?? null
+        ;(this as any)._inkBuffered = null
         if (
-          process.env["TEXTBUFFER_DEBUG"] === "1" ||
-          process.env["TEXTBUFFER_DEBUG"] === "true"
+          process.env['TEXTBUFFER_DEBUG'] === '1' ||
+          process.env['TEXTBUFFER_DEBUG'] === 'true'
         ) {
           // eslint-disable-next-line no-console
-          console.log("[MultilineTextEditor:stdin.read]", JSON.stringify(ret));
+          console.log('[MultilineTextEditor:stdin.read]', JSON.stringify(ret))
         }
-        return ret;
-      };
+        return ret
+      }
     }
 
     if ((this as any)._inkIsStub) {
       // Buffer the payload so that `read()` can synchronously retrieve it.
-      if (typeof (this as any)._inkBuffered === "string") {
-        (this as any)._inkBuffered += chunk;
+      if (typeof (this as any)._inkBuffered === 'string') {
+        ;(this as any)._inkBuffered += chunk
       } else {
-        (this as any)._inkBuffered = chunk;
+        ;(this as any)._inkBuffered = chunk
       }
 
       // Notify listeners that data is ready in a way Ink understands.
       if (
-        process.env["TEXTBUFFER_DEBUG"] === "1" ||
-        process.env["TEXTBUFFER_DEBUG"] === "true"
+        process.env['TEXTBUFFER_DEBUG'] === '1' ||
+        process.env['TEXTBUFFER_DEBUG'] === 'true'
       ) {
         // eslint-disable-next-line no-console
         console.log(
-          "[MultilineTextEditor:stdin] -> readable",
-          JSON.stringify(chunk),
-        );
+          '[MultilineTextEditor:stdin] -> readable',
+          JSON.stringify(chunk)
+        )
       }
-      originalEmit.call(this, "readable");
+      originalEmit.call(this, 'readable')
     }
   }
 
   // Forward the original event.
-  return originalEmit.call(this, event, ...args);
-};
+  return originalEmit.call(this, event, ...args)
+}
 
 export interface MultilineTextEditorProps {
   // Initial contents.
-  readonly initialText?: string;
+  readonly initialText?: string
 
   // Visible width.
-  readonly width?: number;
+  readonly width?: number
 
   // Visible height.
-  readonly height?: number;
+  readonly height?: number
 
   // Called when the user submits (plain <Enter> key).
-  readonly onSubmit?: (text: string) => void;
+  readonly onSubmit?: (text: string) => void
 
   // Capture keyboard input.
-  readonly focus?: boolean;
+  readonly focus?: boolean
 
   // Called when the internal text buffer updates.
-  readonly onChange?: (text: string) => void;
+  readonly onChange?: (text: string) => void
 }
 
 // Expose a minimal imperative API so parent components (e.g. TerminalChatInput)
@@ -144,22 +144,22 @@ export interface MultilineTextEditorProps {
 // navigation that depend on whether the cursor sits on the first/last line.
 export interface MultilineTextEditorHandle {
   /** Current caret row */
-  getRow(): number;
+  getRow(): number
   /** Current caret column */
-  getCol(): number;
+  getCol(): number
   /** Total number of lines in the buffer */
-  getLineCount(): number;
+  getLineCount(): number
   /** Helper: caret is on the very first row */
-  isCursorAtFirstRow(): boolean;
+  isCursorAtFirstRow(): boolean
   /** Helper: caret is on the very last row */
-  isCursorAtLastRow(): boolean;
+  isCursorAtLastRow(): boolean
   /** Full text contents */
-  getText(): string;
+  getText(): string
 }
 
 const MultilineTextEditorInner = (
   {
-    initialText = "",
+    initialText = '',
     // Width can be provided by the caller.  When omitted we fall back to the
     // current terminal size (minus some padding handled by `useTerminalSize`).
     width,
@@ -168,24 +168,24 @@ const MultilineTextEditorInner = (
     focus = true,
     onChange,
   }: MultilineTextEditorProps,
-  ref: React.Ref<MultilineTextEditorHandle | null>,
+  ref: React.Ref<MultilineTextEditorHandle | null>
 ): React.ReactElement => {
   // ---------------------------------------------------------------------------
   // Editor State
   // ---------------------------------------------------------------------------
 
-  const buffer = useRef(new TextBuffer(initialText));
-  const [version, setVersion] = useState(0);
+  const buffer = useRef(new TextBuffer(initialText))
+  const [version, setVersion] = useState(0)
 
   // Keep track of the current terminal size so that the editor grows/shrinks
   // with the window.  `useTerminalSize` already subtracts a small horizontal
   // padding so that we don't butt up right against the edge.
-  const terminalSize = useTerminalSize();
+  const terminalSize = useTerminalSize()
 
   // If the caller didn't specify a width we dynamically choose one based on
   // the terminal's current column count.  We still enforce a reasonable
   // minimum so that the UI never becomes unusably small.
-  const effectiveWidth = Math.max(20, width ?? terminalSize.columns);
+  const effectiveWidth = Math.max(20, width ?? terminalSize.columns)
 
   // ---------------------------------------------------------------------------
   // External editor integration helpers.
@@ -193,7 +193,7 @@ const MultilineTextEditorInner = (
 
   // Access to stdin so we can toggle raw‑mode while the external editor is
   // in control of the terminal.
-  const { stdin, setRawMode } = useStdin();
+  const { stdin, setRawMode } = useStdin()
 
   /**
    * Launch the user's preferred $EDITOR, blocking until they close it, then
@@ -204,23 +204,23 @@ const MultilineTextEditorInner = (
    */
   const openExternalEditor = React.useCallback(async () => {
     // Preserve the current raw‑mode setting so we can restore it afterwards.
-    const wasRaw = stdin?.isRaw ?? false;
+    const wasRaw = stdin?.isRaw ?? false
     try {
-      setRawMode?.(false);
-      await buffer.current.openInExternalEditor();
+      setRawMode?.(false)
+      await buffer.current.openInExternalEditor()
     } catch (err) {
       // Surface the error so it doesn't fail silently – for now we log to
       // stderr.  In the future this could surface a toast / overlay.
       // eslint-disable-next-line no-console
-      console.error("[MultilineTextEditor] external editor error", err);
+      console.error('[MultilineTextEditor] external editor error', err)
     } finally {
       if (wasRaw) {
-        setRawMode?.(true);
+        setRawMode?.(true)
       }
       // Force a re‑render so the component reflects the mutated buffer.
-      setVersion((v) => v + 1);
+      setVersion((v) => v + 1)
     }
-  }, [buffer, stdin, setRawMode]);
+  }, [buffer, stdin, setRawMode])
 
   // ---------------------------------------------------------------------------
   // Keyboard handling.
@@ -229,7 +229,7 @@ const MultilineTextEditorInner = (
   useInput(
     (input, key) => {
       if (!focus) {
-        return;
+        return
       }
 
       // Single‑step editor shortcut: Ctrl+X or Ctrl+E
@@ -238,32 +238,32 @@ const MultilineTextEditorInner = (
       // ink‑testing‑library stub which delivers only the raw byte (e.g. 0x05
       // for Ctrl‑E) without setting `key.ctrl`.
       const isCtrlX =
-        (key.ctrl && (input === "x" || input === "\x18")) || input === "\x18";
+        (key.ctrl && (input === 'x' || input === '\x18')) || input === '\x18'
       const isCtrlE =
-        (key.ctrl && (input === "e" || input === "\x05")) ||
-        input === "\x05" ||
+        (key.ctrl && (input === 'e' || input === '\x05')) ||
+        input === '\x05' ||
         (!key.ctrl &&
-          input === "e" &&
+          input === 'e' &&
           input.length === 1 &&
-          input.charCodeAt(0) === 5);
+          input.charCodeAt(0) === 5)
       if (isCtrlX || isCtrlE) {
-        openExternalEditor();
-        return;
+        openExternalEditor()
+        return
       }
 
       if (
-        process.env["TEXTBUFFER_DEBUG"] === "1" ||
-        process.env["TEXTBUFFER_DEBUG"] === "true"
+        process.env['TEXTBUFFER_DEBUG'] === '1' ||
+        process.env['TEXTBUFFER_DEBUG'] === 'true'
       ) {
         // eslint-disable-next-line no-console
-        console.log("[MultilineTextEditor] event", { input, key });
+        console.log('[MultilineTextEditor] event', { input, key })
       }
 
       // 1) CSI‑u / modifyOtherKeys (Ink strips initial ESC, so we start with '[')
-      if (input.startsWith("[") && input.endsWith("u")) {
-        const m = input.match(/^\[([0-9]+);([0-9]+)u$/);
-        if (m && m[1] === "13") {
-          const mod = Number(m[2]);
+      if (input.startsWith('[') && input.endsWith('u')) {
+        const m = input.match(/^\[([0-9]+);([0-9]+)u$/)
+        if (m && m[1] === '13') {
+          const mod = Number(m[2])
           // In xterm's encoding: bit‑1 (value 2) is Shift. Everything >1 that
           // isn't exactly 1 means some modifier was held. We treat *shift
           // present* (2,4,6,8) as newline; plain (1) as submit.
@@ -271,63 +271,63 @@ const MultilineTextEditorInner = (
           // Xterm encodes modifier keys in `mod` – bit‑2 (value 4) indicates
           // that Ctrl was held. We avoid the `&` bitwise operator (disallowed
           // by our ESLint config) by using arithmetic instead.
-          const hasCtrl = Math.floor(mod / 4) % 2 === 1;
+          const hasCtrl = Math.floor(mod / 4) % 2 === 1
           if (hasCtrl) {
             if (onSubmit) {
-              onSubmit(buffer.current.getText());
+              onSubmit(buffer.current.getText())
             }
           } else {
             // Any variant without Ctrl just inserts newline (Shift, Alt, none)
-            buffer.current.newline();
+            buffer.current.newline()
           }
-          setVersion((v) => v + 1);
-          return;
+          setVersion((v) => v + 1)
+          return
         }
       }
 
       // 2) Single‑byte control chars ------------------------------------------------
-      if (input === "\n") {
+      if (input === '\n') {
         // Ctrl+J or pasted newline → insert newline.
-        buffer.current.newline();
-        setVersion((v) => v + 1);
-        return;
+        buffer.current.newline()
+        setVersion((v) => v + 1)
+        return
       }
 
-      if (input === "\r") {
+      if (input === '\r') {
         // Plain Enter – submit (works on all basic terminals).
         if (onSubmit) {
-          onSubmit(buffer.current.getText());
+          onSubmit(buffer.current.getText())
         }
-        return;
+        return
       }
 
       // Let <Esc> fall through so the parent handler (if any) can act on it.
 
       // Delegate remaining keys to our pure TextBuffer
       if (
-        process.env["TEXTBUFFER_DEBUG"] === "1" ||
-        process.env["TEXTBUFFER_DEBUG"] === "true"
+        process.env['TEXTBUFFER_DEBUG'] === '1' ||
+        process.env['TEXTBUFFER_DEBUG'] === 'true'
       ) {
         // eslint-disable-next-line no-console
-        console.log("[MultilineTextEditor] key event", { input, key });
+        console.log('[MultilineTextEditor] key event', { input, key })
       }
 
       const modified = buffer.current.handleInput(
         input,
         key as Record<string, boolean>,
-        { height, width: effectiveWidth },
-      );
+        { height, width: effectiveWidth }
+      )
       if (modified) {
-        setVersion((v) => v + 1);
+        setVersion((v) => v + 1)
       }
 
-      const newText = buffer.current.getText();
+      const newText = buffer.current.getText()
       if (onChange) {
-        onChange(newText);
+        onChange(newText)
       }
     },
-    { isActive: focus },
-  );
+    { isActive: focus }
+  )
 
   // ---------------------------------------------------------------------------
   // Rendering helpers.
@@ -342,36 +342,36 @@ const MultilineTextEditorInner = (
     () => ({
       getRow: () => buffer.current.getCursor()[0],
       getCol: () => buffer.current.getCursor()[1],
-      getLineCount: () => buffer.current.getText().split("\n").length,
+      getLineCount: () => buffer.current.getText().split('\n').length,
       isCursorAtFirstRow: () => buffer.current.getCursor()[0] === 0,
       isCursorAtLastRow: () => {
-        const [row] = buffer.current.getCursor();
-        const lineCount = buffer.current.getText().split("\n").length;
-        return row === lineCount - 1;
+        const [row] = buffer.current.getCursor()
+        const lineCount = buffer.current.getText().split('\n').length
+        return row === lineCount - 1
       },
       getText: () => buffer.current.getText(),
     }),
-    [],
-  );
+    []
+  )
 
   // Read everything from the buffer
   const visibleLines = buffer.current.getVisibleLines({
     height,
     width: effectiveWidth,
-  });
-  const [cursorRow, cursorCol] = buffer.current.getCursor();
-  const scrollRow = (buffer.current as any).scrollRow as number;
-  const scrollCol = (buffer.current as any).scrollCol as number;
+  })
+  const [cursorRow, cursorCol] = buffer.current.getCursor()
+  const scrollRow = (buffer.current as any).scrollRow as number
+  const scrollCol = (buffer.current as any).scrollCol as number
 
   return (
     <Box flexDirection="column" key={version}>
       {visibleLines.map((lineText, idx) => {
-        const absoluteRow = scrollRow + idx;
+        const absoluteRow = scrollRow + idx
 
         // apply horizontal slice
-        let display = lineText.slice(scrollCol, scrollCol + effectiveWidth);
+        let display = lineText.slice(scrollCol, scrollCol + effectiveWidth)
         if (display.length < effectiveWidth) {
-          display = display.padEnd(effectiveWidth, " ");
+          display = display.padEnd(effectiveWidth, ' ')
         }
 
         // Highlight the *character under the caret* (i.e. the one immediately
@@ -381,29 +381,29 @@ const MultilineTextEditorInner = (
         // *not* the one that would be removed by `backspace()`.
 
         if (absoluteRow === cursorRow) {
-          const relativeCol = cursorCol - scrollCol;
-          const highlightCol = relativeCol;
+          const relativeCol = cursorCol - scrollCol
+          const highlightCol = relativeCol
 
           if (highlightCol >= 0 && highlightCol < effectiveWidth) {
-            const charToHighlight = display[highlightCol] || " ";
-            const highlighted = chalk.inverse(charToHighlight);
+            const charToHighlight = display[highlightCol] || ' '
+            const highlighted = chalk.inverse(charToHighlight)
             display =
               display.slice(0, highlightCol) +
               highlighted +
-              display.slice(highlightCol + 1);
+              display.slice(highlightCol + 1)
           } else if (relativeCol === effectiveWidth) {
             // Caret sits just past the right edge; show a block cursor in the
             // gutter so the user still sees it.
-            display = display.slice(0, effectiveWidth - 1) + chalk.inverse(" ");
+            display = display.slice(0, effectiveWidth - 1) + chalk.inverse(' ')
           }
         }
 
-        return <Text key={idx}>{display}</Text>;
+        return <Text key={idx}>{display}</Text>
       })}
     </Box>
-  );
-};
+  )
+}
 
-const MultilineTextEditor = React.forwardRef(MultilineTextEditorInner);
+const MultilineTextEditor = React.forwardRef(MultilineTextEditorInner)
 
-export default MultilineTextEditor;
+export default MultilineTextEditor

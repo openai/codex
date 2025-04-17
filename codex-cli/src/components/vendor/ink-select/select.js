@@ -1,9 +1,9 @@
-import React from "react";
-import { Box, Text } from "ink";
-import { styles } from "./theme";
-import { SelectOption } from "./select-option";
-import { useSelectState } from "./use-select-state";
-import { useSelect } from "./use-select";
+import { Box, Text } from 'ink'
+import React from 'react'
+import { SelectOption } from './select-option'
+import { styles } from './theme'
+import { useSelect } from './use-select'
+import { useSelectState } from './use-select-state'
 export function Select({
   isDisabled = false,
   visibleOptionCount = 5,
@@ -17,16 +17,16 @@ export function Select({
     options,
     defaultValue,
     onChange,
-  });
-  useSelect({ isDisabled, state });
+  })
+  useSelect({ isDisabled, state })
   return React.createElement(
     Box,
     { ...styles.container() },
     state.visibleOptions.map((option) => {
       // eslint-disable-next-line prefer-destructuring
-      let label = option.label;
+      let label = option.label
       if (highlightText && option.label.includes(highlightText)) {
-        const index = option.label.indexOf(highlightText);
+        const index = option.label.indexOf(highlightText)
         label = React.createElement(
           React.Fragment,
           null,
@@ -34,10 +34,10 @@ export function Select({
           React.createElement(
             Text,
             { ...styles.highlightedText() },
-            highlightText,
+            highlightText
           ),
-          option.label.slice(index + highlightText.length),
-        );
+          option.label.slice(index + highlightText.length)
+        )
       }
       return React.createElement(
         SelectOption,
@@ -46,8 +46,8 @@ export function Select({
           isFocused: !isDisabled && state.focusedValue === option.value,
           isSelected: state.value === option.value,
         },
-        label,
-      );
-    }),
-  );
+        label
+      )
+    })
+  )
 }

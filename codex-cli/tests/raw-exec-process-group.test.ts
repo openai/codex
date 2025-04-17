@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { exec as rawExec } from "../src/utils/agent/sandbox/raw-exec.js";
+import { describe, expect, it } from 'vitest'
+import { exec as rawExec } from '../src/utils/agent/sandbox/raw-exec.js'
 
 // Regression test: When cancelling an in‑flight `rawExec()` the implementation
 // must terminate *all* processes that belong to the spawned command – not just
@@ -19,46 +19,46 @@ import { exec as rawExec } from "../src/utils/agent/sandbox/raw-exec.js";
 // The negative‑PID process‑group trick employed by the fixed implementation is
 // POSIX‑only.  On Windows we skip the test.
 
-describe("rawExec – abort kills entire process group", () => {
-  it("terminates grandchildren spawned via bash", async () => {
-    if (process.platform === "win32") {
-      return;
+describe('rawExec – abort kills entire process group', () => {
+  it('terminates grandchildren spawned via bash', async () => {
+    if (process.platform === 'win32') {
+      return
     }
 
-    const abortController = new AbortController();
+    const abortController = new AbortController()
 
     // Bash script: spawn `sleep 30` in background, print its PID, then wait.
-    const script = "sleep 30 & pid=$!; echo $pid; wait $pid";
-    const cmd = ["bash", "-c", script];
+    const script = 'sleep 30 & pid=$!; echo $pid; wait $pid'
+    const cmd = ['bash', '-c', script]
 
     // Kick off the command.
-    const execPromise = rawExec(cmd, {}, [], abortController.signal);
+    const execPromise = rawExec(cmd, {}, [], abortController.signal)
 
     // Give Bash a tiny bit of time to start and print the PID.
-    await new Promise((r) => setTimeout(r, 50));
+    await new Promise((r) => setTimeout(r, 50))
 
     // Cancel the task – this should kill *both* bash and the inner sleep.
-    abortController.abort();
+    abortController.abort()
 
-    const { exitCode, stdout } = await execPromise;
+    const { exitCode, stdout } = await execPromise
 
     // We expect a non‑zero exit code because the process was killed.
-    expect(exitCode).not.toBe(0);
+    expect(exitCode).not.toBe(0)
 
     // Extract the grand‑child PID from stdout.
-    const pidMatch = /^(\d+)/.exec(stdout.trim());
-    expect(pidMatch).not.toBeNull();
-    const sleepPid = Number(pidMatch![1]);
+    const pidMatch = /^(\d+)/.exec(stdout.trim())
+    expect(pidMatch).not.toBeNull()
+    const sleepPid = Number(pidMatch![1])
 
     // Verify that the sleep process is no longer alive.
-    let alive = true;
+    let alive = true
     try {
-      process.kill(sleepPid, 0); // throws if the process does not exist
-      alive = true;
+      process.kill(sleepPid, 0) // throws if the process does not exist
+      alive = true
     } catch {
-      alive = false;
+      alive = false
     }
 
-    expect(alive).toBe(false);
-  });
-});
+    expect(alive).toBe(false)
+  })
+})

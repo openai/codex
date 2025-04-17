@@ -1,19 +1,19 @@
-import SelectInput from "./select-input/select-input.js";
-import TextInput from "./vendor/ink-text-input.js";
-import { Box, Text, useInput } from "ink";
-import React, { useState } from "react";
+import { Box, Text, useInput } from 'ink'
+import React, { useState } from 'react'
+import SelectInput from './select-input/select-input.js'
+import TextInput from './vendor/ink-text-input.js'
 
-export type TypeaheadItem = { label: string; value: string };
+export type TypeaheadItem = { label: string; value: string }
 
 type Props = {
-  title: string;
-  description?: React.ReactNode;
-  initialItems: Array<TypeaheadItem>;
-  currentValue?: string;
-  limit?: number;
-  onSelect: (value: string) => void;
-  onExit: () => void;
-};
+  title: string
+  description?: React.ReactNode
+  initialItems: Array<TypeaheadItem>
+  currentValue?: string
+  limit?: number
+  onSelect: (value: string) => void
+  onExit: () => void
+}
 
 /**
  * Generic overlay that combines a TextInput with a filtered SelectInput.
@@ -29,32 +29,32 @@ export default function TypeaheadOverlay({
   onSelect,
   onExit,
 }: Props): JSX.Element {
-  const [value, setValue] = useState("");
-  const [items, setItems] = useState<Array<TypeaheadItem>>(initialItems);
+  const [value, setValue] = useState('')
+  const [items, setItems] = useState<Array<TypeaheadItem>>(initialItems)
 
   // Keep internal items list in sync when the caller provides new options
   // (e.g. ModelOverlay fetches models asynchronously).
   React.useEffect(() => {
-    setItems(initialItems);
-  }, [initialItems]);
+    setItems(initialItems)
+  }, [initialItems])
 
   /* ------------------------------------------------------------------ */
   /* Exit on ESC                                                         */
   /* ------------------------------------------------------------------ */
   useInput((_input, key) => {
     if (key.escape) {
-      onExit();
+      onExit()
     }
-  });
+  })
 
   /* ------------------------------------------------------------------ */
   /* Filtering & Ranking                                                 */
   /* ------------------------------------------------------------------ */
-  const q = value.toLowerCase();
+  const q = value.toLowerCase()
   const filtered =
     q.length === 0
       ? items
-      : items.filter((i) => i.label.toLowerCase().includes(q));
+      : items.filter((i) => i.label.toLowerCase().includes(q))
 
   /*
    * Sort logic:
@@ -73,43 +73,43 @@ export default function TypeaheadOverlay({
 
   const ranked = filtered.sort((a, b) => {
     if (a.value === currentValue) {
-      return -1;
+      return -1
     }
     if (b.value === currentValue) {
-      return 1;
+      return 1
     }
 
     // Preserve original order when no query is present so we keep any caller
     // defined prioritisation (e.g. recommended models).
     if (q.length === 0) {
-      return 0;
+      return 0
     }
 
-    const ia = a.label.toLowerCase().indexOf(q);
-    const ib = b.label.toLowerCase().indexOf(q);
+    const ia = a.label.toLowerCase().indexOf(q)
+    const ib = b.label.toLowerCase().indexOf(q)
     if (ia !== ib) {
-      return ia - ib;
+      return ia - ib
     }
-    return a.label.localeCompare(b.label);
-  });
+    return a.label.localeCompare(b.label)
+  })
 
-  const selectItems = ranked;
+  const selectItems = ranked
 
   if (
-    process.env["DEBUG_TYPEAHEAD"] === "1" ||
-    process.env["DEBUG_TYPEAHEAD"] === "true"
+    process.env['DEBUG_TYPEAHEAD'] === '1' ||
+    process.env['DEBUG_TYPEAHEAD'] === 'true'
   ) {
     // eslint-disable-next-line no-console
     console.log(
-      "[TypeaheadOverlay] value=",
+      '[TypeaheadOverlay] value=',
       value,
-      "items=",
+      'items=',
       items.length,
-      "visible=",
-      selectItems.map((i) => i.label),
-    );
+      'visible=',
+      selectItems.map((i) => i.label)
+    )
   }
-  const initialIndex = selectItems.findIndex((i) => i.value === currentValue);
+  const initialIndex = selectItems.findIndex((i) => i.value === currentValue)
 
   return (
     <Box
@@ -131,11 +131,11 @@ export default function TypeaheadOverlay({
             // Prefer the first visible item; otherwise fall back to whatever
             // the user typed so they can switch to a model that wasn't in the
             // pre‑fetched list.
-            const target = selectItems[0]?.value ?? submitted.trim();
+            const target = selectItems[0]?.value ?? submitted.trim()
             if (target) {
-              onSelect(target);
+              onSelect(target)
             } else {
-              onExit();
+              onExit()
             }
           }}
         />
@@ -147,7 +147,7 @@ export default function TypeaheadOverlay({
             isFocused
             onSelect={(item: TypeaheadItem) => {
               if (item.value) {
-                onSelect(item.value);
+                onSelect(item.value)
               }
             }}
           />
@@ -159,5 +159,5 @@ export default function TypeaheadOverlay({
         <Text dimColor>type to search · enter to confirm · esc to cancel</Text>
       </Box>
     </Box>
-  );
+  )
 }

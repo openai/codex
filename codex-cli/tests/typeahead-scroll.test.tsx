@@ -5,8 +5,8 @@
  * slice that is only meant to control how many rows are visible at once.
  */
 
-import * as React from "react";
-import { describe, it, expect, vi } from "vitest";
+import * as React from 'react'
+import { describe, expect, it, vi } from 'vitest'
 
 // ---------------------------------------------------------------------------
 //  Mock <select-input> so we can capture the props that TypeaheadOverlay
@@ -14,55 +14,55 @@ import { describe, it, expect, vi } from "vitest";
 //  Ink TTY environment).
 // ---------------------------------------------------------------------------
 
-let receivedItems: Array<{ label: string; value: string }> | null = null;
-vi.mock("../src/components/select-input/select-input.js", () => {
+let receivedItems: Array<{ label: string; value: string }> | null = null
+vi.mock('../src/components/select-input/select-input.js', () => {
   return {
     default: (props: any) => {
-      receivedItems = props.items;
-      return null; // Do not render anything – we only care about the props
+      receivedItems = props.items
+      return null // Do not render anything – we only care about the props
     },
-  };
-});
+  }
+})
 
 // Ink's <TextInput> toggles raw‑mode which calls .ref() / .unref() on stdin.
 // The test environment's mock streams don't implement those methods, so we
 // polyfill them to no‑ops on the prototype *before* the component tree mounts.
-import { EventEmitter } from "node:events";
+import { EventEmitter } from 'node:events'
 if (!(EventEmitter.prototype as any).ref) {
-  (EventEmitter.prototype as any).ref = () => {};
-  (EventEmitter.prototype as any).unref = () => {};
+  ;(EventEmitter.prototype as any).ref = () => {}
+  ;(EventEmitter.prototype as any).unref = () => {}
 }
 
-import type { TypeaheadItem } from "../src/components/typeahead-overlay.js";
-import TypeaheadOverlay from "../src/components/typeahead-overlay.js";
+import type { TypeaheadItem } from '../src/components/typeahead-overlay.js'
+import TypeaheadOverlay from '../src/components/typeahead-overlay.js'
 
-import { renderTui } from "./ui-test-helpers.js";
+import { renderTui } from './ui-test-helpers.js'
 
-describe("TypeaheadOverlay – scrolling capability", () => {
-  it("passes the full item list to <SelectInput> so users can scroll beyond the visible limit", async () => {
+describe('TypeaheadOverlay – scrolling capability', () => {
+  it('passes the full item list to <SelectInput> so users can scroll beyond the visible limit', async () => {
     const ITEMS: Array<TypeaheadItem> = Array.from({ length: 20 }, (_, i) => ({
       label: `model-${i + 1}`,
       value: `model-${i + 1}`,
-    }));
+    }))
 
     // Sanity – reset capture before rendering
-    receivedItems = null;
+    receivedItems = null
 
     const { flush, cleanup } = renderTui(
       React.createElement(TypeaheadOverlay, {
-        title: "Test",
+        title: 'Test',
         initialItems: ITEMS,
         limit: 5, // visible rows – should *not* limit the underlying list
         onSelect: () => {},
         onExit: () => {},
-      }),
-    );
+      })
+    )
 
-    await flush(); // allow first render to complete
+    await flush() // allow first render to complete
 
-    expect(receivedItems).not.toBeNull();
-    expect((receivedItems ?? []).length).toBe(ITEMS.length);
+    expect(receivedItems).not.toBeNull()
+    expect((receivedItems ?? []).length).toBe(ITEMS.length)
 
-    cleanup();
-  });
-});
+    cleanup()
+  })
+})

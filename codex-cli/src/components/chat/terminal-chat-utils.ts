@@ -1,6 +1,6 @@
-import type { ResponseItem } from "openai/resources/responses/responses.mjs";
+import type { ResponseItem } from 'openai/resources/responses/responses.mjs'
 
-import { approximateTokensUsed } from "../../utils/approximate-tokens-used.js";
+import { approximateTokensUsed } from '../../utils/approximate-tokens-used.js'
 
 /**
  * Type‑guard that narrows a {@link ResponseItem} to one that represents a
@@ -13,9 +13,9 @@ import { approximateTokensUsed } from "../../utils/approximate-tokens-used.js";
  * detect those here in a single, reusable helper.
  */
 function isUserMessage(
-  item: ResponseItem,
-): item is ResponseItem & { type: "message"; role: "user"; content: unknown } {
-  return item.type === "message" && (item as { role?: string }).role === "user";
+  item: ResponseItem
+): item is ResponseItem & { type: 'message'; role: 'user'; content: unknown } {
+  return item.type === 'message' && (item as { role?: string }).role === 'user'
 }
 
 /**
@@ -23,21 +23,21 @@ function isUserMessage(
  * These numbers are best‑effort guesses and provide a basis for UI percentages.
  */
 export function maxTokensForModel(model: string): number {
-  const lower = model.toLowerCase();
-  if (lower.includes("32k")) {
-    return 32000;
+  const lower = model.toLowerCase()
+  if (lower.includes('32k')) {
+    return 32000
   }
-  if (lower.includes("16k")) {
-    return 16000;
+  if (lower.includes('16k')) {
+    return 16000
   }
-  if (lower.includes("8k")) {
-    return 8000;
+  if (lower.includes('8k')) {
+    return 8000
   }
-  if (lower.includes("4k")) {
-    return 4000;
+  if (lower.includes('4k')) {
+    return 4000
   }
   // Default to 128k for newer long‑context models
-  return 128000;
+  return 128000
 }
 
 /**
@@ -45,12 +45,12 @@ export function maxTokensForModel(model: string): number {
  */
 export function calculateContextPercentRemaining(
   items: Array<ResponseItem>,
-  model: string,
+  model: string
 ): number {
-  const used = approximateTokensUsed(items);
-  const max = maxTokensForModel(model);
-  const remaining = Math.max(0, max - used);
-  return (remaining / max) * 100;
+  const used = approximateTokensUsed(items)
+  const max = maxTokensForModel(model)
+  const remaining = Math.max(0, max - used)
+  return (remaining / max) * 100
 }
 
 /**
@@ -75,25 +75,25 @@ export function calculateContextPercentRemaining(
  *       a later point in the conversation are still shown.
  */
 export function uniqueById(items: Array<ResponseItem>): Array<ResponseItem> {
-  const seenIds = new Set<string>();
-  const deduped: Array<ResponseItem> = [];
+  const seenIds = new Set<string>()
+  const deduped: Array<ResponseItem> = []
 
   for (const item of items) {
     // ──────────────────────────────────────────────────────────────────
     // Rule #1 – de‑duplicate by id when present
     // ──────────────────────────────────────────────────────────────────
-    if (typeof item.id === "string" && item.id.length > 0) {
+    if (typeof item.id === 'string' && item.id.length > 0) {
       if (seenIds.has(item.id)) {
-        continue; // skip duplicates
+        continue // skip duplicates
       }
-      seenIds.add(item.id);
+      seenIds.add(item.id)
     }
 
     // ──────────────────────────────────────────────────────────────────
     // Rule #2 – collapse consecutive identical user messages
     // ──────────────────────────────────────────────────────────────────
     if (isUserMessage(item) && deduped.length > 0) {
-      const prev = deduped[deduped.length - 1]!;
+      const prev = deduped[deduped.length - 1]!
 
       if (
         isUserMessage(prev) &&
@@ -102,12 +102,12 @@ export function uniqueById(items: Array<ResponseItem>): Array<ResponseItem> {
         // (and fast for the tiny payloads involved).
         JSON.stringify(prev.content) === JSON.stringify(item.content)
       ) {
-        continue; // skip duplicate user message
+        continue // skip duplicate user message
       }
     }
 
-    deduped.push(item);
+    deduped.push(item)
   }
 
-  return deduped;
+  return deduped
 }

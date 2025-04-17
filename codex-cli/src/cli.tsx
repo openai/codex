@@ -1,45 +1,41 @@
 #!/usr/bin/env node
-import "dotenv/config";
+import 'dotenv/config'
 
 // Hack to suppress deprecation warnings (punycode)
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-(process as any).noDeprecation = true;
+;(process as any).noDeprecation = true
 
-import type { AppRollout } from "./app";
-import type { ApprovalPolicy } from "./approvals";
-import type { CommandConfirmation } from "./utils/agent/agent-loop";
-import type { AppConfig } from "./utils/config";
-import type { ResponseItem } from "openai/resources/responses/responses";
+import type { ResponseItem } from 'openai/resources/responses/responses'
+import type { AppRollout } from './app'
+import type { ApprovalPolicy } from './approvals'
+import type { CommandConfirmation } from './utils/agent/agent-loop'
+import type { AppConfig } from './utils/config'
 
-import App from "./app";
-import { runSinglePass } from "./cli_singlepass";
-import { AgentLoop } from "./utils/agent/agent-loop";
-import { initLogger } from "./utils/agent/log";
-import { ReviewDecision } from "./utils/agent/review";
-import { AutoApprovalMode } from "./utils/auto-approval-mode";
-import {
-  loadConfig,
-  PRETTY_PRINT,
-  INSTRUCTIONS_FILEPATH,
-} from "./utils/config";
-import { createInputItem } from "./utils/input-utils";
+import { spawnSync } from 'child_process'
+import fs from 'fs'
+import path from 'path'
+import chalk from 'chalk'
+import { render } from 'ink'
+import meow from 'meow'
+import React from 'react'
+import App from './app'
+import { runSinglePass } from './cli_singlepass'
+import { AgentLoop } from './utils/agent/agent-loop'
+import { initLogger } from './utils/agent/log'
+import { ReviewDecision } from './utils/agent/review'
+import { AutoApprovalMode } from './utils/auto-approval-mode'
+import { INSTRUCTIONS_FILEPATH, PRETTY_PRINT, loadConfig } from './utils/config'
+import { createInputItem } from './utils/input-utils'
 import {
   isModelSupportedForResponses,
   preloadModels,
-} from "./utils/model-utils.js";
-import { parseToolCall } from "./utils/parsers";
-import { onExit, setInkRenderer } from "./utils/terminal";
-import chalk from "chalk";
-import { spawnSync } from "child_process";
-import fs from "fs";
-import { render } from "ink";
-import meow from "meow";
-import path from "path";
-import React from "react";
+} from './utils/model-utils.js'
+import { parseToolCall } from './utils/parsers'
+import { onExit, setInkRenderer } from './utils/terminal'
 
 // Call this early so `tail -F "$TMPDIR/oai-codex/codex-cli-latest.log"` works
 // immediately. This must be run with DEBUG=1 for logging to work.
-initLogger();
+initLogger()
 
 // TODO: migrate to new versions of quiet mode
 //
@@ -88,70 +84,70 @@ const cli = meow(
     autoHelp: true,
     flags: {
       // misc
-      help: { type: "boolean", aliases: ["h"] },
-      view: { type: "string" },
-      model: { type: "string", aliases: ["m"] },
-      image: { type: "string", isMultiple: true, aliases: ["i"] },
+      help: { type: 'boolean', aliases: ['h'] },
+      view: { type: 'string' },
+      model: { type: 'string', aliases: ['m'] },
+      image: { type: 'string', isMultiple: true, aliases: ['i'] },
       quiet: {
-        type: "boolean",
-        aliases: ["q"],
-        description: "Non-interactive quiet mode",
+        type: 'boolean',
+        aliases: ['q'],
+        description: 'Non-interactive quiet mode',
       },
       config: {
-        type: "boolean",
-        aliases: ["c"],
-        description: "Open the instructions file in your editor",
+        type: 'boolean',
+        aliases: ['c'],
+        description: 'Open the instructions file in your editor',
       },
       dangerouslyAutoApproveEverything: {
-        type: "boolean",
+        type: 'boolean',
         description:
-          "Automatically approve all commands without prompting. This is EXTREMELY DANGEROUS and should only be used in trusted environments.",
+          'Automatically approve all commands without prompting. This is EXTREMELY DANGEROUS and should only be used in trusted environments.',
       },
       autoEdit: {
-        type: "boolean",
-        description: "Automatically approve edits; prompt for commands.",
+        type: 'boolean',
+        description: 'Automatically approve edits; prompt for commands.',
       },
       fullAuto: {
-        type: "boolean",
+        type: 'boolean',
         description:
-          "Automatically run commands in a sandbox; only prompt for failures.",
+          'Automatically run commands in a sandbox; only prompt for failures.',
       },
       approvalMode: {
-        type: "string",
-        aliases: ["a"],
+        type: 'string',
+        aliases: ['a'],
         description:
-          "Determine the approval mode for Codex (default: suggest) Values: suggest, auto-edit, full-auto",
+          'Determine the approval mode for Codex (default: suggest) Values: suggest, auto-edit, full-auto',
       },
       noProjectDoc: {
-        type: "boolean",
-        description: "Disable automatic inclusion of project‑level codex.md",
+        type: 'boolean',
+        description: 'Disable automatic inclusion of project‑level codex.md',
       },
       projectDoc: {
-        type: "string",
-        description: "Path to a markdown file to include as project doc",
+        type: 'string',
+        description: 'Path to a markdown file to include as project doc',
       },
       fullStdout: {
-        type: "boolean",
+        type: 'boolean',
         description:
-          "Disable truncation of command stdout/stderr messages (show everything)",
-        aliases: ["no-truncate"],
+          'Disable truncation of command stdout/stderr messages (show everything)',
+        aliases: ['no-truncate'],
       },
 
       // Experimental mode where whole directory is loaded in context and model is requested
       // to make code edits in a single pass.
       fullContext: {
-        type: "boolean",
-        aliases: ["f"],
+        type: 'boolean',
+        aliases: ['f'],
         description: `Run in full-context editing approach. The model is given the whole code
           directory as context and performs changes in one go without acting.`,
       },
     },
-  },
-);
+  }
+)
 
 // Handle 'completion' subcommand before any prompting or API calls
-if (cli.input[0] === "completion") {
-  const shell = cli.input[1] || "bash";
+if (cli.input[0] === 'completion') {
+  const shell = cli.input[1] || 'bash'
   const scripts: Record<string, string> = {
     bash: `# bash completion for codex
 _codex_completion() {
@@ -169,73 +165,73 @@ _codex() {
 _codex`,
     fish: `# fish completion for codex
 complete -c codex -a '(_fish_complete_path)' -d 'file path'`,
-  };
-  const script = scripts[shell];
+  }
+  const script = scripts[shell]
   if (!script) {
     // eslint-disable-next-line no-console
-    console.error(`Unsupported shell: ${shell}`);
-    process.exit(1);
+    console.error(`Unsupported shell: ${shell}`)
+    process.exit(1)
   }
   // eslint-disable-next-line no-console
-  console.log(script);
-  process.exit(0);
+  console.log(script)
+  process.exit(0)
 }
 // Show help if requested
 if (cli.flags.help) {
-  cli.showHelp();
+  cli.showHelp()
 }
 
 // Handle config flag: open instructions file in editor and exit
 if (cli.flags.config) {
   // Ensure configuration and instructions file exist
   try {
-    loadConfig();
+    loadConfig()
   } catch {
     // ignore errors
   }
-  const filePath = INSTRUCTIONS_FILEPATH;
+  const filePath = INSTRUCTIONS_FILEPATH
   const editor =
-    process.env["EDITOR"] || (process.platform === "win32" ? "notepad" : "vi");
-  spawnSync(editor, [filePath], { stdio: "inherit" });
-  process.exit(0);
+    process.env['EDITOR'] || (process.platform === 'win32' ? 'notepad' : 'vi')
+  spawnSync(editor, [filePath], { stdio: 'inherit' })
+  process.exit(0)
 }
 
 // ---------------------------------------------------------------------------
 // API key handling
 // ---------------------------------------------------------------------------
 
-const apiKey = process.env["OPENAI_API_KEY"];
+const apiKey = process.env['OPENAI_API_KEY']
 
 if (!apiKey) {
   // eslint-disable-next-line no-console
   console.error(
-    `\n${chalk.red("Missing OpenAI API key.")}\n\n` +
-      `Set the environment variable ${chalk.bold("OPENAI_API_KEY")} ` +
+    `\n${chalk.red('Missing OpenAI API key.')}\n\n` +
+      `Set the environment variable ${chalk.bold('OPENAI_API_KEY')} ` +
       `and re-run this command.\n` +
       `You can create a key here: ${chalk.bold(
-        chalk.underline("https://platform.openai.com/account/api-keys"),
-      )}\n`,
-  );
-  process.exit(1);
+        chalk.underline('https://platform.openai.com/account/api-keys')
+      )}\n`
+  )
+  process.exit(1)
 }
 
-const fullContextMode = Boolean(cli.flags.fullContext);
+const fullContextMode = Boolean(cli.flags.fullContext)
 let config = loadConfig(undefined, undefined, {
   cwd: process.cwd(),
   disableProjectDoc: Boolean(cli.flags.noProjectDoc),
   projectDocPath: cli.flags.projectDoc as string | undefined,
   isFullContext: fullContextMode,
-});
+})
 
-const prompt = cli.input[0];
-const model = cli.flags.model;
-const imagePaths = cli.flags.image as Array<string> | undefined;
+const prompt = cli.input[0]
+const model = cli.flags.model
+const imagePaths = cli.flags.image as Array<string> | undefined
 
 config = {
   apiKey,
   ...config,
   model: model ?? config.model,
-};
+}
 
 if (!(await isModelSupportedForResponses(config.model))) {
   // eslint-disable-next-line no-console
@@ -243,25 +239,25 @@ if (!(await isModelSupportedForResponses(config.model))) {
     `The model "${config.model}" does not appear in the list of models ` +
       `available to your account. Double‑check the spelling (use\n` +
       `  openai models list\n` +
-      `to see the full list) or choose another model with the --model flag.`,
-  );
-  process.exit(1);
+      `to see the full list) or choose another model with the --model flag.`
+  )
+  process.exit(1)
 }
 
-let rollout: AppRollout | undefined;
+let rollout: AppRollout | undefined
 
 if (cli.flags.view) {
-  const viewPath = cli.flags.view;
+  const viewPath = cli.flags.view
   const absolutePath = path.isAbsolute(viewPath)
     ? viewPath
-    : path.join(process.cwd(), viewPath);
+    : path.join(process.cwd(), viewPath)
   try {
-    const content = fs.readFileSync(absolutePath, "utf-8");
-    rollout = JSON.parse(content) as AppRollout;
+    const content = fs.readFileSync(absolutePath, 'utf-8')
+    rollout = JSON.parse(content) as AppRollout
   } catch (error) {
     // eslint-disable-next-line no-console
-    console.error("Error reading rollout file:", error);
-    process.exit(1);
+    console.error('Error reading rollout file:', error)
+    process.exit(1)
   }
 }
 
@@ -271,26 +267,26 @@ if (fullContextMode) {
     originalPrompt: prompt,
     config,
     rootPath: process.cwd(),
-  });
-  onExit();
-  process.exit(0);
+  })
+  onExit()
+  process.exit(0)
 }
 
 // If we are running in --quiet mode, do that and exit.
-const quietMode = Boolean(cli.flags.quiet);
+const quietMode = Boolean(cli.flags.quiet)
 const autoApproveEverything = Boolean(
-  cli.flags.dangerouslyAutoApproveEverything,
-);
-const fullStdout = Boolean(cli.flags.fullStdout);
+  cli.flags.dangerouslyAutoApproveEverything
+)
+const fullStdout = Boolean(cli.flags.fullStdout)
 
 if (quietMode) {
-  process.env["CODEX_QUIET_MODE"] = "1";
-  if (!prompt || prompt.trim() === "") {
+  process.env['CODEX_QUIET_MODE'] = '1'
+  if (!prompt || prompt.trim() === '') {
     // eslint-disable-next-line no-console
     console.error(
-      'Quiet mode requires a prompt string, e.g.,: codex -q "Fix bug #123 in the foobar project"',
-    );
-    process.exit(1);
+      'Quiet mode requires a prompt string, e.g.,: codex -q "Fix bug #123 in the foobar project"'
+    )
+    process.exit(1)
   }
   await runQuietMode({
     prompt: prompt as string,
@@ -299,9 +295,9 @@ if (quietMode) {
       ? AutoApprovalMode.FULL_AUTO
       : AutoApprovalMode.SUGGEST,
     config,
-  });
-  onExit();
-  process.exit(0);
+  })
+  onExit()
+  process.exit(0)
 }
 
 // Default to the "suggest" policy.
@@ -317,13 +313,13 @@ if (quietMode) {
 // 4. Default – suggest mode (prompt for everything).
 
 const approvalPolicy: ApprovalPolicy =
-  cli.flags.fullAuto || cli.flags.approvalMode === "full-auto"
+  cli.flags.fullAuto || cli.flags.approvalMode === 'full-auto'
     ? AutoApprovalMode.FULL_AUTO
-    : cli.flags.autoEdit || cli.flags.approvalMode === "auto-edit"
+    : cli.flags.autoEdit || cli.flags.approvalMode === 'auto-edit'
       ? AutoApprovalMode.AUTO_EDIT
-      : AutoApprovalMode.SUGGEST;
+      : AutoApprovalMode.SUGGEST
 
-preloadModels();
+preloadModels()
 
 const instance = render(
   <App
@@ -335,56 +331,56 @@ const instance = render(
     fullStdout={fullStdout}
   />,
   {
-    patchConsole: process.env["DEBUG"] ? false : true,
-  },
-);
-setInkRenderer(instance);
+    patchConsole: process.env['DEBUG'] ? false : true,
+  }
+)
+setInkRenderer(instance)
 
 function formatResponseItemForQuietMode(item: ResponseItem): string {
   if (!PRETTY_PRINT) {
-    return JSON.stringify(item);
+    return JSON.stringify(item)
   }
   switch (item.type) {
-    case "message": {
-      const role = item.role === "assistant" ? "assistant" : item.role;
+    case 'message': {
+      const role = item.role === 'assistant' ? 'assistant' : item.role
       const txt = item.content
         .map((c) => {
-          if (c.type === "output_text" || c.type === "input_text") {
-            return c.text;
+          if (c.type === 'output_text' || c.type === 'input_text') {
+            return c.text
           }
-          if (c.type === "input_image") {
-            return "<Image>";
+          if (c.type === 'input_image') {
+            return '<Image>'
           }
-          if (c.type === "input_file") {
-            return c.filename;
+          if (c.type === 'input_file') {
+            return c.filename
           }
-          if (c.type === "refusal") {
-            return c.refusal;
+          if (c.type === 'refusal') {
+            return c.refusal
           }
-          return "?";
+          return '?'
         })
-        .join(" ");
-      return `${role}: ${txt}`;
+        .join(' ')
+      return `${role}: ${txt}`
     }
-    case "function_call": {
-      const details = parseToolCall(item);
-      return `$ ${details?.cmdReadableText ?? item.name}`;
+    case 'function_call': {
+      const details = parseToolCall(item)
+      return `$ ${details?.cmdReadableText ?? item.name}`
     }
-    case "function_call_output": {
+    case 'function_call_output': {
       // @ts-expect-error metadata unknown on ResponseFunctionToolCallOutputItem
-      const meta = item.metadata as ExecOutputMetadata;
-      const parts: Array<string> = [];
-      if (typeof meta?.exit_code === "number") {
-        parts.push(`code: ${meta.exit_code}`);
+      const meta = item.metadata as ExecOutputMetadata
+      const parts: Array<string> = []
+      if (typeof meta?.exit_code === 'number') {
+        parts.push(`code: ${meta.exit_code}`)
       }
-      if (typeof meta?.duration_seconds === "number") {
-        parts.push(`duration: ${meta.duration_seconds}s`);
+      if (typeof meta?.duration_seconds === 'number') {
+        parts.push(`duration: ${meta.duration_seconds}s`)
       }
-      const header = parts.length > 0 ? ` (${parts.join(", ")})` : "";
-      return `command.stdout${header}\n${item.output}`;
+      const header = parts.length > 0 ? ` (${parts.join(', ')})` : ''
+      return `command.stdout${header}\n${item.output}`
     }
     default: {
-      return JSON.stringify(item);
+      return JSON.stringify(item)
     }
   }
 }
@@ -395,10 +391,10 @@ async function runQuietMode({
   approvalPolicy,
   config,
 }: {
-  prompt: string;
-  imagePaths: Array<string>;
-  approvalPolicy: ApprovalPolicy;
-  config: AppConfig;
+  prompt: string
+  imagePaths: Array<string>
+  approvalPolicy: ApprovalPolicy
+  config: AppConfig
 }): Promise<void> {
   const agent = new AgentLoop({
     model: config.model,
@@ -407,33 +403,33 @@ async function runQuietMode({
     approvalPolicy,
     onItem: (item: ResponseItem) => {
       // eslint-disable-next-line no-console
-      console.log(formatResponseItemForQuietMode(item));
+      console.log(formatResponseItemForQuietMode(item))
     },
     onLoading: () => {
       /* intentionally ignored in quiet mode */
     },
     getCommandConfirmation: (
-      _command: Array<string>,
+      _command: Array<string>
     ): Promise<CommandConfirmation> => {
-      return Promise.resolve({ review: ReviewDecision.NO_CONTINUE });
+      return Promise.resolve({ review: ReviewDecision.NO_CONTINUE })
     },
     onLastResponseId: () => {
       /* intentionally ignored in quiet mode */
     },
-  });
+  })
 
-  const inputItem = await createInputItem(prompt, imagePaths);
-  await agent.run([inputItem]);
+  const inputItem = await createInputItem(prompt, imagePaths)
+  await agent.run([inputItem])
 }
 
 const exit = () => {
-  onExit();
-  process.exit(0);
-};
+  onExit()
+  process.exit(0)
+}
 
-process.on("SIGINT", exit);
-process.on("SIGQUIT", exit);
-process.on("SIGTERM", exit);
+process.on('SIGINT', exit)
+process.on('SIGQUIT', exit)
+process.on('SIGTERM', exit)
 
 // ---------------------------------------------------------------------------
 // Fallback for Ctrl‑C when stdin is in raw‑mode
@@ -445,14 +441,14 @@ if (process.stdin.isTTY) {
   // input. Node does *not* emit a SIGINT in raw‑mode, so we listen for the
   // corresponding byte (0x03) ourselves and trigger a graceful shutdown.
   const onRawData = (data: Buffer | string): void => {
-    const str = Buffer.isBuffer(data) ? data.toString("utf8") : data;
-    if (str === "\u0003") {
-      exit();
+    const str = Buffer.isBuffer(data) ? data.toString('utf8') : data
+    if (str === '\u0003') {
+      exit()
     }
-  };
-  process.stdin.on("data", onRawData);
+  }
+  process.stdin.on('data', onRawData)
 }
 
 // Ensure terminal clean‑up always runs, even when other code calls
 // `process.exit()` directly.
-process.once("exit", onExit);
+process.once('exit', onExit)

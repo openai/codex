@@ -1,7 +1,7 @@
-import { renderTui } from "./ui-test-helpers.js";
-import TerminalChatResponseItem from "../src/components/chat/terminal-chat-response-item.js";
-import React from "react";
-import { describe, it, expect } from "vitest";
+import React from 'react'
+import { describe, expect, it } from 'vitest'
+import TerminalChatResponseItem from '../src/components/chat/terminal-chat-response-item.js'
+import { renderTui } from './ui-test-helpers.js'
 
 // Component under test
 
@@ -11,49 +11,49 @@ import { describe, it, expect } from "vitest";
 
 function userMessage(text: string) {
   return {
-    type: "message",
-    role: "user",
+    type: 'message',
+    role: 'user',
     content: [
       {
-        type: "input_text",
+        type: 'input_text',
         text,
       },
     ],
-  } as any;
+  } as any
 }
 
 function assistantMessage(text: string) {
   return {
-    type: "message",
-    role: "assistant",
+    type: 'message',
+    role: 'assistant',
     content: [
       {
-        type: "output_text",
+        type: 'output_text',
         text,
       },
     ],
-  } as any;
+  } as any
 }
 
-describe("TerminalChatResponseItem", () => {
-  it("renders a user message", () => {
+describe('TerminalChatResponseItem', () => {
+  it('renders a user message', () => {
     const { lastFrameStripped } = renderTui(
-      <TerminalChatResponseItem item={userMessage("Hello world")} />,
-    );
+      <TerminalChatResponseItem item={userMessage('Hello world')} />
+    )
 
-    const frame = lastFrameStripped();
-    expect(frame).toContain("user");
-    expect(frame).toContain("Hello world");
-  });
+    const frame = lastFrameStripped()
+    expect(frame).toContain('user')
+    expect(frame).toContain('Hello world')
+  })
 
-  it("renders an assistant message", () => {
+  it('renders an assistant message', () => {
     const { lastFrameStripped } = renderTui(
-      <TerminalChatResponseItem item={assistantMessage("Sure thing")} />,
-    );
+      <TerminalChatResponseItem item={assistantMessage('Sure thing')} />
+    )
 
-    const frame = lastFrameStripped();
+    const frame = lastFrameStripped()
     // assistant messages are labelled "codex" in the UI
-    expect(frame.toLowerCase()).toContain("codex");
-    expect(frame).toContain("Sure thing");
-  });
-});
+    expect(frame.toLowerCase()).toContain('codex')
+    expect(frame).toContain('Sure thing')
+  })
+})

@@ -1,31 +1,31 @@
-import type { ExecResult } from "./interface.js";
-import type { SpawnOptions } from "child_process";
+import type { SpawnOptions } from 'child_process'
+import type { ExecResult } from './interface.js'
 
-import { exec } from "./raw-exec.js";
-import { log } from "../log.js";
-import { CONFIG_DIR } from "src/utils/config.js";
+import { CONFIG_DIR } from 'src/utils/config.js'
+import { log } from '../log.js'
+import { exec } from './raw-exec.js'
 
 function getCommonRoots() {
   return [
     CONFIG_DIR,
     // Without this root, it'll cause:
     // pyenv: cannot rehash: $HOME/.pyenv/shims isn't writable
-    `${process.env["HOME"]}/.pyenv`,
-  ];
+    `${process.env['HOME']}/.pyenv`,
+  ]
 }
 
 export function execWithSeatbelt(
   cmd: Array<string>,
   opts: SpawnOptions,
   writableRoots: Array<string>,
-  abortSignal?: AbortSignal,
+  abortSignal?: AbortSignal
 ): Promise<ExecResult> {
-  let scopedWritePolicy: string;
-  let policyTemplateParams: Array<string>;
+  let scopedWritePolicy: string
+  let policyTemplateParams: Array<string>
   if (writableRoots.length > 0) {
     // Add `~/.codex` to the list of writable roots
     // (if there's any already, not in read-only mode)
-    getCommonRoots().map((root) => writableRoots.push(root));
+    getCommonRoots().map((root) => writableRoots.push(root))
     const { policies, params } = writableRoots
       .map((root, index) => ({
         policy: `(subpath (param "WRITABLE_ROOT_${index}"))`,
@@ -34,38 +34,38 @@ export function execWithSeatbelt(
       .reduce(
         (
           acc: { policies: Array<string>; params: Array<string> },
-          { policy, param },
+          { policy, param }
         ) => {
-          acc.policies.push(policy);
-          acc.params.push(param);
-          return acc;
+          acc.policies.push(policy)
+          acc.params.push(param)
+          return acc
         },
-        { policies: [], params: [] },
-      );
+        { policies: [], params: [] }
+      )
 
-    scopedWritePolicy = `\n(allow file-write*\n${policies.join(" ")}\n)`;
-    policyTemplateParams = params;
+    scopedWritePolicy = `\n(allow file-write*\n${policies.join(' ')}\n)`
+    policyTemplateParams = params
   } else {
-    scopedWritePolicy = "";
-    policyTemplateParams = [];
+    scopedWritePolicy = ''
+    policyTemplateParams = []
   }
 
-  const fullPolicy = READ_ONLY_SEATBELT_POLICY + scopedWritePolicy;
+  const fullPolicy = READ_ONLY_SEATBELT_POLICY + scopedWritePolicy
   log(
     `Running seatbelt with policy: ${fullPolicy} and ${
       policyTemplateParams.length
-    } template params: ${policyTemplateParams.join(", ")}`,
-  );
+    } template params: ${policyTemplateParams.join(', ')}`
+  )
 
   const fullCommand = [
-    "sandbox-exec",
-    "-p",
+    'sandbox-exec',
+    '-p',
     fullPolicy,
     ...policyTemplateParams,
-    "--",
+    '--',
     ...cmd,
-  ];
-  return exec(fullCommand, opts, writableRoots, abortSignal);
+  ]
+  return exec(fullCommand, opts, writableRoots, abortSignal)
 }
 
 const READ_ONLY_SEATBELT_POLICY = `
@@ -138,4 +138,4 @@ const READ_ONLY_SEATBELT_POLICY = `
   (sysctl-name "kern.version")
   (sysctl-name "sysctl.proc_cputype")
   (sysctl-name-prefix "hw.perflevel")
-)`.trim();
+)`.trim()

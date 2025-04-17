@@ -1,5 +1,5 @@
-import { Box, Text, useInput } from "ink";
-import React from "react";
+import { Box, Text, useInput } from 'ink'
+import React from 'react'
 
 /**
  * An overlay that lists the available slash‑commands and their description.
@@ -10,13 +10,13 @@ import React from "react";
 export default function HelpOverlay({
   onExit,
 }: {
-  onExit: () => void;
+  onExit: () => void
 }): JSX.Element {
   useInput((input, key) => {
-    if (key.escape || input === "q") {
-      onExit();
+    if (key.escape || input === 'q') {
+      onExit()
     }
-  });
+  })
 
   return (
     <Box
@@ -74,7 +74,7 @@ export default function HelpOverlay({
         <Text>
           <Text color="yellow">
             Esc<Text dimColor>(✕2)</Text>
-          </Text>{" "}
+          </Text>{' '}
           – interrupt current action
         </Text>
         <Text>
@@ -86,5 +86,5 @@ export default function HelpOverlay({
         <Text dimColor>esc or q to close</Text>
       </Box>
     </Box>
-  );
+  )
 }

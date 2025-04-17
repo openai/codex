@@ -1,29 +1,29 @@
-export const CLI_VERSION = "0.1.2504161510"; // Must be in sync with package.json.
-export const ORIGIN = "codex_cli_ts";
+export const CLI_VERSION = '0.1.2504161510' // Must be in sync with package.json.
+export const ORIGIN = 'codex_cli_ts'
 
 export type TerminalChatSession = {
   /** Globally unique session identifier */
-  id: string;
+  id: string
   /** The OpenAI username associated with this session */
-  user: string;
+  user: string
   /** Version identifier of the Codex CLI that produced the session */
-  version: string;
+  version: string
   /** The model used for the conversation */
-  model: string;
+  model: string
   /** ISO timestamp noting when the session was persisted */
-  timestamp: string;
+  timestamp: string
   /** Optional custom instructions that were active for the run */
-  instructions: string;
-};
+  instructions: string
+}
 
-let sessionId = "";
+let sessionId = ''
 
 /**
  * Update the globally tracked session identifier.
  * Passing an empty string clears the current session.
  */
 export function setSessionId(id: string): void {
-  sessionId = id;
+  sessionId = id
 }
 
 /**
@@ -31,17 +31,17 @@ export function setSessionId(id: string): void {
  * no session is active.
  */
 export function getSessionId(): string {
-  return sessionId;
+  return sessionId
 }
 
-let currentModel = "";
+let currentModel = ''
 
 /**
  * Record the model that is currently being used for the conversation.
  * Setting an empty string clears the record so the next agent run can update it.
  */
 export function setCurrentModel(model: string): void {
-  currentModel = model;
+  currentModel = model
 }
 
 /**
@@ -49,5 +49,5 @@ export function setCurrentModel(model: string): void {
  * If no model has been recorded yet, an empty string is returned.
  */
 export function getCurrentModel(): string {
-  return currentModel;
+  return currentModel
 }

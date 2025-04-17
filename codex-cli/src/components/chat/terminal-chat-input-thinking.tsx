@@ -1,10 +1,10 @@
-import { log, isLoggingEnabled } from "../../utils/agent/log.js";
-import Spinner from "../vendor/ink-spinner.js";
-import { Box, Text, useInput, useStdin } from "ink";
-import React, { useState } from "react";
-import { useInterval } from "use-interval";
+import { Box, Text, useInput, useStdin } from 'ink'
+import React, { useState } from 'react'
+import { useInterval } from 'use-interval'
+import { isLoggingEnabled, log } from '../../utils/agent/log.js'
+import Spinner from '../vendor/ink-spinner.js'
 
-const thinkingTexts = ["Thinking"]; /* [
+const thinkingTexts = ['Thinking'] /* [
   "Consulting the rubber duck",
   "Maximizing paperclips",
   "Reticulating splines",
@@ -68,90 +68,90 @@ export default function TerminalChatInputThinking({
   onInterrupt,
   active,
 }: {
-  onInterrupt: () => void;
-  active: boolean;
+  onInterrupt: () => void
+  active: boolean
 }): React.ReactElement {
-  const [dots, setDots] = useState("");
-  const [awaitingConfirm, setAwaitingConfirm] = useState(false);
+  const [dots, setDots] = useState('')
+  const [awaitingConfirm, setAwaitingConfirm] = useState(false)
 
   const [thinkingText, setThinkingText] = useState(
-    () => thinkingTexts[Math.floor(Math.random() * thinkingTexts.length)],
-  );
+    () => thinkingTexts[Math.floor(Math.random() * thinkingTexts.length)]
+  )
 
-  const { stdin, setRawMode } = useStdin();
+  const { stdin, setRawMode } = useStdin()
 
   React.useEffect(() => {
     if (!active) {
-      return;
+      return
     }
 
-    setRawMode?.(true);
+    setRawMode?.(true)
 
     const onData = (data: Buffer | string) => {
       if (awaitingConfirm) {
-        return;
+        return
       }
 
-      const str = Buffer.isBuffer(data) ? data.toString("utf8") : data;
-      if (str === "\x1b\x1b") {
+      const str = Buffer.isBuffer(data) ? data.toString('utf8') : data
+      if (str === '\x1b\x1b') {
         if (isLoggingEnabled()) {
           log(
-            "raw stdin: received collapsed ESC ESC – starting confirmation timer",
-          );
+            'raw stdin: received collapsed ESC ESC – starting confirmation timer'
+          )
         }
-        setAwaitingConfirm(true);
-        setTimeout(() => setAwaitingConfirm(false), 1500);
+        setAwaitingConfirm(true)
+        setTimeout(() => setAwaitingConfirm(false), 1500)
       }
-    };
+    }
 
-    stdin?.on("data", onData);
+    stdin?.on('data', onData)
     return () => {
-      stdin?.off("data", onData);
-    };
-  }, [stdin, awaitingConfirm, onInterrupt, active, setRawMode]);
+      stdin?.off('data', onData)
+    }
+  }, [stdin, awaitingConfirm, onInterrupt, active, setRawMode])
 
   useInterval(() => {
-    setDots((prev) => (prev.length < 3 ? prev + "." : ""));
-  }, 500);
+    setDots((prev) => (prev.length < 3 ? prev + '.' : ''))
+  }, 500)
 
   useInterval(
     () => {
       setThinkingText((prev) => {
-        let next = prev;
+        let next = prev
         if (thinkingTexts.length > 1) {
           while (next === prev) {
             next =
-              thinkingTexts[Math.floor(Math.random() * thinkingTexts.length)];
+              thinkingTexts[Math.floor(Math.random() * thinkingTexts.length)]
           }
         }
-        return next;
-      });
+        return next
+      })
     },
-    active ? 30000 : null,
-  );
+    active ? 30000 : null
+  )
 
   useInput(
     (_input, key) => {
       if (!key.escape) {
-        return;
+        return
       }
 
       if (awaitingConfirm) {
         if (isLoggingEnabled()) {
-          log("useInput: second ESC detected – triggering onInterrupt()");
+          log('useInput: second ESC detected – triggering onInterrupt()')
         }
-        onInterrupt();
-        setAwaitingConfirm(false);
+        onInterrupt()
+        setAwaitingConfirm(false)
       } else {
         if (isLoggingEnabled()) {
-          log("useInput: first ESC detected – waiting for confirmation");
+          log('useInput: first ESC detected – waiting for confirmation')
         }
-        setAwaitingConfirm(true);
-        setTimeout(() => setAwaitingConfirm(false), 1500);
+        setAwaitingConfirm(true)
+        setTimeout(() => setAwaitingConfirm(false), 1500)
       }
     },
-    { isActive: active },
-  );
+    { isActive: active }
+  )
 
   return (
     <Box flexDirection="column" gap={1}>
@@ -169,5 +169,5 @@ export default function TerminalChatInputThinking({
         </Text>
       )}
     </Box>
-  );
+  )
 }

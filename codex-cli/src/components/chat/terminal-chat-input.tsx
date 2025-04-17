@@ -1,26 +1,26 @@
-import type { ReviewDecision } from "../../utils/agent/review.js";
 import type {
   ResponseInputItem,
   ResponseItem,
-} from "openai/resources/responses/responses.mjs";
+} from 'openai/resources/responses/responses.mjs'
+import type { ReviewDecision } from '../../utils/agent/review.js'
 
-import { TerminalChatCommandReview } from "./terminal-chat-command-review.js";
-import { log, isLoggingEnabled } from "../../utils/agent/log.js";
-import { createInputItem } from "../../utils/input-utils.js";
-import { setSessionId } from "../../utils/session.js";
-import { clearTerminal, onExit } from "../../utils/terminal.js";
-import Spinner from "../vendor/ink-spinner.js";
-import TextInput from "../vendor/ink-text-input.js";
-import { Box, Text, useApp, useInput, useStdin } from "ink";
-import { fileURLToPath } from "node:url";
-import React, { useCallback, useState, Fragment } from "react";
-import { useInterval } from "use-interval";
+import { fileURLToPath } from 'node:url'
+import { Box, Text, useApp, useInput, useStdin } from 'ink'
+import React, { useCallback, useState, Fragment } from 'react'
+import { useInterval } from 'use-interval'
+import { isLoggingEnabled, log } from '../../utils/agent/log.js'
+import { createInputItem } from '../../utils/input-utils.js'
+import { setSessionId } from '../../utils/session.js'
+import { clearTerminal, onExit } from '../../utils/terminal.js'
+import Spinner from '../vendor/ink-spinner.js'
+import TextInput from '../vendor/ink-text-input.js'
+import { TerminalChatCommandReview } from './terminal-chat-command-review.js'
 
 const suggestions = [
-  "explain this codebase to me",
-  "fix any build errors",
-  "are there any bugs in my code?",
-];
+  'explain this codebase to me',
+  'fix any build errors',
+  'are there any bugs in my code?',
+]
 
 export default function TerminalChatInput({
   isNew,
@@ -38,30 +38,30 @@ export default function TerminalChatInput({
   interruptAgent,
   active,
 }: {
-  isNew: boolean;
-  loading: boolean;
-  submitInput: (input: Array<ResponseInputItem>) => void;
-  confirmationPrompt: React.ReactNode | null;
+  isNew: boolean
+  loading: boolean
+  submitInput: (input: Array<ResponseInputItem>) => void
+  confirmationPrompt: React.ReactNode | null
   submitConfirmation: (
     decision: ReviewDecision,
-    customDenyMessage?: string,
-  ) => void;
-  setLastResponseId: (lastResponseId: string) => void;
-  setItems: React.Dispatch<React.SetStateAction<Array<ResponseItem>>>;
-  contextLeftPercent: number;
-  openOverlay: () => void;
-  openModelOverlay: () => void;
-  openApprovalOverlay: () => void;
-  openHelpOverlay: () => void;
-  interruptAgent: () => void;
-  active: boolean;
+    customDenyMessage?: string
+  ) => void
+  setLastResponseId: (lastResponseId: string) => void
+  setItems: React.Dispatch<React.SetStateAction<Array<ResponseItem>>>
+  contextLeftPercent: number
+  openOverlay: () => void
+  openModelOverlay: () => void
+  openApprovalOverlay: () => void
+  openHelpOverlay: () => void
+  interruptAgent: () => void
+  active: boolean
 }): React.ReactElement {
-  const app = useApp();
-  const [selectedSuggestion, setSelectedSuggestion] = useState<number>(0);
-  const [input, setInput] = useState("");
-  const [history, setHistory] = useState<Array<string>>([]);
-  const [historyIndex, setHistoryIndex] = useState<number | null>(null);
-  const [draftInput, setDraftInput] = useState<string>("");
+  const app = useApp()
+  const [selectedSuggestion, setSelectedSuggestion] = useState<number>(0)
+  const [input, setInput] = useState('')
+  const [history, setHistory] = useState<Array<string>>([])
+  const [historyIndex, setHistoryIndex] = useState<number | null>(null)
+  const [draftInput, setDraftInput] = useState<string>('')
 
   useInput(
     (_input, _key) => {
@@ -69,111 +69,111 @@ export default function TerminalChatInput({
         if (_key.upArrow) {
           if (history.length > 0) {
             if (historyIndex == null) {
-              setDraftInput(input);
+              setDraftInput(input)
             }
 
-            let newIndex: number;
+            let newIndex: number
             if (historyIndex == null) {
-              newIndex = history.length - 1;
+              newIndex = history.length - 1
             } else {
-              newIndex = Math.max(0, historyIndex - 1);
+              newIndex = Math.max(0, historyIndex - 1)
             }
-            setHistoryIndex(newIndex);
-            setInput(history[newIndex] ?? "");
+            setHistoryIndex(newIndex)
+            setInput(history[newIndex] ?? '')
           }
-          return;
+          return
         }
 
         if (_key.downArrow) {
           if (historyIndex == null) {
-            return;
+            return
           }
 
-          const newIndex = historyIndex + 1;
+          const newIndex = historyIndex + 1
           if (newIndex >= history.length) {
-            setHistoryIndex(null);
-            setInput(draftInput);
+            setHistoryIndex(null)
+            setInput(draftInput)
           } else {
-            setHistoryIndex(newIndex);
-            setInput(history[newIndex] ?? "");
+            setHistoryIndex(newIndex)
+            setInput(history[newIndex] ?? '')
           }
-          return;
+          return
         }
       }
 
-      if (input.trim() === "" && isNew) {
+      if (input.trim() === '' && isNew) {
         if (_key.tab) {
           setSelectedSuggestion(
-            (s) => (s + (_key.shift ? -1 : 1)) % (suggestions.length + 1),
-          );
+            (s) => (s + (_key.shift ? -1 : 1)) % (suggestions.length + 1)
+          )
         } else if (selectedSuggestion && _key.return) {
-          const suggestion = suggestions[selectedSuggestion - 1] || "";
-          setInput("");
-          setSelectedSuggestion(0);
+          const suggestion = suggestions[selectedSuggestion - 1] || ''
+          setInput('')
+          setSelectedSuggestion(0)
           submitInput([
             {
-              role: "user",
-              content: [{ type: "input_text", text: suggestion }],
-              type: "message",
+              role: 'user',
+              content: [{ type: 'input_text', text: suggestion }],
+              type: 'message',
             },
-          ]);
+          ])
         }
-      } else if (_input === "\u0003" || (_input === "c" && _key.ctrl)) {
+      } else if (_input === '\u0003' || (_input === 'c' && _key.ctrl)) {
         setTimeout(() => {
-          app.exit();
-          onExit();
-          process.exit(0);
-        }, 60);
+          app.exit()
+          onExit()
+          process.exit(0)
+        }, 60)
       }
     },
-    { isActive: active },
-  );
+    { isActive: active }
+  )
 
   const onSubmit = useCallback(
     async (value: string) => {
-      const inputValue = value.trim();
+      const inputValue = value.trim()
       if (!inputValue) {
-        return;
+        return
       }
 
-      if (inputValue === "/history") {
-        setInput("");
-        openOverlay();
-        return;
+      if (inputValue === '/history') {
+        setInput('')
+        openOverlay()
+        return
       }
 
-      if (inputValue === "/help") {
-        setInput("");
-        openHelpOverlay();
-        return;
+      if (inputValue === '/help') {
+        setInput('')
+        openHelpOverlay()
+        return
       }
 
-      if (inputValue.startsWith("/model")) {
-        setInput("");
-        openModelOverlay();
-        return;
+      if (inputValue.startsWith('/model')) {
+        setInput('')
+        openModelOverlay()
+        return
       }
 
-      if (inputValue.startsWith("/approval")) {
-        setInput("");
-        openApprovalOverlay();
-        return;
+      if (inputValue.startsWith('/approval')) {
+        setInput('')
+        openApprovalOverlay()
+        return
       }
 
-      if (inputValue === "q" || inputValue === ":q" || inputValue === "exit") {
-        setInput("");
+      if (inputValue === 'q' || inputValue === ':q' || inputValue === 'exit') {
+        setInput('')
         // wait one 60ms frame
         setTimeout(() => {
-          app.exit();
-          onExit();
-          process.exit(0);
-        }, 60);
-        return;
-      } else if (inputValue === "/clear" || inputValue === "clear") {
-        setInput("");
-        setSessionId("");
-        setLastResponseId("");
-        clearTerminal();
+          app.exit()
+          onExit()
+          process.exit(0)
+        }, 60)
+        return
+      } else if (inputValue === '/clear' || inputValue === 'clear') {
+        setInput('')
+        setSessionId('')
+        setLastResponseId('')
+        clearTerminal()
 
         // Emit a system message to confirm the clear action.  We *append*
         // it so Ink's <Static> treats it as new output and actually renders it.
@@ -181,35 +181,35 @@ export default function TerminalChatInput({
           ...prev,
           {
             id: `clear-${Date.now()}`,
-            type: "message",
-            role: "system",
-            content: [{ type: "input_text", text: "Context cleared" }],
+            type: 'message',
+            role: 'system',
+            content: [{ type: 'input_text', text: 'Context cleared' }],
           },
-        ]);
+        ])
 
-        return;
+        return
       }
 
-      const images: Array<string> = [];
+      const images: Array<string> = []
       const text = inputValue
         .replace(/!\[[^\]]*?\]\(([^)]+)\)/g, (_m, p1: string) => {
-          images.push(p1.startsWith("file://") ? fileURLToPath(p1) : p1);
-          return "";
+          images.push(p1.startsWith('file://') ? fileURLToPath(p1) : p1)
+          return ''
         })
-        .trim();
+        .trim()
 
-      const inputItem = await createInputItem(text, images);
-      submitInput([inputItem]);
+      const inputItem = await createInputItem(text, images)
+      submitInput([inputItem])
       setHistory((prev) => {
         if (prev[prev.length - 1] === value) {
-          return prev;
+          return prev
         }
-        return [...prev, value];
-      });
-      setHistoryIndex(null);
-      setDraftInput("");
-      setSelectedSuggestion(0);
-      setInput("");
+        return [...prev, value]
+      })
+      setHistoryIndex(null)
+      setDraftInput('')
+      setSelectedSuggestion(0)
+      setInput('')
     },
     [
       setInput,
@@ -223,8 +223,8 @@ export default function TerminalChatInput({
       openApprovalOverlay,
       openModelOverlay,
       openHelpOverlay,
-    ],
-  );
+    ]
+  )
 
   if (confirmationPrompt) {
     return (
@@ -232,7 +232,7 @@ export default function TerminalChatInput({
         confirmationPrompt={confirmationPrompt}
         onReviewCommand={submitConfirmation}
       />
-    );
+    )
   }
 
   return (
@@ -250,17 +250,17 @@ export default function TerminalChatInput({
               placeholder={
                 selectedSuggestion
                   ? `"${suggestions[selectedSuggestion - 1]}"`
-                  : "send a message" +
-                    (isNew ? " or press tab to select a suggestion" : "")
+                  : 'send a message' +
+                    (isNew ? ' or press tab to select a suggestion' : '')
               }
               showCursor
               value={input}
               onChange={(value) => {
-                setDraftInput(value);
+                setDraftInput(value)
                 if (historyIndex != null) {
-                  setHistoryIndex(null);
+                  setHistoryIndex(null)
                 }
-                setInput(value);
+                setInput(value)
               }}
               onSubmit={onSubmit}
             />
@@ -271,13 +271,13 @@ export default function TerminalChatInput({
         <Text dimColor>
           {isNew && !input ? (
             <>
-              try:{" "}
+              try:{' '}
               {suggestions.map((m, key) => (
                 <Fragment key={key}>
-                  {key !== 0 ? " | " : ""}
+                  {key !== 0 ? ' | ' : ''}
                   <Text
                     backgroundColor={
-                      key + 1 === selectedSuggestion ? "blackBright" : ""
+                      key + 1 === selectedSuggestion ? 'blackBright' : ''
                     }
                   >
                     {m}
@@ -291,7 +291,7 @@ export default function TerminalChatInput({
               for commands | press enter to send
               {contextLeftPercent < 25 && (
                 <>
-                  {" — "}
+                  {' — '}
                   <Text color="red">
                     {Math.round(contextLeftPercent)}% context left
                   </Text>
@@ -302,18 +302,18 @@ export default function TerminalChatInput({
         </Text>
       </Box>
     </Box>
-  );
+  )
 }
 
 function TerminalChatInputThinking({
   onInterrupt,
   active,
 }: {
-  onInterrupt: () => void;
-  active: boolean;
+  onInterrupt: () => void
+  active: boolean
 }) {
-  const [dots, setDots] = useState("");
-  const [awaitingConfirm, setAwaitingConfirm] = useState(false);
+  const [dots, setDots] = useState('')
+  const [awaitingConfirm, setAwaitingConfirm] = useState(false)
 
   // ---------------------------------------------------------------------
   // Raw stdin listener to catch the case where the terminal delivers two
@@ -324,47 +324,47 @@ function TerminalChatInputThinking({
   // requiring a double press for the normal single‑byte ESC events.
   // ---------------------------------------------------------------------
 
-  const { stdin, setRawMode } = useStdin();
+  const { stdin, setRawMode } = useStdin()
 
   React.useEffect(() => {
     if (!active) {
-      return;
+      return
     }
 
     // Ensure raw mode – already enabled by Ink when the component has focus,
     // but called defensively in case that assumption ever changes.
-    setRawMode?.(true);
+    setRawMode?.(true)
 
     const onData = (data: Buffer | string) => {
       if (awaitingConfirm) {
-        return; // already awaiting a second explicit press
+        return // already awaiting a second explicit press
       }
 
       // Handle both Buffer and string forms.
-      const str = Buffer.isBuffer(data) ? data.toString("utf8") : data;
-      if (str === "\x1b\x1b") {
+      const str = Buffer.isBuffer(data) ? data.toString('utf8') : data
+      if (str === '\x1b\x1b') {
         // Treat as the first Escape press – prompt the user for confirmation.
         if (isLoggingEnabled()) {
           log(
-            "raw stdin: received collapsed ESC ESC – starting confirmation timer",
-          );
+            'raw stdin: received collapsed ESC ESC – starting confirmation timer'
+          )
         }
-        setAwaitingConfirm(true);
-        setTimeout(() => setAwaitingConfirm(false), 1500);
+        setAwaitingConfirm(true)
+        setTimeout(() => setAwaitingConfirm(false), 1500)
       }
-    };
+    }
 
-    stdin?.on("data", onData);
+    stdin?.on('data', onData)
 
     return () => {
-      stdin?.off("data", onData);
-    };
-  }, [stdin, awaitingConfirm, onInterrupt, active, setRawMode]);
+      stdin?.off('data', onData)
+    }
+  }, [stdin, awaitingConfirm, onInterrupt, active, setRawMode])
 
   // Cycle the "Thinking…" animation dots.
   useInterval(() => {
-    setDots((prev) => (prev.length < 3 ? prev + "." : ""));
-  }, 500);
+    setDots((prev) => (prev.length < 3 ? prev + '.' : ''))
+  }, 500)
 
   // Listen for the escape key to allow the user to interrupt the current
   // operation. We require two presses within a short window (1.5s) to avoid
@@ -372,25 +372,25 @@ function TerminalChatInputThinking({
   useInput(
     (_input, key) => {
       if (!key.escape) {
-        return;
+        return
       }
 
       if (awaitingConfirm) {
         if (isLoggingEnabled()) {
-          log("useInput: second ESC detected – triggering onInterrupt()");
+          log('useInput: second ESC detected – triggering onInterrupt()')
         }
-        onInterrupt();
-        setAwaitingConfirm(false);
+        onInterrupt()
+        setAwaitingConfirm(false)
       } else {
         if (isLoggingEnabled()) {
-          log("useInput: first ESC detected – waiting for confirmation");
+          log('useInput: first ESC detected – waiting for confirmation')
         }
-        setAwaitingConfirm(true);
-        setTimeout(() => setAwaitingConfirm(false), 1500);
+        setAwaitingConfirm(true)
+        setTimeout(() => setAwaitingConfirm(false), 1500)
       }
     },
-    { isActive: active },
-  );
+    { isActive: active }
+  )
 
   return (
     <Box flexDirection="column" gap={1}>
@@ -405,5 +405,5 @@ function TerminalChatInputThinking({
         </Text>
       )}
     </Box>
-  );
+  )
 }

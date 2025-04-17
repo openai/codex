@@ -1,55 +1,55 @@
-import * as fsSync from "fs";
-import * as fs from "fs/promises";
-import * as os from "os";
-import * as path from "path";
+import * as fsSync from 'fs'
+import * as os from 'os'
+import * as path from 'path'
+import * as fs from 'fs/promises'
 
 interface Logger {
   /** Checking this can be used to avoid constructing a large log message. */
-  isLoggingEnabled(): boolean;
+  isLoggingEnabled(): boolean
 
-  log(message: string): void;
+  log(message: string): void
 }
 
 class AsyncLogger implements Logger {
-  private queue: Array<string> = [];
-  private isWriting: boolean = false;
+  private queue: Array<string> = []
+  private isWriting = false
 
   constructor(private filePath: string) {
-    this.filePath = filePath;
+    this.filePath = filePath
   }
 
   isLoggingEnabled(): boolean {
-    return true;
+    return true
   }
 
   log(message: string): void {
-    const entry = `[${now()}] ${message}\n`;
-    this.queue.push(entry);
-    this.maybeWrite();
+    const entry = `[${now()}] ${message}\n`
+    this.queue.push(entry)
+    this.maybeWrite()
   }
 
   private async maybeWrite(): Promise<void> {
     if (this.isWriting || this.queue.length === 0) {
-      return;
+      return
     }
 
-    this.isWriting = true;
-    const messages = this.queue.join("");
-    this.queue = [];
+    this.isWriting = true
+    const messages = this.queue.join('')
+    this.queue = []
 
     try {
-      await fs.appendFile(this.filePath, messages);
+      await fs.appendFile(this.filePath, messages)
     } finally {
-      this.isWriting = false;
+      this.isWriting = false
     }
 
-    this.maybeWrite();
+    this.maybeWrite()
   }
 }
 
 class EmptyLogger implements Logger {
   isLoggingEnabled(): boolean {
-    return false;
+    return false
   }
 
   log(_message: string): void {
@@ -58,17 +58,17 @@ class EmptyLogger implements Logger {
 }
 
 function now() {
-  const date = new Date();
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  const hours = String(date.getHours()).padStart(2, "0");
-  const minutes = String(date.getMinutes()).padStart(2, "0");
-  const seconds = String(date.getSeconds()).padStart(2, "0");
-  return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`;
+  const date = new Date()
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  const hours = String(date.getHours()).padStart(2, '0')
+  const minutes = String(date.getMinutes()).padStart(2, '0')
+  const seconds = String(date.getSeconds()).padStart(2, '0')
+  return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`
 }
 
-let logger: Logger;
+let logger: Logger
 
 /**
  * Creates a .log file for this session, but also symlinks codex-cli-latest.log
@@ -79,51 +79,51 @@ let logger: Logger;
  */
 export function initLogger(): Logger {
   if (logger) {
-    return logger;
-  } else if (!process.env["DEBUG"]) {
-    logger = new EmptyLogger();
-    return logger;
+    return logger
+  } else if (!process.env['DEBUG']) {
+    logger = new EmptyLogger()
+    return logger
   }
 
-  const isMac = process.platform === "darwin";
-  const isWin = process.platform === "win32";
+  const isMac = process.platform === 'darwin'
+  const isWin = process.platform === 'win32'
 
   // On Mac and Windows, os.tmpdir() returns a user-specifc folder, so prefer
   // it there. On Linux, use ~/.local/oai-codex so logs are not world-readable.
   const logDir =
     isMac || isWin
-      ? path.join(os.tmpdir(), "oai-codex")
-      : path.join(os.homedir(), ".local", "oai-codex");
-  fsSync.mkdirSync(logDir, { recursive: true });
-  const logFile = path.join(logDir, `codex-cli-${now()}.log`);
+      ? path.join(os.tmpdir(), 'oai-codex')
+      : path.join(os.homedir(), '.local', 'oai-codex')
+  fsSync.mkdirSync(logDir, { recursive: true })
+  const logFile = path.join(logDir, `codex-cli-${now()}.log`)
   // Write the empty string so the file exists and can be tail'd.
-  fsSync.writeFileSync(logFile, "");
+  fsSync.writeFileSync(logFile, '')
 
   // Symlink to codex-cli-latest.log on UNIX because Windows is funny about
   // symlinks.
   if (!isWin) {
-    const latestLink = path.join(logDir, "codex-cli-latest.log");
+    const latestLink = path.join(logDir, 'codex-cli-latest.log')
     try {
-      fsSync.symlinkSync(logFile, latestLink, "file");
+      fsSync.symlinkSync(logFile, latestLink, 'file')
     } catch (err: unknown) {
-      const error = err as NodeJS.ErrnoException;
-      if (error.code === "EEXIST") {
-        fsSync.unlinkSync(latestLink);
-        fsSync.symlinkSync(logFile, latestLink, "file");
+      const error = err as NodeJS.ErrnoException
+      if (error.code === 'EEXIST') {
+        fsSync.unlinkSync(latestLink)
+        fsSync.symlinkSync(logFile, latestLink, 'file')
       } else {
-        throw err;
+        throw err
       }
     }
   }
 
-  logger = new AsyncLogger(logFile);
-  return logger;
+  logger = new AsyncLogger(logFile)
+  return logger
 }
 
 export function log(message: string): void {
-  (logger ?? initLogger()).log(message);
+  ;(logger ?? initLogger()).log(message)
 }
 
 export function isLoggingEnabled(): boolean {
-  return (logger ?? initLogger()).isLoggingEnabled();
+  return (logger ?? initLogger()).isLoggingEnabled()
 }

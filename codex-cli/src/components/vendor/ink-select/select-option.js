@@ -1,7 +1,7 @@
-import React from "react";
-import { Box, Text } from "ink";
-import figures from "figures";
-import { styles } from "./theme";
+import figures from 'figures'
+import { Box, Text } from 'ink'
+import React from 'react'
+import { styles } from './theme'
 export function SelectOption({ isFocused, isSelected, children }) {
   return React.createElement(
     Box,
@@ -10,18 +10,14 @@ export function SelectOption({ isFocused, isSelected, children }) {
       React.createElement(
         Text,
         { ...styles.focusIndicator() },
-        figures.pointer,
+        figures.pointer
       ),
     React.createElement(
       Text,
       { ...styles.label({ isFocused, isSelected }) },
-      children,
+      children
     ),
     isSelected &&
-      React.createElement(
-        Text,
-        { ...styles.selectedIndicator() },
-        figures.tick,
-      ),
-  );
+      React.createElement(Text, { ...styles.selectedIndicator() }, figures.tick)
+  )
 }

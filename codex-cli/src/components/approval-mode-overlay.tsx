@@ -1,13 +1,13 @@
-import TypeaheadOverlay from "./typeahead-overlay.js";
-import { AutoApprovalMode } from "../utils/auto-approval-mode.js";
-import { Text } from "ink";
-import React from "react";
+import { Text } from 'ink'
+import React from 'react'
+import { AutoApprovalMode } from '../utils/auto-approval-mode.js'
+import TypeaheadOverlay from './typeahead-overlay.js'
 
 type Props = {
-  currentMode: string;
-  onSelect: (mode: string) => void;
-  onExit: () => void;
-};
+  currentMode: string
+  onSelect: (mode: string) => void
+  onExit: () => void
+}
 
 /**
  * Overlay to switch between the different automatic‑approval policies.
@@ -27,8 +27,8 @@ export default function ApprovalModeOverlay({
         label: m,
         value: m,
       })),
-    [],
-  );
+    []
+  )
 
   return (
     <TypeaheadOverlay
@@ -43,5 +43,5 @@ export default function ApprovalModeOverlay({
       onSelect={onSelect}
       onExit={onExit}
     />
-  );
+  )
 }

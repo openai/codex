@@ -1,4 +1,4 @@
-import { execSync } from "child_process";
+import { execSync } from 'child_process'
 
 /**
  * Returns true if the given directory is part of a Git repository.
@@ -20,12 +20,12 @@ export function checkInGit(workdir: string): boolean {
     // stdout. We don't care about the output — only the exit status — so we
     // discard stdio for maximum performance and to avoid leaking noise if the
     // caller happens to inherit stdio.
-    execSync("git rev-parse --is-inside-work-tree", {
+    execSync('git rev-parse --is-inside-work-tree', {
       cwd: workdir,
-      stdio: "ignore",
-    });
-    return true;
+      stdio: 'ignore',
+    })
+    return true
   } catch {
-    return false;
+    return false
   }
 }
