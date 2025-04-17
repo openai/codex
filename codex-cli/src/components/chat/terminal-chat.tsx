@@ -89,27 +89,30 @@ async function generateCommandExplanation(
     return explanation;
   } catch (error) {
     log(`Error generating command explanation: ${error}`);
-    
+
     // Improved error handling with more specific error information
     let errorMessage = "Unable to generate explanation due to an error.";
-    
+
     if (error instanceof Error) {
       // Include specific error message for better debugging
       errorMessage = `Unable to generate explanation: ${error.message}`;
-      
+
       // If it's an API error, check for more specific information
-      if ('status' in error && typeof error.status === 'number') {
+      if ("status" in error && typeof error.status === "number") {
         // Handle API-specific errors
         if (error.status === 401) {
-          errorMessage = "Unable to generate explanation: API key is invalid or expired.";
+          errorMessage =
+            "Unable to generate explanation: API key is invalid or expired.";
         } else if (error.status === 429) {
-          errorMessage = "Unable to generate explanation: Rate limit exceeded. Please try again later.";
+          errorMessage =
+            "Unable to generate explanation: Rate limit exceeded. Please try again later.";
         } else if (error.status >= 500) {
-          errorMessage = "Unable to generate explanation: OpenAI service is currently unavailable. Please try again later.";
+          errorMessage =
+            "Unable to generate explanation: OpenAI service is currently unavailable. Please try again later.";
         }
       }
     }
-    
+
     return errorMessage;
   }
 }

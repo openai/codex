@@ -151,18 +151,30 @@ export function TerminalChatCommandReview({
       <Box flexDirection="column" gap={1}>
         {mode === "explanation" ? (
           <>
-            <Text bold color="yellow">Command Explanation:</Text>
+            <Text bold color="yellow">
+              Command Explanation:
+            </Text>
             <Box paddingX={2} flexDirection="column" gap={1}>
               {explanation ? (
                 <>
-                  {explanation.split('\n').map((line, i) => {
+                  {explanation.split("\n").map((line, i) => {
                     // Check if it's an error message
-                    if (explanation.startsWith("Unable to generate explanation")) {
-                      return <Text key={i} bold color="red">{line}</Text>;
+                    if (
+                      explanation.startsWith("Unable to generate explanation")
+                    ) {
+                      return (
+                        <Text key={i} bold color="red">
+                          {line}
+                        </Text>
+                      );
                     }
                     // Apply different styling to headings (numbered items)
                     else if (line.match(/^\d+\.\s+/)) {
-                      return <Text key={i} bold color="cyan">{line}</Text>;
+                      return (
+                        <Text key={i} bold color="cyan">
+                          {line}
+                        </Text>
+                      );
                     } else {
                       return <Text key={i}>{line}</Text>;
                     }
