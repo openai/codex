@@ -218,7 +218,7 @@ export default function TerminalChat({
       }
     }
     prevLoadingRef.current = loading;
-  }, [notify, loading, confirmationPrompt, items]);
+  }, [notify, loading, confirmationPrompt, items, PWD]);
 
   // Let's also track whenever the ref becomes available
   const agent = agentRef.current;
