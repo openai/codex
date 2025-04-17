@@ -15,11 +15,22 @@ const DEFAULT_DENY_MESSAGE =
 export function TerminalChatCommandReview({
   confirmationPrompt,
   onReviewCommand,
+  explanation: propExplanation,
 }: {
   confirmationPrompt: React.ReactNode;
   onReviewCommand: (decision: ReviewDecision, customMessage?: string) => void;
+  explanation?: string;
 }): React.ReactElement {
-  const [mode, setMode] = React.useState<"select" | "input">("select");
+  const [mode, setMode] = React.useState<"select" | "input" | "explanation">("select");
+  const [explanation, setExplanation] = React.useState<string>("");
+
+  // If the component receives an explanation prop, update the state
+  React.useEffect(() => {
+    if (propExplanation) {
+      setExplanation(propExplanation);
+      setMode("explanation");
+    }
+  }, [propExplanation]);
   const [msg, setMsg] = React.useState<string>("");
 
   // -------------------------------------------------------------------------
@@ -73,6 +84,10 @@ export function TerminalChatCommandReview({
 
     opts.push(
       {
+        label: "Explain this command (x)",
+        value: ReviewDecision.EXPLAIN,
+      },
+      {
         label: "Edit or give feedback (e)",
         value: "edit",
       },
@@ -93,6 +108,8 @@ export function TerminalChatCommandReview({
     if (mode === "select") {
       if (input === "y") {
         onReviewCommand(ReviewDecision.YES);
+      } else if (input === "x") {
+        onReviewCommand(ReviewDecision.EXPLAIN);
       } else if (input === "e") {
         setMode("input");
       } else if (input === "n") {
@@ -104,6 +121,11 @@ export function TerminalChatCommandReview({
         onReviewCommand(ReviewDecision.ALWAYS);
       } else if (key.escape) {
         onReviewCommand(ReviewDecision.NO_EXIT);
+      }
+    } else if (mode === "explanation") {
+      // When in explanation mode, any key returns to select mode
+      if (key.return || key.escape || input === "x") {
+        setMode("select");
       }
     } else {
       // text entry mode
@@ -125,7 +147,19 @@ export function TerminalChatCommandReview({
     <Box flexDirection="column" gap={1} borderStyle="round" marginTop={1}>
       {confirmationPrompt}
       <Box flexDirection="column" gap={1}>
-        {mode === "select" ? (
+        {mode === "explanation" ? (
+          <>
+            <Text bold>Command Explanation:</Text>
+            <Box paddingX={2} flexDirection="column" gap={1}>
+              {explanation ? (
+                <Text>{explanation}</Text>
+              ) : (
+                <Text dimColor>Loading explanation...</Text>
+              )}
+              <Text dimColor>Press any key to return to options</Text>
+            </Box>
+          </>
+        ) : mode === "select" ? (
           <>
             <Text>Allow command?</Text>
             <Box paddingX={2} flexDirection="column" gap={1}>
@@ -141,7 +175,7 @@ export function TerminalChatCommandReview({
               />
             </Box>
           </>
-        ) : (
+        ) : mode === "input" ? (
           <>
             <Text>Give the model feedback (↵ to submit):</Text>
             <Box borderStyle="round">
@@ -165,7 +199,7 @@ export function TerminalChatCommandReview({
               </Box>
             )}
           </>
-        )}
+        ) : null}
       </Box>
     </Box>
   );

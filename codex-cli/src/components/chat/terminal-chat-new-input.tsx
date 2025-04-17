@@ -85,6 +85,7 @@ export default function TerminalChatInput({
   loading: boolean;
   submitInput: (input: Array<ResponseInputItem>) => void;
   confirmationPrompt: React.ReactNode | null;
+  explanation?: string | null;
   submitConfirmation: (
     decision: ReviewDecision,
     customDenyMessage?: string,
@@ -326,6 +327,7 @@ export default function TerminalChatInput({
       <TerminalChatCommandReview
         confirmationPrompt={confirmationPrompt}
         onReviewCommand={submitConfirmation}
+        explanation={explanation}
       />
     );
   }

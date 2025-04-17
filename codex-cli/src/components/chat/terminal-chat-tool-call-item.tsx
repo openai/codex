@@ -6,8 +6,10 @@ import React from "react";
 
 export function TerminalChatToolCallCommand({
   commandForDisplay,
+  explanation,
 }: {
   commandForDisplay: string;
+  explanation?: string;
 }): React.ReactElement {
   // -------------------------------------------------------------------------
   // Colorize diff output inside the command preview: we detect individual
@@ -35,6 +37,12 @@ export function TerminalChatToolCallCommand({
       <Text>
         <Text dimColor>$</Text> {colorizedCommand}
       </Text>
+      {explanation && (
+        <>
+          <Text bold>Explanation</Text>
+          <Text>{explanation}</Text>
+        </>
+      )}
     </>
   );
 }

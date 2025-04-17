@@ -22,6 +22,8 @@ import { getAvailableModels } from "../../utils/model-utils.js";
 import { CLI_VERSION } from "../../utils/session.js";
 import { shortCwd } from "../../utils/short-path.js";
 import { saveRollout } from "../../utils/storage/save-rollout.js";
+import OpenAI from "openai";
+import { OPENAI_BASE_URL } from "../../utils/config.js";
 import ApprovalModeOverlay from "../approval-mode-overlay.js";
 import HelpOverlay from "../help-overlay.js";
 import HistoryOverlay from "../history-overlay.js";
@@ -44,6 +46,50 @@ const colorsByPolicy: Record<ApprovalPolicy, ColorName | undefined> = {
   "full-auto": "green",
 };
 
+/**
+ * Generates an explanation for a shell command using the OpenAI API.
+ *
+ * @param command The command to explain
+ * @param model The model to use for generating the explanation
+ * @returns A human-readable explanation of what the command does
+ */
+async function generateCommandExplanation(command: Array<string>, model: string): Promise<string> {
+  try {
+    // Create a temporary OpenAI client
+    const oai = new OpenAI({
+      apiKey: process.env["OPENAI_API_KEY"],
+      baseURL: OPENAI_BASE_URL,
+    });
+
+    // Format the command for display
+    const commandForDisplay = formatCommandForDisplay(command);
+
+    // Create a prompt that asks for an explanation
+    const response = await oai.chat.completions.create({
+      model,
+      messages: [
+        {
+          role: "system",
+          content: "You are a helpful assistant that explains shell commands. Provide clear, concise explanations that focus on what the command does, any potential risks, and why someone might want to run it."
+        },
+        {
+          role: "user",
+          content: `Please explain this shell command in simple terms: \`${commandForDisplay}\`\n\nInclude:\n1. What the command does\n2. Any potential risks or side effects\n3. Why someone might want to run this command`
+        }
+      ],
+      temperature: 0.3, // Lower temperature for more factual responses
+      max_tokens: 300,  // Limit response length
+    });
+
+    // Extract the explanation from the response
+    const explanation = response.choices[0]?.message.content || "Unable to generate explanation.";
+    return explanation;
+  } catch (error) {
+    log(`Error generating command explanation: ${error}`);
+    return "Unable to generate explanation due to an error.";
+  }
+};
+
 export default function TerminalChat({
   config,
   prompt: _initialPrompt,
@@ -60,7 +106,7 @@ export default function TerminalChat({
     initialApprovalPolicy,
   );
   const [thinkingSeconds, setThinkingSeconds] = useState(0);
-  const { requestConfirmation, confirmationPrompt, submitConfirmation } =
+  const { requestConfirmation, confirmationPrompt, explanation, submitConfirmation } =
     useConfirmation();
   const [overlayMode, setOverlayMode] = useState<
     "none" | "history" | "model" | "approval" | "help"
@@ -122,12 +168,39 @@ export default function TerminalChat({
       ): Promise<CommandConfirmation> => {
         log(`getCommandConfirmation: ${command}`);
         const commandForDisplay = formatCommandForDisplay(command);
-        const { decision: review, customDenyMessage } =
+
+        // First request for confirmation
+        let { decision: review, customDenyMessage } =
           await requestConfirmation(
             <TerminalChatToolCallCommand
               commandForDisplay={commandForDisplay}
             />,
           );
+
+        // If the user wants an explanation, generate one and ask again
+        if (review === ReviewDecision.EXPLAIN) {
+          log(`Generating explanation for command: ${commandForDisplay}`);
+
+          // Generate an explanation using the same model
+          const explanation = await generateCommandExplanation(command, model);
+          log(`Generated explanation: ${explanation}`);
+
+          // Ask for confirmation again, but with the explanation
+          const confirmResult = await requestConfirmation(
+            <TerminalChatToolCallCommand
+              commandForDisplay={commandForDisplay}
+              explanation={explanation}
+            />,
+          );
+
+          // Update the decision based on the second confirmation
+          review = confirmResult.decision;
+          customDenyMessage = confirmResult.customDenyMessage;
+
+          // Return the final decision with the explanation
+          return { review, customDenyMessage, applyPatch, explanation };
+        }
+
         return { review, customDenyMessage, applyPatch };
       },
     });
@@ -282,6 +355,7 @@ export default function TerminalChat({
             isNew={Boolean(items.length === 0)}
             setLastResponseId={setLastResponseId}
             confirmationPrompt={confirmationPrompt}
+            explanation={explanation}
             submitConfirmation={(
               decision: ReviewDecision,
               customDenyMessage?: string,
