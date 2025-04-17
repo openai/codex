@@ -217,7 +217,7 @@ async function execCommand(
     if (applyPatchCommand != null) {
       log("EXEC running apply_patch command");
     } else {
-      const { cmd, workdir, timeoutInMillis } = execInput;
+      const { cmd, timeoutInMillis } = execInput;
       // Seconds are a bit easier to read in log messages and most timeouts
       // are specified as multiples of 1000, anyway.
       const timeout =
