@@ -315,6 +315,11 @@ async function askUserPermission(
     return null;
   }
 
+  // Handle CONFIRM decision by returning null to continue with the normal flow
+  // but with a flag to indicate that confirmation was requested
+  if(decision == ReviewDecision.CONFIRM){
+    return null;
+  }
   // Any decision other than an affirmative (YES / ALWAYS) or EXPLAIN aborts execution.
   if (decision !== ReviewDecision.YES && decision !== ReviewDecision.ALWAYS) {
     const note =

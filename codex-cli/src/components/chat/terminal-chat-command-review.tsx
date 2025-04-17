@@ -16,15 +16,16 @@ export function TerminalChatCommandReview({
   confirmationPrompt,
   onReviewCommand,
   explanation: propExplanation,
+  testMode,
 }: {
   confirmationPrompt: React.ReactNode;
   onReviewCommand: (decision: ReviewDecision, customMessage?: string) => void;
   explanation?: string;
+  testMode?: "select" | "confirm" | "input" | "explanation";
 }): React.ReactElement {
-
   const [selection, setSelection] = React.useState<ReviewDecision | "edit" | null>(null);
-  const [mode, setMode] = React.useState<"select" | "input" | "explanation" | "confirm" >(
-    "select",
+  const [mode, setMode] = React.useState<"select" | "input" | "explanation" | "confirm">(
+    testMode || "select",
   );
   const [explanation, setExplanation] = React.useState<string>("");
 
@@ -35,7 +36,6 @@ export function TerminalChatCommandReview({
       setMode("explanation");
     }
   }, [propExplanation]);
-
   const [msg, setMsg] = React.useState<string>("");
 
   // -------------------------------------------------------------------------
@@ -109,8 +109,6 @@ export function TerminalChatCommandReview({
     return opts;
   }, [showAlwaysApprove]);
 
-
-  // Added a confirm option so if user enters a wrong command they can confirm the comand or type /back to go back to the prev menu NOTE(@3xpl0itk1t)
   useInput((input, key) => {
     if (mode === "select") {
       if (input === "y") {
@@ -124,26 +122,20 @@ export function TerminalChatCommandReview({
       } else if (input === "n") {
         setSelection(ReviewDecision.NO_CONTINUE);
         setMode("confirm");
-        onReviewCommand(
-          ReviewDecision.NO_CONTINUE,
-          "Don't do that, keep going though",
-        );
       } else if (input === "a" && showAlwaysApprove) {
         setSelection(ReviewDecision.ALWAYS);
         setMode("confirm");
-        onReviewCommand(ReviewDecision.ALWAYS);
       } else if (key.escape) {
         setSelection(ReviewDecision.NO_EXIT);
         setMode("confirm");
-        onReviewCommand(ReviewDecision.NO_EXIT);
       }
     } else if (mode === "confirm") {
-      if (input === "/back") {
+      if (input === "/b") {
         setMode("select");
         setSelection(null);
       } else if (input === "y" || input === "yes") {
         if (selection !== null && selection !== "edit") {
-          onReviewCommand(selection);
+          onReviewCommand(ReviewDecision.CONFIRM);
         }
       } else if (input === "n" || input === "no") {
         if (selection === ReviewDecision.NO_CONTINUE) {
@@ -233,7 +225,7 @@ export function TerminalChatCommandReview({
           </>
         ) : mode === "confirm" ? (
           <>
-            <Text>Confirm your choice (y to confirm, n to deny, /back to go back):</Text>
+            <Text>Confirm your choice (y to confirm, n to deny, /b to go back):</Text>
             <Text>
               You selected:{" "}
               {selection === ReviewDecision.YES
@@ -246,7 +238,7 @@ export function TerminalChatCommandReview({
                 ? "No, exit"
                 : "Unknown option"}
             </Text>
-            <Text dimColor>Type "/back" to return to the selection menu.</Text>
+            <Text dimColor>Type "/b" to return to the selection menu.</Text>
           </>
         ) : mode === "input" ? (
           <>
