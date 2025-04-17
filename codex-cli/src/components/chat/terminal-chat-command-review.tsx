@@ -15,12 +15,27 @@ const DEFAULT_DENY_MESSAGE =
 export function TerminalChatCommandReview({
   confirmationPrompt,
   onReviewCommand,
+  explanation: propExplanation,
 }: {
   confirmationPrompt: React.ReactNode;
   onReviewCommand: (decision: ReviewDecision, customMessage?: string) => void;
+  explanation?: string;
 }): React.ReactElement {
-  const [mode, setMode] = React.useState<"select" | "input" | "confirm">("select");
+
   const [selection, setSelection] = React.useState<ReviewDecision | "edit" | null>(null);
+  const [mode, setMode] = React.useState<"select" | "input" | "explanation" | "confirm" >(
+    "select",
+  );
+  const [explanation, setExplanation] = React.useState<string>("");
+
+  // If the component receives an explanation prop, update the state
+  React.useEffect(() => {
+    if (propExplanation) {
+      setExplanation(propExplanation);
+      setMode("explanation");
+    }
+  }, [propExplanation]);
+
   const [msg, setMsg] = React.useState<string>("");
 
   // -------------------------------------------------------------------------
@@ -74,6 +89,10 @@ export function TerminalChatCommandReview({
 
     opts.push(
       {
+        label: "Explain this command (x)",
+        value: ReviewDecision.EXPLAIN,
+      },
+      {
         label: "Edit or give feedback (e)",
         value: "edit",
       },
@@ -97,6 +116,9 @@ export function TerminalChatCommandReview({
       if (input === "y") {
         setSelection(ReviewDecision.YES);
         setMode("confirm");
+        onReviewCommand(ReviewDecision.YES);
+      } else if (input === "x") {
+        onReviewCommand(ReviewDecision.EXPLAIN);
       } else if (input === "e") {
         setMode("input");
       } else if (input === "n") {
@@ -125,6 +147,11 @@ export function TerminalChatCommandReview({
           onReviewCommand(ReviewDecision.NO_EXIT);
         }
       }
+    } else if (mode === "explanation") {
+      // When in explanation mode, any key returns to select mode
+      if (key.return || key.escape || input === "x") {
+        setMode("select");
+      }
     } else {
       // text entry mode
       if (key.return) {
@@ -145,7 +172,44 @@ export function TerminalChatCommandReview({
     <Box flexDirection="column" gap={1} borderStyle="round" marginTop={1}>
       {confirmationPrompt}
       <Box flexDirection="column" gap={1}>
-        {mode === "select" ? (
+        {mode === "explanation" ? (
+          <>
+            <Text bold color="yellow">
+              Command Explanation:
+            </Text>
+            <Box paddingX={2} flexDirection="column" gap={1}>
+              {explanation ? (
+                <>
+                  {explanation.split("\n").map((line, i) => {
+                    // Check if it's an error message
+                    if (
+                      explanation.startsWith("Unable to generate explanation")
+                    ) {
+                      return (
+                        <Text key={i} bold color="red">
+                          {line}
+                        </Text>
+                      );
+                    }
+                    // Apply different styling to headings (numbered items)
+                    else if (line.match(/^\d+\.\s+/)) {
+                      return (
+                        <Text key={i} bold color="cyan">
+                          {line}
+                        </Text>
+                      );
+                    } else {
+                      return <Text key={i}>{line}</Text>;
+                    }
+                  })}
+                </>
+              ) : (
+                <Text dimColor>Loading explanation...</Text>
+              )}
+              <Text dimColor>Press any key to return to options</Text>
+            </Box>
+          </>
+        ) : mode === "select" ? (
           <>
             <Text>Allow command?</Text>
             <Box paddingX={2} flexDirection="column" gap={1}>
@@ -178,7 +242,7 @@ export function TerminalChatCommandReview({
             </Text>
             <Text dimColor>Type "/back" to return to the selection menu.</Text>
           </>
-        ) : (
+        ) : mode === "input" ? (
           <>
             <Text>Give the model feedback (↵ to submit):</Text>
             <Box borderStyle="round">
@@ -202,7 +266,7 @@ export function TerminalChatCommandReview({
               </Box>
             )}
           </>
-        )}
+        ) : null}
       </Box>
     </Box>
   );

@@ -309,7 +309,13 @@ async function askUserPermission(
     alwaysApprovedCommands.add(key);
   }
 
-  // Any decision other than an affirmative (YES / ALWAYS) aborts execution.
+  // Handle EXPLAIN decision by returning null to continue with the normal flow
+  // but with a flag to indicate that an explanation was requested
+  if (decision === ReviewDecision.EXPLAIN) {
+    return null;
+  }
+
+  // Any decision other than an affirmative (YES / ALWAYS) or EXPLAIN aborts execution.
   if (decision !== ReviewDecision.YES && decision !== ReviewDecision.ALWAYS) {
     const note =
       decision === ReviewDecision.NO_CONTINUE
