@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import "dotenv/config";
 
 // Hack to suppress deprecation warnings (punycode)
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -13,6 +12,7 @@ import type { ResponseItem } from "openai/resources/responses/responses";
 
 import App from "./app";
 import { runSinglePass } from "./cli_singlepass";
+import TextInput from "./components/vendor/ink-text-input.js";
 import { AgentLoop } from "./utils/agent/agent-loop";
 import { initLogger } from "./utils/agent/log";
 import { ReviewDecision } from "./utils/agent/review";
@@ -22,20 +22,27 @@ import {
   PRETTY_PRINT,
   INSTRUCTIONS_FILEPATH,
 } from "./utils/config";
+import { setApiKey as setConfigApiKey } from "./utils/config.js";
 import { createInputItem } from "./utils/input-utils";
+import {
+  getApiKey as getStoredApiKey,
+  setApiKey as setStoredApiKey,
+} from "./utils/key-manager.js";
 import {
   isModelSupportedForResponses,
   preloadModels,
 } from "./utils/model-utils.js";
 import { parseToolCall } from "./utils/parsers";
-import { onExit, setInkRenderer } from "./utils/terminal";
+import { clearTerminal, onExit, setInkRenderer } from "./utils/terminal";
 import chalk from "chalk";
 import { spawnSync } from "child_process";
+import dotenv from "dotenv";
+const envResult = dotenv.config();
 import fs from "fs";
-import { render } from "ink";
+import { Box, Text, useInput, render } from "ink";
 import meow from "meow";
 import path from "path";
-import React from "react";
+import React, { useState } from "react";
 
 // Call this early so `tail -F "$TMPDIR/oai-codex/codex-cli-latest.log"` works
 // immediately. This must be run with DEBUG=1 for logging to work.
@@ -200,145 +207,190 @@ if (cli.flags.config) {
   process.exit(0);
 }
 
-// ---------------------------------------------------------------------------
-// API key handling
-// ---------------------------------------------------------------------------
-
-const apiKey = process.env["OPENAI_API_KEY"];
-
-if (!apiKey) {
-  // eslint-disable-next-line no-console
-  console.error(
-    `\n${chalk.red("Missing OpenAI API key.")}\n\n` +
-      `Set the environment variable ${chalk.bold("OPENAI_API_KEY")} ` +
-      `and re-run this command.\n` +
-      `You can create a key here: ${chalk.bold(
-        chalk.underline("https://platform.openai.com/account/api-keys"),
-      )}\n`,
-  );
-  process.exit(1);
-}
-
-const fullContextMode = Boolean(cli.flags.fullContext);
-let config = loadConfig(undefined, undefined, {
-  cwd: process.cwd(),
-  disableProjectDoc: Boolean(cli.flags.noProjectDoc),
-  projectDocPath: cli.flags.projectDoc as string | undefined,
-  isFullContext: fullContextMode,
-});
-
-const prompt = cli.input[0];
-const model = cli.flags.model;
-const imagePaths = cli.flags.image as Array<string> | undefined;
-
-config = {
-  apiKey,
-  ...config,
-  model: model ?? config.model,
-};
-
-if (!(await isModelSupportedForResponses(config.model))) {
-  // eslint-disable-next-line no-console
-  console.error(
-    `The model "${config.model}" does not appear in the list of models ` +
-      `available to your account. Double‑check the spelling (use\n` +
-      `  openai models list\n` +
-      `to see the full list) or choose another model with the --model flag.`,
-  );
-  process.exit(1);
-}
-
-let rollout: AppRollout | undefined;
-
-if (cli.flags.view) {
-  const viewPath = cli.flags.view;
-  const absolutePath = path.isAbsolute(viewPath)
-    ? viewPath
-    : path.join(process.cwd(), viewPath);
-  try {
-    const content = fs.readFileSync(absolutePath, "utf-8");
-    rollout = JSON.parse(content) as AppRollout;
-  } catch (error) {
-    // eslint-disable-next-line no-console
-    console.error("Error reading rollout file:", error);
-    process.exit(1);
+(async () => {
+  // ---------------------------------------------------------------------------
+  // API key handling
+  let apiKey: string = "";
+  // 1) Check for .env file override
+  if (envResult.parsed && envResult.parsed["OPENAI_API_KEY"]) {
+    apiKey = envResult.parsed["OPENAI_API_KEY"];
+  } else if (process.env["OPENAI_API_KEY"]) {
+    // 2) Fallback to environment variable
+    apiKey = process.env["OPENAI_API_KEY"];
+  } else {
+    // 3) Secure storage via keytar
+    apiKey = await getStoredApiKey();
   }
-}
 
-// If we are running in --fullcontext mode, do that and exit.
-if (fullContextMode) {
-  await runSinglePass({
-    originalPrompt: prompt,
-    config,
-    rootPath: process.cwd(),
+  // prompt if no key is found
+  if (!apiKey) {
+    apiKey = await promptForApiKey();
+    clearTerminal();
+    try {
+      await setStoredApiKey(apiKey);
+    } catch {
+      // ignore
+    }
+  }
+
+  setConfigApiKey(apiKey);
+
+  const fullContextMode = Boolean(cli.flags.fullContext);
+  let config = loadConfig(undefined, undefined, {
+    cwd: process.cwd(),
+    disableProjectDoc: Boolean(cli.flags.noProjectDoc),
+    projectDocPath: cli.flags.projectDoc as string | undefined,
+    isFullContext: fullContextMode,
   });
-  onExit();
-  process.exit(0);
-}
 
-// If we are running in --quiet mode, do that and exit.
-const quietMode = Boolean(cli.flags.quiet);
-const autoApproveEverything = Boolean(
-  cli.flags.dangerouslyAutoApproveEverything,
-);
-const fullStdout = Boolean(cli.flags.fullStdout);
+  const prompt = cli.input[0];
+  const model = cli.flags.model;
+  const imagePaths = cli.flags.image as Array<string> | undefined;
 
-if (quietMode) {
-  process.env["CODEX_QUIET_MODE"] = "1";
-  if (!prompt || prompt.trim() === "") {
+  config = {
+    apiKey,
+    ...config,
+    model: model ?? config.model,
+  };
+
+  if (!(await isModelSupportedForResponses(config.model))) {
     // eslint-disable-next-line no-console
     console.error(
-      'Quiet mode requires a prompt string, e.g.,: codex -q "Fix bug #123 in the foobar project"',
+      `The model "${config.model}" does not appear in the list of models ` +
+        `available to your account. Double‑check the spelling (use\n` +
+        `  openai models list\n` +
+        `to see the full list) or choose another model with the --model flag.`,
     );
     process.exit(1);
   }
-  await runQuietMode({
-    prompt: prompt as string,
-    imagePaths: imagePaths || [],
-    approvalPolicy: autoApproveEverything
+
+  let rollout: AppRollout | undefined;
+
+  if (cli.flags.view) {
+    const viewPath = cli.flags.view;
+    const absolutePath = path.isAbsolute(viewPath)
+      ? viewPath
+      : path.join(process.cwd(), viewPath);
+    try {
+      const content = fs.readFileSync(absolutePath, "utf-8");
+      rollout = JSON.parse(content) as AppRollout;
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error("Error reading rollout file:", error);
+      process.exit(1);
+    }
+  }
+
+  // If we are running in --fullcontext mode, do that and exit.
+  if (fullContextMode) {
+    await runSinglePass({
+      originalPrompt: prompt,
+      config,
+      rootPath: process.cwd(),
+    });
+    onExit();
+    process.exit(0);
+  }
+
+  // If we are running in --quiet mode, do that and exit.
+  const quietMode = Boolean(cli.flags.quiet);
+  const autoApproveEverything = Boolean(
+    cli.flags.dangerouslyAutoApproveEverything,
+  );
+  const fullStdout = Boolean(cli.flags.fullStdout);
+
+  if (quietMode) {
+    process.env["CODEX_QUIET_MODE"] = "1";
+    if (!prompt || prompt.trim() === "") {
+      // eslint-disable-next-line no-console
+      console.error(
+        'Quiet mode requires a prompt string, e.g.,: codex -q "Fix bug #123 in the foobar project"',
+      );
+      process.exit(1);
+    }
+    await runQuietMode({
+      prompt: prompt as string,
+      imagePaths: imagePaths || [],
+      approvalPolicy: autoApproveEverything
+        ? AutoApprovalMode.FULL_AUTO
+        : AutoApprovalMode.SUGGEST,
+      config,
+    });
+    onExit();
+    process.exit(0);
+  }
+
+  // Default to the "suggest" policy.
+  // Determine the approval policy to use in interactive mode.
+  //
+  // Priority (highest → lowest):
+  // 1. --fullAuto – run everything automatically in a sandbox.
+  // 2. --dangerouslyAutoApproveEverything – run everything **without** a sandbox
+  //    or prompts.  This is intended for completely trusted environments.  Since
+  //    it is more dangerous than --fullAuto we deliberately give it lower
+  //    priority so a user specifying both flags still gets the safer behaviour.
+  // 3. --autoEdit – automatically approve edits, but prompt for commands.
+  // 4. Default – suggest mode (prompt for everything).
+
+  const approvalPolicy: ApprovalPolicy =
+    cli.flags.fullAuto || cli.flags.approvalMode === "full-auto"
       ? AutoApprovalMode.FULL_AUTO
-      : AutoApprovalMode.SUGGEST,
-    config,
-  });
+      : cli.flags.autoEdit || cli.flags.approvalMode === "auto-edit"
+      ? AutoApprovalMode.AUTO_EDIT
+      : AutoApprovalMode.SUGGEST;
+
+  preloadModels();
+
+  const instance = render(
+    <App
+      prompt={prompt}
+      config={config}
+      rollout={rollout}
+      imagePaths={imagePaths}
+      approvalPolicy={approvalPolicy}
+      fullStdout={fullStdout}
+    />,
+    {
+      patchConsole: process.env["DEBUG"] ? false : true,
+    },
+  );
+  setInkRenderer(instance);
+
+  // End of main logic wrapper
+})().catch(() => {
   onExit();
-  process.exit(0);
+  process.exit(1);
+});
+
+export default async function promptForApiKey(): Promise<string> {
+  return new Promise((resolve) => {
+    const ApiKeyPrompt: React.FC = () => {
+      const [value, setValue] = useState("");
+      useInput((_, key) => {
+        if (key.return) {
+          instance.clear();
+          instance.unmount();
+          resolve(value);
+        }
+      });
+      return (
+        <Box flexDirection="column" gap={1}>
+          <Text>{chalk.yellow("OpenAI API key not found.")}</Text>
+          <Text>
+            Create a new key at{" "}
+            {chalk.underline("https://platform.openai.com/account/api-keys")}{" "}
+            and paste it below.
+          </Text>
+          <Box borderStyle="round" borderColor="gray" width={100}>
+            <Text>API key: </Text>
+            <TextInput value={value} onChange={setValue} showCursor focus />
+          </Box>
+        </Box>
+      );
+    };
+    const instance = render(<ApiKeyPrompt />, { patchConsole: false });
+  });
 }
-
-// Default to the "suggest" policy.
-// Determine the approval policy to use in interactive mode.
-//
-// Priority (highest → lowest):
-// 1. --fullAuto – run everything automatically in a sandbox.
-// 2. --dangerouslyAutoApproveEverything – run everything **without** a sandbox
-//    or prompts.  This is intended for completely trusted environments.  Since
-//    it is more dangerous than --fullAuto we deliberately give it lower
-//    priority so a user specifying both flags still gets the safer behaviour.
-// 3. --autoEdit – automatically approve edits, but prompt for commands.
-// 4. Default – suggest mode (prompt for everything).
-
-const approvalPolicy: ApprovalPolicy =
-  cli.flags.fullAuto || cli.flags.approvalMode === "full-auto"
-    ? AutoApprovalMode.FULL_AUTO
-    : cli.flags.autoEdit || cli.flags.approvalMode === "auto-edit"
-    ? AutoApprovalMode.AUTO_EDIT
-    : AutoApprovalMode.SUGGEST;
-
-preloadModels();
-
-const instance = render(
-  <App
-    prompt={prompt}
-    config={config}
-    rollout={rollout}
-    imagePaths={imagePaths}
-    approvalPolicy={approvalPolicy}
-    fullStdout={fullStdout}
-  />,
-  {
-    patchConsole: process.env["DEBUG"] ? false : true,
-  },
-);
-setInkRenderer(instance);
 
 function formatResponseItemForQuietMode(item: ResponseItem): string {
   if (!PRETTY_PRINT) {
