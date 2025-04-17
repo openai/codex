@@ -29,6 +29,7 @@ import {
 } from "./utils/model-utils.js";
 import { parseToolCall } from "./utils/parsers";
 import { onExit, setInkRenderer } from "./utils/terminal";
+import { resolveSmartPath } from "./utils/resolve-smart-path"; 
 import chalk from "chalk";
 import { spawnSync } from "child_process";
 import fs from "fs";
@@ -252,14 +253,21 @@ let rollout: AppRollout | undefined;
 
 if (cli.flags.view) {
   const viewPath = cli.flags.view;
-  const absolutePath = path.isAbsolute(viewPath)
-    ? viewPath
-    : path.join(process.cwd(), viewPath);
+
+  // Use smart resolver instead of blindly joining paths
+  let absolutePath: string;
+  try {
+    absolutePath = resolveSmartPath(viewPath);
+  } catch (error) {
+    console.error(`❌ Could not resolve the view path: ${viewPath}`);
+    console.error(error);
+    process.exit(1);
+  }
+
   try {
     const content = fs.readFileSync(absolutePath, "utf-8");
     rollout = JSON.parse(content) as AppRollout;
   } catch (error) {
-    // eslint-disable-next-line no-console
     console.error("Error reading rollout file:", error);
     process.exit(1);
   }
