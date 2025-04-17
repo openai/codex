@@ -3,8 +3,8 @@
  */
 
 import { log, isLoggingEnabled } from "./log.js";
-import * as path from "path";
 import * as fs from "fs";
+import * as path from "path";
 
 /**
  * Map of Unix commands to their Windows equivalents
@@ -101,9 +101,15 @@ export function adaptCommandForPlatform(command: Array<string>): Array<string> {
  * @param command The command array to adapt
  * @returns The adapted command array or null if no adaptation is needed
  */
-function adaptGoCommandForSandbox(command: Array<string>): Array<string> | null {
+function adaptGoCommandForSandbox(
+  command: Array<string>,
+): Array<string> | null {
   // Only adapt on macOS and when the command is Go-related
-  if (process.platform !== "darwin" || command.length === 0 || command[0] !== "go") {
+  if (
+    process.platform !== "darwin" ||
+    command.length === 0 ||
+    command[0] !== "go"
+  ) {
     return null;
   }
 
