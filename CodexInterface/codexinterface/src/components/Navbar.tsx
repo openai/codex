@@ -1,5 +1,5 @@
 import React from 'react'
-import { Terminal, Settings } from 'lucide-react'
+import { Terminal, Settings, Brain, Mic } from 'lucide-react'
 import { cn } from '../lib/utils'
 
 interface NavItemProps {
@@ -36,6 +36,8 @@ interface NavbarProps {
 const Navbar: React.FC<NavbarProps> = ({ activePage, onPageChange }) => {
   const navItems = [
     { id: 'codex', label: 'Codex', icon: <Terminal size={18} /> },
+    { id: 'logithm', label: 'Logithm', icon: <Brain size={18} /> },
+    { id: 'vocalith', label: 'Vocalith', icon: <Mic size={18} /> },
     { id: 'settings', label: 'Settings', icon: <Settings size={18} /> }
   ]
   

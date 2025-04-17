@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import CodexPage from './pages/CodexPage'
+import LogithmPage from './pages/LogithmPage'
+import VocalithPage from './pages/VocalithPage'
 import SettingsPage from './pages/SettingsPage'
 import Navbar from './components/Navbar'
 
@@ -21,6 +23,10 @@ function App() {
     switch (activePage) {
       case 'codex':
         return <CodexPage />
+      case 'logithm':
+        return <LogithmPage />
+      case 'vocalith':
+        return <VocalithPage />
       case 'settings':
         return <SettingsPage />
       default:
