@@ -5,8 +5,8 @@
   "scripts": {
     "format": "prettier --check \"{.,.github,codex-cli/src,codex-cli/tests}/**/*.{js,ts,tsx,json,md,yml,yaml}\"",
     "format:fix": "prettier --write \"{.,.github,codex-cli/src,codex-cli/tests}/**/*.{js,ts,tsx,json,md,yml,yaml}\"",
-    "lint": "cd codex-cli && eslint src tests --ext ts --ext tsx --report-unused-disable-directives --max-warnings 0",
-    "lint:fix": "cd codex-cli && eslint src tests --ext ts --ext tsx --fix",
+    "lint": "eslint \"codex-cli/{src,tests}/**/*.{ts,tsx}\" --report-unused-disable-directives --max-warnings 0",
+    "lint:fix": "eslint \"codex-cli/{src,tests}/**/*.{ts,tsx}\" --fix",
     "dev": "pnpm --filter @openai/codex run dev",
     "test": "pnpm --filter @openai/codex run test",
     "test:watch": "pnpm --filter @openai/codex run test:watch",
