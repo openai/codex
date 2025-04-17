@@ -3,19 +3,21 @@
   "private": true,
   "description": "Tools for repo-wide maintenance.",
   "scripts": {
-    "release": "pnpm --filter @openai/codex run release",
-    "format": "prettier --check *.json *.md .github/workflows/*.yml codex-cli/**/*.{ts,tsx,js,json,md}",
-    "format:fix": "prettier --write *.json *.md .github/workflows/*.yml codex-cli/**/*.{ts,tsx,js,json,md}",
+    "format": "prettier --check '*.{json,md,yml,yaml}' '.github/**/*.{yml,yaml}' 'codex-cli/src/**/*.{ts,tsx,js,json,md}' 'codex-cli/tests/**/*.{ts,tsx,js,json,md}'",
+    "format:fix": "prettier --write '*.{json,md,yml,yaml}' '.github/**/*.{yml,yaml}' 'codex-cli/src/**/*.{ts,tsx,js,json,md}' 'codex-cli/tests/**/*.{ts,tsx,js,json,md}'",
     "lint": "cd codex-cli && eslint src tests --ext ts --ext tsx --report-unused-disable-directives --max-warnings 0",
     "lint:fix": "cd codex-cli && eslint src tests --ext ts --ext tsx --fix",
-    "build": "pnpm --filter @openai/codex run build",
     "dev": "pnpm --filter @openai/codex run dev",
-    "test": "pnpm --filter @openai/codex run test"
+    "test": "pnpm --filter @openai/codex run test",
+    "test:watch": "pnpm --filter @openai/codex run test:watch",
+    "typecheck": "pnpm --filter @openai/codex run typecheck",
+    "build": "pnpm --filter @openai/codex run build",
+    "build:dev": "pnpm --filter @openai/codex run build:dev",
+    "release:readme": "cp README.md codex-cli/README.md",
+    "release:version": "pnpm --filter @openai/codex run release:version",
+    "release": "pnpm run release:readme && pnpm run release:version && pnpm run build && cd codex-cli && pnpm publish"
   },
   "devDependencies": {
-    "@typescript-eslint/eslint-plugin": "^7.18.0",
-    "@typescript-eslint/parser": "^7.18.0",
-    "eslint": "^8.57.1",
     "prettier": "^3.5.3"
   },
   "engines": {
