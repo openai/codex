@@ -40,7 +40,7 @@ docker rm -f codex 2>/dev/null || true
 
 # Run the container with the specified directory mounted at the same path inside the container.
 docker run --name codex -d \
-  -e OPENAI_API_KEY \
+  -e OPENROUTER_API_KEY \
   --cap-add=NET_ADMIN \
   --cap-add=NET_RAW \
   -v "$WORK_DIR:/app$WORK_DIR" \

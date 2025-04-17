@@ -17,7 +17,7 @@ import { AgentLoop } from "./utils/agent/agent-loop";
 import { initLogger } from "./utils/agent/log";
 import { ReviewDecision } from "./utils/agent/review";
 import { AutoApprovalMode } from "./utils/auto-approval-mode";
-import {
+import { getApiKey,
   loadConfig,
   PRETTY_PRINT,
   INSTRUCTIONS_FILEPATH,
@@ -91,6 +91,7 @@ const cli = meow(
       help: { type: "boolean", aliases: ["h"] },
       view: { type: "string" },
       model: { type: "string", aliases: ["m"] },
+      provider: { type: "string", aliases: ["p"] },
       image: { type: "string", isMultiple: true, aliases: ["i"] },
       quiet: {
         type: "boolean",
@@ -204,7 +205,20 @@ if (cli.flags.config) {
 // API key handling
 // ---------------------------------------------------------------------------
 
-const apiKey = process.env["OPENAI_API_KEY"];
+
+const fullContextMode = Boolean(cli.flags.fullContext);
+let config = loadConfig(undefined, undefined, {
+  cwd: process.cwd(),
+  disableProjectDoc: Boolean(cli.flags.noProjectDoc),
+  projectDocPath: cli.flags.projectDoc as string | undefined,
+  isFullContext: fullContextMode,
+});
+
+const prompt = cli.input[0];
+const model = cli.flags.model ?? config.model;
+const imagePaths = cli.flags.image as Array<string> | undefined;
+const provider = cli.flags.provider ?? config.provider;
+const apiKey = getApiKey(provider);
 
 if (!apiKey) {
   // eslint-disable-next-line no-console
@@ -219,22 +233,11 @@ if (!apiKey) {
   process.exit(1);
 }
 
-const fullContextMode = Boolean(cli.flags.fullContext);
-let config = loadConfig(undefined, undefined, {
-  cwd: process.cwd(),
-  disableProjectDoc: Boolean(cli.flags.noProjectDoc),
-  projectDocPath: cli.flags.projectDoc as string | undefined,
-  isFullContext: fullContextMode,
-});
-
-const prompt = cli.input[0];
-const model = cli.flags.model;
-const imagePaths = cli.flags.image as Array<string> | undefined;
-
 config = {
   apiKey,
   ...config,
-  model: model ?? config.model,
+  provider,
+  model,
 };
 
 if (!(await isModelSupportedForResponses(config.model))) {
@@ -323,7 +326,7 @@ const approvalPolicy: ApprovalPolicy =
     ? AutoApprovalMode.AUTO_EDIT
     : AutoApprovalMode.SUGGEST;
 
-preloadModels();
+
 
 const instance = render(
   <App

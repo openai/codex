@@ -9,7 +9,7 @@ import type {
 import type { Reasoning } from "openai/resources.mjs";
 
 import { log, isLoggingEnabled } from "./log.js";
-import { OPENAI_BASE_URL, OPENAI_TIMEOUT_MS } from "../config.js";
+import { OPENAI_BASE_URL, OPENAI_TIMEOUT_MS, getApiKey, getBaseUrl } from "../config.js";
 import { parseToolCallArguments } from "../parsers.js";
 import {
   ORIGIN,
@@ -21,6 +21,7 @@ import {
 import { handleExecCommand } from "./handle-exec-command.js";
 import { randomUUID } from "node:crypto";
 import OpenAI, { APIConnectionTimeoutError } from "openai";
+import { responsesCreateViaChatCompletions } from "../responses.js";
 
 // Wait time before retrying after rate limit errors (ms).
 const RATE_LIMIT_RETRY_WAIT_MS = parseInt(
@@ -38,6 +39,7 @@ const alreadyProcessedResponses = new Set();
 
 type AgentLoopParams = {
   model: string;
+  provider?: string;
   config?: AppConfig;
   instructions?: string;
   approvalPolicy: ApprovalPolicy;
@@ -54,6 +56,7 @@ type AgentLoopParams = {
 
 export class AgentLoop {
   private model: string;
+  private provider: string;
   private instructions?: string;
   private approvalPolicy: ApprovalPolicy;
   private config: AppConfig;
@@ -207,6 +210,7 @@ export class AgentLoop {
   // private cumulativeThinkingMs = 0;
   constructor({
     model,
+    provider = "openai",
     instructions,
     approvalPolicy,
     // `config` used to be required.  Some unit‑tests (and potentially other
@@ -222,6 +226,7 @@ export class AgentLoop {
     onLastResponseId,
   }: AgentLoopParams & { config?: AppConfig }) {
     this.model = model;
+    this.provider = provider;
     this.instructions = instructions;
     this.approvalPolicy = approvalPolicy;
 
@@ -243,7 +248,9 @@ export class AgentLoop {
     this.sessionId = getSessionId() || randomUUID().replaceAll("-", "");
     // Configure OpenAI client with optional timeout (ms) from environment
     const timeoutMs = OPENAI_TIMEOUT_MS;
-    const apiKey = this.config.apiKey ?? process.env["OPENAI_API_KEY"] ?? "";
+    const apiKey = getApiKey(this.provider);
+    const baseURL = getBaseUrl(this.provider);
+
     this.oai = new OpenAI({
       // The OpenAI JS SDK only requires `apiKey` when making requests against
       // the official API.  When running unit‑tests we stub out all network
@@ -252,7 +259,7 @@ export class AgentLoop {
       // errors inside the SDK (it validates that `apiKey` is a non‑empty
       // string when the field is present).
       ...(apiKey ? { apiKey } : {}),
-      baseURL: OPENAI_BASE_URL,
+      baseURL,
       defaultHeaders: {
         originator: ORIGIN,
         version: CLI_VERSION,
@@ -506,8 +513,9 @@ export class AgentLoop {
                 `instructions (length ${mergedInstructions.length}): ${mergedInstructions}`,
               );
             }
+            
             // eslint-disable-next-line no-await-in-loop
-            stream = await this.oai.responses.create({
+            stream = await responsesCreateViaChatCompletions(this.oai, {
               model: this.model,
               instructions: mergedInstructions,
               previous_response_id: lastResponseId || undefined,
@@ -731,6 +739,7 @@ export class AgentLoop {
         try {
           // eslint-disable-next-line no-await-in-loop
           for await (const event of stream) {
+            // console.error('RESPONSE', JSON.stringify(event));
             if (isLoggingEnabled()) {
               log(`AgentLoop.run(): response event ${event.type}`);
             }

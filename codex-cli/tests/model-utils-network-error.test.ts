@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 
-// The model‑utils module reads OPENAI_API_KEY at import time. We therefore
+// The model‑utils module reads OPENROUTER_API_KEY at import time. We therefore
 // need to tweak the env var *before* importing the module in each test and
 // make sure the module cache is cleared.
 
-const ORIGINAL_ENV_KEY = process.env["OPENAI_API_KEY"];
+const ORIGINAL_ENV_KEY = process.env["OPENROUTER_API_KEY"];
 
 // Holders so individual tests can adjust behaviour of the OpenAI mock.
 const openAiState: { listSpy?: ReturnType<typeof vi.fn> } = {};
@@ -27,16 +27,16 @@ describe("model-utils – offline resilience", () => {
   afterEach(() => {
     // Restore env var & module cache so tests are isolated.
     if (ORIGINAL_ENV_KEY !== undefined) {
-      process.env["OPENAI_API_KEY"] = ORIGINAL_ENV_KEY;
+      process.env["OPENROUTER_API_KEY"] = ORIGINAL_ENV_KEY;
     } else {
-      delete process.env["OPENAI_API_KEY"];
+      delete process.env["OPENROUTER_API_KEY"];
     }
     vi.resetModules();
     openAiState.listSpy = undefined;
   });
 
   it("returns true when API key absent (no network available)", async () => {
-    delete process.env["OPENAI_API_KEY"];
+    delete process.env["OPENROUTER_API_KEY"];
 
     // Re‑import after env change so the module picks up the new state.
     vi.resetModules();
@@ -44,12 +44,12 @@ describe("model-utils – offline resilience", () => {
       "../src/utils/model-utils.js"
     );
 
-    const supported = await isModelSupportedForResponses("o4-mini");
+    const supported = await isModelSupportedForResponses("deepseek/deepseek-chat-v3-0324:free");
     expect(supported).toBe(true);
   });
 
   it("falls back gracefully when openai.models.list throws a network error", async () => {
-    process.env["OPENAI_API_KEY"] = "dummy";
+    process.env["OPENROUTER_API_KEY"] = "dummy";
 
     const netErr: any = new Error("socket hang up");
     netErr.code = "ECONNRESET";

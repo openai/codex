@@ -14,6 +14,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { load as loadYaml, dump as dumpYaml } from "js-yaml";
 import { homedir } from "os";
 import { dirname, join, extname, resolve as resolvePath } from "path";
+import { providers } from "./providers.js";
 
 export const DEFAULT_AGENTIC_MODEL = "o4-mini";
 export const DEFAULT_FULL_CONTEXT_MODEL = "gpt-4.1";
@@ -40,12 +41,30 @@ export function setApiKey(apiKey: string): void {
   OPENAI_API_KEY = apiKey;
 }
 
+export function getBaseUrl(provider: string = "openai"): string | undefined {
+  const providerInfo = providers[provider.toLowerCase()];
+  if (providerInfo) {
+    return providerInfo.baseURL;
+  }
+  return undefined;
+}
+
+export function getApiKey(provider: string = "openai"): string | undefined {
+  const providerInfo = providers[provider.toLowerCase()];
+  if (providerInfo) {
+    return process.env[providerInfo.envKey];
+  }
+
+  return undefined;
+}
+
 // Formatting (quiet mode-only).
 export const PRETTY_PRINT = Boolean(process.env["PRETTY_PRINT"] || "");
 
 // Represents config as persisted in config.json.
 export type StoredConfig = {
   model?: string;
+  provider?: string;
   approvalMode?: AutoApprovalMode;
   fullAutoErrorMode?: FullAutoErrorMode;
   memory?: MemoryConfig;
@@ -67,6 +86,7 @@ export type MemoryConfig = {
 export type AppConfig = {
   apiKey?: string;
   model: string;
+  provider?: string;
   instructions: string;
   fullAutoErrorMode?: FullAutoErrorMode;
   memory?: MemoryConfig;
@@ -252,6 +272,7 @@ export const loadConfig = (
       (options.isFullContext
         ? DEFAULT_FULL_CONTEXT_MODEL
         : DEFAULT_AGENTIC_MODEL),
+    provider: storedConfig.provider,
     instructions: combinedInstructions,
   };
 
@@ -324,6 +345,7 @@ export const saveConfig = (
   // If the caller passed the default JSON path *and* a YAML config already
   // exists on disk, save back to that YAML file instead to preserve the
   // user's chosen format.
+
   let targetPath = configPath;
   if (
     configPath === CONFIG_FILEPATH &&
@@ -335,6 +357,7 @@ export const saveConfig = (
       : CONFIG_YML_FILEPATH;
   }
 
+
   const dir = dirname(targetPath);
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
@@ -342,11 +365,11 @@ export const saveConfig = (
 
   const ext = extname(targetPath).toLowerCase();
   if (ext === ".yaml" || ext === ".yml") {
-    writeFileSync(targetPath, dumpYaml({ model: config.model }), "utf-8");
+    writeFileSync(targetPath, dumpYaml({ model: config.model, provider: config.provider }), "utf-8");
   } else {
     writeFileSync(
       targetPath,
-      JSON.stringify({ model: config.model }, null, 2),
+      JSON.stringify({ model: config.model, provider: config.provider }, null, 2),
       "utf-8",
     );
   }
