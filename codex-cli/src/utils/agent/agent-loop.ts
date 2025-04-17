@@ -902,6 +902,7 @@ export class AgentLoop {
       //     (e.g. ECONNRESET, ETIMEDOUT …)
       //   • the OpenAI SDK attached an HTTP `status` >= 500 indicating a
       //     server‑side problem.
+      //   • the error is model specific and detected in stream.
       // If matched we emit a single system message to inform the user and
       // resolve gracefully so callers can choose to retry.
       // -------------------------------------------------------------------
@@ -979,6 +980,74 @@ export class AgentLoop {
           });
         } catch {
           /* best‑effort */
+        }
+        this.onLoading(false);
+        return;
+      }
+
+      const isInvalidRequestError = () => {
+        if (!err || typeof err !== "object") {
+          return false;
+        }
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const e: any = err;
+
+        if (
+          e.type === "invalid_request_error" &&
+          e.code === "model_not_found"
+        ) {
+          return true;
+        }
+
+        if (
+          e.cause &&
+          e.cause.type === "invalid_request_error" &&
+          e.cause.code === "model_not_found"
+        ) {
+          return true;
+        }
+
+        return false;
+      };
+
+      if (isInvalidRequestError()) {
+        try {
+          // Extract request ID and error details from the error object
+
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const e: any = err;
+
+          const reqId =
+            e.request_id ??
+            (e.cause && e.cause.request_id) ??
+            (e.cause && e.cause.requestId);
+
+          const errorDetails = [
+            `Status: ${e.status || (e.cause && e.cause.status) || "unknown"}`,
+            `Code: ${e.code || (e.cause && e.cause.code) || "unknown"}`,
+            `Type: ${e.type || (e.cause && e.cause.type) || "unknown"}`,
+            `Message: ${
+              e.message || (e.cause && e.cause.message) || "unknown"
+            }`,
+          ].join(", ");
+
+          const msgText = `⚠️  OpenAI rejected the request${
+            reqId ? ` (request ID: ${reqId})` : ""
+          }. Error details: ${errorDetails}. Please verify your settings and try again.`;
+
+          this.onItem({
+            id: `error-${Date.now()}`,
+            type: "message",
+            role: "system",
+            content: [
+              {
+                type: "input_text",
+                text: msgText,
+              },
+            ],
+          });
+        } catch {
+          /* best-effort */
         }
         this.onLoading(false);
         return;
