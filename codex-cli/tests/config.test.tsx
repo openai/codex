@@ -59,7 +59,7 @@ test("loads default config if files don't exist", () => {
     disableProjectDoc: true,
   });
   expect(config).toEqual({
-    model: "o4-mini",
+    model: "deepseek/deepseek-chat-v3-0324:free",
     instructions: "",
   });
 });

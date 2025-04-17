@@ -6,6 +6,8 @@
     "format:fix": "prettier --write *.json *.md .github/workflows/*.yml"
   },
   "devDependencies": {
-    "prettier": "^3.5.3"
+    "openai": "^4.95.0",
+    "prettier": "^3.5.3",
+    "typescript": "^5.8.3"
   }
 }
