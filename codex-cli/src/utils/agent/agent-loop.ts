@@ -534,9 +534,13 @@ export class AgentLoop {
           try {
             let reasoning: Reasoning | undefined;
             if (this.model.startsWith("o")) {
-              reasoning = { effort: "high" };
+              // Create a reasoning object with the properties we need
+              // The OpenAI SDK type definitions might not be up to date with the latest API features
+              type ExtendedReasoning = Reasoning & { summary?: string };
+              reasoning = { effort: "high" } as ExtendedReasoning;
+
               if (this.model === "o3" || this.model === "o4-mini") {
-                reasoning.summary = "auto";
+                (reasoning as ExtendedReasoning).summary = "auto";
               }
             }
             const mergedInstructions = [prefix, this.instructions]
