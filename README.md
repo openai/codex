@@ -160,12 +160,12 @@ Both approaches are _transparent_ to everyday usage – you still run `codex` fr
 
 ## CLI Reference
 
-| Command        | Purpose                             | Example                              |
-| -------------- | ----------------------------------- | ------------------------------------ |
-| `codex`        | Interactive REPL                    | `codex`                              |
-| `codex "…"`    | Initial prompt for interactive REPL | `codex "fix lint errors"`            |
-| `codex -q "…"` | Non‑interactive "quiet mode"        | `codex -q --json "explain utils.ts"` |
-| `codex completion <bash\|zsh\|fish>` | Print shell completion script    | `codex completion bash`               |
+| Command                              | Purpose                             | Example                              |
+| ------------------------------------ | ----------------------------------- | ------------------------------------ |
+| `codex`                              | Interactive REPL                    | `codex`                              |
+| `codex "…"`                          | Initial prompt for interactive REPL | `codex "fix lint errors"`            |
+| `codex -q "…"`                       | Non‑interactive "quiet mode"        | `codex -q --json "explain utils.ts"` |
+| `codex completion <bash\|zsh\|fish>` | Print shell completion script       | `codex completion bash`              |
 
 Key flags: `--model/-m`, `--approval-mode/-a`, and `--quiet/-q`.
 
