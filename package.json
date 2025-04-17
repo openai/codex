@@ -3,8 +3,8 @@
   "private": true,
   "description": "Tools for repo-wide maintenance.",
   "scripts": {
-    "check": "biome check",
-    "fix": "biome check --apply",
+    "check": "biome check .",
+    "fix": "biome check --apply .",
     "dev": "pnpm --filter @openai/codex run dev",
     "test": "pnpm --filter @openai/codex run test",
     "test:watch": "pnpm --filter @openai/codex run test:watch",
