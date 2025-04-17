@@ -12,7 +12,7 @@
   "scripts": {
     "format": "prettier --check src tests",
     "format:fix": "prettier --write src tests",
-    "dev": "npm run build:dev",
+    "dev": "tsc --watch",
     "lint": "eslint src tests --ext ts --ext tsx --report-unused-disable-directives --max-warnings 0",
     "lint:fix": "eslint src tests --ext ts --ext tsx --fix",
     "test": "vitest run",
