@@ -15,7 +15,7 @@ import {
   DEFAULT_RATE_LIMIT_MAX_RETRIES,
   DEFAULT_RATE_LIMIT_INITIAL_RETRY_DELAY_MS,
   DEFAULT_RATE_LIMIT_MAX_RETRY_DELAY_MS,
-  DEFAULT_RATE_LIMIT_JITTER_FACTOR
+  DEFAULT_RATE_LIMIT_JITTER_FACTOR,
 } from "../config.js";
 import { parseToolCallArguments } from "../parsers.js";
 import {
@@ -32,7 +32,7 @@ import OpenAI, { APIConnectionTimeoutError } from "openai";
 // Wait time before retrying after rate limit errors (ms).
 const RATE_LIMIT_RETRY_WAIT_MS = parseInt(
   process.env["OPENAI_RATE_LIMIT_RETRY_WAIT_MS"] ||
-  DEFAULT_RATE_LIMIT_INITIAL_RETRY_DELAY_MS.toString(),
+    DEFAULT_RATE_LIMIT_INITIAL_RETRY_DELAY_MS.toString(),
   10,
 );
 
@@ -51,7 +51,7 @@ function calculateBackoffDelay(
   initialDelayMs: number,
   maxDelayMs: number,
   jitterFactor: number,
-  suggestedDelayMs?: number
+  suggestedDelayMs?: number,
 ): number {
   // If we have a suggested delay from the API, use that (with a small buffer)
   if (suggestedDelayMs && !Number.isNaN(suggestedDelayMs)) {
@@ -532,7 +532,8 @@ export class AgentLoop {
         let stream;
 
         // Retry loop for transient errors. Use config for max retries or fall back to default.
-        const maxRetries = this.config.rateLimits?.maxRetries ?? DEFAULT_RATE_LIMIT_MAX_RETRIES;
+        const maxRetries =
+          this.config.rateLimits?.maxRetries ?? DEFAULT_RATE_LIMIT_MAX_RETRIES;
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
           try {
             let reasoning: Reasoning | undefined;
@@ -645,11 +646,14 @@ export class AgentLoop {
             if (isRateLimit) {
               if (attempt < maxRetries) {
                 // Get rate limit config or use defaults
-                const initialRetryDelayMs = this.config.rateLimits?.initialRetryDelayMs ??
+                const initialRetryDelayMs =
+                  this.config.rateLimits?.initialRetryDelayMs ??
                   DEFAULT_RATE_LIMIT_INITIAL_RETRY_DELAY_MS;
-                const maxRetryDelayMs = this.config.rateLimits?.maxRetryDelayMs ??
+                const maxRetryDelayMs =
+                  this.config.rateLimits?.maxRetryDelayMs ??
                   DEFAULT_RATE_LIMIT_MAX_RETRY_DELAY_MS;
-                const jitterFactor = this.config.rateLimits?.jitterFactor ??
+                const jitterFactor =
+                  this.config.rateLimits?.jitterFactor ??
                   DEFAULT_RATE_LIMIT_JITTER_FACTOR;
 
                 // Parse suggested retry time from error message, e.g., "Please try again in 1.3s"
@@ -666,7 +670,7 @@ export class AgentLoop {
                   initialRetryDelayMs,
                   maxRetryDelayMs,
                   jitterFactor,
-                  suggestedDelayMs
+                  suggestedDelayMs,
                 );
 
                 log(

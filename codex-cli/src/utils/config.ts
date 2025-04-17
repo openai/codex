@@ -399,11 +399,7 @@ export const saveConfig = (
       storedConfig.memory = config.memory;
     }
 
-    writeFileSync(
-      targetPath,
-      JSON.stringify(storedConfig, null, 2),
-      "utf-8",
-    );
+    writeFileSync(targetPath, JSON.stringify(storedConfig, null, 2), "utf-8");
   }
 
   writeFileSync(instructionsPath, config.instructions, "utf-8");
