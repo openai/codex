@@ -3,6 +3,7 @@ import CodexPage from './pages/CodexPage'
 import LogithmPage from './pages/LogithmPage'
 import VocalithPage from './pages/VocalithPage'
 import SettingsPage from './pages/SettingsPage'
+import LogsPage from './pages/LogsPage'
 import Navbar from './components/Navbar'
 
 function App() {
@@ -27,6 +28,8 @@ function App() {
         return <LogithmPage />
       case 'vocalith':
         return <VocalithPage />
+      case 'logs':
+        return <LogsPage />
       case 'settings':
         return <SettingsPage />
       default:
