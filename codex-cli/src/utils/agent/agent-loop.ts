@@ -45,6 +45,9 @@ type AgentLoopParams = {
   onItem: (item: ResponseItem) => void;
   onLoading: (loading: boolean) => void;
 
+  /** Extra writable roots to use with sandbox execution. */
+  additionalWritableRoots: ReadonlyArray<string>;
+
   /** Called when the command is not auto-approved to request explicit user review. */
   getCommandConfirmation: (
     command: Array<string>,
@@ -58,6 +61,7 @@ export class AgentLoop {
   private instructions?: string;
   private approvalPolicy: ApprovalPolicy;
   private config: AppConfig;
+  private additionalWritableRoots: ReadonlyArray<string>;
 
   // Using `InstanceType<typeof OpenAI>` sidesteps typing issues with the OpenAI package under
   // the TS 5+ `moduleResolution=bundler` setup. OpenAI client instance. We keep the concrete
@@ -213,6 +217,7 @@ export class AgentLoop {
     onLoading,
     getCommandConfirmation,
     onLastResponseId,
+    additionalWritableRoots,
   }: AgentLoopParams & { config?: AppConfig }) {
     this.model = model;
     this.instructions = instructions;
@@ -229,6 +234,7 @@ export class AgentLoop {
         model,
         instructions: instructions ?? "",
       } as AppConfig);
+    this.additionalWritableRoots = additionalWritableRoots;
     this.onItem = onItem;
     this.onLoading = onLoading;
     this.getCommandConfirmation = getCommandConfirmation;
@@ -358,6 +364,7 @@ export class AgentLoop {
         args,
         this.config,
         this.approvalPolicy,
+        this.additionalWritableRoots,
         this.getCommandConfirmation,
         this.execAbortController?.signal,
       );
