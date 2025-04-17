@@ -9,7 +9,7 @@ import type {
 import type { Reasoning } from "openai/resources.mjs";
 
 import { log, isLoggingEnabled } from "./log.js";
-import { OPENAI_BASE_URL, OPENAI_TIMEOUT_MS } from "../config.js";
+import { OPENAI_BASE_URL, OPENAI_TIMEOUT_MS, PROJECT_DOC_MAX_BYTES } from "../config.js";
 import { parseToolCallArguments } from "../parsers.js";
 import {
   ORIGIN,
@@ -308,20 +308,54 @@ export class AgentLoop {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const callId: string = (item as any).call_id ?? (item as any).id;
 
-    const args = parseToolCallArguments(rawArguments ?? "{}");
+    const rawArgsString = rawArguments ?? "{}";
     if (isLoggingEnabled()) {
       log(
         `handleFunctionCall(): name=${
           name ?? "undefined"
-        } callId=${callId} args=${rawArguments}`,
+        } callId=${callId} args=${rawArgsString}`,
       );
     }
 
+    // allow the model to fetch online docs via an HTTP URL
+    if (name === "http.fetch") {
+      let url: string;
+      let maxBytes: number;
+      try {
+        const fetchArgs = JSON.parse(rawArgsString) as { url: string; max_bytes?: number };
+        url = fetchArgs.url;
+        maxBytes = typeof fetchArgs.max_bytes === "number" ? fetchArgs.max_bytes : PROJECT_DOC_MAX_BYTES;
+      } catch (e) {
+        const outputItem: ResponseInputItem.FunctionCallOutput = {
+          type: "function_call_output",
+          call_id: callId,
+          output: `invalid arguments: ${rawArgsString}`,
+        };
+        return [outputItem];
+      }
+      const outputItem: ResponseInputItem.FunctionCallOutput = {
+        type: "function_call_output",
+        // `call_id` is mandatory – ensure we never send `undefined`
+        call_id: callId,
+        output: "no function found",
+      };
+      try {
+        const response = await fetch(url);
+        const text = await response.text();
+        const truncated = text.slice(0, maxBytes);
+        outputItem.output = JSON.stringify({ url, status: response.status, body: truncated });
+      } catch (e) {
+        outputItem.output = JSON.stringify({ url, error: String(e) });
+      }
+      return [outputItem];
+    }
+
+    const args = parseToolCallArguments(rawArgsString);
     if (args == null) {
       const outputItem: ResponseInputItem.FunctionCallOutput = {
         type: "function_call_output",
-        call_id: item.call_id,
-        output: `invalid arguments: ${rawArguments}`,
+        call_id: callId,
+        output: `invalid arguments: ${rawArgsString}`,
       };
       return [outputItem];
     }
@@ -531,6 +565,21 @@ export class AgentLoop {
                       },
                     },
                     required: ["command"],
+                    additionalProperties: false,
+                  },
+                },
+                {
+                  type: "function",
+                  name: "http.fetch",
+                  description: "Fetches the content of a URL via HTTP(S). Returns the response body as a string.",
+                  strict: false,
+                  parameters: {
+                    type: "object",
+                    properties: {
+                      url: { type: "string", description: "The URL to fetch." },
+                      max_bytes: { type: "number", description: "Maximum bytes to return from the response body." },
+                    },
+                    required: ["url"],
                     additionalProperties: false,
                   },
                 },
@@ -1093,6 +1142,7 @@ const prefix = `You are operating as and within the Codex CLI, a terminal-based 
 You can:
 - Receive user prompts, project context, and files.
 - Stream responses and emit function calls (e.g., shell commands, code edits).
+ - When unsure about syntax or encountering errors for a library or function, use the 'http.fetch' tool to download the relevant documentation. Construct the URL for the official docs (e.g., the package’s API reference or homepage) and set 'max_bytes' to limit the fetched content.
 - Apply patches, run commands, and manage user approvals based on policy.
 - Work inside a sandboxed, git-backed workspace with rollback support.
 - Log telemetry so sessions can be replayed or inspected later.
