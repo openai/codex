@@ -175,7 +175,7 @@ function _read_default_patterns_file(filePath?: string): string {
 }
 
 /** Loads ignore patterns from a file (or a default list) and returns a list of RegExp patterns. */
-export function loadIgnorePatterns(filePath?: string): Array<RegExp> {
+export function loadIgnorePatternsAsRegExp(filePath?: string): Array<RegExp> {
   try {
     const raw = _read_default_patterns_file(filePath);
     const lines = raw.split(/\r?\n/);
@@ -198,13 +198,43 @@ export function loadIgnorePatterns(filePath?: string): Array<RegExp> {
   }
 }
 
+/** Loads ignore patterns from a file (or a default list) and returns a string of SBPL deny rules. */
+export function loadIgnorePatternsAsSBPLDenyRules(
+  ignoreFilePath?: string,
+): string {
+  try {
+    const raw = _read_default_patterns_file(ignoreFilePath);
+    const lines = raw.split(/\r?\n/);
+    const cleaned = lines
+      .map((l: string) => l.trim())
+      .filter((l: string) => l && !l.startsWith("#"));
+
+    if (cleaned.length === 0) {
+      return "";
+    }
+
+    const regexPatterns = cleaned.map((pattern) => {
+      const escaped = pattern
+        .replace(/[.+^${}()|[\]\\]/g, "\\$&") // Escape special regex characters
+        .replace(/\*/g, ".*")
+        .replace(/\?/g, ".");
+
+      return `(regex #"(^|/)${escaped}$")`;
+    });
+
+    return ["(deny file-read* file-write*", ...regexPatterns, ")"].join("\n");
+  } catch {
+    return "";
+  }
+}
+
 /** Checks if a given path is ignored by any of the compiled patterns. */
 export function shouldIgnorePath(
   p: string,
-  compiledPatterns: Array<RegExp>,
+  compiledIgnorePatterns: Array<RegExp>,
 ): boolean {
   const normalized = path.resolve(p);
-  for (const regex of compiledPatterns) {
+  for (const regex of compiledIgnorePatterns) {
     if (regex.test(normalized)) {
       return true;
     }
@@ -307,7 +337,7 @@ export function makeAsciiDirectoryStructure(
  */
 export async function getFileContents(
   rootPath: string,
-  compiledPatterns: Array<RegExp>,
+  compiledIgnorePatterns: Array<RegExp>,
 ): Promise<Array<FileContent>> {
   const root = path.resolve(rootPath);
   const candidateFiles: Array<string> = [];
@@ -334,12 +364,12 @@ export async function getFileContents(
         }
         if (dirent.isDirectory()) {
           // check if ignored
-          if (!shouldIgnorePath(resolved, compiledPatterns)) {
+          if (!shouldIgnorePath(resolved, compiledIgnorePatterns)) {
             queue.push(resolved);
           }
         } else if (dirent.isFile()) {
           // check if ignored
-          if (!shouldIgnorePath(resolved, compiledPatterns)) {
+          if (!shouldIgnorePath(resolved, compiledIgnorePatterns)) {
             candidateFiles.push(resolved);
           }
         }

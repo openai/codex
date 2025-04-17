@@ -13,7 +13,7 @@ import {
 import { renderTaskContext } from "../utils/singlepass/context";
 import {
   getFileContents,
-  loadIgnorePatterns,
+  loadIgnorePatternsAsRegExp,
   makeAsciiDirectoryStructure,
 } from "../utils/singlepass/context_files";
 import { EditedFilesSchema } from "../utils/singlepass/file_ops";
@@ -366,7 +366,7 @@ export function SinglePassApp({
   /* ---------------------------- Load file context --------------------------- */
   useEffect(() => {
     (async () => {
-      const ignorePats = loadIgnorePatterns();
+      const ignorePats = loadIgnorePatternsAsRegExp();
       const fileContents = await getFileContents(rootPath, ignorePats);
       setFiles(fileContents);
     })();

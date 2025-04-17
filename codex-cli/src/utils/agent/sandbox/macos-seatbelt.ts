@@ -4,6 +4,7 @@ import type { SpawnOptions } from "child_process";
 import { exec } from "./raw-exec.js";
 import { log } from "../log.js";
 import { CONFIG_DIR } from "src/utils/config.js";
+import { loadIgnorePatternsAsSBPLDenyRules } from "src/utils/singlepass/context_files.js";
 
 function getCommonRoots() {
   return [
@@ -43,14 +44,19 @@ export function execWithSeatbelt(
         { policies: [], params: [] },
       );
 
-    scopedWritePolicy = `\n(allow file-write*\n${policies.join(" ")}\n)`;
+    scopedWritePolicy = `(allow file-write*\n${policies.join(" ")}\n)`;
     policyTemplateParams = params;
   } else {
     scopedWritePolicy = "";
     policyTemplateParams = [];
   }
 
-  const fullPolicy = READ_ONLY_SEATBELT_POLICY + scopedWritePolicy;
+  const ignoreFilesDenyPolicy = loadIgnorePatternsAsSBPLDenyRules();
+  const fullPolicy = [
+    READ_ONLY_SEATBELT_POLICY,
+    scopedWritePolicy,
+    ignoreFilesDenyPolicy,
+  ].join("\n");
   log(
     `Running seatbelt with policy: ${fullPolicy} and ${
       policyTemplateParams.length
