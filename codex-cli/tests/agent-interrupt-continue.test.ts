@@ -41,6 +41,7 @@ describe("Agent interrupt and continue", () => {
       config: {
         model: "test-model",
         instructions: "",
+        notify: false,
       },
       onItem: (item) => received.push(item),
       onLoading: (loading) => {

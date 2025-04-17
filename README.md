@@ -176,7 +176,7 @@ The hardening mechanism Codex uses depends on your OS:
 | `codex -q "…"`                       | Non‑interactive "quiet mode"        | `codex -q --json "explain utils.ts"` |
 | `codex completion <bash\|zsh\|fish>` | Print shell completion script       | `codex completion bash`              |
 
-Key flags: `--model/-m`, `--approval-mode/-a`, and `--quiet/-q`.
+Key flags: `--model/-m`, `--approval-mode/-a`, `--quiet/-q`, and `--notify`.
 
 ---
 
@@ -279,6 +279,7 @@ Codex looks for config files in **`~/.codex/`**.
 # ~/.codex/config.yaml
 model: o4-mini # Default model
 fullAutoErrorMode: ask-user # or ignore-and-continue
+notify: true # Enable desktop notifications for responses
 ```
 
 You can also define custom instructions:

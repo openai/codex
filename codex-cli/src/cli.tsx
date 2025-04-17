@@ -68,6 +68,7 @@ const cli = meow(
     --no-project-doc           Do not automatically include the repository's 'codex.md'
     --project-doc <file>       Include an additional markdown file at <file> as context
     --full-stdout              Do not truncate stdout/stderr from command outputs
+    --notify                   Enable desktop notifications for responses
 
   Dangerous options
     --dangerously-auto-approve-everything
@@ -143,6 +144,11 @@ const cli = meow(
         description:
           "Disable truncation of command stdout/stderr messages (show everything)",
         aliases: ["no-truncate"],
+      },
+      // Notification
+      notify: {
+        type: "boolean",
+        description: "Enable desktop notifications for responses",
       },
 
       // Experimental mode where whole directory is loaded in context and model is requested
@@ -243,6 +249,7 @@ config = {
   apiKey,
   ...config,
   model: model ?? config.model,
+  notify: Boolean(cli.flags.notify),
 };
 
 if (!(await isModelSupportedForResponses(config.model))) {
