@@ -74,8 +74,9 @@ const cli = meow(
 
   Dangerous options
     --dangerously-auto-approve-everything
-                               Skip all confirmation prompts and execute commands without
-                               sandboxing. Intended solely for ephemeral local testing.
+                               Automatically approve all commands without prompting and 
+                               with streamlined output formatting. Commands still run in
+                               the sandbox for safety.
 
   Experimental options
     -f, --full-context         Launch in "full-context" mode which loads the entire repository
@@ -110,7 +111,7 @@ const cli = meow(
       dangerouslyAutoApproveEverything: {
         type: "boolean",
         description:
-          "Automatically approve all commands without prompting. This is EXTREMELY DANGEROUS and should only be used in trusted environments.",
+          "Automatically approve all commands without prompting with minimized output formatting. This is safer than it sounds, as commands still run in the sandbox.",
       },
       autoEdit: {
         type: "boolean",
@@ -126,11 +127,6 @@ const cli = meow(
         aliases: ["a"],
         description:
           "Determine the approval mode for Codex (default: suggest) Values: suggest, auto-edit, full-auto",
-      },
-      fullyNonInteractive: {
-        type: "boolean",
-        description:
-          "Run in fully non-interactive mode with automatic approval of all suggestions and commands",
       },
       noProjectDoc: {
         type: "boolean",
@@ -310,26 +306,6 @@ if (fullContextMode) {
   process.exit(0);
 }
 
-// If we are running in fully non-interactive mode, do that and exit
-const fullyNonInteractive = Boolean(cli.flags.fullyNonInteractive);
-if (fullyNonInteractive) {
-  process.env["CODEX_QUIET_MODE"] = "1";
-  if (!prompt || prompt.trim() === "") {
-    // eslint-disable-next-line no-console
-    console.error(
-      'Fully non-interactive mode requires a prompt string, e.g.,: codex --fully-non-interactive "Generate a hello world app"',
-    );
-    process.exit(1);
-  }
-  await runFullyNonInteractiveMode({
-    prompt: prompt as string,
-    imagePaths: imagePaths || [],
-    config,
-  });
-  onExit();
-  process.exit(0);
-}
-
 // If we are running in --quiet mode, do that and exit.
 const quietMode = Boolean(cli.flags.quiet);
 const autoApproveEverything = Boolean(
@@ -346,12 +322,41 @@ if (quietMode) {
     );
     process.exit(1);
   }
-  await runQuietMode({
+  
+  if (autoApproveEverything) {
+    // Run with auto-approval and clean formatting
+    await runAutoApproveMode({
+      prompt: prompt as string,
+      imagePaths: imagePaths || [],
+      config,
+    });
+  } else {
+    // Standard quiet mode
+    await runQuietMode({
+      prompt: prompt as string,
+      imagePaths: imagePaths || [],
+      approvalPolicy: AutoApprovalMode.SUGGEST,
+      config,
+    });
+  }
+  
+  onExit();
+  process.exit(0);
+}
+
+// If we are running with auto-approve, do that with clean output
+if (autoApproveEverything && !quietMode) {
+  if (!prompt || prompt.trim() === "") {
+    // eslint-disable-next-line no-console
+    console.error(
+      'Auto-approve mode requires a prompt string, e.g.,: codex --dangerously-auto-approve-everything "Generate a hello world app"',
+    );
+    process.exit(1);
+  }
+  process.env["CODEX_QUIET_MODE"] = "1";
+  await runAutoApproveMode({
     prompt: prompt as string,
     imagePaths: imagePaths || [],
-    approvalPolicy: autoApproveEverything
-      ? AutoApprovalMode.FULL_AUTO
-      : AutoApprovalMode.SUGGEST,
     config,
   });
   onExit();
@@ -556,9 +561,10 @@ async function runQuietMode({
 }
 
 /**
- * Run Codex in fully non-interactive mode, automatically approving all suggestions and commands
+ * Run Codex in auto-approve mode, automatically approving all suggestions and commands
+ * with clean, minimal output formatting
  */
-async function runFullyNonInteractiveMode({
+async function runAutoApproveMode({
   prompt,
   imagePaths,
   config,

@@ -44,7 +44,7 @@
 
 ## Experimental Technology Disclaimer
 
-Codex CLI is an experimental project under active development. It is not yet stable, may contain bugs, incomplete features, or undergo breaking changes. We’re building it in the open with the community and welcome:
+Codex CLI is an experimental project under active development. It is not yet stable, may contain bugs, incomplete features, or undergo breaking changes. We're building it in the open with the community and welcome:
 
 - Bug reports
 - Feature requests
@@ -85,9 +85,15 @@ codex "explain this codebase to me"
 codex --approval-mode full-auto "create the fanciest todo-list app"
 ```
 
-That’s it – Codex will scaffold a file, run it inside a sandbox, install any
+For completely automated execution with minimal output:
+
+```shell
+codex --dangerously-auto-approve-everything "generate documentation for all modules"
+```
+
+That's it – Codex will scaffold a file, run it inside a sandbox, install any
 missing dependencies, and show you the live result. Approve the changes and
-they’ll be committed to your working directory.
+they'll be committed to your working directory.
 
 ---
 
@@ -95,7 +101,7 @@ they’ll be committed to your working directory.
 
 Codex CLI is built for developers who already **live in the terminal** and want
 ChatGPT‑level reasoning **plus** the power to actually run code, manipulate
-files, and iterate – all under version control. In short, it’s _chat‑driven
+files, and iterate – all under version control. In short, it's _chat‑driven
 development_ that understands and executes your repo.
 
 - **Zero setup** — bring your OpenAI API key and it just works!
@@ -106,7 +112,7 @@ And it's **fully open-source** so you can see and contribute to how it develops!
 
 ---
 
-## Security Model & Permissions
+## Security Model & Permissions
 
 Codex lets you decide _how much autonomy_ the agent receives and auto-approval policy via the
 `--approval-mode` flag (or the interactive onboarding prompt):
@@ -114,23 +120,24 @@ Codex lets you decide _how much autonomy_ the agent receives and auto-approval p
 | Mode                      | What the agent may do without asking            | Still requires approval                                         |
 | ------------------------- | ----------------------------------------------- | --------------------------------------------------------------- |
 | **Suggest** <br>(default) | • Read any file in the repo                     | • **All** file writes/patches <br>• **All** shell/Bash commands |
-| **Auto Edit**             | • Read **and** apply‑patch writes to files      | • **All** shell/Bash commands                                   |
-| **Full Auto**             | • Read/write files <br>• Execute shell commands | –                                                               |
+| **Auto Edit**             | • Read **and** apply‑patch writes to files      | • **All** shell/Bash commands                                   |
+| **Full Auto**             | • Read/write files <br>• Execute shell commands | –                                                               |
+| **Auto-Approve Everything** | • Read/write files <br>• Execute shell commands <br>• Streamlined output formatting | –                       |
 
-In **Full Auto** every command is run **network‑disabled** and confined to the
+In **Full Auto** and **Auto-Approve Everything** modes, every command is run **network‑disabled** and confined to the
 current working directory (plus temporary files) for defense‑in‑depth. Codex
 will also show a warning/confirmation if you start in **auto‑edit** or
 **full‑auto** while the directory is _not_ tracked by Git, so you always have a
 safety net.
 
-Coming soon: you’ll be able to whitelist specific commands to auto‑execute with
-the network enabled, once we’re confident in additional safeguards.
+Coming soon: you'll be able to whitelist specific commands to auto‑execute with
+the network enabled, once we're confident in additional safeguards.
 
 ### Platform sandboxing details
 
 The hardening mechanism Codex uses depends on your OS:
 
-- **macOS 12+** – commands are wrapped with **Apple Seatbelt** (`sandbox-exec`).
+- **macOS 12+** – commands are wrapped with **Apple Seatbelt** (`sandbox-exec`).
 
   - Everything is placed in a read‑only jail except for a small set of
     writable roots (`$PWD`, `$TMPDIR`, `~/.codex`, etc.).
@@ -147,33 +154,35 @@ Both approaches are _transparent_ to everyday usage – you still run `codex` fr
 
 ---
 
-## System Requirements
+## System Requirements
 
 | Requirement                 | Details                                                         |
 | --------------------------- | --------------------------------------------------------------- |
-| Operating systems           | macOS 12+, Ubuntu 20.04+/Debian 10+, or Windows 11 **via WSL2** |
+| Operating systems           | macOS 12+, Ubuntu 20.04+/Debian 10+, or Windows 11 **via WSL2** |
 | Node.js                     | **22 or newer** (LTS recommended)                               |
 | Git (optional, recommended) | 2.23+ for built‑in PR helpers                                   |
-| RAM                         | 4‑GB minimum (8‑GB recommended)                                 |
+| RAM                         | 4‑GB minimum (8‑GB recommended)                                 |
 
 > Never run `sudo npm install -g`; fix npm permissions instead.
 
 ---
 
-## CLI Reference
+## CLI Reference
 
-| Command                              | Purpose                             | Example                              |
-| ------------------------------------ | ----------------------------------- | ------------------------------------ |
-| `codex`                              | Interactive REPL                    | `codex`                              |
-| `codex "…"`                          | Initial prompt for interactive REPL | `codex "fix lint errors"`            |
-| `codex -q "…"`                       | Non‑interactive "quiet mode"        | `codex -q --json "explain utils.ts"` |
-| `codex completion <bash\|zsh\|fish>` | Print shell completion script       | `codex completion bash`              |
+| Command                                    | Purpose                             | Example                              |
+| ------------------------------------------ | ----------------------------------- | ------------------------------------ |
+| `codex`                                    | Interactive REPL                    | `codex`                              |
+| `codex "…"`                                | Initial prompt for interactive REPL | `codex "fix lint errors"`            |
+| `codex -q "…"`                             | Non‑interactive "quiet mode"        | `codex -q --json "explain utils.ts"` |
+| `codex --dangerously-auto-approve-everything "…"` | Auto-approve with minimal output    | `codex --dangerously-auto-approve-everything "generate a REST API"` |
+| `codex --workdir <path> "…"`               | Set working directory               | `codex --workdir ~/projects/app "fix bugs"` |
+| `codex completion <bash\|zsh\|fish>`       | Print shell completion script       | `codex completion bash`              |
 
-Key flags: `--model/-m`, `--approval-mode/-a`, and `--quiet/-q`.
+Key flags: `--model/-m`, `--approval-mode/-a`, `--quiet/-q`, `--workdir`, and `--dangerously-auto-approve-everything`.
 
 ---
 
-## Memory & Project Docs
+## Memory & Project Docs
 
 Codex merges Markdown instructions in this order:
 
@@ -185,7 +194,7 @@ Disable with `--no-project-doc` or `CODEX_DISABLE_PROJECT_DOC=1`.
 
 ---
 
-## Non‑interactive / CI mode
+## Non‑interactive / CI mode
 
 Run Codex head‑less in pipelines. Example GitHub Action step:
 
@@ -197,6 +206,18 @@ Run Codex head‑less in pipelines. Example GitHub Action step:
     codex -a auto-edit --quiet "update CHANGELOG for next release"
 ```
 
+For completely automated execution with minimal output:
+
+```yaml
+- name: Generate documentation via Codex
+  run: |
+    npm install -g @openai/codex
+    export OPENAI_API_KEY="${{ secrets.OPENAI_KEY }}"
+    codex --dangerously-auto-approve-everything --workdir ./src "create documentation for all modules"
+```
+
+The `--dangerously-auto-approve-everything` mode automatically approves all actions without user interaction, while still maintaining the security sandbox. It also provides cleaner output by filtering out reasoning messages and reducing command output verbosity.
+
 Set `CODEX_QUIET_MODE=1` to silence interactive UI noise.
 
 ---
@@ -207,7 +228,7 @@ Below are a few bite‑size examples you can copy‑paste. Replace the text in q
 
 | ✨  | What you type                                                                   | What happens                                                               |
 | --- | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| 1   | `codex "Refactor the Dashboard component to React Hooks"`                       | Codex rewrites the class component, runs `npm test`, and shows the diff.   |
+| 1   | `codex "Refactor the Dashboard component to React Hooks"`                       | Codex rewrites the class component, runs `npm test`, and shows the diff.   |
 | 2   | `codex "Generate SQL migrations for adding a users table"`                      | Infers your ORM, creates migration files, and runs them in a sandboxed DB. |
 | 3   | `codex "Write unit tests for utils/date.ts"`                                    | Generates tests, executes them, and iterates until they pass.              |
 | 4   | `codex "Bulk‑rename *.jpeg → *.jpg with git mv"`                                | Safely renames files and updates imports/usages.                           |
@@ -220,7 +241,7 @@ Below are a few bite‑size examples you can copy‑paste. Replace the text in q
 ## Installation
 
 <details open>
-<summary><strong>From npm (Recommended)</strong></summary>
+<summary><strong>From npm (Recommended)</strong></summary>
 
 ```bash
 npm install -g @openai/codex
@@ -231,7 +252,7 @@ yarn global add @openai/codex
 </details>
 
 <details>
-<summary><strong>Build from source</strong></summary>
+<summary><strong>Build from source</strong></summary>
 
 ```bash
 # Clone the repository and navigate to the CLI package
@@ -295,7 +316,7 @@ Codex always runs in a **sandbox first**. If a proposed command or file change l
 <details>
 <summary>Does it work on Windows?</summary>
 
-Not directly. It requires [Windows Subsystem for Linux (WSL2)](https://learn.microsoft.com/en-us/windows/wsl/install) – Codex has been tested on macOS and Linux with Node ≥ 22.
+Not directly. It requires [Windows Subsystem for Linux (WSL2)](https://learn.microsoft.com/en-us/windows/wsl/install) – Codex has been tested on macOS and Linux with Node ≥ 22.
 
 </details>
 
@@ -333,12 +354,12 @@ OpenAI rejected the request. Error details: Status: 400, Code: unsupported_param
 
 ## Funding Opportunity
 
-We’re excited to launch a **$1 million initiative** supporting open source projects that use Codex CLI and other OpenAI models.
+We're excited to launch a **$1 million initiative** supporting open source projects that use Codex CLI and other OpenAI models.
 
 - Grants are awarded in **$25,000** API credit increments.
 - Applications are reviewed **on a rolling basis**.
 
-**Interested? [Apply here](https://openai.com/form/codex-open-source-fund/).**
+**Interested? [Apply here](https://openai.com/form/codex-open-source-fund/).**
 
 ---
 
@@ -346,7 +367,7 @@ We’re excited to launch a **$1 million initiative** supporting open source pr
 
 This project is under active development and the code will likely change pretty significantly. We'll update this message once that's complete!
 
-More broadly we welcome contributions – whether you are opening your very first pull request or you’re a seasoned maintainer. At the same time we care about reliability and long‑term maintainability, so the bar for merging code is intentionally **high**. The guidelines below spell out what “high‑quality” means in practice and should make the whole process transparent and friendly.
+More broadly we welcome contributions – whether you are opening your very first pull request or you're a seasoned maintainer. At the same time we care about reliability and long‑term maintainability, so the bar for merging code is intentionally **high**. The guidelines below spell out what "high‑quality" means in practice and should make the whole process transparent and friendly.
 
 ### Development workflow
 
@@ -378,13 +399,13 @@ npm test && npm run lint && npm run typecheck
   The CLA‑Assistant bot will turn the PR status green once all authors have signed.
 
 ```bash
-# Watch mode (tests rerun on change)
+# Watch mode (tests rerun on change)
 npm run test:watch
 
-# Type‑check without emitting files
+# Type‑check without emitting files
 npm run typecheck
 
-# Automatically fix lint + prettier issues
+# Automatically fix lint + prettier issues
 npm run lint:fix
 npm run format:fix
 ```
@@ -392,7 +413,7 @@ npm run format:fix
 ### Writing high‑impact code changes
 
 1. **Start with an issue.** Open a new one or comment on an existing discussion so we can agree on the solution before code is written.
-2. **Add or update tests.** Every new feature or bug‑fix should come with test coverage that fails before your change and passes afterwards. 100 % coverage is not required, but aim for meaningful assertions.
+2. **Add or update tests.** Every new feature or bug‑fix should come with test coverage that fails before your change and passes afterwards. 100 % coverage is not required, but aim for meaningful assertions.
 3. **Document behaviour.** If your change affects user‑facing behaviour, update the README, inline help (`codex --help`), or relevant example projects.
 4. **Keep commits atomic.** Each commit should compile and the tests should pass. This makes reviews and potential rollbacks easier.
 
@@ -426,7 +447,7 @@ Together we can make Codex CLI an incredible tool. **Happy hacking!** :rocket:
 All contributors **must** accept the CLA. The process is lightweight:
 
 1. Open your pull request.
-2. Paste the following comment (or reply `recheck` if you’ve signed before):
+2. Paste the following comment (or reply `recheck` if you've signed before):
 
    ```text
    I have read the CLA Document and I hereby sign the CLA
@@ -462,7 +483,7 @@ To publish a new version of the CLI, run the release scripts defined in `codex-c
 
 ---
 
-## Security &amp; Responsible AI
+## Security & Responsible AI
 
 Have you discovered a vulnerability or have concerns about model output? Please e‑mail **security@openai.com** and we will respond promptly.
 
@@ -470,4 +491,4 @@ Have you discovered a vulnerability or have concerns about model output? Please 
 
 ## License
 
-This repository is licensed under the [Apache-2.0 License](LICENSE).
+This repository is licensed under the [Apache-2.0 License](LICENSE).
