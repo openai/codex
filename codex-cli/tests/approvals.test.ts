@@ -10,23 +10,33 @@ describe("canAutoApprove()", () => {
   };
 
   const writeablePaths: Array<string> = [];
-  const check = (command: ReadonlyArray<string>): SafetyAssessment =>
-    canAutoApprove(command, "suggest", writeablePaths, env);
+  const check = (
+    command: ReadonlyArray<string>,
+    policy: "suggest" | "auto-edit" | "full-auto" = "suggest",
+  ): SafetyAssessment => canAutoApprove(command, policy, writeablePaths, env);
 
-  test("simple safe commands", () => {
-    expect(check(["ls"])).toEqual({
+  test("simple commands in suggest mode should require approval", () => {
+    // In suggest mode, all commands should require approval
+    expect(check(["ls"])).toEqual({ type: "ask-user" });
+    expect(check(["cat", "file.txt"])).toEqual({ type: "ask-user" });
+    expect(check(["pwd"])).toEqual({ type: "ask-user" });
+  });
+
+  test("simple safe commands in auto-edit mode", () => {
+    // In auto-edit mode, safe commands should be auto-approved
+    expect(check(["ls"], "auto-edit")).toEqual({
       type: "auto-approve",
       reason: "List directory",
       group: "Searching",
       runInSandbox: false,
     });
-    expect(check(["cat", "file.txt"])).toEqual({
+    expect(check(["cat", "file.txt"], "auto-edit")).toEqual({
       type: "auto-approve",
       reason: "View file contents",
       group: "Reading files",
       runInSandbox: false,
     });
-    expect(check(["pwd"])).toEqual({
+    expect(check(["pwd"], "auto-edit")).toEqual({
       type: "auto-approve",
       reason: "Print working directory",
       group: "Navigating",
@@ -34,20 +44,30 @@ describe("canAutoApprove()", () => {
     });
   });
 
-  test("simple safe commands within a `bash -lc` call", () => {
-    expect(check(["bash", "-lc", "ls"])).toEqual({
-      type: "auto-approve",
-      reason: "List directory",
-      group: "Searching",
-      runInSandbox: false,
-    });
-    expect(check(["bash", "-lc", "ls $HOME"])).toEqual({
-      type: "auto-approve",
-      reason: "List directory",
-      group: "Searching",
-      runInSandbox: false,
-    });
+  test("bash commands in suggest mode should require approval", () => {
+    // In suggest mode, all bash commands should require approval
+    expect(check(["bash", "-lc", "ls"])).toEqual({ type: "ask-user" });
+    expect(check(["bash", "-lc", "ls $HOME"])).toEqual({ type: "ask-user" });
     expect(check(["bash", "-lc", "git show ab9811cb90"])).toEqual({
+      type: "ask-user",
+    });
+  });
+
+  test("bash commands in auto-edit mode", () => {
+    // In auto-edit mode, safe bash commands should be auto-approved
+    expect(check(["bash", "-lc", "ls"], "auto-edit")).toEqual({
+      type: "auto-approve",
+      reason: "List directory",
+      group: "Searching",
+      runInSandbox: false,
+    });
+    expect(check(["bash", "-lc", "ls $HOME"], "auto-edit")).toEqual({
+      type: "auto-approve",
+      reason: "List directory",
+      group: "Searching",
+      runInSandbox: false,
+    });
+    expect(check(["bash", "-lc", "git show ab9811cb90"], "auto-edit")).toEqual({
       type: "auto-approve",
       reason: "Git show",
       group: "Using git",
@@ -56,13 +76,23 @@ describe("canAutoApprove()", () => {
   });
 
   test("bash -lc commands with unsafe redirects", () => {
+    // In suggest mode, all commands should require approval
     expect(check(["bash", "-lc", "echo hello > file.txt"])).toEqual({
       type: "ask-user",
     });
-    // In theory, we could make our checker more sophisticated to auto-approve
-    // This previously required approval, but now that we consider safe
-    // operators like "&&" the entire expression can be auto‑approved.
     expect(check(["bash", "-lc", "ls && pwd"])).toEqual({
+      type: "ask-user",
+    });
+
+    // In auto-edit mode, commands with redirects should still require approval
+    expect(
+      check(["bash", "-lc", "echo hello > file.txt"], "auto-edit"),
+    ).toEqual({
+      type: "ask-user",
+    });
+
+    // In auto-edit mode, safe commands with safe operators should be auto-approved
+    expect(check(["bash", "-lc", "ls && pwd"], "auto-edit")).toEqual({
       type: "auto-approve",
       reason: "List directory",
       group: "Searching",
@@ -70,8 +100,12 @@ describe("canAutoApprove()", () => {
     });
   });
 
-  test("true command is considered safe", () => {
-    expect(check(["true"])).toEqual({
+  test("true command in suggest mode requires approval", () => {
+    expect(check(["true"])).toEqual({ type: "ask-user" });
+  });
+
+  test("true command in auto-edit mode is auto-approved", () => {
+    expect(check(["true"], "auto-edit")).toEqual({
       type: "auto-approve",
       reason: "No‑op (true)",
       group: "Utility",

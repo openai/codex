@@ -24,7 +24,7 @@ import OpenAI, { APIConnectionTimeoutError } from "openai";
 
 // Wait time before retrying after rate limit errors (ms).
 const RATE_LIMIT_RETRY_WAIT_MS = parseInt(
-  process.env["OPENAI_RATE_LIMIT_RETRY_WAIT_MS"] || "15000",
+  process.env["OPENAI_RATE_LIMIT_RETRY_WAIT_MS"] || "2500",
   10,
 );
 
@@ -32,6 +32,7 @@ export type CommandConfirmation = {
   review: ReviewDecision;
   applyPatch?: ApplyPatchCommand | undefined;
   customDenyMessage?: string;
+  explanation?: string;
 };
 
 const alreadyProcessedResponses = new Set();
@@ -108,6 +109,9 @@ export class AgentLoop {
     if (this.terminated) {
       return;
     }
+
+    // Reset the current stream to allow new requests
+    this.currentStream = null;
     if (isLoggingEnabled()) {
       log(
         `AgentLoop.cancel() invoked – currentStream=${Boolean(
@@ -122,22 +126,16 @@ export class AgentLoop {
     )?.controller?.abort?.();
 
     this.canceled = true;
+
+    // Abort any in-progress tool calls
     this.execAbortController?.abort();
+
+    // Create a new abort controller for future tool calls
+    this.execAbortController = new AbortController();
     if (isLoggingEnabled()) {
       log("AgentLoop.cancel(): execAbortController.abort() called");
     }
 
-    // If we have *not* seen any function_call IDs yet there is nothing that
-    // needs to be satisfied in a follow‑up request.  In that case we clear
-    // the stored lastResponseId so a subsequent run starts a clean turn.
-    if (this.pendingAborts.size === 0) {
-      try {
-        this.onLastResponseId("");
-      } catch {
-        /* ignore */
-      }
-    }
-
     // NOTE: We intentionally do *not* clear `lastResponseId` here.  If the
     // stream produced a `function_call` before the user cancelled, OpenAI now
     // expects a corresponding `function_call_output` that must reference that
@@ -155,11 +153,6 @@ export class AgentLoop {
       }
     }
 
-    // NOTE: We intentionally do *not* clear `lastResponseId` here.  If the
-    // stream produced a `function_call` before the user cancelled, OpenAI now
-    // expects a corresponding `function_call_output` that must reference that
-    // very same response ID.  We therefore keep the ID around so the
-    // follow‑up request can still satisfy the contract.
     this.onLoading(false);
 
     /* Inform the UI that the run was aborted by the user. */
@@ -400,8 +393,10 @@ export class AgentLoop {
       // identified and dropped.
       const thisGeneration = ++this.generation;
 
-      // Reset cancellation flag for a fresh run.
+      // Reset cancellation flag and stream for a fresh run.
       this.canceled = false;
+      this.currentStream = null;
+
       // Create a fresh AbortController for this run so that tool calls from a
       // previous run do not accidentally get signalled.
       this.execAbortController = new AbortController();
@@ -569,11 +564,6 @@ export class AgentLoop {
               );
               continue;
             }
-            const isRateLimit =
-              status === 429 ||
-              errCtx.code === "rate_limit_exceeded" ||
-              errCtx.type === "rate_limit_exceeded" ||
-              /rate limit/i.test(errCtx.message ?? "");
 
             const isTooManyTokensError =
               (errCtx.param === "max_tokens" ||
@@ -597,30 +587,61 @@ export class AgentLoop {
               return;
             }
 
+            const isRateLimit =
+              status === 429 ||
+              errCtx.code === "rate_limit_exceeded" ||
+              errCtx.type === "rate_limit_exceeded" ||
+              /rate limit/i.test(errCtx.message ?? "");
             if (isRateLimit) {
               if (attempt < MAX_RETRIES) {
+                // Exponential backoff: base wait * 2^(attempt-1), or use suggested retry time
+                // if provided.
+                let delayMs = RATE_LIMIT_RETRY_WAIT_MS * 2 ** (attempt - 1);
+
+                // Parse suggested retry time from error message, e.g., "Please try again in 1.3s"
+                const msg = errCtx?.message ?? "";
+                const m = /(?:retry|try) again in ([\d.]+)s/i.exec(msg);
+                if (m && m[1]) {
+                  const suggested = parseFloat(m[1]) * 1000;
+                  if (!Number.isNaN(suggested)) {
+                    delayMs = suggested;
+                  }
+                }
                 log(
-                  `OpenAI rate limit exceeded (attempt ${attempt}/${MAX_RETRIES}), retrying in ${RATE_LIMIT_RETRY_WAIT_MS} ms...`,
+                  `OpenAI rate limit exceeded (attempt ${attempt}/${MAX_RETRIES}), retrying in ${Math.round(
+                    delayMs,
+                  )} ms...`,
                 );
                 // eslint-disable-next-line no-await-in-loop
-                await new Promise((resolve) =>
-                  setTimeout(resolve, RATE_LIMIT_RETRY_WAIT_MS),
-                );
+                await new Promise((resolve) => setTimeout(resolve, delayMs));
                 continue;
+              } else {
+                // We have exhausted all retry attempts. Surface a message so the user understands
+                // why the request failed and can decide how to proceed (e.g. wait and retry later
+                // or switch to a different model / account).
+
+                const errorDetails = [
+                  `Status: ${status || "unknown"}`,
+                  `Code: ${errCtx.code || "unknown"}`,
+                  `Type: ${errCtx.type || "unknown"}`,
+                  `Message: ${errCtx.message || "unknown"}`,
+                ].join(", ");
+
+                this.onItem({
+                  id: `error-${Date.now()}`,
+                  type: "message",
+                  role: "system",
+                  content: [
+                    {
+                      type: "input_text",
+                      text: `⚠️  Rate limit reached. Error details: ${errorDetails}. Please try again later.`,
+                    },
+                  ],
+                });
+
+                this.onLoading(false);
+                return;
               }
-              this.onItem({
-                id: `error-${Date.now()}`,
-                type: "message",
-                role: "system",
-                content: [
-                  {
-                    type: "input_text",
-                    text: "⚠️  Rate limit reached while contacting OpenAI. Please try again later.",
-                  },
-                ],
-              });
-              this.onLoading(false);
-              return;
             }
 
             const isClientError =
@@ -882,6 +903,7 @@ export class AgentLoop {
       //     (e.g. ECONNRESET, ETIMEDOUT …)
       //   • the OpenAI SDK attached an HTTP `status` >= 500 indicating a
       //     server‑side problem.
+      //   • the error is model specific and detected in stream.
       // If matched we emit a single system message to inform the user and
       // resolve gracefully so callers can choose to retry.
       // -------------------------------------------------------------------
@@ -964,6 +986,74 @@ export class AgentLoop {
         return;
       }
 
+      const isInvalidRequestError = () => {
+        if (!err || typeof err !== "object") {
+          return false;
+        }
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const e: any = err;
+
+        if (
+          e.type === "invalid_request_error" &&
+          e.code === "model_not_found"
+        ) {
+          return true;
+        }
+
+        if (
+          e.cause &&
+          e.cause.type === "invalid_request_error" &&
+          e.cause.code === "model_not_found"
+        ) {
+          return true;
+        }
+
+        return false;
+      };
+
+      if (isInvalidRequestError()) {
+        try {
+          // Extract request ID and error details from the error object
+
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const e: any = err;
+
+          const reqId =
+            e.request_id ??
+            (e.cause && e.cause.request_id) ??
+            (e.cause && e.cause.requestId);
+
+          const errorDetails = [
+            `Status: ${e.status || (e.cause && e.cause.status) || "unknown"}`,
+            `Code: ${e.code || (e.cause && e.cause.code) || "unknown"}`,
+            `Type: ${e.type || (e.cause && e.cause.type) || "unknown"}`,
+            `Message: ${
+              e.message || (e.cause && e.cause.message) || "unknown"
+            }`,
+          ].join(", ");
+
+          const msgText = `⚠️  OpenAI rejected the request${
+            reqId ? ` (request ID: ${reqId})` : ""
+          }. Error details: ${errorDetails}. Please verify your settings and try again.`;
+
+          this.onItem({
+            id: `error-${Date.now()}`,
+            type: "message",
+            role: "system",
+            content: [
+              {
+                type: "input_text",
+                text: msgText,
+              },
+            ],
+          });
+        } catch {
+          /* best-effort */
+        }
+        this.onLoading(false);
+        return;
+      }
+
       // Re‑throw all other errors so upstream handlers can decide what to do.
       throw err;
     }
@@ -1034,7 +1124,7 @@ You MUST adhere to the following criteria when executing the task:
             - If pre-commit doesn't work after a few retries, politely inform the user that the pre-commit setup is broken.
         - Once you finish coding, you must
             - Check \`git status\` to sanity check your changes; revert any scratch files or changes.
-            - Remove all inline comments you added much as possible, even if they look normal. Check using \`git diff\`. Inline comments must be generally avoided, unless active maintainers of the repo, after long careful study of the code and the issue, will still misinterpret the code without the comments.
+            - Remove all inline comments you added as much as possible, even if they look normal. Check using \`git diff\`. Inline comments must be generally avoided, unless active maintainers of the repo, after long careful study of the code and the issue, will still misinterpret the code without the comments.
             - Check if you accidentally add copyright or license headers. If so, remove them.
             - Try to run pre-commit if it is available.
             - For smaller tasks, describe in brief bullet points
