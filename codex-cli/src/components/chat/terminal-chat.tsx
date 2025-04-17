@@ -1,14 +1,17 @@
-import type { ColorName } from "chalk";
-import type { ResponseItem } from "openai/resources/responses/responses.mjs";
-import type { ReviewDecision } from "src/utils/agent/review.ts";
 import type { ApplyPatchCommand, ApprovalPolicy } from "../../approvals.js";
 import type { CommandConfirmation } from "../../utils/agent/agent-loop.js";
 import type { AppConfig } from "../../utils/config.js";
+import type { ColorName } from "chalk";
+import type { ResponseItem } from "openai/resources/responses/responses.mjs";
+import type { ReviewDecision } from "src/utils/agent/review.ts";
 
-import { Box, Text } from "ink";
-import { exec } from "node:child_process";
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { inspect } from "util";
+import TerminalChatInput from "./terminal-chat-input.js";
+import { TerminalChatToolCallCommand } from "./terminal-chat-tool-call-item.js";
+import {
+  calculateContextPercentRemaining,
+  uniqueById,
+} from "./terminal-chat-utils.js";
+import TerminalMessageHistory from "./terminal-message-history.js";
 import { formatCommandForDisplay } from "../../format-command.js";
 import { useConfirmation } from "../../hooks/use-confirmation.js";
 import { useTerminalSize } from "../../hooks/use-terminal-size.js";
@@ -23,13 +26,10 @@ import ApprovalModeOverlay from "../approval-mode-overlay.js";
 import HelpOverlay from "../help-overlay.js";
 import HistoryOverlay from "../history-overlay.js";
 import ModelOverlay from "../model-overlay.js";
-import TerminalChatInput from "./terminal-chat-input.js";
-import { TerminalChatToolCallCommand } from "./terminal-chat-tool-call-item.js";
-import {
-  calculateContextPercentRemaining,
-  uniqueById,
-} from "./terminal-chat-utils.js";
-import TerminalMessageHistory from "./terminal-message-history.js";
+import { Box, Text } from "ink";
+import { exec } from "node:child_process";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { inspect } from "util";
 
 type Props = {
   config: AppConfig;
@@ -212,7 +212,7 @@ export default function TerminalChat({
           const title = "Codex CLI";
           const cwd = PWD;
           exec(
-            `osascript -e 'display notification "${safePreview}" with title "${title}" subtitle "${cwd}" sound name \"Ping\"'`,
+            `osascript -e 'display notification "${safePreview}" with title "${title}" subtitle "${cwd}" sound name "Ping"'`,
           );
         }
       }
