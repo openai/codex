@@ -3,15 +3,24 @@ import type { SpawnOptions } from "child_process";
 
 import { exec } from "./raw-exec.js";
 import { log } from "../log.js";
-import { CONFIG_DIR } from "src/utils/config.js";
+import { CONFIG_DIR, DATA_DIR } from "src/utils/config.js";
+import { getLegacyConfigDir, legacyConfigDirExists } from "src/utils/platform-dirs.js";
 
 function getCommonRoots() {
-  return [
+  const roots = [
     CONFIG_DIR,
+    DATA_DIR,
     // Without this root, it'll cause:
     // pyenv: cannot rehash: $HOME/.pyenv/shims isn't writable
     `${process.env["HOME"]}/.pyenv`,
   ];
+
+  // Add legacy config directory if it exists for backward compatibility
+  if (legacyConfigDirExists()) {
+    roots.push(getLegacyConfigDir());
+  }
+
+  return roots;
 }
 
 export function execWithSeatbelt(
@@ -23,7 +32,7 @@ export function execWithSeatbelt(
   let scopedWritePolicy: string;
   let policyTemplateParams: Array<string>;
   if (writableRoots.length > 0) {
-    // Add `~/.codex` to the list of writable roots
+    // Add platform-specific config directories to the list of writable roots
     // (if there's any already, not in read-only mode)
     getCommonRoots().map((root) => writableRoots.push(root));
     const { policies, params } = writableRoots

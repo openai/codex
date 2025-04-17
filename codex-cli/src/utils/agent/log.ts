@@ -2,6 +2,7 @@ import * as fsSync from "fs";
 import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
+import { getLogDir, ensureDirectoryExists } from "../platform-dirs.js";
 
 interface Logger {
   /** Checking this can be used to avoid constructing a large log message. */
@@ -85,16 +86,11 @@ export function initLogger(): Logger {
     return logger;
   }
 
-  const isMac = process.platform === "darwin";
   const isWin = process.platform === "win32";
 
-  // On Mac and Windows, os.tmpdir() returns a user-specifc folder, so prefer
-  // it there. On Linux, use ~/.local/oai-codex so logs are not world-readable.
-  const logDir =
-    isMac || isWin
-      ? path.join(os.tmpdir(), "oai-codex")
-      : path.join(os.homedir(), ".local", "oai-codex");
-  fsSync.mkdirSync(logDir, { recursive: true });
+  // Use the platform-specific log directory
+  const logDir = getLogDir();
+  ensureDirectoryExists(logDir);
   const logFile = path.join(logDir, `codex-cli-${now()}.log`);
   // Write the empty string so the file exists and can be tail'd.
   fsSync.writeFileSync(logFile, "");

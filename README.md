@@ -105,10 +105,10 @@ And it's **fully open-source** so you can see and contribute to how it develops!
 
 ---
 
-## Funding Opportunity 
-We’re excited to launch a **$1 million initiative** supporting open source projects that use Codex CLI and other OpenAI models.  
+## Funding Opportunity
+We’re excited to launch a **$1 million initiative** supporting open source projects that use Codex CLI and other OpenAI models.
 
-* Grants are awarded in **$25,000** API credit increments.  
+* Grants are awarded in **$25,000** API credit increments.
 * Applications are reviewed **on a rolling basis**.
 
 **Interested? [Apply here](https://openai.com/form/codex-open-source-fund/).**
@@ -267,10 +267,16 @@ npm link
 
 ## Configuration
 
-Codex looks for config files in **`~/.codex/`**.
+Codex looks for config files in platform-specific directories:
+
+- **Linux**: `$XDG_CONFIG_HOME/codex/` (typically `~/.config/codex/`)
+- **macOS**: `~/Library/Application Support/Codex/`
+- **Other platforms**: `~/.codex/`
+
+Example configuration:
 
 ```yaml
-# ~/.codex/config.yaml
+# config.yaml in your platform-specific config directory
 model: o4-mini # Default model
 fullAutoErrorMode: ask-user # or ignore-and-continue
 ```
@@ -278,10 +284,12 @@ fullAutoErrorMode: ask-user # or ignore-and-continue
 You can also define custom instructions:
 
 ```yaml
-# ~/.codex/instructions.md
+# instructions.md in your platform-specific config directory
 - Always respond with emojis
 - Only use git commands if I explicitly mention you should
 ```
+
+> **Note:** For backward compatibility, Codex will still read from `~/.codex/` if the platform-specific directory doesn't exist, and will automatically migrate your configuration on first run.
 
 ---
 

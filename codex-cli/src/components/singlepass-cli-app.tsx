@@ -5,7 +5,7 @@ import type { FileOperation } from "../utils/singlepass/file_ops";
 
 import Spinner from "./vendor/ink-spinner"; // Third‑party / vendor components
 import TextInput from "./vendor/ink-text-input";
-import { OPENAI_TIMEOUT_MS, OPENAI_BASE_URL } from "../utils/config";
+import { OPENAI_TIMEOUT_MS, OPENAI_BASE_URL, DATA_DIR } from "../utils/config";
 import {
   generateDiffSummary,
   generateEditSummary,
@@ -17,6 +17,7 @@ import {
   makeAsciiDirectoryStructure,
 } from "../utils/singlepass/context_files";
 import { EditedFilesSchema } from "../utils/singlepass/file_ops";
+import { ensureDirectoryExists } from "../utils/platform-dirs.js";
 import * as fsSync from "fs";
 import * as fsPromises from "fs/promises";
 import { Box, Text, useApp, useInput } from "ink";
@@ -43,13 +44,22 @@ function loadPromptHistory(): Array<string> {
   }
   // fallback to process.env-based temp storage if localStorage isn't available
   try {
+    // Use the platform-specific data directory
+    const historyDir = path.join(DATA_DIR, "history");
+    const historyFile = path.join(historyDir, "singlepass_history.json");
+
+    if (fsSync.existsSync(historyFile)) {
+      return JSON.parse(fsSync.readFileSync(historyFile, "utf8"));
+    }
+
+    // Legacy path fallback
     if (process && process.env && process.env["HOME"]) {
-      const p = path.join(
+      const legacyPath = path.join(
         process.env["HOME"],
         ".codex_singlepass_history.json",
       );
-      if (fsSync.existsSync(p)) {
-        return JSON.parse(fsSync.readFileSync(p, "utf8"));
+      if (fsSync.existsSync(legacyPath)) {
+        return JSON.parse(fsSync.readFileSync(legacyPath, "utf8"));
       }
     }
   } catch {
@@ -68,12 +78,19 @@ function savePromptHistory(history: Array<string>) {
   }
   // fallback to process.env-based temp storage if localStorage isn't available
   try {
+    // Use the platform-specific data directory
+    const historyDir = path.join(DATA_DIR, "history");
+    ensureDirectoryExists(historyDir);
+    const historyFile = path.join(historyDir, "singlepass_history.json");
+    fsSync.writeFileSync(historyFile, JSON.stringify(history), "utf8");
+
+    // Also write to legacy path for backward compatibility
     if (process && process.env && process.env["HOME"]) {
-      const p = path.join(
+      const legacyPath = path.join(
         process.env["HOME"],
         ".codex_singlepass_history.json",
       );
-      fsSync.writeFileSync(p, JSON.stringify(history), "utf8");
+      fsSync.writeFileSync(legacyPath, JSON.stringify(history), "utf8");
     }
   } catch {
     // ignore

@@ -12,24 +12,45 @@ import { log, isLoggingEnabled } from "./agent/log.js";
 import { AutoApprovalMode } from "./auto-approval-mode.js";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { load as loadYaml, dump as dumpYaml } from "js-yaml";
-import { homedir } from "os";
 import { dirname, join, extname, resolve as resolvePath } from "path";
+import {
+  getConfigDir,
+  getDataDir,
+  getLegacyConfigDir,
+  legacyConfigDirExists,
+  ensureDirectoryExists
+} from "./platform-dirs.js";
 
 export const DEFAULT_AGENTIC_MODEL = "o4-mini";
 export const DEFAULT_FULL_CONTEXT_MODEL = "gpt-4.1";
 export const DEFAULT_APPROVAL_MODE = AutoApprovalMode.SUGGEST;
 export const DEFAULT_INSTRUCTIONS = "";
 
-export const CONFIG_DIR = join(homedir(), ".codex");
+// Get the platform-specific config directory
+export const CONFIG_DIR = getConfigDir();
+// Legacy config directory for backward compatibility
+export const LEGACY_CONFIG_DIR = getLegacyConfigDir();
+
+// Config file paths in the new location
 export const CONFIG_JSON_FILEPATH = join(CONFIG_DIR, "config.json");
 export const CONFIG_YAML_FILEPATH = join(CONFIG_DIR, "config.yaml");
 export const CONFIG_YML_FILEPATH = join(CONFIG_DIR, "config.yml");
+
+// Legacy config file paths for backward compatibility
+export const LEGACY_CONFIG_JSON_FILEPATH = join(LEGACY_CONFIG_DIR, "config.json");
+export const LEGACY_CONFIG_YAML_FILEPATH = join(LEGACY_CONFIG_DIR, "config.yaml");
+export const LEGACY_CONFIG_YML_FILEPATH = join(LEGACY_CONFIG_DIR, "config.yml");
+export const LEGACY_INSTRUCTIONS_FILEPATH = join(LEGACY_CONFIG_DIR, "instructions.md");
 
 // Keep the original constant name for backward compatibility, but point it at
 // the default JSON path. Code that relies on this constant will continue to
 // work unchanged.
 export const CONFIG_FILEPATH = CONFIG_JSON_FILEPATH;
 export const INSTRUCTIONS_FILEPATH = join(CONFIG_DIR, "instructions.md");
+
+// Data directory for sessions and other persistent data
+export const DATA_DIR = getDataDir();
+export const SESSIONS_DIR = join(DATA_DIR, "sessions");
 
 export const OPENAI_TIMEOUT_MS =
   parseInt(process.env["OPENAI_TIMEOUT_MS"] || "0", 10) || undefined;
@@ -173,16 +194,29 @@ export const loadConfig = (
   instructionsPath: string | undefined = INSTRUCTIONS_FILEPATH,
   options: LoadConfigOptions = {},
 ): AppConfig => {
+  // Check for legacy config files and migrate if needed
+  migrateFromLegacyIfNeeded();
   // Determine the actual path to load. If the provided path doesn't exist and
   // the caller passed the default JSON path, automatically fall back to YAML
-  // variants.
+  // variants or legacy paths.
   let actualConfigPath = configPath;
   if (!existsSync(actualConfigPath)) {
     if (configPath === CONFIG_FILEPATH) {
+      // Try new location YAML variants
       if (existsSync(CONFIG_YAML_FILEPATH)) {
         actualConfigPath = CONFIG_YAML_FILEPATH;
       } else if (existsSync(CONFIG_YML_FILEPATH)) {
         actualConfigPath = CONFIG_YML_FILEPATH;
+      }
+      // If still not found, try legacy location
+      else if (legacyConfigDirExists()) {
+        if (existsSync(LEGACY_CONFIG_JSON_FILEPATH)) {
+          actualConfigPath = LEGACY_CONFIG_JSON_FILEPATH;
+        } else if (existsSync(LEGACY_CONFIG_YAML_FILEPATH)) {
+          actualConfigPath = LEGACY_CONFIG_YAML_FILEPATH;
+        } else if (existsSync(LEGACY_CONFIG_YML_FILEPATH)) {
+          actualConfigPath = LEGACY_CONFIG_YML_FILEPATH;
+        }
       }
     }
   }
@@ -203,11 +237,18 @@ export const loadConfig = (
     }
   }
 
-  const instructionsFilePathResolved =
-    instructionsPath ?? INSTRUCTIONS_FILEPATH;
-  const userInstructions = existsSync(instructionsFilePathResolved)
-    ? readFileSync(instructionsFilePathResolved, "utf-8")
-    : DEFAULT_INSTRUCTIONS;
+  // Resolve instructions path, checking both new and legacy locations
+  let instructionsFilePathResolved = instructionsPath ?? INSTRUCTIONS_FILEPATH;
+  let userInstructions = DEFAULT_INSTRUCTIONS;
+
+  if (existsSync(instructionsFilePathResolved)) {
+    userInstructions = readFileSync(instructionsFilePathResolved, "utf-8");
+  } else if (legacyConfigDirExists() && existsSync(LEGACY_INSTRUCTIONS_FILEPATH)) {
+    // Try legacy instructions path if the new one doesn't exist
+    userInstructions = readFileSync(LEGACY_INSTRUCTIONS_FILEPATH, "utf-8");
+    // Update the resolved path to point to the legacy location for potential saving later
+    instructionsFilePathResolved = LEGACY_INSTRUCTIONS_FILEPATH;
+  }
 
   // Project doc support.
   const shouldLoadProjectDoc =
@@ -315,6 +356,73 @@ export const loadConfig = (
 
   return config;
 };
+
+/**
+ * Migrates configuration files from the legacy ~/.codex directory to the platform-specific
+ * directory if needed. This ensures a smooth transition for existing users.
+ */
+export function migrateFromLegacyIfNeeded(): void {
+  // Only migrate if legacy config exists and new config doesn't
+  if (!legacyConfigDirExists() || existsSync(CONFIG_JSON_FILEPATH) ||
+      existsSync(CONFIG_YAML_FILEPATH) || existsSync(CONFIG_YML_FILEPATH)) {
+    return;
+  }
+
+  try {
+    // Ensure the new config directory exists
+    ensureDirectoryExists(CONFIG_DIR);
+    ensureDirectoryExists(DATA_DIR);
+    ensureDirectoryExists(SESSIONS_DIR);
+
+    // Migrate config files
+    if (existsSync(LEGACY_CONFIG_JSON_FILEPATH)) {
+      const content = readFileSync(LEGACY_CONFIG_JSON_FILEPATH, 'utf-8');
+      writeFileSync(CONFIG_JSON_FILEPATH, content, 'utf-8');
+      console.log(`Migrated config from ${LEGACY_CONFIG_JSON_FILEPATH} to ${CONFIG_JSON_FILEPATH}`);
+    } else if (existsSync(LEGACY_CONFIG_YAML_FILEPATH)) {
+      const content = readFileSync(LEGACY_CONFIG_YAML_FILEPATH, 'utf-8');
+      writeFileSync(CONFIG_YAML_FILEPATH, content, 'utf-8');
+      console.log(`Migrated config from ${LEGACY_CONFIG_YAML_FILEPATH} to ${CONFIG_YAML_FILEPATH}`);
+    } else if (existsSync(LEGACY_CONFIG_YML_FILEPATH)) {
+      const content = readFileSync(LEGACY_CONFIG_YML_FILEPATH, 'utf-8');
+      writeFileSync(CONFIG_YML_FILEPATH, content, 'utf-8');
+      console.log(`Migrated config from ${LEGACY_CONFIG_YML_FILEPATH} to ${CONFIG_YML_FILEPATH}`);
+    }
+
+    // Migrate instructions file
+    if (existsSync(LEGACY_INSTRUCTIONS_FILEPATH)) {
+      const content = readFileSync(LEGACY_INSTRUCTIONS_FILEPATH, 'utf-8');
+      writeFileSync(INSTRUCTIONS_FILEPATH, content, 'utf-8');
+      console.log(`Migrated instructions from ${LEGACY_INSTRUCTIONS_FILEPATH} to ${INSTRUCTIONS_FILEPATH}`);
+    }
+
+    // Migrate sessions directory if it exists
+    const legacySessionsDir = join(LEGACY_CONFIG_DIR, 'sessions');
+    if (existsSync(legacySessionsDir)) {
+      const fs = require('fs');
+      const path = require('path');
+
+      // Read all files in the legacy sessions directory
+      const sessionFiles = fs.readdirSync(legacySessionsDir);
+
+      // Copy each file to the new sessions directory
+      for (const file of sessionFiles) {
+        const sourcePath = path.join(legacySessionsDir, file);
+        const destPath = path.join(SESSIONS_DIR, file);
+
+        // Only copy files, not directories
+        if (fs.statSync(sourcePath).isFile()) {
+          const content = fs.readFileSync(sourcePath);
+          fs.writeFileSync(destPath, content);
+          console.log(`Migrated session file from ${sourcePath} to ${destPath}`);
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Error during migration from legacy config:', error);
+    // Continue with execution even if migration fails
+  }
+}
 
 export const saveConfig = (
   config: AppConfig,
