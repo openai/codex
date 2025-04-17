@@ -27,26 +27,21 @@ export default function ModelOverlay({
   onSelect,
   onExit,
 }: Props): JSX.Element {
-  const [items, setItems] = useState<Array<{ label: string; value: string }>>(
-    [],
-  );
+  // Group models into local recommended and OpenAI‑fetched lists
+  const OPENAI_GROUP_VALUE = '__OPENAI_GROUP__';
+  const BACK_VALUE = '__BACK__';
+  const [recommendedModels, setRecommendedModels] = useState<string[]>([]);
+  const [openaiModels, setOpenaiModels] = useState<string[]>([]);
+  const [view, setView] = useState<'root' | 'openai'>('root');
 
   useEffect(() => {
     (async () => {
       const models = await getAvailableModels();
-
-      // Split the list into recommended and “other” models.
+      // Split the list into recommended and “other” (OpenAI) models
       const recommended = RECOMMENDED_MODELS.filter((m) => models.includes(m));
       const others = models.filter((m) => !recommended.includes(m));
-
-      const ordered = [...recommended, ...others.sort()];
-
-      setItems(
-        ordered.map((m) => ({
-          label: recommended.includes(m) ? `⭐ ${m}` : m,
-          value: m,
-        })),
-      );
+      setRecommendedModels(recommended);
+      setOpenaiModels(others);
     })();
   }, []);
 
@@ -90,18 +85,44 @@ export default function ModelOverlay({
       </Box>
     );
   }
+  // Prepare items for the typeahead based on the current view (root or OpenAI group)
+  const initialItems = (() => {
+    if (view === 'root') {
+      const items = recommendedModels.map((m) => ({ label: `⭐ ${m}`, value: m }));
+      if (openaiModels.length > 0) {
+        items.push({ label: 'OpenAI', value: OPENAI_GROUP_VALUE });
+      }
+      return items;
+    } else {
+      return [
+        { label: '← Back', value: BACK_VALUE },
+        ...openaiModels.map((m) => ({ label: m, value: m })),
+      ];
+    }
+  })();
+
+  const handleSelect = (value: string) => {
+    if (view === 'root' && value === OPENAI_GROUP_VALUE) {
+      setView('openai');
+    } else if (view === 'openai' && value === BACK_VALUE) {
+      setView('root');
+    } else {
+      onSelect(value);
+    }
+  };
 
   return (
     <TypeaheadOverlay
+      key={view}
       title="Switch model"
       description={
         <Text>
           Current model: <Text color="greenBright">{currentModel}</Text>
         </Text>
       }
-      initialItems={items}
+      initialItems={initialItems}
       currentValue={currentModel}
-      onSelect={onSelect}
+      onSelect={handleSelect}
       onExit={onExit}
     />
   );

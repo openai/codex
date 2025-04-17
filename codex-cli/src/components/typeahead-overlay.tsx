@@ -125,6 +125,8 @@ export default function TypeaheadOverlay({
       <Box flexDirection="column" paddingX={1} gap={1}>
         {description}
         <TextInput
+          /** only accept submit when the user has typed a query */
+          focus={value.length > 0}
           value={value}
           onChange={setValue}
           onSubmit={(submitted) => {
