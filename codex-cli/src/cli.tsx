@@ -29,6 +29,7 @@ import {
 } from "./utils/model-utils.js";
 import { parseToolCall } from "./utils/parsers";
 import { onExit, setInkRenderer } from "./utils/terminal";
+import { formatForNonInteractiveMode } from "./utils/non-interactive-formatter";
 import chalk from "chalk";
 import { spawnSync } from "child_process";
 import fs from "fs";
@@ -63,10 +64,13 @@ const cli = meow(
 
     --auto-edit                Automatically approve file edits; still prompt for commands
     --full-auto                Automatically approve edits and commands when executed in the sandbox
+    --fully-non-interactive    Run in completely non-interactive mode, automatically approving all
+                               actions, including commands, with no user interaction
 
     --no-project-doc           Do not automatically include the repository's 'codex.md'
     --project-doc <file>       Include an additional markdown file at <file> as context
     --full-stdout              Do not truncate stdout/stderr from command outputs
+    --workdir <directory>      Set the working directory for Codex to operate in
 
   Dangerous options
     --dangerously-auto-approve-everything
@@ -81,6 +85,7 @@ const cli = meow(
   Examples
     $ codex "Write and run a python program that prints ASCII art"
     $ codex -q "fix build issues"
+    $ codex --workdir /path/to/project "Analyze this codebase"
     $ codex completion bash
 `,
   {
@@ -122,6 +127,11 @@ const cli = meow(
         description:
           "Determine the approval mode for Codex (default: suggest) Values: suggest, auto-edit, full-auto",
       },
+      fullyNonInteractive: {
+        type: "boolean",
+        description:
+          "Run in fully non-interactive mode with automatic approval of all suggestions and commands",
+      },
       noProjectDoc: {
         type: "boolean",
         description: "Disable automatic inclusion of project‑level codex.md",
@@ -135,6 +145,10 @@ const cli = meow(
         description:
           "Disable truncation of command stdout/stderr messages (show everything)",
         aliases: ["no-truncate"],
+      },
+      workdir: {
+        type: "string",
+        description: "Set the working directory for Codex to operate in",
       },
 
       // Experimental mode where whole directory is loaded in context and model is requested
@@ -183,6 +197,26 @@ complete -c codex -a '(_fish_complete_path)' -d 'file path'`,
 // Show help if requested
 if (cli.flags.help) {
   cli.showHelp();
+}
+
+// Change working directory if specified
+const workdir = cli.flags.workdir as string | undefined;
+if (workdir) {
+  try {
+    const targetDir = path.resolve(workdir);
+    if (!fs.existsSync(targetDir)) {
+      // eslint-disable-next-line no-console
+      console.error(`Error: Working directory "${targetDir}" does not exist.`);
+      process.exit(1);
+    }
+    process.chdir(targetDir);
+    // eslint-disable-next-line no-console
+    console.log(`Changed working directory to: ${targetDir}`);
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error(`Error changing to directory "${workdir}": ${error}`);
+    process.exit(1);
+  }
 }
 
 // Handle config flag: open instructions file in editor and exit
@@ -276,6 +310,26 @@ if (fullContextMode) {
   process.exit(0);
 }
 
+// If we are running in fully non-interactive mode, do that and exit
+const fullyNonInteractive = Boolean(cli.flags.fullyNonInteractive);
+if (fullyNonInteractive) {
+  process.env["CODEX_QUIET_MODE"] = "1";
+  if (!prompt || prompt.trim() === "") {
+    // eslint-disable-next-line no-console
+    console.error(
+      'Fully non-interactive mode requires a prompt string, e.g.,: codex --fully-non-interactive "Generate a hello world app"',
+    );
+    process.exit(1);
+  }
+  await runFullyNonInteractiveMode({
+    prompt: prompt as string,
+    imagePaths: imagePaths || [],
+    config,
+  });
+  onExit();
+  process.exit(0);
+}
+
 // If we are running in --quiet mode, do that and exit.
 const quietMode = Boolean(cli.flags.quiet);
 const autoApproveEverything = Boolean(
@@ -340,6 +394,9 @@ const instance = render(
 );
 setInkRenderer(instance);
 
+/**
+ * Format response items for quiet mode output
+ */
 function formatResponseItemForQuietMode(item: ResponseItem): string {
   if (!PRETTY_PRINT) {
     return JSON.stringify(item);
@@ -389,6 +446,82 @@ function formatResponseItemForQuietMode(item: ResponseItem): string {
   }
 }
 
+/**
+ * Format response items for non-interactive mode with cleaner output
+ * Filters out reasoning messages and improves readability
+ */
+function formatResponseItemForNonInteractiveMode(item: ResponseItem): string | null {
+  if (!PRETTY_PRINT) {
+    return JSON.stringify(item);
+  }
+
+  // Skip reasoning messages entirely
+  // @ts-expect-error - We're checking for a type that might not be in the ResponseItem type
+  if (item.type === "reasoning") {
+    return null;
+  }
+
+  switch (item.type) {
+    case "message": {
+      const role = item.role === "assistant" ? "assistant" : item.role;
+      const txt = item.content
+        .map((c) => {
+          if (c.type === "output_text" || c.type === "input_text") {
+            return c.text;
+          }
+          if (c.type === "input_image") {
+            return "<Image>";
+          }
+          if (c.type === "input_file") {
+            return c.filename;
+          }
+          if (c.type === "refusal") {
+            return c.refusal;
+          }
+          return "?";
+        })
+        .join(" ");
+      return `${role}: ${txt}`;
+    }
+    case "function_call": {
+      const details = parseToolCall(item);
+      return `> Running: ${details?.cmdReadableText ?? item.name}`;
+    }
+    case "function_call_output": {
+      // @ts-expect-error metadata unknown on ResponseFunctionToolCallOutputItem
+      const meta = item.metadata as ExecOutputMetadata;
+      
+      try {
+        // Parse the JSON output to get the actual command output
+        const outputData = JSON.parse(item.output);
+        const actualOutput = outputData.output || item.output;
+        const exitCode = meta?.exit_code ?? outputData.metadata?.exit_code;
+        
+        // Provide clean output with status indication
+        if (exitCode === 0 || exitCode === undefined) {
+          return actualOutput;
+        } else {
+          return `Command failed (exit code: ${exitCode}):\n${actualOutput}`;
+        }
+      } catch (e) {
+        // Fall back to original output if parsing fails
+        const parts: Array<string> = [];
+        if (typeof meta?.exit_code === "number") {
+          parts.push(`code: ${meta.exit_code}`);
+        }
+        if (typeof meta?.duration_seconds === "number") {
+          parts.push(`duration: ${meta.duration_seconds}s`);
+        }
+        const header = parts.length > 0 ? ` (${parts.join(", ")})` : "";
+        return `Output${header}:\n${item.output}`;
+      }
+    }
+    default: {
+      return JSON.stringify(item);
+    }
+  }
+}
+
 async function runQuietMode({
   prompt,
   imagePaths,
@@ -412,13 +545,51 @@ async function runQuietMode({
     onLoading: () => {
       /* intentionally ignored in quiet mode */
     },
-    getCommandConfirmation: (
-      _command: Array<string>,
-    ): Promise<CommandConfirmation> => {
-      return Promise.resolve({ review: ReviewDecision.NO_CONTINUE });
-    },
+    getCommandConfirmation: (_command: Array<string>) => Promise.resolve({ review: ReviewDecision.NO_CONTINUE }),
     onLastResponseId: () => {
       /* intentionally ignored in quiet mode */
+    },
+  });
+
+  const inputItem = await createInputItem(prompt, imagePaths);
+  await agent.run([inputItem]);
+}
+
+/**
+ * Run Codex in fully non-interactive mode, automatically approving all suggestions and commands
+ */
+async function runFullyNonInteractiveMode({
+  prompt,
+  imagePaths,
+  config,
+}: {
+  prompt: string;
+  imagePaths: Array<string>;
+  config: AppConfig;
+}): Promise<void> {
+  // Always use full auto mode
+  const approvalPolicy = AutoApprovalMode.FULL_AUTO;
+  
+  const agent = new AgentLoop({
+    model: config.model,
+    config: config,
+    instructions: config.instructions,
+    approvalPolicy,
+    onItem: (item: ResponseItem) => {
+      // Use the improved formatter from the dedicated module
+      const formatted = formatForNonInteractiveMode(item);
+      if (formatted !== null) {
+        // eslint-disable-next-line no-console
+        console.log(formatted);
+      }
+    },
+    onLoading: () => {
+      /* intentionally ignored in non-interactive mode */
+    },
+    getCommandConfirmation: (_command, _applyPatch) => 
+      Promise.resolve({ review: ReviewDecision.YES }),
+    onLastResponseId: () => {
+      /* intentionally ignored in non-interactive mode */
     },
   });
 

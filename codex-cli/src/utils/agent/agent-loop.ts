@@ -1,4 +1,3 @@
-import type { ReviewDecision } from "./review.js";
 import type { ApplyPatchCommand, ApprovalPolicy } from "../../approvals.js";
 import type { AppConfig } from "../config.js";
 import type {
@@ -11,6 +10,7 @@ import type { Reasoning } from "openai/resources.mjs";
 import { log, isLoggingEnabled } from "./log.js";
 import { OPENAI_BASE_URL, OPENAI_TIMEOUT_MS } from "../config.js";
 import { parseToolCallArguments } from "../parsers.js";
+import { ReviewDecision } from "./review.js";
 import {
   ORIGIN,
   CLI_VERSION,
@@ -1015,6 +1015,18 @@ export class AgentLoop {
       emitItem(item as ResponseItem);
     }
     return turnInput;
+  }
+
+  /**
+   * Helper function that always returns an automatic approval
+   * Used for fully non-interactive mode where everything is auto-approved
+   * @returns A CommandConfirmation with auto-approval
+   */
+  private getAutoApproveConfirmation(
+    _command: Array<string>,
+    _applyPatch: ApplyPatchCommand | undefined,
+  ): Promise<CommandConfirmation> {
+    return Promise.resolve({ review: ReviewDecision.YES });
   }
 }
 
