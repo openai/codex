@@ -30,6 +30,7 @@
     "src"
   ],
   "dependencies": {
+    "@azure/identity": "^4.9.0",
     "@inkjs/ui": "^2.0.0",
     "chalk": "^5.2.0",
     "diff": "^7.0.0",
@@ -41,10 +42,11 @@
     "marked-terminal": "^7.3.0",
     "meow": "^13.2.0",
     "open": "^10.1.0",
-    "openai": "^4.89.0",
+    "openai": "^4.95.0",
     "react": "^18.2.0",
     "shell-quote": "^1.8.2",
-    "use-interval": "1.4.0"
+    "use-interval": "1.4.0",
+    "zod": "^3.22.4"
   },
   "devDependencies": {
     "@eslint/js": "^9.22.0",

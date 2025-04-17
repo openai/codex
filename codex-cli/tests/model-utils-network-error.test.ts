@@ -37,6 +37,7 @@ describe("model-utils – offline resilience", () => {
 
   it("returns true when API key absent (no network available)", async () => {
     delete process.env["OPENAI_API_KEY"];
+    delete process.env["AZURE_OPENAI_ENDPOINT"];
 
     // Re‑import after env change so the module picks up the new state.
     vi.resetModules();

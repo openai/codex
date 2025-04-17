@@ -36,6 +36,12 @@ export const OPENAI_TIMEOUT_MS =
 export const OPENAI_BASE_URL = process.env["OPENAI_BASE_URL"] || "";
 export let OPENAI_API_KEY = process.env["OPENAI_API_KEY"] || "";
 
+export const AZURE_OPENAI_ENDPOINT = process.env["AZURE_OPENAI_ENDPOINT"] || "";
+export const AZURE_OPENAI_API_VERSION =
+  process.env["AZURE_OPENAI_API_VERSION"] || "";
+export const AZURE_OPENAI_DEPLOYMENT =
+  process.env["AZURE_OPENAI_DEPLOYMENT"] || "";
+
 export function setApiKey(apiKey: string): void {
   OPENAI_API_KEY = apiKey;
 }
