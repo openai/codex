@@ -55,7 +55,7 @@ const thinkingTexts = ["Thinking"]; /* [
   "Asking the oracle",
   "Detangling qubits",
   "Reading tea leaves",
-  "Pondering universal love and transcendant joy",
+  "Pondering universal love and transcendent joy",
   "Feeling the AGI",
   "Shaving the yak",
   "Escaping local minima",

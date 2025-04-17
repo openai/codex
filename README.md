@@ -13,7 +13,6 @@
 - [Experimental Technology Disclaimer](#experimental-technology-disclaimer)
 - [Quickstart](#quickstart)
 - [Why Codex?](#whycodex)
-- [Funding Opportunity](#funding-opportunity)
 - [Security Model \& Permissions](#securitymodelpermissions)
   - [Platform sandboxing details](#platform-sandboxing-details)
 - [System Requirements](#systemrequirements)
@@ -24,6 +23,7 @@
 - [Installation](#installation)
 - [Configuration](#configuration)
 - [FAQ](#faq)
+- [Funding Opportunity](#funding-opportunity)
 - [Contributing](#contributing)
   - [Development workflow](#development-workflow)
   - [Writing high‑impact code changes](#writing-highimpact-code-changes)
@@ -102,16 +102,6 @@ development_ that understands and executes your repo.
 - **Multimodal** — pass in screenshots or diagrams to implement features ✨
 
 And it's **fully open-source** so you can see and contribute to how it develops!
-
----
-
-## Funding Opportunity 
-We’re excited to launch a **$1 million initiative** supporting open source projects that use Codex CLI and other OpenAI models.  
-
-* Grants are awarded in **$25,000** API credit increments.  
-* Applications are reviewed **on a rolling basis**.
-
-**Interested? [Apply here](https://openai.com/form/codex-open-source-fund/).**
 
 ---
 
@@ -314,6 +304,17 @@ Not directly. It requires [Windows Subsystem for Linux (WSL2)](https://learn.mic
 Any model available with [Responses API](https://platform.openai.com/docs/api-reference/responses). The default is `o4-mini`, but pass `--model gpt-4o` or set `model: gpt-4o` in your config file to override.
 
 </details>
+
+---
+
+## Funding Opportunity
+
+We’re excited to launch a **$1 million initiative** supporting open source projects that use Codex CLI and other OpenAI models.
+
+- Grants are awarded in **$25,000** API credit increments.
+- Applications are reviewed **on a rolling basis**.
+
+**Interested? [Apply here](https://openai.com/form/codex-open-source-fund/).**
 
 ---
 
