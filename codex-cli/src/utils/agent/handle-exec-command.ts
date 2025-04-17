@@ -204,11 +204,20 @@ async function execCommand(
   runInSandbox: boolean,
   abortSignal?: AbortSignal,
 ): Promise<ExecCommandSummary> {
+  let { workdir } = execInput;
+  if (workdir) {
+    try {
+      await access(workdir);
+    } catch (e) {
+      log(`EXEC workdir=${workdir} not found, use process.cwd() instead`);
+      workdir = process.cwd();
+    }
+  }
   if (isLoggingEnabled()) {
     if (applyPatchCommand != null) {
       log("EXEC running apply_patch command");
     } else {
-      const { cmd, workdir, timeoutInMillis } = execInput;
+      const { cmd, timeoutInMillis } = execInput;
       // Seconds are a bit easier to read in log messages and most timeouts
       // are specified as multiples of 1000, anyway.
       const timeout =
@@ -248,7 +257,7 @@ async function execCommand(
   };
 }
 
-const isInContainer = async (): Promise<boolean> => {
+const isInLinux = async (): Promise<boolean> => {
   try {
     await access("/proc/1/cgroup");
     return true;
@@ -261,7 +270,7 @@ async function getSandbox(runInSandbox: boolean): Promise<SandboxType> {
   if (runInSandbox) {
     if (process.platform === "darwin") {
       return SandboxType.MACOS_SEATBELT;
-    } else if (await isInContainer()) {
+    } else if (await isInLinux()) {
       return SandboxType.NONE;
     }
     throw new Error("Sandbox was mandated, but no sandbox is available!");

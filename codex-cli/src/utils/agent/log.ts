@@ -88,7 +88,7 @@ export function initLogger(): Logger {
   const isMac = process.platform === "darwin";
   const isWin = process.platform === "win32";
 
-  // On Mac and Windows, os.tmpdir() returns a user-specifc folder, so prefer
+  // On Mac and Windows, os.tmpdir() returns a user-specific folder, so prefer
   // it there. On Linux, use ~/.local/oai-codex so logs are not world-readable.
   const logDir =
     isMac || isWin

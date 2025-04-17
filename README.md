@@ -10,6 +10,7 @@
 <details>
 <summary><strong>Table&nbsp;of&nbsp;Contents</strong></summary>
 
+- [Experimental Technology Disclaimer](#experimental-technology-disclaimer)
 - [Quickstart](#quickstart)
 - [Why Codex?](#whycodex)
 - [Security Model \& Permissions](#securitymodelpermissions)
@@ -22,6 +23,7 @@
 - [Installation](#installation)
 - [Configuration](#configuration)
 - [FAQ](#faq)
+- [Funding Opportunity](#funding-opportunity)
 - [Contributing](#contributing)
   - [Development workflow](#development-workflow)
   - [Writing high‑impact code changes](#writing-highimpact-code-changes)
@@ -29,15 +31,27 @@
   - [Review process](#review-process)
   - [Community values](#community-values)
   - [Getting help](#getting-help)
-  - [Developer Certificate of Origin (DCO)](#developer-certificate-of-origin-dco)
-    - [How to sign (recommended flow)](#how-to-sign-recommended-flow)
+  - [Contributor License Agreement (CLA)](#contributor-license-agreement-cla)
     - [Quick fixes](#quick-fixes)
+  - [Releasing `codex`](#releasing-codex)
 - [Security \& Responsible AI](#securityresponsibleai)
 - [License](#license)
+- [Zero Data Retention (ZDR) Organization Limitation](#zero-data-retention-zdr-organization-limitation)
 
 </details>
 
 ---
+
+## Experimental Technology Disclaimer
+
+Codex CLI is an experimental project under active development. It is not yet stable, may contain bugs, incomplete features, or undergo breaking changes. We’re building it in the open with the community and welcome:
+
+- Bug reports
+- Feature requests
+- Pull requests
+- Good vibes
+
+Help us improve by filing issues or submitting PRs (see the section below for how to contribute)!
 
 ## Quickstart
 
@@ -123,13 +137,12 @@ The hardening mechanism Codex uses depends on your OS:
   - Outbound network is _fully blocked_ by default – even if a child process
     tries to `curl` somewhere it will fail.
 
-- **Linux** – we recommend using Docker for sandboxing, where Codex launches itself inside a **minimal
+- **Linux** – there is no sandboxing by default.
+  We recommend using Docker for sandboxing, where Codex launches itself inside a **minimal
   container image** and mounts your repo _read/write_ at the same path. A
   custom `iptables`/`ipset` firewall script denies all egress except the
   OpenAI API. This gives you deterministic, reproducible runs without needing
-  root on the host. You can read more in [`run_in_container.sh`](./codex-cli/scripts/run_in_container.sh)
-
-Both approaches are _transparent_ to everyday usage – you still run `codex` from your repo root and approve/reject steps as usual.
+  root on the host. You can use the [`run_in_container.sh`](./codex-cli/scripts/run_in_container.sh) script to set up the sandbox.
 
 ---
 
@@ -148,11 +161,12 @@ Both approaches are _transparent_ to everyday usage – you still run `codex` fr
 
 ## CLI Reference
 
-| Command        | Purpose                             | Example                              |
-| -------------- | ----------------------------------- | ------------------------------------ |
-| `codex`        | Interactive REPL                    | `codex`                              |
-| `codex "…"`    | Initial prompt for interactive REPL | `codex "fix lint errors"`            |
-| `codex -q "…"` | Non‑interactive "quiet mode"        | `codex -q --json "explain utils.ts"` |
+| Command                              | Purpose                             | Example                              |
+| ------------------------------------ | ----------------------------------- | ------------------------------------ |
+| `codex`                              | Interactive REPL                    | `codex`                              |
+| `codex "…"`                          | Initial prompt for interactive REPL | `codex "fix lint errors"`            |
+| `codex -q "…"`                       | Non‑interactive "quiet mode"        | `codex -q --json "explain utils.ts"` |
+| `codex completion <bash\|zsh\|fish>` | Print shell completion script       | `codex completion bash`              |
 
 Key flags: `--model/-m`, `--approval-mode/-a`, and `--quiet/-q`.
 
@@ -188,7 +202,7 @@ Set `CODEX_QUIET_MODE=1` to silence interactive UI noise.
 
 ## Recipes
 
-Below are a few bite‑size examples you can copy‑paste. Replace the text in quotes with your own task.
+Below are a few bite‑size examples you can copy‑paste. Replace the text in quotes with your own task. See the [prompting guide](https://github.com/openai/codex/blob/main/codex-cli/examples/prompting_guide.md) for more tips and usage patterns.
 
 | ✨  | What you type                                                                   | What happens                                                               |
 | --- | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
@@ -227,8 +241,11 @@ cd codex/codex-cli
 npm install
 npm run build
 
-# Run the locally‑built CLI directly
+# Get the usage and the options
 node ./dist/cli.js --help
+
+# Run the locally‑built CLI directly
+node ./dist/cli.js
 
 # Or link the command globally for convenience
 npm link
@@ -290,6 +307,40 @@ Any model available with [Responses API](https://platform.openai.com/docs/api-re
 
 ---
 
+## Zero Data Retention (ZDR) Organization Limitation
+
+> **Note:** Codex CLI does **not** currently support OpenAI organizations with [Zero Data Retention (ZDR)](https://platform.openai.com/docs/guides/your-data#zero-data-retention) enabled.
+
+If your OpenAI organization has Zero Data Retention enabled, you may encounter errors such as:
+
+```
+OpenAI rejected the request. Error details: Status: 400, Code: unsupported_parameter, Type: invalid_request_error, Message: 400 Previous response cannot be used for this organization due to Zero Data Retention.
+```
+
+**Why?**
+
+- Codex CLI relies on the Responses API with `store:true` to enable internal reasoning steps.
+- As noted in the [docs](https://platform.openai.com/docs/guides/your-data#responses-api), the Responses API requires a 30-day retention period by default, or when the store parameter is set to true.
+- ZDR organizations cannot use `store:true`, so requests will fail.
+
+**What can I do?**
+
+- If you are part of a ZDR organization, Codex CLI will not work until support is added.
+- We are tracking this limitation and will update the documentation if support becomes available.
+
+---
+
+## Funding Opportunity
+
+We’re excited to launch a **$1 million initiative** supporting open source projects that use Codex CLI and other OpenAI models.
+
+- Grants are awarded in **$25,000** API credit increments.
+- Applications are reviewed **on a rolling basis**.
+
+**Interested? [Apply here](https://openai.com/form/codex-open-source-fund/).**
+
+---
+
 ## Contributing
 
 This project is under active development and the code will likely change pretty significantly. We'll update this message once that's complete!
@@ -304,9 +355,18 @@ More broadly we welcome contributions – whether you are opening your very firs
 - We use **Vitest** for unit tests, **ESLint** + **Prettier** for style, and **TypeScript** for type‑checking.
 - Before pushing, run the full test/type/lint suite:
 
-  ```bash
-  npm test && npm run lint && npm run typecheck
-  ```
+### Git Hooks with Husky
+
+This project uses [Husky](https://typicode.github.io/husky/) to enforce code quality checks:
+
+- **Pre-commit hook**: Automatically runs lint-staged to format and lint files before committing
+- **Pre-push hook**: Runs tests and type checking before pushing to the remote
+
+These hooks help maintain code quality and prevent pushing code with failing tests. For more details, see [HUSKY.md](./codex-cli/HUSKY.md).
+
+```bash
+npm test && npm run lint && npm run typecheck
+```
 
 - If you have **not** yet signed the Contributor License Agreement (CLA), add a PR comment containing the exact text
 
