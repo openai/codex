@@ -30,7 +30,7 @@ const MessageHistory: React.FC<MessageHistoryProps> = ({
   thinkingSeconds,
   fullStdout,
 }) => {
-  // Flatten batch entries to response items
+  // Flatten batch entries to response items.
   const messages = useMemo(() => batch.map(({ item }) => item!), [batch]);
 
   return (
@@ -48,9 +48,7 @@ const MessageHistory: React.FC<MessageHistoryProps> = ({
 
           // After the guard above, item is a ResponseItem
           const message = item as ResponseItem;
-          // Suppress empty reasoning updates to avoid redundant blank lines
-          // Suppress empty reasoning updates (i.e. items with an empty summary)
-          // Suppress empty reasoning updates (i.e. items with an empty summary)
+          // Suppress empty reasoning updates (i.e. items with an empty summary).
           const msg = message as unknown as { summary?: Array<unknown> };
           if (msg.summary?.length === 0) {
             return null;
