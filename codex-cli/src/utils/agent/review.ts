@@ -7,4 +7,8 @@ export enum ReviewDecision {
    * future identical instances for the remainder of the session.
    */
   ALWAYS = "always",
+  /**
+   * User wants an explanation of what the command does before deciding.
+   */
+  EXPLAIN = "explain",
 }

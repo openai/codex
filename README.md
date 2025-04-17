@@ -13,7 +13,6 @@
 - [Experimental Technology Disclaimer](#experimental-technology-disclaimer)
 - [Quickstart](#quickstart)
 - [Why Codex?](#whycodex)
-- [Funding Opportunity](#funding-opportunity)
 - [Security Model \& Permissions](#securitymodelpermissions)
   - [Platform sandboxing details](#platform-sandboxing-details)
 - [System Requirements](#systemrequirements)
@@ -24,6 +23,7 @@
 - [Installation](#installation)
 - [Configuration](#configuration)
 - [FAQ](#faq)
+- [Funding Opportunity](#funding-opportunity)
 - [Contributing](#contributing)
   - [Development workflow](#development-workflow)
   - [Writing high‑impact code changes](#writing-highimpact-code-changes)
@@ -36,6 +36,7 @@
   - [Releasing `codex`](#releasing-codex)
 - [Security \& Responsible AI](#securityresponsibleai)
 - [License](#license)
+- [Zero Data Retention (ZDR) Organization Limitation](#zero-data-retention-zdr-organization-limitation)
 
 </details>
 
@@ -67,6 +68,14 @@ export OPENAI_API_KEY="your-api-key-here"
 ```
 
 > **Note:** This command sets the key only for your current terminal session. To make it permanent, add the `export` line to your shell's configuration file (e.g., `~/.zshrc`).
+>
+> **Tip:** You can also place your API key into a `.env` file at the root of your project:
+>
+> ```env
+> OPENAI_API_KEY=your-api-key-here
+> ```
+>
+> The CLI will automatically load variables from `.env` (via `dotenv/config`).
 
 Run interactively:
 
@@ -105,16 +114,6 @@ And it's **fully open-source** so you can see and contribute to how it develops!
 
 ---
 
-## Funding Opportunity 
-We’re excited to launch a **$1 million initiative** supporting open source projects that use Codex CLI and other OpenAI models.  
-
-* Grants are awarded in **$25,000** API credit increments.  
-* Applications are reviewed **on a rolling basis**.
-
-**Interested? [Apply here](https://openai.com/form/codex-open-source-fund/).**
-
----
-
 ## Security Model & Permissions
 
 Codex lets you decide _how much autonomy_ the agent receives and auto-approval policy via the
@@ -146,13 +145,12 @@ The hardening mechanism Codex uses depends on your OS:
   - Outbound network is _fully blocked_ by default – even if a child process
     tries to `curl` somewhere it will fail.
 
-- **Linux** – we recommend using Docker for sandboxing, where Codex launches itself inside a **minimal
+- **Linux** – there is no sandboxing by default.
+  We recommend using Docker for sandboxing, where Codex launches itself inside a **minimal
   container image** and mounts your repo _read/write_ at the same path. A
   custom `iptables`/`ipset` firewall script denies all egress except the
   OpenAI API. This gives you deterministic, reproducible runs without needing
-  root on the host. You can read more in [`run_in_container.sh`](./codex-cli/scripts/run_in_container.sh)
-
-Both approaches are _transparent_ to everyday usage – you still run `codex` from your repo root and approve/reject steps as usual.
+  root on the host. You can use the [`run_in_container.sh`](./codex-cli/scripts/run_in_container.sh) script to set up the sandbox.
 
 ---
 
@@ -207,6 +205,14 @@ Run Codex head‑less in pipelines. Example GitHub Action step:
 ```
 
 Set `CODEX_QUIET_MODE=1` to silence interactive UI noise.
+
+## Tracing / Verbose Logging
+
+Setting the environment variable `DEBUG=true` prints full API request and response details:
+
+```shell
+DEBUG=true codex
+```
 
 ---
 
@@ -317,6 +323,40 @@ Any model available with [Responses API](https://platform.openai.com/docs/api-re
 
 ---
 
+## Zero Data Retention (ZDR) Organization Limitation
+
+> **Note:** Codex CLI does **not** currently support OpenAI organizations with [Zero Data Retention (ZDR)](https://platform.openai.com/docs/guides/your-data#zero-data-retention) enabled.
+
+If your OpenAI organization has Zero Data Retention enabled, you may encounter errors such as:
+
+```
+OpenAI rejected the request. Error details: Status: 400, Code: unsupported_parameter, Type: invalid_request_error, Message: 400 Previous response cannot be used for this organization due to Zero Data Retention.
+```
+
+**Why?**
+
+- Codex CLI relies on the Responses API with `store:true` to enable internal reasoning steps.
+- As noted in the [docs](https://platform.openai.com/docs/guides/your-data#responses-api), the Responses API requires a 30-day retention period by default, or when the store parameter is set to true.
+- ZDR organizations cannot use `store:true`, so requests will fail.
+
+**What can I do?**
+
+- If you are part of a ZDR organization, Codex CLI will not work until support is added.
+- We are tracking this limitation and will update the documentation if support becomes available.
+
+---
+
+## Funding Opportunity
+
+We’re excited to launch a **$1 million initiative** supporting open source projects that use Codex CLI and other OpenAI models.
+
+- Grants are awarded in **$25,000** API credit increments.
+- Applications are reviewed **on a rolling basis**.
+
+**Interested? [Apply here](https://openai.com/form/codex-open-source-fund/).**
+
+---
+
 ## Contributing
 
 This project is under active development and the code will likely change pretty significantly. We'll update this message once that's complete!
@@ -331,9 +371,18 @@ More broadly we welcome contributions – whether you are opening your very firs
 - We use **Vitest** for unit tests, **ESLint** + **Prettier** for style, and **TypeScript** for type‑checking.
 - Before pushing, run the full test/type/lint suite:
 
-  ```bash
-  npm test && npm run lint && npm run typecheck
-  ```
+### Git Hooks with Husky
+
+This project uses [Husky](https://typicode.github.io/husky/) to enforce code quality checks:
+
+- **Pre-commit hook**: Automatically runs lint-staged to format and lint files before committing
+- **Pre-push hook**: Runs tests and type checking before pushing to the remote
+
+These hooks help maintain code quality and prevent pushing code with failing tests. For more details, see [HUSKY.md](./codex-cli/HUSKY.md).
+
+```bash
+npm test && npm run lint && npm run typecheck
+```
 
 - If you have **not** yet signed the Contributor License Agreement (CLA), add a PR comment containing the exact text
 

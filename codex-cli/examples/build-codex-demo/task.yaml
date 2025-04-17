@@ -13,7 +13,7 @@ description: |
   - Append each assistant and user message to preserve context across turns
   - Errors are displayed to user gracefully
   - Ensure there is a fixed layout is responsive and faithful to the screenshot design
-  - Be sure to parse the ouput from OpenAI call to strip the ```html tags code is returned within
+  - Be sure to parse the output from OpenAI call to strip the ```html tags code is returned within
   - Use the system prompt shared in the API call below to ensure the AI only returns HTML
 
   Support a simple local backend that can:
