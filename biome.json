@@ -7,11 +7,13 @@
     "enabled": true,
     "rules": {
       "recommended": true,
-      "correctness": {
-        "noDebugger": "error"
-      },
       "suspicious": {
-        "noConsoleLog": "error"
+        "noConsole": "error"
+      },
+      "correctness": {
+        "noDebugger": {
+          "level": "error"
+        }
       }
     }
   },
