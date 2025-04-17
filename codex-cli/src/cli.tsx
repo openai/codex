@@ -61,6 +61,7 @@ const cli = meow(
     --no-project-doc           Do not automatically include the repository's 'codex.md'
     --project-doc <file>       Include an additional markdown file at <file> as context
     --full-stdout              Do not truncate stdout/stderr from command outputs
+    --notify                   Enable desktop notifications for responses
 
   Dangerous options
     --dangerously-auto-approve-everything

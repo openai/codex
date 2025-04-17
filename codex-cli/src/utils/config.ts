@@ -257,6 +257,7 @@ export const loadConfig = (
         ? DEFAULT_FULL_CONTEXT_MODEL
         : DEFAULT_AGENTIC_MODEL),
     instructions: combinedInstructions,
+    notify: storedConfig.notify === true,
   };
 
   // -----------------------------------------------------------------------
