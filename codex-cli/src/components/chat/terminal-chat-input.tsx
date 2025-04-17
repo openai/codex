@@ -5,8 +5,6 @@ import type {
   ResponseItem,
 } from "openai/resources/responses/responses.mjs";
 
-
-
 import { TerminalChatCommandReview } from "./terminal-chat-command-review.js";
 import { log, isLoggingEnabled } from "../../utils/agent/log.js";
 import { loadConfig } from "../../utils/config.js";
