@@ -115,6 +115,11 @@ export function canAutoApprove(
     try {
       bashCmd = parse(command[2], env);
     } catch (e) {
+      // Log error for debugging
+      if (env.NODE_ENV === "development") {
+        // eslint-disable-next-line no-console
+        console.error("Shell parse error in canAutoApprove:", e);
+      }
       // In practice, there seem to be syntactically valid shell commands that
       // shell-quote cannot parse, so we should not reject, but ask the user.
       // We already checked for 'suggest' mode at the beginning of the function,
