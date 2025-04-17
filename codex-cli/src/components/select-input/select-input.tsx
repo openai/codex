@@ -5,7 +5,7 @@ import React, {
   useRef,
   useCallback,
 } from "react";
-import isEqual from 'fast-deep-equal';
+import isEqual from "fast-deep-equal";
 import arrayToRotated from "to-rotated";
 import { Box, useInput } from "ink";
 import Indicator, { type Props as IndicatorProps } from "./Indicator.js";
