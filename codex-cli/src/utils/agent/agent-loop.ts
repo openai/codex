@@ -608,10 +608,10 @@ export class AgentLoop {
             const isServerError = typeof status === "number" && status >= 500;
             if (
               (isTimeout || isServerError || isConnectionError) &&
-              attempt < MAX_RETRIES
+              attempt < maxRetries
             ) {
               log(
-                `OpenAI request failed (attempt ${attempt}/${MAX_RETRIES}), retrying...`,
+                `OpenAI request failed (attempt ${attempt}/${maxRetries}), retrying...`,
               );
               continue;
             }

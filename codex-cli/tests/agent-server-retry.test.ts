@@ -51,6 +51,12 @@ vi.mock("../src/utils/agent/log.js", () => ({
 }));
 
 import { AgentLoop } from "../src/utils/agent/agent-loop.js";
+import {
+  DEFAULT_RATE_LIMIT_MAX_RETRIES,
+  DEFAULT_RATE_LIMIT_INITIAL_RETRY_DELAY_MS,
+  DEFAULT_RATE_LIMIT_MAX_RETRY_DELAY_MS,
+  DEFAULT_RATE_LIMIT_JITTER_FACTOR,
+} from "../src/utils/config.js";
 
 describe("AgentLoop – automatic retry on 5xx errors", () => {
   it("retries up to 3 times then succeeds", async () => {
@@ -97,6 +103,16 @@ describe("AgentLoop – automatic retry on 5xx errors", () => {
       model: "any",
       instructions: "",
       approvalPolicy: { mode: "auto" } as any,
+      config: {
+        model: "any",
+        instructions: "",
+        rateLimits: {
+          maxRetries: DEFAULT_RATE_LIMIT_MAX_RETRIES,
+          initialRetryDelayMs: DEFAULT_RATE_LIMIT_INITIAL_RETRY_DELAY_MS,
+          maxRetryDelayMs: DEFAULT_RATE_LIMIT_MAX_RETRY_DELAY_MS,
+          jitterFactor: DEFAULT_RATE_LIMIT_JITTER_FACTOR,
+        },
+      },
       onItem: (i) => received.push(i),
       onLoading: () => {},
       getCommandConfirmation: async () => ({ review: "yes" } as any),
@@ -134,6 +150,16 @@ describe("AgentLoop – automatic retry on 5xx errors", () => {
       model: "any",
       instructions: "",
       approvalPolicy: { mode: "auto" } as any,
+      config: {
+        model: "any",
+        instructions: "",
+        rateLimits: {
+          maxRetries: DEFAULT_RATE_LIMIT_MAX_RETRIES,
+          initialRetryDelayMs: DEFAULT_RATE_LIMIT_INITIAL_RETRY_DELAY_MS,
+          maxRetryDelayMs: DEFAULT_RATE_LIMIT_MAX_RETRY_DELAY_MS,
+          jitterFactor: DEFAULT_RATE_LIMIT_JITTER_FACTOR,
+        },
+      },
       onItem: (i) => received.push(i),
       onLoading: () => {},
       getCommandConfirmation: async () => ({ review: "yes" } as any),
