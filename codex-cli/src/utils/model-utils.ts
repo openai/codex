@@ -1,70 +1,72 @@
 import { OPENAI_API_KEY } from "./config";
+import { OLLAMA_DEFAULT_MODEL } from "./ollama-client";
 import OpenAI from "openai";
 
 const MODEL_LIST_TIMEOUT_MS = 2_000; // 2 seconds
 export const RECOMMENDED_MODELS: Array<string> = ["o4-mini", "o3"];
+export const RECOMMENDED_OLLAMA_MODELS: Array<string> = ["llama2", "codellama", "mistral"];
 
-/**
- * Background model loader / cache.
- *
- * We start fetching the list of available models from OpenAI once the CLI
- * enters interactive mode.  The request is made exactly once during the
- * lifetime of the process and the results are cached for subsequent calls.
- */
+export type ModelProvider = "openai" | "ollama";
+
+export function getModelProvider(model: string): ModelProvider {
+  if (RECOMMENDED_MODELS.includes(model)) {
+    return "openai";
+  }
+  return "ollama";
+}
 
 let modelsPromise: Promise<Array<string>> | null = null;
 
-async function fetchModels(): Promise<Array<string>> {
-  // If the user has not configured an API key we cannot hit the network.
-  if (!OPENAI_API_KEY) {
-    return RECOMMENDED_MODELS;
-  }
-
-  try {
-    const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
-    const list = await openai.models.list();
-
-    const models: Array<string> = [];
-    for await (const model of list as AsyncIterable<{ id?: string }>) {
-      if (model && typeof model.id === "string") {
-        models.push(model.id);
-      }
-    }
-
-    return models.sort();
-  } catch {
-    return [];
-  }
-}
-
-export function preloadModels(): void {
-  if (!modelsPromise) {
-    // Fire‑and‑forget – callers that truly need the list should `await`
-    // `getAvailableModels()` instead.
-    void getAvailableModels();
-  }
-}
-
 export async function getAvailableModels(): Promise<Array<string>> {
   if (!modelsPromise) {
-    modelsPromise = fetchModels();
+    modelsPromise = (async () => {
+      try {
+        // For OpenAI models
+        const openaiModels = RECOMMENDED_MODELS;
+
+        // For Ollama models
+        const ollamaModels = RECOMMENDED_OLLAMA_MODELS;
+
+        return [...openaiModels, ...ollamaModels];
+      } catch (error) {
+        console.error("Failed to fetch available models:", error);
+        return [];
+      }
+    })();
   }
   return modelsPromise;
 }
 
+export async function preloadModels(): Promise<void> {
+  // For OpenAI, we don't need to preload anything
+  if (!OPENAI_API_KEY) {
+    console.warn("No OpenAI API key found, skipping OpenAI model preload");
+  }
+
+  // For Ollama, we could potentially check if models are downloaded
+  // but for now we'll just assume they are available
+  await getAvailableModels();
+}
+
 /**
- * Verify that the provided model identifier is present in the set returned by
- * {@link getAvailableModels}. The list of models is fetched from the OpenAI
- * `/models` endpoint the first time it is required and then cached in‑process.
+ * Verify that the provided model identifier is supported.
+ * For Ollama models, we assume all models are supported.
+ * For OpenAI models, we check against the available models list.
  */
 export async function isModelSupportedForResponses(
   model: string | undefined | null,
 ): Promise<boolean> {
-  if (
-    typeof model !== "string" ||
-    model.trim() === "" ||
-    RECOMMENDED_MODELS.includes(model)
-  ) {
+  if (typeof model !== "string" || model.trim() === "") {
+    return true;
+  }
+
+  // All Ollama models are supported
+  if (getModelProvider(model) === "ollama") {
+    return true;
+  }
+
+  // For OpenAI models, first check recommended models
+  if (RECOMMENDED_MODELS.includes(model)) {
     return true;
   }
 

@@ -14,8 +14,9 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { load as loadYaml, dump as dumpYaml } from "js-yaml";
 import { homedir } from "os";
 import { dirname, join, extname, resolve as resolvePath } from "path";
+import { OLLAMA_BASE_URL, OLLAMA_DEFAULT_MODEL } from "./ollama-client.js";
 
-export const DEFAULT_AGENTIC_MODEL = "o4-mini";
+export const DEFAULT_AGENTIC_MODEL = process.env["DEFAULT_MODEL"] || "o4-mini";
 export const DEFAULT_FULL_CONTEXT_MODEL = "gpt-4.1";
 export const DEFAULT_APPROVAL_MODE = AutoApprovalMode.SUGGEST;
 export const DEFAULT_INSTRUCTIONS = "";
@@ -49,6 +50,10 @@ export type StoredConfig = {
   approvalMode?: AutoApprovalMode;
   fullAutoErrorMode?: FullAutoErrorMode;
   memory?: MemoryConfig;
+  ollamaConfig?: {
+    baseUrl?: string;
+    defaultModel?: string;
+  };
 };
 
 // Minimal config written on first run.  An *empty* model string ensures that
@@ -56,7 +61,7 @@ export type StoredConfig = {
 // propagating to existing users until they explicitly set a model.
 export const EMPTY_STORED_CONFIG: StoredConfig = { model: "" };
 
-// Pre‑stringified JSON variant so we don’t stringify repeatedly.
+// Pre‑stringified JSON variant so we don't stringify repeatedly.
 const EMPTY_CONFIG_JSON = JSON.stringify(EMPTY_STORED_CONFIG, null, 2) + "\n";
 
 export type MemoryConfig = {
@@ -70,6 +75,10 @@ export type AppConfig = {
   instructions: string;
   fullAutoErrorMode?: FullAutoErrorMode;
   memory?: MemoryConfig;
+  ollamaConfig?: {
+    baseUrl?: string;
+    defaultModel?: string;
+  };
 };
 
 // ---------------------------------------------------------------------------
@@ -313,6 +322,10 @@ export const loadConfig = (
     config.fullAutoErrorMode = storedConfig.fullAutoErrorMode;
   }
 
+  if (storedConfig.ollamaConfig) {
+    config.ollamaConfig = storedConfig.ollamaConfig;
+  }
+
   return config;
 };
 
@@ -353,3 +366,23 @@ export const saveConfig = (
 
   writeFileSync(instructionsPath, config.instructions, "utf-8");
 };
+
+function loadStoredConfig(configPath: string): StoredConfig {
+  try {
+    const configStr = readFileSync(configPath, "utf8");
+    const config = loadYaml(configStr) as StoredConfig;
+
+    // Ensure Ollama config has default values
+    if (config.ollamaConfig) {
+      config.ollamaConfig.baseUrl = config.ollamaConfig.baseUrl || OLLAMA_BASE_URL;
+      config.ollamaConfig.defaultModel = config.ollamaConfig.defaultModel || OLLAMA_DEFAULT_MODEL;
+    }
+
+    return config;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return EMPTY_STORED_CONFIG;
+    }
+    throw error;
+  }
+}
