@@ -14,7 +14,15 @@
 
 # Enable auto-confirm mode if flag is passed
 auto_mode=false
-[[ "$1" == "--auto-confirm" ]] && auto_mode=true
+if [[ "$1" == "--auto-confirm" ]]; then
+  auto_mode=true
+  shift
+fi
+# Prompt override: any remaining args are used as the description
+description_override=""
+if [[ -n "$1" ]]; then
+  description_override="$*"
+fi
 
 # Create the runs directory if it doesn't exist
 mkdir -p runs
@@ -62,7 +70,18 @@ fi
 
 cd "run_$new_run_number"
 
-# Launch Codex
+# Launch Codex (prefer local build)
 echo "Launching..."
-description=$(yq -o=json '.' ../../task.yaml | jq -r '.description')
-codex "$description"
+if [[ -n "$description_override" ]]; then
+  description="$description_override"
+else
+  description=$(yq -o=json '.' ../../task.yaml | jq -r '.description')
+fi
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+CLI="$SCRIPT_DIR/../../dist/cli.js"
+if [ -f "$CLI" ]; then
+  # Run in full-context mode to show side-by-side diffs
+  node "$CLI" --full-context "$description"
+else
+  codex --full-context "$description"
+fi
