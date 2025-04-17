@@ -55,3 +55,8 @@ Thumbs.db
 Icon?
 .Spotlight-V100/
 
+# Unwanted package managers
+.yarn/
+yarn.lock
+pnpm-lock.yaml
+
