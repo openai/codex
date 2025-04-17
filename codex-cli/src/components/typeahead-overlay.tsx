@@ -1,6 +1,6 @@
+import SelectInput from "./select-input/select-input.js";
 import TextInput from "./vendor/ink-text-input.js";
 import { Box, Text, useInput } from "ink";
-import SelectInput from "./select-input/select-input.js";
 import React, { useState } from "react";
 
 export type TypeaheadItem = { label: string; value: string };

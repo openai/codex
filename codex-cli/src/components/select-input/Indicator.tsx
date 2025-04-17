@@ -1,12 +1,12 @@
-import React from "react";
-import { Box, Text } from "ink";
 import figures from "figures";
+import { Box, Text } from "ink";
+import React from "react";
 
 export type Props = {
   readonly isSelected?: boolean;
 };
 
-function Indicator({ isSelected = false }: Props) {
+function Indicator({ isSelected = false }: Props): JSX.Element {
   return (
     <Box marginRight={1}>
       {isSelected ? (

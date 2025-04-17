@@ -1,3 +1,7 @@
+import Indicator, { type Props as IndicatorProps } from "./Indicator.js";
+import ItemComponent, { type Props as ItemProps } from "./Item.js";
+import isEqual from "fast-deep-equal";
+import { Box, useInput } from "ink";
 import React, {
   type FC,
   useState,
@@ -5,11 +9,7 @@ import React, {
   useRef,
   useCallback,
 } from "react";
-import isEqual from "fast-deep-equal";
 import arrayToRotated from "to-rotated";
-import { Box, useInput } from "ink";
-import Indicator, { type Props as IndicatorProps } from "./Indicator.js";
-import ItemComponent, { type Props as ItemProps } from "./Item.js";
 
 type Props<V> = {
   /**
@@ -73,7 +73,7 @@ function SelectInput<V>({
   limit: customLimit,
   onSelect,
   onHighlight,
-}: Props<V>) {
+}: Props<V>): JSX.Element {
   const hasLimit =
     typeof customLimit === "number" && items.length > customLimit;
   const limit = hasLimit ? Math.min(customLimit, items.length) : items.length;
@@ -176,7 +176,7 @@ function SelectInput<V>({
         const isSelected = index === selectedIndex;
 
         return (
-          <Box key={item.key ?? (item as any).value}>
+          <Box key={item.key ?? String(item.value)}>
             {React.createElement(indicatorComponent, { isSelected })}
             {React.createElement(itemComponent, { ...item, isSelected })}
           </Box>
