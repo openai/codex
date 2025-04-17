@@ -3,7 +3,7 @@ import type { CommandConfirmation } from "../../utils/agent/agent-loop.js";
 import type { AppConfig } from "../../utils/config.js";
 import type { ColorName } from "chalk";
 import type { ResponseItem } from "openai/resources/responses/responses.mjs";
-import type { ReviewDecision } from "src/utils/agent/review.ts";
+
 
 import TerminalChatInput from "./terminal-chat-input.js";
 import { TerminalChatToolCallCommand } from "./terminal-chat-tool-call-item.js";
@@ -17,18 +17,19 @@ import { useConfirmation } from "../../hooks/use-confirmation.js";
 import { useTerminalSize } from "../../hooks/use-terminal-size.js";
 import { AgentLoop } from "../../utils/agent/agent-loop.js";
 import { log, isLoggingEnabled } from "../../utils/agent/log.js";
+import { ReviewDecision } from "../../utils/agent/review.js";
+import { OPENAI_BASE_URL } from "../../utils/config.js";
 import { createInputItem } from "../../utils/input-utils.js";
 import { getAvailableModels } from "../../utils/model-utils.js";
 import { CLI_VERSION } from "../../utils/session.js";
 import { shortCwd } from "../../utils/short-path.js";
 import { saveRollout } from "../../utils/storage/save-rollout.js";
-import OpenAI from "openai";
-import { OPENAI_BASE_URL } from "../../utils/config.js";
 import ApprovalModeOverlay from "../approval-mode-overlay.js";
 import HelpOverlay from "../help-overlay.js";
 import HistoryOverlay from "../history-overlay.js";
 import ModelOverlay from "../model-overlay.js";
 import { Box, Text } from "ink";
+import OpenAI from "openai";
 import React, { useEffect, useMemo, useState } from "react";
 import { inspect } from "util";
 

@@ -70,6 +70,7 @@ export default function TerminalChatInput({
   loading,
   submitInput,
   confirmationPrompt,
+  explanation,
   submitConfirmation,
   setLastResponseId,
   setItems,
@@ -85,7 +86,7 @@ export default function TerminalChatInput({
   loading: boolean;
   submitInput: (input: Array<ResponseInputItem>) => void;
   confirmationPrompt: React.ReactNode | null;
-  explanation?: string | null;
+  explanation?: string;
   submitConfirmation: (
     decision: ReviewDecision,
     customDenyMessage?: string,

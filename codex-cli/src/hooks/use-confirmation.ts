@@ -22,7 +22,7 @@ export function useConfirmation(): {
     explanation?: string,
   ) => Promise<ConfirmationResult>;
   confirmationPrompt: React.ReactNode | null;
-  explanation?: string | null;
+  explanation?: string;
 } {
   // The current prompt is just the head of the queue
   const [current, setCurrent] = useState<ConfirmationItem | null>(null);

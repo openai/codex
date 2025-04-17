@@ -37,6 +37,7 @@
     "file-type": "^20.1.0",
     "ink": "^5.2.0",
     "ink-select-input": "^6.0.0",
+    "js-yaml": "^4.1.0",
     "marked": "^15.0.7",
     "marked-terminal": "^7.3.0",
     "meow": "^13.2.0",
@@ -44,6 +45,7 @@
     "openai": "^4.89.0",
     "react": "^18.2.0",
     "shell-quote": "^1.8.2",
+    "strip-ansi": "^7.1.0",
     "use-interval": "1.4.0"
   },
   "devDependencies": {
