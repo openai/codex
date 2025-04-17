@@ -8,9 +8,9 @@ import type {
 } from "child_process";
 
 import { log, isLoggingEnabled } from "../log.js";
+import { adaptCommandForPlatform } from "../platform-commands.js";
 import { spawn } from "child_process";
 import * as os from "os";
-import { adaptCommandForPlatform } from "../platform-commands.js";
 
 const MAX_BUFFER = 1024 * 100; // 100 KB
 
@@ -26,11 +26,18 @@ export function exec(
 ): Promise<ExecResult> {
   // Adapt command for the current platform (e.g., convert 'ls' to 'dir' on Windows)
   const adaptedCommand = adaptCommandForPlatform(command);
-  
-  if (isLoggingEnabled() && JSON.stringify(adaptedCommand) !== JSON.stringify(command)) {
-    log(`Command adapted for platform: ${command.join(' ')} -> ${adaptedCommand.join(' ')}`);
+
+  if (
+    isLoggingEnabled() &&
+    JSON.stringify(adaptedCommand) !== JSON.stringify(command)
+  ) {
+    log(
+      `Command adapted for platform: ${command.join(
+        " ",
+      )} -> ${adaptedCommand.join(" ")}`,
+    );
   }
-  
+
   const prog = adaptedCommand[0];
   if (typeof prog !== "string") {
     return Promise.resolve({

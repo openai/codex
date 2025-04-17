@@ -275,7 +275,9 @@ async function getSandbox(runInSandbox: boolean): Promise<SandboxType> {
     } else if (process.platform === "win32") {
       // On Windows, we don't have a sandbox implementation yet, so we fall back to NONE
       // instead of throwing an error, which would crash the application
-      log("WARNING: Sandbox was requested but is not available on Windows. Continuing without sandbox.");
+      log(
+        "WARNING: Sandbox was requested but is not available on Windows. Continuing without sandbox.",
+      );
       return SandboxType.NONE;
     }
     // For other platforms, still throw an error as before

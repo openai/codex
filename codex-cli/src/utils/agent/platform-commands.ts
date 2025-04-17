@@ -8,26 +8,26 @@ import { log, isLoggingEnabled } from "./log.js";
  * Map of Unix commands to their Windows equivalents
  */
 const COMMAND_MAP: Record<string, string> = {
-  "ls": "dir",
-  "grep": "findstr",
-  "cat": "type",
-  "rm": "del",
-  "cp": "copy",
-  "mv": "move",
-  "touch": "echo.>",
-  "mkdir": "md",
+  ls: "dir",
+  grep: "findstr",
+  cat: "type",
+  rm: "del",
+  cp: "copy",
+  mv: "move",
+  touch: "echo.>",
+  mkdir: "md",
 };
 
 /**
  * Map of common Unix command options to their Windows equivalents
  */
 const OPTION_MAP: Record<string, Record<string, string>> = {
-  "ls": {
+  ls: {
     "-l": "/p",
     "-a": "/a",
     "-R": "/s",
   },
-  "grep": {
+  grep: {
     "-i": "/i",
     "-r": "/s",
   },
@@ -37,7 +37,7 @@ const OPTION_MAP: Record<string, Record<string, string>> = {
  * Adapts a command for the current platform.
  * On Windows, this will translate Unix commands to their Windows equivalents.
  * On Unix-like systems, this will return the original command.
- * 
+ *
  * @param command The command array to adapt
  * @returns The adapted command array
  */
@@ -53,7 +53,7 @@ export function adaptCommandForPlatform(command: Array<string>): Array<string> {
   }
 
   const cmd = command[0];
-  
+
   // If cmd is undefined or the command doesn't need adaptation, return it as is
   if (!cmd || !COMMAND_MAP[cmd]) {
     return command;
@@ -79,7 +79,7 @@ export function adaptCommandForPlatform(command: Array<string>): Array<string> {
   }
 
   if (isLoggingEnabled()) {
-    log(`Adapted command: ${adaptedCommand.join(' ')}`);
+    log(`Adapted command: ${adaptedCommand.join(" ")}`);
   }
 
   return adaptedCommand;
