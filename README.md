@@ -356,9 +356,18 @@ More broadly we welcome contributions – whether you are opening your very firs
 - We use **Vitest** for unit tests, **ESLint** + **Prettier** for style, and **TypeScript** for type‑checking.
 - Before pushing, run the full test/type/lint suite:
 
-  ```bash
-  npm test && npm run lint && npm run typecheck
-  ```
+### Git Hooks with Husky
+
+This project uses [Husky](https://typicode.github.io/husky/) to enforce code quality checks:
+
+- **Pre-commit hook**: Automatically runs lint-staged to format and lint files before committing
+- **Pre-push hook**: Runs tests and type checking before pushing to the remote
+
+These hooks help maintain code quality and prevent pushing code with failing tests. For more details, see [HUSKY.md](./codex-cli/HUSKY.md).
+
+```bash
+npm test && npm run lint && npm run typecheck
+```
 
 - If you have **not** yet signed the Contributor License Agreement (CLA), add a PR comment containing the exact text
 
