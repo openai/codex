@@ -1,4 +1,3 @@
-import type { ReviewDecision } from "./review.js";
 import type { ApplyPatchCommand, ApprovalPolicy } from "../../approvals.js";
 import type { AppConfig } from "../config.js";
 import type {
@@ -7,6 +6,9 @@ import type {
   ResponseItem,
 } from "openai/resources/responses/responses.mjs";
 import type { Reasoning } from "openai/resources.mjs";
+import { IAgentLoop, AgentLoopParams, CommandConfirmation } from "./interfaces/agent-interface.js";
+
+export type { CommandConfirmation } from "./interfaces/agent-interface.js";
 
 import { log, isLoggingEnabled } from "./log.js";
 import { OPENAI_BASE_URL, OPENAI_TIMEOUT_MS } from "../config.js";
@@ -28,31 +30,9 @@ const RATE_LIMIT_RETRY_WAIT_MS = parseInt(
   10,
 );
 
-export type CommandConfirmation = {
-  review: ReviewDecision;
-  applyPatch?: ApplyPatchCommand | undefined;
-  customDenyMessage?: string;
-};
-
 const alreadyProcessedResponses = new Set();
 
-type AgentLoopParams = {
-  model: string;
-  config?: AppConfig;
-  instructions?: string;
-  approvalPolicy: ApprovalPolicy;
-  onItem: (item: ResponseItem) => void;
-  onLoading: (loading: boolean) => void;
-
-  /** Called when the command is not auto-approved to request explicit user review. */
-  getCommandConfirmation: (
-    command: Array<string>,
-    applyPatch: ApplyPatchCommand | undefined,
-  ) => Promise<CommandConfirmation>;
-  onLastResponseId: (lastResponseId: string) => void;
-};
-
-export class AgentLoop {
+export class AgentLoop implements IAgentLoop {
   private model: string;
   private instructions?: string;
   private approvalPolicy: ApprovalPolicy;
@@ -291,15 +271,15 @@ export class AgentLoop {
 
     const name: string | undefined = isChatStyle
       ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (item as any).function?.name
+      (item as any).function?.name
       : // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (item as any).name;
+      (item as any).name;
 
     const rawArguments: string | undefined = isChatStyle
       ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (item as any).function?.arguments
+      (item as any).function?.arguments
       : // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (item as any).arguments;
+      (item as any).arguments;
 
     // The OpenAI "function_call" item may have either `call_id` (responses
     // endpoint) or `id` (chat endpoint).  Prefer `call_id` if present but fall
@@ -310,8 +290,7 @@ export class AgentLoop {
     const args = parseToolCallArguments(rawArguments ?? "{}");
     if (isLoggingEnabled()) {
       log(
-        `handleFunctionCall(): name=${
-          name ?? "undefined"
+        `handleFunctionCall(): name=${name ?? "undefined"
         } callId=${callId} args=${rawArguments}`,
       );
     }
@@ -682,9 +661,8 @@ export class AgentLoop {
                         `Message: ${errCtx.message || "unknown"}`,
                       ].join(", ");
 
-                      return `⚠️  OpenAI rejected the request${
-                        reqId ? ` (request ID: ${reqId})` : ""
-                      }. Error details: ${errorDetails}. Please verify your settings and try again.`;
+                      return `⚠️  OpenAI rejected the request${reqId ? ` (request ID: ${reqId})` : ""
+                        }. Error details: ${errorDetails}. Please verify your settings and try again.`;
                     })(),
                   },
                 ],
@@ -817,41 +795,8 @@ export class AgentLoop {
         // to avoid emitting duplicate synthetic outputs in subsequent runs.
         this.pendingAborts.clear();
         // Now emit system messages recording the per‑turn *and* cumulative
-        // thinking times so UIs and tests can surface/verify them.
-        // const thinkingEnd = Date.now();
-
-        // 1) Per‑turn measurement – exact time spent between request and
-        //    response for *this* command.
-        // this.onItem({
-        //   id: `thinking-${thinkingEnd}`,
-        //   type: "message",
-        //   role: "system",
-        //   content: [
-        //     {
-        //       type: "input_text",
-        //       text: `🤔  Thinking time: ${Math.round(
-        //         (thinkingEnd - thinkingStart) / 1000
-        //       )} s`,
-        //     },
-        //   ],
-        // });
-
-        // 2) Session‑wide cumulative counter so users can track overall wait
-        //    time across multiple turns.
-        // this.cumulativeThinkingMs += thinkingEnd - thinkingStart;
-        // this.onItem({
-        //   id: `thinking-total-${thinkingEnd}`,
-        //   type: "message",
-        //   role: "system",
-        //   content: [
-        //     {
-        //       type: "input_text",
-        //       text: `⏱  Total thinking time: ${Math.round(
-        //         this.cumulativeThinkingMs / 1000
-        //       )} s`,
-        //     },
-        //   ],
-        // });
+        // thinking times so UIs and tests can track overall wait
+        // time across multiple turns.
 
         this.onLoading(false);
       };
