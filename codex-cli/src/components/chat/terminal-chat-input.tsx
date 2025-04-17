@@ -191,7 +191,7 @@ export default function TerminalChatInput({
       }
 
       // detect image file paths for dynamic inclusion
-      const images: string[] = [];
+      const images: Array<string> = [];
       let text = inputValue;
       // markdown-style image syntax: ![alt](path)
       text = text.replace(/!\[[^\]]*?\]\(([^)]+)\)/g, (_m, p1: string) => {
@@ -206,9 +206,10 @@ export default function TerminalChatInput({
           return "";
         },
       );
-      // bare file paths ending with common image extensions (e.g. foo.png, ./dir/bar.jpg)
+      // bare file paths ending with common image extensions
       text = text.replace(
-        /\b(?:\.\/|\/)?[\w\/\-.]+\.(?:png|jpe?g|gif|bmp|webp|svg)\b/gi,
+        // eslint-disable-next-line no-useless-escape
+        /\b(?:\.[\/\\]|[\/\\]|[A-Za-z]:[\/\\])?[\w-]+(?:[\/\\][\w-]+)*\.(?:png|jpe?g|gif|bmp|webp|svg)\b/gi,
         (match: string) => {
           images.push(
             match.startsWith("file://") ? fileURLToPath(match) : match,
