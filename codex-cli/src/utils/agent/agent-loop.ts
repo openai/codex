@@ -528,10 +528,10 @@ export class AgentLoop {
             let reasoning: Reasoning | undefined;
             if (this.model.startsWith("o")) {
               reasoning = { effort: "high" };
-            if (this.model === "o3" || this.model === "o4-mini") {
-                // Request reasoning summary for debugging
-                reasoning = { ...reasoning, generate_summary: "concise" };
-            }
+              if (this.model === "o3" || this.model === "o4-mini") {
+                // Add summary property to reasoning object
+                reasoning = { ...reasoning, summary: "auto" };
+              }
             }
             const mergedInstructions = [prefix, this.instructions]
               .filter(Boolean)
