@@ -10,6 +10,7 @@
 <details>
 <summary><strong>Table&nbsp;of&nbsp;Contents</strong></summary>
 
+- [Experimental Technology Disclaimer](#experimental-technology-disclaimer)
 - [Quickstart](#quickstart)
 - [Why Codex?](#whycodex)
 - [Security Model \& Permissions](#securitymodelpermissions)
@@ -29,15 +30,26 @@
   - [Review process](#review-process)
   - [Community values](#community-values)
   - [Getting help](#getting-help)
-  - [Developer Certificate of Origin (DCO)](#developer-certificate-of-origin-dco)
-    - [How to sign (recommended flow)](#how-to-sign-recommended-flow)
+  - [Contributor License Agreement (CLA)](#contributor-license-agreement-cla)
     - [Quick fixes](#quick-fixes)
+  - [Releasing `codex`](#releasing-codex)
 - [Security \& Responsible AI](#securityresponsibleai)
 - [License](#license)
 
 </details>
 
 ---
+
+## Experimental Technology Disclaimer
+
+Codex CLI is an experimental project under active development. It is not yet stable, may contain bugs, incomplete features, or undergo breaking changes. We’re building it in the open with the community and welcome:
+
+- Bug reports
+- Feature requests
+- Pull requests
+- Good vibes
+
+Help us improve by filing issues or submitting PRs (see the section below for how to contribute)!
 
 ## Quickstart
 
