@@ -139,9 +139,9 @@ const cli = meow(
 );
 
 // Handle 'completion' subcommand before any prompting or API calls
-if (cli.input[0] === 'completion') {
-  const shell = cli.input[1] || 'bash';
-  const scripts: Record<string,string> = {
+if (cli.input[0] === "completion") {
+  const shell = cli.input[1] || "bash";
+  const scripts: Record<string, string> = {
     bash: `# bash completion for codex
 _codex_completion() {
   local cur

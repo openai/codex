@@ -49,6 +49,11 @@ export type StoredConfig = {
   approvalMode?: AutoApprovalMode;
   fullAutoErrorMode?: FullAutoErrorMode;
   memory?: MemoryConfig;
+  history?: {
+    maxSize?: number;
+    saveHistory?: boolean;
+    sensitivePatterns?: Array<string>;
+  };
 };
 
 // Minimal config written on first run.  An *empty* model string ensures that
@@ -70,6 +75,11 @@ export type AppConfig = {
   instructions: string;
   fullAutoErrorMode?: FullAutoErrorMode;
   memory?: MemoryConfig;
+  history?: {
+    maxSize: number;
+    saveHistory: boolean;
+    sensitivePatterns: Array<string>;
+  };
 };
 
 // ---------------------------------------------------------------------------
@@ -313,6 +323,21 @@ export const loadConfig = (
     config.fullAutoErrorMode = storedConfig.fullAutoErrorMode;
   }
 
+  // Add default history config if not provided
+  if (storedConfig.history !== undefined) {
+    config.history = {
+      maxSize: storedConfig.history.maxSize ?? 1000,
+      saveHistory: storedConfig.history.saveHistory ?? true,
+      sensitivePatterns: storedConfig.history.sensitivePatterns ?? [],
+    };
+  } else {
+    config.history = {
+      maxSize: 1000,
+      saveHistory: true,
+      sensitivePatterns: [],
+    };
+  }
+
   return config;
 };
 
@@ -341,14 +366,24 @@ export const saveConfig = (
   }
 
   const ext = extname(targetPath).toLowerCase();
+  // Create the config object to save
+  const configToSave: StoredConfig = {
+    model: config.model,
+  };
+
+  // Add history settings if they exist
+  if (config.history) {
+    configToSave.history = {
+      maxSize: config.history.maxSize,
+      saveHistory: config.history.saveHistory,
+      sensitivePatterns: config.history.sensitivePatterns,
+    };
+  }
+
   if (ext === ".yaml" || ext === ".yml") {
-    writeFileSync(targetPath, dumpYaml({ model: config.model }), "utf-8");
+    writeFileSync(targetPath, dumpYaml(configToSave), "utf-8");
   } else {
-    writeFileSync(
-      targetPath,
-      JSON.stringify({ model: config.model }, null, 2),
-      "utf-8",
-    );
+    writeFileSync(targetPath, JSON.stringify(configToSave, null, 2), "utf-8");
   }
 
   writeFileSync(instructionsPath, config.instructions, "utf-8");
