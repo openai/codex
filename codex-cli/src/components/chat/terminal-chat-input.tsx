@@ -17,9 +17,9 @@ import {
 import { clearTerminal, onExit } from "../../utils/terminal.js";
 import Spinner from "../vendor/ink-spinner.js";
 import TextInput from "../vendor/ink-text-input.js";
+import React, { useCallback, useState, Fragment, useEffect } from "react";
 import { Box, Text, useApp, useInput, useStdin } from "ink";
 import { fileURLToPath } from "node:url";
-import React, { useCallback, useState, Fragment, useEffect } from "react";
 import { useInterval } from "use-interval";
 
 const suggestions = [
