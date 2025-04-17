@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 
-// The model‑utils module reads OPENROUTER_API_KEY at import time. We therefore
+// The model‑utils module reads OPENAI_API_KEY at import time. We therefore
 // need to tweak the env var *before* importing the module in each test and
 // make sure the module cache is cleared.
 

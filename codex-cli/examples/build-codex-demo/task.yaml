@@ -17,7 +17,7 @@ description: |
   - Use the system prompt shared in the API call below to ensure the AI only returns HTML
 
   Support a simple local backend that can:
-  - Read local env for OPENROUTER_API_KEY
+  - Read local env for OPENAI_API_KEY
   - Expose an endpoint that streams completions from OpenAI
   - Backend should be a simple node.js app
   - App should be easy to run locally for development and testing
