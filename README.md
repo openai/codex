@@ -341,9 +341,9 @@ This project uses [Husky](https://typicode.github.io/husky/) to enforce code qua
 
 These hooks help maintain code quality and prevent pushing code with failing tests. For more details, see [HUSKY.md](./codex-cli/HUSKY.md).
 
-  ```bash
-  npm test && npm run lint && npm run typecheck
-  ```
+```bash
+npm test && npm run lint && npm run typecheck
+```
 
 - If you have **not** yet signed the Contributor License Agreement (CLA), add a PR comment containing the exact text
 

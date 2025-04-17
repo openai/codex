@@ -5,6 +5,7 @@ This project uses [Husky](https://typicode.github.io/husky/) to enforce code qua
 ## What's Included
 
 - **Pre-commit Hook**: Runs lint-staged to check files that are about to be committed.
+
   - Lints and formats TypeScript/TSX files using ESLint and Prettier
   - Formats JSON, MD, and YML files using Prettier
 
