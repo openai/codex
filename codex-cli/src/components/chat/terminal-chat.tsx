@@ -308,6 +308,22 @@ export default function TerminalChat({
               }
               agent.cancel();
               setLoading(false);
+
+              // Add a system message to indicate the interruption
+              setItems((prev) => [
+                ...prev,
+                {
+                  id: `interrupt-${Date.now()}`,
+                  type: "message",
+                  role: "system",
+                  content: [
+                    {
+                      type: "input_text",
+                      text: "⏹️  Execution interrupted by user. You can continue typing.",
+                    },
+                  ],
+                },
+              ]);
             }}
             submitInput={(inputs) => {
               agent.run(inputs, lastResponseId || "");

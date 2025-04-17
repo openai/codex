@@ -148,6 +148,9 @@ export class AgentLoop {
     if (this.terminated) {
       return;
     }
+
+    // Reset the current stream to allow new requests
+    this.currentStream = null;
     if (isLoggingEnabled()) {
       log(
         `AgentLoop.cancel() invoked – currentStream=${Boolean(
@@ -162,22 +165,16 @@ export class AgentLoop {
     )?.controller?.abort?.();
 
     this.canceled = true;
+
+    // Abort any in-progress tool calls
     this.execAbortController?.abort();
+
+    // Create a new abort controller for future tool calls
+    this.execAbortController = new AbortController();
     if (isLoggingEnabled()) {
       log("AgentLoop.cancel(): execAbortController.abort() called");
     }
 
-    // If we have *not* seen any function_call IDs yet there is nothing that
-    // needs to be satisfied in a follow‑up request.  In that case we clear
-    // the stored lastResponseId so a subsequent run starts a clean turn.
-    if (this.pendingAborts.size === 0) {
-      try {
-        this.onLastResponseId("");
-      } catch {
-        /* ignore */
-      }
-    }
-
     // NOTE: We intentionally do *not* clear `lastResponseId` here.  If the
     // stream produced a `function_call` before the user cancelled, OpenAI now
     // expects a corresponding `function_call_output` that must reference that
@@ -195,11 +192,6 @@ export class AgentLoop {
       }
     }
 
-    // NOTE: We intentionally do *not* clear `lastResponseId` here.  If the
-    // stream produced a `function_call` before the user cancelled, OpenAI now
-    // expects a corresponding `function_call_output` that must reference that
-    // very same response ID.  We therefore keep the ID around so the
-    // follow‑up request can still satisfy the contract.
     this.onLoading(false);
 
     /* Inform the UI that the run was aborted by the user. */
@@ -440,8 +432,10 @@ export class AgentLoop {
       // identified and dropped.
       const thisGeneration = ++this.generation;
 
-      // Reset cancellation flag for a fresh run.
+      // Reset cancellation flag and stream for a fresh run.
       this.canceled = false;
+      this.currentStream = null;
+
       // Create a fresh AbortController for this run so that tool calls from a
       // previous run do not accidentally get signalled.
       this.execAbortController = new AbortController();
@@ -1116,7 +1110,7 @@ You MUST adhere to the following criteria when executing the task:
             - If pre-commit doesn't work after a few retries, politely inform the user that the pre-commit setup is broken.
         - Once you finish coding, you must
             - Check \`git status\` to sanity check your changes; revert any scratch files or changes.
-            - Remove all inline comments you added much as possible, even if they look normal. Check using \`git diff\`. Inline comments must be generally avoided, unless active maintainers of the repo, after long careful study of the code and the issue, will still misinterpret the code without the comments.
+            - Remove all inline comments you added as much as possible, even if they look normal. Check using \`git diff\`. Inline comments must be generally avoided, unless active maintainers of the repo, after long careful study of the code and the issue, will still misinterpret the code without the comments.
             - Check if you accidentally add copyright or license headers. If so, remove them.
             - Try to run pre-commit if it is available.
             - For smaller tasks, describe in brief bullet points
