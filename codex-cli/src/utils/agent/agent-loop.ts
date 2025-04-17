@@ -9,7 +9,14 @@ import type {
 import type { Reasoning } from "openai/resources.mjs";
 
 import { log, isLoggingEnabled } from "./log.js";
-import { OPENAI_BASE_URL, OPENAI_TIMEOUT_MS } from "../config.js";
+import {
+  OPENAI_BASE_URL,
+  OPENAI_TIMEOUT_MS,
+  DEFAULT_RATE_LIMIT_MAX_RETRIES,
+  DEFAULT_RATE_LIMIT_INITIAL_RETRY_DELAY_MS,
+  DEFAULT_RATE_LIMIT_MAX_RETRY_DELAY_MS,
+  DEFAULT_RATE_LIMIT_JITTER_FACTOR
+} from "../config.js";
 import { parseToolCallArguments } from "../parsers.js";
 import {
   ORIGIN,
@@ -24,9 +31,47 @@ import OpenAI, { APIConnectionTimeoutError } from "openai";
 
 // Wait time before retrying after rate limit errors (ms).
 const RATE_LIMIT_RETRY_WAIT_MS = parseInt(
-  process.env["OPENAI_RATE_LIMIT_RETRY_WAIT_MS"] || "2500",
+  process.env["OPENAI_RATE_LIMIT_RETRY_WAIT_MS"] ||
+  DEFAULT_RATE_LIMIT_INITIAL_RETRY_DELAY_MS.toString(),
   10,
 );
+
+/**
+ * Calculates the delay for the next retry attempt using exponential backoff with jitter.
+ *
+ * @param attempt The current attempt number (1-based)
+ * @param initialDelayMs The initial delay in milliseconds
+ * @param maxDelayMs The maximum delay in milliseconds
+ * @param jitterFactor The jitter factor (0-1) to add randomness to the delay
+ * @param suggestedDelayMs Optional suggested delay from the API response
+ * @returns The delay in milliseconds to wait before the next retry
+ */
+function calculateBackoffDelay(
+  attempt: number,
+  initialDelayMs: number,
+  maxDelayMs: number,
+  jitterFactor: number,
+  suggestedDelayMs?: number
+): number {
+  // If we have a suggested delay from the API, use that (with a small buffer)
+  if (suggestedDelayMs && !Number.isNaN(suggestedDelayMs)) {
+    // Add 10% to the suggested delay to account for network latency
+    return Math.min(suggestedDelayMs * 1.1, maxDelayMs);
+  }
+
+  // Calculate exponential backoff: initialDelay * 2^(attempt-1)
+  const exponentialDelay = initialDelayMs * Math.pow(2, attempt - 1);
+
+  // Apply maximum delay cap
+  const cappedDelay = Math.min(exponentialDelay, maxDelayMs);
+
+  // Apply jitter: random value between (1-jitterFactor) and (1+jitterFactor) times the delay
+  // This helps prevent thundering herd problem when multiple clients retry at the same time
+  const jitterMultiplier = 1 + jitterFactor * (Math.random() * 2 - 1);
+
+  // Return the final delay with jitter, ensuring it's at least initialDelayMs
+  return Math.max(initialDelayMs, Math.round(cappedDelay * jitterMultiplier));
+}
 
 export type CommandConfirmation = {
   review: ReviewDecision;
@@ -486,9 +531,9 @@ export class AgentLoop {
         // Send request to OpenAI with retry on timeout
         let stream;
 
-        // Retry loop for transient errors. Up to MAX_RETRIES attempts.
-        const MAX_RETRIES = 5;
-        for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+        // Retry loop for transient errors. Use config for max retries or fall back to default.
+        const maxRetries = this.config.rateLimits?.maxRetries ?? DEFAULT_RATE_LIMIT_MAX_RETRIES;
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
           try {
             let reasoning: Reasoning | undefined;
             if (this.model.startsWith("o")) {
@@ -598,22 +643,34 @@ export class AgentLoop {
               errCtx.type === "rate_limit_exceeded" ||
               /rate limit/i.test(errCtx.message ?? "");
             if (isRateLimit) {
-              if (attempt < MAX_RETRIES) {
-                // Exponential backoff: base wait * 2^(attempt-1), or use suggested retry time
-                // if provided.
-                let delayMs = RATE_LIMIT_RETRY_WAIT_MS * 2 ** (attempt - 1);
+              if (attempt < maxRetries) {
+                // Get rate limit config or use defaults
+                const initialRetryDelayMs = this.config.rateLimits?.initialRetryDelayMs ??
+                  DEFAULT_RATE_LIMIT_INITIAL_RETRY_DELAY_MS;
+                const maxRetryDelayMs = this.config.rateLimits?.maxRetryDelayMs ??
+                  DEFAULT_RATE_LIMIT_MAX_RETRY_DELAY_MS;
+                const jitterFactor = this.config.rateLimits?.jitterFactor ??
+                  DEFAULT_RATE_LIMIT_JITTER_FACTOR;
 
                 // Parse suggested retry time from error message, e.g., "Please try again in 1.3s"
+                let suggestedDelayMs: number | undefined;
                 const msg = errCtx?.message ?? "";
                 const m = /retry again in ([\d.]+)s/i.exec(msg);
                 if (m && m[1]) {
-                  const suggested = parseFloat(m[1]) * 1000;
-                  if (!Number.isNaN(suggested)) {
-                    delayMs = suggested;
-                  }
+                  suggestedDelayMs = parseFloat(m[1]) * 1000;
                 }
+
+                // Calculate backoff delay with jitter
+                const delayMs = calculateBackoffDelay(
+                  attempt,
+                  initialRetryDelayMs,
+                  maxRetryDelayMs,
+                  jitterFactor,
+                  suggestedDelayMs
+                );
+
                 log(
-                  `OpenAI rate limit exceeded (attempt ${attempt}/${MAX_RETRIES}), retrying in ${Math.round(
+                  `OpenAI rate limit exceeded (attempt ${attempt}/${maxRetries}), retrying in ${Math.round(
                     delayMs,
                   )} ms...`,
                 );

@@ -26,6 +26,12 @@ export const DEFAULT_FULL_CONTEXT_MODEL = "gpt-4.1";
 export const DEFAULT_APPROVAL_MODE = AutoApprovalMode.SUGGEST;
 export const DEFAULT_INSTRUCTIONS = "";
 
+// Default rate limit retry settings
+export const DEFAULT_RATE_LIMIT_MAX_RETRIES = 5;
+export const DEFAULT_RATE_LIMIT_INITIAL_RETRY_DELAY_MS = 2500;
+export const DEFAULT_RATE_LIMIT_MAX_RETRY_DELAY_MS = 60000; // 1 minute
+export const DEFAULT_RATE_LIMIT_JITTER_FACTOR = 0.25; // 25% random jitter
+
 // Get the platform-specific config directory
 export const CONFIG_DIR = getConfigDir();
 // Legacy config directory for backward compatibility
@@ -65,11 +71,19 @@ export function setApiKey(apiKey: string): void {
 export const PRETTY_PRINT = Boolean(process.env["PRETTY_PRINT"] || "");
 
 // Represents config as persisted in config.json.
+export type RateLimitConfig = {
+  maxRetries: number;
+  initialRetryDelayMs: number;
+  maxRetryDelayMs: number;
+  jitterFactor: number;
+};
+
 export type StoredConfig = {
   model?: string;
   approvalMode?: AutoApprovalMode;
   fullAutoErrorMode?: FullAutoErrorMode;
   memory?: MemoryConfig;
+  rateLimits?: RateLimitConfig;
 };
 
 // Minimal config written on first run.  An *empty* model string ensures that
@@ -91,6 +105,7 @@ export type AppConfig = {
   instructions: string;
   fullAutoErrorMode?: FullAutoErrorMode;
   memory?: MemoryConfig;
+  rateLimits?: RateLimitConfig;
 };
 
 // ---------------------------------------------------------------------------
@@ -354,6 +369,18 @@ export const loadConfig = (
     config.fullAutoErrorMode = storedConfig.fullAutoErrorMode;
   }
 
+  // Add rate limit configuration if present, or use defaults
+  if (storedConfig.rateLimits) {
+    config.rateLimits = storedConfig.rateLimits;
+  } else {
+    config.rateLimits = {
+      maxRetries: DEFAULT_RATE_LIMIT_MAX_RETRIES,
+      initialRetryDelayMs: DEFAULT_RATE_LIMIT_INITIAL_RETRY_DELAY_MS,
+      maxRetryDelayMs: DEFAULT_RATE_LIMIT_MAX_RETRY_DELAY_MS,
+      jitterFactor: DEFAULT_RATE_LIMIT_JITTER_FACTOR,
+    };
+  }
+
   return config;
 };
 
@@ -450,11 +477,39 @@ export const saveConfig = (
 
   const ext = extname(targetPath).toLowerCase();
   if (ext === ".yaml" || ext === ".yml") {
-    writeFileSync(targetPath, dumpYaml({ model: config.model }), "utf-8");
+    // Create a StoredConfig object with all the necessary fields
+    const storedConfig: StoredConfig = {
+      model: config.model,
+      rateLimits: config.rateLimits,
+    };
+
+    // Add optional fields if they exist
+    if (config.fullAutoErrorMode) {
+      storedConfig.fullAutoErrorMode = config.fullAutoErrorMode;
+    }
+    if (config.memory) {
+      storedConfig.memory = config.memory;
+    }
+
+    writeFileSync(targetPath, dumpYaml(storedConfig), "utf-8");
   } else {
+    // Create a StoredConfig object with all the necessary fields
+    const storedConfig: StoredConfig = {
+      model: config.model,
+      rateLimits: config.rateLimits,
+    };
+
+    // Add optional fields if they exist
+    if (config.fullAutoErrorMode) {
+      storedConfig.fullAutoErrorMode = config.fullAutoErrorMode;
+    }
+    if (config.memory) {
+      storedConfig.memory = config.memory;
+    }
+
     writeFileSync(
       targetPath,
-      JSON.stringify({ model: config.model }, null, 2),
+      JSON.stringify(storedConfig, null, 2),
       "utf-8",
     );
   }
