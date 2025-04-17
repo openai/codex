@@ -38,5 +38,10 @@ export const providers: Record<string, { name: string, baseURL: string, envKey: 
     name: 'Groq',
     baseURL: 'https://api.groq.com/openai/v1',
     envKey: 'GROQ_API_KEY',
+  },
+  requesty: {
+    name: 'Requesty',
+    baseURL: 'https://router.requesty.ai/v1',
+    envKey: 'REQUESTY_API_KEY',
   }
 }
