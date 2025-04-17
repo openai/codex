@@ -84,6 +84,11 @@ export function canAutoApprove(
         };
   }
 
+  // In 'suggest' mode, all shell commands should require user permission
+  if (policy === "suggest") {
+    return { type: "ask-user" };
+  }
+
   const isSafe = isSafeCommand(command);
   if (isSafe != null) {
     const { reason, group } = isSafe;
@@ -137,6 +142,11 @@ export function canAutoApprove(
     // We try to ensure that *every* command segment is deemed safe and that
     // all operators belong to an allow‑list. If so, the entire expression is
     // considered auto‑approvable.
+
+    // In 'suggest' mode, all shell commands should require user permission
+    if (policy === "suggest") {
+      return { type: "ask-user" };
+    }
 
     const shellSafe = isEntireShellExpressionSafe(bashCmd);
     if (shellSafe != null) {
