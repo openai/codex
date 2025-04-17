@@ -17,7 +17,11 @@ import { AgentLoop } from "./utils/agent/agent-loop";
 import { initLogger } from "./utils/agent/log";
 import { ReviewDecision } from "./utils/agent/review";
 import { AutoApprovalMode } from "./utils/auto-approval-mode";
-import { loadConfig, PRETTY_PRINT } from "./utils/config";
+import {
+  loadConfig,
+  PRETTY_PRINT,
+  INSTRUCTIONS_FILEPATH,
+} from "./utils/config";
 import { createInputItem } from "./utils/input-utils";
 import {
   isModelSupportedForResponses,
@@ -26,6 +30,7 @@ import {
 import { parseToolCall } from "./utils/parsers";
 import { onExit, setInkRenderer } from "./utils/terminal";
 import chalk from "chalk";
+import { spawnSync } from "child_process";
 import fs from "fs";
 import { render } from "ink";
 import meow from "meow";
@@ -53,6 +58,7 @@ const cli = meow(
     -i, --image <path>         Path(s) to image files to include as input
     -v, --view <rollout>       Inspect a previously saved rollout instead of starting a session
     -q, --quiet                Non-interactive mode that only prints the assistant's final output
+    -c, --config               Open the instructions file in your editor
     -a, --approval-mode <mode> Override the approval policy: 'suggest', 'auto-edit', or 'full-auto'
 
     --auto-edit                Automatically approve file edits; still prompt for commands
@@ -90,6 +96,11 @@ const cli = meow(
         type: "boolean",
         aliases: ["q"],
         description: "Non-interactive quiet mode",
+      },
+      config: {
+        type: "boolean",
+        aliases: ["c"],
+        description: "Open the instructions file in your editor",
       },
       dangerouslyAutoApproveEverything: {
         type: "boolean",
@@ -139,9 +150,9 @@ const cli = meow(
 );
 
 // Handle 'completion' subcommand before any prompting or API calls
-if (cli.input[0] === 'completion') {
-  const shell = cli.input[1] || 'bash';
-  const scripts: Record<string,string> = {
+if (cli.input[0] === "completion") {
+  const shell = cli.input[1] || "bash";
+  const scripts: Record<string, string> = {
     bash: `# bash completion for codex
 _codex_completion() {
   local cur
@@ -172,6 +183,21 @@ complete -c codex -a '(_fish_complete_path)' -d 'file path'`,
 // Show help if requested
 if (cli.flags.help) {
   cli.showHelp();
+}
+
+// Handle config flag: open instructions file in editor and exit
+if (cli.flags.config) {
+  // Ensure configuration and instructions file exist
+  try {
+    loadConfig();
+  } catch {
+    // ignore errors
+  }
+  const filePath = INSTRUCTIONS_FILEPATH;
+  const editor =
+    process.env["EDITOR"] || (process.platform === "win32" ? "notepad" : "vi");
+  spawnSync(editor, [filePath], { stdio: "inherit" });
+  process.exit(0);
 }
 
 // ---------------------------------------------------------------------------

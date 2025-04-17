@@ -24,7 +24,7 @@ import OpenAI, { APIConnectionTimeoutError } from "openai";
 
 // Wait time before retrying after rate limit errors (ms).
 const RATE_LIMIT_RETRY_WAIT_MS = parseInt(
-  process.env["OPENAI_RATE_LIMIT_RETRY_WAIT_MS"] || "15000",
+  process.env["OPENAI_RATE_LIMIT_RETRY_WAIT_MS"] || "2500",
   10,
 );
 
@@ -569,11 +569,6 @@ export class AgentLoop {
               );
               continue;
             }
-            const isRateLimit =
-              status === 429 ||
-              errCtx.code === "rate_limit_exceeded" ||
-              errCtx.type === "rate_limit_exceeded" ||
-              /rate limit/i.test(errCtx.message ?? "");
 
             const isTooManyTokensError =
               (errCtx.param === "max_tokens" ||
@@ -597,30 +592,61 @@ export class AgentLoop {
               return;
             }
 
+            const isRateLimit =
+              status === 429 ||
+              errCtx.code === "rate_limit_exceeded" ||
+              errCtx.type === "rate_limit_exceeded" ||
+              /rate limit/i.test(errCtx.message ?? "");
             if (isRateLimit) {
               if (attempt < MAX_RETRIES) {
+                // Exponential backoff: base wait * 2^(attempt-1), or use suggested retry time
+                // if provided.
+                let delayMs = RATE_LIMIT_RETRY_WAIT_MS * 2 ** (attempt - 1);
+
+                // Parse suggested retry time from error message, e.g., "Please try again in 1.3s"
+                const msg = errCtx?.message ?? "";
+                const m = /retry again in ([\d.]+)s/i.exec(msg);
+                if (m && m[1]) {
+                  const suggested = parseFloat(m[1]) * 1000;
+                  if (!Number.isNaN(suggested)) {
+                    delayMs = suggested;
+                  }
+                }
                 log(
-                  `OpenAI rate limit exceeded (attempt ${attempt}/${MAX_RETRIES}), retrying in ${RATE_LIMIT_RETRY_WAIT_MS} ms...`,
+                  `OpenAI rate limit exceeded (attempt ${attempt}/${MAX_RETRIES}), retrying in ${Math.round(
+                    delayMs,
+                  )} ms...`,
                 );
                 // eslint-disable-next-line no-await-in-loop
-                await new Promise((resolve) =>
-                  setTimeout(resolve, RATE_LIMIT_RETRY_WAIT_MS),
-                );
+                await new Promise((resolve) => setTimeout(resolve, delayMs));
                 continue;
+              } else {
+                // We have exhausted all retry attempts. Surface a message so the user understands
+                // why the request failed and can decide how to proceed (e.g. wait and retry later
+                // or switch to a different model / account).
+
+                const errorDetails = [
+                  `Status: ${status || "unknown"}`,
+                  `Code: ${errCtx.code || "unknown"}`,
+                  `Type: ${errCtx.type || "unknown"}`,
+                  `Message: ${errCtx.message || "unknown"}`,
+                ].join(", ");
+
+                this.onItem({
+                  id: `error-${Date.now()}`,
+                  type: "message",
+                  role: "system",
+                  content: [
+                    {
+                      type: "input_text",
+                      text: `⚠️  Rate limit reached. Error details: ${errorDetails}. Please try again later.`,
+                    },
+                  ],
+                });
+
+                this.onLoading(false);
+                return;
               }
-              this.onItem({
-                id: `error-${Date.now()}`,
-                type: "message",
-                role: "system",
-                content: [
-                  {
-                    type: "input_text",
-                    text: "⚠️  Rate limit reached while contacting OpenAI. Please try again later.",
-                  },
-                ],
-              });
-              this.onLoading(false);
-              return;
             }
 
             const isClientError =
