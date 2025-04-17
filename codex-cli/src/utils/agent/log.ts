@@ -1,8 +1,7 @@
+import { getLogDir, ensureDirectoryExists } from "../platform-dirs.js";
 import * as fsSync from "fs";
 import * as fs from "fs/promises";
-import * as os from "os";
 import * as path from "path";
-import { getLogDir, ensureDirectoryExists } from "../platform-dirs.js";
 
 interface Logger {
   /** Checking this can be used to avoid constructing a large log message. */

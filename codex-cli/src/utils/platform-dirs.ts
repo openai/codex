@@ -1,6 +1,6 @@
+import { existsSync, mkdirSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
-import { existsSync, mkdirSync } from "fs";
 
 /**
  * Get the appropriate configuration directory based on the platform.
@@ -14,7 +14,8 @@ export function getConfigDir(): string {
 
   // Linux: Follow XDG Base Directory Specification
   if (platform === "linux") {
-    const xdgConfigHome = process.env.XDG_CONFIG_HOME || join(home, ".config");
+    const xdgConfigHome =
+      process.env["XDG_CONFIG_HOME"] || join(home, ".config");
     return join(xdgConfigHome, "codex");
   }
 
@@ -40,7 +41,7 @@ export function getDataDir(): string {
   // Linux: Follow XDG Base Directory Specification
   if (platform === "linux") {
     const xdgDataHome =
-      process.env.XDG_DATA_HOME || join(home, ".local", "share");
+      process.env["XDG_DATA_HOME"] || join(home, ".local", "share");
     return join(xdgDataHome, "codex");
   }
 
@@ -65,7 +66,7 @@ export function getCacheDir(): string {
 
   // Linux: Follow XDG Base Directory Specification
   if (platform === "linux") {
-    const xdgCacheHome = process.env.XDG_CACHE_HOME || join(home, ".cache");
+    const xdgCacheHome = process.env["XDG_CACHE_HOME"] || join(home, ".cache");
     return join(xdgCacheHome, "codex");
   }
 
@@ -91,7 +92,7 @@ export function getLogDir(): string {
   // Linux: Follow XDG Base Directory Specification
   if (platform === "linux") {
     const xdgStateHome =
-      process.env.XDG_STATE_HOME || join(home, ".local", "state");
+      process.env["XDG_STATE_HOME"] || join(home, ".local", "state");
     return join(xdgStateHome, "codex", "logs");
   }
 

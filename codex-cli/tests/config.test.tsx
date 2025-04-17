@@ -1,6 +1,13 @@
 import type * as fsType from "fs";
 
-import { loadConfig, saveConfig, DEFAULT_RATE_LIMIT_MAX_RETRIES, DEFAULT_RATE_LIMIT_INITIAL_RETRY_DELAY_MS, DEFAULT_RATE_LIMIT_MAX_RETRY_DELAY_MS, DEFAULT_RATE_LIMIT_JITTER_FACTOR } from "../src/utils/config.js"; // parent import first
+import {
+  loadConfig,
+  saveConfig,
+  DEFAULT_RATE_LIMIT_MAX_RETRIES,
+  DEFAULT_RATE_LIMIT_INITIAL_RETRY_DELAY_MS,
+  DEFAULT_RATE_LIMIT_MAX_RETRY_DELAY_MS,
+  DEFAULT_RATE_LIMIT_JITTER_FACTOR,
+} from "../src/utils/config.js"; // parent import first
 import { tmpdir } from "os";
 import { join } from "path";
 import { test, expect, beforeEach, afterEach, vi } from "vitest";

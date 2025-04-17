@@ -6,6 +6,7 @@ import type { FileOperation } from "../utils/singlepass/file_ops";
 import Spinner from "./vendor/ink-spinner"; // Third‑party / vendor components
 import TextInput from "./vendor/ink-text-input";
 import { OPENAI_TIMEOUT_MS, OPENAI_BASE_URL, DATA_DIR } from "../utils/config";
+import { ensureDirectoryExists } from "../utils/platform-dirs.js";
 import {
   generateDiffSummary,
   generateEditSummary,
@@ -17,7 +18,6 @@ import {
   makeAsciiDirectoryStructure,
 } from "../utils/singlepass/context_files";
 import { EditedFilesSchema } from "../utils/singlepass/file_ops";
-import { ensureDirectoryExists } from "../utils/platform-dirs.js";
 import * as fsSync from "fs";
 import * as fsPromises from "fs/promises";
 import { Box, Text, useApp, useInput } from "ink";

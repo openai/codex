@@ -30,11 +30,7 @@ import { randomUUID } from "node:crypto";
 import OpenAI, { APIConnectionTimeoutError } from "openai";
 
 // Wait time before retrying after rate limit errors (ms).
-const RATE_LIMIT_RETRY_WAIT_MS = parseInt(
-  process.env["OPENAI_RATE_LIMIT_RETRY_WAIT_MS"] ||
-    DEFAULT_RATE_LIMIT_INITIAL_RETRY_DELAY_MS.toString(),
-  10,
-);
+// This is now handled by the calculateBackoffDelay function
 
 /**
  * Calculates the delay for the next retry attempt using exponential backoff with jitter.
@@ -540,7 +536,6 @@ export class AgentLoop {
             if (this.model.startsWith("o")) {
               reasoning = { effort: "high" };
               if (this.model === "o3" || this.model === "o4-mini") {
-                // @ts-expect-error waiting for API type update
                 reasoning.summary = "auto";
               }
             }

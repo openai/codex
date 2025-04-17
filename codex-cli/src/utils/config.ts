@@ -10,9 +10,6 @@ import type { FullAutoErrorMode } from "./auto-approval-mode.js";
 
 import { log, isLoggingEnabled } from "./agent/log.js";
 import { AutoApprovalMode } from "./auto-approval-mode.js";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { load as loadYaml, dump as dumpYaml } from "js-yaml";
-import { dirname, join, extname, resolve as resolvePath } from "path";
 import {
   getConfigDir,
   getDataDir,
@@ -20,6 +17,9 @@ import {
   legacyConfigDirExists,
   ensureDirectoryExists,
 } from "./platform-dirs.js";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync } from "fs";
+import { load as loadYaml, dump as dumpYaml } from "js-yaml";
+import { dirname, join, extname, resolve as resolvePath } from "path";
 
 export const DEFAULT_AGENTIC_MODEL = "o4-mini";
 export const DEFAULT_FULL_CONTEXT_MODEL = "gpt-4.1";
@@ -421,59 +421,70 @@ export function migrateFromLegacyIfNeeded(): void {
     if (existsSync(LEGACY_CONFIG_JSON_FILEPATH)) {
       const content = readFileSync(LEGACY_CONFIG_JSON_FILEPATH, "utf-8");
       writeFileSync(CONFIG_JSON_FILEPATH, content, "utf-8");
-      console.log(
-        `Migrated config from ${LEGACY_CONFIG_JSON_FILEPATH} to ${CONFIG_JSON_FILEPATH}`,
-      );
+      if (isLoggingEnabled()) {
+        log(
+          `Migrated config from ${LEGACY_CONFIG_JSON_FILEPATH} to ${CONFIG_JSON_FILEPATH}`,
+        );
+      }
     } else if (existsSync(LEGACY_CONFIG_YAML_FILEPATH)) {
       const content = readFileSync(LEGACY_CONFIG_YAML_FILEPATH, "utf-8");
       writeFileSync(CONFIG_YAML_FILEPATH, content, "utf-8");
-      console.log(
-        `Migrated config from ${LEGACY_CONFIG_YAML_FILEPATH} to ${CONFIG_YAML_FILEPATH}`,
-      );
+      if (isLoggingEnabled()) {
+        log(
+          `Migrated config from ${LEGACY_CONFIG_YAML_FILEPATH} to ${CONFIG_YAML_FILEPATH}`,
+        );
+      }
     } else if (existsSync(LEGACY_CONFIG_YML_FILEPATH)) {
       const content = readFileSync(LEGACY_CONFIG_YML_FILEPATH, "utf-8");
       writeFileSync(CONFIG_YML_FILEPATH, content, "utf-8");
-      console.log(
-        `Migrated config from ${LEGACY_CONFIG_YML_FILEPATH} to ${CONFIG_YML_FILEPATH}`,
-      );
+      if (isLoggingEnabled()) {
+        log(
+          `Migrated config from ${LEGACY_CONFIG_YML_FILEPATH} to ${CONFIG_YML_FILEPATH}`,
+        );
+      }
     }
 
     // Migrate instructions file
     if (existsSync(LEGACY_INSTRUCTIONS_FILEPATH)) {
       const content = readFileSync(LEGACY_INSTRUCTIONS_FILEPATH, "utf-8");
       writeFileSync(INSTRUCTIONS_FILEPATH, content, "utf-8");
-      console.log(
-        `Migrated instructions from ${LEGACY_INSTRUCTIONS_FILEPATH} to ${INSTRUCTIONS_FILEPATH}`,
-      );
+      if (isLoggingEnabled()) {
+        log(
+          `Migrated instructions from ${LEGACY_INSTRUCTIONS_FILEPATH} to ${INSTRUCTIONS_FILEPATH}`,
+        );
+      }
     }
 
     // Migrate sessions directory if it exists
     const legacySessionsDir = join(LEGACY_CONFIG_DIR, "sessions");
     if (existsSync(legacySessionsDir)) {
-      const fs = require("fs");
-      const path = require("path");
-
       // Read all files in the legacy sessions directory
-      const sessionFiles = fs.readdirSync(legacySessionsDir);
+      const sessionFiles = readdirSync(legacySessionsDir);
 
       // Copy each file to the new sessions directory
       for (const file of sessionFiles) {
-        const sourcePath = path.join(legacySessionsDir, file);
-        const destPath = path.join(SESSIONS_DIR, file);
+        const sourcePath = join(legacySessionsDir, file);
+        const destPath = join(SESSIONS_DIR, file);
 
         // Only copy files, not directories
-        if (fs.statSync(sourcePath).isFile()) {
-          const content = fs.readFileSync(sourcePath);
-          fs.writeFileSync(destPath, content);
-          console.log(
-            `Migrated session file from ${sourcePath} to ${destPath}`,
-          );
+        if (statSync(sourcePath).isFile()) {
+          const content = readFileSync(sourcePath);
+          writeFileSync(destPath, content);
+          if (isLoggingEnabled()) {
+            log(`Migrated session file from ${sourcePath} to ${destPath}`);
+          }
         }
       }
     }
   } catch (error) {
-    console.error("Error during migration from legacy config:", error);
+    if (isLoggingEnabled()) {
+      log(`Error during migration from legacy config: ${error}`);
+    }
     // Continue with execution even if migration fails
+  }
+
+  if (isLoggingEnabled()) {
+    log("Migration from legacy config directory completed.");
   }
 }
 
