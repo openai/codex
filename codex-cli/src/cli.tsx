@@ -68,6 +68,11 @@ const cli = meow(
     --project-doc <file>       Include an additional markdown file at <file> as context
     --full-stdout              Do not truncate stdout/stderr from command outputs
 
+  Rate limit handling options
+    --max-retries <number>     Maximum number of retry attempts for rate limit errors (default: 10)
+    --initial-delay <number>   Initial delay in milliseconds before retrying (default: 1000)
+    --max-delay <number>       Maximum delay in milliseconds for exponential backoff (default: 60000)
+
   Dangerous options
     --dangerously-auto-approve-everything
                                Skip all confirmation prompts and execute commands without
@@ -135,6 +140,20 @@ const cli = meow(
         description:
           "Disable truncation of command stdout/stderr messages (show everything)",
         aliases: ["no-truncate"],
+      },
+      
+      // Rate limit handling options
+      maxRetries: {
+        type: "number",
+        description: "Maximum number of retry attempts for rate limit errors",
+      },
+      initialDelay: {
+        type: "number",
+        description: "Initial delay in milliseconds before retrying",
+      },
+      maxDelay: {
+        type: "number",
+        description: "Maximum delay in milliseconds for exponential backoff",
       },
 
       // Experimental mode where whole directory is loaded in context and model is requested
@@ -230,6 +249,23 @@ let config = loadConfig(undefined, undefined, {
 const prompt = cli.input[0];
 const model = cli.flags.model;
 const imagePaths = cli.flags.image as Array<string> | undefined;
+
+// Process backoff configuration from command line
+if (cli.flags.maxRetries !== undefined || cli.flags.initialDelay !== undefined || cli.flags.maxDelay !== undefined) {
+  config.backoff = config.backoff || {};
+  
+  if (cli.flags.maxRetries !== undefined) {
+    config.backoff.maxRetries = cli.flags.maxRetries;
+  }
+  
+  if (cli.flags.initialDelay !== undefined) {
+    config.backoff.initialDelayMs = cli.flags.initialDelay;
+  }
+  
+  if (cli.flags.maxDelay !== undefined) {
+    config.backoff.maxDelayMs = cli.flags.maxDelay;
+  }
+}
 
 config = {
   apiKey,

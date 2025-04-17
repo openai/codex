@@ -36,6 +36,14 @@ export const OPENAI_TIMEOUT_MS =
 export const OPENAI_BASE_URL = process.env["OPENAI_BASE_URL"] || "";
 export let OPENAI_API_KEY = process.env["OPENAI_API_KEY"] || "";
 
+// Default values for backoff configuration
+export const DEFAULT_BACKOFF_MAX_RETRIES = 
+  parseInt(process.env["OPENAI_BACKOFF_MAX_RETRIES"] || "10", 10);
+export const DEFAULT_BACKOFF_INITIAL_DELAY_MS = 
+  parseInt(process.env["OPENAI_BACKOFF_INITIAL_DELAY_MS"] || "1000", 10);
+export const DEFAULT_BACKOFF_MAX_DELAY_MS = 
+  parseInt(process.env["OPENAI_BACKOFF_MAX_DELAY_MS"] || "60000", 10);
+
 export function setApiKey(apiKey: string): void {
   OPENAI_API_KEY = apiKey;
 }
@@ -49,6 +57,7 @@ export type StoredConfig = {
   approvalMode?: AutoApprovalMode;
   fullAutoErrorMode?: FullAutoErrorMode;
   memory?: MemoryConfig;
+  backoff?: BackoffConfig;
 };
 
 // Minimal config written on first run.  An *empty* model string ensures that
@@ -56,7 +65,7 @@ export type StoredConfig = {
 // propagating to existing users until they explicitly set a model.
 export const EMPTY_STORED_CONFIG: StoredConfig = { model: "" };
 
-// Pre‑stringified JSON variant so we don’t stringify repeatedly.
+// Pre‑stringified JSON variant so we don't stringify repeatedly.
 const EMPTY_CONFIG_JSON = JSON.stringify(EMPTY_STORED_CONFIG, null, 2) + "\n";
 
 export type MemoryConfig = {
@@ -64,13 +73,15 @@ export type MemoryConfig = {
 };
 
 // Represents full runtime config, including loaded instructions.
-export type AppConfig = {
+export interface AppConfig extends StoredConfig {
   apiKey?: string;
   model: string;
   instructions: string;
   fullAutoErrorMode?: FullAutoErrorMode;
   memory?: MemoryConfig;
-};
+  /** Configuration for API rate limit backoff behavior */
+  backoff?: BackoffConfig;
+}
 
 // ---------------------------------------------------------------------------
 // Project doc support (codex.md)
@@ -312,6 +323,18 @@ export const loadConfig = (
   if (storedConfig.fullAutoErrorMode) {
     config.fullAutoErrorMode = storedConfig.fullAutoErrorMode;
   }
+  
+  // Include backoff settings if present in stored config
+  if (storedConfig.backoff) {
+    config.backoff = storedConfig.backoff;
+  } else {
+    // Use environment variables or defaults for backoff if not in config
+    config.backoff = {
+      maxRetries: DEFAULT_BACKOFF_MAX_RETRIES,
+      initialDelayMs: DEFAULT_BACKOFF_INITIAL_DELAY_MS,
+      maxDelayMs: DEFAULT_BACKOFF_MAX_DELAY_MS,
+    };
+  }
 
   return config;
 };
@@ -340,16 +363,47 @@ export const saveConfig = (
     mkdirSync(dir, { recursive: true });
   }
 
+  // Extract the config properties to save
+  const configToSave: StoredConfig = {
+    model: config.model,
+  };
+
+  // Only include properties that are defined
+  if (config.approvalMode) {
+    configToSave.approvalMode = config.approvalMode;
+  }
+  
+  if (config.fullAutoErrorMode) {
+    configToSave.fullAutoErrorMode = config.fullAutoErrorMode;
+  }
+  
+  if (config.memory) {
+    configToSave.memory = config.memory;
+  }
+  
+  if (config.backoff) {
+    configToSave.backoff = config.backoff;
+  }
+
   const ext = extname(targetPath).toLowerCase();
   if (ext === ".yaml" || ext === ".yml") {
-    writeFileSync(targetPath, dumpYaml({ model: config.model }), "utf-8");
+    writeFileSync(targetPath, dumpYaml(configToSave), "utf-8");
   } else {
     writeFileSync(
       targetPath,
-      JSON.stringify({ model: config.model }, null, 2),
+      JSON.stringify(configToSave, null, 2),
       "utf-8",
     );
   }
 
   writeFileSync(instructionsPath, config.instructions, "utf-8");
 };
+
+export interface BackoffConfig {
+  /** Maximum number of retry attempts for rate limit errors */
+  maxRetries?: number;
+  /** Initial delay in milliseconds before retrying */
+  initialDelayMs?: number;
+  /** Maximum delay in milliseconds for exponential backoff */
+  maxDelayMs?: number;
+}

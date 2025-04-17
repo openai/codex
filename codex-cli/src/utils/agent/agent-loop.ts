@@ -10,6 +10,7 @@ import type { Reasoning } from "openai/resources.mjs";
 
 import { log, isLoggingEnabled } from "./log.js";
 import { OPENAI_BASE_URL, OPENAI_TIMEOUT_MS } from "../config.js";
+import { createOpenAIClientWithBackoff } from "../openai-backoff.js";
 import { parseToolCallArguments } from "../parsers.js";
 import {
   ORIGIN,
@@ -20,13 +21,7 @@ import {
 } from "../session.js";
 import { handleExecCommand } from "./handle-exec-command.js";
 import { randomUUID } from "node:crypto";
-import OpenAI, { APIConnectionTimeoutError } from "openai";
-
-// Wait time before retrying after rate limit errors (ms).
-const RATE_LIMIT_RETRY_WAIT_MS = parseInt(
-  process.env["OPENAI_RATE_LIMIT_RETRY_WAIT_MS"] || "2500",
-  10,
-);
+import OpenAI from "openai";
 
 export type CommandConfirmation = {
   review: ReviewDecision;
@@ -233,10 +228,13 @@ export class AgentLoop {
     this.getCommandConfirmation = getCommandConfirmation;
     this.onLastResponseId = onLastResponseId;
     this.sessionId = getSessionId() || randomUUID().replaceAll("-", "");
+    
     // Configure OpenAI client with optional timeout (ms) from environment
     const timeoutMs = OPENAI_TIMEOUT_MS;
     const apiKey = this.config.apiKey ?? process.env["OPENAI_API_KEY"] ?? "";
-    this.oai = new OpenAI({
+    
+    // Create OpenAI client with backoff capability
+    this.oai = createOpenAIClientWithBackoff({
       // The OpenAI JS SDK only requires `apiKey` when making requests against
       // the official API.  When running unit‑tests we stub out all network
       // calls so an undefined key is perfectly fine.  We therefore only set
@@ -251,6 +249,8 @@ export class AgentLoop {
         session_id: this.sessionId,
       },
       ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
+      // Add backoff options from config
+      backoffOptions: this.config.backoff,
     });
 
     setSessionId(this.sessionId);
@@ -477,224 +477,64 @@ export class AgentLoop {
         for (const item of turnInput) {
           stageItem(item as ResponseItem);
         }
-        // Send request to OpenAI with retry on timeout
-        let stream;
-
-        // Retry loop for transient errors. Up to MAX_RETRIES attempts.
-        const MAX_RETRIES = 5;
-        for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-          try {
-            let reasoning: Reasoning | undefined;
-            if (this.model.startsWith("o")) {
-              reasoning = { effort: "high" };
-              if (this.model === "o3" || this.model === "o4-mini") {
-                // @ts-expect-error waiting for API type update
-                reasoning.summary = "auto";
-              }
-            }
-            const mergedInstructions = [prefix, this.instructions]
-              .filter(Boolean)
-              .join("\n");
-            if (isLoggingEnabled()) {
-              log(
-                `instructions (length ${mergedInstructions.length}): ${mergedInstructions}`,
-              );
-            }
-            // eslint-disable-next-line no-await-in-loop
-            stream = await this.oai.responses.create({
-              model: this.model,
-              instructions: mergedInstructions,
-              previous_response_id: lastResponseId || undefined,
-              input: turnInput,
-              stream: true,
-              parallel_tool_calls: false,
-              reasoning,
-              tools: [
-                {
-                  type: "function",
-                  name: "shell",
-                  description: "Runs a shell command, and returns its output.",
-                  strict: false,
-                  parameters: {
-                    type: "object",
-                    properties: {
-                      command: { type: "array", items: { type: "string" } },
-                      workdir: {
-                        type: "string",
-                        description: "The working directory for the command.",
-                      },
-                      timeout: {
-                        type: "number",
-                        description:
-                          "The maximum time to wait for the command to complete in milliseconds.",
-                      },
-                    },
-                    required: ["command"],
-                    additionalProperties: false,
-                  },
-                },
-              ],
-            });
-            break;
-          } catch (error) {
-            const isTimeout = error instanceof APIConnectionTimeoutError;
-            // Lazily look up the APIConnectionError class at runtime to
-            // accommodate the test environment's minimal OpenAI mocks which
-            // do not define the class.  Falling back to `false` when the
-            // export is absent ensures the check never throws.
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const ApiConnErrCtor = (OpenAI as any).APIConnectionError as  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              | (new (...args: any) => Error)
-              | undefined;
-            const isConnectionError = ApiConnErrCtor
-              ? error instanceof ApiConnErrCtor
-              : false;
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const errCtx = error as any;
-            const status =
-              errCtx?.status ?? errCtx?.httpStatus ?? errCtx?.statusCode;
-            const isServerError = typeof status === "number" && status >= 500;
-            if (
-              (isTimeout || isServerError || isConnectionError) &&
-              attempt < MAX_RETRIES
-            ) {
-              log(
-                `OpenAI request failed (attempt ${attempt}/${MAX_RETRIES}), retrying...`,
-              );
-              continue;
-            }
-
-            const isTooManyTokensError =
-              (errCtx.param === "max_tokens" ||
-                (typeof errCtx.message === "string" &&
-                  /max_tokens is too large/i.test(errCtx.message))) &&
-              errCtx.type === "invalid_request_error";
-
-            if (isTooManyTokensError) {
-              this.onItem({
-                id: `error-${Date.now()}`,
-                type: "message",
-                role: "system",
-                content: [
-                  {
-                    type: "input_text",
-                    text: "⚠️  The current request exceeds the maximum context length supported by the chosen model. Please shorten the conversation, run /clear, or switch to a model with a larger context window and try again.",
-                  },
-                ],
-              });
-              this.onLoading(false);
-              return;
-            }
-
-            const isRateLimit =
-              status === 429 ||
-              errCtx.code === "rate_limit_exceeded" ||
-              errCtx.type === "rate_limit_exceeded" ||
-              /rate limit/i.test(errCtx.message ?? "");
-            if (isRateLimit) {
-              if (attempt < MAX_RETRIES) {
-                // Exponential backoff: base wait * 2^(attempt-1), or use suggested retry time
-                // if provided.
-                let delayMs = RATE_LIMIT_RETRY_WAIT_MS * 2 ** (attempt - 1);
-
-                // Parse suggested retry time from error message, e.g., "Please try again in 1.3s"
-                const msg = errCtx?.message ?? "";
-                const m = /retry again in ([\d.]+)s/i.exec(msg);
-                if (m && m[1]) {
-                  const suggested = parseFloat(m[1]) * 1000;
-                  if (!Number.isNaN(suggested)) {
-                    delayMs = suggested;
-                  }
-                }
-                log(
-                  `OpenAI rate limit exceeded (attempt ${attempt}/${MAX_RETRIES}), retrying in ${Math.round(
-                    delayMs,
-                  )} ms...`,
-                );
-                // eslint-disable-next-line no-await-in-loop
-                await new Promise((resolve) => setTimeout(resolve, delayMs));
-                continue;
-              } else {
-                // We have exhausted all retry attempts. Surface a message so the user understands
-                // why the request failed and can decide how to proceed (e.g. wait and retry later
-                // or switch to a different model / account).
-
-                const errorDetails = [
-                  `Status: ${status || "unknown"}`,
-                  `Code: ${errCtx.code || "unknown"}`,
-                  `Type: ${errCtx.type || "unknown"}`,
-                  `Message: ${errCtx.message || "unknown"}`,
-                ].join(", ");
-
-                this.onItem({
-                  id: `error-${Date.now()}`,
-                  type: "message",
-                  role: "system",
-                  content: [
-                    {
-                      type: "input_text",
-                      text: `⚠️  Rate limit reached. Error details: ${errorDetails}. Please try again later.`,
-                    },
-                  ],
-                });
-
-                this.onLoading(false);
-                return;
-              }
-            }
-
-            const isClientError =
-              (typeof status === "number" &&
-                status >= 400 &&
-                status < 500 &&
-                status !== 429) ||
-              errCtx.code === "invalid_request_error" ||
-              errCtx.type === "invalid_request_error";
-            if (isClientError) {
-              this.onItem({
-                id: `error-${Date.now()}`,
-                type: "message",
-                role: "system",
-                content: [
-                  {
-                    type: "input_text",
-                    // Surface the request ID when it is present on the error so users
-                    // can reference it when contacting support or inspecting logs.
-                    text: (() => {
-                      const reqId =
-                        (
-                          errCtx as Partial<{
-                            request_id?: string;
-                            requestId?: string;
-                          }>
-                        )?.request_id ??
-                        (
-                          errCtx as Partial<{
-                            request_id?: string;
-                            requestId?: string;
-                          }>
-                        )?.requestId;
-
-                      const errorDetails = [
-                        `Status: ${status || "unknown"}`,
-                        `Code: ${errCtx.code || "unknown"}`,
-                        `Type: ${errCtx.type || "unknown"}`,
-                        `Message: ${errCtx.message || "unknown"}`,
-                      ].join(", ");
-
-                      return `⚠️  OpenAI rejected the request${
-                        reqId ? ` (request ID: ${reqId})` : ""
-                      }. Error details: ${errorDetails}. Please verify your settings and try again.`;
-                    })(),
-                  },
-                ],
-              });
-              this.onLoading(false);
-              return;
-            }
-            throw error;
+        // Send request to OpenAI - retries are handled by our backoff utility
+        
+        // Set up reasoning based on model
+        let reasoning: Reasoning | undefined;
+        if (this.model.startsWith("o")) {
+          reasoning = { effort: "high" };
+          if (this.model === "o3" || this.model === "o4-mini") {
+            // @ts-expect-error waiting for API type update
+            reasoning.summary = "auto";
           }
         }
+        
+        const mergedInstructions = [prefix, this.instructions]
+          .filter(Boolean)
+          .join("\n");
+        
+        if (isLoggingEnabled()) {
+          log(
+            `instructions (length ${mergedInstructions.length}): ${mergedInstructions}`,
+          );
+        }
+      
+        // eslint-disable-next-line no-await-in-loop
+        const stream = await this.oai.responses.create({
+          model: this.model,
+          instructions: mergedInstructions,
+          previous_response_id: lastResponseId || undefined,
+          input: turnInput,
+          stream: true,
+          parallel_tool_calls: false,
+          reasoning,
+          tools: [
+            {
+              type: "function",
+              name: "shell",
+              description: "Runs a shell command, and returns its output.",
+              strict: false,
+              parameters: {
+                type: "object",
+                properties: {
+                  command: { type: "array", items: { type: "string" } },
+                  workdir: {
+                    type: "string",
+                    description: "The working directory for the command.",
+                  },
+                  timeout: {
+                    type: "number",
+                    description:
+                      "The maximum time to wait for the command to complete in milliseconds.",
+                  },
+                },
+                required: ["command"],
+                additionalProperties: false,
+              },
+            },
+          ],
+        });
+
         turnInput = []; // clear turn input, prepare for function call results
 
         // If the user requested cancellation while we were awaiting the network
