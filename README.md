@@ -13,6 +13,7 @@
 - [Experimental Technology Disclaimer](#experimental-technology-disclaimer)
 - [Quickstart](#quickstart)
 - [Why Codex?](#whycodex)
+- [Funding Opportunity](#funding-opportunity)
 - [Security Model \& Permissions](#securitymodelpermissions)
   - [Platform sandboxing details](#platform-sandboxing-details)
 - [System Requirements](#systemrequirements)
@@ -101,6 +102,16 @@ development_ that understands and executes your repo.
 - **Multimodal** — pass in screenshots or diagrams to implement features ✨
 
 And it's **fully open-source** so you can see and contribute to how it develops!
+
+---
+
+## Funding Opportunity 
+We’re excited to launch a **$1 million initiative** supporting open source projects that use Codex CLI and other OpenAI models.  
+
+* Grants are awarded in **$25,000** API credit increments.  
+* Applications are reviewed **on a rolling basis**.
+
+**Interested? [Apply here](https://openai.com/form/codex-open-source-fund/).**
 
 ---
 
