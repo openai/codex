@@ -9,7 +9,11 @@ import type {
 import type { Reasoning } from "openai/resources.mjs";
 
 import { log, isLoggingEnabled } from "./log.js";
-import { OPENAI_BASE_URL, OPENAI_TIMEOUT_MS, PROJECT_DOC_MAX_BYTES } from "../config.js";
+import {
+  OPENAI_BASE_URL,
+  OPENAI_TIMEOUT_MS,
+  PROJECT_DOC_MAX_BYTES,
+} from "../config.js";
 import { parseToolCallArguments } from "../parsers.js";
 import {
   ORIGIN,
@@ -322,9 +326,15 @@ export class AgentLoop {
       let url: string;
       let maxBytes: number;
       try {
-        const fetchArgs = JSON.parse(rawArgsString) as { url: string; max_bytes?: number };
+        const fetchArgs = JSON.parse(rawArgsString) as {
+          url: string;
+          max_bytes?: number;
+        };
         url = fetchArgs.url;
-        maxBytes = typeof fetchArgs.max_bytes === "number" ? fetchArgs.max_bytes : PROJECT_DOC_MAX_BYTES;
+        maxBytes =
+          typeof fetchArgs.max_bytes === "number"
+            ? fetchArgs.max_bytes
+            : PROJECT_DOC_MAX_BYTES;
       } catch (e) {
         const outputItem: ResponseInputItem.FunctionCallOutput = {
           type: "function_call_output",
@@ -343,7 +353,11 @@ export class AgentLoop {
         const response = await fetch(url);
         const text = await response.text();
         const truncated = text.slice(0, maxBytes);
-        outputItem.output = JSON.stringify({ url, status: response.status, body: truncated });
+        outputItem.output = JSON.stringify({
+          url,
+          status: response.status,
+          body: truncated,
+        });
       } catch (e) {
         outputItem.output = JSON.stringify({ url, error: String(e) });
       }
@@ -571,13 +585,18 @@ export class AgentLoop {
                 {
                   type: "function",
                   name: "http.fetch",
-                  description: "Fetches the content of a URL via HTTP(S). Returns the response body as a string.",
+                  description:
+                    "Fetches the content of a URL via HTTP(S). Returns the response body as a string.",
                   strict: false,
                   parameters: {
                     type: "object",
                     properties: {
                       url: { type: "string", description: "The URL to fetch." },
-                      max_bytes: { type: "number", description: "Maximum bytes to return from the response body." },
+                      max_bytes: {
+                        type: "number",
+                        description:
+                          "Maximum bytes to return from the response body.",
+                      },
                     },
                     required: ["url"],
                     additionalProperties: false,
