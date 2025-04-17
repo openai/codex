@@ -35,7 +35,7 @@ type Props = {
   prompt?: string;
   imagePaths?: Array<string>;
   approvalPolicy: ApprovalPolicy;
-  additionalWritableRoots: Array<string>;
+  additionalWritableRoots: ReadonlyArray<string>;
   fullStdout: boolean;
 };
 
@@ -150,7 +150,13 @@ export default function TerminalChat({
       agentRef.current = undefined;
       forceUpdate(); // re‑render after teardown too
     };
-  }, [model, config, approvalPolicy, requestConfirmation]);
+  }, [
+    model,
+    config,
+    approvalPolicy,
+    requestConfirmation,
+    additionalWritableRoots,
+  ]);
 
   // whenever loading starts/stops, reset or start a timer — but pause the
   // timer while a confirmation overlay is displayed so we don't trigger a

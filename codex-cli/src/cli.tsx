@@ -285,9 +285,9 @@ if (fullContextMode) {
 }
 
 // Ensure that all values in additionalWritableRoots are absolute paths.
-const additionalWritableRoots = (cli.flags.writableRoot ?? []).map((p) =>
-  path.resolve(p),
-);
+const additionalWritableRoots: ReadonlyArray<string> = (
+  cli.flags.writableRoot ?? []
+).map((p) => path.resolve(p));
 
 // If we are running in --quiet mode, do that and exit.
 const quietMode = Boolean(cli.flags.quiet);
@@ -414,7 +414,7 @@ async function runQuietMode({
   prompt: string;
   imagePaths: Array<string>;
   approvalPolicy: ApprovalPolicy;
-  additionalWritableRoots: Array<string>;
+  additionalWritableRoots: ReadonlyArray<string>;
   config: AppConfig;
 }): Promise<void> {
   const agent = new AgentLoop({

@@ -22,7 +22,7 @@ type Props = {
   imagePaths?: Array<string>;
   rollout?: AppRollout;
   approvalPolicy: ApprovalPolicy;
-  additionalWritableRoots: Array<string>;
+  additionalWritableRoots: ReadonlyArray<string>;
   fullStdout: boolean;
 };
 

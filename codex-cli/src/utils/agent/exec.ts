@@ -21,7 +21,7 @@ export function exec(
     workdir,
     timeoutInMillis,
     additionalWritableRoots,
-  }: ExecInput & { additionalWritableRoots: Array<string> },
+  }: ExecInput & { additionalWritableRoots: ReadonlyArray<string> },
   sandbox: SandboxType,
   abortSignal?: AbortSignal,
 ): Promise<ExecResult> {

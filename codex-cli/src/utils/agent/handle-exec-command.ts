@@ -74,7 +74,7 @@ export async function handleExecCommand(
   args: ExecInput,
   config: AppConfig,
   policy: ApprovalPolicy,
-  additionalWritableRoots: Array<string>,
+  additionalWritableRoots: ReadonlyArray<string>,
   getCommandConfirmation: (
     command: Array<string>,
     applyPatch: ApplyPatchCommand | undefined,
@@ -211,7 +211,7 @@ async function execCommand(
   execInput: ExecInput,
   applyPatchCommand: ApplyPatchCommand | undefined,
   runInSandbox: boolean,
-  additionalWritableRoots: Array<string>,
+  additionalWritableRoots: ReadonlyArray<string>,
   abortSignal?: AbortSignal,
 ): Promise<ExecCommandSummary> {
   let { workdir } = execInput;

@@ -45,7 +45,7 @@ type AgentLoopParams = {
   onLoading: (loading: boolean) => void;
 
   /** Extra writable roots to use with sandbox execution. */
-  additionalWritableRoots: Array<string>;
+  additionalWritableRoots: ReadonlyArray<string>;
 
   /** Called when the command is not auto-approved to request explicit user review. */
   getCommandConfirmation: (
@@ -60,7 +60,7 @@ export class AgentLoop {
   private instructions?: string;
   private approvalPolicy: ApprovalPolicy;
   private config: AppConfig;
-  private additionalWritableRoots: Array<string>;
+  private additionalWritableRoots: ReadonlyArray<string>;
 
   // Using `InstanceType<typeof OpenAI>` sidesteps typing issues with the OpenAI package under
   // the TS 5+ `moduleResolution=bundler` setup. OpenAI client instance. We keep the concrete

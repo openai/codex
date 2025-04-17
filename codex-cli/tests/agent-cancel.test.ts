@@ -91,6 +91,7 @@ describe("Agent cancellation", () => {
       instructions: "",
       config: { model: "any", instructions: "" },
       approvalPolicy: { mode: "auto" } as any,
+      additionalWritableRoots: [],
       onItem: (item) => {
         received.push(item);
       },
@@ -136,6 +137,7 @@ describe("Agent cancellation", () => {
     const received: Array<any> = [];
 
     const agent = new AgentLoop({
+      additionalWritableRoots: [],
       model: "any",
       instructions: "",
       config: { model: "any", instructions: "" },
