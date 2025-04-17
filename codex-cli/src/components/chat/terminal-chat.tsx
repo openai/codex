@@ -191,7 +191,10 @@ export default function TerminalChat({
         );
         const last = assistantMessages[assistantMessages.length - 1];
         if (last) {
-          const text = last.content.map((c) => c.text).join("").trim();
+          const text = last.content
+            .map((c) => c.text)
+            .join("")
+            .trim();
           const preview = text.replace(/\n/g, " ").slice(0, 100);
           const safePreview = preview.replace(/"/g, '\\"');
           const title = "Codex CLI";
