@@ -22,7 +22,9 @@
     "build:dev": "NODE_ENV=development node build.mjs --dev && NODE_OPTIONS=--enable-source-maps node dist/cli-dev.js",
     "release:readme": "cp ../README.md ./README.md",
     "release:version": "codex -a full-auto 'update the CLI_VERSION in codex-cli/src/utils/session.ts and the version in package.json to use the current timestamp (YYMMDDHHmm format)'",
-    "release": "npm run release:readme && npm run release:version && npm run build && npm publish"
+    "release": "npm run release:readme && npm run release:version && npm run build && npm publish",
+    "prepare": "husky",
+    "pre-commit": "lint-staged"
   },
   "files": [
     "README.md",
@@ -61,7 +63,9 @@
     "eslint-plugin-react": "^7.32.2",
     "eslint-plugin-react-hooks": "^4.6.0",
     "eslint-plugin-react-refresh": "^0.4.19",
+    "husky": "^9.1.7",
     "ink-testing-library": "^3.0.0",
+    "lint-staged": "^15.5.1",
     "prettier": "^2.8.7",
     "punycode": "^2.3.1",
     "ts-node": "^10.9.1",
