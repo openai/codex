@@ -592,7 +592,7 @@ export class AgentLoop {
               return;
             }
 
-            let isRateLimit =
+            const isRateLimit =
               status === 429 ||
               errCtx.code === "rate_limit_exceeded" ||
               errCtx.type === "rate_limit_exceeded" ||
