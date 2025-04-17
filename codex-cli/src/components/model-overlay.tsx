@@ -19,6 +19,8 @@ type Props = {
   hasLastResponse: boolean;
   onSelect: (model: string) => void;
   onExit: () => void;
+  availableModels: Array<string>;
+  setModels: React.Dispatch<React.SetStateAction<Array<string>>>;
 };
 
 export default function ModelOverlay({
@@ -26,6 +28,8 @@ export default function ModelOverlay({
   hasLastResponse,
   onSelect,
   onExit,
+  availableModels,
+  setModels,
 }: Props): JSX.Element {
   const [items, setItems] = useState<Array<{ label: string; value: string }>>(
     [],
@@ -34,13 +38,11 @@ export default function ModelOverlay({
   useEffect(() => {
     (async () => {
       const models = await getAvailableModels();
-
+      setModels(models ?? []);
       // Split the list into recommended and “other” models.
       const recommended = RECOMMENDED_MODELS.filter((m) => models.includes(m));
       const others = models.filter((m) => !recommended.includes(m));
-
       const ordered = [...recommended, ...others.sort()];
-
       setItems(
         ordered.map((m) => ({
           label: recommended.includes(m) ? `⭐ ${m}` : m,
@@ -48,7 +50,7 @@ export default function ModelOverlay({
         })),
       );
     })();
-  }, []);
+  }, [setModels]);
 
   // ---------------------------------------------------------------------------
   // If the conversation already contains a response we cannot change the model

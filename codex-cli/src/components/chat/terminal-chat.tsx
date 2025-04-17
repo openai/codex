@@ -29,6 +29,7 @@ import ModelOverlay from "../model-overlay.js";
 import { Box, Text } from "ink";
 import React, { useEffect, useMemo, useState } from "react";
 import { inspect } from "util";
+import chalk from "chalk";
 
 type Props = {
   config: AppConfig;
@@ -37,7 +38,45 @@ type Props = {
   approvalPolicy: ApprovalPolicy;
   fullStdout: boolean;
 };
+// ...existing code...
+type Props = {
+  currentModel: string;
+  hasLastResponse: boolean;
+  onSelect: (model: string) => void;
+  onExit: () => void;
+  availableModels: Array<string>;
+  setModels: React.Dispatch<React.SetStateAction<Array<string>>>;
+};
 
+export default function ModelOverlay({
+  currentModel,
+  hasLastResponse,
+  onSelect,
+  onExit,
+  availableModels,
+  setModels,
+}: Props): JSX.Element {
+  const [items, setItems] = useState<Array<{ label: string; value: string }>>(
+    [],
+  );
+
+  useEffect(() => {
+    (async () => {
+      const models = await getAvailableModels();
+      setModels(models ?? []);
+      // Split the list into recommended and “other” models.
+      const recommended = RECOMMENDED_MODELS.filter((m) => models.includes(m));
+      const others = models.filter((m) => !recommended.includes(m));
+      const ordered = [...recommended, ...others.sort()];
+      setItems(
+        ordered.map((m) => ({
+          label: recommended.includes(m) ? `⭐ ${m}` : m,
+          value: m,
+        })),
+      );
+    })();
+  }, [setModels]);
+  // ...existing code...
 const colorsByPolicy: Record<ApprovalPolicy, ColorName | undefined> = {
   "suggest": undefined,
   "auto-edit": "greenBright",
@@ -52,6 +91,7 @@ export default function TerminalChat({
   fullStdout,
 }: Props): React.ReactElement {
   const [model, setModel] = useState<string>(config.model);
+  const [availableModels, setAvailableModels] = useState<Array<string>>([]);
   const [lastResponseId, setLastResponseId] = useState<string | null>(null);
   const [items, setItems] = useState<Array<ResponseItem>>([]);
   const [loading, setLoading] = useState<boolean>(false);
@@ -213,6 +253,7 @@ export default function TerminalChat({
   useEffect(() => {
     (async () => {
       const available = await getAvailableModels();
+      setAvailableModels(available);
       if (model && available.length > 0 && !available.includes(model)) {
         setItems((prev) => [
           ...prev,
@@ -339,6 +380,16 @@ export default function TerminalChat({
             currentModel={model}
             hasLastResponse={Boolean(lastResponseId)}
             onSelect={(newModel) => {
+              // Validate model selection
+              if (!availableModels.includes(newModel)) {
+                // eslint-disable-next-line no-console
+                console.error(
+                  `\n${chalk.red('Error:')} Model "${chalk.bold(newModel)}" is not available.\n` +
+                  `Available models: ${chalk.green(availableModels.join(', '))}\n`
+                );
+                setOverlayMode("none");
+                return;
+              }
               if (isLoggingEnabled()) {
                 log(
                   "TerminalChat: interruptAgent invoked – calling agent.cancel()",
@@ -373,6 +424,8 @@ export default function TerminalChat({
               setOverlayMode("none");
             }}
             onExit={() => setOverlayMode("none")}
+            availableModels={availableModels}
+            setModels={setAvailableModels}
           />
         )}
 
