@@ -3,8 +3,8 @@
   "private": true,
   "description": "Tools for repo-wide maintenance.",
   "scripts": {
-    "format": "prettier --check '*.{json,md,yml,yaml}' '.github/**/*.{yml,yaml}' 'codex-cli/src/**/*.{ts,tsx,js,json,md}' 'codex-cli/tests/**/*.{ts,tsx,js,json,md}'",
-    "format:fix": "prettier --write '*.{json,md,yml,yaml}' '.github/**/*.{yml,yaml}' 'codex-cli/src/**/*.{ts,tsx,js,json,md}' 'codex-cli/tests/**/*.{ts,tsx,js,json,md}'",
+    "format": "prettier --check \"{.,.github,codex-cli/src,codex-cli/tests}/**/*.{js,ts,tsx,json,md,yml,yaml}\"",
+    "format:fix": "prettier --write \"{.,.github,codex-cli/src,codex-cli/tests}/**/*.{js,ts,tsx,json,md,yml,yaml}\"",
     "lint": "cd codex-cli && eslint src tests --ext ts --ext tsx --report-unused-disable-directives --max-warnings 0",
     "lint:fix": "cd codex-cli && eslint src tests --ext ts --ext tsx --fix",
     "dev": "pnpm --filter @openai/codex run dev",
