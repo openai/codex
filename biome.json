@@ -1,5 +1,5 @@
 {
-  "$schema": "https://biomejs.dev/schemas/1.5.3/schema.json",
+  "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
   "organizeImports": {
     "enabled": true
   },
@@ -9,9 +9,6 @@
       "recommended": true,
       "suspicious": {
         "noConsoleLog": "error"
-      },
-      "all": {
-        "noDebugger": "error"
       }
     }
   },
