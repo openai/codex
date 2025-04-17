@@ -86,16 +86,16 @@ describe("Agent interrupt and continue", () => {
 
     // Start the first run
     const firstRunPromise = agent.run(firstMessage as any);
-    
+
     // Advance timers to allow the stream to start
     await vi.advanceTimersByTimeAsync(5);
-    
+
     // Interrupt the agent
     agent.cancel();
-    
+
     // Verify loading state is reset
     expect(loadingState).toBe(false);
-    
+
     // Second user message
     const secondMessage = [
       {
@@ -104,10 +104,10 @@ describe("Agent interrupt and continue", () => {
         content: [{ type: "input_text", text: "second message" }],
       },
     ];
-    
+
     // Reset the mock to track the second call
     openAiState.createSpy.mockClear();
-    
+
     // Setup the second mock response
     openAiState.createSpy.mockImplementation(() => {
       // Return a mock stream object
@@ -130,19 +130,19 @@ describe("Agent interrupt and continue", () => {
         },
       };
     });
-    
+
     // Start the second run
     const secondRunPromise = agent.run(secondMessage as any);
-    
+
     // Advance timers to allow the second stream to complete
     await vi.advanceTimersByTimeAsync(20);
-    
+
     // Ensure both promises resolve
     await Promise.all([firstRunPromise, secondRunPromise]);
-    
+
     // Verify the second API call was made
     expect(openAiState.createSpy).toHaveBeenCalled();
-    
+
     // Verify that the agent can process new input after cancellation
     expect(loadingState).toBe(false);
   });

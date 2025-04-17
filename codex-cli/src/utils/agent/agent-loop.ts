@@ -152,7 +152,6 @@ export class AgentLoop {
       }
     }
 
-
     this.onLoading(false);
 
     /* Inform the UI that the run was aborted by the user. */
