@@ -27,8 +27,9 @@ import HelpOverlay from "../help-overlay.js";
 import HistoryOverlay from "../history-overlay.js";
 import ModelOverlay from "../model-overlay.js";
 import { Box, Text } from "ink";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useRef } from "react";
 import { inspect } from "util";
+import { exec } from "node:child_process";
 
 type Props = {
   config: AppConfig;
@@ -173,6 +174,36 @@ export default function TerminalChat({
       }
     };
   }, [loading, confirmationPrompt]);
+
+  // Notify desktop with a preview when an assistant response arrives
+  const prevLoadingRef = useRef<boolean>(false);
+  useEffect(() => {
+    if (
+      prevLoadingRef.current &&
+      !loading &&
+      confirmationPrompt == null &&
+      items.length > 0
+    ) {
+      if (process.platform === "darwin") {
+        // find the last assistant message
+        const assistantMessages = items.filter(
+          (i) => i.type === "message" && i.role === "assistant",
+        );
+        const last = assistantMessages[assistantMessages.length - 1];
+        if (last) {
+          const text = last.content.map((c) => c.text).join("").trim();
+          const preview = text.replace(/\n/g, " ").slice(0, 100);
+          const safePreview = preview.replace(/"/g, '\\"');
+          const title = "Codex CLI";
+          const cwd = PWD;
+          exec(
+            `osascript -e 'display notification "${safePreview}" with title "${title}" subtitle "${cwd}" sound name \"Ping\"'`,
+          );
+        }
+      }
+    }
+    prevLoadingRef.current = loading;
+  }, [loading, confirmationPrompt, items]);
 
   // Let's also track whenever the ref becomes available
   const agent = agentRef.current;
