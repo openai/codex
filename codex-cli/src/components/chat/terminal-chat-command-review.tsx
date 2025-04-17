@@ -124,12 +124,18 @@ export function TerminalChatCommandReview({
       } else if (input === "n") {
         setSelection(ReviewDecision.NO_CONTINUE);
         setMode("confirm");
+        onReviewCommand(
+          ReviewDecision.NO_CONTINUE,
+          "Don't do that, keep going though",
+        );
       } else if (input === "a" && showAlwaysApprove) {
         setSelection(ReviewDecision.ALWAYS);
         setMode("confirm");
+        onReviewCommand(ReviewDecision.ALWAYS);
       } else if (key.escape) {
         setSelection(ReviewDecision.NO_EXIT);
         setMode("confirm");
+        onReviewCommand(ReviewDecision.NO_EXIT);
       }
     } else if (mode === "confirm") {
       if (input === "/back") {
