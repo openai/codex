@@ -23,7 +23,7 @@ jobs:
 
       - name: Install dependencies (codex-cli)
         working-directory: codex-cli
-        run: npm ci
+        run: npm i
 
       - name: Check formatting (codex-cli)
         working-directory: codex-cli
