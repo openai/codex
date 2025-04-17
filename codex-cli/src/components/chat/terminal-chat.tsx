@@ -67,22 +67,20 @@ async function generateCommandExplanation(
     // Format the command for display
     const commandForDisplay = formatCommandForDisplay(command);
 
-    // Create a prompt that asks for an explanation
+    // Create a prompt that asks for an explanation with a more detailed system prompt
     const response = await oai.chat.completions.create({
       model,
       messages: [
         {
           role: "system",
           content:
-            "You are a helpful assistant that explains shell commands. Provide clear, concise explanations that focus on what the command does, any potential risks, and why someone might want to run it.",
+            "You are an expert in shell commands and terminal operations. Your task is to provide detailed, accurate explanations of shell commands that users are considering executing. Break down each part of the command, explain what it does, identify any potential risks or side effects, and explain why someone might want to run it. Be specific about what files or systems will be affected. If the command could potentially be harmful, make sure to clearly highlight those risks.",
         },
         {
           role: "user",
-          content: `Please explain this shell command in simple terms: \`${commandForDisplay}\`\n\nInclude:\n1. What the command does\n2. Any potential risks or side effects\n3. Why someone might want to run this command`,
+          content: `Please explain this shell command in detail: \`${commandForDisplay}\`\n\nProvide a structured explanation that includes:\n1. A brief overview of what the command does\n2. A breakdown of each part of the command (flags, arguments, etc.)\n3. What files, directories, or systems will be affected\n4. Any potential risks or side effects\n5. Why someone might want to run this command\n\nBe specific and technical - this explanation will help the user decide whether to approve or reject the command.`,
         },
       ],
-      temperature: 0.3, // Lower temperature for more factual responses
-      max_tokens: 300, // Limit response length
     });
 
     // Extract the explanation from the response
@@ -91,7 +89,28 @@ async function generateCommandExplanation(
     return explanation;
   } catch (error) {
     log(`Error generating command explanation: ${error}`);
-    return "Unable to generate explanation due to an error.";
+    
+    // Improved error handling with more specific error information
+    let errorMessage = "Unable to generate explanation due to an error.";
+    
+    if (error instanceof Error) {
+      // Include specific error message for better debugging
+      errorMessage = `Unable to generate explanation: ${error.message}`;
+      
+      // If it's an API error, check for more specific information
+      if ('status' in error && typeof error.status === 'number') {
+        // Handle API-specific errors
+        if (error.status === 401) {
+          errorMessage = "Unable to generate explanation: API key is invalid or expired.";
+        } else if (error.status === 429) {
+          errorMessage = "Unable to generate explanation: Rate limit exceeded. Please try again later.";
+        } else if (error.status >= 500) {
+          errorMessage = "Unable to generate explanation: OpenAI service is currently unavailable. Please try again later.";
+        }
+      }
+    }
+    
+    return errorMessage;
   }
 }
 
