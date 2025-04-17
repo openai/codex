@@ -70,7 +70,6 @@
     "vitest": "^3.0.9",
     "whatwg-url": "^14.2.0"
   },
-
   "repository": {
     "type": "git",
     "url": "https://github.com/openai/codex"

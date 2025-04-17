@@ -4,13 +4,18 @@
   "description": "Tools for repo-wide maintenance.",
   "scripts": {
     "release": "pnpm --filter @openai/codex run release",
-    "format": "prettier --check *.json *.md .github/workflows/*.yml",
-    "format:fix": "prettier --write *.json *.md .github/workflows/*.yml",
+    "format": "prettier --check *.json *.md .github/workflows/*.yml codex-cli/**/*.{ts,tsx,js,json,md}",
+    "format:fix": "prettier --write *.json *.md .github/workflows/*.yml codex-cli/**/*.{ts,tsx,js,json,md}",
+    "lint": "cd codex-cli && eslint src tests --ext ts --ext tsx --report-unused-disable-directives --max-warnings 0",
+    "lint:fix": "cd codex-cli && eslint src tests --ext ts --ext tsx --fix",
     "build": "pnpm --filter @openai/codex run build",
     "dev": "pnpm --filter @openai/codex run dev",
     "test": "pnpm --filter @openai/codex run test"
   },
   "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
+    "eslint": "^8.57.1",
     "prettier": "^3.5.3"
   },
   "engines": {

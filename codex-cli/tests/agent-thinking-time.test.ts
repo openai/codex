@@ -109,7 +109,7 @@ describe("thinking time counter", () => {
       approvalPolicy: { mode: "auto" } as any,
       onItem: (i) => items.push(i),
       onLoading: () => {},
-      getCommandConfirmation: async () => ({ review: "yes" } as any),
+      getCommandConfirmation: async () => ({ review: "yes" }) as any,
       onLastResponseId: () => {},
     });
 
