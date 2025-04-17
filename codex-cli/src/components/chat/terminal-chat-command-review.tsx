@@ -21,7 +21,9 @@ export function TerminalChatCommandReview({
   onReviewCommand: (decision: ReviewDecision, customMessage?: string) => void;
   explanation?: string;
 }): React.ReactElement {
-  const [mode, setMode] = React.useState<"select" | "input" | "explanation">("select");
+  const [mode, setMode] = React.useState<"select" | "input" | "explanation">(
+    "select",
+  );
   const [explanation, setExplanation] = React.useState<string>("");
 
   // If the component receives an explanation prop, update the state

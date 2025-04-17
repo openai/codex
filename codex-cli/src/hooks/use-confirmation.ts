@@ -17,7 +17,10 @@ type ConfirmationItem = {
 
 export function useConfirmation(): {
   submitConfirmation: (result: ConfirmationResult) => void;
-  requestConfirmation: (prompt: React.ReactNode, explanation?: string) => Promise<ConfirmationResult>;
+  requestConfirmation: (
+    prompt: React.ReactNode,
+    explanation?: string,
+  ) => Promise<ConfirmationResult>;
   confirmationPrompt: React.ReactNode | null;
   explanation?: string | null;
 } {

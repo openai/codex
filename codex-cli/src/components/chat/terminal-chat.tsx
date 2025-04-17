@@ -53,7 +53,10 @@ const colorsByPolicy: Record<ApprovalPolicy, ColorName | undefined> = {
  * @param model The model to use for generating the explanation
  * @returns A human-readable explanation of what the command does
  */
-async function generateCommandExplanation(command: Array<string>, model: string): Promise<string> {
+async function generateCommandExplanation(
+  command: Array<string>,
+  model: string,
+): Promise<string> {
   try {
     // Create a temporary OpenAI client
     const oai = new OpenAI({
@@ -70,25 +73,27 @@ async function generateCommandExplanation(command: Array<string>, model: string)
       messages: [
         {
           role: "system",
-          content: "You are a helpful assistant that explains shell commands. Provide clear, concise explanations that focus on what the command does, any potential risks, and why someone might want to run it."
+          content:
+            "You are a helpful assistant that explains shell commands. Provide clear, concise explanations that focus on what the command does, any potential risks, and why someone might want to run it.",
         },
         {
           role: "user",
-          content: `Please explain this shell command in simple terms: \`${commandForDisplay}\`\n\nInclude:\n1. What the command does\n2. Any potential risks or side effects\n3. Why someone might want to run this command`
-        }
+          content: `Please explain this shell command in simple terms: \`${commandForDisplay}\`\n\nInclude:\n1. What the command does\n2. Any potential risks or side effects\n3. Why someone might want to run this command`,
+        },
       ],
       temperature: 0.3, // Lower temperature for more factual responses
-      max_tokens: 300,  // Limit response length
+      max_tokens: 300, // Limit response length
     });
 
     // Extract the explanation from the response
-    const explanation = response.choices[0]?.message.content || "Unable to generate explanation.";
+    const explanation =
+      response.choices[0]?.message.content || "Unable to generate explanation.";
     return explanation;
   } catch (error) {
     log(`Error generating command explanation: ${error}`);
     return "Unable to generate explanation due to an error.";
   }
-};
+}
 
 export default function TerminalChat({
   config,
@@ -106,8 +111,12 @@ export default function TerminalChat({
     initialApprovalPolicy,
   );
   const [thinkingSeconds, setThinkingSeconds] = useState(0);
-  const { requestConfirmation, confirmationPrompt, explanation, submitConfirmation } =
-    useConfirmation();
+  const {
+    requestConfirmation,
+    confirmationPrompt,
+    explanation,
+    submitConfirmation,
+  } = useConfirmation();
   const [overlayMode, setOverlayMode] = useState<
     "none" | "history" | "model" | "approval" | "help"
   >("none");
@@ -170,12 +179,9 @@ export default function TerminalChat({
         const commandForDisplay = formatCommandForDisplay(command);
 
         // First request for confirmation
-        let { decision: review, customDenyMessage } =
-          await requestConfirmation(
-            <TerminalChatToolCallCommand
-              commandForDisplay={commandForDisplay}
-            />,
-          );
+        let { decision: review, customDenyMessage } = await requestConfirmation(
+          <TerminalChatToolCallCommand commandForDisplay={commandForDisplay} />,
+        );
 
         // If the user wants an explanation, generate one and ask again
         if (review === ReviewDecision.EXPLAIN) {
