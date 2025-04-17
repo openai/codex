@@ -199,16 +199,20 @@ export default function TerminalChatInput({
         return "";
       });
       // quoted file paths ending with common image extensions (e.g. '/path/to/img.png')
-      text = text.replace(/['"]([^'"]+?\.(?:png|jpe?g|gif|bmp|webp|svg))['"]/gi,
+      text = text.replace(
+        /['"]([^'"]+?\.(?:png|jpe?g|gif|bmp|webp|svg))['"]/gi,
         (_m, p1: string) => {
           images.push(p1.startsWith("file://") ? fileURLToPath(p1) : p1);
           return "";
         },
       );
       // bare file paths ending with common image extensions (e.g. foo.png, ./dir/bar.jpg)
-      text = text.replace(/\b(?:\.\/|\/)?[\w\/\-.]+\.(?:png|jpe?g|gif|bmp|webp|svg)\b/gi,
+      text = text.replace(
+        /\b(?:\.\/|\/)?[\w\/\-.]+\.(?:png|jpe?g|gif|bmp|webp|svg)\b/gi,
         (match: string) => {
-          images.push(match.startsWith("file://") ? fileURLToPath(match) : match);
+          images.push(
+            match.startsWith("file://") ? fileURLToPath(match) : match,
+          );
           return "";
         },
       );
