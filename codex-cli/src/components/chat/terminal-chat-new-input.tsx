@@ -114,7 +114,7 @@ export default function TerminalChatInput({
   const editorRef = React.useRef<MultilineTextEditorHandle | null>(null);
 
   // Track the caret row across keystrokes so we can tell whether the cursor
-  // was *already* on the first/last line before the curren`t key event.  This
+  // was *already* on the first/last line before the current key event.  This
   // lets us distinguish between a normal vertical navigation (e.g. moving
   // from row 1 → row 0 inside a multi‑line draft) and an attempt to navigate
   // the chat history (pressing ↑ again while already at row 0).
