@@ -47,7 +47,8 @@
     "react": "^18.2.0",
     "shell-quote": "^1.8.2",
     "to-rotated": "^1.0.0",
-    "use-interval": "1.4.0"
+    "use-interval": "1.4.0",
+    "zod": "^3.24.3"
   },
   "devDependencies": {
     "@eslint/js": "^9.22.0",
