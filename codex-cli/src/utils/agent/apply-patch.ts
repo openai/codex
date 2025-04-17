@@ -3,6 +3,7 @@
 
 import fs from "fs";
 import path from "path";
+import { resolveSmartPath } from "../resolve-smart-path";
 
 // -----------------------------------------------------------------------------
 // Types & Models
@@ -597,7 +598,8 @@ export function process_patch(
 // -----------------------------------------------------------------------------
 
 function open_file(p: string): string {
-  return fs.readFileSync(p, "utf8");
+  const resolved = resolveSmartPath(p);
+  return fs.readFileSync(resolved, "utf8");
 }
 
 function write_file(p: string, content: string): void {

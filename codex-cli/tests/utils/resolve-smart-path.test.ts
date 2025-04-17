@@ -8,14 +8,20 @@ describe("resolveSmartPath", () => {
 
   beforeAll(() => {
     fs.mkdirSync(tempDir, { recursive: true });
-  
+
     // Create auth route
     fs.mkdirSync(path.join(tempDir, "src/app/api/auth"), { recursive: true });
-    fs.writeFileSync(path.join(tempDir, "src/app/api/auth/route.ts"), "// test file");
-  
+    fs.writeFileSync(
+      path.join(tempDir, "src/app/api/auth/route.ts"),
+      "// test file",
+    );
+
     // Create user route
     fs.mkdirSync(path.join(tempDir, "src/app/api/user"), { recursive: true });
-    fs.writeFileSync(path.join(tempDir, "src/app/api/user/route.ts"), "// not it");
+    fs.writeFileSync(
+      path.join(tempDir, "src/app/api/user/route.ts"),
+      "// not it",
+    );
   });
 
   afterAll(() => {
