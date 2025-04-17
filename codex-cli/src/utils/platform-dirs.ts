@@ -11,18 +11,18 @@ import { existsSync, mkdirSync } from "fs";
 export function getConfigDir(): string {
   const platform = process.platform;
   const home = homedir();
-  
+
   // Linux: Follow XDG Base Directory Specification
   if (platform === "linux") {
     const xdgConfigHome = process.env.XDG_CONFIG_HOME || join(home, ".config");
     return join(xdgConfigHome, "codex");
   }
-  
+
   // macOS: Follow Apple's File System Programming Guide
   if (platform === "darwin") {
     return join(home, "Library", "Application Support", "Codex");
   }
-  
+
   // Default fallback for other platforms (Windows, etc.)
   return join(home, ".codex");
 }
@@ -36,18 +36,19 @@ export function getConfigDir(): string {
 export function getDataDir(): string {
   const platform = process.platform;
   const home = homedir();
-  
+
   // Linux: Follow XDG Base Directory Specification
   if (platform === "linux") {
-    const xdgDataHome = process.env.XDG_DATA_HOME || join(home, ".local", "share");
+    const xdgDataHome =
+      process.env.XDG_DATA_HOME || join(home, ".local", "share");
     return join(xdgDataHome, "codex");
   }
-  
+
   // macOS: Uses the same directory as config for Application Support
   if (platform === "darwin") {
     return join(home, "Library", "Application Support", "Codex");
   }
-  
+
   // Default fallback for other platforms (Windows, etc.)
   return join(home, ".codex");
 }
@@ -61,18 +62,18 @@ export function getDataDir(): string {
 export function getCacheDir(): string {
   const platform = process.platform;
   const home = homedir();
-  
+
   // Linux: Follow XDG Base Directory Specification
   if (platform === "linux") {
     const xdgCacheHome = process.env.XDG_CACHE_HOME || join(home, ".cache");
     return join(xdgCacheHome, "codex");
   }
-  
+
   // macOS: Follow Apple's File System Programming Guide
   if (platform === "darwin") {
     return join(home, "Library", "Caches", "Codex");
   }
-  
+
   // Default fallback for other platforms (Windows, etc.)
   return join(home, ".codex", "cache");
 }
@@ -86,18 +87,19 @@ export function getCacheDir(): string {
 export function getLogDir(): string {
   const platform = process.platform;
   const home = homedir();
-  
+
   // Linux: Follow XDG Base Directory Specification
   if (platform === "linux") {
-    const xdgStateHome = process.env.XDG_STATE_HOME || join(home, ".local", "state");
+    const xdgStateHome =
+      process.env.XDG_STATE_HOME || join(home, ".local", "state");
     return join(xdgStateHome, "codex", "logs");
   }
-  
+
   // macOS: Follow Apple's File System Programming Guide
   if (platform === "darwin") {
     return join(home, "Library", "Logs", "Codex");
   }
-  
+
   // Default fallback for other platforms (Windows, etc.)
   return join(home, ".codex", "logs");
 }

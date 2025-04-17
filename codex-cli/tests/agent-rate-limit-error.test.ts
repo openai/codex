@@ -58,7 +58,7 @@ import {
   DEFAULT_RATE_LIMIT_MAX_RETRIES,
   DEFAULT_RATE_LIMIT_INITIAL_RETRY_DELAY_MS,
   DEFAULT_RATE_LIMIT_MAX_RETRY_DELAY_MS,
-  DEFAULT_RATE_LIMIT_JITTER_FACTOR
+  DEFAULT_RATE_LIMIT_JITTER_FACTOR,
 } from "../src/utils/config.js";
 
 describe("AgentLoop – rate‑limit handling", () => {
@@ -92,8 +92,8 @@ describe("AgentLoop – rate‑limit handling", () => {
             maxRetries: DEFAULT_RATE_LIMIT_MAX_RETRIES,
             initialRetryDelayMs: DEFAULT_RATE_LIMIT_INITIAL_RETRY_DELAY_MS,
             maxRetryDelayMs: DEFAULT_RATE_LIMIT_MAX_RETRY_DELAY_MS,
-            jitterFactor: DEFAULT_RATE_LIMIT_JITTER_FACTOR
-          }
+            jitterFactor: DEFAULT_RATE_LIMIT_JITTER_FACTOR,
+          },
         },
         onItem: (i) => received.push(i),
         onLoading: () => {},
@@ -177,8 +177,8 @@ describe("AgentLoop – rate‑limit handling", () => {
             maxRetries: customMaxRetries,
             initialRetryDelayMs: customInitialDelay,
             maxRetryDelayMs: customMaxDelay,
-            jitterFactor: customJitter
-          }
+            jitterFactor: customJitter,
+          },
         },
         onItem: (i) => received.push(i),
         onLoading: () => {},

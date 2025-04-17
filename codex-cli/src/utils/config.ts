@@ -18,7 +18,7 @@ import {
   getDataDir,
   getLegacyConfigDir,
   legacyConfigDirExists,
-  ensureDirectoryExists
+  ensureDirectoryExists,
 } from "./platform-dirs.js";
 
 export const DEFAULT_AGENTIC_MODEL = "o4-mini";
@@ -43,10 +43,19 @@ export const CONFIG_YAML_FILEPATH = join(CONFIG_DIR, "config.yaml");
 export const CONFIG_YML_FILEPATH = join(CONFIG_DIR, "config.yml");
 
 // Legacy config file paths for backward compatibility
-export const LEGACY_CONFIG_JSON_FILEPATH = join(LEGACY_CONFIG_DIR, "config.json");
-export const LEGACY_CONFIG_YAML_FILEPATH = join(LEGACY_CONFIG_DIR, "config.yaml");
+export const LEGACY_CONFIG_JSON_FILEPATH = join(
+  LEGACY_CONFIG_DIR,
+  "config.json",
+);
+export const LEGACY_CONFIG_YAML_FILEPATH = join(
+  LEGACY_CONFIG_DIR,
+  "config.yaml",
+);
 export const LEGACY_CONFIG_YML_FILEPATH = join(LEGACY_CONFIG_DIR, "config.yml");
-export const LEGACY_INSTRUCTIONS_FILEPATH = join(LEGACY_CONFIG_DIR, "instructions.md");
+export const LEGACY_INSTRUCTIONS_FILEPATH = join(
+  LEGACY_CONFIG_DIR,
+  "instructions.md",
+);
 
 // Keep the original constant name for backward compatibility, but point it at
 // the default JSON path. Code that relies on this constant will continue to
@@ -258,7 +267,10 @@ export const loadConfig = (
 
   if (existsSync(instructionsFilePathResolved)) {
     userInstructions = readFileSync(instructionsFilePathResolved, "utf-8");
-  } else if (legacyConfigDirExists() && existsSync(LEGACY_INSTRUCTIONS_FILEPATH)) {
+  } else if (
+    legacyConfigDirExists() &&
+    existsSync(LEGACY_INSTRUCTIONS_FILEPATH)
+  ) {
     // Try legacy instructions path if the new one doesn't exist
     userInstructions = readFileSync(LEGACY_INSTRUCTIONS_FILEPATH, "utf-8");
     // Update the resolved path to point to the legacy location for potential saving later
@@ -390,8 +402,12 @@ export const loadConfig = (
  */
 export function migrateFromLegacyIfNeeded(): void {
   // Only migrate if legacy config exists and new config doesn't
-  if (!legacyConfigDirExists() || existsSync(CONFIG_JSON_FILEPATH) ||
-      existsSync(CONFIG_YAML_FILEPATH) || existsSync(CONFIG_YML_FILEPATH)) {
+  if (
+    !legacyConfigDirExists() ||
+    existsSync(CONFIG_JSON_FILEPATH) ||
+    existsSync(CONFIG_YAML_FILEPATH) ||
+    existsSync(CONFIG_YML_FILEPATH)
+  ) {
     return;
   }
 
@@ -403,31 +419,39 @@ export function migrateFromLegacyIfNeeded(): void {
 
     // Migrate config files
     if (existsSync(LEGACY_CONFIG_JSON_FILEPATH)) {
-      const content = readFileSync(LEGACY_CONFIG_JSON_FILEPATH, 'utf-8');
-      writeFileSync(CONFIG_JSON_FILEPATH, content, 'utf-8');
-      console.log(`Migrated config from ${LEGACY_CONFIG_JSON_FILEPATH} to ${CONFIG_JSON_FILEPATH}`);
+      const content = readFileSync(LEGACY_CONFIG_JSON_FILEPATH, "utf-8");
+      writeFileSync(CONFIG_JSON_FILEPATH, content, "utf-8");
+      console.log(
+        `Migrated config from ${LEGACY_CONFIG_JSON_FILEPATH} to ${CONFIG_JSON_FILEPATH}`,
+      );
     } else if (existsSync(LEGACY_CONFIG_YAML_FILEPATH)) {
-      const content = readFileSync(LEGACY_CONFIG_YAML_FILEPATH, 'utf-8');
-      writeFileSync(CONFIG_YAML_FILEPATH, content, 'utf-8');
-      console.log(`Migrated config from ${LEGACY_CONFIG_YAML_FILEPATH} to ${CONFIG_YAML_FILEPATH}`);
+      const content = readFileSync(LEGACY_CONFIG_YAML_FILEPATH, "utf-8");
+      writeFileSync(CONFIG_YAML_FILEPATH, content, "utf-8");
+      console.log(
+        `Migrated config from ${LEGACY_CONFIG_YAML_FILEPATH} to ${CONFIG_YAML_FILEPATH}`,
+      );
     } else if (existsSync(LEGACY_CONFIG_YML_FILEPATH)) {
-      const content = readFileSync(LEGACY_CONFIG_YML_FILEPATH, 'utf-8');
-      writeFileSync(CONFIG_YML_FILEPATH, content, 'utf-8');
-      console.log(`Migrated config from ${LEGACY_CONFIG_YML_FILEPATH} to ${CONFIG_YML_FILEPATH}`);
+      const content = readFileSync(LEGACY_CONFIG_YML_FILEPATH, "utf-8");
+      writeFileSync(CONFIG_YML_FILEPATH, content, "utf-8");
+      console.log(
+        `Migrated config from ${LEGACY_CONFIG_YML_FILEPATH} to ${CONFIG_YML_FILEPATH}`,
+      );
     }
 
     // Migrate instructions file
     if (existsSync(LEGACY_INSTRUCTIONS_FILEPATH)) {
-      const content = readFileSync(LEGACY_INSTRUCTIONS_FILEPATH, 'utf-8');
-      writeFileSync(INSTRUCTIONS_FILEPATH, content, 'utf-8');
-      console.log(`Migrated instructions from ${LEGACY_INSTRUCTIONS_FILEPATH} to ${INSTRUCTIONS_FILEPATH}`);
+      const content = readFileSync(LEGACY_INSTRUCTIONS_FILEPATH, "utf-8");
+      writeFileSync(INSTRUCTIONS_FILEPATH, content, "utf-8");
+      console.log(
+        `Migrated instructions from ${LEGACY_INSTRUCTIONS_FILEPATH} to ${INSTRUCTIONS_FILEPATH}`,
+      );
     }
 
     // Migrate sessions directory if it exists
-    const legacySessionsDir = join(LEGACY_CONFIG_DIR, 'sessions');
+    const legacySessionsDir = join(LEGACY_CONFIG_DIR, "sessions");
     if (existsSync(legacySessionsDir)) {
-      const fs = require('fs');
-      const path = require('path');
+      const fs = require("fs");
+      const path = require("path");
 
       // Read all files in the legacy sessions directory
       const sessionFiles = fs.readdirSync(legacySessionsDir);
@@ -441,12 +465,14 @@ export function migrateFromLegacyIfNeeded(): void {
         if (fs.statSync(sourcePath).isFile()) {
           const content = fs.readFileSync(sourcePath);
           fs.writeFileSync(destPath, content);
-          console.log(`Migrated session file from ${sourcePath} to ${destPath}`);
+          console.log(
+            `Migrated session file from ${sourcePath} to ${destPath}`,
+          );
         }
       }
     }
   } catch (error) {
-    console.error('Error during migration from legacy config:', error);
+    console.error("Error during migration from legacy config:", error);
     // Continue with execution even if migration fails
   }
 }
@@ -507,11 +533,7 @@ export const saveConfig = (
       storedConfig.memory = config.memory;
     }
 
-    writeFileSync(
-      targetPath,
-      JSON.stringify(storedConfig, null, 2),
-      "utf-8",
-    );
+    writeFileSync(targetPath, JSON.stringify(storedConfig, null, 2), "utf-8");
   }
 
   writeFileSync(instructionsPath, config.instructions, "utf-8");
