@@ -530,7 +530,7 @@ export class AgentLoop {
               reasoning = { effort: "high" };
             if (this.model === "o3" || this.model === "o4-mini") {
                 // Request reasoning summary for debugging
-                reasoning = { ...reasoning, summary: "auto" } as Reasoning & { summary: string };
+                reasoning = { ...reasoning, generate_summary: "concise" };
             }
             }
             const mergedInstructions = [prefix, this.instructions]
