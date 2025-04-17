@@ -17,7 +17,11 @@ import { AgentLoop } from "./utils/agent/agent-loop";
 import { initLogger } from "./utils/agent/log";
 import { ReviewDecision } from "./utils/agent/review";
 import { AutoApprovalMode } from "./utils/auto-approval-mode";
-import { loadConfig, PRETTY_PRINT, INSTRUCTIONS_FILEPATH } from "./utils/config";
+import {
+  loadConfig,
+  PRETTY_PRINT,
+  INSTRUCTIONS_FILEPATH,
+} from "./utils/config";
 import { createInputItem } from "./utils/input-utils";
 import {
   isModelSupportedForResponses,
@@ -146,9 +150,9 @@ const cli = meow(
 );
 
 // Handle 'completion' subcommand before any prompting or API calls
-if (cli.input[0] === 'completion') {
-  const shell = cli.input[1] || 'bash';
-  const scripts: Record<string,string> = {
+if (cli.input[0] === "completion") {
+  const shell = cli.input[1] || "bash";
+  const scripts: Record<string, string> = {
     bash: `# bash completion for codex
 _codex_completion() {
   local cur
@@ -190,7 +194,8 @@ if (cli.flags.config) {
     // ignore errors
   }
   const filePath = INSTRUCTIONS_FILEPATH;
-  const editor = process.env["EDITOR"] || (process.platform === "win32" ? "notepad" : "vi");
+  const editor =
+    process.env["EDITOR"] || (process.platform === "win32" ? "notepad" : "vi");
   spawnSync(editor, [filePath], { stdio: "inherit" });
   process.exit(0);
 }
