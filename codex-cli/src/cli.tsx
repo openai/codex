@@ -33,7 +33,7 @@ import {
   preloadModels,
 } from "./utils/model-utils.js";
 import { parseToolCall } from "./utils/parsers";
-import { clearTerminal, onExit, setInkRenderer } from "./utils/terminal";
+import { onExit, setInkRenderer } from "./utils/terminal";
 import chalk from "chalk";
 import { spawnSync } from "child_process";
 import dotenv from "dotenv";
@@ -225,7 +225,6 @@ if (cli.flags.config) {
   // prompt if no key is found
   if (!apiKey) {
     apiKey = await promptForApiKey();
-    clearTerminal();
     try {
       await setStoredApiKey(apiKey);
     } catch {
