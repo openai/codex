@@ -18,6 +18,7 @@
     "release": "pnpm run release:readme && pnpm run release:version && pnpm run build && cd codex-cli && pnpm publish"
   },
   "devDependencies": {
+    "eslint": "^8.56.0",
     "prettier": "^3.5.3"
   },
   "engines": {
