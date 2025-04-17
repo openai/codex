@@ -95,7 +95,7 @@ describe("Agent cancellation race", () => {
       additionalWritableRoots: [],
       model: "any",
       instructions: "",
-      config: { model: "any", instructions: "" },
+      config: { model: "any", instructions: "", notify: false },
       approvalPolicy: { mode: "auto" } as any,
       onItem: (i) => items.push(i),
       onLoading: () => {},

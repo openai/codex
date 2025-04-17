@@ -49,6 +49,8 @@ export type StoredConfig = {
   approvalMode?: AutoApprovalMode;
   fullAutoErrorMode?: FullAutoErrorMode;
   memory?: MemoryConfig;
+  /** Whether to enable desktop notifications for responses */
+  notify?: boolean;
   history?: {
     maxSize?: number;
     saveHistory?: boolean;
@@ -75,6 +77,8 @@ export type AppConfig = {
   instructions: string;
   fullAutoErrorMode?: FullAutoErrorMode;
   memory?: MemoryConfig;
+  /** Whether to enable desktop notifications for responses */
+  notify: boolean;
   history?: {
     maxSize: number;
     saveHistory: boolean;
@@ -263,6 +267,7 @@ export const loadConfig = (
         ? DEFAULT_FULL_CONTEXT_MODEL
         : DEFAULT_AGENTIC_MODEL),
     instructions: combinedInstructions,
+    notify: storedConfig.notify === true,
   };
 
   // -----------------------------------------------------------------------
@@ -322,6 +327,8 @@ export const loadConfig = (
   if (storedConfig.fullAutoErrorMode) {
     config.fullAutoErrorMode = storedConfig.fullAutoErrorMode;
   }
+  // Notification setting: enable desktop notifications when set in config
+  config.notify = storedConfig.notify === true;
 
   // Add default history config if not provided
   if (storedConfig.history !== undefined) {

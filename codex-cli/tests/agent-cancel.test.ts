@@ -89,7 +89,7 @@ describe("Agent cancellation", () => {
     const agent = new AgentLoop({
       model: "any",
       instructions: "",
-      config: { model: "any", instructions: "" },
+      config: { model: "any", instructions: "", notify: false },
       approvalPolicy: { mode: "auto" } as any,
       additionalWritableRoots: [],
       onItem: (item) => {
@@ -140,7 +140,7 @@ describe("Agent cancellation", () => {
       additionalWritableRoots: [],
       model: "any",
       instructions: "",
-      config: { model: "any", instructions: "" },
+      config: { model: "any", instructions: "", notify: false },
       approvalPolicy: { mode: "auto" } as any,
       onItem: (item) => received.push(item),
       onLoading: () => {},

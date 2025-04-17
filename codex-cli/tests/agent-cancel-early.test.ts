@@ -96,7 +96,7 @@ describe("cancel before first function_call", () => {
       onLoading: () => {},
       getCommandConfirmation: async () => ({ review: "yes" } as any),
       onLastResponseId: () => {},
-      config: { model: "any", instructions: "" },
+      config: { model: "any", instructions: "", notify: false },
     });
 
     // Start first run.
