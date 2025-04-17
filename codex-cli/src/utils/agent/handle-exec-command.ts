@@ -173,7 +173,13 @@ export async function handleExecCommand(
     } else {
       // The user has approved the command, so we will run it outside of the
       // sandbox.
-      const summary = await execCommand(args, applyPatch, false, additionalWritableRoots, abortSignal);
+      const summary = await execCommand(
+        args,
+        applyPatch,
+        false,
+        additionalWritableRoots,
+        abortSignal,
+      );
       return convertSummaryToResult(summary);
     }
   } else {
@@ -243,7 +249,11 @@ async function execCommand(
   const execResult =
     applyPatchCommand != null
       ? execApplyPatch(applyPatchCommand.patch)
-      : await exec({ ...execInput, additionalWritableRoots }, await getSandbox(runInSandbox), abortSignal);
+      : await exec(
+          { ...execInput, additionalWritableRoots },
+          await getSandbox(runInSandbox),
+          abortSignal,
+        );
   const duration = Date.now() - start;
   const { stdout, stderr, exitCode } = execResult;
 

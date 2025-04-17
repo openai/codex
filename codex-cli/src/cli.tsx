@@ -127,7 +127,8 @@ const cli = meow(
         type: "string",
         isMultiple: true,
         aliases: ["w"],
-        description: "Writable folder for sandbox in full-auto mode (can be specified multiple times)",
+        description:
+          "Writable folder for sandbox in full-auto mode (can be specified multiple times)",
       },
       noProjectDoc: {
         type: "boolean",
@@ -284,7 +285,9 @@ if (fullContextMode) {
 }
 
 // Ensure that all values in additionalWritableRoots are absolute paths.
-const additionalWritableRoots = (cli.flags.writableRoot ?? []).map((p) => path.resolve(p));
+const additionalWritableRoots = (cli.flags.writableRoot ?? []).map((p) =>
+  path.resolve(p),
+);
 
 // If we are running in --quiet mode, do that and exit.
 const quietMode = Boolean(cli.flags.quiet);
