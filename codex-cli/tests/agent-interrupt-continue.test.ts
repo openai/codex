@@ -1,24 +1,21 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { AgentLoop } from "../src/utils/agent/agent-loop.js";
 
+// Create a state holder for our mocks
+const openAiState = {
+  createSpy: vi.fn(),
+};
+
 // Mock the OpenAI client
 vi.mock("openai", () => {
-  const openAiState = {
-    createSpy: vi.fn(),
-  };
-
   return {
     default: class MockOpenAI {
       responses = {
         create: openAiState.createSpy,
       };
     },
-    openAiState,
   };
 });
-
-// Import the mocked state
-const { openAiState } = await import("openai");
 
 describe("Agent interrupt and continue", () => {
   beforeEach(() => {
@@ -68,7 +65,7 @@ describe("Agent interrupt and continue", () => {
         controller: {
           abort: vi.fn(),
         },
-        on: (event: string, callback: Function) => {
+        on: (event: string, callback: (...args: Array<any>) => void) => {
           if (event === "message") {
             // Schedule a message to be delivered
             setTimeout(() => {
@@ -115,7 +112,7 @@ describe("Agent interrupt and continue", () => {
         controller: {
           abort: vi.fn(),
         },
-        on: (event: string, callback: Function) => {
+        on: (event: string, callback: (...args: Array<any>) => void) => {
           if (event === "message") {
             // Schedule a message to be delivered
             setTimeout(() => {
