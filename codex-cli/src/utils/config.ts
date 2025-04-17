@@ -17,7 +17,14 @@ import {
   legacyConfigDirExists,
   ensureDirectoryExists,
 } from "./platform-dirs.js";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync } from "fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+  readdirSync,
+  statSync,
+} from "fs";
 import { load as loadYaml, dump as dumpYaml } from "js-yaml";
 import { dirname, join, extname, resolve as resolvePath } from "path";
 
