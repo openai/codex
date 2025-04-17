@@ -21,6 +21,8 @@ import {
 import { handleExecCommand } from "./handle-exec-command.js";
 import { randomUUID } from "node:crypto";
 import OpenAI, { APIConnectionTimeoutError } from "openai";
+import { isOllamaModel } from "../ollama-client.js";
+import { OllamaAgentLoop } from "./ollama-agent-loop.js";
 
 // Wait time before retrying after rate limit errors (ms).
 const RATE_LIMIT_RETRY_WAIT_MS = parseInt(
@@ -51,6 +53,20 @@ type AgentLoopParams = {
   ) => Promise<CommandConfirmation>;
   onLastResponseId: (lastResponseId: string) => void;
 };
+
+/**
+ * Factory function to create the appropriate agent loop based on the model.
+ * 
+ * @param params The parameters for the agent loop.
+ * @returns An instance of AgentLoop or OllamaAgentLoop.
+ */
+export function createAgentLoop(params: AgentLoopParams & { config?: AppConfig }): AgentLoop | OllamaAgentLoop {
+  if (isOllamaModel(params.model)) {
+    return new OllamaAgentLoop(params);
+  } else {
+    return new AgentLoop(params);
+  }
+}
 
 export class AgentLoop {
   private model: string;
@@ -188,6 +204,22 @@ export class AgentLoop {
     this.hardAbort.abort();
 
     this.cancel();
+  }
+  
+  /**
+   * Clear the conversation history.
+   * This is used when the user issues the `/clear` command.
+   * For the OpenAI implementation, this is a no-op since OpenAI doesn't maintain
+   * conversation history on the client side. The history is cleared by resetting
+   * the session ID and last response ID.
+   */
+  public clearConversationHistory(): void {
+    // For OpenAI, this is a no-op since we don't maintain conversation history
+    // on the client side. The history is cleared by resetting the session ID
+    // and last response ID, which is handled in terminal-chat-input.tsx.
+    if (isLoggingEnabled()) {
+      log("AgentLoop.clearConversationHistory(): no-op for OpenAI models");
+    }
   }
 
   public sessionId: string;

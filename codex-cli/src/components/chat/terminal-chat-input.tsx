@@ -37,6 +37,8 @@ export default function TerminalChatInput({
   openHelpOverlay,
   interruptAgent,
   active,
+  agent,
+  onClearContext,
 }: {
   isNew: boolean;
   loading: boolean;
@@ -55,6 +57,8 @@ export default function TerminalChatInput({
   openHelpOverlay: () => void;
   interruptAgent: () => void;
   active: boolean;
+  agent: any; // Using any type to avoid importing specific agent types
+  onClearContext?: () => void; // Callback to recreate the agent when context is cleared
 }): React.ReactElement {
   const app = useApp();
   const [selectedSuggestion, setSelectedSuggestion] = useState<number>(0);
@@ -174,6 +178,14 @@ export default function TerminalChatInput({
         setSessionId("");
         setLastResponseId("");
         clearTerminal();
+
+        // Call the onClearContext callback to recreate the agent
+        if (onClearContext) {
+          onClearContext();
+          if (isLoggingEnabled()) {
+            log("TerminalChatInput: called onClearContext to recreate agent");
+          }
+        }
 
         // Emit a system message to confirm the clear action.  We *append*
         // it so Ink's <Static> treats it as new output and actually renders it.

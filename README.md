@@ -309,7 +309,18 @@ Not directly. It requires [Windows Subsystem for Linux (WSL2)](https://learn.mic
 <details>
 <summary>Which models are supported?</summary>
 
-Any model available with [Responses API](https://platform.openai.com/docs/api-reference/responses). The default is `o4-mini`, but pass `--model gpt-4o` or set `model: gpt-4o` in your config file to override.
+Codex CLI supports two types of models:
+
+1. **OpenAI models**: Any model available with [Responses API](https://platform.openai.com/docs/api-reference/responses). The default is `o4-mini`, but you can use `--model gpt-4o` or set `model: gpt-4o` in your config file.
+
+2. **Ollama models**: Local open-source models via [Ollama](https://ollama.ai/). Use with the `ollama:` prefix, e.g., `--model ollama:gemma3:1b`. See [OLLAMA.md](./codex-cli/OLLAMA.md) for detailed setup instructions.
+
+</details>
+
+<details>
+<summary>Can I use Codex without an OpenAI API key?</summary>
+
+Yes! Codex now supports local open-source models through [Ollama](https://ollama.ai/). This allows you to run Codex completely offline with models like Gemma, Llama, and others. See [OLLAMA.md](./codex-cli/OLLAMA.md) for setup instructions and usage details.
 
 </details>
 

@@ -36,6 +36,10 @@ export const OPENAI_TIMEOUT_MS =
 export const OPENAI_BASE_URL = process.env["OPENAI_BASE_URL"] || "";
 export let OPENAI_API_KEY = process.env["OPENAI_API_KEY"] || "";
 
+// Ollama configuration
+export const OLLAMA_API_URL = process.env["OLLAMA_API_URL"] || "http://localhost:11434";
+export const OLLAMA_ENABLED = process.env["OLLAMA_ENABLED"] !== "false";
+
 export function setApiKey(apiKey: string): void {
   OPENAI_API_KEY = apiKey;
 }
@@ -49,6 +53,12 @@ export type StoredConfig = {
   approvalMode?: AutoApprovalMode;
   fullAutoErrorMode?: FullAutoErrorMode;
   memory?: MemoryConfig;
+  ollama?: OllamaConfig;
+};
+
+export type OllamaConfig = {
+  enabled: boolean;
+  apiUrl: string;
 };
 
 // Minimal config written on first run.  An *empty* model string ensures that
@@ -70,6 +80,7 @@ export type AppConfig = {
   instructions: string;
   fullAutoErrorMode?: FullAutoErrorMode;
   memory?: MemoryConfig;
+  ollama?: OllamaConfig;
 };
 
 // ---------------------------------------------------------------------------
@@ -313,6 +324,16 @@ export const loadConfig = (
     config.fullAutoErrorMode = storedConfig.fullAutoErrorMode;
   }
 
+  // Include Ollama configuration if explicitly set, otherwise use environment defaults
+  if (storedConfig.ollama !== undefined) {
+    config.ollama = storedConfig.ollama;
+  } else if (OLLAMA_ENABLED) {
+    config.ollama = {
+      enabled: OLLAMA_ENABLED,
+      apiUrl: OLLAMA_API_URL,
+    };
+  }
+
   return config;
 };
 
@@ -341,12 +362,17 @@ export const saveConfig = (
   }
 
   const ext = extname(targetPath).toLowerCase();
+  const configToSave: StoredConfig = { 
+    model: config.model,
+    ollama: config.ollama,
+  };
+  
   if (ext === ".yaml" || ext === ".yml") {
-    writeFileSync(targetPath, dumpYaml({ model: config.model }), "utf-8");
+    writeFileSync(targetPath, dumpYaml(configToSave), "utf-8");
   } else {
     writeFileSync(
       targetPath,
-      JSON.stringify({ model: config.model }, null, 2),
+      JSON.stringify(configToSave, null, 2),
       "utf-8",
     );
   }

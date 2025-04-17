@@ -1,4 +1,5 @@
 import type { AgentLoop } from "../../utils/agent/agent-loop.js";
+import type { OllamaAgentLoop } from "../../utils/agent/ollama-agent-loop.js";
 
 import { Box, Text } from "ink";
 import path from "node:path";
@@ -11,7 +12,7 @@ export interface TerminalHeaderProps {
   model: string;
   approvalPolicy: string;
   colorsByPolicy: Record<string, string | undefined>;
-  agent?: AgentLoop;
+  agent?: AgentLoop | OllamaAgentLoop;
   initialImagePaths?: Array<string>;
 }
 

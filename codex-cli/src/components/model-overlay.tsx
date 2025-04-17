@@ -1,8 +1,10 @@
 import TypeaheadOverlay from "./typeahead-overlay.js";
 import {
   getAvailableModels,
-  RECOMMENDED_MODELS,
+  RECOMMENDED_OPENAI_MODELS,
+  RECOMMENDED_OLLAMA_MODELS,
 } from "../utils/model-utils.js";
+import { isOllamaModel } from "../utils/ollama-client.js";
 import { Box, Text, useInput } from "ink";
 import React, { useEffect, useState } from "react";
 
@@ -35,15 +37,28 @@ export default function ModelOverlay({
     (async () => {
       const models = await getAvailableModels();
 
-      // Split the list into recommended and “other” models.
-      const recommended = RECOMMENDED_MODELS.filter((m) => models.includes(m));
-      const others = models.filter((m) => !recommended.includes(m));
+      // Split the list into recommended OpenAI, recommended Ollama, and "other" models.
+      const recommendedOpenAI = RECOMMENDED_OPENAI_MODELS.filter((m) => models.includes(m));
+      const recommendedOllama = RECOMMENDED_OLLAMA_MODELS.map(m => `ollama:${m}`).filter((m) => models.includes(m));
+      const others = models.filter((m) => 
+        !recommendedOpenAI.includes(m) && !recommendedOllama.includes(m)
+      );
 
-      const ordered = [...recommended, ...others.sort()];
+      // Separate Ollama models from OpenAI models in the "others" category
+      const otherOllamaModels = others.filter(m => isOllamaModel(m)).sort();
+      const otherOpenAIModels = others.filter(m => !isOllamaModel(m)).sort();
+
+      // Order: recommended OpenAI, other OpenAI, recommended Ollama, other Ollama
+      const ordered = [
+        ...recommendedOpenAI,
+        ...otherOpenAIModels,
+        ...recommendedOllama,
+        ...otherOllamaModels
+      ];
 
       setItems(
         ordered.map((m) => ({
-          label: recommended.includes(m) ? `⭐ ${m}` : m,
+          label: getModelLabel(m, recommendedOpenAI, recommendedOllama),
           value: m,
         })),
       );
@@ -91,12 +106,36 @@ export default function ModelOverlay({
     );
   }
 
+  /**
+   * Get a formatted label for a model.
+   * 
+   * @param model The model name.
+   * @param recommendedOpenAI List of recommended OpenAI models.
+   * @param recommendedOllama List of recommended Ollama models.
+   * @returns A formatted label for the model.
+   */
+  function getModelLabel(
+    model: string, 
+    recommendedOpenAI: string[], 
+    recommendedOllama: string[]
+  ): string {
+    if (recommendedOpenAI.includes(model)) {
+      return `⭐ ${model}`;
+    } else if (recommendedOllama.includes(model)) {
+      return `🚀 ${model}`;
+    } else if (isOllamaModel(model)) {
+      return `🚀 ${model}`;
+    } else {
+      return model;
+    }
+  }
+
   return (
     <TypeaheadOverlay
       title="Switch model"
       description={
         <Text>
-          Current model: <Text color="greenBright">{currentModel}</Text>
+          Current model: <Text color={isOllamaModel(currentModel) ? "blueBright" : "greenBright"}>{currentModel}</Text>
         </Text>
       }
       initialItems={items}

@@ -1,5 +1,6 @@
 import type { ApplyPatchCommand, ApprovalPolicy } from "../../approvals.js";
-import type { CommandConfirmation } from "../../utils/agent/agent-loop.js";
+import type { CommandConfirmation, AgentLoop } from "../../utils/agent/agent-loop.js";
+import type { OllamaAgentLoop } from "../../utils/agent/ollama-agent-loop.js";
 import type { AppConfig } from "../../utils/config.js";
 import type { ColorName } from "chalk";
 import type { ResponseItem } from "openai/resources/responses/responses.mjs";
@@ -15,7 +16,7 @@ import TerminalMessageHistory from "./terminal-message-history.js";
 import { formatCommandForDisplay } from "../../format-command.js";
 import { useConfirmation } from "../../hooks/use-confirmation.js";
 import { useTerminalSize } from "../../hooks/use-terminal-size.js";
-import { AgentLoop } from "../../utils/agent/agent-loop.js";
+import { createAgentLoop } from "../../utils/agent/agent-loop.js";
 import { log, isLoggingEnabled } from "../../utils/agent/log.js";
 import { createInputItem } from "../../utils/input-utils.js";
 import { getAvailableModels } from "../../utils/model-utils.js";
@@ -72,9 +73,9 @@ export default function TerminalChat({
 
   const PWD = React.useMemo(() => shortCwd(), []);
 
-  // Keep a single AgentLoop instance alive across renders;
+  // Keep a single agent instance alive across renders;
   // recreate only when model/instructions/approvalPolicy change.
-  const agentRef = React.useRef<AgentLoop>();
+  const agentRef = React.useRef<AgentLoop | OllamaAgentLoop>();
   const [, forceUpdate] = React.useReducer((c) => c + 1, 0); // trigger re‑render
 
   // ────────────────────────────────────────────────────────────────
@@ -101,7 +102,7 @@ export default function TerminalChat({
     // Tear down any existing loop before creating a new one
     agentRef.current?.terminate();
 
-    agentRef.current = new AgentLoop({
+    agentRef.current = createAgentLoop({
       model,
       config,
       instructions: config.instructions,
@@ -297,6 +298,51 @@ export default function TerminalChat({
             openApprovalOverlay={() => setOverlayMode("approval")}
             openHelpOverlay={() => setOverlayMode("help")}
             active={overlayMode === "none"}
+            agent={agent}
+            onClearContext={() => {
+              // Recreate the agent instance to ensure a completely fresh start
+              if (isLoggingEnabled()) {
+                log("TerminalChat: recreating agent instance for /clear command");
+              }
+              
+              // Terminate the current agent
+              agentRef.current?.terminate();
+              
+              // Create a new agent with the same configuration
+              agentRef.current = createAgentLoop({
+                model,
+                config,
+                instructions: config.instructions,
+                approvalPolicy,
+                onLastResponseId: setLastResponseId,
+                onItem: (item) => {
+                  log(`onItem: ${JSON.stringify(item)}`);
+                  setItems((prev) => {
+                    const updated = uniqueById([...prev, item as ResponseItem]);
+                    saveRollout(updated);
+                    return updated;
+                  });
+                },
+                onLoading: setLoading,
+                getCommandConfirmation: async (
+                  command: Array<string>,
+                  applyPatch: ApplyPatchCommand | undefined,
+                ): Promise<CommandConfirmation> => {
+                  log(`getCommandConfirmation: ${command}`);
+                  const commandForDisplay = formatCommandForDisplay(command);
+                  const { decision: review, customDenyMessage } =
+                    await requestConfirmation(
+                      <TerminalChatToolCallCommand
+                        commandForDisplay={commandForDisplay}
+                      />,
+                    );
+                  return { review, customDenyMessage, applyPatch };
+                },
+              });
+              
+              // Force a render to update the UI with the new agent
+              forceUpdate();
+            }}
             interruptAgent={() => {
               if (!agent) {
                 return;
