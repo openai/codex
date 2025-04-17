@@ -41,15 +41,8 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
-      - name: Check formatting
-        run: pnpm run format
-
-      - name: Lint
-        run: |
-          cd codex-cli && npx --no-install eslint src tests --ext ts --ext tsx \
-            --rule "no-console:error" \
-            --rule "no-debugger:error" \
-            --max-warnings=-1
+      - name: Biome Check
+        run: pnpm run check
 
       - name: Type‑check
         run: pnpm run typecheck
