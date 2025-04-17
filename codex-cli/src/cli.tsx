@@ -210,6 +210,8 @@ if (cli.flags.config) {
 (async () => {
   // ---------------------------------------------------------------------------
   // API key handling
+  // ---------------------------------------------------------------------------
+
   let apiKey: string = "";
   // 1) Check for .env file override
   if (envResult.parsed && envResult.parsed["OPENAI_API_KEY"]) {
