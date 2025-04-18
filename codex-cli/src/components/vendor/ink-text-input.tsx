@@ -105,8 +105,11 @@ function TextInput({
       }
 
       const newValue = originalValue || "";
-
-      if (previousState.cursorOffset > newValue.length - 1) {
+      // Sets the cursor to the end of the line if the value is empty or the cursor is at the end of the line.
+      if (
+        previousState.cursorOffset === 0 ||
+        previousState.cursorOffset > newValue.length - 1
+      ) {
         return {
           cursorOffset: newValue.length,
           cursorWidth: 0,

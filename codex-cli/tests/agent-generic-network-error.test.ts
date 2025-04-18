@@ -56,6 +56,7 @@ describe("AgentLoop – generic network/server errors", () => {
     const received: Array<any> = [];
 
     const agent = new AgentLoop({
+      additionalWritableRoots: [],
       model: "any",
       instructions: "",
       approvalPolicy: { mode: "auto" } as any,
@@ -99,6 +100,7 @@ describe("AgentLoop – generic network/server errors", () => {
     const received: Array<any> = [];
 
     const agent = new AgentLoop({
+      additionalWritableRoots: [],
       model: "any",
       instructions: "",
       approvalPolicy: { mode: "auto" } as any,
