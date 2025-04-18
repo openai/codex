@@ -10,6 +10,9 @@ storybook-static/
 # ignore README for publishing
 codex-cli/README.md
 
+# ignore Nix derivation results
+result
+
 # editor
 .vscode/
 .idea/
@@ -64,3 +67,7 @@ Icon?
 yarn.lock
 pnpm-lock.yaml
 
+# release
+package.json-e
+session.ts-e
+CHANGELOG.ignore.md

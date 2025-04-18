@@ -42,6 +42,7 @@ export default function TerminalChatInput({
   openModelOverlay,
   openApprovalOverlay,
   openHelpOverlay,
+  onCompact,
   interruptAgent,
   active,
 }: {
@@ -61,6 +62,7 @@ export default function TerminalChatInput({
   openModelOverlay: () => void;
   openApprovalOverlay: () => void;
   openHelpOverlay: () => void;
+  onCompact: () => void;
   interruptAgent: () => void;
   active: boolean;
 }): React.ReactElement {
@@ -166,6 +168,12 @@ export default function TerminalChatInput({
         return;
       }
 
+      if (inputValue === "/compact") {
+        setInput("");
+        onCompact();
+        return;
+      }
+
       if (inputValue.startsWith("/model")) {
         setInput("");
         openModelOverlay();
@@ -232,6 +240,32 @@ export default function TerminalChatInput({
         );
 
         return;
+      } else if (inputValue.startsWith("/")) {
+        // Handle invalid/unrecognized commands.
+        // Only single-word inputs starting with '/' (e.g., /command) that are not recognized are caught here.
+        // Any other input, including those starting with '/' but containing spaces
+        // (e.g., "/command arg"), will fall through and be treated as a regular prompt.
+        const trimmed = inputValue.trim();
+
+        if (/^\/\S+$/.test(trimmed)) {
+          setInput("");
+          setItems((prev) => [
+            ...prev,
+            {
+              id: `invalidcommand-${Date.now()}`,
+              type: "message",
+              role: "system",
+              content: [
+                {
+                  type: "input_text",
+                  text: `Invalid command "${trimmed}". Use /help to retrieve the list of commands.`,
+                },
+              ],
+            },
+          ]);
+
+          return;
+        }
       }
 
       // detect image file paths for dynamic inclusion
@@ -295,6 +329,7 @@ export default function TerminalChatInput({
       openModelOverlay,
       openHelpOverlay,
       history, // Add history to the dependency array
+      onCompact,
     ],
   );
 
@@ -362,11 +397,20 @@ export default function TerminalChatInput({
             <>
               send q or ctrl+c to exit | send "/clear" to reset | send "/help"
               for commands | press enter to send
-              {contextLeftPercent < 25 && (
+              {contextLeftPercent > 25 && (
+                <>
+                  {" — "}
+                  <Text color={contextLeftPercent > 40 ? "green" : "yellow"}>
+                    {Math.round(contextLeftPercent)}% context left
+                  </Text>
+                </>
+              )}
+              {contextLeftPercent <= 25 && (
                 <>
                   {" — "}
                   <Text color="red">
-                    {Math.round(contextLeftPercent)}% context left
+                    {Math.round(contextLeftPercent)}% context left — send
+                    "/compact" to condense context
                   </Text>
                 </>
               )}
