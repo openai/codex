@@ -6,6 +6,7 @@ import type {
 
 import { TerminalChatCommandReview } from "./terminal-chat-command-review.js";
 import { log, isLoggingEnabled } from "../../utils/agent/log.js";
+import { exec } from "../../utils/agent/exec.js";
 import { createInputItem } from "../../utils/input-utils.js";
 import { setSessionId } from "../../utils/session.js";
 import { clearTerminal, onExit } from "../../utils/terminal.js";
@@ -15,12 +16,62 @@ import { Box, Text, useApp, useInput, useStdin } from "ink";
 import { fileURLToPath } from "node:url";
 import React, { useCallback, useState, Fragment } from "react";
 import { useInterval } from "use-interval";
+import { SandboxType } from "../../utils/agent/sandbox/interface.js";
 
 const suggestions = [
   "explain this codebase to me",
   "fix any build errors",
   "are there any bugs in my code?",
 ];
+
+// Function to execute bash commands when user inputs with '!' prefix
+async function executeBashCommand(
+  command: string,
+  setItems: React.Dispatch<React.SetStateAction<Array<ResponseItem>>>,
+) {
+  // Parse command to array format required by exec
+  const cmdArray = command.split(" ").filter(part => part !== "");
+  
+  try {
+    // Execute the command
+    const result = await exec(
+      { 
+        cmd: cmdArray, 
+        workdir: process.cwd(),
+        timeoutInMillis: 30000 // 30 second timeout
+      },
+      SandboxType.RAW_EXEC
+    );
+    
+    // Create a custom message type for bash command outputs
+    setItems((prev) => [
+      ...prev,
+      {
+        id: `bash-${Date.now()}`,
+        type: "message",
+        role: "system", // System messages often don't show the sender name
+        content: [{ 
+          type: "input_text",
+          text: `$ ${command}\n${result.stdout}${result.stderr ? result.stderr : ""}` 
+        }],
+      },
+    ]);
+  } catch (error) {
+    // Handle any unexpected errors using the same format
+    setItems((prev) => [
+      ...prev,
+      {
+        id: `bash-error-${Date.now()}`,
+        type: "message",
+        role: "system",
+        content: [{ 
+          type: "input_text", 
+          text: `$ ${command}\nError executing command: ${error}` 
+        }],
+      },
+    ]);
+  }
+}
 
 export default function TerminalChatInput({
   isNew,
@@ -160,6 +211,15 @@ export default function TerminalChatInput({
         return;
       }
 
+      if (inputValue.startsWith("!")) {
+        const bashCommand = inputValue.slice(1).trim();
+        setInput("");
+        if (bashCommand) {
+          executeBashCommand(bashCommand, setItems);
+        }
+        return;
+      }
+
       if (inputValue === "q" || inputValue === ":q" || inputValue === "exit") {
         setInput("");
         // wait one 60ms frame
@@ -288,7 +348,7 @@ export default function TerminalChatInput({
           ) : (
             <>
               send q or ctrl+c to exit | send "/clear" to reset | send "/help"
-              for commands | press enter to send
+              for commands | type "!" for bash mode | press enter to send
               {contextLeftPercent < 25 && (
                 <>
                   {" — "}

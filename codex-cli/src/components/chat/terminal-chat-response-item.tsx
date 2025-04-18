@@ -118,6 +118,33 @@ function TerminalChatResponseMessage({
 }: {
   message: ResponseInputMessageItem | ResponseOutputMessage;
 }) {
+  // Special case for bash command outputs - don't show any role header
+  if (message.role === "system" && message.id?.startsWith("bash-")) {
+    return (
+      <Box flexDirection="column">
+        <Markdown>
+          {message.content
+            .map(
+              (c) =>
+                c.type === "output_text"
+                  ? c.text
+                  : c.type === "refusal"
+                  ? c.refusal
+                  : c.type === "input_text"
+                  ? c.text
+                  : c.type === "input_image"
+                  ? "<Image>"
+                  : c.type === "input_file"
+                  ? c.filename
+                  : "", // unknown content type
+            )
+            .join(" ")}
+        </Markdown>
+      </Box>
+    );
+  }
+  
+  // Default case - show role header
   return (
     <Box flexDirection="column">
       <Text bold color={colorsByRole[message.role] || "gray"}>

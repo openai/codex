@@ -49,6 +49,9 @@ export default function HelpOverlay({
         <Text>
           <Text color="cyan">/clear</Text> – clear screen &amp; context
         </Text>
+        <Text>
+          <Text color="cyan">!</Text><Text color="gray">command</Text> – execute bash command
+        </Text>
 
         <Box marginTop={1}>
           <Text bold dimColor>
