@@ -7,13 +7,14 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thank you for submitting a bug report. It helps make Codex better.
+        Thank you for submitting a bug report! It helps make Codex better for everyone.
 
         If you need help or support using Codex, and are not reporting a bug, please
-        join our [Discussions](https://github.com/openai/codex/discussions), where you can ask questions or suggest ideas.
+        post on [codex/discussions](https://github.com/openai/codex/discussions), where you
+        can ask questions or engage with others on ideas for how to improve codex.
 
-        Make sure you are running the [latest](https://npmjs.com/package/@openai/codex) version of Codex CLI.
-        The bug you are experiencing may already have been fixed.
+        Make sure you are running the [latest](https://npmjs.com/package/@openai/codex)
+        version of Codex CLI. The bug you are experiencing may already have been fixed.
 
         Please try to include as much information as possible.
 
