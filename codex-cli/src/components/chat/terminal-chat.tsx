@@ -17,6 +17,7 @@ import { useTerminalSize } from "../../hooks/use-terminal-size.js";
 import { AgentLoop } from "../../utils/agent/agent-loop.js";
 import { isLoggingEnabled, log } from "../../utils/agent/log.js";
 import { ReviewDecision } from "../../utils/agent/review.js";
+import { generateCompactSummary } from "../../utils/compact-summary.js";
 import { OPENAI_BASE_URL } from "../../utils/config.js";
 import { createInputItem } from "../../utils/input-utils.js";
 import { getAvailableModels } from "../../utils/model-utils.js";
@@ -117,64 +118,6 @@ async function generateCommandExplanation(
 
     return errorMessage;
   }
-}
-
-/**
- * Generates a condensed summary of the conversation using the OpenAI API.
- * @param items The list of conversation items to summarize
- * @param model The model to use for generating the summary
- */
-async function generateCompactSummary(
-  items: Array<ResponseItem>,
-  model: string,
-): Promise<string> {
-  const oai = new OpenAI({
-    apiKey: process.env["OPENAI_API_KEY"],
-    baseURL: OPENAI_BASE_URL,
-  });
-
-  const conversationText = items
-    .filter(
-      (
-        item,
-      ): item is ResponseItem & { content: Array<unknown>; role: string } => {
-        if (item.type !== "message") {
-          return false;
-        }
-        const content = (item as { content?: unknown }).content;
-        return Array.isArray(content);
-      },
-    )
-    .map((item) => {
-      const parts = item.content;
-      const texts: Array<string> = [];
-      for (const part of parts) {
-        if (typeof part === "object" && part != null && "text" in part) {
-          const p = part as { text?: unknown };
-          if (typeof p.text === "string") {
-            texts.push(p.text);
-          }
-        }
-      }
-      return texts.join("");
-    })
-    .join("\n");
-  // Ask the model to provide a structured summary preserving key context
-  const response = await oai.chat.completions.create({
-    model,
-    messages: [
-      {
-        role: "system",
-        content:
-          "You are an expert coding assistant. Your goal is to generate a concise, structured summary of the conversation below that captures all essential information needed to continue development after context replacement. Include tasks performed, code areas modified or reviewed, key decisions or assumptions, test results or errors, and outstanding tasks or next steps.",
-      },
-      {
-        role: "user",
-        content: `Here is the conversation so far:\n${conversationText}\n\nPlease summarize this conversation, covering:\n1. Tasks performed and outcomes\n2. Code files, modules, or functions modified or examined\n3. Important decisions or assumptions made\n4. Errors encountered and test or build results\n5. Remaining tasks, open questions, or next steps\nProvide the summary in a clear, concise format.`,
-      },
-    ],
-  });
-  return response.choices[0]?.message.content || "Unable to generate summary.";
 }
 
 export default function TerminalChat({
