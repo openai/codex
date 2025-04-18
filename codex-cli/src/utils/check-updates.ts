@@ -37,7 +37,6 @@ export async function checkOutdated(
   npmCommandPath: string,
 ): Promise<UpdateCheckInfo | undefined> {
   return new Promise((resolve, _reject) => {
-    // Suppose users have installed the package globally.
     // TODO: support local installation
     const args = ["outdated", "--global", "--json", "--", "@openai/codex"];
     // corepack npm wrapper would automatically update package.json. disable that behavior.
