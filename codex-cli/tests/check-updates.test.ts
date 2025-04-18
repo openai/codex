@@ -83,7 +83,7 @@ describe("Check for updates", () => {
   });
 
   it("should outputs the update message when package is outdated", async () => {
-    const codexStatePath = join(CONFIG_DIR, "codex-state.json");
+    const codexStatePath = join(CONFIG_DIR, "update-check.json");
     // Use a fixed early date far in the past to ensure it's always at least 1 day before now
     memfs[codexStatePath] = JSON.stringify({
       lastUpdateCheck: new Date("2000-01-01T00:00:00Z").toUTCString(),
@@ -99,7 +99,7 @@ describe("Check for updates", () => {
   });
 
   it("should not output the update message when package is not outdated", async () => {
-    const codexStatePath = join(CONFIG_DIR, "codex-state.json");
+    const codexStatePath = join(CONFIG_DIR, "update-check.json");
     memfs[codexStatePath] = JSON.stringify({
       lastUpdateCheck: new Date().toUTCString(),
     });

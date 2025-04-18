@@ -6,7 +6,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import which from "which";
 
-interface State {
+interface UpdateCheckState {
   lastUpdateCheck?: string;
 }
 
@@ -81,8 +81,8 @@ export async function checkOutdated(
 }
 
 export async function checkForUpdates(): Promise<void> {
-  const stateFile = join(CONFIG_DIR, "codex-state.json");
-  let state: State | undefined;
+  const stateFile = join(CONFIG_DIR, "update-check.json");
+  let state: UpdateCheckState | undefined;
   try {
     state = JSON.parse(await readFile(stateFile, "utf8"));
   } catch {
@@ -136,7 +136,7 @@ ${updateMessage}`,
   console.log(box);
 }
 
-async function writeState(stateFilePath: string, state: State) {
+async function writeState(stateFilePath: string, state: UpdateCheckState) {
   await writeFile(stateFilePath, JSON.stringify(state, null, 2), {
     encoding: "utf8",
   });
