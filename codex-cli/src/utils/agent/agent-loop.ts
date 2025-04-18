@@ -760,15 +760,15 @@ export class AgentLoop {
                   if (callId) {
                     this.pendingAborts.add(callId);
                   }
-                } else {
-                  stageItem(item as ResponseItem);
-                }
+              } else {
+                stageItem(item as ResponseItem);
               }
+            }
 
-                if (event.type === "response.completed") {
-                  if (thisGeneration === this.generation && !this.canceled) {
-                    for (const item of event.response.output) {
-                      stageItem(item as ResponseItem);
+              if (event.type === "response.completed") {
+                if (thisGeneration === this.generation && !this.canceled) {
+                  for (const item of event.response.output) {
+                    stageItem(item as ResponseItem);
                     }
                   }
                   if (event.response.status === "completed") {
