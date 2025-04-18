@@ -99,11 +99,12 @@ describe("cancel clears previous_response_id", () => {
       model: "any",
       instructions: "",
       approvalPolicy: { mode: "auto" } as any,
+      additionalWritableRoots: [],
       onItem: () => {},
       onLoading: () => {},
       getCommandConfirmation: async () => ({ review: "yes" } as any),
       onLastResponseId: () => {},
-      config: { model: "any", instructions: "" },
+      config: { model: "any", instructions: "", notify: false },
     });
 
     // First run that triggers a function_call, but we will cancel *before* the

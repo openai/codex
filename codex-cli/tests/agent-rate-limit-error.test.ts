@@ -79,6 +79,7 @@ describe("AgentLoop – rate‑limit handling", () => {
         model: "any",
         instructions: "",
         approvalPolicy: { mode: "auto" } as any,
+        additionalWritableRoots: [],
         onItem: (i) => received.push(i),
         onLoading: () => {},
         getCommandConfirmation: async () => ({ review: "yes" } as any),

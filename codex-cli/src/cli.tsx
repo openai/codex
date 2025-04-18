@@ -12,7 +12,7 @@ import type { AppConfig } from "./utils/config";
 import type { ResponseItem } from "openai/resources/responses/responses";
 
 import App from "./app";
-import { runSinglePass } from "./cli_singlepass";
+import { runSinglePass } from "./cli-singlepass";
 import { AgentLoop } from "./utils/agent/agent-loop";
 import { initLogger } from "./utils/agent/log";
 import { ReviewDecision } from "./utils/agent/review";
@@ -53,13 +53,14 @@ const cli = meow(
     $ codex completion <bash|zsh|fish>
 
   Options
-    -h, --help                 Show usage and exit
-    -m, --model <model>        Model to use for completions (default: o4-mini)
-    -i, --image <path>         Path(s) to image files to include as input
-    -v, --view <rollout>       Inspect a previously saved rollout instead of starting a session
-    -q, --quiet                Non-interactive mode that only prints the assistant's final output
-    -c, --config               Open the instructions file in your editor
-    -a, --approval-mode <mode> Override the approval policy: 'suggest', 'auto-edit', or 'full-auto'
+    -h, --help                      Show usage and exit
+    -m, --model <model>             Model to use for completions (default: o4-mini)
+    -i, --image <path>              Path(s) to image files to include as input
+    -v, --view <rollout>            Inspect a previously saved rollout instead of starting a session
+    -q, --quiet                     Non-interactive mode that only prints the assistant's final output
+    -c, --config                    Open the instructions file in your editor
+    -w, --writable-root <path>      Writable folder for sandbox in full-auto mode (can be specified multiple times)
+    -a, --approval-mode <mode>      Override the approval policy: 'suggest', 'auto-edit', or 'full-auto'
 
     --auto-edit                Automatically approve file edits; still prompt for commands
     --full-auto                Automatically approve edits and commands when executed in the sandbox
@@ -67,6 +68,7 @@ const cli = meow(
     --no-project-doc           Do not automatically include the repository's 'codex.md'
     --project-doc <file>       Include an additional markdown file at <file> as context
     --full-stdout              Do not truncate stdout/stderr from command outputs
+    --notify                   Enable desktop notifications for responses
 
   Dangerous options
     --dangerously-auto-approve-everything
@@ -122,6 +124,13 @@ const cli = meow(
         description:
           "Determine the approval mode for Codex (default: suggest) Values: suggest, auto-edit, full-auto",
       },
+      writableRoot: {
+        type: "string",
+        isMultiple: true,
+        aliases: ["w"],
+        description:
+          "Writable folder for sandbox in full-auto mode (can be specified multiple times)",
+      },
       noProjectDoc: {
         type: "boolean",
         description: "Disable automatic inclusion of project‑level codex.md",
@@ -135,6 +144,11 @@ const cli = meow(
         description:
           "Disable truncation of command stdout/stderr messages (show everything)",
         aliases: ["no-truncate"],
+      },
+      // Notification
+      notify: {
+        type: "boolean",
+        description: "Enable desktop notifications for responses",
       },
 
       // Experimental mode where whole directory is loaded in context and model is requested
@@ -235,6 +249,7 @@ config = {
   apiKey,
   ...config,
   model: model ?? config.model,
+  notify: Boolean(cli.flags.notify),
 };
 
 if (!(await isModelSupportedForResponses(config.model))) {
@@ -276,6 +291,11 @@ if (fullContextMode) {
   process.exit(0);
 }
 
+// Ensure that all values in additionalWritableRoots are absolute paths.
+const additionalWritableRoots: ReadonlyArray<string> = (
+  cli.flags.writableRoot ?? []
+).map((p) => path.resolve(p));
+
 // If we are running in --quiet mode, do that and exit.
 const quietMode = Boolean(cli.flags.quiet);
 const autoApproveEverything = Boolean(
@@ -298,6 +318,7 @@ if (quietMode) {
     approvalPolicy: autoApproveEverything
       ? AutoApprovalMode.FULL_AUTO
       : AutoApprovalMode.SUGGEST,
+    additionalWritableRoots,
     config,
   });
   onExit();
@@ -332,6 +353,7 @@ const instance = render(
     rollout={rollout}
     imagePaths={imagePaths}
     approvalPolicy={approvalPolicy}
+    additionalWritableRoots={additionalWritableRoots}
     fullStdout={fullStdout}
   />,
   {
@@ -393,11 +415,13 @@ async function runQuietMode({
   prompt,
   imagePaths,
   approvalPolicy,
+  additionalWritableRoots,
   config,
 }: {
   prompt: string;
   imagePaths: Array<string>;
   approvalPolicy: ApprovalPolicy;
+  additionalWritableRoots: ReadonlyArray<string>;
   config: AppConfig;
 }): Promise<void> {
   const agent = new AgentLoop({
@@ -405,6 +429,7 @@ async function runQuietMode({
     config: config,
     instructions: config.instructions,
     approvalPolicy,
+    additionalWritableRoots,
     onItem: (item: ResponseItem) => {
       // eslint-disable-next-line no-console
       console.log(formatResponseItemForQuietMode(item));

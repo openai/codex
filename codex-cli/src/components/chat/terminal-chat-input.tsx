@@ -42,6 +42,7 @@ export default function TerminalChatInput({
   openModelOverlay,
   openApprovalOverlay,
   openHelpOverlay,
+  onCompact,
   interruptAgent,
   active,
 }: {
@@ -61,6 +62,7 @@ export default function TerminalChatInput({
   openModelOverlay: () => void;
   openApprovalOverlay: () => void;
   openHelpOverlay: () => void;
+  onCompact: () => void;
   interruptAgent: () => void;
   active: boolean;
 }): React.ReactElement {
@@ -166,6 +168,12 @@ export default function TerminalChatInput({
         return;
       }
 
+      if (inputValue === "/compact") {
+        setInput("");
+        onCompact();
+        return;
+      }
+
       if (inputValue.startsWith("/model")) {
         setInput("");
         openModelOverlay();
@@ -232,15 +240,62 @@ export default function TerminalChatInput({
         );
 
         return;
+      } else if (inputValue.startsWith("/")) {
+        // Handle invalid/unrecognized commands.
+        // Only single-word inputs starting with '/' (e.g., /command) that are not recognized are caught here.
+        // Any other input, including those starting with '/' but containing spaces
+        // (e.g., "/command arg"), will fall through and be treated as a regular prompt.
+        const trimmed = inputValue.trim();
+
+        if (/^\/\S+$/.test(trimmed)) {
+          setInput("");
+          setItems((prev) => [
+            ...prev,
+            {
+              id: `invalidcommand-${Date.now()}`,
+              type: "message",
+              role: "system",
+              content: [
+                {
+                  type: "input_text",
+                  text: `Invalid command "${trimmed}". Use /help to retrieve the list of commands.`,
+                },
+              ],
+            },
+          ]);
+
+          return;
+        }
       }
 
+      // detect image file paths for dynamic inclusion
       const images: Array<string> = [];
-      const text = inputValue
-        .replace(/!\[[^\]]*?\]\(([^)]+)\)/g, (_m, p1: string) => {
+      let text = inputValue;
+      // markdown-style image syntax: ![alt](path)
+      text = text.replace(/!\[[^\]]*?\]\(([^)]+)\)/g, (_m, p1: string) => {
+        images.push(p1.startsWith("file://") ? fileURLToPath(p1) : p1);
+        return "";
+      });
+      // quoted file paths ending with common image extensions (e.g. '/path/to/img.png')
+      text = text.replace(
+        /['"]([^'"]+?\.(?:png|jpe?g|gif|bmp|webp|svg))['"]/gi,
+        (_m, p1: string) => {
           images.push(p1.startsWith("file://") ? fileURLToPath(p1) : p1);
           return "";
-        })
-        .trim();
+        },
+      );
+      // bare file paths ending with common image extensions
+      text = text.replace(
+        // eslint-disable-next-line no-useless-escape
+        /\b(?:\.[\/\\]|[\/\\]|[A-Za-z]:[\/\\])?[\w-]+(?:[\/\\][\w-]+)*\.(?:png|jpe?g|gif|bmp|webp|svg)\b/gi,
+        (match: string) => {
+          images.push(
+            match.startsWith("file://") ? fileURLToPath(match) : match,
+          );
+          return "";
+        },
+      );
+      text = text.trim();
 
       const inputItem = await createInputItem(text, images);
       submitInput([inputItem]);
@@ -274,6 +329,7 @@ export default function TerminalChatInput({
       openModelOverlay,
       openHelpOverlay,
       history, // Add history to the dependency array
+      onCompact,
     ],
   );
 
@@ -345,7 +401,8 @@ export default function TerminalChatInput({
                 <>
                   {" — "}
                   <Text color="red">
-                    {Math.round(contextLeftPercent)}% context left
+                    {Math.round(contextLeftPercent)}% context left — send
+                    "/compact" to condense context
                   </Text>
                 </>
               )}
