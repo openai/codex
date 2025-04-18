@@ -1,6 +1,6 @@
 {
   "name": "@openai/codex",
-  "version": "0.1.2504161551",
+  "version": "0.1.2504172304",
   "license": "Apache-2.0",
   "bin": {
     "codex": "bin/codex"
@@ -21,7 +21,7 @@
     "build": "node build.mjs",
     "build:dev": "NODE_ENV=development node build.mjs --dev && NODE_OPTIONS=--enable-source-maps node dist/cli-dev.js",
     "release:readme": "cp ../README.md ./README.md",
-    "release:version": "codex -a full-auto 'update the CLI_VERSION in codex-cli/src/utils/session.ts and the version in package.json to use the current timestamp (YYMMDDHHmm format)'",
+    "release:version": "TS=$(date +%y%m%d%H%M) && sed -E -i'' -e \"s/\\\"0\\.1\\.[0-9]{10}\\\"/\\\"0.1.${TS}\\\"/g\" package.json src/utils/session.ts",
     "release:build-and-publish": "npm run build && npm publish",
     "release": "npm run release:readme && npm run release:version && npm run release:build-and-publish",
     "prepare": "husky",
