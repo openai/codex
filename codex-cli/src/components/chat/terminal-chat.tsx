@@ -17,6 +17,7 @@ import { useTerminalSize } from "../../hooks/use-terminal-size.js";
 import { AgentLoop } from "../../utils/agent/agent-loop.js";
 import { isLoggingEnabled, log } from "../../utils/agent/log.js";
 import { ReviewDecision } from "../../utils/agent/review.js";
+import { generateCompactSummary } from "../../utils/compact-summary.js";
 import { OPENAI_BASE_URL } from "../../utils/config.js";
 import { createInputItem } from "../../utils/input-utils.js";
 import { getAvailableModels } from "../../utils/model-utils.js";
@@ -138,6 +139,34 @@ export default function TerminalChat({
     initialApprovalPolicy,
   );
   const [thinkingSeconds, setThinkingSeconds] = useState(0);
+  const handleCompact = async () => {
+    setLoading(true);
+    try {
+      const summary = await generateCompactSummary(items, model);
+      setItems([
+        {
+          id: `compact-${Date.now()}`,
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: summary }],
+        } as ResponseItem,
+      ]);
+    } catch (err) {
+      setItems((prev) => [
+        ...prev,
+        {
+          id: `compact-error-${Date.now()}`,
+          type: "message",
+          role: "system",
+          content: [
+            { type: "input_text", text: `Failed to compact context: ${err}` },
+          ],
+        } as ResponseItem,
+      ]);
+    } finally {
+      setLoading(false);
+    }
+  };
   const {
     requestConfirmation,
     confirmationPrompt,
@@ -453,6 +482,7 @@ export default function TerminalChat({
             openModelOverlay={() => setOverlayMode("model")}
             openApprovalOverlay={() => setOverlayMode("approval")}
             openHelpOverlay={() => setOverlayMode("help")}
+            onCompact={handleCompact}
             active={overlayMode === "none"}
             interruptAgent={() => {
               if (!agent) {
