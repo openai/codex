@@ -298,15 +298,15 @@ export class AgentLoop {
 
     const name: string | undefined = isChatStyle
       ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (item as any).function?.name
+      (item as any).function?.name
       : // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (item as any).name;
+      (item as any).name;
 
     const rawArguments: string | undefined = isChatStyle
       ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (item as any).function?.arguments
+      (item as any).function?.arguments
       : // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (item as any).arguments;
+      (item as any).arguments;
 
     // The OpenAI "function_call" item may have either `call_id` (responses
     // endpoint) or `id` (chat endpoint).  Prefer `call_id` if present but fall
@@ -317,8 +317,7 @@ export class AgentLoop {
     const args = parseToolCallArguments(rawArguments ?? "{}");
     if (isLoggingEnabled()) {
       log(
-        `handleFunctionCall(): name=${
-          name ?? "undefined"
+        `handleFunctionCall(): name=${name ?? "undefined"
         } callId=${callId} args=${rawArguments}`,
       );
     }
@@ -620,7 +619,47 @@ export class AgentLoop {
                   )} ms...`,
                 );
                 // eslint-disable-next-line no-await-in-loop
-                await new Promise((resolve) => setTimeout(resolve, delayMs));
+                await new Promise<void>((resolve) => {
+                  // If the delay is less than 1 second, we are going to show the ms
+                  if (delayMs < 1000) {
+                    process.stdout.write(`Waiting: ${delayMs}ms`);
+                    setTimeout(() => {
+                      process.stdout.write("\n");
+                      resolve();
+                    }, delayMs);
+                    return;
+                  }
+
+                  // If it bigger than 1 second we are going to show it in this format {hh:mm:ss}
+                  // give the user better feedback on how long it will take to retry
+                  let remaining = Math.ceil(delayMs / 1000);
+
+                  function formatTime(seconds: number): string {
+                    const hour = Math.floor(seconds / 3600)
+                      .toString()
+                      .padStart(2, "0");
+                    const minutes = Math.floor((seconds % 3600) / 60)
+                      .toString()
+                      .padStart(2, "0");
+                    const s = (seconds % 60).toString().padStart(2, "0");
+                    return Number(hour) > 0 ? `${hour}:${minutes}:${s}` : `${minutes}:${s}`;
+                  }
+
+                  process.stdout.write(`Waiting: ${formatTime(remaining)}`);
+                  const timer = setInterval(() => {
+                    remaining -= 1;
+
+                    if (remaining >= 0) {
+                      process.stdout.write(`\rWaiting: ${formatTime(remaining)}`);
+                    }
+
+                    if (remaining <= 0) {
+                      clearInterval(timer);
+                      process.stdout.write("\n");
+                      resolve();
+                    }
+                  }, 1000);
+                });
                 continue;
               } else {
                 // We have exhausted all retry attempts. Surface a message so the user understands
@@ -690,9 +729,8 @@ export class AgentLoop {
                         `Message: ${errCtx.message || "unknown"}`,
                       ].join(", ");
 
-                      return `⚠️  OpenAI rejected the request${
-                        reqId ? ` (request ID: ${reqId})` : ""
-                      }. Error details: ${errorDetails}. Please verify your settings and try again.`;
+                      return `⚠️  OpenAI rejected the request${reqId ? ` (request ID: ${reqId})` : ""
+                        }. Error details: ${errorDetails}. Please verify your settings and try again.`;
                     })(),
                   },
                 ],
@@ -1034,14 +1072,12 @@ export class AgentLoop {
             `Status: ${e.status || (e.cause && e.cause.status) || "unknown"}`,
             `Code: ${e.code || (e.cause && e.cause.code) || "unknown"}`,
             `Type: ${e.type || (e.cause && e.cause.type) || "unknown"}`,
-            `Message: ${
-              e.message || (e.cause && e.cause.message) || "unknown"
+            `Message: ${e.message || (e.cause && e.cause.message) || "unknown"
             }`,
           ].join(", ");
 
-          const msgText = `⚠️  OpenAI rejected the request${
-            reqId ? ` (request ID: ${reqId})` : ""
-          }. Error details: ${errorDetails}. Please verify your settings and try again.`;
+          const msgText = `⚠️  OpenAI rejected the request${reqId ? ` (request ID: ${reqId})` : ""
+            }. Error details: ${errorDetails}. Please verify your settings and try again.`;
 
           this.onItem({
             id: `error-${Date.now()}`,
