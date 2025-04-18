@@ -72,6 +72,7 @@ esbuild
     outfile: isDevBuild ? "dist/cli-dev.js" : "dist/cli.js",
     minify: !isDevBuild,
     sourcemap: isDevBuild ? "inline" : true,
+    external: ["keytar"],
     plugins,
     inject: ["./require-shim.js"],
   })
