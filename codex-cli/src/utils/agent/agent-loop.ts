@@ -740,35 +740,35 @@ export class AgentLoop {
                   log(`AgentLoop.run(): response event ${event.type}`);
                 }
 
-              // process and surface each item (no‑op until we can depend on streaming events)
-              if (event.type === "response.output_item.done") {
-                const item = event.item;
-                // 1) if it's a reasoning item, annotate it
-                type ReasoningItem = { type?: string; duration_ms?: number };
-                const maybeReasoning = item as ReasoningItem;
-                if (maybeReasoning.type === "reasoning") {
-                  maybeReasoning.duration_ms = Date.now() - thinkingStart;
+            // process and surface each item (no‑op until we can depend on streaming events)
+            if (event.type === "response.output_item.done") {
+              const item = event.item;
+              // 1) if it's a reasoning item, annotate it
+              type ReasoningItem = { type?: string; duration_ms?: number };
+              const maybeReasoning = item as ReasoningItem;
+              if (maybeReasoning.type === "reasoning") {
+                maybeReasoning.duration_ms = Date.now() - thinkingStart;
+              }
+              if (item.type === "function_call") {
+                // Track outstanding tool call so we can abort later if needed.
+                // The item comes from the streaming response, therefore it has
+                // either `id` (chat) or `call_id` (responses) – we normalise
+                // by reading both.
+                const callId =
+                  (item as { call_id?: string; id?: string }).call_id ??
+                  (item as { id?: string }).id;
+                if (callId) {
+                  this.pendingAborts.add(callId);
                 }
-                if (item.type === "function_call") {
-                  // Track outstanding tool call so we can abort later if needed.
-                  // The item comes from the streaming response, therefore it has
-                  // either `id` (chat) or `call_id` (responses) – we normalise
-                  // by reading both.
-                  const callId =
-                    (item as { call_id?: string; id?: string }).call_id ??
-                    (item as { id?: string }).id;
-                  if (callId) {
-                    this.pendingAborts.add(callId);
-                  }
               } else {
                 stageItem(item as ResponseItem);
               }
             }
 
-              if (event.type === "response.completed") {
-                if (thisGeneration === this.generation && !this.canceled) {
-                  for (const item of event.response.output) {
-                    stageItem(item as ResponseItem);
+            if (event.type === "response.completed") {
+              if (thisGeneration === this.generation && !this.canceled) {
+                for (const item of event.response.output) {
+                  stageItem(item as ResponseItem);
                     }
                   }
                   if (event.response.status === "completed") {
