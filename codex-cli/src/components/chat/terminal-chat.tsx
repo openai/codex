@@ -147,8 +147,8 @@ export default function TerminalChat({
         {
           id: `compact-${Date.now()}`,
           type: "message",
-          role: "system",
-          content: [{ type: "input_text", text: summary }],
+          role: "assistant",
+          content: [{ type: "output_text", text: summary }],
         } as ResponseItem,
       ]);
       setLastResponseId("");
