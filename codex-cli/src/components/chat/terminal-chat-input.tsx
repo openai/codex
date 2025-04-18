@@ -254,36 +254,19 @@ export default function TerminalChatInput({
             import("node:os"),
           ]);
 
-          // Build a minimal JSON representation of the session to keep the URL length reasonable
-          const sessionJson = JSON.stringify(items ?? [], null, 2);
-
-          // Truncate session if it's too large (GitHub accepts fairly long URLs but browsers may cap at ~2000 chars)
-          const MAX_BODY_CHARS = 1500;
-          const truncatedSession =
-            sessionJson.length > MAX_BODY_CHARS
-              ? `${sessionJson.slice(0, MAX_BODY_CHARS)}… (truncated)`
-              : sessionJson;
-
           // Lazy import CLI_VERSION to avoid circular deps
           const { CLI_VERSION } = await import("../../utils/session.js");
 
-          const title = encodeURIComponent("Codex CLI bug report");
+          const { buildBugReportUrl } = await import(
+            "../../utils/bug-report.js",
+          );
 
-          const bodyLines = [
-            "### What happened?\n",
-            "(Please describe what you were doing when the issue occurred)\n\n",
-            `**CLI version**: ${CLI_VERSION}\n`,
-            `**Node version**: ${process.version}\n`,
-            `**OS**: ${os.platform()} ${os.release()}\n\n`,
-            "### Session log\n",
-            "```json\n",
-            truncatedSession,
-            "\n```\n",
-          ];
-
-          const body = encodeURIComponent(bodyLines.join(""));
-
-          const url = `https://github.com/openai/codex/issues/new?template=2-bug-report.yml&title=${title}&body=${body}`;
+          const url = buildBugReportUrl({
+            items: items ?? [],
+            cliVersion: CLI_VERSION,
+            model: loadConfig().model ?? "unknown",
+            platform: `${os.platform()} ${os.arch()} ${os.release()}`,
+          });
 
           // Open the URL in the user's default browser
           await open(url, { wait: false });
@@ -298,7 +281,7 @@ export default function TerminalChatInput({
               content: [
                 {
                   type: "input_text",
-                  text: "📋 Opened your browser to file a Codex bug report. Please review and submit!",
+                  text: "📋 Opened browser to file a bug report. Please include any context that might help us fix the issue!",
                 },
               ],
             },
