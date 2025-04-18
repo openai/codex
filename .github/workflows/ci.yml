@@ -52,7 +52,8 @@ jobs:
 
       - name: Lint
         run: |
-          pnpm --filter @openai/codex run lint -- \
+          pnpm --filter @openai/codex exec -- eslint src tests --ext ts --ext tsx \
+            --report-unused-disable-directives \
             --rule "no-console:error" \
             --rule "no-debugger:error" \
             --max-warnings=-1
