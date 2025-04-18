@@ -10,6 +10,7 @@ import { log, isLoggingEnabled } from "../../utils/agent/log.js";
 import { loadConfig } from "../../utils/config.js";
 import { createInputItem } from "../../utils/input-utils.js";
 import { setSessionId } from "../../utils/session.js";
+import { SLASH_COMMANDS, type SlashCommand } from "../../utils/slash-commands";
 import {
   loadCommandHistory,
   addToHistory,
@@ -20,7 +21,6 @@ import TextInput from "../vendor/ink-text-input.js";
 import { Box, Text, useApp, useInput, useStdin } from "ink";
 import { fileURLToPath } from "node:url";
 import React, { useCallback, useState, Fragment, useEffect } from "react";
-import { SLASH_COMMANDS } from "../../utils/slash-commands.js";
 import { useInterval } from "use-interval";
 
 const suggestions = [
@@ -68,13 +68,15 @@ export default function TerminalChatInput({
   active: boolean;
 }): React.ReactElement {
   // Slash command suggestion index
-  const [selectedSlashSuggestion, setSelectedSlashSuggestion] = useState<number>(0);
+  const [selectedSlashSuggestion, setSelectedSlashSuggestion] =
+    useState<number>(0);
   const app = useApp();
   const [selectedSuggestion, setSelectedSuggestion] = useState<number>(0);
   const [input, setInput] = useState("");
   const [history, setHistory] = useState<Array<HistoryEntry>>([]);
   const [historyIndex, setHistoryIndex] = useState<number | null>(null);
   const [draftInput, setDraftInput] = useState<string>("");
+  const [skipNextSubmit, setSkipNextSubmit] = useState<boolean>(false);
 
   // Load command history on component mount
   useEffect(() => {
@@ -97,19 +99,19 @@ export default function TerminalChatInput({
       // Slash command navigation: up/down to select, enter to fill
       if (!confirmationPrompt && !loading && input.trim().startsWith("/")) {
         const prefix = input.trim();
-        const matches = SLASH_COMMANDS.filter((cmd) =>
-          cmd.command.startsWith(prefix)
+        const matches = SLASH_COMMANDS.filter((cmd: SlashCommand) =>
+          cmd.command.startsWith(prefix),
         );
         if (matches.length > 0) {
           if (_key.upArrow) {
             setSelectedSlashSuggestion((prev) =>
-              prev <= 0 ? matches.length - 1 : prev - 1
+              prev <= 0 ? matches.length - 1 : prev - 1,
             );
             return;
           }
           if (_key.downArrow) {
             setSelectedSlashSuggestion((prev) =>
-              prev < 0 || prev >= matches.length - 1 ? 0 : prev + 1
+              prev < 0 || prev >= matches.length - 1 ? 0 : prev + 1,
             );
             return;
           }
@@ -120,9 +122,11 @@ export default function TerminalChatInput({
             if (cmdObj) {
               const cmd = cmdObj.command;
               if (input.trim() !== cmd) {
-                setInput(cmd + " ");
-                setDraftInput(cmd + " ");
+                // Fill the command without trailing space
+                setInput(cmd);
+                setDraftInput(cmd);
                 setSelectedSlashSuggestion(0);
+                setSkipNextSubmit(true);
                 return; // consumed for autocomplete
               }
             }
@@ -196,6 +200,11 @@ export default function TerminalChatInput({
 
   const onSubmit = useCallback(
     async (value: string) => {
+      // Skip this submit if we just autocompleted a slash command
+      if (skipNextSubmit) {
+        setSkipNextSubmit(false);
+        return;
+      }
       const inputValue = value.trim();
       if (!inputValue) {
         return;
@@ -373,8 +382,9 @@ export default function TerminalChatInput({
       openApprovalOverlay,
       openModelOverlay,
       openHelpOverlay,
-      history, // Add history to the dependency array
+      history,
       onCompact,
+      skipNextSubmit,
     ],
   );
 
@@ -423,9 +433,9 @@ export default function TerminalChatInput({
       {/* Slash command autocomplete suggestions */}
       {input.trim().startsWith("/") && (
         <Box flexDirection="column" paddingX={2} marginBottom={1}>
-          {SLASH_COMMANDS.filter((cmd) =>
-            cmd.command.startsWith(input.trim())
-          ).map((cmd, idx) => (
+          {SLASH_COMMANDS.filter((cmd: SlashCommand) =>
+            cmd.command.startsWith(input.trim()),
+          ).map((cmd: SlashCommand, idx: number) => (
             <Box key={cmd.command}>
               <Text
                 backgroundColor={
