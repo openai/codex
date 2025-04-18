@@ -121,9 +121,9 @@ Codex lets you decide _how much autonomy_ the agent receives and auto-approval p
 
 | Mode                      | What the agent may do without asking            | Still requires approval                                         |
 | ------------------------- | ----------------------------------------------- | --------------------------------------------------------------- |
-| **Suggest** <br>(default) | • Read any file in the repo                     | • **All** file writes/patches <br>• **All** shell/Bash commands |
-| **Auto Edit**             | • Read **and** apply‑patch writes to files      | • **All** shell/Bash commands                                   |
-| **Full Auto**             | • Read/write files <br>• Execute shell commands | –                                                               |
+| **Suggest** <br>(default) | • Read any file in the repo                     | • **All** file writes/patches <br>• **Any** arbitrary shell commands (aside from reading files) |
+| **Auto Edit**             | • Read **and** apply‑patch writes to files      | • **All** shell commands                                   |
+| **Full Auto**             | • Read/write files <br>• Execute shell commands (network disabled, writes limited to your workdir) | –                                                               |
 
 In **Full Auto** every command is run **network‑disabled** and confined to the
 current working directory (plus temporary files) for defense‑in‑depth. Codex
@@ -302,12 +302,23 @@ In 2021, OpenAI released Codex, an AI system designed to generate code from natu
 </details>
 
 <details>
-<summary>How do I stop Codex from touching my repo?</summary>
+<details>
+<summary>Which models are supported?</summary>
 
-Codex always runs in a **sandbox first**. If a proposed command or file change looks suspicious you can simply answer **n** when prompted and nothing happens to your working tree.
+Any model available with [Responses API](https://platform.openai.com/docs/api-reference/responses). The default is `o4-mini`, but pass `--model gpt-4.1` or set `model: gpt-4.1` in your config file to override.
 
 </details>
+<details>
+<summary>Why does <code>o3</code> or <code>o4-mini</code> not work for me?</summary>
 
+It's possible that your [API account needs to be verified](https://help.openai.com/en/articles/10910291-api-organization-verification) in order to start streaming responses and seeing chain of thought summaries from the API. If you're still running into issues, please let us know!
+
+</details>
+<summary>How do I stop Codex from editing my files?</summary>
+
+Codex runs model-generated commands in a sandbox. If a proposed command or file change doesn't look right, you can simply type **n** to deny the command or give the model feedback.
+
+</details>
 <details>
 <summary>Does it work on Windows?</summary>
 
@@ -315,12 +326,6 @@ Not directly. It requires [Windows Subsystem for Linux (WSL2)](https://learn.mic
 
 </details>
 
-<details>
-<summary>Which models are supported?</summary>
-
-Any model available with [Responses API](https://platform.openai.com/docs/api-reference/responses). The default is `o4-mini`, but pass `--model gpt-4o` or set `model: gpt-4o` in your config file to override.
-
-</details>
 
 ---
 
