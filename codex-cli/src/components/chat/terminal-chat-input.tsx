@@ -131,21 +131,42 @@ export default function TerminalChatInput({
             return;
           }
           if (_key.return) {
-            // Autocomplete slash command if input is a prefix
+            const prefix = input.trim();
             const selIdx = selectedSlashSuggestion;
             const cmdObj = matches[selIdx];
             if (cmdObj) {
               const cmd = cmdObj.command;
-              if (input.trim() !== cmd) {
-                // Fill the command without trailing space
+              if (prefix !== cmd) {
                 setInput(cmd);
                 setDraftInput(cmd);
                 setSelectedSlashSuggestion(0);
-                setSkipNextSubmit(true);
-                return; // consumed for autocomplete
+              } else {
+                // Execute the selected slash command
+                setInput("");
+                setDraftInput("");
+                setSelectedSlashSuggestion(0);
+                switch (cmd) {
+                  case "/history":
+                    openOverlay();
+                    break;
+                  case "/help":
+                    openHelpOverlay();
+                    break;
+                  case "/compact":
+                    onCompact();
+                    break;
+                  case "/model":
+                    openModelOverlay();
+                    break;
+                  case "/approval":
+                    openApprovalOverlay();
+                    break;
+                  default:
+                    break;
+                }
               }
             }
-            // If input already matches a full command, do not consume Enter here
+            return;
           }
         }
       }
@@ -215,12 +236,17 @@ export default function TerminalChatInput({
 
   const onSubmit = useCallback(
     async (value: string) => {
+      const inputValue = value.trim();
+      // If the user only entered a slash, do not send a chat message
+      if (inputValue === "/") {
+        setInput("");
+        return;
+      }
       // Skip this submit if we just autocompleted a slash command
       if (skipNextSubmit) {
         setSkipNextSubmit(false);
         return;
       }
-      const inputValue = value.trim();
       if (!inputValue) {
         return;
       }
