@@ -4,6 +4,9 @@ node_modules
 .pnpm-store
 .pnpm-debug.log
 
+# Keep pnpm-lock.yaml
+!pnpm-lock.yaml
+
 # build
 dist/
 build/
