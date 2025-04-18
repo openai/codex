@@ -81,14 +81,14 @@ export class AgentLoop {
   /**
    * A reference to the currently active stream returned from the OpenAI
    * client. We keep this so that we can abort the request if the user decides
-   * to interrupt the current task (e.g. via the escape hot-key).
+   * to interrupt the current task (e.g. via the escape hot‑key).
    */
   private currentStream: unknown | null = null;
   /** Incremented with every call to `run()`. Allows us to ignore stray events
    * from streams that belong to a previous run which might still be emitting
    * after the user has canceled and issued a new command. */
   private generation = 0;
-  /** AbortController for in-progress tool calls (e.g. shell commands). */
+  /** AbortController for in‑progress tool calls (e.g. shell commands). */
   private execAbortController: AbortController | null = null;
   /** Set to true when `cancel()` is called so `run()` can exit early. */
   private canceled = false;
@@ -144,10 +144,10 @@ export class AgentLoop {
     // stream produced a `function_call` before the user cancelled, OpenAI now
     // expects a corresponding `function_call_output` that must reference that
     // very same response ID.  We therefore keep the ID around so the
-    // follow-up request can still satisfy the contract.
+    // follow‑up request can still satisfy the contract.
 
     // If we have *not* seen any function_call IDs yet there is nothing that
-    // needs to be satisfied in a follow-up request.  In that case we clear
+    // needs to be satisfied in a follow‑up request.  In that case we clear
     // the stored lastResponseId so a subsequent run starts a clean turn.
     if (this.pendingAborts.size === 0) {
       try {
@@ -180,8 +180,8 @@ export class AgentLoop {
   }
 
   /**
-   * Hard-stop the agent loop. After calling this method the instance becomes
-   * unusable: any in-flight operations are aborted and subsequent invocations
+   * Hard‑stop the agent loop. After calling this method the instance becomes
+   * unusable: any in‑flight operations are aborted and subsequent invocations
    * of `run()` will throw.
    */
   public terminate(): void {
@@ -206,10 +206,10 @@ export class AgentLoop {
     model,
     instructions,
     approvalPolicy,
-    // `config` used to be required.  Some unit-tests (and potentially other
+    // `config` used to be required.  Some unit‑tests (and potentially other
     // callers) instantiate `AgentLoop` without passing it, so we make it
     // optional and fall back to sensible defaults.  This keeps the public
-    // surface backwards-compatible and prevents runtime errors like
+    // surface backwards‑compatible and prevents runtime errors like
     // "Cannot read properties of undefined (reading 'apiKey')" when accessing
     // `config.apiKey` below.
     config,
@@ -245,10 +245,10 @@ export class AgentLoop {
     const apiKey = this.config.apiKey ?? process.env["OPENAI_API_KEY"] ?? "";
     this.oai = new OpenAI({
       // The OpenAI JS SDK only requires `apiKey` when making requests against
-      // the official API.  When running unit-tests we stub out all network
+      // the official API.  When running unit‑tests we stub out all network
       // calls so an undefined key is perfectly fine.  We therefore only set
       // the property if we actually have a value to avoid triggering runtime
-      // errors inside the SDK (it validates that `apiKey` is a non-empty
+      // errors inside the SDK (it validates that `apiKey` is a non‑empty
       // string when the field is present).
       ...(apiKey ? { apiKey } : {}),
       baseURL: OPENAI_BASE_URL,
@@ -277,14 +277,14 @@ export class AgentLoop {
   ): Promise<Array<ResponseInputItem>> {
     // If the agent has been canceled in the meantime we should not perform any
     // additional work. Returning an empty array ensures that we neither execute
-    // the requested tool call nor enqueue any follow-up input items. This keeps
+    // the requested tool call nor enqueue any follow‑up input items. This keeps
     // the cancellation semantics intuitive for users – once they interrupt a
     // task no further actions related to that task should be taken.
     if (this.canceled) {
       return [];
     }
     // ---------------------------------------------------------------------
-    // Normalise the function-call item into a consistent shape regardless of
+    // Normalise the function‑call item into a consistent shape regardless of
     // whether it originated from the `/responses` or the `/chat/completions`
     // endpoint – their JSON differs slightly.
     // ---------------------------------------------------------------------
@@ -343,7 +343,7 @@ export class AgentLoop {
     // We intentionally *do not* remove this `callId` from the `pendingAborts`
     // set right away.  The output produced below is only queued up for the
     // *next* request to the OpenAI API – it has not been delivered yet.  If
-    // the user presses ESC-ESC (i.e. invokes `cancel()`) in the small window
+    // the user presses ESC‑ESC (i.e. invokes `cancel()`) in the small window
     // between queuing the result and the actual network call, we need to be
     // able to surface a synthetic `function_call_output` marked as
     // "aborted".  Keeping the ID in the set until the run concludes
@@ -383,9 +383,9 @@ export class AgentLoop {
     previousResponseId: string = "",
   ): Promise<void> {
     // ---------------------------------------------------------------------
-    // Top-level error wrapper so that known transient network issues like
+    // Top‑level error wrapper so that known transient network issues like
     // `ERR_STREAM_PREMATURE_CLOSE` do not crash the entire CLI process.
-    // Instead we surface the failure to the user as a regular system-message
+    // Instead we surface the failure to the user as a regular system‑message
     // and terminate the current run gracefully. The calling UI can then let
     // the user retry the request if desired.
     // ---------------------------------------------------------------------
@@ -412,9 +412,9 @@ export class AgentLoop {
           `AgentLoop.run(): new execAbortController created (${this.execAbortController.signal}) for generation ${this.generation}`,
         );
       }
-      // NOTE: We no longer (re-)attach an `abort` listener to `hardAbort` here.
+      // NOTE: We no longer (re‑)attach an `abort` listener to `hardAbort` here.
       // A single listener that forwards the `abort` to the current
-      // `execAbortController` is installed once in the constructor. Re-adding a
+      // `execAbortController` is installed once in the constructor. Re‑adding a
       // new listener on every `run()` caused the same `AbortSignal` instance to
       // accumulate listeners which in turn triggered Node's
       // `MaxListenersExceededWarning` after ten invocations.
@@ -423,7 +423,7 @@ export class AgentLoop {
 
       // If there are unresolved function calls from a previously cancelled run
       // we have to emit dummy tool outputs so that the API no longer expects
-      // them.  We prepend them to the user-supplied input so they appear
+      // them.  We prepend them to the user‑supplied input so they appear
       // first in the conversation turn.
       const abortOutputs: Array<ResponseInputItem> = [];
       if (this.pendingAborts.size > 0) {
@@ -456,10 +456,10 @@ export class AgentLoop {
         // We'll nil out entries once they're delivered.
         const idx = staged.push(item) - 1;
 
-        // Instead of emitting synchronously we schedule a short-delay delivery.
+        // Instead of emitting synchronously we schedule a short‑delay delivery.
         // This accomplishes two things:
         //   1. The UI still sees new messages almost immediately, creating the
-        //      perception of real-time updates.
+        //      perception of real‑time updates.
         //   2. If the user calls `cancel()` in the small window right after the
         //      item was staged we can still abort the delivery because the
         //      generation counter will have been bumped by `cancel()`.
@@ -551,7 +551,7 @@ export class AgentLoop {
             // do not define the class.  Falling back to `false` when the
             // export is absent ensures the check never throws.
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const ApiConnErrCtor = (OpenAI as any).APIConnectionError as // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const ApiConnErrCtor = (OpenAI as any).APIConnectionError as  // eslint-disable-next-line @typescript-eslint/no-explicit-any
               | (new (...args: any) => Error)
               | undefined;
             const isConnectionError = ApiConnErrCtor
@@ -947,15 +947,15 @@ export class AgentLoop {
         }
 
         // At this point the turn finished without the user invoking
-        // `cancel()`.  Any outstanding function-calls must therefore have been
+        // `cancel()`.  Any outstanding function‑calls must therefore have been
         // satisfied, so we can safely clear the set that tracks pending aborts
         // to avoid emitting duplicate synthetic outputs in subsequent runs.
         this.pendingAborts.clear();
-        // Now emit system messages recording the per-turn *and* cumulative
+        // Now emit system messages recording the per‑turn *and* cumulative
         // thinking times so UIs and tests can surface/verify them.
         // const thinkingEnd = Date.now();
 
-        // 1) Per-turn measurement – exact time spent between request and
+        // 1) Per‑turn measurement – exact time spent between request and
         //    response for *this* command.
         // this.onItem({
         //   id: `thinking-${thinkingEnd}`,
@@ -971,7 +971,7 @@ export class AgentLoop {
         //   ],
         // });
 
-        // 2) Session-wide cumulative counter so users can track overall wait
+        // 2) Session‑wide cumulative counter so users can track overall wait
         //    time across multiple turns.
         // this.cumulativeThinkingMs += thinkingEnd - thinkingStart;
         // this.onItem({
@@ -991,7 +991,7 @@ export class AgentLoop {
         this.onLoading(false);
       };
 
-      // Delay flush slightly to allow a near-simultaneous cancel() to land.
+      // Delay flush slightly to allow a near‑simultaneous cancel() to land.
       setTimeout(flush, 30);
       // End of main logic. The corresponding catch block for the wrapper at the
       // start of this method follows next.
@@ -1021,22 +1021,22 @@ export class AgentLoop {
             ],
           });
         } catch {
-          /* no-op – emitting the error message is best-effort */
+          /* no‑op – emitting the error message is best‑effort */
         }
         this.onLoading(false);
         return;
       }
 
       // -------------------------------------------------------------------
-      // Catch-all handling for other network or server-side issues so that
+      // Catch‑all handling for other network or server‑side issues so that
       // transient failures do not crash the CLI. We intentionally keep the
       // detection logic conservative to avoid masking programming errors. A
-      // failure is treated as retry-worthy/user-visible when any of the
+      // failure is treated as retry‑worthy/user‑visible when any of the
       // following apply:
-      //   • the error carries a recognised Node.js network errno - style code
+      //   • the error carries a recognised Node.js network errno ‑ style code
       //     (e.g. ECONNRESET, ETIMEDOUT …)
       //   • the OpenAI SDK attached an HTTP `status` >= 500 indicating a
-      //     server-side problem.
+      //     server‑side problem.
       //   • the error is model specific and detected in stream.
       // If matched we emit a single system message to inform the user and
       // resolve gracefully so callers can choose to retry.
@@ -1060,7 +1060,7 @@ export class AgentLoop {
 
         // Direct instance check for connection errors thrown by the OpenAI SDK.
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const ApiConnErrCtor = (OpenAI as any).APIConnectionError as // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const ApiConnErrCtor = (OpenAI as any).APIConnectionError as  // eslint-disable-next-line @typescript-eslint/no-explicit-any
           | (new (...args: any) => Error)
           | undefined;
         if (ApiConnErrCtor && e instanceof ApiConnErrCtor) {
@@ -1114,7 +1114,7 @@ export class AgentLoop {
             ],
           });
         } catch {
-          /* best-effort */
+          /* best‑effort */
         }
         this.onLoading(false);
         return;
@@ -1161,7 +1161,9 @@ export class AgentLoop {
             `Status: ${e.status || (e.cause && e.cause.status) || "unknown"}`,
             `Code: ${e.code || (e.cause && e.cause.code) || "unknown"}`,
             `Type: ${e.type || (e.cause && e.cause.type) || "unknown"}`,
-            `Message: ${e.message || (e.cause && e.cause.message) || "unknown"}`,
+            `Message: ${
+              e.message || (e.cause && e.cause.message) || "unknown"
+            }`,
           ].join(", ");
 
           const msgText = `⚠️  OpenAI rejected the request${
@@ -1186,7 +1188,7 @@ export class AgentLoop {
         return;
       }
 
-      // Re-throw all other errors so upstream handlers can decide what to do.
+      // Re‑throw all other errors so upstream handlers can decide what to do.
       throw err;
     }
   }
@@ -1196,9 +1198,9 @@ export class AgentLoop {
     output: Array<ResponseInputItem>,
     emitItem: (item: ResponseItem) => void,
   ): Promise<Array<ResponseInputItem>> {
-    // If the agent has been canceled we should short-circuit immediately to
+    // If the agent has been canceled we should short‑circuit immediately to
     // avoid any further processing (including potentially expensive tool
-    // calls). Returning an empty array ensures the main run-loop terminates
+    // calls). Returning an empty array ensures the main run‑loop terminates
     // promptly.
     if (this.canceled) {
       return [];
