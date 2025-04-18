@@ -68,6 +68,7 @@ test("saves and loads config correctly", () => {
   const testConfig = {
     model: "test-model",
     instructions: "test instructions",
+    notify: false,
   };
   saveConfig(testConfig, testConfigPath, testInstructionsPath);
 

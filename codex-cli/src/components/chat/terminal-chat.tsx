@@ -15,7 +15,7 @@ import { formatCommandForDisplay } from "../../format-command.js";
 import { useConfirmation } from "../../hooks/use-confirmation.js";
 import { useTerminalSize } from "../../hooks/use-terminal-size.js";
 import { AgentLoop } from "../../utils/agent/agent-loop.js";
-import { log, isLoggingEnabled } from "../../utils/agent/log.js";
+import { isLoggingEnabled, log } from "../../utils/agent/log.js";
 import { ReviewDecision } from "../../utils/agent/review.js";
 import { OPENAI_BASE_URL } from "../../utils/config.js";
 import { createInputItem } from "../../utils/input-utils.js";
@@ -28,8 +28,9 @@ import HelpOverlay from "../help-overlay.js";
 import HistoryOverlay from "../history-overlay.js";
 import ModelOverlay from "../model-overlay.js";
 import { Box, Text } from "ink";
+import { exec } from "node:child_process";
 import OpenAI from "openai";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { inspect } from "util";
 
 type Props = {
@@ -37,6 +38,7 @@ type Props = {
   prompt?: string;
   imagePaths?: Array<string>;
   approvalPolicy: ApprovalPolicy;
+  additionalWritableRoots: ReadonlyArray<string>;
   fullStdout: boolean;
 };
 
@@ -180,8 +182,11 @@ export default function TerminalChat({
   prompt: _initialPrompt,
   imagePaths: _initialImagePaths,
   approvalPolicy: initialApprovalPolicy,
+  additionalWritableRoots,
   fullStdout,
 }: Props): React.ReactElement {
+  // Desktop notification setting
+  const notify = config.notify;
   const [model, setModel] = useState<string>(config.model);
   const [lastResponseId, setLastResponseId] = useState<string | null>(null);
   const [items, setItems] = useState<Array<ResponseItem>>([]);
@@ -270,6 +275,7 @@ export default function TerminalChat({
       config,
       instructions: config.instructions,
       approvalPolicy,
+      additionalWritableRoots,
       onLastResponseId: setLastResponseId,
       onItem: (item) => {
         log(`onItem: ${JSON.stringify(item)}`);
@@ -335,7 +341,13 @@ export default function TerminalChat({
       agentRef.current = undefined;
       forceUpdate(); // re‑render after teardown too
     };
-  }, [model, config, approvalPolicy, requestConfirmation]);
+  }, [
+    model,
+    config,
+    approvalPolicy,
+    requestConfirmation,
+    additionalWritableRoots,
+  ]);
 
   // whenever loading starts/stops, reset or start a timer — but pause the
   // timer while a confirmation overlay is displayed so we don't trigger a
@@ -361,6 +373,49 @@ export default function TerminalChat({
       }
     };
   }, [loading, confirmationPrompt]);
+
+  // Notify desktop with a preview when an assistant response arrives
+  const prevLoadingRef = useRef<boolean>(false);
+  useEffect(() => {
+    // Only notify when notifications are enabled
+    if (!notify) {
+      prevLoadingRef.current = loading;
+      return;
+    }
+    if (
+      prevLoadingRef.current &&
+      !loading &&
+      confirmationPrompt == null &&
+      items.length > 0
+    ) {
+      if (process.platform === "darwin") {
+        // find the last assistant message
+        const assistantMessages = items.filter(
+          (i) => i.type === "message" && i.role === "assistant",
+        );
+        const last = assistantMessages[assistantMessages.length - 1];
+        if (last) {
+          const text = last.content
+            .map((c) => {
+              if (c.type === "output_text") {
+                return c.text;
+              }
+              return "";
+            })
+            .join("")
+            .trim();
+          const preview = text.replace(/\n/g, " ").slice(0, 100);
+          const safePreview = preview.replace(/"/g, '\\"');
+          const title = "Codex CLI";
+          const cwd = PWD;
+          exec(
+            `osascript -e 'display notification "${safePreview}" with title "${title}" subtitle "${cwd}" sound name "Ping"'`,
+          );
+        }
+      }
+    }
+    prevLoadingRef.current = loading;
+  }, [notify, loading, confirmationPrompt, items, PWD]);
 
   // Let's also track whenever the ref becomes available
   const agent = agentRef.current;

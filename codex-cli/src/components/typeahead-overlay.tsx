@@ -128,15 +128,18 @@ export default function TypeaheadOverlay({
           value={value}
           onChange={setValue}
           onSubmit={(submitted) => {
-            // Prefer the first visible item; otherwise fall back to whatever
-            // the user typed so they can switch to a model that wasn't in the
-            // pre‑fetched list.
-            const target = selectItems[0]?.value ?? submitted.trim();
-            if (target) {
-              onSelect(target);
-            } else {
-              onExit();
+            // If there are items in the SelectInput, let its onSelect handle the submission.
+            // Only submit from TextInput if the list is empty.
+            if (selectItems.length === 0) {
+              const target = submitted.trim();
+              if (target) {
+                onSelect(target);
+              } else {
+                // If submitted value is empty and list is empty, just exit.
+                onExit();
+              }
             }
+            // If selectItems.length > 0, do nothing here; SelectInput's onSelect will handle Enter.
           }}
         />
         {selectItems.length > 0 && (
