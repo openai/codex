@@ -33,6 +33,7 @@ import { exec } from "node:child_process";
 import OpenAI from "openai";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { inspect } from "util";
+import chalk from "chalk"; // Required for CLI error on invalid model
 
 type Props = {
   config: AppConfig;
@@ -97,12 +98,8 @@ async function generateCommandExplanation(
     let errorMessage = "Unable to generate explanation due to an error.";
 
     if (error instanceof Error) {
-      // Include specific error message for better debugging
       errorMessage = `Unable to generate explanation: ${error.message}`;
-
-      // If it's an API error, check for more specific information
       if ("status" in error && typeof error.status === "number") {
-        // Handle API-specific errors
         if (error.status === 401) {
           errorMessage =
             "Unable to generate explanation: API key is invalid or expired.";
@@ -131,6 +128,7 @@ export default function TerminalChat({
   // Desktop notification setting
   const notify = config.notify;
   const [model, setModel] = useState<string>(config.model);
+  const [availableModels, setAvailableModels] = useState<Array<string>>([]);
   const [lastResponseId, setLastResponseId] = useState<string | null>(null);
   const [items, setItems] = useState<Array<ResponseItem>>([]);
   const [loading, setLoading] = useState<boolean>(false);
@@ -398,6 +396,7 @@ export default function TerminalChat({
   useEffect(() => {
     (async () => {
       const available = await getAvailableModels();
+      setAvailableModels(available);
       if (model && available.length > 0 && !available.includes(model)) {
         setItems((prev) => [
           ...prev,
@@ -496,7 +495,6 @@ export default function TerminalChat({
               agent.cancel();
               setLoading(false);
 
-              // Add a system message to indicate the interruption
               setItems((prev) => [
                 ...prev,
                 {
@@ -526,6 +524,20 @@ export default function TerminalChat({
             currentModel={model}
             hasLastResponse={Boolean(lastResponseId)}
             onSelect={(newModel) => {
+              // Only allow switching to an available model
+              if (!availableModels.includes(newModel)) {
+                // eslint-disable-next-line no-console
+                console.error(
+                  `\n${chalk.red("Error:")} Model "${chalk.bold(
+                    newModel,
+                  )}" is not available.\n` +
+                    `Available models: ${chalk.green(
+                      availableModels.join(", "),
+                    )}\n`,
+                );
+                setOverlayMode("none");
+                return;
+              }
               if (isLoggingEnabled()) {
                 log(
                   "TerminalChat: interruptAgent invoked – calling agent.cancel()",
@@ -560,6 +572,8 @@ export default function TerminalChat({
               setOverlayMode("none");
             }}
             onExit={() => setOverlayMode("none")}
+            availableModels={availableModels}
+            setModels={setAvailableModels}
           />
         )}
 

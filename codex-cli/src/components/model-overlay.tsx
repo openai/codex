@@ -19,6 +19,8 @@ type Props = {
   hasLastResponse: boolean;
   onSelect: (model: string) => void;
   onExit: () => void;
+  availableModels: Array<string>;
+  setModels: React.Dispatch<React.SetStateAction<Array<string>>>;
 };
 
 export default function ModelOverlay({
@@ -26,6 +28,8 @@ export default function ModelOverlay({
   hasLastResponse,
   onSelect,
   onExit,
+  availableModels,
+  setModels,
 }: Props): JSX.Element {
   const [items, setItems] = useState<Array<{ label: string; value: string }>>(
     [],
@@ -34,13 +38,11 @@ export default function ModelOverlay({
   useEffect(() => {
     (async () => {
       const models = await getAvailableModels();
-
+      setModels(models ?? []);
       // Split the list into recommended and “other” models.
       const recommended = RECOMMENDED_MODELS.filter((m) => models.includes(m));
       const others = models.filter((m) => !recommended.includes(m));
-
       const ordered = [...recommended, ...others.sort()];
-
       setItems(
         ordered.map((m) => ({
           label: recommended.includes(m) ? `⭐ ${m}` : m,
@@ -48,6 +50,7 @@ export default function ModelOverlay({
         })),
       );
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ---------------------------------------------------------------------------
@@ -58,7 +61,6 @@ export default function ModelOverlay({
   // available action is to dismiss the overlay (Esc or Enter).
   // ---------------------------------------------------------------------------
 
-  // Always register input handling so hooks are called consistently.
   useInput((_input, key) => {
     if (hasLastResponse && (key.escape || key.return)) {
       onExit();
@@ -101,7 +103,19 @@ export default function ModelOverlay({
       }
       initialItems={items}
       currentValue={currentModel}
-      onSelect={onSelect}
+      // Only allow picking from availableModels
+      onSelect={(model) => {
+        if (!availableModels.includes(model)) {
+          // eslint-disable-next-line no-console
+          console.error(
+            `\nModel "${model}" is not available.\nAvailable models: ${availableModels.join(
+              ", ",
+            )}\n`,
+          );
+          return;
+        }
+        onSelect(model);
+      }}
       onExit={onExit}
     />
   );
