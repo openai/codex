@@ -5,7 +5,7 @@ import type { ColorName } from "chalk";
 import type { ResponseItem } from "openai/resources/responses/responses.mjs";
 
 import TerminalChatInput from "./terminal-chat-input.js";
-import { TerminalChatToolCallCommand } from "./terminal-chat-tool-call-item.js";
+import { TerminalChatToolCallCommand, TerminalChatToolCallApplyPatch } from "./terminal-chat-tool-call-item.js";
 import {
   calculateContextPercentRemaining,
   uniqueById,
@@ -206,9 +206,22 @@ export default function TerminalChat({
         log(`getCommandConfirmation: ${command}`);
         const commandForDisplay = formatCommandForDisplay(command);
 
-        // First request for confirmation
+        // First request for confirmation: show plan if this is a large apply_patch
+        let confirmationElement: React.ReactNode;
+        if (applyPatch && applyPatch.patch.split("\n").length > 5) {
+          confirmationElement = (
+            <TerminalChatToolCallApplyPatch
+              commandForDisplay={commandForDisplay}
+              patch={applyPatch.patch}
+            />
+          );
+        } else {
+          confirmationElement = (
+            <TerminalChatToolCallCommand commandForDisplay={commandForDisplay} />
+          );
+        }
         let { decision: review, customDenyMessage } = await requestConfirmation(
-          <TerminalChatToolCallCommand commandForDisplay={commandForDisplay} />,
+          confirmationElement,
         );
 
         // If the user wants an explanation, generate one and ask again

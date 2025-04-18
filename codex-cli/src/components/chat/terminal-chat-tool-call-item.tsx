@@ -1,5 +1,4 @@
 import { parseApplyPatch } from "../../parse-apply-patch";
-import { shortenPath } from "../../utils/short-path";
 import chalk from "chalk";
 import { Text } from "ink";
 import React from "react";
@@ -84,21 +83,8 @@ export function TerminalChatToolCallApplyPatch({
   patch: string;
 }): React.ReactElement {
   const ops = React.useMemo(() => parseApplyPatch(patch), [patch]);
+  // Use firstOp for empty-patch detection
   const firstOp = ops?.[0];
-
-  const title = React.useMemo(() => {
-    if (!firstOp) {
-      return "";
-    }
-    return capitalize(firstOp.type);
-  }, [firstOp]);
-
-  const filePath = React.useMemo(() => {
-    if (!firstOp) {
-      return "";
-    }
-    return shortenPath(firstOp.path || ".");
-  }, [firstOp]);
 
   if (ops == null) {
     return (
@@ -128,11 +114,26 @@ export function TerminalChatToolCallApplyPatch({
     );
   }
 
+  // Display a human-readable plan: list file operations before showing the patch command
   return (
     <>
-      <Text>
-        <Text bold>{title}</Text> <Text dimColor>{filePath}</Text>
-      </Text>
+      <Text bold color="cyan">Plan:</Text>
+      {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (ops || []).map((op: any, i) => {
+        // op is a parsed patch operation: create, delete, or update
+        let desc: string;
+        if (op.type === "create") {
+          desc = `Add file ${op.path}`;
+        } else if (op.type === "delete") {
+          desc = `Delete file ${op.path}`;
+        } else if (op.type === "update") {
+          desc = `Update file ${op.path} (+${op.added}/-${op.deleted} lines)`;
+        } else {
+          desc = `${capitalize(op.type)} ${op.path}`;
+        }
+        return <Text key={i}>{desc}</Text>;
+      })}
       <Text>
         <Text dimColor>$</Text> {commandForDisplay}
       </Text>
