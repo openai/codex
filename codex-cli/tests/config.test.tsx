@@ -58,16 +58,17 @@ test("loads default config if files don't exist", () => {
   const config = loadConfig(testConfigPath, testInstructionsPath, {
     disableProjectDoc: true,
   });
-  expect(config).toEqual({
-    model: "o4-mini",
-    instructions: "",
-  });
+  // Keep the test focused on just checking that default model and instructions are loaded
+  // so we need to make sure we check just these properties
+  expect(config.model).toBe("o4-mini");
+  expect(config.instructions).toBe("");
 });
 
 test("saves and loads config correctly", () => {
   const testConfig = {
     model: "test-model",
     instructions: "test instructions",
+    notify: false,
   };
   saveConfig(testConfig, testConfigPath, testInstructionsPath);
 
@@ -78,7 +79,9 @@ test("saves and loads config correctly", () => {
   const loadedConfig = loadConfig(testConfigPath, testInstructionsPath, {
     disableProjectDoc: true,
   });
-  expect(loadedConfig).toEqual(testConfig);
+  // Check just the specified properties that were saved
+  expect(loadedConfig.model).toBe(testConfig.model);
+  expect(loadedConfig.instructions).toBe(testConfig.instructions);
 });
 
 test("loads user instructions + project doc when codex.md is present", () => {

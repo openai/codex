@@ -34,12 +34,14 @@ describe("Agent interrupt and continue", () => {
 
     // Create the agent
     const agent = new AgentLoop({
+      additionalWritableRoots: [],
       model: "test-model",
       instructions: "",
       approvalPolicy: { mode: "auto" } as any,
       config: {
         model: "test-model",
         instructions: "",
+        notify: false,
       },
       onItem: (item) => received.push(item),
       onLoading: (loading) => {
