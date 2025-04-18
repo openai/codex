@@ -258,7 +258,7 @@ export default function TerminalChatInput({
           const { CLI_VERSION } = await import("../../utils/session.js");
 
           const { buildBugReportUrl } = await import(
-            "../../utils/bug-report.js",
+            "../../utils/bug-report.js"
           );
 
           const url = buildBugReportUrl({
