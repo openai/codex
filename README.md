@@ -119,11 +119,11 @@ And it's **fully open-source** so you can see and contribute to how it develops!
 Codex lets you decide _how much autonomy_ the agent receives and auto-approval policy via the
 `--approval-mode` flag (or the interactive onboarding prompt):
 
-| Mode                      | What the agent may do without asking            | Still requires approval                                         |
-| ------------------------- | ----------------------------------------------- | --------------------------------------------------------------- |
-| **Suggest** <br>(default) | • Read any file in the repo                     | • **All** file writes/patches <br>• **Any** arbitrary shell commands (aside from reading files) |
-| **Auto Edit**             | • Read **and** apply‑patch writes to files      | • **All** shell commands                                   |
-| **Full Auto**             | • Read/write files <br>• Execute shell commands (network disabled, writes limited to your workdir) | –                                                               |
+| Mode                      | What the agent may do without asking                                                               | Still requires approval                                                                         |
+| ------------------------- | -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| **Suggest** <br>(default) | • Read any file in the repo                                                                        | • **All** file writes/patches <br>• **Any** arbitrary shell commands (aside from reading files) |
+| **Auto Edit**             | • Read **and** apply‑patch writes to files                                                         | • **All** shell commands                                                                        |
+| **Full Auto**             | • Read/write files <br>• Execute shell commands (network disabled, writes limited to your workdir) | –                                                                                               |
 
 In **Full Auto** every command is run **network‑disabled** and confined to the
 current working directory (plus temporary files) for defense‑in‑depth. Codex
@@ -325,7 +325,6 @@ Codex runs model-generated commands in a sandbox. If a proposed command or file 
 Not directly. It requires [Windows Subsystem for Linux (WSL2)](https://learn.microsoft.com/en-us/windows/wsl/install) – Codex has been tested on macOS and Linux with Node ≥ 22.
 
 </details>
-
 
 ---
 
