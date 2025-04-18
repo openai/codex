@@ -27,7 +27,7 @@ You can install any of these versions: `npm install -g codex@version`
 - Standardize filename to kebab-case 🐍➡️🥙 (#302)
 - Small update to bug report template (#288)
 - Duplicated message on model change (#276)
-- Typos in prompts and comments  (#195)
+- Typos in prompts and comments (#195)
 - Check workdir before spawn (#221)
 
 <!-- generated - do not edit -->
