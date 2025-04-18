@@ -1,5 +1,6 @@
 import type * as fsType from "fs";
 
+import { AutoApprovalMode } from "../src/utils/auto-approval-mode.js";
 import { loadConfig, saveConfig } from "../src/utils/config.js"; // parent import first
 import { tmpdir } from "os";
 import { join } from "path";
@@ -62,12 +63,14 @@ test("loads default config if files don't exist", () => {
   // so we need to make sure we check just these properties
   expect(config.model).toBe("o4-mini");
   expect(config.instructions).toBe("");
+  expect(config.approvalMode).toBe(AutoApprovalMode.SUGGEST);
 });
 
 test("saves and loads config correctly", () => {
   const testConfig = {
     model: "test-model",
     instructions: "test instructions",
+    approvalMode: AutoApprovalMode.AUTO_EDIT,
     notify: false,
   };
   saveConfig(testConfig, testConfigPath, testInstructionsPath);
@@ -82,6 +85,7 @@ test("saves and loads config correctly", () => {
   // Check just the specified properties that were saved
   expect(loadedConfig.model).toBe(testConfig.model);
   expect(loadedConfig.instructions).toBe(testConfig.instructions);
+  expect(loadedConfig.approvalMode).toBe(AutoApprovalMode.AUTO_EDIT);
 });
 
 test("loads user instructions + project doc when codex.md is present", () => {
@@ -89,7 +93,7 @@ test("loads user instructions + project doc when codex.md is present", () => {
   const userInstr = "here are user instructions";
   const projectDoc = "# Project Title\n\nSome project‑specific doc";
   // first, make config so loadConfig will see storedConfig
-  memfs[testConfigPath] = JSON.stringify({ model: "mymodel" }, null, 2);
+  memfs[testConfigPath] = JSON.stringify({ model: "mymodel", approvalMode: "full-auto" }, null, 2);
   // then user instructions:
   memfs[testInstructionsPath] = userInstr;
   // and now our fake codex.md in the cwd:
@@ -103,6 +107,7 @@ test("loads user instructions + project doc when codex.md is present", () => {
 
   // 3) assert we got both pieces concatenated
   expect(cfg.model).toBe("mymodel");
+  expect(cfg.approvalMode).toBe(AutoApprovalMode.FULL_AUTO);
   expect(cfg.instructions).toBe(
     userInstr + "\n\n--- project-doc ---\n\n" + projectDoc,
   );

@@ -46,6 +46,7 @@ export const PRETTY_PRINT = Boolean(process.env["PRETTY_PRINT"] || "");
 // Represents config as persisted in config.json.
 export type StoredConfig = {
   model?: string;
+  /** Default approval mode used when CLI flags are not provided */
   approvalMode?: AutoApprovalMode;
   fullAutoErrorMode?: FullAutoErrorMode;
   memory?: MemoryConfig;
@@ -75,6 +76,8 @@ export type AppConfig = {
   apiKey?: string;
   model: string;
   instructions: string;
+  /** Default approval mode for the CLI session when flags are absent */
+  approvalMode?: AutoApprovalMode;
   fullAutoErrorMode?: FullAutoErrorMode;
   memory?: MemoryConfig;
   /** Whether to enable desktop notifications for responses */
@@ -268,6 +271,7 @@ export const loadConfig = (
         : DEFAULT_AGENTIC_MODEL),
     instructions: combinedInstructions,
     notify: storedConfig.notify === true,
+    approvalMode: storedConfig.approvalMode ?? DEFAULT_APPROVAL_MODE,
   };
 
   // -----------------------------------------------------------------------
@@ -376,6 +380,7 @@ export const saveConfig = (
   // Create the config object to save
   const configToSave: StoredConfig = {
     model: config.model,
+    approvalMode: config.approvalMode,
   };
 
   // Add history settings if they exist
