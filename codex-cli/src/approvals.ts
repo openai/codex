@@ -84,11 +84,6 @@ export function canAutoApprove(
         };
   }
 
-  // In 'suggest' mode, all shell commands should require user permission
-  if (policy === "suggest") {
-    return { type: "ask-user" };
-  }
-
   const isSafe = isSafeCommand(command);
   if (isSafe != null) {
     const { reason, group } = isSafe;
@@ -117,23 +112,23 @@ export function canAutoApprove(
     } catch (e) {
       // In practice, there seem to be syntactically valid shell commands that
       // shell-quote cannot parse, so we should not reject, but ask the user.
-      // We already checked for 'suggest' mode at the beginning of the function,
-      // so at this point we know policy is either 'auto-edit' or 'full-auto'
-      if (policy === "full-auto") {
-        // In full-auto, we still run the command automatically, but must
-        // restrict it to the sandbox.
-        return {
-          type: "auto-approve",
-          reason: "Full auto mode",
-          group: "Running commands",
-          runInSandbox: true,
-        };
-      } else {
-        // In auto-edit mode, since we cannot reason about the command, we
-        // should ask the user.
-        return {
-          type: "ask-user",
-        };
+      switch (policy) {
+        case "full-auto":
+          // In full-auto, we still run the command automatically, but must
+          // restrict it to the sandbox.
+          return {
+            type: "auto-approve",
+            reason: "Full auto mode",
+            group: "Running commands",
+            runInSandbox: true,
+          };
+        case "suggest":
+        case "auto-edit":
+          // In all other modes, since we cannot reason about the command, we
+          // should ask the user.
+          return {
+            type: "ask-user",
+          };
       }
     }
 
@@ -142,9 +137,6 @@ export function canAutoApprove(
     // We try to ensure that *every* command segment is deemed safe and that
     // all operators belong to an allow‑list. If so, the entire expression is
     // considered auto‑approvable.
-
-    // We already checked for 'suggest' mode at the beginning of the function,
-    // so at this point we know policy is either 'auto-edit' or 'full-auto'
 
     const shellSafe = isEntireShellExpressionSafe(bashCmd);
     if (shellSafe != null) {
