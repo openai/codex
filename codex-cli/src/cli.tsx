@@ -215,8 +215,6 @@ if (cli.flags.config) {
   process.exit(0);
 }
 
-await checkForUpdates();
-
 // ---------------------------------------------------------------------------
 // API key handling
 // ---------------------------------------------------------------------------
@@ -254,6 +252,10 @@ config = {
   model: model ?? config.model,
   notify: Boolean(cli.flags.notify),
 };
+
+// Check for updates after loading config
+// This is important because we write state file in the config dir
+await checkForUpdates().catch();
 
 if (!(await isModelSupportedForResponses(config.model))) {
   // eslint-disable-next-line no-console
