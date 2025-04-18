@@ -106,6 +106,18 @@ export default function TerminalChatInput({
           cmd.command.startsWith(prefix),
         );
         if (matches.length > 0) {
+          if (_key.tab) {
+            setSelectedSlashSuggestion((prev) => {
+              const len = matches.length;
+              // Shift+Tab to move up, Tab to move down
+              if (_key.shift) {
+                return prev <= 0 ? len - 1 : prev - 1;
+              } else {
+                return prev >= len - 1 ? 0 : prev + 1;
+              }
+            });
+            return;
+          }
           if (_key.upArrow) {
             setSelectedSlashSuggestion((prev) =>
               prev <= 0 ? matches.length - 1 : prev - 1,
