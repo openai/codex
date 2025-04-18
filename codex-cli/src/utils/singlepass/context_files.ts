@@ -186,51 +186,52 @@ export function loadIgnorePatterns(filePath?: string): Array<RegExp> {
       .map((line) => line.trim());
 
     // Convert each pattern to a RegExp with proper gitignore-style semantics
-    const regs = cleaned.map((pattern: string) => {
+    const regs = cleaned.map((origPattern: string) => {
       let isNegated = false;
+      let modPattern = origPattern;
       
       // Handle negation
-      if (pattern.startsWith('!')) {
+      if (modPattern.startsWith('!')) {
         isNegated = true;
-        pattern = pattern.substring(1);
+        modPattern = modPattern.substring(1);
       }
       
       // Handle directory-specific patterns (ending with slash)
-      const isDirectory = pattern.endsWith('/');
+      const isDirectory = modPattern.endsWith('/');
       if (isDirectory) {
-        pattern = pattern.slice(0, -1);
+        modPattern = modPattern.slice(0, -1);
       }
       
       // Handle non-recursive patterns (starting with slash)
-      const isNonRecursive = pattern.startsWith('/');
+      const isNonRecursive = modPattern.startsWith('/');
       if (isNonRecursive) {
-        pattern = pattern.substring(1);
+        modPattern = modPattern.substring(1);
       }
 
       // Replace glob patterns with regex equivalents
-      let regexPattern = pattern
-        .replace(/[.+^${}()|[\]\\]/g, "\\$&") // Escape regex special chars
-        .replace(/\*\*/g, ".*") // Handle ** (match everything including slashes)
-        .replace(/\*/g, "[^/]*") // Handle * (match everything except slashes)
-        .replace(/\?/g, "[^/]"); // Handle ? (single character, but not /)
+      const regexPattern = modPattern
+        .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+        .replace(/\*\*/g, ".*")
+        .replace(/\*/g, "[^/]*")
+        .replace(/\?/g, "[^/]"); 
       
       // Build the final regex pattern
       let finalRe: string;
       if (isNonRecursive) {
-        // Non-recursive pattern (anchored at start)
+
         finalRe = isDirectory 
-          ? `^${regexPattern}(?:/.*)?$`  // Directory pattern
-          : `^${regexPattern}$`;         // File pattern
+          ? `^${regexPattern}(?:/.*)?$` 
+          : `^${regexPattern}$`;      
       } else {
         // Recursive pattern (can match at any level)
         finalRe = isDirectory
-          ? `^(?:.*?/)?${regexPattern}(?:/.*)?$`  // Directory pattern
-          : `^(?:.*?/)?${regexPattern}$`;         // File pattern
+          ? `^(?:.*?/)?${regexPattern}(?:/.*)?$` 
+          : `^(?:.*?/)?${regexPattern}$`;      
       }
       
       // Store negation information in the regex object
       const regex = new RegExp(finalRe, "i");
-      (regex as any).negated = isNegated;
+      (regex as ExtendedRegExp).negated = isNegated;
       
       return regex;
     });
@@ -243,9 +244,10 @@ export function loadIgnorePatterns(filePath?: string): Array<RegExp> {
 
 export function loadAgentIgnorePatterns(workspacePath: string): Array<RegExp> {
   const patternsFile = path.join(workspacePath, ".agentignore");
-  // Check if file exists first to provide clearer flow
+  
   if (fsSync.existsSync(patternsFile)) {
-    return loadIgnorePatterns(patternsFile);
+    const patterns = loadIgnorePatterns(patternsFile);
+    return patterns;
   }
   return []; // Return empty array if .agentignore doesn't exist
 }
@@ -261,7 +263,7 @@ export function shouldIgnorePath(
   let excluded = false;
   
   for (const regex of compiledPatterns) {
-    const isNegated = (regex as any).negated === true;
+    const isNegated = (regex as ExtendedRegExp).negated === true;
     
     if (regex.test(normalized)) {
       if (isNegated) {
