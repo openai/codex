@@ -16,7 +16,12 @@ const DEFAULT_TIMEOUT_MS = 10_000; // 10 seconds
  * mapped to a non-zero exit code and the error message should be in stderr.
  */
 export function exec(
-  { cmd, workdir, timeoutInMillis }: ExecInput,
+  {
+    cmd,
+    workdir,
+    timeoutInMillis,
+    additionalWritableRoots,
+  }: ExecInput & { additionalWritableRoots: ReadonlyArray<string> },
   sandbox: SandboxType,
   abortSignal?: AbortSignal,
 ): Promise<ExecResult> {
@@ -30,7 +35,12 @@ export function exec(
     timeout: timeoutInMillis || DEFAULT_TIMEOUT_MS,
     ...(workdir ? { cwd: workdir } : {}),
   };
-  const writableRoots = [process.cwd(), os.tmpdir()];
+  // Merge default writable roots with any user-specified ones.
+  const writableRoots = [
+    process.cwd(),
+    os.tmpdir(),
+    ...additionalWritableRoots,
+  ];
   return execForSandbox(cmd, opts, writableRoots, abortSignal);
 }
 

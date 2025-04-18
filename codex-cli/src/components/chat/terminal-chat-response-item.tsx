@@ -72,30 +72,13 @@ export function TerminalChatResponseReasoning({
 }: {
   message: ResponseReasoningItem & { duration_ms?: number };
 }): React.ReactElement | null {
-  // prefer the real duration if present
-  const thinkingTime = message.duration_ms
-    ? Math.round(message.duration_ms / 1000)
-    : Math.max(
-        1,
-        Math.ceil(
-          (message.summary || [])
-            .map((t) => t.text.length)
-            .reduce((a, b) => a + b, 0) / 300,
-        ),
-      );
-  if (thinkingTime <= 0) {
+  // Only render when there is a reasoning summary
+  if (!message.summary || message.summary.length === 0) {
     return null;
   }
-
   return (
     <Box gap={1} flexDirection="column">
-      <Box gap={1}>
-        <Text bold color="magenta">
-          thinking
-        </Text>
-        <Text dimColor>for {thinkingTime}s</Text>
-      </Box>
-      {message.summary?.map((summary, key) => {
+      {message.summary.map((summary, key) => {
         const s = summary as { headline?: string; text: string };
         return (
           <Box key={key} flexDirection="column">

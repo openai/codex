@@ -2,10 +2,12 @@
   "description": "Tools for repo-wide maintenance.",
   "scripts": {
     "release": "cd codex-cli && npm run release",
-    "format": "npx prettier --check \"**/*.{json,md,yml,tsx}\"",
-    "format:fix": "npx prettier --write \"**/*.{json,md,yml,tsx}\""
+    "format": "prettier --check *.json *.md .github/workflows/*.yml",
+    "format:fix": "prettier --write *.json *.md .github/workflows/*.yml",
+    "changelog": "git-cliff --config cliff.toml --output CHANGELOG.ignore.md $LAST_RELEASE_TAG..HEAD"
   },
   "devDependencies": {
+    "git-cliff": "^2.8.0",
     "prettier": "^3.5.3"
   }
 }

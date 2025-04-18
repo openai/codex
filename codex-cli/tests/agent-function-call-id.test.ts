@@ -118,6 +118,7 @@ describe("function_call_output includes original call ID", () => {
       model: "any",
       instructions: "",
       approvalPolicy: { mode: "auto" } as any,
+      additionalWritableRoots: [],
       onItem: () => {},
       onLoading: () => {},
       getCommandConfirmation: async () => ({ review: "yes" } as any),
