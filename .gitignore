@@ -63,3 +63,7 @@ Icon?
 yarn.lock
 pnpm-lock.yaml
 
+# release
+package.json-e
+session.ts-e
+
