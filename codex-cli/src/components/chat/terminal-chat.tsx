@@ -117,6 +117,64 @@ async function generateCommandExplanation(
   }
 }
 
+/**
+ * Generates a condensed summary of the conversation using the OpenAI API.
+ * @param items The list of conversation items to summarize
+ * @param model The model to use for generating the summary
+ */
+async function generateCompactSummary(
+  items: Array<ResponseItem>,
+  model: string,
+): Promise<string> {
+  const oai = new OpenAI({
+    apiKey: process.env["OPENAI_API_KEY"],
+    baseURL: OPENAI_BASE_URL,
+  });
+
+  const conversationText = items
+    .filter(
+      (
+        item,
+      ): item is ResponseItem & { content: Array<unknown>; role: string } => {
+        if (item.type !== "message") {
+          return false;
+        }
+        const content = (item as { content?: unknown }).content;
+        return Array.isArray(content);
+      },
+    )
+    .map((item) => {
+      const parts = item.content;
+      const texts: Array<string> = [];
+      for (const part of parts) {
+        if (typeof part === "object" && part != null && "text" in part) {
+          const p = part as { text?: unknown };
+          if (typeof p.text === "string") {
+            texts.push(p.text);
+          }
+        }
+      }
+      return texts.join("");
+    })
+    .join("\n");
+  // Ask the model to provide a structured summary preserving key context
+  const response = await oai.chat.completions.create({
+    model,
+    messages: [
+      {
+        role: "system",
+        content:
+          "You are an expert coding assistant. Your goal is to generate a concise, structured summary of the conversation below that captures all essential information needed to continue development after context replacement. Include tasks performed, code areas modified or reviewed, key decisions or assumptions, test results or errors, and outstanding tasks or next steps.",
+      },
+      {
+        role: "user",
+        content: `Here is the conversation so far:\n${conversationText}\n\nPlease summarize this conversation, covering:\n1. Tasks performed and outcomes\n2. Code files, modules, or functions modified or examined\n3. Important decisions or assumptions made\n4. Errors encountered and test or build results\n5. Remaining tasks, open questions, or next steps\nProvide the summary in a clear, concise format.`,
+      },
+    ],
+  });
+  return response.choices[0]?.message.content || "Unable to generate summary.";
+}
+
 export default function TerminalChat({
   config,
   prompt: _initialPrompt,
@@ -133,6 +191,35 @@ export default function TerminalChat({
     initialApprovalPolicy,
   );
   const [thinkingSeconds, setThinkingSeconds] = useState(0);
+  const handleCompact = async () => {
+    setLoading(true);
+    try {
+      const summary = await generateCompactSummary(items, model);
+      setItems([
+        {
+          id: `compact-${Date.now()}`,
+          type: "message",
+          role: "system",
+          content: [{ type: "input_text", text: summary }],
+        } as ResponseItem,
+      ]);
+      setLastResponseId("");
+    } catch (err) {
+      setItems((prev) => [
+        ...prev,
+        {
+          id: `compact-error-${Date.now()}`,
+          type: "message",
+          role: "system",
+          content: [
+            { type: "input_text", text: `Failed to compact context: ${err}` },
+          ],
+        } as ResponseItem,
+      ]);
+    } finally {
+      setLoading(false);
+    }
+  };
   const {
     requestConfirmation,
     confirmationPrompt,
@@ -398,6 +485,7 @@ export default function TerminalChat({
             openModelOverlay={() => setOverlayMode("model")}
             openApprovalOverlay={() => setOverlayMode("approval")}
             openHelpOverlay={() => setOverlayMode("help")}
+            onCompact={handleCompact}
             active={overlayMode === "none"}
             interruptAgent={() => {
               if (!agent) {
