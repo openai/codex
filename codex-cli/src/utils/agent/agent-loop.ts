@@ -1095,7 +1095,9 @@ export class AgentLoop {
   }
 }
 
-const prefix = `You are operating as and within the Codex CLI, a terminal-based agentic coding assistant built by OpenAI. It wraps OpenAI models to enable natural language interaction with a local codebase. You are expected to be precise, safe, and helpful.
+const windowsNotice = process.platform === "win32" ? `\n\nYou are running natively on Windows.\n- Use Windows paths (e.g. \`C:\\Users\\…\\\`).\n- Default to PowerShell or cmd.exe commands (\`dir\`, \`Get-ChildItem\`, etc.).\n- Do **not** use Linux mount paths like /mnt/c unless the user explicitly references WSL.` : "";
+
+const prefix = `You are operating as and within the Codex CLI, a terminal-based agentic coding assistant built by OpenAI. It wraps OpenAI models to enable natural language interaction with a local codebase. You are expected to be precise, safe, and helpful.${windowsNotice}
 
 You can:
 - Receive user prompts, project context, and files.
