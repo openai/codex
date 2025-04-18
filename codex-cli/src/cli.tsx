@@ -312,12 +312,26 @@ if (quietMode) {
     );
     process.exit(1);
   }
+  // Determine approval policy for quiet mode using the same precedence rules
+  // as interactive mode.  This means:
+  //   1. `--full-auto` or `-a full-auto` (or the dangerous
+  //      `--dangerously-auto-approve-everything`) imply FULL_AUTO.
+  //   2. `--auto-edit` or `-a auto-edit` imply AUTO_EDIT.
+  //   3. Otherwise we default to SUGGEST.
+
+  const quietApprovalPolicy: ApprovalPolicy =
+    autoApproveEverything ||
+    cli.flags.fullAuto ||
+    cli.flags.approvalMode === "full-auto"
+      ? AutoApprovalMode.FULL_AUTO
+      : cli.flags.autoEdit || cli.flags.approvalMode === "auto-edit"
+      ? AutoApprovalMode.AUTO_EDIT
+      : AutoApprovalMode.SUGGEST;
+
   await runQuietMode({
     prompt: prompt as string,
     imagePaths: imagePaths || [],
-    approvalPolicy: autoApproveEverything
-      ? AutoApprovalMode.FULL_AUTO
-      : AutoApprovalMode.SUGGEST,
+    approvalPolicy: quietApprovalPolicy,
     additionalWritableRoots,
     config,
   });
@@ -440,7 +454,17 @@ async function runQuietMode({
     getCommandConfirmation: (
       _command: Array<string>,
     ): Promise<CommandConfirmation> => {
-      return Promise.resolve({ review: ReviewDecision.NO_CONTINUE });
+      // In quiet mode there is no interactive prompt.  If the user has opted
+      // into full‑auto approval we default to an affirmative response so the
+      // agent proceeds without interruption.  Otherwise we default to
+      // refusing the command but allow the agent loop to continue.
+
+      const defaultDecision =
+        approvalPolicy === AutoApprovalMode.FULL_AUTO
+          ? ReviewDecision.YES
+          : ReviewDecision.NO_CONTINUE;
+
+      return Promise.resolve({ review: defaultDecision });
     },
     onLastResponseId: () => {
       /* intentionally ignored in quiet mode */
