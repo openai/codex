@@ -6,6 +6,7 @@ import type { FileOperation } from "../utils/singlepass/file_ops";
 import Spinner from "./vendor/ink-spinner"; // Third‑party / vendor components
 import TextInput from "./vendor/ink-text-input";
 import { OPENAI_TIMEOUT_MS, OPENAI_BASE_URL } from "../utils/config";
+import { loadIgnorePatternsAsRegExp } from "../utils/ignore-patterns";
 import {
   generateDiffSummary,
   generateEditSummary,
@@ -13,7 +14,6 @@ import {
 import { renderTaskContext } from "../utils/singlepass/context";
 import {
   getFileContents,
-  loadIgnorePatternsAsRegExp,
   makeAsciiDirectoryStructure,
 } from "../utils/singlepass/context_files";
 import { EditedFilesSchema } from "../utils/singlepass/file_ops";

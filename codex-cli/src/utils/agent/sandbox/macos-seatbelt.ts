@@ -4,7 +4,7 @@ import type { SpawnOptions } from "child_process";
 import { exec } from "./raw-exec.js";
 import { log } from "../log.js";
 import { CONFIG_DIR } from "src/utils/config.js";
-import { loadIgnorePatternsAsSBPLDenyRules } from "src/utils/singlepass/context_files.js";
+import { loadIgnorePatternsAsSBPLDenyRules } from "src/utils/ignore-patterns.js";
 
 function getCommonRoots() {
   return [
