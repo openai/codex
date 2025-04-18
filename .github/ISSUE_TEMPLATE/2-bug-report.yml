@@ -26,6 +26,7 @@ body:
       label: Which model were you using?
       description: Like `gpt-4.1`, `o4-mini`, `o3`, etc.
   - type: input
+    id: platform
     attributes:
       label: What platform is your computer?
       description: |
