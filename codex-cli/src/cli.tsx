@@ -40,7 +40,14 @@ import React from "react";
 // Call this early so `tail -F "$TMPDIR/oai-codex/codex-cli-latest.log"` works
 // immediately. This must be run with DEBUG=1 for logging to work.
 initLogger();
-
+// If CODEX_DEV_DIR is set, switch working directory before running
+if (process.env.CODEX_DEV_DIR) {
+  try {
+    process.chdir(process.env.CODEX_DEV_DIR);
+  } catch {
+    // ignore
+  }
+}
 // TODO: migrate to new versions of quiet mode
 //
 //     -q, --quiet    Non-interactive quiet mode that only prints final message
