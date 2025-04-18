@@ -59,7 +59,7 @@ export async function checkOutdated(
     }
     cp.execFile(commandPath, args, options, async (_error, stdout) => {
       try {
-        const { name: packageName } = await import ('../../package.json');
+        const { name: packageName } = await import("../../package.json");
         const content: Record<string, PackageInfo> = JSON.parse(stdout);
         if (!content[packageName]) {
           // package not installed or not outdated
