@@ -22,8 +22,8 @@
     "build:dev": "NODE_ENV=development node build.mjs --dev && NODE_OPTIONS=--enable-source-maps node dist/cli-dev.js",
     "release:readme": "cp ../README.md ./README.md",
     "release:version": "TS=$(date +%y%m%d%H%M) && sed -E -i'' -e \"s/\\\"0\\.1\\.[0-9]{10}\\\"/\\\"0.1.${TS}\\\"/g\" package.json src/utils/session.ts",
-    "release:build-and-publish": "npm run build && npm publish",
-    "release": "npm run release:readme && npm run release:version && npm install && npm run release:build-and-publish",
+    "release:build-and-publish": "pmpm run build && pmpm publish",
+    "release": "pnpm run release:readme && pnpm run release:version && pnpm install && pnpm run release:build-and-publish",
     "prepare": "husky",
     "pre-commit": "lint-staged"
   },
@@ -78,14 +78,6 @@
     "typescript": "^5.0.3",
     "vitest": "^3.0.9",
     "whatwg-url": "^14.2.0"
-  },
-  "resolutions": {
-    "braces": "^3.0.3",
-    "micromatch": "^4.0.8",
-    "semver": "^7.7.1"
-  },
-  "overrides": {
-    "punycode": "^2.3.1"
   },
   "repository": {
     "type": "git",
