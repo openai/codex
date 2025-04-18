@@ -13,6 +13,7 @@ export interface TerminalHeaderProps {
   colorsByPolicy: Record<string, string | undefined>;
   agent?: AgentLoop;
   initialImagePaths?: Array<string>;
+  flexEnabled?: boolean;
 }
 
 const TerminalHeader: React.FC<TerminalHeaderProps> = ({
@@ -24,6 +25,7 @@ const TerminalHeader: React.FC<TerminalHeaderProps> = ({
   colorsByPolicy,
   agent,
   initialImagePaths,
+  flexEnabled = false,
 }) => {
   return (
     <>
@@ -32,6 +34,7 @@ const TerminalHeader: React.FC<TerminalHeaderProps> = ({
         <Text>
           ● Codex v{version} – {PWD} – {model} –{" "}
           <Text color={colorsByPolicy[approvalPolicy]}>{approvalPolicy}</Text>
+          {flexEnabled ? " – flex" : ""}
         </Text>
       ) : (
         <>
@@ -68,6 +71,11 @@ const TerminalHeader: React.FC<TerminalHeaderProps> = ({
                 {approvalPolicy}
               </Text>
             </Text>
+            {flexEnabled && (
+              <Text dimColor>
+                <Text color="blueBright">↳</Text> flex: <Text bold>enabled</Text>
+              </Text>
+            )}
             {initialImagePaths?.map((img, idx) => (
               <Text key={img ?? idx} color="gray">
                 <Text color="blueBright">↳</Text> image:{" "}

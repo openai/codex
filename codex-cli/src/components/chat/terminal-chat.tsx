@@ -464,6 +464,7 @@ export default function TerminalChat({
               colorsByPolicy,
               agent,
               initialImagePaths,
+              flexEnabled: Boolean(config.flex),
             }}
           />
         ) : (
