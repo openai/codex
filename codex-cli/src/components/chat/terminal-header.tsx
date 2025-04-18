@@ -49,7 +49,7 @@ const TerminalHeader: React.FC<TerminalHeaderProps> = ({
               <Text dimColor>
                 (research preview) <Text color="blueBright">v{version}</Text>
               </Text>
-            </Text> 
+            </Text>
           </Box>
           <Box
             borderStyle="round"
