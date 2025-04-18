@@ -16,7 +16,7 @@
           pname       = "codex-cli";
           version     = "0.1.0";
           src         = self + "/codex-cli";
-          npmDepsHash = "sha256-riVXC7T9zgUBUazH5Wq7+MjU1FepLkp9kHLSq+ZVqbs=";
+          npmDepsHash = "sha256-UkvkaM7tvVlio0st8UA45x8wQ+q423BTzshsmdmmO2o=";
           nodejs      = node;
           npmInstallFlags = [ "--frozen-lockfile" ];
           meta = with pkgs.lib; {
