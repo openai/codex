@@ -151,7 +151,6 @@ export default function TerminalChat({
           content: [{ type: "output_text", text: summary }],
         } as ResponseItem,
       ]);
-      setLastResponseId("");
     } catch (err) {
       setItems((prev) => [
         ...prev,
