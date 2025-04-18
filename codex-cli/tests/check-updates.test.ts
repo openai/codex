@@ -29,18 +29,18 @@ vi.mock("child_process", () => ({
 let memfs: Record<string, string> = {};
 
 vi.mock("node:fs/promises", async (importOriginal) => ({
-  ...await importOriginal(),
+  ...(await importOriginal()),
   readFile: async (path: string) => {
     if (memfs[path] === undefined) {
       throw new Error("ENOENT");
     }
     return memfs[path];
   },
-}))
+}));
 
 beforeEach(() => {
   memfs = {}; // reset in‑memory store
-})
+});
 
 describe("Check for updates", () => {
   it("should return the path to npm", async () => {

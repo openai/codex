@@ -2,8 +2,8 @@ import { CONFIG_DIR } from "./config";
 import boxen from "boxen";
 import chalk from "chalk";
 import * as cp from "node:child_process";
-import { readFile, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import which from "which";
 
 interface State {
@@ -79,12 +79,11 @@ export async function checkOutdated(
 }
 
 export async function checkForUpdates(): Promise<void> {
-  const stateFile = join(CONFIG_DIR, 'codex-state.json')
+  const stateFile = join(CONFIG_DIR, "codex-state.json");
   let state: State | undefined;
   try {
     state = JSON.parse(await readFile(stateFile, "utf8"));
-  }
-  catch {
+  } catch {
     // ignore
   }
 
@@ -106,11 +105,11 @@ export async function checkForUpdates(): Promise<void> {
   await writeState(stateFile, {
     ...state,
     lastUpdateCheck: new Date().toUTCString(),
-  })
+  });
 
   if (!packageInfo) {
     return;
-  } 
+  }
 
   const updateMessage = `To update, run: ${chalk.cyan(
     "npm install -g @openai/codex",
@@ -118,7 +117,9 @@ export async function checkForUpdates(): Promise<void> {
 
   const box = boxen(
     `\
-Update available! ${chalk.red(packageInfo.currentVersion)} → ${chalk.green(packageInfo.latestVersion)}.
+Update available! ${chalk.red(packageInfo.currentVersion)} → ${chalk.green(
+      packageInfo.latestVersion,
+    )}.
 ${updateMessage}`,
     {
       padding: 1,
@@ -134,5 +135,7 @@ ${updateMessage}`,
 }
 
 async function writeState(stateFilePath: string, state: State) {
-  await writeFile(stateFilePath, JSON.stringify(state, null, 2), { encoding: "utf8" });
+  await writeFile(stateFilePath, JSON.stringify(state, null, 2), {
+    encoding: "utf8",
+  });
 }
