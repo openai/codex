@@ -54,10 +54,9 @@ export async function checkOutdated(
       options = { ...options, shell: true };
       commandPath = `"${npmCommandPath}"`;
     }
-    cp.execFile(commandPath, args, options, (_error, stdout) => {
+    cp.execFile(commandPath, args, options, async (_error, stdout) => {
       try {
-        // TODO parse from package.json
-        const packageName = "@openai/codex";
+        const { name: packageName } = await import ('../../package.json');
         const content: Record<string, PackageInfo> = JSON.parse(stdout);
         if (!content[packageName]) {
           // package not installed or not outdated
