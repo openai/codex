@@ -17,6 +17,7 @@ import { AgentLoop } from "./utils/agent/agent-loop";
 import { initLogger } from "./utils/agent/log";
 import { ReviewDecision } from "./utils/agent/review";
 import { AutoApprovalMode } from "./utils/auto-approval-mode";
+import { checkForUpdates } from "./utils/check-updates";
 import {
   loadConfig,
   PRETTY_PRINT,
@@ -213,6 +214,8 @@ if (cli.flags.config) {
   spawnSync(editor, [filePath], { stdio: "inherit" });
   process.exit(0);
 }
+
+await checkForUpdates();
 
 // ---------------------------------------------------------------------------
 // API key handling
