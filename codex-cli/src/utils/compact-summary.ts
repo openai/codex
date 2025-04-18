@@ -45,7 +45,6 @@ export async function generateCompactSummary(
 
   const response = await oai.chat.completions.create({
     model,
-    // @ts-expect-error: service_tier is currently not part of openai type definitions
     ...(flex ? { service_tier: "flex" } : {}),
     messages: [
       {

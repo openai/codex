@@ -258,7 +258,7 @@ config = {
   apiKey,
   ...config,
   model: model ?? config.model,
-    flex: Boolean(cli.flags.flex),
+  flex: Boolean(cli.flags.flex),
   notify: Boolean(cli.flags.notify),
 };
 

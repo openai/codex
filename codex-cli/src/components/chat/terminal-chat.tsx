@@ -74,7 +74,6 @@ async function generateCommandExplanation(
     // Create a prompt that asks for an explanation with a more detailed system prompt
     const response = await oai.chat.completions.create({
       model,
-      // @ts-expect-error service_tier not yet in types
       ...(flex ? { service_tier: "flex" } : {}),
       messages: [
         {

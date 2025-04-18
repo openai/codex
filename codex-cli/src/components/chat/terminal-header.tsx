@@ -73,7 +73,8 @@ const TerminalHeader: React.FC<TerminalHeaderProps> = ({
             </Text>
             {flexEnabled && (
               <Text dimColor>
-                <Text color="blueBright">↳</Text> flex: <Text bold>enabled</Text>
+                <Text color="blueBright">↳</Text> flex:{" "}
+                <Text bold>enabled</Text>
               </Text>
             )}
             {initialImagePaths?.map((img, idx) => (
