@@ -62,6 +62,25 @@ if (isDevBuild) {
   plugins.push(devShebangPlugin);
 }
 
+// Add a plugin to handle native modules properly
+const nativeModulesPlugin = {
+  name: "native-modules-handler",
+  setup(build) {
+    // Handle .node files with the copy loader
+    build.onResolve({ filter: /\.node$/ }, (args) => {
+      return { path: args.path, external: true };
+    });
+
+    // Mark keytar as external to prevent bundling issues
+    build.onResolve({ filter: /^keytar$/ }, (args) => {
+      return { path: args.path, external: true };
+    });
+  },
+};
+
+// Add the native modules plugin to the plugins array
+plugins.push(nativeModulesPlugin);
+
 esbuild
   .build({
     entryPoints: ["src/cli.tsx"],
@@ -74,5 +93,9 @@ esbuild
     sourcemap: isDevBuild ? "inline" : true,
     plugins,
     inject: ["./require-shim.js"],
+    // Set native modules as external
+    external: ["keytar"],
+    // Configure loader for .node files
+    loader: { ".node": "file" },
   })
   .catch(() => process.exit(1));

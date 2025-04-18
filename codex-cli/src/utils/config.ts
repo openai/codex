@@ -15,6 +15,26 @@ import { load as loadYaml, dump as dumpYaml } from "js-yaml";
 import { homedir } from "os";
 import { dirname, join, extname, resolve as resolvePath } from "path";
 
+// Provider configuration with display names and available models
+export type ProviderConfig = {
+  displayName: string;
+  models: {
+    agentic: string[];
+    fullContext: string[];
+  };
+};
+
+// Dictionary of available providers
+export const AVAILABLE_PROVIDERS: Record<string, ProviderConfig> = {
+  openai: {
+    displayName: "OpenAI",
+    models: {
+      agentic: ["o3", "o4-mini", "gpt-4.1"],
+      fullContext: ["gpt-4.1"]
+    }
+  }
+};
+
 export const DEFAULT_AGENTIC_MODEL = "o4-mini";
 export const DEFAULT_FULL_CONTEXT_MODEL = "gpt-4.1";
 export const DEFAULT_APPROVAL_MODE = AutoApprovalMode.SUGGEST;
@@ -34,10 +54,200 @@ export const INSTRUCTIONS_FILEPATH = join(CONFIG_DIR, "instructions.md");
 export const OPENAI_TIMEOUT_MS =
   parseInt(process.env["OPENAI_TIMEOUT_MS"] || "0", 10) || undefined;
 export const OPENAI_BASE_URL = process.env["OPENAI_BASE_URL"] || "";
+
+// Default to environment variable, will be updated by initApiKey
 export let OPENAI_API_KEY = process.env["OPENAI_API_KEY"] || "";
 
+// Current provider, defaults to OpenAI
+export let CURRENT_PROVIDER = "openai";
+
+/**
+ * Get the display name for a provider
+ * 
+ * @param provider The provider key
+ * @returns The display name for the provider
+ */
+export function getProviderDisplayName(provider: string): string {
+  return AVAILABLE_PROVIDERS[provider]?.displayName || provider;
+}
+
+/**
+ * Get available models for a provider and mode
+ * 
+ * @param provider The provider key
+ * @param isFullContext Whether to get models for full context mode
+ * @returns Array of available model names
+ */
+export function getProviderModels(provider: string, isFullContext = false): string[] {
+  const providerConfig = AVAILABLE_PROVIDERS[provider];
+  if (!providerConfig) return [];
+  
+  return isFullContext ? providerConfig.models.fullContext : providerConfig.models.agentic;
+}
+
+/**
+ * Initialize API key from keychain or environment variables.
+ * This should be called during startup to ensure the API key is loaded
+ * from the most secure source available.
+ */
+export async function initApiKey(): Promise<void> {
+  try {
+    // Dynamically import to avoid circular dependencies
+    const { getApiKey, isKeychainAvailable } = await import("./keychain.js");
+    
+    // Check if keychain is available
+    if (await isKeychainAvailable()) {
+      // Try to get API key from keychain
+      const apiKey = await getApiKey(CURRENT_PROVIDER);
+      if (apiKey) {
+        OPENAI_API_KEY = apiKey;
+        return;
+      }
+    }
+  } catch (error) {
+    // If keychain access fails, fall back to environment variable
+    // which is already set as the default value
+  }
+}
+
+/**
+ * Set the API key for the current session.
+ * This does not store the key in the keychain.
+ * 
+ * @param apiKey The API key to use
+ */
 export function setApiKey(apiKey: string): void {
   OPENAI_API_KEY = apiKey;
+}
+
+/**
+ * Update the model in the configuration and save it.
+ * 
+ * @param model The model to use
+ * @param configPath Path to the config file
+ * @returns True if successful, false otherwise
+ */
+export function updateModel(model: string, configPath = CONFIG_FILEPATH): boolean {
+  try {
+    const config = loadConfig(configPath);
+    config.model = model;
+    saveConfig(config, configPath);
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+/**
+ * Update the approval mode in the configuration and save it.
+ * 
+ * @param approvalMode The approval mode to use
+ * @param configPath Path to the config file
+ * @returns True if successful, false otherwise
+ */
+export function updateApprovalMode(approvalMode: AutoApprovalMode, configPath = CONFIG_FILEPATH): boolean {
+  try {
+    const config = loadConfig(configPath);
+    config.approvalMode = approvalMode;
+    saveConfig(config, configPath);
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+/**
+ * Update the memory settings in the configuration and save it.
+ * 
+ * @param memoryConfig The memory configuration
+ * @param configPath Path to the config file
+ * @returns True if successful, false otherwise
+ */
+export function updateMemorySettings(memoryConfig: MemoryConfig, configPath = CONFIG_FILEPATH): boolean {
+  try {
+    const config = loadConfig(configPath);
+    config.memory = memoryConfig;
+    saveConfig(config, configPath);
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+/**
+ * Update the history settings in the configuration and save it.
+ * 
+ * @param historyConfig The history configuration
+ * @param configPath Path to the config file
+ * @returns True if successful, false otherwise
+ */
+export function updateHistorySettings(
+  historyConfig: {
+    maxSize: number;
+    saveHistory: boolean;
+    sensitivePatterns: Array<string>;
+  },
+  configPath = CONFIG_FILEPATH
+): boolean {
+  try {
+    const config = loadConfig(configPath);
+    config.history = historyConfig;
+    saveConfig(config, configPath);
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+/**
+ * Update the instructions in the configuration and save it.
+ * 
+ * @param instructions The instructions to use
+ * @param configPath Path to the config file
+ * @param instructionsPath Path to the instructions file
+ * @returns True if successful, false otherwise
+ */
+export function updateInstructions(
+  instructions: string,
+  configPath = CONFIG_FILEPATH,
+  instructionsPath = INSTRUCTIONS_FILEPATH
+): boolean {
+  try {
+    const config = loadConfig(configPath, instructionsPath);
+    config.instructions = instructions;
+    saveConfig(config, configPath, instructionsPath);
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+/**
+ * Update the provider in the configuration and save it.
+ * 
+ * @param provider The provider to use
+ * @param configPath Path to the config file
+ * @returns True if successful, false otherwise
+ */
+export function updateProvider(provider: string, configPath = CONFIG_FILEPATH): boolean {
+  try {
+    const config = loadConfig(configPath);
+    config.provider = provider;
+    CURRENT_PROVIDER = provider;
+    saveConfig(config, configPath);
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+/**
+ * Set the current provider.
+ * 
+ * @param provider The provider name
+ */
+export function setProvider(provider: string): void {
+  CURRENT_PROVIDER = provider;
 }
 
 // Formatting (quiet mode-only).
@@ -56,6 +266,8 @@ export type StoredConfig = {
     saveHistory?: boolean;
     sensitivePatterns?: Array<string>;
   };
+  /** Provider for the API key (e.g., "openai") */
+  provider?: string;
 };
 
 // Minimal config written on first run.  An *empty* model string ensures that
@@ -75,6 +287,7 @@ export type AppConfig = {
   apiKey?: string;
   model: string;
   instructions: string;
+  approvalMode?: AutoApprovalMode;
   fullAutoErrorMode?: FullAutoErrorMode;
   memory?: MemoryConfig;
   /** Whether to enable desktop notifications for responses */
@@ -84,6 +297,8 @@ export type AppConfig = {
     saveHistory: boolean;
     sensitivePatterns: Array<string>;
   };
+  /** Provider for the API key (e.g., "openai") */
+  provider?: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -372,26 +587,27 @@ export const saveConfig = (
     mkdirSync(dir, { recursive: true });
   }
 
-  const ext = extname(targetPath).toLowerCase();
-  // Create the config object to save
-  const configToSave: StoredConfig = {
+  // Write instructions to file if they exist
+  if (config.instructions) {
+    writeFileSync(instructionsPath, config.instructions, "utf-8");
+  }
+
+  // Extract the subset of config that we want to persist
+  const storedConfig: StoredConfig = {
     model: config.model,
+    approvalMode: config.approvalMode,
+    fullAutoErrorMode: config.fullAutoErrorMode,
+    memory: config.memory,
+    notify: config.notify,
+    history: config.history,
+    provider: config.provider || CURRENT_PROVIDER,
   };
 
-  // Add history settings if they exist
-  if (config.history) {
-    configToSave.history = {
-      maxSize: config.history.maxSize,
-      saveHistory: config.history.saveHistory,
-      sensitivePatterns: config.history.sensitivePatterns,
-    };
-  }
-
+  // Write config to file
+  const ext = extname(targetPath).toLowerCase();
   if (ext === ".yaml" || ext === ".yml") {
-    writeFileSync(targetPath, dumpYaml(configToSave), "utf-8");
+    writeFileSync(targetPath, dumpYaml(storedConfig), "utf-8");
   } else {
-    writeFileSync(targetPath, JSON.stringify(configToSave, null, 2), "utf-8");
+    writeFileSync(targetPath, JSON.stringify(storedConfig, null, 2) + "\n", "utf-8");
   }
-
-  writeFileSync(instructionsPath, config.instructions, "utf-8");
-};
+}

@@ -13,15 +13,18 @@ import type { ResponseItem } from "openai/resources/responses/responses";
 
 import App from "./app";
 import { runSinglePass } from "./cli-singlepass";
+import { runConfigCommand } from "./commands/config.js";
 import { AgentLoop } from "./utils/agent/agent-loop";
 import { initLogger } from "./utils/agent/log";
 import { ReviewDecision } from "./utils/agent/review";
 import { AutoApprovalMode } from "./utils/auto-approval-mode";
 import {
-  loadConfig,
-  PRETTY_PRINT,
   INSTRUCTIONS_FILEPATH,
-} from "./utils/config";
+  OPENAI_API_KEY,
+  PRETTY_PRINT,
+  initApiKey,
+  loadConfig,
+} from "./utils/config.js";
 import { createInputItem } from "./utils/input-utils";
 import {
   isModelSupportedForResponses,
@@ -50,6 +53,7 @@ const cli = meow(
   `
   Usage
     $ codex [options] <prompt>
+    $ codex config
     $ codex completion <bash|zsh|fish>
 
   Options
@@ -83,6 +87,7 @@ const cli = meow(
   Examples
     $ codex "Write and run a python program that prints ASCII art"
     $ codex -q "fix build issues"
+    $ codex config
     $ codex completion bash
 `,
   {
@@ -194,6 +199,12 @@ complete -c codex -a '(_fish_complete_path)' -d 'file path'`,
   console.log(script);
   process.exit(0);
 }
+
+// Handle 'config' subcommand for interactive configuration
+if (cli.input[0] === "config") {
+  await runConfigCommand();
+  process.exit(0);
+}
 // Show help if requested
 if (cli.flags.help) {
   cli.showHelp();
@@ -218,7 +229,11 @@ if (cli.flags.config) {
 // API key handling
 // ---------------------------------------------------------------------------
 
-const apiKey = process.env["OPENAI_API_KEY"];
+// Initialize API key from keychain or environment variables
+await initApiKey();
+
+// Get the API key (now potentially loaded from keychain)
+const apiKey = OPENAI_API_KEY;
 
 if (!apiKey) {
   // eslint-disable-next-line no-console
