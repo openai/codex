@@ -78,6 +78,39 @@ export function adaptCommandForPlatform(command: Array<string>): Array<string> {
     }
   }
 
+  // Additionally translate any Linux mount paths (/mnt/c/...) to native
+  // Windows drive paths and normalise back‑slashes so that PowerShell and
+  // cmd.exe commands work without modification.
+  for (let i = 1; i < adaptedCommand.length; i++) {
+    const token = adaptedCommand[i];
+    if (typeof token === "string") {
+      let transformed = token;
+      // If the command operates on $Env:USERPROFILE\Downloads and attempts to
+      // write a *relative* file like "downloads.html" we prepend the full
+      // Downloads path so the output ends up where the user expects.  This
+      // kicks in when the token follows an Out‑File/Start‑Process flag.
+      if (
+        /Out-File|Start-Process/i.test(adaptedCommand[0] ?? "") &&
+        !/^[A-Z]:\\/.test(transformed) &&
+        /downloads/i.test(transformed) &&
+        !transformed.includes("\\")
+      ) {
+        const dl = `${process.env["USERPROFILE"]}\\Downloads`;
+        transformed = `${dl}\\${transformed}`;
+      }
+      // /mnt/c/Users -> C:\Users
+      transformed = transformed.replace(/^\/mnt\/([a-z])\//i, (_m, d) => {
+        return `${d.toUpperCase()}:\\`;
+      });
+      // Replace forward slashes with backslashes if the token now looks like a
+      // Windows absolute path.
+      if (/^[A-Z]:\//.test(transformed)) {
+        transformed = transformed.replaceAll("/", "\\");
+      }
+      adaptedCommand[i] = transformed;
+    }
+  }
+
   if (isLoggingEnabled()) {
     log(`Adapted command: ${adaptedCommand.join(" ")}`);
   }

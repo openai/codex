@@ -1,0 +1,28 @@
+#!/usr/bin/env node
+/*
+ * Cross‑platform launcher for the Codex CLI.
+ *
+ * When this package is installed globally, npm (or pnpm/yarn) generates a
+ * platform‑specific wrapper (e.g. `codex.cmd`, `codex.ps1`) that simply
+ * invokes the interpreter from this shebang.  Using `/usr/bin/env node`
+ * therefore avoids any hard dependency on POSIX utilities such as `sh.exe`
+ * which do not exist on a vanilla Windows installation.
+ *
+ * The file lives in `bin` so the `package.json#bin` field can remain a single
+ * entry, letting npm take care of the platform wrappers automatically.
+ *
+ * We intentionally use ESM‑compatible syntax because the project sets
+ * `"type": "module"`.
+ */
+
+import { fileURLToPath, pathToFileURL } from "url";
+import { dirname, resolve } from "path";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+// Resolve the path to the compiled JS entry‑point produced by `npm run build`.
+const cliPath = resolve(__dirname, "../dist/cli.js");
+
+// Dynamic import so the exit code, stdio, etc. are preserved.
+await import(pathToFileURL(cliPath));
