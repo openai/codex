@@ -35,13 +35,21 @@ const TerminalHeader: React.FC<TerminalHeaderProps> = ({
         </Text>
       ) : (
         <>
+          <Box borderStyle="round" paddingX={6} width={64} height={8} flexDirection="column">
+            <Text> ██████╗ ██████╗ ██████╗ ███████╗██╗  ██╗   </Text>
+            <Text>██╔════╝██╔═══██╗██╔══██╗██╔════╝╚██╗██╔╝   </Text>
+            <Text>██║     ██║   ██║██║  ██║█████╗   ╚███╔╝    </Text>
+            <Text>██║     ██║   ██║██║  ██║██╔══╝   ██╔██╗    </Text>
+            <Text>╚██████╗╚██████╔╝██████╔╝███████╗██╔╝ ██╗   </Text>
+            <Text> ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝   </Text>
+          </Box>
           <Box borderStyle="round" paddingX={1} width={64}>
             <Text>
               ● OpenAI <Text bold>Codex</Text>{" "}
               <Text dimColor>
                 (research preview) <Text color="blueBright">v{version}</Text>
               </Text>
-            </Text>
+            </Text> 
           </Box>
           <Box
             borderStyle="round"
