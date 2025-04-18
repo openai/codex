@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-set -euo pipefail
 
 # Script to update the npmDepsHash in flake.nix when package-lock.json changes
 # This script is meant to be triggered by a GitHub Action or run manually

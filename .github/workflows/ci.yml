@@ -73,14 +73,10 @@ jobs:
       - name: Setup Nix
         uses: DeterminateSystems/nix-installer-action@v8
       
-      - name: Make script executable
-        run: chmod +x "${GITHUB_WORKSPACE}/codex-cli/scripts/update-nix-hash.sh"
-      
       - name: Update nix npm hash
         id: update-hash
         run: |
-          OUTPUT=$(${GITHUB_WORKSPACE}/update-nix-hash.sh)
-          echo "::set-output name=changed::$(echo $OUTPUT | grep -q "Hash updated" && echo "true" || echo "false")"
+          sh ./codex-cli/scripts/update-nix-hash.sh
         env:
           GITHUB_ACTIONS: "true"
       
