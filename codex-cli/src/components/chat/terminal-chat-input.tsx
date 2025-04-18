@@ -42,6 +42,7 @@ export default function TerminalChatInput({
   openModelOverlay,
   openApprovalOverlay,
   openHelpOverlay,
+  onCompact,
   interruptAgent,
   active,
 }: {
@@ -61,6 +62,7 @@ export default function TerminalChatInput({
   openModelOverlay: () => void;
   openApprovalOverlay: () => void;
   openHelpOverlay: () => void;
+  onCompact: () => void;
   interruptAgent: () => void;
   active: boolean;
 }): React.ReactElement {
@@ -163,6 +165,12 @@ export default function TerminalChatInput({
       if (inputValue === "/help") {
         setInput("");
         openHelpOverlay();
+        return;
+      }
+
+      if (inputValue === "/compact") {
+        setInput("");
+        onCompact();
         return;
       }
 
@@ -295,6 +303,7 @@ export default function TerminalChatInput({
       openModelOverlay,
       openHelpOverlay,
       history, // Add history to the dependency array
+      onCompact,
     ],
   );
 
@@ -366,7 +375,8 @@ export default function TerminalChatInput({
                 <>
                   {" — "}
                   <Text color="red">
-                    {Math.round(contextLeftPercent)}% context left
+                    {Math.round(contextLeftPercent)}% context left — send
+                    "/compact" to condense context
                   </Text>
                 </>
               )}
