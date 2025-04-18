@@ -5,7 +5,7 @@ import type { ColorName } from "chalk";
 import type { ResponseItem } from "openai/resources/responses/responses.mjs";
 
 import TerminalChatInput from "./terminal-chat-input.js";
-import { TerminalChatToolCallCommand } from "./terminal-chat-tool-call-item.js";
+import { TerminalChatToolCallCommand } from "./terminal-chat-tool-call-command.js";
 import {
   calculateContextPercentRemaining,
   uniqueById,
