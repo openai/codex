@@ -12,7 +12,7 @@ import type { AppConfig } from "./utils/config";
 import type { ResponseItem } from "openai/resources/responses/responses";
 
 import App from "./app";
-import { runSinglePass } from "./cli_singlepass";
+import { runSinglePass } from "./cli-singlepass";
 import { AgentLoop } from "./utils/agent/agent-loop";
 import { initLogger } from "./utils/agent/log";
 import { ReviewDecision } from "./utils/agent/review";
