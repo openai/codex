@@ -12,6 +12,7 @@ import OpenAI from "openai";
 export async function generateCompactSummary(
   items: Array<ResponseItem>,
   model: string,
+  flex = false,
 ): Promise<string> {
   const oai = new OpenAI({
     apiKey: process.env["OPENAI_API_KEY"],
@@ -44,6 +45,8 @@ export async function generateCompactSummary(
 
   const response = await oai.chat.completions.create({
     model,
+    // @ts-expect-error: service_tier is currently not part of openai type definitions
+    ...(flex ? { service_tier: "flex" } : {}),
     messages: [
       {
         role: "assistant",

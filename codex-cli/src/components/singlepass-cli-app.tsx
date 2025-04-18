@@ -400,6 +400,8 @@ export function SinglePassApp({
       });
       const chatResp = await openai.beta.chat.completions.parse({
         model: config.model,
+        // @ts-expect-error service_tier not in types yet
+        ...(config.flex ? { service_tier: "flex" } : {}),
         messages: [
           {
             role: "user",

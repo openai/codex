@@ -79,6 +79,9 @@ export type AppConfig = {
   memory?: MemoryConfig;
   /** Whether to enable desktop notifications for responses */
   notify: boolean;
+
+  /** Enable the "flex" service tier for supported models (o3, o4-mini) */
+  flex?: boolean;
   history?: {
     maxSize: number;
     saveHistory: boolean;

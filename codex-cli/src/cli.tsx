@@ -71,6 +71,9 @@ const cli = meow(
     --full-stdout              Do not truncate stdout/stderr from command outputs
     --notify                   Enable desktop notifications for responses
 
+    --flex                    Use the "flex" service tier for the request (only supported
+                              with models o3 and o4-mini)
+
   Dangerous options
     --dangerously-auto-approve-everything
                                Skip all confirmation prompts and execute commands without
@@ -139,6 +142,11 @@ const cli = meow(
       projectDoc: {
         type: "string",
         description: "Path to a markdown file to include as project doc",
+      },
+      flex: {
+        type: "boolean",
+        description:
+          "Enable the flex service tier (only supported by models o3 and o4-mini)",
       },
       fullStdout: {
         type: "boolean",
@@ -250,12 +258,31 @@ config = {
   apiKey,
   ...config,
   model: model ?? config.model,
+    flex: Boolean(cli.flags.flex),
   notify: Boolean(cli.flags.notify),
 };
 
+<<<<<<< HEAD
 // Check for updates after loading config
 // This is important because we write state file in the config dir
 await checkForUpdates().catch();
+=======
+// ---------------------------------------------------------------------------
+// --flex validation (only allowed for o3 and o4-mini)
+// ---------------------------------------------------------------------------
+
+if (cli.flags.flex) {
+  const allowedFlexModels = new Set(["o3", "o4-mini"]);
+  if (!allowedFlexModels.has(config.model)) {
+    // eslint-disable-next-line no-console
+    console.error(
+      `The --flex option is only supported when using the 'o3' or 'o4-mini' models. ` +
+        `Current model: '${config.model}'.`,
+    );
+    process.exit(1);
+  }
+}
+>>>>>>> 37819c1 (initial take)
 
 if (!(await isModelSupportedForResponses(config.model))) {
   // eslint-disable-next-line no-console

@@ -59,6 +59,7 @@ const colorsByPolicy: Record<ApprovalPolicy, ColorName | undefined> = {
 async function generateCommandExplanation(
   command: Array<string>,
   model: string,
+  flex: boolean,
 ): Promise<string> {
   try {
     // Create a temporary OpenAI client
@@ -73,6 +74,8 @@ async function generateCommandExplanation(
     // Create a prompt that asks for an explanation with a more detailed system prompt
     const response = await oai.chat.completions.create({
       model,
+      // @ts-expect-error service_tier not yet in types
+      ...(flex ? { service_tier: "flex" } : {}),
       messages: [
         {
           role: "system",
@@ -142,7 +145,11 @@ export default function TerminalChat({
   const handleCompact = async () => {
     setLoading(true);
     try {
-      const summary = await generateCompactSummary(items, model);
+      const summary = await generateCompactSummary(
+        items,
+        model,
+        Boolean(config.flex),
+      );
       setItems([
         {
           id: `compact-${Date.now()}`,
@@ -245,7 +252,11 @@ export default function TerminalChat({
           log(`Generating explanation for command: ${commandForDisplay}`);
 
           // Generate an explanation using the same model
-          const explanation = await generateCommandExplanation(command, model);
+          const explanation = await generateCommandExplanation(
+            command,
+            model,
+            Boolean(config.flex),
+          );
           log(`Generated explanation: ${explanation}`);
 
           // Ask for confirmation again, but with the explanation

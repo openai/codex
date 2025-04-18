@@ -516,6 +516,9 @@ export class AgentLoop {
               stream: true,
               parallel_tool_calls: false,
               reasoning,
+              // Support for the "flex" service tier when requested by the user.
+              // @ts-expect-error The OpenAI types may not yet include this field.
+              ...(this.config.flex ? { service_tier: "flex" } : {}),
               tools: [
                 {
                   type: "function",
