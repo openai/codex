@@ -279,7 +279,7 @@ Codex looks for config files in **`~/.codex/`**.
 
 ```yaml
 # ~/.codex/config.yaml
-model: o4-mini # Default model
+model: o4-mini-2025-04-16 # Default model
 fullAutoErrorMode: ask-user # or ignore-and-continue
 notify: true # Enable desktop notifications for responses
 ```
@@ -307,11 +307,11 @@ In 2021, OpenAI released Codex, an AI system designed to generate code from natu
 <details>
 <summary>Which models are supported?</summary>
 
-Any model available with [Responses API](https://platform.openai.com/docs/api-reference/responses). The default is `o4-mini`, but pass `--model gpt-4.1` or set `model: gpt-4.1` in your config file to override.
+Any model available with [Responses API](https://platform.openai.com/docs/api-reference/responses). The default is `o4-mini-2025-04-16`, but pass `--model gpt-4.1` or set `model: gpt-4.1` in your config file to override.
 
 </details>
 <details>
-<summary>Why does <code>o3</code> or <code>o4-mini</code> not work for me?</summary>
+<summary>Why does <code>o3-2025-04-16</code> or <code>o4-mini-2025-04-16</code> not work for me?</summary>
 
 It's possible that your [API account needs to be verified](https://help.openai.com/en/articles/10910291-api-organization-verification) in order to start streaming responses and seeing chain of thought summaries from the API. If you're still running into issues, please let us know!
 

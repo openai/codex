@@ -9,7 +9,7 @@ The image is a full–page screenshot of a single post on the social‑media sit
 2. **Tweet body text**
    * Below the header, in regular type, the author writes:
 
-     “Okay, OpenAI’s o3 is insane. Spent an hour messing with it and built an image‑to‑ASCII art converter, the exact tool I’ve always wanted. And it works so well”
+     “Okay, OpenAI’s o3-2025-04-16 is insane. Spent an hour messing with it and built an image‑to‑ASCII art converter, the exact tool I’ve always wanted. And it works so well”
 
 3. **Embedded media**
    * The majority of the screenshot is occupied by an embedded 12‑second video of the converter UI.  The video window has rounded corners and a dark theme.
@@ -31,4 +31,4 @@ The image is a full–page screenshot of a single post on the social‑media sit
    * A small black badge showing **“0:12”** overlays the bottom‑left corner of the media frame, indicating the video’s duration.
    * In the top‑right area of the media window are two pill‑shaped buttons: a heart‑shaped “Save” button and a cog‑shaped “Settings” button.
 
-Overall, the screenshot shows the user excitedly announcing the success of their custom “Image to ASCII” converter created with OpenAI’s “o3”, accompanied by a short video demonstration of the tool converting a palm‑tree photo into ASCII art.
+Overall, the screenshot shows the user excitedly announcing the success of their custom “Image to ASCII” converter created with OpenAI’s “o3-2025-04-16”, accompanied by a short video demonstration of the tool converting a palm‑tree photo into ASCII art.

@@ -113,7 +113,7 @@ describe("AgentLoop", () => {
 
     const agent = new AgentLoop({
       additionalWritableRoots: [],
-      model: "o3", // arbitrary
+      model: "o3-2025-04-16", // arbitrary
       instructions: config.instructions,
       config,
       approvalPolicy: { mode: "suggest" } as any,
