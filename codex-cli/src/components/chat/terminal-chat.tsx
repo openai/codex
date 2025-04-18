@@ -5,7 +5,10 @@ import type { ColorName } from "chalk";
 import type { ResponseItem } from "openai/resources/responses/responses.mjs";
 
 import TerminalChatInput from "./terminal-chat-input.js";
-import { TerminalChatToolCallCommand, TerminalChatToolCallApplyPatch } from "./terminal-chat-tool-call-item.js";
+import {
+  TerminalChatToolCallCommand,
+  TerminalChatToolCallApplyPatch,
+} from "./terminal-chat-tool-call-item.js";
 import {
   calculateContextPercentRemaining,
   uniqueById,
@@ -217,7 +220,9 @@ export default function TerminalChat({
           );
         } else {
           confirmationElement = (
-            <TerminalChatToolCallCommand commandForDisplay={commandForDisplay} />
+            <TerminalChatToolCallCommand
+              commandForDisplay={commandForDisplay}
+            />
           );
         }
         let { decision: review, customDenyMessage } = await requestConfirmation(
