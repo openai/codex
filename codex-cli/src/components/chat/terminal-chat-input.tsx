@@ -238,7 +238,7 @@ export default function TerminalChatInput({
         // Any other input, including those starting with '/' but containing spaces
         // (e.g., "/command arg"), will fall through and be treated as a regular prompt.
         const trimmed = inputValue.trim();
-        
+
         if (/^\/\S+$/.test(trimmed)) {
           setInput("");
           setItems((prev) => [
