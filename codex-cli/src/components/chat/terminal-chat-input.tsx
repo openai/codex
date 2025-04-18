@@ -20,6 +20,7 @@ import TextInput from "../vendor/ink-text-input.js";
 import { Box, Text, useApp, useInput, useStdin } from "ink";
 import { fileURLToPath } from "node:url";
 import React, { useCallback, useState, Fragment, useEffect } from "react";
+import { SLASH_COMMANDS } from "../../utils/slash-commands.js";
 import { useInterval } from "use-interval";
 
 const suggestions = [
@@ -66,6 +67,8 @@ export default function TerminalChatInput({
   interruptAgent: () => void;
   active: boolean;
 }): React.ReactElement {
+  // Slash command suggestion index
+  const [selectedSlashSuggestion, setSelectedSlashSuggestion] = useState<number>(0);
   const app = useApp();
   const [selectedSuggestion, setSelectedSuggestion] = useState<number>(0);
   const [input, setInput] = useState("");
@@ -82,9 +85,45 @@ export default function TerminalChatInput({
 
     loadHistory();
   }, []);
+  // Reset slash suggestion index when input prefix changes
+  useEffect(() => {
+    if (input.trim().startsWith("/")) {
+      setSelectedSlashSuggestion(0);
+    }
+  }, [input]);
 
   useInput(
     (_input, _key) => {
+      // Slash command navigation: up/down to select, enter to fill
+      if (!confirmationPrompt && !loading && input.trim().startsWith("/")) {
+        const prefix = input.trim();
+        const matches = SLASH_COMMANDS.filter((cmd) =>
+          cmd.command.startsWith(prefix)
+        );
+        if (matches.length > 0) {
+          if (_key.upArrow) {
+            setSelectedSlashSuggestion((prev) =>
+              prev <= 0 ? matches.length - 1 : prev - 1
+            );
+            return;
+          }
+          if (_key.downArrow) {
+            setSelectedSlashSuggestion((prev) =>
+              prev < 0 || prev >= matches.length - 1 ? 0 : prev + 1
+            );
+            return;
+          }
+          if (_key.return) {
+            if (selectedSlashSuggestion >= 0) {
+              const cmd = matches[selectedSlashSuggestion].command;
+              setInput(cmd + " ");
+              setDraftInput(cmd + " ");
+              setSelectedSlashSuggestion(0);
+            }
+            return;
+          }
+        }
+      }
       if (!confirmationPrompt && !loading) {
         if (_key.upArrow) {
           if (history.length > 0) {
@@ -375,6 +414,25 @@ export default function TerminalChatInput({
           </Box>
         )}
       </Box>
+      {/* Slash command autocomplete suggestions */}
+      {input.trim().startsWith("/") && (
+        <Box flexDirection="column" paddingX={2} marginBottom={1}>
+          {SLASH_COMMANDS.filter((cmd) =>
+            cmd.command.startsWith(input.trim())
+          ).map((cmd, idx) => (
+            <Box key={cmd.command}>
+              <Text
+                backgroundColor={
+                  idx === selectedSlashSuggestion ? "blackBright" : undefined
+                }
+              >
+                <Text color="blueBright">{cmd.command}</Text>
+                <Text> {cmd.description}</Text>
+              </Text>
+            </Box>
+          ))}
+        </Box>
+      )}
       <Box paddingX={2} marginBottom={1}>
         <Text dimColor>
           {isNew && !input ? (
