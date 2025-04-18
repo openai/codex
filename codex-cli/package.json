@@ -3,7 +3,7 @@
   "version": "0.1.2504161510",
   "license": "Apache-2.0",
   "bin": {
-    "codex": "dist/cli.js"
+    "codex": "bin/codex"
   },
   "type": "module",
   "engines": {
@@ -28,6 +28,7 @@
   },
   "files": [
     "README.md",
+    "bin",
     "dist",
     "src"
   ],
