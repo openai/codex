@@ -298,9 +298,6 @@ const additionalWritableRoots: ReadonlyArray<string> = (
 
 // If we are running in --quiet mode, do that and exit.
 const quietMode = Boolean(cli.flags.quiet);
-const autoApproveEverything = Boolean(
-  cli.flags.dangerouslyAutoApproveEverything,
-);
 const fullStdout = Boolean(cli.flags.fullStdout);
 
 if (quietMode) {
