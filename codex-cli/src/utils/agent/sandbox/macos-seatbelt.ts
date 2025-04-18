@@ -3,7 +3,17 @@ import type { SpawnOptions } from "child_process";
 
 import { exec } from "./raw-exec.js";
 import { log } from "../log.js";
+import { realpath } from "fs/promises";
 import { CONFIG_DIR } from "src/utils/config.js";
+
+async function realpathSafe(path: string): Promise<string> {
+  try {
+    return realpath(path);
+  } catch (err) {
+    // fallback to the literal path if file not found or other exception
+    return path;
+  }
+}
 
 function getCommonRoots() {
   return [
@@ -14,7 +24,7 @@ function getCommonRoots() {
   ];
 }
 
-export function execWithSeatbelt(
+export async function execWithSeatbelt(
   cmd: Array<string>,
   opts: SpawnOptions,
   writableRoots: Array<string>,
@@ -25,8 +35,11 @@ export function execWithSeatbelt(
   if (writableRoots.length > 0) {
     // Add `~/.codex` to the list of writable roots
     // (if there's any already, not in read-only mode)
-    getCommonRoots().map((root) => writableRoots.push(root));
-    const { policies, params } = writableRoots
+    writableRoots.push(...getCommonRoots());
+
+    const resolvedRoots = await Promise.all(writableRoots.map(realpathSafe));
+
+    const { policies, params } = resolvedRoots
       .map((root, index) => ({
         policy: `(subpath (param "WRITABLE_ROOT_${index}"))`,
         param: `-DWRITABLE_ROOT_${index}=${root}`,
