@@ -5,8 +5,6 @@ test("SLASH_COMMANDS includes expected commands", () => {
   const commands = SLASH_COMMANDS.map((c) => c.command);
   expect(commands).toContain("/clear");
   expect(commands).toContain("/compact");
-  expect(commands).toContain("/config");
-  expect(commands).toContain("/cost");
   expect(commands).toContain("/history");
   expect(commands).toContain("/help");
   expect(commands).toContain("/model");
@@ -18,14 +16,12 @@ test("filters slash commands by prefix", () => {
   const prefix = "/c";
   const filtered = SLASH_COMMANDS.filter((c) => c.command.startsWith(prefix));
   const names = filtered.map((c) => c.command);
-  // Should include /clear, /compact, /config, /cost, /clearhistory
+  // Should include /clear, /clearhistory, /compact
   expect(names).toEqual(
     expect.arrayContaining([
       "/clear",
-      "/compact",
-      "/config",
-      "/cost",
       "/clearhistory",
+      "/compact",
     ])
   );
 });

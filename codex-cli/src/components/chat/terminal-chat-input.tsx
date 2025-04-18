@@ -114,13 +114,19 @@ export default function TerminalChatInput({
             return;
           }
           if (_key.return) {
-            if (selectedSlashSuggestion >= 0) {
-              const cmd = matches[selectedSlashSuggestion].command;
-              setInput(cmd + " ");
-              setDraftInput(cmd + " ");
-              setSelectedSlashSuggestion(0);
+            // Autocomplete slash command if input is a prefix
+            const selIdx = selectedSlashSuggestion;
+            const cmdObj = matches[selIdx];
+            if (cmdObj) {
+              const cmd = cmdObj.command;
+              if (input.trim() !== cmd) {
+                setInput(cmd + " ");
+                setDraftInput(cmd + " ");
+                setSelectedSlashSuggestion(0);
+                return; // consumed for autocomplete
+              }
             }
-            return;
+            // If input already matches a full command, do not consume Enter here
           }
         }
       }
