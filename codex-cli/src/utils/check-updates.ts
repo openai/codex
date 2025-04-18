@@ -38,6 +38,9 @@ export async function checkOutdated(
 ): Promise<UpdateCheckInfo | undefined> {
   return new Promise((resolve, _reject) => {
     // TODO: support local installation
+    // Right now we're using "--global", which only checks global packages.
+    // But codex might be installed locally — we should check the local version first,
+    // and only fall back to the global one if needed.
     const args = ["outdated", "--global", "--json", "--", "@openai/codex"];
     // corepack npm wrapper would automatically update package.json. disable that behavior.
     // COREPACK_ENABLE_AUTO_PIN disables the package.json overwrite, and
