@@ -14,7 +14,9 @@ test("SLASH_COMMANDS includes expected commands", () => {
 
 test("filters slash commands by prefix", () => {
   const prefix = "/c";
-  const filtered = SLASH_COMMANDS.filter((c: SlashCommand) => c.command.startsWith(prefix));
+  const filtered = SLASH_COMMANDS.filter((c: SlashCommand) =>
+    c.command.startsWith(prefix),
+  );
   const names = filtered.map((c: SlashCommand) => c.command);
   expect(names).toEqual(
     expect.arrayContaining(["/clear", "/clearhistory", "/compact"]),
@@ -30,9 +32,7 @@ test("filters slash commands by prefix", () => {
     (c: SlashCommand) => c.command,
   );
   expect(emptyPrefixNames).toEqual(
-    expect.arrayContaining(
-      SLASH_COMMANDS.map((c: SlashCommand) => c.command),
-    ),
+    expect.arrayContaining(SLASH_COMMANDS.map((c: SlashCommand) => c.command)),
   );
   expect(emptyPrefixNames).toHaveLength(SLASH_COMMANDS.length);
 });
