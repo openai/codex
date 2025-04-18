@@ -275,13 +275,24 @@ npm link
 
 ## Configuration
 
-Codex looks for config files in **`~/.codex/`**.
+Codex looks for config files in **`~/.codex/`** (either YAML or JSON format).
 
 ```yaml
 # ~/.codex/config.yaml
 model: o4-mini # Default model
+approvalMode: suggest # or auto-edit, full-auto
 fullAutoErrorMode: ask-user # or ignore-and-continue
 notify: true # Enable desktop notifications for responses
+```
+
+```json
+// ~/.codex/config.json
+{
+  "model": "o4-mini",
+  "approvalMode": "suggest",
+  "fullAutoErrorMode": "ask-user",
+  "notify": true
+}
 ```
 
 You can also define custom instructions:
