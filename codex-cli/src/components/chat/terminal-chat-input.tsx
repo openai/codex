@@ -240,6 +240,32 @@ export default function TerminalChatInput({
         );
 
         return;
+      } else if (inputValue.startsWith("/")) {
+        // Handle invalid/unrecognized commands.
+        // Only single-word inputs starting with '/' (e.g., /command) that are not recognized are caught here.
+        // Any other input, including those starting with '/' but containing spaces
+        // (e.g., "/command arg"), will fall through and be treated as a regular prompt.
+        const trimmed = inputValue.trim();
+
+        if (/^\/\S+$/.test(trimmed)) {
+          setInput("");
+          setItems((prev) => [
+            ...prev,
+            {
+              id: `invalidcommand-${Date.now()}`,
+              type: "message",
+              role: "system",
+              content: [
+                {
+                  type: "input_text",
+                  text: `Invalid command "${trimmed}". Use /help to retrieve the list of commands.`,
+                },
+              ],
+            },
+          ]);
+
+          return;
+        }
       }
 
       // detect image file paths for dynamic inclusion
