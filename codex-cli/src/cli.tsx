@@ -335,14 +335,27 @@ if (quietMode) {
 //    it is more dangerous than --fullAuto we deliberately give it lower
 //    priority so a user specifying both flags still gets the safer behaviour.
 // 3. --autoEdit – automatically approve edits, but prompt for commands.
-// 4. Default – suggest mode (prompt for everything).
+// 4. Default – use the config file's approval mode.
+// 5. If not specified, fall back to suggest mode (prompt for everything).
 
-const approvalPolicy: ApprovalPolicy =
-  cli.flags.fullAuto || cli.flags.approvalMode === "full-auto"
-    ? AutoApprovalMode.FULL_AUTO
-    : cli.flags.autoEdit || cli.flags.approvalMode === "auto-edit"
-    ? AutoApprovalMode.AUTO_EDIT
-    : AutoApprovalMode.SUGGEST;
+const approvalPolicy: ApprovalPolicy = (() => {
+  if (cli.flags.fullAuto || cli.flags.approvalMode === "full-auto") {
+    return AutoApprovalMode.FULL_AUTO;
+  }
+  if (cli.flags.autoEdit || cli.flags.approvalMode === "auto-edit") {
+    return AutoApprovalMode.AUTO_EDIT;
+  }
+  if (
+    typeof cli.flags.approvalMode === "string" &&
+    Object.values(AutoApprovalMode).includes(
+      cli.flags.approvalMode as AutoApprovalMode,
+    )
+  ) {
+    return cli.flags.approvalMode as AutoApprovalMode;
+  }
+  // Fall back to config value, then default
+  return config.approvalMode ?? AutoApprovalMode.SUGGEST;
+})();
 
 preloadModels();
 
