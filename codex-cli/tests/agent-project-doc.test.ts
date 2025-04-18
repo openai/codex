@@ -112,6 +112,7 @@ describe("AgentLoop", () => {
     expect(config.instructions).toContain("Hello docs!");
 
     const agent = new AgentLoop({
+      additionalWritableRoots: [],
       model: "o3", // arbitrary
       instructions: config.instructions,
       config,

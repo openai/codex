@@ -58,6 +58,7 @@ describe("AgentLoop – invalid request / 4xx errors", () => {
       model: "any",
       instructions: "",
       approvalPolicy: { mode: "auto" } as any,
+      additionalWritableRoots: [],
       onItem: (i) => received.push(i),
       onLoading: () => {},
       getCommandConfirmation: async () => ({ review: "yes" } as any),
