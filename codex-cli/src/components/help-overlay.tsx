@@ -53,6 +53,9 @@ export default function HelpOverlay({
           <Text color="cyan">/clearhistory</Text> – clear command history
         </Text>
         <Text>
+          <Text color="cyan">/bug</Text> – file a bug report with session log
+        </Text>
+        <Text>
           <Text color="cyan">/compact</Text> – condense context into a summary
         </Text>
 

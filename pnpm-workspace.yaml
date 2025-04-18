@@ -1,0 +1,5 @@
+packages:
+  - 'codex-cli'
+  - 'docs'
+  # For future packages
+  - 'packages/*'
