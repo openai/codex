@@ -26,6 +26,7 @@
 - [Funding Opportunity](#funding-opportunity)
 - [Contributing](#contributing)
   - [Development workflow](#development-workflow)
+    - [Nix Flake Development](#nix-flake-development)
   - [Writing high‑impact code changes](#writing-highimpact-code-changes)
   - [Opening a pull request](#opening-a-pull-request)
   - [Review process](#review-process)
@@ -410,6 +411,31 @@ npm run typecheck
 # Automatically fix lint + prettier issues
 npm run lint:fix
 npm run format:fix
+```
+
+#### Nix Flake Development
+
+Prerequisite: Nix >= 2.4 with flakes enabled (`experimental-features = nix-command flakes` in `~/.config/nix/nix.conf`).
+
+Enter a Nix development shell:
+
+```bash
+nix develop
+```
+
+This shell includes Node.js, installs dependencies, builds the CLI, and provides a `codex` command alias.
+
+Build and run the CLI directly:
+
+```bash
+nix build
+./result/bin/codex --help
+```
+
+Run the CLI via the flake app:
+
+```bash
+nix run .#codex
 ```
 
 ### Writing high‑impact code changes
