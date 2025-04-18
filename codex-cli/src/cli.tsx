@@ -312,12 +312,17 @@ if (quietMode) {
     );
     process.exit(1);
   }
+  // Determine approval policy for quiet mode based on flags
+  const quietApprovalPolicy: ApprovalPolicy =
+    cli.flags.fullAuto || cli.flags.approvalMode === "full-auto"
+      ? AutoApprovalMode.FULL_AUTO
+      : cli.flags.autoEdit || cli.flags.approvalMode === "auto-edit"
+      ? AutoApprovalMode.AUTO_EDIT
+      : AutoApprovalMode.SUGGEST;
   await runQuietMode({
     prompt: prompt as string,
     imagePaths: imagePaths || [],
-    approvalPolicy: autoApproveEverything
-      ? AutoApprovalMode.FULL_AUTO
-      : AutoApprovalMode.SUGGEST,
+    approvalPolicy: quietApprovalPolicy,
     additionalWritableRoots,
     config,
   });
@@ -440,7 +445,12 @@ async function runQuietMode({
     getCommandConfirmation: (
       _command: Array<string>,
     ): Promise<CommandConfirmation> => {
-      return Promise.resolve({ review: ReviewDecision.NO_CONTINUE });
+      // In quiet mode, default to NO_CONTINUE, except when in full-auto mode
+      const reviewDecision =
+        approvalPolicy === AutoApprovalMode.FULL_AUTO
+          ? ReviewDecision.YES
+          : ReviewDecision.NO_CONTINUE;
+      return Promise.resolve({ review: reviewDecision });
     },
     onLastResponseId: () => {
       /* intentionally ignored in quiet mode */
