@@ -397,7 +397,15 @@ export default function TerminalChatInput({
             <>
               send q or ctrl+c to exit | send "/clear" to reset | send "/help"
               for commands | press enter to send
-              {contextLeftPercent < 25 && (
+              {contextLeftPercent > 25 && (
+                <>
+                  {" — "}
+                  <Text color={contextLeftPercent > 40 ? "green" : "yellow"}>
+                    {Math.round(contextLeftPercent)}% context left
+                  </Text>
+                </>
+              )}
+              {contextLeftPercent <= 25 && (
                 <>
                   {" — "}
                   <Text color="red">
