@@ -627,33 +627,3 @@ function remove_file(p: string): void {
   fs.unlinkSync(p);
 }
 
-// -----------------------------------------------------------------------------
-// CLI mode. Not exported, executed only if run directly.
-// -----------------------------------------------------------------------------
-
-if (import.meta.url === `file://${process.argv[1]}`) {
-  let patchText = "";
-  process.stdin.setEncoding("utf8");
-  process.stdin.on("data", (chunk) => (patchText += chunk));
-  process.stdin.on("end", () => {
-    if (!patchText) {
-      // eslint-disable-next-line no-console
-      console.error("Please pass patch text through stdin");
-      process.exit(1);
-    }
-    try {
-      const result = process_patch(
-        patchText,
-        open_file,
-        write_file,
-        remove_file,
-      );
-      // eslint-disable-next-line no-console
-      console.log(result);
-    } catch (err: unknown) {
-      // eslint-disable-next-line no-console
-      console.error(err instanceof Error ? err.message : String(err));
-      process.exit(1);
-    }
-  });
-}

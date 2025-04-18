@@ -76,3 +76,19 @@ esbuild
     inject: ["./require-shim.js"],
   })
   .catch(() => process.exit(1));
+
+// Build server entrypoint
+esbuild
+  .build({
+    entryPoints: ["src/server.ts"],
+    bundle: true,
+    format: "esm",
+    platform: "node",
+    tsconfig: "tsconfig.json",
+    outfile: isDevBuild ? "dist/server-dev.js" : "dist/server.js",
+    minify: !isDevBuild,
+    sourcemap: isDevBuild ? "inline" : true,
+    plugins,
+    inject: ["./require-shim.js"],
+  })
+  .catch(() => process.exit(1));

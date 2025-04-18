@@ -3,7 +3,8 @@
   "version": "0.1.2504161510",
   "license": "Apache-2.0",
   "bin": {
-    "codex": "dist/cli.js"
+    "codex": "dist/cli.js",
+    "codex-server": "dist/server.js"
   },
   "type": "module",
   "engines": {
@@ -46,6 +47,7 @@
     "meow": "^13.2.0",
     "open": "^10.1.0",
     "openai": "^4.89.0",
+    "ws": "^8.13.0",
     "react": "^18.2.0",
     "shell-quote": "^1.8.2",
     "strip-ansi": "^7.1.0",
@@ -75,7 +77,8 @@
     "ts-node": "^10.9.1",
     "typescript": "^5.0.3",
     "vitest": "^3.0.9",
-    "whatwg-url": "^14.2.0"
+    "whatwg-url": "^14.2.0",
+    "@types/ws": "^8.5.4"
   },
   "resolutions": {
     "braces": "^3.0.3",
