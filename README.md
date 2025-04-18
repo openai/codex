@@ -241,6 +241,8 @@ Below are a few bite‑size examples you can copy‑paste. Replace the text in q
 npm install -g @openai/codex
 # or
 yarn global add @openai/codex
+# or
+bun install -g @openai/codex
 ```
 
 </details>
