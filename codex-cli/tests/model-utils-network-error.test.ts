@@ -44,7 +44,7 @@ describe("model-utils – offline resilience", () => {
       "../src/utils/model-utils.js"
     );
 
-    const supported = await isModelSupportedForResponses("o4-mini");
+    const supported = await isModelSupportedForResponses("o4-mini-2025-04-16");
     expect(supported).toBe(true);
   });
 
