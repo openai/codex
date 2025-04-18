@@ -45,6 +45,7 @@ export default function TerminalChatInput({
   onCompact,
   interruptAgent,
   active,
+  items = [],
 }: {
   isNew: boolean;
   loading: boolean;
@@ -65,6 +66,8 @@ export default function TerminalChatInput({
   onCompact: () => void;
   interruptAgent: () => void;
   active: boolean;
+  // New: current conversation items so we can include them in bug reports
+  items?: Array<ResponseItem>;
 }): React.ReactElement {
   const app = useApp();
   const [selectedSuggestion, setSelectedSuggestion] = useState<number>(0);
@@ -240,6 +243,68 @@ export default function TerminalChatInput({
         );
 
         return;
+      } else if (inputValue === "/bug") {
+        // Generate a GitHub bug report URL pre‑filled with session details
+        setInput("");
+
+        try {
+          // Dynamically import dependencies to avoid unnecessary bundle size
+          const [{ default: open }, os] = await Promise.all([
+            import("open"),
+            import("node:os"),
+          ]);
+
+          // Lazy import CLI_VERSION to avoid circular deps
+          const { CLI_VERSION } = await import("../../utils/session.js");
+
+          const { buildBugReportUrl } = await import(
+            "../../utils/bug-report.js"
+          );
+
+          const url = buildBugReportUrl({
+            items: items ?? [],
+            cliVersion: CLI_VERSION,
+            model: loadConfig().model ?? "unknown",
+            platform: `${os.platform()} ${os.arch()} ${os.release()}`,
+          });
+
+          // Open the URL in the user's default browser
+          await open(url, { wait: false });
+
+          // Inform the user in the chat history
+          setItems((prev) => [
+            ...prev,
+            {
+              id: `bugreport-${Date.now()}`,
+              type: "message",
+              role: "system",
+              content: [
+                {
+                  type: "input_text",
+                  text: "📋 Opened browser to file a bug report. Please include any context that might help us fix the issue!",
+                },
+              ],
+            },
+          ]);
+        } catch (error) {
+          // If anything went wrong, notify the user
+          setItems((prev) => [
+            ...prev,
+            {
+              id: `bugreport-error-${Date.now()}`,
+              type: "message",
+              role: "system",
+              content: [
+                {
+                  type: "input_text",
+                  text: `⚠️ Failed to create bug report URL: ${error}`,
+                },
+              ],
+            },
+          ]);
+        }
+
+        return;
       } else if (inputValue.startsWith("/")) {
         // Handle invalid/unrecognized commands.
         // Only single-word inputs starting with '/' (e.g., /command) that are not recognized are caught here.
@@ -330,6 +395,7 @@ export default function TerminalChatInput({
       openHelpOverlay,
       history, // Add history to the dependency array
       onCompact,
+      items,
     ],
   );
 
