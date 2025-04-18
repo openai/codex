@@ -43,6 +43,7 @@
     "file-type": "^20.1.0",
     "ink": "^5.2.0",
     "js-yaml": "^4.1.0",
+    "keytar": "^7.9.0",
     "marked": "^15.0.7",
     "marked-terminal": "^7.3.0",
     "meow": "^13.2.0",
