@@ -517,3 +517,7 @@ export function isExplicitlyIgnored(
   
   return shouldIgnorePath(normalized, agentPatterns);
 }
+
+interface ExtendedRegExp extends RegExp {
+  negated?: boolean;
+}
