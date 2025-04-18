@@ -3,9 +3,11 @@
   "scripts": {
     "release": "cd codex-cli && npm run release",
     "format": "prettier --check *.json *.md .github/workflows/*.yml",
-    "format:fix": "prettier --write *.json *.md .github/workflows/*.yml"
+    "format:fix": "prettier --write *.json *.md .github/workflows/*.yml",
+    "changelog": "git-cliff --config cliff.toml --output CHANGELOG.md $LAST_RELEASE_TAG..HEAD"
   },
   "devDependencies": {
+    "git-cliff": "^2.8.0",
     "prettier": "^3.5.3"
   }
 }
