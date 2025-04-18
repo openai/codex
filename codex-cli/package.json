@@ -1,6 +1,6 @@
 {
   "name": "@openai/codex",
-  "version": "0.1.2504172304",
+  "version": "0.1.2504172351",
   "license": "Apache-2.0",
   "bin": {
     "codex": "bin/codex"
@@ -23,7 +23,7 @@
     "release:readme": "cp ../README.md ./README.md",
     "release:version": "TS=$(date +%y%m%d%H%M) && sed -E -i'' -e \"s/\\\"0\\.1\\.[0-9]{10}\\\"/\\\"0.1.${TS}\\\"/g\" package.json src/utils/session.ts",
     "release:build-and-publish": "npm run build && npm publish",
-    "release": "npm run release:readme && npm run release:version && npm run release:build-and-publish",
+    "release": "npm run release:readme && npm run release:version && npm install && npm run release:build-and-publish",
     "prepare": "husky",
     "pre-commit": "lint-staged"
   },

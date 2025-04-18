@@ -2,6 +2,18 @@
 
 You can install any of these versions: `npm install -g codex@version`
 
+## 0.1.2504172351
+
+### 🚀 Features
+
+- Add Nix flake for reproducible development environments (#225)
+
+### 🐛 Bug Fixes
+
+- Handle invalid commands (#304)
+- Raw-exec-process-group.test improve reliability and error handling (#280)
+- Canonicalize the writeable paths used in seatbelt policy (#275)
+
 ## 0.1.2504172304
 
 ### 🚀 Features
