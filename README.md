@@ -295,6 +295,9 @@ You can also define custom instructions:
 
 ---
 
+## Codebase Map
+![Codebase Map](./codebase-map.excalidraw.svg)
+
 ## FAQ
 
 <details>
