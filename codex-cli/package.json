@@ -44,7 +44,7 @@
     "react": "^18.2.0",
     "shell-quote": "^1.8.2",
     "terminal-image": "^1.1.0",
-    "use-interval": "1.4.0"
+    "use-interval": "^3.1.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.22.0",

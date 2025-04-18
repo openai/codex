@@ -191,21 +191,21 @@ export async function executeToolCall(
     // Check if this is an MCP tool
     if (name.startsWith("mcp__")) {
       // Execute the tool through the MCP registry
-      // Parse serverName and actualToolName from the namespaced name
+      // Parse mcpServerName and actualToolName from the namespaced name
       const nameParts = name.split("__");
       if (nameParts.length < 3 || nameParts[0] !== "mcp") {
         throw new Error(`Invalid MCP tool name format: ${name}`);
       }
-      const serverName = nameParts[1];
+      const mcpServerName = nameParts[1];
       const actualToolName = nameParts.slice(2).join("__"); // Handle tool names with underscores
 
-      // Add explicit checks for serverName and actualToolName
+      // Add explicit checks for mcpServerName and actualToolName
       if (!serverName || !actualToolName) {
-        throw new Error(`Could not parse server and tool name from: ${name}`);
+        throw new Error(`Could not parsemcpServer and tool name from: ${name}`);
       }
 
       // Use the callTool method from McpManager
-      const result = await mcpManager.callTool(serverName, actualToolName, args);
+      const result = await mcpManager.callTool(mcpServerName, actualToolName, args);
       return {
         toolCall,
         ...result,

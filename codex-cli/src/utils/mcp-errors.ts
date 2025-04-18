@@ -16,17 +16,17 @@ export class McpError extends Error {
  * Error thrown when there's an issue connecting to an MCP server
  */
 export class McpConnectionError extends McpError {
-  public serverName: string;
+  public mcpServerName: string;
   public override cause?: Error;
 
-  constructor(serverName: string, cause?: Error) {
+  constructor(mcpServerName: string, cause?: Error) {
     const message = cause
-      ? `Failed to connect to Mcp server '${serverName}': ${cause.message}`
-      : `Failed to connect to Mcp server '${serverName}'`;
+      ? `Failed to connect to MCP Server '${mcpServerName}': ${cause.message}`
+      : `Failed to connect to MCP Server '${mcpServerName}'`;
 
     super(message);
     this.name = "McpConnectionError";
-    this.serverName = serverName;
+    this.mcpServerName = mcpServerName;
     this.cause = cause;
 
     // Ensure proper prototype chain for instanceof checks
@@ -38,18 +38,18 @@ export class McpConnectionError extends McpError {
  * Error thrown when there's an issue executing an MCP tool
  */
 export class McpToolError extends McpError {
-  public serverName: string;
+  public mcpServerName: string;
   public toolName: string;
   public override cause?: Error;
 
-  constructor(serverName: string, toolName: string, cause?: Error) {
+  constructor(mcpServerName: string, toolName: string, cause?: Error) {
     const message = cause
-      ? `Error executing tool '${toolName}' on server '${serverName}': ${cause.message}`
-      : `Error executing tool '${toolName}' on server '${serverName}'`;
+      ? `Error executing tool '${toolName}' onmcpServer '${mcpServerName}': ${cause.message}`
+      : `Error executing tool '${toolName}' onmcpServer '${mcpServerName}'`;
 
     super(message);
     this.name = "McpToolError";
-    this.serverName = serverName;
+    this.mcpServerName = mcpServerName;
     this.toolName = toolName;
     this.cause = cause;
 
@@ -59,7 +59,7 @@ export class McpToolError extends McpError {
 }
 
 /**
- * Error thrown when an MCP server or tool is not found
+ * Error thrown when an MCP Server or tool is not found
  */
 export class McpNotFoundError extends McpError {
   constructor(
@@ -83,16 +83,16 @@ export class McpNotFoundError extends McpError {
  * Error thrown when an MCP operation times out
  */
 export class McpTimeoutError extends McpError {
-  public serverName: string;
+  public mcpServerName: string;
   public operationType: string;
   public timeoutMs: number;
 
-  constructor(serverName: string, operationType: string, timeoutMs: number) {
+  constructor(mcpServerName: string, operationType: string, timeoutMs: number) {
     super(
-      `Mcp operation '${operationType}' on server '${serverName}' timed out after ${timeoutMs}ms`,
+      `Mcp operation '${operationType}' onmcpServer '${mcpServerName}' timed out after ${timeoutMs}ms`,
     );
     this.name = "McpTimeoutError";
-    this.serverName = serverName;
+    this.mcpServerName = mcpServerName;
     this.operationType = operationType;
     this.timeoutMs = timeoutMs;
 
@@ -102,16 +102,16 @@ export class McpTimeoutError extends McpError {
 }
 
 /**
- * Error thrown when an MCP server returns an invalid response
+ * Error thrown when an MCP Server returns an invalid response
  */
 export class McpInvalidResponseError extends McpError {
-  public serverName: string;
+  public mcpServerName: string;
   public responseData?: any;
 
-  constructor(serverName: string, message: string, responseData?: any) {
-    super(`Invalid response from Mcp server '${serverName}': ${message}`);
+  constructor(mcpServerName: string, message: string, responseData?: any) {
+    super(`Invalid response from MCP Server '${mcpServerName}': ${message}`);
     this.name = "McpInvalidResponseError";
-    this.serverName = serverName;
+    this.mcpServerName = mcpServerName;
     this.responseData = responseData;
 
     // Ensure proper prototype chain for instanceof checks

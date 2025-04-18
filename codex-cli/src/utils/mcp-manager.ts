@@ -1,7 +1,7 @@
 import type { MCPServer as McpServerConfig } from "./mcp";
 
 import { log } from "./agent/log";
-import { listServers } from "./mcp";
+import { listMcpServers } from "./mcp";
 // Removed: import { RobustStdioMcpClient } from './robust-mcp-client';
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
@@ -33,7 +33,7 @@ async function executeWithErrorHandling<T>(
 
 // Define internal connection state
 type McpConnection = {
-  serverConfig: McpServerConfig; // Configuration loaded from file
+  mcpServerConfig: McpServerConfig; // Configuration loaded from file
   client: Client | null; // Allow null client for error states
   transport: StdioClientTransport | SSEClientTransport | null; // Allow null transport
   // Removed: robustClient?: RobustStdioMcpClient; // For robust stdio handling
@@ -58,9 +58,9 @@ export interface McpToolResult {
 
 // Timeout for internal MCP requests (e.g., listing tools)
 const DEFAULT_REQUEST_TIMEOUT_MS = 5000;
-// Default timeout for tool execution (can be overridden by server config later)
+// Default timeout for tool execution (can be overridden bymcpServer config later)
 const DEFAULT_TOOL_EXEC_TIMEOUT_MS = 30000;
-// Timeout for stdio server readiness check
+// Timeout for stdiomcpServer readiness check
 const DEFAULT_READINESS_TIMEOUT_MS = 5000;
 
 export class McpManager {
@@ -103,37 +103,37 @@ export class McpManager {
     log("[MCP Manager] Initializing...");
 
     try {
-      const localServers = await listServers("local");
-      const globalServers = await listServers("global");
-      const allServerConfigs = [...localServers, ...globalServers];
+      const localMcpServers = await listMcpServers("local");
+      const globalMcpServers = await listMcpServers("global");
+      const allMcpServerConfigs = [...localMcpServers, ...globalMcpServers];
 
       // Deduplicate based on name, prioritizing local config
-      const uniqueServerConfigs = new Map<string, McpServerConfig>();
-      for (const server of allServerConfigs) {
-        if (!uniqueServerConfigs.has(server.name)) {
-          uniqueServerConfigs.set(server.name, server);
+      const uniqueMcpServerConfigs = new Map<string, McpServerConfig>();
+      for (const mcpServer of allMcpServerConfigs) {
+        if (!uniqueMcpServerConfigs.has(mcpServer.name)) {
+          uniqueMcpServerConfigs.set(mcpServer.name, mcpServer);
         }
       }
 
-      if (uniqueServerConfigs.size === 0) {
+      if (uniqueMcpServerConfigs.size === 0) {
         log("[MCP Manager] No MCP servers configured.");
         this.isInitialized = true;
         return;
       }
 
       log(
-        `[MCP Manager] Found ${uniqueServerConfigs.size} servers. Connecting...`,
+        `[MCP Manager] Found ${uniqueMcpServerConfigs.size} servers. Connecting...`,
       );
 
-      const connectionPromises = Array.from(uniqueServerConfigs.values()).map(
+      const connectionPromises = Array.from(uniqueMcpServerConfigs.values()).map(
         (config) =>
           this.connectToServer(config).catch((err) => {
             log(
-              `[MCP Manager] Failed to connect to server ${config.name}: ${err}`,
+              `[MCP Manager] Failed to connect tomcpServer ${config.name}: ${err}`,
             );
             // Store error state even if initial connection fails
             this.connections.set(config.name, {
-              serverConfig: config,
+              mcpServerConfig: config,
               client: null, // No client if connection failed
               transport: null, // No transport
               status: "error",
@@ -151,7 +151,7 @@ export class McpManager {
             () =>
               reject(
                 new Error(
-                  "MCP initialization timed out waiting for server connections.",
+                  "MCP initialization timed out waiting formcpServer connections.",
                 ),
               ),
             DEFAULT_REQUEST_TIMEOUT_MS + 1000,
@@ -192,7 +192,7 @@ export class McpManager {
     if (this.debugMode) {
       this.connections.forEach((conn, name) => {
         log(
-          `[MCP Manager] Server '${name}': status=${conn.status}, tools=${
+          `[MCP Manager]mcpServer '${name}': status=${conn.status}, tools=${
             conn.tools.length
           }${conn.error ? `, error=${conn.error}` : ""}`,
         );
@@ -201,7 +201,7 @@ export class McpManager {
   }
 
   /**
-   * Connect to a single MCP server based on its configuration.
+   * Connect to a single MCP Server based on its configuration.
    */
   private async connectToServer(config: McpServerConfig): Promise<void> {
     log(`[MCP Manager] Connecting to ${config.name} (${config.type})...`);
@@ -212,14 +212,14 @@ export class McpManager {
       this.connections.get(config.name)?.status !== "error"
     ) {
       log(
-        `[MCP Manager] Server ${config.name} already connecting or connected.`,
+        `[MCP Manager]mcpServer ${config.name} already connecting or connected.`,
       );
       return;
     }
 
     // Mark as connecting immediately
     this.connections.set(config.name, {
-      serverConfig: config,
+      mcpServerConfig: config,
       client: null,
       transport: null,
       status: "connecting",
@@ -237,13 +237,13 @@ export class McpManager {
 
       if (config.type === "sse") {
         if (!config.url) {
-          throw new Error(`SSE server ${config.name} is missing 'url'.`);
+          throw new Error(`SSEmcpServer ${config.name} is missing 'url'.`);
         }
         transport = new SSEClientTransport(new URL(config.url), {});
         // SSE transport doesn't need manual start or readiness check like stdio
       } else if (config.type === "stdio") {
         if (!config.cmd) {
-          throw new Error(`Stdio server ${config.name} is missing 'cmd'.`);
+          throw new Error(`StdiomcpServer ${config.name} is missing 'cmd'.`);
         }
 
         // Use the SDK's StdioClientTransport directly
@@ -318,7 +318,7 @@ export class McpManager {
               }
               if (!isReady && readyPattern.test(output)) {
                 isReady = true;
-                log(`[MCP Manager] Server ${config.name} signaled ready.`);
+                log(`[MCP Manager]mcpServer ${config.name} signaled ready.`);
                 cleanup();
                 resolve();
               }
@@ -345,7 +345,7 @@ export class McpManager {
         // Monkey-patch start to prevent client.connect from restarting the transport
         stdioTransport.start = async () => {};
       } else {
-        throw new Error(`Unsupported server type: ${config.type}`);
+        throw new Error(`UnsupportedmcpServer type: ${config.type}`);
       }
 
       if (!transport) {
@@ -424,7 +424,7 @@ export class McpManager {
 
       // Update connection state to connected
       this.connections.set(config.name, {
-        serverConfig: config,
+        mcpServerConfig: config,
         client,
         transport,
         status: "connected",
@@ -436,7 +436,7 @@ export class McpManager {
       // Ensure state reflects the error
       const existingConn = this.connections.get(config.name);
       this.connections.set(config.name, {
-        ...(existingConn || { serverConfig: config, tools: [] }), // Keep existing config/tools if possible
+        ...(existingConn || { mcpServerConfig: config, tools: [] }), // Keep existing config/tools if possible
         client: null, // Set client to null on error
         transport: transport || existingConn?.transport || null, // Keep transport if created
         status: "error",
@@ -459,13 +459,13 @@ export class McpManager {
    */
   getAvailableTools(): Array<McpToolDefinition> {
     const allTools: Array<McpToolDefinition> = [];
-    this.connections.forEach((conn, serverName) => {
+    this.connections.forEach((conn, mcpServerName) => {
       if (conn.status === "connected" && conn.tools) {
         conn.tools.forEach((tool) => {
-          // Namespace the tool name: mcp__serverName__toolName
+          // Namespace the tool name: mcp__mcpServerName__toolName
           allTools.push({
             ...tool,
-            name: `mcp__${serverName}__${tool.name}`,
+            name: `mcp__${mcpServerName}__${tool.name}`,
           });
         });
       }
@@ -518,40 +518,40 @@ export class McpManager {
   }
 
   /**
-   * Execute a tool call on the specified server with improved error handling.
-   * @param serverName The name of the MCP server to call the tool on
+   * Execute a tool call on the specifiedmcpServer with improved error handling.
+   * @param mcpServerName The name of the MCP Server to call the tool on
    * @param toolName The name of the tool to call
    * @param args The arguments to pass to the tool
    * @returns A promise that resolves to the tool result or error
    */
   async callTool(
-    serverName: string,
+    mcpServerName: string,
     toolName: string,
     args: Record<string, any>,
   ): Promise<McpToolResult> {
     return executeWithErrorHandling(
       async () => {
-        const connection = this.connections.get(serverName);
+        const connection = this.connections.get(mcpServerName);
 
         if (!connection) {
-          return { error: `MCP server '${serverName}' not found.` };
+          return { error: `mcpServer '${mcpServerName}' not found.` };
         }
         if (connection.status !== "connected") {
           return {
-            error: `MCP server '${serverName}' is not connected (status: ${
+            error: `mcpServer '${mcpServerName}' is not connected (status: ${
               connection.status
             }). ${connection.error || ""}`.trim(),
           };
         }
         if (!connection.client) {
-          return { error: `MCP server '${serverName}' has no active client.` };
+          return { error: `mcpServer '${mcpServerName}' has no active client.` };
         }
 
         // TODO: Add server-specific timeout from config if available
         const timeout = DEFAULT_TOOL_EXEC_TIMEOUT_MS;
 
         log(
-          `[MCP Manager] Calling tool '${toolName}' on server '${serverName}' with args: ${JSON.stringify(
+          `[MCP Manager] Calling tool '${toolName}' on mcpServer '${mcpServerName}' with args: ${JSON.stringify(
             args,
           )}`,
         );
@@ -571,13 +571,13 @@ export class McpManager {
 
         if (this.debugMode) {
           console.log(
-            `[MCP DEBUG] Raw tool call result for '${toolName}' on server '${serverName}':`,
+            `[MCP DEBUG] Raw tool call result for '${toolName}' on mcpServer '${mcpServerName}':`,
             result,
           );
         }
 
         log(
-          `[MCP Manager] Tool '${toolName}' on server '${serverName}' result received`,
+          `[MCP Manager] Tool '${toolName}' on mcpServer '${mcpServerName}' result received`,
         );
 
         return this.processToolResult(result);
@@ -621,7 +621,7 @@ export class McpManager {
             await conn.transport.close();
           } catch (e) {
             log(
-              `[MCP Manager] Error closing transport for ${conn.serverConfig.name}: ${e}`,
+              `[MCP Manager] Error closing transport for ${conn.mcpServerConfig.name}: ${e}`,
             );
           }
         }
@@ -632,7 +632,7 @@ export class McpManager {
             await conn.client.close();
           } catch (e) {
             log(
-              `[MCP Manager] Error closing client for ${conn.serverConfig.name}: ${e}`,
+              `[MCP Manager] Error closing client for ${conn.mcpServerConfig.name}: ${e}`,
             );
           }
         }
@@ -645,12 +645,12 @@ export class McpManager {
   }
 
   /**
-   * Start an HTTP server to expose MCP functionality
-   * @param options Server options including port
-   * @returns A promise that resolves when the server is started
+   * Start an HTTPmcpServer to expose MCP functionality
+   * @param optionsmcpServer options including port
+   * @returns A promise that resolves when themcpServer is started
    */
   async serve(options: { port: number }): Promise<void> {
-    log(`[MCP Manager] Starting HTTP server on port ${options.port}...`);
+    log(`[MCP Manager] Starting HTTPmcpServer on port ${options.port}...`);
 
     // Use the serveConnection function from mcp-serve.ts
     return serveConnection({

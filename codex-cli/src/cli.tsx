@@ -16,9 +16,9 @@ import { AutoApprovalMode } from "./utils/auto-approval-mode";
 import { loadConfig, PRETTY_PRINT } from "./utils/config";
 import { createInputItem } from "./utils/input-utils";
 import {
-  listServers,
-  addServer,
-  removeServer,
+  listMcpServers,
+  addMcpServer,
+  removeMcpServer,
 } from "./utils/mcp";
 import { serve as serveMcp } from "./utils/mcp-serve";
 import { McpManager } from "./utils/mcp-manager"; // Use McpManager instead of McpClientRegistry
@@ -44,47 +44,47 @@ import { createInterface } from "readline/promises";
 initLogger();
 
 // Helper to create an MCP client for a specific server
-async function createClientForServer(
-  serverName: string,
-): Promise<{ client: any; server: MCPServer }> {
-  console.log(`Creating MCP client for server: ${serverName}`);
+async function createMcpClientForMcpServer(
+  mcpServerName: string,
+): Promise<{ client: any; mcpServer: MCPServer }> {
+  console.log(`Creating MCP client for MCP Server: ${mcpServerName}`);
 
   // Check local then global scope
-  const localServers = await listServers("local");
-  const globalServers = await listServers("global");
-  const allServers = [...localServers, ...globalServers];
+  const localMcpServers = await listMcpServers("local");
+  const globalMcpServers = await listMcpServers("global");
+  const allMcpServers = [...localMcpServers, ...globalMcpServers];
 
   // Find the server by name
-  const server = allServers.find((s) => s.name === serverName);
-  if (!server) {
+  const mcpServer = allMcpServers.find((s: MCPServer) => s.name === mcpServerName);
+  if (!mcpServer) {
     throw new Error(
-      `Server '${serverName}' not found. Use 'codex --mcp list' to see available servers.`,
+      `MCP Server '${mcpServerName}' not found. Use 'codex --mcp list' to see available MCP Servers.`,
     );
   }
 
-  console.log(`Found server '${serverName}' of type '${server.type}'`);
+  console.log(`Found MCP Server '${mcpServerName}' of type '${mcpServer.type}'`);
 
   // Create a client based on server type
   let client: any;
   const childProcess: any = null;
   try {
     // For stdio servers, use our robust client implementation
-    if (server.type === "stdio") {
-      if (!server.cmd) {
+    if (mcpServer.type === "stdio") {
+      if (!mcpServer.cmd) {
         throw new Error(
-          `Server '${serverName}' is missing required 'cmd' field.`,
+          `MCP Server '${mcpServerName}' is missing required 'cmd' field.`,
         );
       }
 
       console.log(
-        `Using robust client for stdio server: ${server.cmd} ${(
-          server.args || []
+        `Using robust client for stdio MCP Server: ${mcpServer.cmd} ${(
+          mcpServer.args || []
         ).join(" ")}`,
       );
 
       try {
         // Create a robust client that handles line-buffered JSON parsing
-        client = await createRobustClient(server);
+        client = await createRobustClient(mcpServer);
       } catch (err) {
         if (err instanceof Error) {
           console.error(`Error creating robust MCP client: ${err.message}`);
@@ -93,14 +93,14 @@ async function createClientForServer(
         }
         throw err;
       }
-    } else if (server.type === "sse") {
-      if (!server.url) {
+    } else if (mcpServer.type === "sse") {
+      if (!mcpServer.url) {
         throw new Error(
-          `Server '${serverName}' is missing required 'url' field.`,
+          `Server '${mcpServerName}' is missing required 'url' field.`,
         );
       }
 
-      console.log(`Connecting to SSE server at: ${server.url}`);
+      console.log(`Connecting to SSE server at: ${mcpServer.url}`);
 
       // Simple direct approach for SSE
       // Create a client with SSE support
@@ -109,7 +109,7 @@ async function createClientForServer(
         const EventSource = (await import("eventsource")) as any;
 
         // Create a client that uses EventSource for SSE
-        const eventSource = new EventSource(server.url!);
+        const eventSource = new EventSource(mcpServer.url!);
 
         client = {
           initialize: async () => {
@@ -139,7 +139,7 @@ async function createClientForServer(
               eventSource.addEventListener("message", onMessage);
 
               // Send init request
-              fetch(`${server.url}/init`, { method: "POST" }).catch((err) => {
+              fetch(`${mcpServer.url}/init`, { method: "POST" }).catch((err) => {
                 clearTimeout(timeoutId);
                 reject(err);
               });
@@ -148,7 +148,7 @@ async function createClientForServer(
 
           listTools: async () => {
             try {
-              const response = await fetch(`${server.url}/list_tools`, {
+              const response = await fetch(`${mcpServer.url}/list_tools`, {
                 method: "POST",
               });
               return await response.json();
@@ -160,7 +160,7 @@ async function createClientForServer(
 
           invoke: async (tool: string, args: any) => {
             try {
-              const response = await fetch(`${server.url}/invoke`, {
+              const response = await fetch(`${mcpServer.url}/invoke`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ tool, args }),
@@ -184,7 +184,7 @@ async function createClientForServer(
         throw err;
       }
     } else {
-      throw new Error(`Unsupported server type: ${server.type}`);
+      throw new Error(`Unsupported MCP Server type: ${mcpServer.type}`);
     }
 
     // Client is already created directly for each transport type
@@ -200,7 +200,7 @@ async function createClientForServer(
     throw err; // Propagate the error
   }
 
-  return { client, server };
+  return { client, mcpServer };
 }
 
 // TODO: migrate to new versions of quiet mode
@@ -252,8 +252,8 @@ const cli = meow(
     $ codex --mcp invoke --name myserver --tool echo --payload '{"message":"Hello"}'
   
   MCP Server mode
-    $ codex --mcp serve --type stdio    # run codex as an MCP server over stdio
-    $ codex --mcp serve --type sse --port 8080  # run codex as an MCP server over HTTP
+    $ codex --mcp serve --type stdio    # run codex as an MCP Server over stdio
+    $ codex --mcp serve --type sse --port 8080  # run codex as an MCP Server over HTTP
 `,
   {
     importMeta: import.meta,
@@ -332,7 +332,7 @@ const cli = meow(
       // MCP commands
       name: {
         type: "string",
-        description: "Name of the MCP server (for add/remove)",
+        description: "Name of the MCP Server (for add/remove)",
       },
       type: {
         type: "string",
@@ -349,7 +349,7 @@ const cli = meow(
       },
       url: {
         type: "string",
-        description: "URL for sse-type MCP server (for add)",
+        description: "URL for sse-type MCP Server (for add)",
       },
       env: {
         type: "string",
@@ -399,7 +399,7 @@ if (cli.flags.mcp) {
         if (!type) {
           type = await rl.question("Type (stdio/sse): ");
         }
-        const server: Record<string, any> = { name, type };
+        const mcpServer: Record<string, any> = { name, type };
         if (type === "stdio") {
           if (!cmd) {
             cmd = await rl.question("Command: ");
@@ -419,13 +419,13 @@ if (cli.flags.mcp) {
             );
             flags["args"] = a ? a.split(/\s+/) : [];
           }
-          server["cmd"] = cmd;
-          server["args"] = flags["args"];
+          mcpServer["cmd"] = cmd;
+          mcpServer["args"] = flags["args"];
         } else if (type === "sse") {
           if (!url) {
             url = await rl.question("URL: ");
           }
-          server["url"] = url;
+          mcpServer["url"] = url;
         } else {
           console.error("Invalid type. Must be 'stdio' or 'sse'.");
           process.exit(1);
@@ -441,24 +441,24 @@ if (cli.flags.mcp) {
             env[k] = v;
           }
         }
-        server["env"] = env;
-        await addServer(server as any, scope);
-        console.log(`Added server '${name}' to ${scope} MCP config.`);
+        mcpServer["env"] = env;
+        await addMcpServer(mcpServer as any, scope);
+        console.log(`Added mcpServer '${name}' to ${scope} MCP config.`);
         break;
       }
       case "remove": {
         let { name } = flags;
         if (!name) {
-          name = await rl.question("Name of server to remove: ");
+          name = await rl.question("Name of mcpServer to remove: ");
         }
-        await removeServer(name, scope);
-        console.log(`Removed server '${name}' from ${scope} MCP config.`);
+        await removeMcpServer(name, scope);
+        console.log(`Removed mcpServer '${name}' from ${scope} MCP config.`);
         break;
       }
       case "list": {
         const scopes = flags["scope"] ? [scope] : ["local", "global"];
         for (const s of scopes) {
-          const list = await listServers(s as any);
+          const list = await listMcpServers(s as any);
           console.log(`${s} MCP servers:`);
           if (list.length === 0) {
             console.log("  (none)");
@@ -481,12 +481,12 @@ if (cli.flags.mcp) {
         // If a specific server is named, use the MCP client SDK
         if (flags["name"]) {
           try {
-            console.log(`Listing tools for server '${flags["name"]}'...`);
-            const { client, server } = await createClientForServer(
+            console.log(`Listing tools for mcpServer '${flags["name"]}'...`);
+            const { client, mcpServer } = await createMcpClientForMcpServer(
               flags["name"],
             );
             console.log(
-              `Connected to server '${flags["name"]}' (${server.type})`,
+              `Connected to server '${flags["name"]}' (${mcpServer.type})`,
             );
 
             // Initialize and get tools
@@ -497,7 +497,7 @@ if (cli.flags.mcp) {
             const tools = await client.listTools();
 
             console.log(
-              `Tools for server '${flags["name"]}' (${server.type}):`,
+              `Tools for MCP mcpServer '${flags["name"]}' (${mcpServer.type}):`,
             );
             if (tools.length === 0) {
               console.log("  (no tools available)");
@@ -525,18 +525,18 @@ if (cli.flags.mcp) {
           console.log("Available MCP servers:");
 
           const scopes = flags["scope"] ? [scope] : ["local", "global"];
-          let hasServers = false;
+          let hasMcpServers = false;
 
           for (const sc of scopes) {
-            const servers = await listServers(sc as any);
-            if (servers.length === 0) {
+            const mcpServers = await listMcpServers(sc as any);
+            if (mcpServers.length === 0) {
               console.log(`${sc} MCP servers: (none)`);
               continue;
             }
 
-            hasServers = true;
+            hasMcpServers = true;
             console.log(`${sc} MCP servers:`);
-            for (const svr of servers) {
+            for (const svr of mcpServers) {
               console.log(`  - ${svr.name} (${svr.type})`);
               if (svr.type === "stdio" && svr.cmd) {
                 console.log(
@@ -552,8 +552,8 @@ if (cli.flags.mcp) {
             }
           }
 
-          if (hasServers) {
-            console.log("\nTo list tools for a specific server:");
+          if (hasMcpServers) {
+            console.log("\nTo list tools for a specific mcpServer:");
             console.log("  codex --mcp tools --name <server_name>");
           } else {
             console.log("\nNo MCP servers configured. Add one with:");
@@ -585,14 +585,14 @@ if (cli.flags.mcp) {
               if (payload.includes("message") && payload.includes(":")) {
                 const match = payload.match(/message["\s:]+([^"]+)/);
                 if (match && match[1]) {
-                  argsObj = { message: match[1]?.replace(/[",}]/g, "") || "" };
+                  argsObj = { message: match[1].replace(/[",}]/g, "") || "" };
                 }
               }
             }
             console.log(`Parsed payload: ${JSON.stringify(argsObj)}`);
           } catch (err) {
             const errorMessage =
-              err instanceof Error ? err.message : String(err);
+              (err as Error) instanceof Error ? (err as Error).message : String(err);
             console.error(`Invalid JSON payload: ${errorMessage}`);
             console.error("Using default empty payload");
           }
@@ -600,19 +600,19 @@ if (cli.flags.mcp) {
           console.log("No payload provided, using empty object as args");
         }
 
-        // If server name is provided, use the MCP client SDK
+        // If mcpServer name is provided, use the MCP client SDK
         if (flags["name"]) {
           try {
             console.log(
-              `Using MCP SDK client to connect to server '${flags["name"]}'`,
+              `Using MCP SDK client to connect to mcpServer '${flags["name"]}'`,
             );
 
-            // Create client for the specified server
-            const { client, server } = await createClientForServer(
+            // Create client for the specified mcpServer
+            const { client, mcpServer } = await createMcpClientForMcpServer(
               flags["name"],
             );
             console.log(
-              `Connected to server '${flags["name"]}' (${server.type})`,
+              `Connected to mcpServer '${flags["name"]}' (${mcpServer.type})`,
             );
 
             // Initialize the client and get tools
@@ -638,8 +638,8 @@ if (cli.flags.mcp) {
           break;
         }
 
-        // No server name provided - error out
-        console.error("Error: Server name is required for invoke command.");
+        // No mcpServer name provided - error out
+        console.error("Error: mcpServer name is required for invoke command.");
         console.error(
           'Usage: codex --mcp invoke --name <server_name> --tool <tool_name> [--payload \'{"key":"value"}\']',
         );

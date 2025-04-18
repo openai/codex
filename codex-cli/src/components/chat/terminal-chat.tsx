@@ -131,7 +131,7 @@ export default function TerminalChat({
             const parts = tool.name.split("__");
             if (parts.length === 3) {
               // Format: mcp__server__tool
-              const serverName = parts[1] || "unknown";
+              const mcpServerName = parts[1] || "unknown";
               // Initialize the category if it doesn't exist
               if (!toolCategories[serverName]) {
                 toolCategories[serverName] = [];

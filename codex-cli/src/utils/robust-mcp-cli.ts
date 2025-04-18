@@ -6,40 +6,40 @@ import { RobustStdioMcpClient } from "./robust-mcp-client";
  * Create a robust MCP client for a stdio server
  * This is used by the CLI to invoke tools on MCP servers
  */
-export async function createRobustClient(server: MCPServer): Promise<any> {
-  if (server.type !== "stdio" || !server.cmd) {
-    throw new Error("Server must be a stdio server with a command");
+export async function createRobustClient(mcpServer: MCPServer): Promise<any> {
+  if (mcpServer.type !== "stdio" || !server.cmd) {
+    throw new Error("Server must be a stdiomcpServer with a command");
   }
 
-  console.log(`Creating robust stdio client for ${server.name}`);
-  console.log(`Command: ${server.cmd} ${(server.args || []).join(" ")}`);
+  console.log(`Creating robust stdio client for ${mcpServer.name}`);
+  console.log(`Command: ${mcpServer.cmd} ${(mcpServer.args || []).join(" ")}`);
 
   // Create the robust client
-  const robustClient = new RobustStdioMcpClient(server.cmd, server.args || [], {
-    serverName: server.name,
+  const robustClient = new RobustStdioMcpClient(mcpServer.cmd, server.args || [], {
+    mcpServerName: server.name,
     env: server.env,
     readyPattern: /server running|ready|started/i,
   });
 
-  // Wait for the server to be ready (with timeout)
+  // Wait for themcpServer to be ready (with timeout)
   try {
     await robustClient.waitForReady(5000);
-    console.log(`Server ${server.name} is ready`);
+    console.log(`Server ${mcpServer.name} is ready`);
   } catch (e) {
     console.log(
-      `Server ${server.name} did not signal ready, continuing anyway`,
+      `Server ${mcpServer.name} did not signal ready, continuing anyway`,
     );
   }
 
   // Create a client interface that matches the expected API
   return {
     initialize: async () => {
-      console.log(`Initializing robust client for ${server.name}`);
+      console.log(`Initializing robust client for ${mcpServer.name}`);
       return { protocol: "mcp/1.0" };
     },
 
     listTools: async () => {
-      console.log(`Listing tools for ${server.name} using robust client`);
+      console.log(`Listing tools for ${mcpServer.name} using robust client`);
       try {
         const response = await robustClient.send({ method: "tools/list" });
         console.log(`Got tools response: ${JSON.stringify(response)}`);
@@ -52,7 +52,7 @@ export async function createRobustClient(server: MCPServer): Promise<any> {
 
     invoke: async (tool: string, args: any) => {
       console.log(
-        `Invoking tool ${tool} on ${server.name} using robust client`,
+        `Invoking tool ${tool} on ${mcpServer.name} using robust client`,
       );
       console.log(`Arguments: ${JSON.stringify(args)}`);
 
@@ -85,12 +85,12 @@ export async function createRobustClient(server: MCPServer): Promise<any> {
           `Sending to server: ${tool} with args: ${JSON.stringify(actualArgs)}`,
         );
 
-        // Set up a timeout promise to handle cases where the server doesn't respond
+        // Set up a timeout promise to handle cases where themcpServer doesn't respond
         const timeoutPromise = new Promise<any>((_, reject) => {
           setTimeout(() => {
             reject(
               new Error(
-                "Timeout waiting for response from MCP server (5000ms)",
+                "Timeout waiting for response from MCP Server (5000ms)",
               ),
             );
           }, 5000);
@@ -156,37 +156,37 @@ export async function createRobustClient(server: MCPServer): Promise<any> {
 
     // Add a method to close the client
     close: () => {
-      console.log(`Closing robust client for ${server.name}`);
+      console.log(`Closing robust client for ${mcpServer.name}`);
       robustClient.kill();
     },
   };
 }
 
 /**
- * Patch for the CLI's createClientForServer function
+ * Patch for the CLI's createMcpClientForMcpServer function
  * This replaces the stdio client creation with our robust client
  */
-export async function patchedCreateClientForServer(
+export async function patchedcreateMcpClientForMcpServer(
   originalFn: (
-    serverName: string,
+    mcpServerName: string,
   ) => Promise<{ client: any; server: MCPServer }>,
-  serverName: string,
+  mcpServerName: string,
 ): Promise<{ client: any; server: MCPServer }> {
-  console.log(`Creating MCP client for server: ${serverName} (patched)`);
+  console.log(`Creating MCP client for server: ${mcpServerName} (patched)`);
 
   try {
-    // Get the server config using the original function's logic
-    const { server } = await originalFn(serverName);
+    // Get themcpServer config using the original function's logic
+    const { mcpServer } = await originalFn(mcpServerName);
 
     // For stdio servers, use our robust client
-    if (server.type === "stdio") {
-      console.log(`Using robust client for stdio server ${serverName}`);
-      const client = await createRobustClient(server);
-      return { client, server };
+    if (mcpServer.type === "stdio") {
+      console.log(`Using robust client for stdiomcpServer ${mcpServerName}`);
+      const client = await createRobustClient(mcpServer);
+      return { client, mcpServer };
     }
 
-    // For other server types, use the original function
-    return await originalFn(serverName);
+    // For othermcpServer types, use the original function
+    return await originalFn(mcpServerName);
   } catch (e) {
     console.error(`Error creating client: ${e}`);
     throw e;

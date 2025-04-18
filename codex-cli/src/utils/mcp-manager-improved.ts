@@ -1,6 +1,6 @@
 import type { MCPServer as McpServerConfig } from "./mcp";
 
-import { listServers } from "./mcp";
+import { listMcpServers } from "./mcp";
 import {
   McpError,
   McpConnectionError,
@@ -27,7 +27,7 @@ import {
 
 // Define internal connection state
 type McpConnection = {
-  serverConfig: McpServerConfig;
+  mcpServerConfig: McpServerConfig;
   client: Client;
   transport: StdioClientTransport | SSEClientTransport;
   stdioClient?: McpStdioClient;
@@ -117,37 +117,37 @@ export class McpManager {
     info("Initializing...");
 
     try {
-      const localServers = await listServers("local");
-      const globalServers = await listServers("global");
-      const allServerConfigs = [...localServers, ...globalServers];
+      const localMcpServers = await listMcpServers("local");
+      const globalMcpServers = await listMcpServers("global");
+      const allMcpServerConfigs = [...localMcpServers, ...globalMcpServers];
 
       // Deduplicate based on name, prioritizing local config
-      const uniqueServerConfigs = new Map<string, McpServerConfig>();
-      for (const server of allServerConfigs) {
-        if (!uniqueServerConfigs.has(server.name)) {
-          uniqueServerConfigs.set(server.name, server);
+      const uniqueMcpServerConfigs = new Map<string, McpServerConfig>();
+      for (const mcpServer of allMcpServerConfigs) {
+        if (!uniqueMcpServerConfigs.has(mcpServer.name)) {
+          uniqueMcpServerConfigs.set(mcpServer.name, mcpServer);
         }
       }
 
-      if (uniqueServerConfigs.size === 0) {
+      if (uniqueMcpServerConfigs.size === 0) {
         info("No Mcp servers configured");
         this.isInitialized = true;
         return;
       }
 
-      info(`Found ${uniqueServerConfigs.size} servers. Connecting...`);
+      info(`Found ${uniqueMcpServerConfigs.size} servers. Connecting...`);
 
-      // Connect to each server with retry logic
-      const connectionPromises = Array.from(uniqueServerConfigs.values()).map(
+      // Connect to eachmcpServer with retry logic
+      const connectionPromises = Array.from(uniqueMcpServerConfigs.values()).map(
         (config) =>
           this.connectWithRetry(config).catch((err) => {
             const errorMessage =
               err instanceof Error ? err.message : String(err);
-            warn(`Failed to connect to server ${config.name}: ${errorMessage}`);
+            warn(`Failed to connect tomcpServer ${config.name}: ${errorMessage}`);
 
             // Store error state even if all connection attempts failed
             this.connections.set(config.name, {
-              serverConfig: config,
+              mcpServerConfig: config,
               client: null as any,
               transport: null as any,
               status: "error",
@@ -206,7 +206,7 @@ export class McpManager {
   }
 
   /**
-   * Connect to a server with retry logic
+   * Connect to amcpServer with retry logic
    */
   private async connectWithRetry(
     config: McpServerConfig,
@@ -219,7 +219,7 @@ export class McpManager {
     // Track connection attempts
     if (!conn) {
       conn = {
-        serverConfig: config,
+        mcpServerConfig: config,
         client: null as any,
         transport: null as any,
         status: "connecting",
@@ -240,7 +240,7 @@ export class McpManager {
           `Connection attempt ${attempt}/${maxRetries} to '${config.name}'`,
         );
         await this.connectToServer(config);
-        info(`Connected to server '${config.name}' on attempt ${attempt}`);
+        info(`Connected tomcpServer '${config.name}' on attempt ${attempt}`);
         return;
       } catch (err) {
         lastError = err instanceof Error ? err : new Error(String(err));
@@ -269,7 +269,7 @@ export class McpManager {
   }
 
   /**
-   * Connect to a single MCP server based on its configuration.
+   * Connect to a single MCP Server based on its configuration.
    */
   private async connectToServer(config: McpServerConfig): Promise<void> {
     debug(`Connecting to ${config.name} (${config.type})...`);
@@ -283,7 +283,7 @@ export class McpManager {
 
     // Keep track of connections, even if they fail
     const conn: McpConnection = existingConn || {
-      serverConfig: config,
+      mcpServerConfig: config,
       client: null as any,
       transport: null as any,
       status: "connecting",
@@ -308,7 +308,7 @@ export class McpManager {
         if (!config.url) {
           throw new McpConnectionError(
             config.name,
-            new Error("SSE server is missing 'url' field"),
+            new Error("SSEmcpServer is missing 'url' field"),
           );
         }
         transport = new SSEClientTransport(new URL(config.url), {});
@@ -316,13 +316,13 @@ export class McpManager {
         if (!config.cmd) {
           throw new McpConnectionError(
             config.name,
-            new Error("Stdio server is missing 'cmd' field"),
+            new Error("StdiomcpServer is missing 'cmd' field"),
           );
         }
 
         // Create the stdio client
         const stdioClient = new McpStdioClient(config.cmd, config.args || [], {
-          serverName: config.name,
+          mcpServerName: config.name,
           env: config.env,
           debug: this.debugEnabled,
         });
@@ -342,7 +342,7 @@ export class McpManager {
               }${event.message}`;
             }
           } else if (event.type === "ready") {
-            debug(`[${config.name}] Server ready event received`);
+            debug(`[${config.name}]mcpServer ready event received`);
           }
         });
 
@@ -371,7 +371,7 @@ export class McpManager {
       } else {
         throw new McpConnectionError(
           config.name,
-          new Error(`Unsupported server type: ${config.type}`),
+          new Error(`UnsupportedmcpServer type: ${config.type}`),
         );
       }
 
@@ -464,13 +464,13 @@ export class McpManager {
   getAvailableTools(): Array<McpToolDefinition> {
     const allTools: Array<McpToolDefinition> = [];
 
-    this.connections.forEach((conn, serverName) => {
+    this.connections.forEach((conn, mcpServerName) => {
       if (conn.status === "connected" && conn.tools) {
         conn.tools.forEach((tool) => {
           // Namespace the tool name: mcp__serverName__toolName
           allTools.push({
             ...tool,
-            name: `mcp__${serverName}__${tool.name}`,
+            name: `mcp__${mcpServerName}__${tool.name}`,
           });
         });
       }
@@ -480,31 +480,31 @@ export class McpManager {
   }
 
   /**
-   * Execute a tool call on the specified server with improved error handling.
+   * Execute a tool call on the specifiedmcpServer with improved error handling.
    */
   async callTool(
-    serverName: string,
+    mcpServerName: string,
     toolName: string,
     args: Record<string, any>,
   ): Promise<McpToolResult> {
     return executeWithErrorHandling(
       async () => {
         // Check connection status first
-        const connection = this.connections.get(serverName);
+        const connection = this.connections.get(mcpServerName);
         if (!connection) {
           const availableServers = Array.from(this.connections.keys()).join(
             ", ",
           );
           throw new McpNotFoundError(
             "server",
-            serverName,
+            mcpServerName,
             `Available servers: ${availableServers || "none"}`,
           );
         }
 
         if (connection.status !== "connected") {
           throw new McpConnectionError(
-            serverName,
+            mcpServerName,
             new Error(
               `Server is not connected (status: ${connection.status})${
                 connection.error ? ": " + connection.error : ""
@@ -515,7 +515,7 @@ export class McpManager {
 
         if (!connection.client) {
           throw new McpConnectionError(
-            serverName,
+            mcpServerName,
             new Error("No active client available"),
           );
         }
@@ -524,7 +524,7 @@ export class McpManager {
         const timeout = DEFAULT_TOOL_EXEC_TIMEOUT_MS;
 
         debug(
-          `Calling tool '${toolName}' on server '${serverName}' with args: ${JSON.stringify(
+          `Calling tool '${toolName}' onmcpServer '${mcpServerName}' with args: ${JSON.stringify(
             args,
           )}`,
         );
@@ -541,7 +541,7 @@ export class McpManager {
             });
 
             debug(
-              `Tool '${toolName}' execution completed on '${serverName}' using stdio client`,
+              `Tool '${toolName}' execution completed on '${mcpServerName}' using stdio client`,
             );
 
             // Process the result
@@ -549,7 +549,7 @@ export class McpManager {
           } catch (err) {
             // Create a proper tool error
             throw new McpToolError(
-              serverName,
+              mcpServerName,
               toolName,
               err instanceof Error ? err : new Error(String(err)),
             );
@@ -575,7 +575,7 @@ export class McpManager {
             return this.processToolResult(result);
           } catch (err) {
             throw new McpToolError(
-              serverName,
+              mcpServerName,
               toolName,
               err instanceof Error ? err : new Error(String(err)),
             );
@@ -629,7 +629,7 @@ export class McpManager {
           // Kill stdio client if it exists
           if (conn.stdioClient) {
             conn.stdioClient.kill();
-            debug(`Killed stdio client for ${conn.serverConfig.name}`);
+            debug(`Killed stdio client for ${conn.mcpServerConfig.name}`);
           }
 
           // Close transport if it exists
@@ -642,11 +642,11 @@ export class McpManager {
             await conn.client.close();
           }
 
-          debug(`Closed connection to ${conn.serverConfig.name}`);
+          debug(`Closed connection to ${conn.mcpServerConfig.name}`);
         } catch (err) {
           const errorMessage = err instanceof Error ? err.message : String(err);
           warn(
-            `Error closing connection to ${conn.serverConfig.name}: ${errorMessage}`,
+            `Error closing connection to ${conn.mcpServerConfig.name}: ${errorMessage}`,
           );
         }
       },

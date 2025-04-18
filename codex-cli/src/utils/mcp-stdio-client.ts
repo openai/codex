@@ -9,11 +9,11 @@ import { EventEmitter } from "events";
  * Options for creating an MCP Stdio Client
  */
 export interface McpStdioClientOptions {
-  /** Name of the server (for logging purposes) */
-  serverName: string;
+  /** Name of themcpServer (for logging purposes) */
+  mcpServerName: string;
   /** Environment variables to pass to the process */
   env?: Record<string, string>;
-  /** Regex pattern to detect server readiness */
+  /** Regex pattern to detectmcpServer readiness */
   readyPattern?: RegExp;
   /** Timeout for request operations (milliseconds) */
   requestTimeoutMs?: number;
@@ -94,7 +94,7 @@ export class McpStdioClient extends EventEmitter {
 
     // Set default options
     this.options = {
-      serverName: options.serverName,
+      mcpServerName: options.mcpServerName,
       env: options.env || {},
       readyPattern: options.readyPattern || /server running|ready|started/i,
       requestTimeoutMs: options.requestTimeoutMs || 10000,
@@ -128,7 +128,7 @@ export class McpStdioClient extends EventEmitter {
    */
   async start(): Promise<void> {
     if (this.process) {
-      debug(`Process for ${this.options.serverName} already started`);
+      debug(`Process for ${this.options.mcpServerName} already started`);
       return;
     }
 
@@ -151,7 +151,7 @@ export class McpStdioClient extends EventEmitter {
         message: `Started process: ${this.command} ${this.args.join(" ")}`,
       });
 
-      // Wait for the server to be ready
+      // Wait for themcpServer to be ready
       await this.waitForReady();
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
@@ -160,7 +160,7 @@ export class McpStdioClient extends EventEmitter {
         message: `Failed to start process: ${errorMessage}`,
       });
       throw new McpConnectionError(
-        this.options.serverName,
+        this.options.mcpServerName,
         err instanceof Error ? err : new Error(errorMessage),
       );
     }
@@ -251,9 +251,9 @@ export class McpStdioClient extends EventEmitter {
    */
   private emitEvent(event: McpStdioClientEvent): void {
     if (event.type === "log" && this.options.debug) {
-      debug(`[${this.options.serverName}] ${event.message}`);
+      debug(`[${this.options.mcpServerName}] ${event.message}`);
     } else if (event.type === "error") {
-      logError(`[${this.options.serverName}] ${event.message}`);
+      logError(`[${this.options.mcpServerName}] ${event.message}`);
     }
 
     this.emit("event", event);
@@ -320,7 +320,7 @@ export class McpStdioClient extends EventEmitter {
   }
 
   /**
-   * Wait for the server to be ready
+   * Wait for themcpServer to be ready
    * @param timeoutMs Timeout in milliseconds
    */
   async waitForReady(timeoutMs: number = 10000): Promise<void> {
@@ -332,7 +332,7 @@ export class McpStdioClient extends EventEmitter {
     // If in error state, throw immediately
     if (this.readyState === "error") {
       throw new McpConnectionError(
-        this.options.serverName,
+        this.options.mcpServerName,
         new Error("Server is in error state"),
       );
     }
@@ -343,7 +343,7 @@ export class McpStdioClient extends EventEmitter {
         this.removeListener("event", handler);
         reject(
           new McpTimeoutError(
-            this.options.serverName,
+            this.options.mcpServerName,
             "waitForReady",
             timeoutMs,
           ),
@@ -361,7 +361,7 @@ export class McpStdioClient extends EventEmitter {
           this.removeListener("event", handler);
           reject(
             new McpConnectionError(
-              this.options.serverName,
+              this.options.mcpServerName,
               new Error(event.message),
             ),
           );
@@ -370,7 +370,7 @@ export class McpStdioClient extends EventEmitter {
           this.removeListener("event", handler);
           reject(
             new McpConnectionError(
-              this.options.serverName,
+              this.options.mcpServerName,
               new Error(`Process exited with code ${event.code}`),
             ),
           );
@@ -405,7 +405,7 @@ export class McpStdioClient extends EventEmitter {
     // Ensure we have a process
     if (!this.process) {
       throw new McpConnectionError(
-        this.options.serverName,
+        this.options.mcpServerName,
         new Error("Failed to start process"),
       );
     }
@@ -424,7 +424,7 @@ export class McpStdioClient extends EventEmitter {
           this.requests.delete(request.id!);
           reject(
             new McpTimeoutError(
-              this.options.serverName,
+              this.options.mcpServerName,
               `request '${request.method}'`,
               actualTimeout,
             ),
@@ -456,7 +456,7 @@ export class McpStdioClient extends EventEmitter {
 
         reject(
           new McpConnectionError(
-            this.options.serverName,
+            this.options.mcpServerName,
             err instanceof Error ? err : new Error(String(err)),
           ),
         );
@@ -472,7 +472,7 @@ export class McpStdioClient extends EventEmitter {
     for (const [id, { reject, timeout }] of this.requests.entries()) {
       clearTimeout(timeout);
       reject(
-        new McpConnectionError(this.options.serverName, new Error(reason)),
+        new McpConnectionError(this.options.mcpServerName, new Error(reason)),
       );
       this.requests.delete(id);
     }

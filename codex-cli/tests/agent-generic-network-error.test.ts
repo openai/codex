@@ -89,7 +89,7 @@ describe("AgentLoop – generic network/server errors", () => {
   });
 
   it("emits user friendly message on HTTP 500 from OpenAI", async () => {
-    const serverErr: any = new Error("Internal Server Error");
+    const serverErr: any = new Error("InternalmcpServer Error");
     serverErr.status = 500;
 
     openAiState.createSpy = vi.fn(async () => {

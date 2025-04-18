@@ -5,8 +5,8 @@ import type { ChildProcessWithoutNullStreams } from "child_process";
 import { spawn } from "child_process";
 import path from "path";
 
-// Path to the example server script
-const SERVER_SCRIPT = path.resolve(__dirname, "../scripts/mcp-echo-server.js");
+// Path to the examplemcpServer script
+const MCP_SERVER_SCRIPT = path.resolve(__dirname, "../scripts/mcp-echo-server.js");
 
 // Direct implementation of MCP client for testing
 class DirectMCPClient {
@@ -65,27 +65,27 @@ class DirectMCPClient {
 // Full implementation of MCP protocol tests
 describe("MCP Protocol", () => {
   let client: DirectMCPClient;
-  let serverProcess: ChildProcessWithoutNullStreams;
+  let mcpServerProcess: ChildProcessWithoutNullStreams;
 
   beforeAll(async () => {
-    // Start the test server process
-    serverProcess = spawn(SERVER_SCRIPT, [], {
+    // Start the testmcpServer process
+    mcpServerProcess = spawn(MCP_SERVER_SCRIPT, [], {
       stdio: ["pipe", "pipe", "pipe"],
     });
 
     // Add error handlers for debugging
-    serverProcess.on("error", (err) => {
-      console.error("Failed to start server process:", err);
+    mcpServerProcess.on("error", (err) => {
+      console.error("Failed to startmcpServer process:", err);
     });
 
-    serverProcess.stderr.on("data", (data) => {
+    mcpServerProcess.stderr.on("data", (data) => {
       console.log("Server stderr:", data.toString());
     });
 
     // Create a direct client implementation
-    client = new DirectMCPClient(serverProcess);
+    client = new DirectMCPClient(mcpServerProcess);
 
-    // Set up client and wait for server to be ready
+    // Set up client and wait formcpServer to be ready
     await client.setup();
 
     // Initialize MCP connection
@@ -118,8 +118,8 @@ describe("MCP Protocol", () => {
 
   // Clean up
   afterAll(() => {
-    if (serverProcess) {
-      serverProcess.kill();
+    if (mcpServerProcess) {
+      mcpServerProcess.kill();
     }
   });
 });

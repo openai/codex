@@ -367,8 +367,8 @@ export class AgentLoop {
     const mcpMatch = name && /^mcp__(.+)__(.+)$/.exec(name);
     if (mcpMatch) {
       const [, server, tool] = mcpMatch;
-      if (typeof server === "string" && typeof tool === "string") {
-        const mcpResult = await this.mcpManager.callTool(server, tool, args);
+      if (typeofmcpServer === "string" && typeof tool === "string") {
+        const mcpResult = await this.mcpManager.callTool(mcpServer, tool, args);
         outputItem.output = JSON.stringify(
           mcpResult.error
             ? { error: mcpResult.error }
@@ -377,7 +377,7 @@ export class AgentLoop {
         return [outputItem, ...additionalItems];
       } else {
         outputItem.output = JSON.stringify({
-          error: "Invalid MCP tool call: server or tool name missing.",
+          error: "Invalid MCP tool call:mcpServer or tool name missing.",
         });
         return [outputItem, ...additionalItems];
       }
@@ -1047,8 +1047,8 @@ function generatePrefix(mcpManager?: McpManager) {
 
 
     You can:
-    - Run MCP server tools
-    - Access MCP server resources
+    - Run MCP Server tools
+    - Access MCP Server resources
     - Receive user prompts, project context, and files.
     - Stream responses and emit function calls (e.g., shell commands, code edits).
     - Apply patches, run commands, and manage user approvals based on policy.
@@ -1097,9 +1097,9 @@ function generatePrefix(mcpManager?: McpManager) {
     - When using MCP tools or resources:
 
         ## use_mcp_tool
-        Description: Request to use a tool provided by a connected MCP server. Each MCP server can provide multiple tools with different capabilities. Tools have defined input schemas that specify required and optional parameters.
+        Description: Request to use a tool provided by a connected MCP server. Each MCP Server can provide multiple tools with different capabilities. Tools have defined input schemas that specify required and optional parameters.
         Parameters:
-        - server_name: (required) The name of the MCP server providing the tool
+        - server_name: (required) The name of the MCP Server providing the tool
         - tool_name: (required) The name of the tool to execute
         - arguments: (required) A JSON object containing the tool's input parameters, following the tool's input schema
         Usage:
@@ -1130,7 +1130,7 @@ function generatePrefix(mcpManager?: McpManager) {
         ## access_mcp_resource
         Description: Request to access a resource provided by a connected MCP server. Resources represent data sources that can be used as context, such as files, API responses, or system information.
         Parameters:
-        - server_name: (required) The name of the MCP server providing the resource
+        - server_name: (required) The name of the MCP Server providing the resource
         - uri: (required) The URI identifying the specific resource to access
         Usage:
         <access_mcp_resource>

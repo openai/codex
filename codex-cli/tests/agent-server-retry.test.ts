@@ -59,7 +59,7 @@ describe("AgentLoop – automatic retry on 5xx errors", () => {
     openAiState.createSpy = vi.fn(async () => {
       call += 1;
       if (call <= 2) {
-        const err: any = new Error("Internal Server Error");
+        const err: any = new Error("InternalmcpServer Error");
         err.status = 500;
         throw err;
       }
@@ -123,7 +123,7 @@ describe("AgentLoop – automatic retry on 5xx errors", () => {
 
   it("fails after 3 attempts and surfaces system message", async () => {
     openAiState.createSpy = vi.fn(async () => {
-      const err: any = new Error("Internal Server Error");
+      const err: any = new Error("InternalmcpServer Error");
       err.status = 502; // any 5xx
       throw err;
     });

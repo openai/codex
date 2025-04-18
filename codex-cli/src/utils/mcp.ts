@@ -2,7 +2,7 @@ import fs, { promises as fsPromises } from "fs";
 import os from "os";
 import path from "path";
 
-// Types for MCP server definitions
+// Types for MCP Server definitions
 export type MCPServer = {
   name: string;
   type: "stdio" | "sse";
@@ -16,7 +16,11 @@ export type MCPServer = {
 };
 
 type MCPConfig = {
-  servers: Array<MCPServer>;
+  mcpServers: Record<string, {
+    command: string;
+    args?: Array<string>;
+    env?: Record<string, string>;
+  }>;
 };
 
 // Config file paths
@@ -51,13 +55,21 @@ function getLocalFile(): string | null {
 async function loadConfig(scope: "global" | "local"): Promise<MCPConfig> {
   const file = scope === "global" ? GLOBAL_FILE : getLocalFile();
   if (!file) {
-    return { servers: [] };
+    return { mcpServers: {} };
   }
   try {
     const raw = await fsPromises.readFile(file, "utf-8");
-    return JSON.parse(raw) as MCPConfig;
+    const parsed = JSON.parse(raw);
+
+    // Support new mcpServers object format
+    if (parsed.mcpServers && typeof parsed.mcpServers === "object") {
+      return { mcpServers: parsed.mcpServers };
+    }
+
+    // Fallback to empty object if not present
+    return { mcpServers: {} };
   } catch {
-    return { servers: [] };
+    return { mcpServers: {} };
   }
 }
 
@@ -71,41 +83,65 @@ async function saveConfig(
   }
   const dir = path.dirname(file);
   await fsPromises.mkdir(dir, { recursive: true });
-  await fsPromises.writeFile(file, JSON.stringify(config, null, 2), "utf-8");
+
+  // Prefer saving in new mcpServers object format if present
+  let toSave: any = config;
+  if (config.mcpServers) {
+    toSave = { mcpServers: config.mcpServers };
+  }
+  // Otherwise, save legacy format
+  await fsPromises.writeFile(file, JSON.stringify(toSave, null, 2), "utf-8");
 }
 
-// Public API
-export async function listServers(
+/**
+ * List all MCP servers as an array of MCPServer objects.
+ */
+export async function listMcpServers(
   scope: "global" | "local",
 ): Promise<Array<MCPServer>> {
   const cfg = await loadConfig(scope);
-  return cfg.servers;
+  return Object.entries(cfg.mcpServers).map(([name, def]) => ({
+    name,
+    type: "stdio",
+    cmd: def.command,
+    args: def.args,
+    env: def.env,
+  }));
 }
 
-export async function addServer(
-  server: MCPServer,
+/**
+ * Add a new MCP server to the config.
+ */
+export async function addMcpServer(
+  mcpServer: MCPServer,
   scope: "global" | "local",
 ): Promise<void> {
   const cfg = await loadConfig(scope);
-  if (cfg.servers.find((s) => s.name === server.name)) {
+  if (cfg.mcpServers[mcpServer.name]) {
     throw new Error(
-      `Server with name '${server.name}' already exists in ${scope}`,
+      `MCP Server with name '${mcpServer.name}' already exists in ${scope}`,
     );
   }
-  cfg.servers.push(server);
+  cfg.mcpServers[mcpServer.name] = {
+    command: mcpServer.cmd!,
+    args: mcpServer.args,
+    env: mcpServer.env,
+  };
   await saveConfig(scope, cfg);
 }
 
-export async function removeServer(
+/**
+ * Remove an MCP server from the config.
+ */
+export async function removeMcpServer(
   name: string,
   scope: "global" | "local",
 ): Promise<void> {
   const cfg = await loadConfig(scope);
-  const idx = cfg.servers.findIndex((s) => s.name === name);
-  if (idx < 0) {
-    throw new Error(`Server with name '${name}' not found in ${scope}`);
+  if (!cfg.mcpServers[name]) {
+    throw new Error(`MCP server with name '${name}' not found in ${scope}`);
   }
-  cfg.servers.splice(idx, 1);
+  delete cfg.mcpServers[name];
   await saveConfig(scope, cfg);
 }
 

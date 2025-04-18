@@ -20,7 +20,7 @@ export type McpClientEvent =
  * - Buffers stdout and processes it line by line
  * - Parses each line as JSON and handles invalid JSON gracefully
  * - Logs stderr output
- * - Detects when the server is ready based on stderr messages
+ * - Detects when themcpServer is ready based on stderr messages
  * - Provides a simple API for sending requests and receiving responses
  */
 export class RobustStdioMcpClient {
@@ -33,7 +33,7 @@ export class RobustStdioMcpClient {
     id?: string | number;
   }> = [];
   private eventListeners: Array<(event: McpClientEvent) => void> = [];
-  private serverName: string;
+  private mcpServerName: string;
 
   /**
    * Create a new RobustStdioMcpClient
@@ -46,14 +46,14 @@ export class RobustStdioMcpClient {
     cmd: string,
     args: Array<string> = [],
     private options: {
-      serverName: string;
+      mcpServerName: string;
       env?: Record<string, string>;
       readyPattern?: RegExp;
     },
   ) {
-    this.serverName = options.serverName || "unknown";
+    this.mcpServerName = options.mcpServerName || "unknown";
 
-    log(`[MCP ${this.serverName}] Spawning process: ${cmd} ${args.join(" ")}`);
+    log(`[MCP ${this.mcpServerName}] Spawning process: ${cmd} ${args.join(" ")}`);
 
     this.proc = spawn(cmd, args, {
       stdio: ["pipe", "pipe", "pipe"],
@@ -64,12 +64,12 @@ export class RobustStdioMcpClient {
     this.proc.stderr.on("data", (data) => this.handleStderr(data));
 
     this.proc.on("exit", (code) => {
-      log(`[MCP ${this.serverName}] Process exited with code ${code}`);
+      log(`[MCP ${this.mcpServerName}] Process exited with code ${code}`);
       this.emitEvent({ type: "exit", code });
 
       // Reject any pending requests
       for (const request of this.pendingRequests) {
-        request.reject(new Error(`MCP server exited with code ${code}`));
+        request.reject(new Error(`MCPmcpServer exited with code ${code}`));
       }
       this.pendingRequests = [];
     });
@@ -105,7 +105,7 @@ export class RobustStdioMcpClient {
     // Log raw data for debugging
     const rawData = data.toString();
     console.log(
-      `[MCP ${this.serverName}] Raw stdout: ${JSON.stringify(rawData)}`,
+      `[MCP ${this.mcpServerName}] Raw stdout: ${JSON.stringify(rawData)}`,
     );
 
     this.stdoutBuffer += rawData;
@@ -113,35 +113,35 @@ export class RobustStdioMcpClient {
     this.stdoutBuffer = lines.pop() || ""; // Keep incomplete line for next time
 
     console.log(
-      `[MCP ${this.serverName}] Processing ${
+      `[MCP ${this.mcpServerName}] Processing ${
         lines.length
       } lines, buffer remaining: ${JSON.stringify(this.stdoutBuffer)}`,
     );
 
     for (const line of lines) {
       if (!line.trim()) {
-        console.log(`[MCP ${this.serverName}] Skipping empty line`);
+        console.log(`[MCP ${this.mcpServerName}] Skipping empty line`);
         continue;
       }
 
       console.log(
-        `[MCP ${this.serverName}] Processing line: ${JSON.stringify(line)}`,
+        `[MCP ${this.mcpServerName}] Processing line: ${JSON.stringify(line)}`,
       );
 
       try {
         const parsed = JSON.parse(line);
         console.log(
-          `[MCP ${this.serverName}] Successfully parsed JSON: ${JSON.stringify(
+          `[MCP ${this.mcpServerName}] Successfully parsed JSON: ${JSON.stringify(
             parsed,
           )}`,
         );
-        log(`[MCP ${this.serverName}] Received: ${JSON.stringify(parsed)}`);
+        log(`[MCP ${this.mcpServerName}] Received: ${JSON.stringify(parsed)}`);
         this.emitEvent({ type: "response", data: parsed });
 
         // If we have a pending request, resolve it
         if (this.pendingRequests.length > 0) {
           console.log(
-            `[MCP ${this.serverName}] Resolving pending request (${this.pendingRequests.length} in queue)`,
+            `[MCP ${this.mcpServerName}] Resolving pending request (${this.pendingRequests.length} in queue)`,
           );
           const request = this.pendingRequests.shift();
           if (request) {
@@ -149,12 +149,12 @@ export class RobustStdioMcpClient {
           }
         } else {
           console.log(
-            `[MCP ${this.serverName}] No pending requests to resolve`,
+            `[MCP ${this.mcpServerName}] No pending requests to resolve`,
           );
         }
       } catch (err) {
-        console.log(`[MCP ${this.serverName}] Failed to parse JSON: ${err}`);
-        log(`[MCP ${this.serverName}] Invalid JSON from stdout: ${line}`);
+        console.log(`[MCP ${this.mcpServerName}] Failed to parse JSON: ${err}`);
+        log(`[MCP ${this.mcpServerName}] Invalid JSON from stdout: ${line}`);
         this.emitEvent({
           type: "error",
           message: `Invalid JSON from stdout: ${line}`,
@@ -163,7 +163,7 @@ export class RobustStdioMcpClient {
         // If this looks like a text response and we have pending requests, try to handle it anyway
         if (line.includes("message") && this.pendingRequests.length > 0) {
           console.log(
-            `[MCP ${this.serverName}] Line contains 'message', treating as text response`,
+            `[MCP ${this.mcpServerName}] Line contains 'message', treating as text response`,
           );
           const request = this.pendingRequests.shift();
           if (request) {
@@ -183,14 +183,14 @@ export class RobustStdioMcpClient {
       return;
     }
 
-    log(`[MCP ${this.serverName}] Log: ${msg}`);
+    log(`[MCP ${this.mcpServerName}] Log: ${msg}`);
     this.emitEvent({ type: "log", message: msg });
 
-    // Check if the server is ready
+    // Check if themcpServer is ready
     const readyPattern =
       this.options.readyPattern || /server running|ready|started/i;
     if (!this.ready && readyPattern.test(msg)) {
-      log(`[MCP ${this.serverName}] Server is ready`);
+      log(`[MCP ${this.mcpServerName}]mcpServer is ready`);
       this.ready = true;
       this.emitEvent({ type: "ready" });
     }
@@ -212,7 +212,7 @@ export class RobustStdioMcpClient {
 
         reject(
           new Error(
-            `Timeout waiting for response from MCP server (${timeoutMs}ms)`,
+            `Timeout waiting for response from MCP Server (${timeoutMs}ms)`,
           ),
         );
       }, timeoutMs);
@@ -232,23 +232,23 @@ export class RobustStdioMcpClient {
 
       // Send the payload
       const payloadStr = JSON.stringify(payload) + "\n";
-      log(`[MCP ${this.serverName}] Sending: ${payloadStr.trim()}`);
+      log(`[MCP ${this.mcpServerName}] Sending: ${payloadStr.trim()}`);
       this.proc.stdin.write(payloadStr);
 
       // Log to console for debugging
-      console.log(`[DEBUG] Sent to ${this.serverName}: ${payloadStr.trim()}`);
+      console.log(`[DEBUG] Sent to ${this.mcpServerName}: ${payloadStr.trim()}`);
     });
   }
 
   /**
-   * Check if the server is ready
+   * Check if themcpServer is ready
    */
   isReady(): boolean {
     return this.ready;
   }
 
   /**
-   * Wait for the server to be ready
+   * Wait for themcpServer to be ready
    */
   async waitForReady(timeoutMs = 5000): Promise<void> {
     if (this.ready) {
@@ -260,7 +260,7 @@ export class RobustStdioMcpClient {
         cleanup();
         reject(
           new Error(
-            `Timeout waiting for MCP server to be ready (${timeoutMs}ms)`,
+            `Timeout waiting for MCP Server to be ready (${timeoutMs}ms)`,
           ),
         );
       }, timeoutMs);
@@ -273,7 +273,7 @@ export class RobustStdioMcpClient {
           cleanup();
           reject(
             new Error(
-              `MCP server exited before becoming ready (code: ${event.code})`,
+              `MCPmcpServer exited before becoming ready (code: ${event.code})`,
             ),
           );
         }
@@ -289,7 +289,7 @@ export class RobustStdioMcpClient {
   }
 
   /**
-   * Kill the server process
+   * Kill themcpServer process
    */
   kill(): void {
     this.proc.kill();

@@ -10,7 +10,7 @@ import { AutoApprovalMode } from "./auto-approval-mode";
 import { ReviewDecision } from "./agent/review";
 import { MCPTool } from "./mcp";
 
-// Define MCP server options 
+// Define MCP Server options 
 export type MCPServeOptions = {
   /** Transport mode: 'stdio' (default) or 'sse' */
   transport?: "stdio" | "sse";
@@ -108,7 +108,7 @@ const toolCatalog: Array<MCPTool> = [
 export async function serveConnection(options: MCPServeOptions = {}): Promise<void> {
   const transport = options.transport ?? "stdio";
   const { port } = options;
-  // HTTP server mode
+  // HTTPmcpServer mode
   if (port !== undefined) {
     const app = express();
     app.use(express.json());
@@ -438,8 +438,8 @@ export async function serveConnection(options: MCPServeOptions = {}): Promise<vo
     routes();
 
     // Create HTTP server
-    const server = app.listen(port, () => {
-      console.log(`MCP HTTP server listening on port ${port}`);
+    const mcpServer = app.listen(port, () => {
+      console.log(`MCP HTTPmcpServer listening on port ${port}`);
     });
 
     // Keep the process running until terminated

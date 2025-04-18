@@ -256,18 +256,18 @@ await mcpManagerDebug.initialize();
 // MCP_DEBUG=1 codex
 ```
 
-#### Using the HTTP Server API
+#### Using the HTTPmcpServer API
 
 You can expose MCP functionality over HTTP:
 
 ```typescript
-// Start an HTTP server on port 3000
+// Start an HTTPmcpServer on port 3003
 const mcpManager = new McpManager();
 await mcpManager.initialize();
-await mcpManager.serve({ port: 3000 });
+await mcpManager.serve({ port: 3003 });
 
 // This allows other applications to connect to your MCP server
-// via SSE transport at http://localhost:3000/mcp
+// via SSE transport at http://localhost:3003/mcp
 ```
 
 ---
