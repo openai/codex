@@ -1,6 +1,7 @@
 import type * as fsType from "fs";
 
 import { loadConfig, saveConfig } from "../src/utils/config.js"; // parent import first
+import { AutoApprovalMode } from "../src/utils/auto-approval-mode.js";
 import { tmpdir } from "os";
 import { join } from "path";
 import { test, expect, beforeEach, afterEach, vi } from "vitest";
@@ -106,4 +107,44 @@ test("loads user instructions + project doc when codex.md is present", () => {
   expect(cfg.instructions).toBe(
     userInstr + "\n\n--- project-doc ---\n\n" + projectDoc,
   );
+});
+
+test("loads and saves approvalMode correctly", () => {
+  // Setup config with approvalMode
+  memfs[testConfigPath] = JSON.stringify(
+    {
+      model: "mymodel",
+      approvalMode: AutoApprovalMode.AUTO_EDIT,
+    },
+    null,
+    2,
+  );
+  memfs[testInstructionsPath] = "test instructions";
+
+  // Load config and verify approvalMode
+  const loadedConfig = loadConfig(testConfigPath, testInstructionsPath, {
+    disableProjectDoc: true,
+  });
+
+  // Check approvalMode was loaded correctly
+  expect(loadedConfig.approvalMode).toBe(AutoApprovalMode.AUTO_EDIT);
+
+  // Modify approvalMode and save
+  const updatedConfig = {
+    ...loadedConfig,
+    approvalMode: AutoApprovalMode.FULL_AUTO,
+  };
+
+  saveConfig(updatedConfig, testConfigPath, testInstructionsPath);
+
+  // Verify saved config contains updated approvalMode
+  expect(memfs[testConfigPath]).toContain(
+    `"approvalMode": "${AutoApprovalMode.FULL_AUTO}"`,
+  );
+
+  // Load again and verify updated value
+  const reloadedConfig = loadConfig(testConfigPath, testInstructionsPath, {
+    disableProjectDoc: true,
+  });
+  expect(reloadedConfig.approvalMode).toBe(AutoApprovalMode.FULL_AUTO);
 });

@@ -77,6 +77,7 @@ export type AppConfig = {
   apiKey?: string;
   model: string;
   instructions: string;
+  approvalMode?: AutoApprovalMode;
   fullAutoErrorMode?: FullAutoErrorMode;
   memory?: MemoryConfig;
   /** Whether to enable desktop notifications for responses */
@@ -275,6 +276,7 @@ export const loadConfig = (
         : DEFAULT_AGENTIC_MODEL),
     instructions: combinedInstructions,
     notify: storedConfig.notify === true,
+    approvalMode: storedConfig.approvalMode,
     safeCommands: storedConfig.safeCommands ?? [],
   };
 
@@ -391,6 +393,7 @@ export const saveConfig = (
   // Create the config object to save
   const configToSave: StoredConfig = {
     model: config.model,
+    approvalMode: config.approvalMode,
   };
 
   // Add history settings if they exist
