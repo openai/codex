@@ -48,6 +48,7 @@ yarn-error.log*
 # env
 .env*
 !.env.example
+.direnv/
 
 # package
 *.tgz
