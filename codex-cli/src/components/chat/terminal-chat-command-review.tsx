@@ -15,11 +15,18 @@ const DEFAULT_DENY_MESSAGE =
 export function TerminalChatCommandReview({
   confirmationPrompt,
   onReviewCommand,
+  // callback to switch approval mode overlay
+  onSwitchApprovalMode,
   explanation: propExplanation,
+  // whether this review Select is active (listening for keys)
+  isActive = true,
 }: {
   confirmationPrompt: React.ReactNode;
   onReviewCommand: (decision: ReviewDecision, customMessage?: string) => void;
+  onSwitchApprovalMode: () => void;
   explanation?: string;
+  // when false, disable the underlying Select so it won't capture input
+  isActive?: boolean;
 }): React.ReactElement {
   const [mode, setMode] = React.useState<"select" | "input" | "explanation">(
     "select",
@@ -70,6 +77,7 @@ export function TerminalChatCommandReview({
     const opts: Array<
       | { label: string; value: ReviewDecision }
       | { label: string; value: "edit" }
+      | { label: string; value: "switch" }
     > = [
       {
         label: "Yes (y)",
@@ -93,6 +101,11 @@ export function TerminalChatCommandReview({
         label: "Edit or give feedback (e)",
         value: "edit",
       },
+      // allow switching approval mode
+      {
+        label: "Switch approval mode (s)",
+        value: "switch",
+      },
       {
         label: "No, and keep going (n)",
         value: ReviewDecision.NO_CONTINUE,
@@ -106,7 +119,8 @@ export function TerminalChatCommandReview({
     return opts;
   }, [showAlwaysApprove]);
 
-  useInput((input, key) => {
+  useInput(
+    (input, key) => {
     if (mode === "select") {
       if (input === "y") {
         onReviewCommand(ReviewDecision.YES);
@@ -121,6 +135,9 @@ export function TerminalChatCommandReview({
         );
       } else if (input === "a" && showAlwaysApprove) {
         onReviewCommand(ReviewDecision.ALWAYS);
+      } else if (input === "s") {
+        // switch approval mode
+        onSwitchApprovalMode();
       } else if (key.escape) {
         onReviewCommand(ReviewDecision.NO_EXIT);
       }
@@ -143,7 +160,8 @@ export function TerminalChatCommandReview({
         );
       }
     }
-  });
+    }, { isActive }
+  );
 
   return (
     <Box flexDirection="column" gap={1} borderStyle="round" marginTop={1}>
@@ -191,9 +209,13 @@ export function TerminalChatCommandReview({
             <Text>Allow command?</Text>
             <Box paddingX={2} flexDirection="column" gap={1}>
               <Select
-                onChange={(value: ReviewDecision | "edit") => {
+                isDisabled={!isActive}
+                visibleOptionCount={approvalOptions.length}
+                onChange={(value: ReviewDecision | "edit" | "switch") => {
                   if (value === "edit") {
                     setMode("input");
+                  } else if (value === "switch") {
+                    onSwitchApprovalMode();
                   } else {
                     onReviewCommand(value);
                   }
