@@ -487,6 +487,7 @@ export class AgentLoop {
         }
         // Send request to OpenAI with retry on timeout
         let stream;
+        let retryAbortOutputs: Array<ResponseInputItem> = abortOutputs;
 
         // Retry loop for transient errors. Up to MAX_RETRIES attempts.
         const MAX_RETRIES = 5;
@@ -507,12 +508,11 @@ export class AgentLoop {
                 `instructions (length ${mergedInstructions.length}): ${mergedInstructions}`,
               );
             }
-            // eslint-disable-next-line no-await-in-loop
             stream = await this.oai.responses.create({
               model: this.model,
               instructions: mergedInstructions,
               previous_response_id: lastResponseId || undefined,
-              input: turnInput,
+              input: [...retryAbortOutputs, ...turnInput],
               stream: true,
               parallel_tool_calls: false,
               reasoning,
@@ -724,6 +724,8 @@ export class AgentLoop {
         this.currentStream = stream;
 
         // guard against an undefined stream before iterating
+        const MAX_STREAM_RETRIES = 5;
+        let streamRetryAttempt = 0;
         if (!stream) {
           this.onLoading(false);
           log("AgentLoop.run(): stream is undefined");
@@ -731,11 +733,12 @@ export class AgentLoop {
         }
 
         try {
-          // eslint-disable-next-line no-await-in-loop
-          for await (const event of stream) {
-            if (isLoggingEnabled()) {
-              log(`AgentLoop.run(): response event ${event.type}`);
-            }
+          while (streamRetryAttempt < MAX_STREAM_RETRIES) {
+            try {
+              for await (const event of stream) {
+                if (isLoggingEnabled()) {
+                  log(`AgentLoop.run(): response event ${event.type}`);
+                }
 
             // process and surface each item (no‑op until we can depend on streaming events)
             if (event.type === "response.output_item.done") {
@@ -766,32 +769,162 @@ export class AgentLoop {
               if (thisGeneration === this.generation && !this.canceled) {
                 for (const item of event.response.output) {
                   stageItem(item as ResponseItem);
+                    }
+                  }
+                  if (event.response.status === "completed") {
+                    // TODO: remove this once we can depend on streaming events
+                    const newTurnInput = await this.processEventsWithoutStreaming(
+                      event.response.output,
+                      stageItem,
+                    );
+                    turnInput = newTurnInput;
+                  }
+                  lastResponseId = event.response.id;
+                  this.onLastResponseId(event.response.id);
                 }
               }
-              if (event.response.status === "completed") {
-                // TODO: remove this once we can depend on streaming events
-                const newTurnInput = await this.processEventsWithoutStreaming(
-                  event.response.output,
-                  stageItem,
-                );
-                turnInput = newTurnInput;
+              break; // Success, exit retry loop
+            } catch (err: unknown) {
+              if (err instanceof Error && err.name === "AbortError") {
+                if (!this.canceled) {
+                  throw err;
+                }
+                this.onLoading(false);
+                return;
               }
-              lastResponseId = event.response.id;
-              this.onLastResponseId(event.response.id);
+              const isRateLimitError = (e: any): boolean => {
+                if (!e) return false;
+                return (
+                  e.code === "rate_limit_exceeded" ||
+                  (e.error && e.error.code === "rate_limit_exceeded")
+                );
+              };
+              if (isRateLimitError(err)) {
+                streamRetryAttempt++;
+                if (streamRetryAttempt >= MAX_STREAM_RETRIES) {
+                  log(
+                    `Max stream retries (${MAX_STREAM_RETRIES}) reached, throwing error: ${
+                      err instanceof Error ? err.message : String(err)
+                    }`,
+                  );
+                  this.onItem({
+                    id: `error-${Date.now()}`,
+                    type: "message",
+                    role: "system",
+                    content: [
+                      {
+                        type: "input_text",
+                        text: `⚠️  Rate limit reached after ${MAX_STREAM_RETRIES} retries. Please try again later.`,
+                      },
+                    ],
+                  });
+                  this.onLoading(false);
+                  throw err;
+                }
+                let delayMs = 15000; // Fixed 15-second delay
+                log(
+                  `Rate limit error during streaming, retrying in ${delayMs} ms... (attempt ${streamRetryAttempt}, error: ${
+                    err instanceof Error ? err.message : String(err)
+                  })`,
+                );
+                await new Promise((resolve) => setTimeout(resolve, delayMs));
+                if (this.canceled || this.hardAbort.signal.aborted) {
+                  this.onLoading(false);
+                  return;
+                }
+                // Reinitialize retryAbortOutputs for the next attempt
+                retryAbortOutputs = [];
+                if (this.pendingAborts.size > 0) {
+                  for (const id of this.pendingAborts) {
+                    retryAbortOutputs.push({
+                      type: "function_call_output",
+                      call_id: id,
+                      output: JSON.stringify({
+                        output: "aborted",
+                        metadata: { exit_code: 1, duration_seconds: 0 },
+                      }),
+                    } as ResponseInputItem.FunctionCallOutput);
+                  }
+                }
+                // Recreate the stream for the next retry
+                try {
+                  let reasoning: Reasoning | undefined;
+                  if (this.model.startsWith("o")) {
+                    reasoning = { effort: "high" };
+                    if (this.model === "o3" || this.model === "o4-mini") {
+                      // @ts-expect-error waiting for API type update
+                      reasoning.summary = "auto";
+                    }
+                  }
+                  const mergedInstructions = [prefix, this.instructions]
+                    .filter(Boolean)
+                    .join("\n");
+                  if (isLoggingEnabled()) {
+                    log(
+                      `instructions (length ${mergedInstructions.length}): ${mergedInstructions}`,
+                    );
+                  }
+                  stream = await this.oai.responses.create({
+                    model: this.model,
+                    instructions: mergedInstructions,
+                    previous_response_id: lastResponseId || undefined,
+                    input: [...retryAbortOutputs, ...turnInput],
+                    stream: true,
+                    parallel_tool_calls: false,
+                    reasoning,
+                    tools: [
+                      {
+                        type: "function",
+                        name: "shell",
+                        description: "Runs a shell command, and returns its output.",
+                        strict: false,
+                        parameters: {
+                          type: "object",
+                          properties: {
+                            command: {
+                              type: "array",
+                              items: { type: "string" },
+                            },
+                            workdir: {
+                              type: "string",
+                              description: "The working directory for the command.",
+                            },
+                            timeout: {
+                              type: "number",
+                              description:
+                                "The maximum time to wait for the command to complete in milliseconds.",
+                            },
+                          },
+                          required: ["command"],
+                          additionalProperties: false,
+                        },
+                      },
+                    ],
+                  });
+                  this.currentStream = stream;
+                } catch (createErr) {
+                  log(
+                    `Failed to recreate stream on retry ${streamRetryAttempt}: ${
+                      createErr instanceof Error
+                        ? createErr.message
+                        : String(createErr)
+                    }`,
+                  );
+                  if (streamRetryAttempt === MAX_STREAM_RETRIES) {
+                    throw createErr;
+                  }
+                  continue;
+                }
+              } else {
+                log(
+                  `Unhandled streaming error: ${
+                    err instanceof Error ? err.message : String(err)
+                  }`,
+                );
+                throw err;
+              }
             }
           }
-        } catch (err: unknown) {
-          // Gracefully handle an abort triggered via `cancel()` so that the
-          // consumer does not see an unhandled exception.
-          if (err instanceof Error && err.name === "AbortError") {
-            if (!this.canceled) {
-              // It was aborted for some other reason; surface the error.
-              throw err;
-            }
-            this.onLoading(false);
-            return;
-          }
-          throw err;
         } finally {
           this.currentStream = null;
         }
