@@ -27,9 +27,7 @@ const MessageHistory: React.FC<MessageHistoryProps> = ({
   batch,
   headerProps,
   // `loading` and `thinkingSeconds` handled by input component now.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   loading: _loading,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   thinkingSeconds: _thinkingSeconds,
   fullStdout,
 }) => {
