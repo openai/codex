@@ -516,6 +516,7 @@ export class AgentLoop {
               stream: true,
               parallel_tool_calls: false,
               reasoning,
+              ...(this.config.flexMode ? { service_tier: "flex" } : {}),
               tools: [
                 {
                   type: "function",
