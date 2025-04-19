@@ -47,15 +47,6 @@ export function exec(
     });
   }
 
-  if (prog.includes(" ")) {
-    return Promise.resolve({
-      stdout: "",
-      stderr:
-        "command[0] contains spaces: arguments must be separate array elements",
-      exitCode: 1,
-    });
-  }
-
   // We use spawn() instead of exec() or execFile() so that we can set the
   // stdio options to "ignore" for stdin. Ripgrep has a heuristic where it
   // may try to read from stdin as explained here:
