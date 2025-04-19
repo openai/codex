@@ -121,46 +121,47 @@ export function TerminalChatCommandReview({
 
   useInput(
     (input, key) => {
-    if (mode === "select") {
-      if (input === "y") {
-        onReviewCommand(ReviewDecision.YES);
-      } else if (input === "x") {
-        onReviewCommand(ReviewDecision.EXPLAIN);
-      } else if (input === "e") {
-        setMode("input");
-      } else if (input === "n") {
-        onReviewCommand(
-          ReviewDecision.NO_CONTINUE,
-          "Don't do that, keep going though",
-        );
-      } else if (input === "a" && showAlwaysApprove) {
-        onReviewCommand(ReviewDecision.ALWAYS);
-      } else if (input === "s") {
-        // switch approval mode
-        onSwitchApprovalMode();
-      } else if (key.escape) {
-        onReviewCommand(ReviewDecision.NO_EXIT);
+      if (mode === "select") {
+        if (input === "y") {
+          onReviewCommand(ReviewDecision.YES);
+        } else if (input === "x") {
+          onReviewCommand(ReviewDecision.EXPLAIN);
+        } else if (input === "e") {
+          setMode("input");
+        } else if (input === "n") {
+          onReviewCommand(
+            ReviewDecision.NO_CONTINUE,
+            "Don't do that, keep going though",
+          );
+        } else if (input === "a" && showAlwaysApprove) {
+          onReviewCommand(ReviewDecision.ALWAYS);
+        } else if (input === "s") {
+          // switch approval mode
+          onSwitchApprovalMode();
+        } else if (key.escape) {
+          onReviewCommand(ReviewDecision.NO_EXIT);
+        }
+      } else if (mode === "explanation") {
+        // When in explanation mode, any key returns to select mode
+        if (key.return || key.escape || input === "x") {
+          setMode("select");
+        }
+      } else {
+        // text entry mode
+        if (key.return) {
+          // if user hit enter on empty msg, fall back to DEFAULT_DENY_MESSAGE
+          const custom = msg.trim() === "" ? DEFAULT_DENY_MESSAGE : msg;
+          onReviewCommand(ReviewDecision.NO_CONTINUE, custom);
+        } else if (key.escape) {
+          // treat escape as denial with default message as well
+          onReviewCommand(
+            ReviewDecision.NO_CONTINUE,
+            msg.trim() === "" ? DEFAULT_DENY_MESSAGE : msg,
+          );
+        }
       }
-    } else if (mode === "explanation") {
-      // When in explanation mode, any key returns to select mode
-      if (key.return || key.escape || input === "x") {
-        setMode("select");
-      }
-    } else {
-      // text entry mode
-      if (key.return) {
-        // if user hit enter on empty msg, fall back to DEFAULT_DENY_MESSAGE
-        const custom = msg.trim() === "" ? DEFAULT_DENY_MESSAGE : msg;
-        onReviewCommand(ReviewDecision.NO_CONTINUE, custom);
-      } else if (key.escape) {
-        // treat escape as denial with default message as well
-        onReviewCommand(
-          ReviewDecision.NO_CONTINUE,
-          msg.trim() === "" ? DEFAULT_DENY_MESSAGE : msg,
-        );
-      }
-    }
-    }, { isActive }
+    },
+    { isActive },
   );
 
   return (

@@ -14,9 +14,13 @@ describe("createInputItem", () => {
 
   it("includes image content for existing file", async () => {
     const fakeBuffer = Buffer.from("fake image content");
-    const readSpy = vi.spyOn(fs, "readFile").mockResolvedValue(fakeBuffer as any);
+    const readSpy = vi
+      .spyOn(fs, "readFile")
+      .mockResolvedValue(fakeBuffer as any);
     const result = await createInputItem("hello", ["dummy-path"]);
-    const expectedUrl = `data:application/octet-stream;base64,${fakeBuffer.toString("base64")}`;
+    const expectedUrl = `data:application/octet-stream;base64,${fakeBuffer.toString(
+      "base64",
+    )}`;
     expect(result.role).toBe("user");
     expect(result.type).toBe("message");
     expect(result.content.length).toBe(2);
