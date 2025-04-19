@@ -1,5 +1,6 @@
 import type { ExecInput, ExecResult } from "./sandbox/interface.js";
 import type { SpawnOptions } from "child_process";
+import type { ParseEntry } from "shell-quote";
 
 import { process_patch } from "./apply-patch.js";
 import { SandboxType } from "./sandbox/interface.js";
@@ -8,15 +9,28 @@ import { exec as rawExec } from "./sandbox/raw-exec.js";
 import { formatCommandForDisplay } from "../../format-command.js";
 import fs from "fs";
 import os from "os";
+import { parse } from "shell-quote";
 
 const DEFAULT_TIMEOUT_MS = 10_000; // 10 seconds
+
+function requiresShell(cmd: Array<string>): boolean {
+  return cmd.some((arg) => {
+    const tokens = parse(arg) as Array<ParseEntry>;
+    return tokens.some((token) => typeof token === "object" && "op" in token);
+  });
+}
 
 /**
  * This function should never return a rejected promise: errors should be
  * mapped to a non-zero exit code and the error message should be in stderr.
  */
 export function exec(
-  { cmd, workdir, timeoutInMillis }: ExecInput,
+  {
+    cmd,
+    workdir,
+    timeoutInMillis,
+    additionalWritableRoots,
+  }: ExecInput & { additionalWritableRoots: ReadonlyArray<string> },
   sandbox: SandboxType,
   abortSignal?: AbortSignal,
 ): Promise<ExecResult> {
@@ -28,9 +42,15 @@ export function exec(
 
   const opts: SpawnOptions = {
     timeout: timeoutInMillis || DEFAULT_TIMEOUT_MS,
+    ...(requiresShell(cmd) ? { shell: true } : {}),
     ...(workdir ? { cwd: workdir } : {}),
   };
-  const writableRoots = [process.cwd(), os.tmpdir()];
+  // Merge default writable roots with any user-specified ones.
+  const writableRoots = [
+    process.cwd(),
+    os.tmpdir(),
+    ...additionalWritableRoots,
+  ];
   return execForSandbox(cmd, opts, writableRoots, abortSignal);
 }
 
