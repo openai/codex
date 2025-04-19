@@ -1,4 +1,4 @@
-export const CLI_VERSION = "0.1.2504172351"; // Must be in sync with package.json.
+export const CLI_VERSION = "0.1.2504181820"; // Must be in sync with package.json.
 export const ORIGIN = "codex_cli_ts";
 
 export type TerminalChatSession = {

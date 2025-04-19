@@ -1,9 +1,9 @@
 {
   "name": "@openai/codex",
-  "version": "0.1.2504172351",
+  "version": "0.1.2504181820",
   "license": "Apache-2.0",
   "bin": {
-    "codex": "bin/codex"
+    "codex": "bin/codex.js"
   },
   "type": "module",
   "engines": {
@@ -22,8 +22,8 @@
     "build:dev": "NODE_ENV=development node build.mjs --dev && NODE_OPTIONS=--enable-source-maps node dist/cli-dev.js",
     "release:readme": "cp ../README.md ./README.md",
     "release:version": "TS=$(date +%y%m%d%H%M) && sed -E -i'' -e \"s/\\\"0\\.1\\.[0-9]{10}\\\"/\\\"0.1.${TS}\\\"/g\" package.json src/utils/session.ts",
-    "release:build-and-publish": "npm run build && npm publish",
-    "release": "npm run release:readme && npm run release:version && npm install && npm run release:build-and-publish",
+    "release:build-and-publish": "pmpm run build && pmpm publish",
+    "release": "pnpm run release:readme && pnpm run release:version && pnpm install && pnpm run release:build-and-publish",
     "prepare": "husky",
     "pre-commit": "lint-staged"
   },
@@ -47,7 +47,7 @@
     "marked-terminal": "^7.3.0",
     "meow": "^13.2.0",
     "open": "^10.1.0",
-    "openai": "^4.89.0",
+    "openai": "^4.95.1",
     "react": "^18.2.0",
     "shell-quote": "^1.8.2",
     "strip-ansi": "^7.1.0",
@@ -62,8 +62,10 @@
     "@types/marked-terminal": "^6.1.1",
     "@types/react": "^18.0.32",
     "@types/shell-quote": "^1.7.5",
+    "@types/which": "^3.0.4",
     "@typescript-eslint/eslint-plugin": "^7.18.0",
     "@typescript-eslint/parser": "^7.18.0",
+    "boxen": "^8.0.1",
     "esbuild": "^0.25.2",
     "eslint-plugin-import": "^2.31.0",
     "eslint-plugin-react": "^7.32.2",
@@ -77,15 +79,8 @@
     "ts-node": "^10.9.1",
     "typescript": "^5.0.3",
     "vitest": "^3.0.9",
-    "whatwg-url": "^14.2.0"
-  },
-  "resolutions": {
-    "braces": "^3.0.3",
-    "micromatch": "^4.0.8",
-    "semver": "^7.7.1"
-  },
-  "overrides": {
-    "punycode": "^2.3.1"
+    "whatwg-url": "^14.2.0",
+    "which": "^5.0.0"
   },
   "repository": {
     "type": "git",
