@@ -2,7 +2,7 @@
 set -e
 
 # Usage:
-#   ./run_in_container.sh [--allow-outbound] [--work_dir directory] "COMMAND"
+#   ./run_in_container.sh [--dangerously-allow-network-outbound] [--work_dir directory] "COMMAND"
 #
 #   Examples:
 #     ./run_in_container.sh --work_dir project/code "ls -la"
@@ -13,10 +13,10 @@ WORK_DIR="${WORKSPACE_ROOT_DIR:-$(pwd)}"
 # By default, do not disable outbound firewall
 ALLOW_OUTBOUND=false
 
-# Parse optional flags: --allow-outbound and --work_dir
+# Parse optional flags: --dangerously-allow-network-outbound and --work_dir
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --allow-outbound)
+    --dangerously-allow-network-outbound)
       ALLOW_OUTBOUND=true
       shift
       ;;
@@ -48,7 +48,7 @@ trap cleanup EXIT
 
 # Ensure a command is provided.
 if [ "$#" -eq 0 ]; then
-  echo "Usage: $0 [--allow-outbound] [--work_dir directory] \"COMMAND\""
+  echo "Usage: $0 [--dangerously-allow-network-outbound] [--work_dir directory] \"COMMAND\""
   exit 1
 fi
 
@@ -73,7 +73,7 @@ docker run --name "$CONTAINER_NAME" -d \
 # Initialize the firewall inside the container, passing allow-outbound if requested
 if [ "$ALLOW_OUTBOUND" = true ]; then
   echo "Initializing firewall inside container (allowing outbound traffic)..."
-  docker exec "$CONTAINER_NAME" bash -c "sudo /usr/local/bin/init_firewall.sh --allow-outbound"
+  docker exec "$CONTAINER_NAME" bash -c "sudo /usr/local/bin/init_firewall.sh --dangerously-allow-network-outbound"
 else
   echo "Initializing firewall inside container..."
   docker exec "$CONTAINER_NAME" bash -c "sudo /usr/local/bin/init_firewall.sh"

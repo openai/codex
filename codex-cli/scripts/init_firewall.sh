@@ -3,7 +3,7 @@ set -euo pipefail  # Exit on error, undefined vars, and pipeline failures
 IFS=$'\n\t'       # Stricter word splitting
 # Optional flag to allow outbound traffic without restrictions
 ALLOW_OUTBOUND=false
-if [ "${1:-}" = "--allow-outbound" ]; then
+if [ "${1:-}" = "--dangerously-allow-network-outbound" ]; then
   ALLOW_OUTBOUND=true
   shift
 fi
@@ -96,7 +96,7 @@ iptables -A FORWARD -p udp -j REJECT --reject-with icmp-port-unreachable
 echo "Firewall configuration complete"
 # Skip verification if outbound is allowed
 if [ "$ALLOW_OUTBOUND" = true ]; then
-  echo "Allow-outbound flag set; skipping firewall verification"
+  echo "DANGEROUS Allow-outbound flag set; skipping firewall verification"
   exit 0
 fi
 echo "Verifying firewall rules..."
