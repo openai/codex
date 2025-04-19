@@ -111,6 +111,9 @@ export function canAutoApprove(
     try {
       bashCmd = parse(command[2], env);
     } catch (e) {
+      if (isLoggingEnabled()) {
+        log(`Bash command parsing failed for: ${command[2]}\nCaused by: ${e instanceof Error ? e.message : String(e)}`);
+      }
       // In practice, there seem to be syntactically valid shell commands that
       // shell-quote cannot parse, so we should not reject, but ask the user.
       switch (policy) {
