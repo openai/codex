@@ -366,7 +366,7 @@ export function SinglePassApp({
   /* ---------------------------- Load file context --------------------------- */
   useEffect(() => {
     (async () => {
-      const ignorePats = loadIgnorePatterns();
+      const ignorePats = loadIgnorePatterns(undefined, rootPath);
       const fileContents = await getFileContents(rootPath, ignorePats);
       setFiles(fileContents);
     })();
