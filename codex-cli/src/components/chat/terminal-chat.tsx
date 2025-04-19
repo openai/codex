@@ -300,15 +300,10 @@ export default function TerminalChat({
       agentRef.current = undefined;
       forceUpdate(); // re‑render after teardown too
     };
-  // We intentionally omit 'approvalPolicy' and 'confirmationPrompt' from the deps
-  // so switching modes or showing confirmation dialogs doesn’t tear down the loop.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    model,
-    config,
-    requestConfirmation,
-    additionalWritableRoots,
-  ]);
+    // We intentionally omit 'approvalPolicy' and 'confirmationPrompt' from the deps
+    // so switching modes or showing confirmation dialogs doesn’t tear down the loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [model, config, requestConfirmation, additionalWritableRoots]);
 
   // whenever loading starts/stops, reset or start a timer — but pause the
   // timer while a confirmation overlay is displayed so we don't trigger a
@@ -597,7 +592,11 @@ export default function TerminalChat({
               setApprovalPolicy(newMode as ApprovalPolicy);
               // update existing AgentLoop instance
               if (agentRef.current) {
-                (agentRef.current as unknown as { approvalPolicy: ApprovalPolicy }).approvalPolicy = newMode as ApprovalPolicy;
+                (
+                  agentRef.current as unknown as {
+                    approvalPolicy: ApprovalPolicy;
+                  }
+                ).approvalPolicy = newMode as ApprovalPolicy;
               }
               setItems((prev) => [
                 ...prev,
