@@ -17,6 +17,7 @@ import React, { useEffect, useState } from "react";
 type Props = {
   currentModel: string;
   hasLastResponse: boolean;
+  setModels: React.Dispatch<React.SetStateAction<Array<string>>>;
   onSelect: (model: string) => void;
   onExit: () => void;
 };
@@ -24,6 +25,7 @@ type Props = {
 export default function ModelOverlay({
   currentModel,
   hasLastResponse,
+  setModels,
   onSelect,
   onExit,
 }: Props): JSX.Element {
@@ -34,6 +36,7 @@ export default function ModelOverlay({
   useEffect(() => {
     (async () => {
       const models = await getAvailableModels();
+      setModels(models ?? []);
 
       // Split the list into recommended and “other” models.
       const recommended = RECOMMENDED_MODELS.filter((m) => models.includes(m));
@@ -48,7 +51,7 @@ export default function ModelOverlay({
         })),
       );
     })();
-  }, []);
+  }, [setModels]);
 
   // ---------------------------------------------------------------------------
   // If the conversation already contains a response we cannot change the model
