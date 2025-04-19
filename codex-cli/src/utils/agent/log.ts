@@ -65,7 +65,9 @@ function now() {
   const hours = String(date.getHours()).padStart(2, "0");
   const minutes = String(date.getMinutes()).padStart(2, "0");
   const seconds = String(date.getSeconds()).padStart(2, "0");
-  return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`;
+  const base = `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`;
+  // Windows file names cannot contain ':' – replace with '-'.
+  return process.platform === "win32" ? base.replaceAll(":", "-") : base;
 }
 
 let logger: Logger;

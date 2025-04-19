@@ -11,6 +11,7 @@ import { log, isLoggingEnabled } from "../log.js";
 import { adaptCommandForPlatform } from "../platform-commands.js";
 import { spawn } from "child_process";
 import * as os from "os";
+import { getShell } from "../../getShell.js";
 
 const MAX_BUFFER = 1024 * 100; // 100 KB
 
@@ -38,7 +39,7 @@ export function exec(
     );
   }
 
-  const prog = adaptedCommand[0];
+  const { cmd: prog, args: shellArgs } = getShell();
   if (typeof prog !== "string") {
     return Promise.resolve({
       stdout: "",
@@ -84,10 +85,14 @@ export function exec(
     // single signal to the entire group – this reliably terminates not only
     // the immediate child but also any grandchildren it might have spawned
     // (think `bash -c "sleep 999"`).
-    detached: true,
+    detached: process.platform !== "win32" || process.env["CODEX_DETACH"] === "1",
   };
 
-  const child: ChildProcess = spawn(prog, adaptedCommand.slice(1), fullOptions);
+  const child: ChildProcess = spawn(
+    prog,
+    [...shellArgs, adaptedCommand.join(" ")],
+    fullOptions,
+  );
   // If an AbortSignal is provided, ensure the spawned process is terminated
   // when the signal is triggered so that cancellations propagate down to any
   // long‑running child processes. We default to SIGTERM to give the process a
@@ -177,8 +182,26 @@ export function exec(
       }
     });
     child.on("exit", (code, signal) => {
-      const stdout = Buffer.concat(stdoutChunks).toString("utf8");
-      const stderr = Buffer.concat(stderrChunks).toString("utf8");
+      const stdoutBuf = Buffer.concat(stdoutChunks);
+      const stderrBuf = Buffer.concat(stderrChunks);
+
+      const decode = (buf: Buffer): string => {
+        if (process.platform !== "win32") {
+          return buf.toString("utf8");
+        }
+        // Heuristic: treat as UTF‑16LE only when *most* odd bytes are 0x00
+        const sample = buf.subarray(0, 2000); // small sample is enough
+        let nulCount = 0;
+        for (let i = 1; i < sample.length; i += 2) {
+          if (sample[i] === 0) nulCount += 1;
+        }
+        const ratio = sample.length > 0 ? nulCount / (sample.length / 2) : 0;
+        const encoding = ratio > 0.6 ? "utf16le" : "utf8"; // >60% NULs → likely UTF‑16LE
+        return buf.toString(encoding);
+      };
+
+      const stdout = decode(stdoutBuf);
+      const stderr = decode(stderrBuf);
 
       // Map (code, signal) to an exit code. We expect exactly one of the two
       // values to be non-null, but we code defensively to handle the case where
