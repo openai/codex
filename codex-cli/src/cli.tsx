@@ -37,6 +37,7 @@ import { render } from "ink";
 import meow from "meow";
 import path from "path";
 import React from "react";
+import { ReasoningEffort } from "openai/resources.mjs";
 
 // Call this early so `tail -F "$TMPDIR/oai-codex/codex-cli-latest.log"` works
 // immediately. This must be run with DEBUG=1 for logging to work.
@@ -154,6 +155,12 @@ const cli = meow(
           "Disable truncation of command stdout/stderr messages (show everything)",
         aliases: ["no-truncate"],
       },
+      reasoning:{
+        type: "string",
+        description: "Set the reasoning effort level (low, medium, high)",
+        choices: ["low", "medium", "high"],
+        default: "high",
+      },
       // Notification
       notify: {
         type: "boolean",
@@ -260,6 +267,7 @@ config = {
   model: model ?? config.model,
   flexMode: Boolean(cli.flags.flexMode),
   notify: Boolean(cli.flags.notify),
+  reasoningEffort: (cli.flags.reasoning as ReasoningEffort | undefined) ?? "high",
 };
 
 // Check for updates after loading config
