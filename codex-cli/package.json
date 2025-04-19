@@ -22,10 +22,8 @@
     "build:dev": "NODE_ENV=development node build.mjs --dev && NODE_OPTIONS=--enable-source-maps node dist/cli-dev.js",
     "release:readme": "cp ../README.md ./README.md",
     "release:version": "TS=$(date +%y%m%d%H%M) && sed -E -i'' -e \"s/\\\"0\\.1\\.[0-9]{10}\\\"/\\\"0.1.${TS}\\\"/g\" package.json src/utils/session.ts",
-    "release:build-and-publish": "pmpm run build && pmpm publish",
-    "release": "pnpm run release:readme && pnpm run release:version && pnpm install && pnpm run release:build-and-publish",
-    "prepare": "husky",
-    "pre-commit": "lint-staged"
+    "release:build-and-publish": "pnpm run build && npm publish",
+    "release": "pnpm run release:readme && pnpm run release:version && pnpm install && pnpm run release:build-and-publish"
   },
   "files": [
     "README.md",
@@ -73,7 +71,6 @@
     "eslint-plugin-react-refresh": "^0.4.19",
     "husky": "^9.1.7",
     "ink-testing-library": "^3.0.0",
-    "lint-staged": "^15.5.1",
     "prettier": "^2.8.7",
     "punycode": "^2.3.1",
     "ts-node": "^10.9.1",
