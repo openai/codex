@@ -49,6 +49,7 @@
     "open": "^10.1.0",
     "openai": "^4.89.0",
     "react": "^18.2.0",
+    "react-dom": "^18.3.1",
     "shell-quote": "^1.8.2",
     "strip-ansi": "^7.1.0",
     "to-rotated": "^1.0.0",
@@ -57,6 +58,9 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.22.0",
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.3.0",
+    "@testing-library/user-event": "^14.6.1",
     "@types/diff": "^7.0.2",
     "@types/js-yaml": "^4.0.9",
     "@types/marked-terminal": "^6.1.1",
@@ -76,7 +80,7 @@
     "punycode": "^2.3.1",
     "ts-node": "^10.9.1",
     "typescript": "^5.0.3",
-    "vitest": "^3.0.9",
+    "vitest": "^3.1.1",
     "whatwg-url": "^14.2.0"
   },
   "resolutions": {
