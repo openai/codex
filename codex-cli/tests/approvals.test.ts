@@ -1,7 +1,13 @@
 import type { SafetyAssessment } from "../src/approvals";
 
 import { canAutoApprove } from "../src/approvals";
-import { describe, test, expect } from "vitest";
+import { describe, test, expect, vi } from "vitest";
+
+vi.mock("../src/utils/config", () => ({
+  loadConfig: () => ({
+    safeCommands: ["npm test", "sl"],
+  }),
+}));
 
 describe("canAutoApprove()", () => {
   const env = {
@@ -88,5 +94,28 @@ describe("canAutoApprove()", () => {
     expect(check(["pytest"])).toEqual({ type: "ask-user" });
 
     expect(check(["cargo", "build"])).toEqual({ type: "ask-user" });
+  });
+
+  test("commands in safeCommands config should be safe", async () => {
+    expect(check(["npm", "test"])).toEqual({
+      type: "auto-approve",
+      reason: "User-defined safe command",
+      group: "User config",
+      runInSandbox: false,
+    });
+
+    expect(check(["sl"])).toEqual({
+      type: "auto-approve",
+      reason: "User-defined safe command",
+      group: "User config",
+      runInSandbox: false,
+    });
+
+    expect(check(["npm", "test", "--watch"])).toEqual({
+      type: "auto-approve",
+      reason: "User-defined safe command",
+      group: "User config",
+      runInSandbox: false,
+    });
   });
 });
