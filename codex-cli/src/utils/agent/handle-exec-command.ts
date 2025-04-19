@@ -223,23 +223,22 @@ async function execCommand(
       workdir = process.cwd();
     }
   }
-  if (isLoggingEnabled()) {
-    if (applyPatchCommand != null) {
-      log("EXEC running apply_patch command");
-    } else {
-      const { cmd, timeoutInMillis } = execInput;
-      // Seconds are a bit easier to read in log messages and most timeouts
-      // are specified as multiples of 1000, anyway.
-      const timeout =
-        timeoutInMillis != null
-          ? Math.round(timeoutInMillis / 1000).toString()
-          : "undefined";
-      log(
-        `EXEC running \`${formatCommandForDisplay(
-          cmd,
-        )}\` in workdir=${workdir} with timeout=${timeout}s`,
-      );
-    }
+
+  if (applyPatchCommand != null) {
+    log("EXEC running apply_patch command");
+  } else if (isLoggingEnabled()) {
+    const { cmd, timeoutInMillis } = execInput;
+    // Seconds are a bit easier to read in log messages and most timeouts
+    // are specified as multiples of 1000, anyway.
+    const timeout =
+      timeoutInMillis != null
+        ? Math.round(timeoutInMillis / 1000).toString()
+        : "undefined";
+    log(
+      `EXEC running \`${formatCommandForDisplay(
+        cmd,
+      )}\` in workdir=${workdir} with timeout=${timeout}s`,
+    );
   }
 
   // Note execApplyPatch() and exec() are coded defensively and should not

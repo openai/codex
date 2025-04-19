@@ -7,7 +7,7 @@ import type {
   StdioPipe,
 } from "child_process";
 
-import { log, isLoggingEnabled } from "../log.js";
+import { log } from "../log.js";
 import { adaptCommandForPlatform } from "../platform-commands.js";
 import { spawn } from "child_process";
 import * as os from "os";
@@ -27,10 +27,7 @@ export function exec(
   // Adapt command for the current platform (e.g., convert 'ls' to 'dir' on Windows)
   const adaptedCommand = adaptCommandForPlatform(command);
 
-  if (
-    isLoggingEnabled() &&
-    JSON.stringify(adaptedCommand) !== JSON.stringify(command)
-  ) {
+  if (JSON.stringify(adaptedCommand) !== JSON.stringify(command)) {
     log(
       `Command adapted for platform: ${command.join(
         " ",
@@ -95,9 +92,7 @@ export function exec(
   // timely fashion.
   if (abortSignal) {
     const abortHandler = () => {
-      if (isLoggingEnabled()) {
-        log(`raw-exec: abort signal received – killing child ${child.pid}`);
-      }
+      log(`raw-exec: abort signal received – killing child ${child.pid}`);
       const killTarget = (signal: NodeJS.Signals) => {
         if (!child.pid) {
           return;
@@ -194,11 +189,9 @@ export function exec(
         exitCode = 1;
       }
 
-      if (isLoggingEnabled()) {
-        log(
-          `raw-exec: child ${child.pid} exited code=${exitCode} signal=${signal}`,
-        );
-      }
+      log(
+        `raw-exec: child ${child.pid} exited code=${exitCode} signal=${signal}`,
+      );
       resolve({
         stdout,
         stderr,

@@ -15,7 +15,7 @@ import { formatCommandForDisplay } from "../../format-command.js";
 import { useConfirmation } from "../../hooks/use-confirmation.js";
 import { useTerminalSize } from "../../hooks/use-terminal-size.js";
 import { AgentLoop } from "../../utils/agent/agent-loop.js";
-import { isLoggingEnabled, log } from "../../utils/agent/log.js";
+import { log } from "../../utils/agent/log.js";
 import { ReviewDecision } from "../../utils/agent/review.js";
 import { generateCompactSummary } from "../../utils/compact-summary.js";
 import { OPENAI_BASE_URL } from "../../utils/config.js";
@@ -197,30 +197,25 @@ export default function TerminalChat({
   // ────────────────────────────────────────────────────────────────
   // DEBUG: log every render w/ key bits of state
   // ────────────────────────────────────────────────────────────────
-  if (isLoggingEnabled()) {
-    log(
-      `render – agent? ${Boolean(agentRef.current)} loading=${loading} items=${
-        items.length
-      }`,
-    );
-  }
+  log(
+    `render – agent? ${Boolean(agentRef.current)} loading=${loading} items=${
+      items.length
+    }`,
+  );
 
   useEffect(() => {
     // Skip recreating the agent if awaiting a decision on a pending confirmation
     if (confirmationPrompt != null) {
-      if (isLoggingEnabled()) {
-        log("skip AgentLoop recreation due to pending confirmationPrompt");
-      }
+      log("skip AgentLoop recreation due to pending confirmationPrompt");
       return;
     }
-    if (isLoggingEnabled()) {
-      log("creating NEW AgentLoop");
-      log(
-        `model=${model} instructions=${Boolean(
-          config.instructions,
-        )} approvalPolicy=${approvalPolicy}`,
-      );
-    }
+
+    log("creating NEW AgentLoop");
+    log(
+      `model=${model} instructions=${Boolean(
+        config.instructions,
+      )} approvalPolicy=${approvalPolicy}`,
+    );
 
     // Tear down any existing loop before creating a new one
     agentRef.current?.terminate();
@@ -288,14 +283,10 @@ export default function TerminalChat({
     // force a render so JSX below can "see" the freshly created agent
     forceUpdate();
 
-    if (isLoggingEnabled()) {
-      log(`AgentLoop created: ${inspect(agentRef.current, { depth: 1 })}`);
-    }
+    log(`AgentLoop created: ${inspect(agentRef.current, { depth: 1 })}`);
 
     return () => {
-      if (isLoggingEnabled()) {
-        log("terminating AgentLoop");
-      }
+      log("terminating AgentLoop");
       agentRef.current?.terminate();
       agentRef.current = undefined;
       forceUpdate(); // re‑render after teardown too
@@ -377,9 +368,7 @@ export default function TerminalChat({
   // Let's also track whenever the ref becomes available
   const agent = agentRef.current;
   useEffect(() => {
-    if (isLoggingEnabled()) {
-      log(`agentRef.current is now ${Boolean(agent)}`);
-    }
+    log(`agentRef.current is now ${Boolean(agent)}`);
   }, [agent]);
 
   // ---------------------------------------------------------------------
@@ -504,11 +493,9 @@ export default function TerminalChat({
               if (!agent) {
                 return;
               }
-              if (isLoggingEnabled()) {
-                log(
-                  "TerminalChat: interruptAgent invoked – calling agent.cancel()",
-                );
-              }
+              log(
+                "TerminalChat: interruptAgent invoked – calling agent.cancel()",
+              );
               agent.cancel();
               setLoading(false);
 
@@ -544,13 +531,11 @@ export default function TerminalChat({
             currentModel={model}
             hasLastResponse={Boolean(lastResponseId)}
             onSelect={(newModel) => {
-              if (isLoggingEnabled()) {
-                log(
-                  "TerminalChat: interruptAgent invoked – calling agent.cancel()",
-                );
-                if (!agent) {
-                  log("TerminalChat: agent is not ready yet");
-                }
+              log(
+                "TerminalChat: interruptAgent invoked – calling agent.cancel()",
+              );
+              if (!agent) {
+                log("TerminalChat: agent is not ready yet");
               }
               agent?.cancel();
               setLoading(false);

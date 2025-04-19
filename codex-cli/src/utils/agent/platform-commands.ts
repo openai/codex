@@ -2,7 +2,7 @@
  * Utility functions for handling platform-specific commands
  */
 
-import { log, isLoggingEnabled } from "./log.js";
+import { log } from "./log.js";
 
 /**
  * Map of Unix commands to their Windows equivalents
@@ -59,9 +59,7 @@ export function adaptCommandForPlatform(command: Array<string>): Array<string> {
     return command;
   }
 
-  if (isLoggingEnabled()) {
-    log(`Adapting command '${cmd}' for Windows platform`);
-  }
+  log(`Adapting command '${cmd}' for Windows platform`);
 
   // Create a new command array with the adapted command
   const adaptedCommand = [...command];
@@ -78,9 +76,7 @@ export function adaptCommandForPlatform(command: Array<string>): Array<string> {
     }
   }
 
-  if (isLoggingEnabled()) {
-    log(`Adapted command: ${adaptedCommand.join(" ")}`);
-  }
+  log(`Adapted command: ${adaptedCommand.join(" ")}`);
 
   return adaptedCommand;
 }

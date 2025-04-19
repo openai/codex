@@ -124,6 +124,14 @@ export function log(message: string): void {
   (logger ?? initLogger()).log(message);
 }
 
+/**
+ * USE SPARINGLY! This function should only be used to guard a call to log() if
+ * the log message is large and you want to avoid constructing it if logging is
+ * disabled.
+ *
+ * `log()` is already a no-op if DEBUG is not set, so an extra
+ * `isLoggingEnabled()` check is unnecessary.
+ */
 export function isLoggingEnabled(): boolean {
   return (logger ?? initLogger()).isLoggingEnabled();
 }

@@ -8,7 +8,7 @@ import type {
 
 import MultilineTextEditor from "./multiline-editor";
 import { TerminalChatCommandReview } from "./terminal-chat-command-review.js";
-import { log, isLoggingEnabled } from "../../utils/agent/log.js";
+import { log } from "../../utils/agent/log.js";
 import { loadConfig } from "../../utils/config.js";
 import { createInputItem } from "../../utils/input-utils.js";
 import { setSessionId } from "../../utils/session.js";
@@ -496,11 +496,9 @@ function TerminalChatInputThinking({
       const str = Buffer.isBuffer(data) ? data.toString("utf8") : data;
       if (str === "\x1b\x1b") {
         // Treat as the first Escape press – prompt the user for confirmation.
-        if (isLoggingEnabled()) {
-          log(
-            "raw stdin: received collapsed ESC ESC – starting confirmation timer",
-          );
-        }
+        log(
+          "raw stdin: received collapsed ESC ESC – starting confirmation timer",
+        );
         setAwaitingConfirm(true);
         setTimeout(() => setAwaitingConfirm(false), 1500);
       }
@@ -522,15 +520,11 @@ function TerminalChatInputThinking({
       }
 
       if (awaitingConfirm) {
-        if (isLoggingEnabled()) {
-          log("useInput: second ESC detected – triggering onInterrupt()");
-        }
+        log("useInput: second ESC detected – triggering onInterrupt()");
         onInterrupt();
         setAwaitingConfirm(false);
       } else {
-        if (isLoggingEnabled()) {
-          log("useInput: first ESC detected – waiting for confirmation");
-        }
+        log("useInput: first ESC detected – waiting for confirmation");
         setAwaitingConfirm(true);
         setTimeout(() => setAwaitingConfirm(false), 1500);
       }
