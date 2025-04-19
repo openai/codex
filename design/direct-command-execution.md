@@ -1,13 +1,14 @@
 # Direct Command Execution for Codex CLI
 
 ## Overview
-Add a direct command execution mode to Codex CLI that allows users to run shell commands directly without AI processing, using a simple prefix.
+Add a direct command execution mode to Codex CLI that allows users to run shell commands directly without AI processing, using a simple prefix. Command outputs are added to the conversation context, enriching the AI's understanding of the environment.
 
 ## Motivation
 Users frequently need to run simple, known commands (like `ls`, `pwd`, `cd`) without waiting for AI processing or approval workflows. This feature would:
 - Save time for common operations
 - Reduce token usage
 - Provide a more integrated terminal experience
+- Enrich the conversation context with command outputs (e.g., `$ cat FUNCTIONS.md` adds file contents to context)
 
 ## Design
 
@@ -112,7 +113,20 @@ The direct command would flow through the normal execution path, but with an aut
    if (value.startsWith('!') || value.startsWith('$')) {
      // Call direct command handler instead of sending to AI
      const output = await handleDirectCommand(value, config);
-     addResponse({ type: 'direct_command', text: output });
+     
+     // Add response to UI
+     addResponse({ type: 'direct_command', text: output, originalCommand: value });
+     
+     // Handle context enrichment differently based on prefix
+     if (value.startsWith('$')) {
+       // $ prefix: Add output to conversation context for AI
+       addContextToConversation({
+         role: "system",
+         content: `Command executed by user: ${value.slice(1)}\nOutput:\n${output}`,
+       });
+     }
+     // ! prefix doesn't add to conversation context
+     
      return;
    }
    
@@ -127,12 +141,30 @@ The direct command would flow through the normal execution path, but with an aut
    if (item.type === 'direct_command') {
      return (
        <Box>
-         <Text color="gray">$ {item.originalCommand}</Text>
+         <Text color="gray">{item.originalCommand}</Text>
          <Text>{item.text}</Text>
        </Box>
      );
    }
    ```
+
+### Context Enrichment
+
+A key difference between the two command prefixes is how they interact with conversation context:
+
+1. **`$` (Dollar) Prefix**: 
+   - Enriches the conversation context with command output
+   - Makes the command output available to the AI for future interactions
+   - Ideal for commands like `$ cat FILE.md`, `$ ls`, `$ grep pattern file.txt` where output informs future AI responses
+   - Example: `$ cat FUNCTIONS.md` adds the file contents to the context, so the AI can reference those functions later
+
+2. **`!` (Bang) Prefix**:
+   - Executes the command but doesn't add output to conversation context
+   - Useful for operations that don't need to inform future AI responses
+   - Better for commands that generate large outputs that would waste context tokens
+   - Example: `! npm install` to install dependencies without cluttering the context
+
+This dual-prefix approach gives users fine-grained control over context management while maintaining the direct execution benefits.
 
 ## Security Considerations
 
@@ -146,6 +178,8 @@ The direct command would flow through the normal execution path, but with an aut
 2. Test commands with arguments and quotes
 3. Test interactions with the current working directory
 4. Test error handling and display
+5. Test context enrichment with both prefixes
+6. Verify context additions appear in subsequent AI responses
 
 ## Success Criteria
 
@@ -153,7 +187,9 @@ The direct command would flow through the normal execution path, but with an aut
 2. By default, prefixed commands still require explicit user approval (no auto-execution)
 3. Users must explicitly opt-in to automatic approval of direct commands via configuration
 4. Output is displayed clearly in the terminal interface, distinguishing direct commands from AI-generated ones
-5. The implementation doesn't break existing functionality
+5. Commands with `$` prefix add their output to the conversation context for AI
+6. Commands with `!` prefix execute without adding to conversation context
+7. The implementation doesn't break existing functionality
 
 ## Configuration Options
 
