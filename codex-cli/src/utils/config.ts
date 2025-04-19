@@ -80,8 +80,8 @@ export type AppConfig = {
   /** Whether to enable desktop notifications for responses */
   notify: boolean;
 
-  /** Enable the "flex" processing mode for supported models (o3, o4-mini) */
-  flex?: boolean;
+  /** Enable the "flex-mode" processing mode for supported models (o3, o4-mini) */
+  flexMode?: boolean;
   history?: {
     maxSize: number;
     saveHistory: boolean;

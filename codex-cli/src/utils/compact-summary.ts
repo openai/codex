@@ -9,10 +9,17 @@ import OpenAI from "openai";
  * @param model The model to use for generating the summary
  * @returns A concise structured summary string
  */
+/**
+ * Generate a condensed summary of the conversation items.
+ * @param items The list of conversation items to summarize
+ * @param model The model to use for generating the summary
+ * @param flexMode Whether to use the flex-mode service tier
+ * @returns A concise structured summary string
+ */
 export async function generateCompactSummary(
   items: Array<ResponseItem>,
   model: string,
-  flex = false,
+  flexMode = false,
 ): Promise<string> {
   const oai = new OpenAI({
     apiKey: process.env["OPENAI_API_KEY"],
@@ -45,7 +52,7 @@ export async function generateCompactSummary(
 
   const response = await oai.chat.completions.create({
     model,
-    ...(flex ? { service_tier: "flex" } : {}),
+    ...(flexMode ? { service_tier: "flex" } : {}),
     messages: [
       {
         role: "assistant",

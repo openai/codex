@@ -13,7 +13,7 @@ export interface TerminalHeaderProps {
   colorsByPolicy: Record<string, string | undefined>;
   agent?: AgentLoop;
   initialImagePaths?: Array<string>;
-  flexEnabled?: boolean;
+  flexModeEnabled?: boolean;
 }
 
 const TerminalHeader: React.FC<TerminalHeaderProps> = ({
@@ -25,16 +25,16 @@ const TerminalHeader: React.FC<TerminalHeaderProps> = ({
   colorsByPolicy,
   agent,
   initialImagePaths,
-  flexEnabled = false,
+  flexModeEnabled = false,
 }) => {
   return (
     <>
-      {terminalRows < 10 ? (
+          {terminalRows < 10 ? (
         // Compact header for small terminal windows
         <Text>
           ● Codex v{version} – {PWD} – {model} –{" "}
           <Text color={colorsByPolicy[approvalPolicy]}>{approvalPolicy}</Text>
-          {flexEnabled ? " – flex" : ""}
+          {flexModeEnabled ? " – flex-mode" : ""}
         </Text>
       ) : (
         <>
@@ -71,9 +71,9 @@ const TerminalHeader: React.FC<TerminalHeaderProps> = ({
                 {approvalPolicy}
               </Text>
             </Text>
-            {flexEnabled && (
+            {flexModeEnabled && (
               <Text dimColor>
-                <Text color="blueBright">↳</Text> flex:{" "}
+                <Text color="blueBright">↳</Text> flex-mode:{" "}
                 <Text bold>enabled</Text>
               </Text>
             )}

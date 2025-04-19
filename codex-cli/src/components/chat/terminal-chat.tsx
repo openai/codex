@@ -59,7 +59,7 @@ const colorsByPolicy: Record<ApprovalPolicy, ColorName | undefined> = {
 async function generateCommandExplanation(
   command: Array<string>,
   model: string,
-  flex: boolean,
+  flexMode: boolean,
 ): Promise<string> {
   try {
     // Create a temporary OpenAI client
@@ -74,7 +74,7 @@ async function generateCommandExplanation(
     // Create a prompt that asks for an explanation with a more detailed system prompt
     const response = await oai.chat.completions.create({
       model,
-      ...(flex ? { service_tier: "flex" } : {}),
+      ...(flexMode ? { service_tier: "flex" } : {}),
       messages: [
         {
           role: "system",
@@ -147,7 +147,7 @@ export default function TerminalChat({
       const summary = await generateCompactSummary(
         items,
         model,
-        Boolean(config.flex),
+        Boolean(config.flexMode),
       );
       setItems([
         {
@@ -254,7 +254,7 @@ export default function TerminalChat({
           const explanation = await generateCommandExplanation(
             command,
             model,
-            Boolean(config.flex),
+            Boolean(config.flexMode),
           );
           log(`Generated explanation: ${explanation}`);
 
@@ -463,7 +463,7 @@ export default function TerminalChat({
               colorsByPolicy,
               agent,
               initialImagePaths,
-              flexEnabled: Boolean(config.flex),
+              flexModeEnabled: Boolean(config.flexMode),
             }}
           />
         ) : (
