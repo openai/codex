@@ -14,18 +14,21 @@ import chalk, { type ForegroundColorName } from "chalk";
 import { Box, Text } from "ink";
 import { parse, setOptions } from "marked";
 import TerminalRenderer from "marked-terminal";
-import React, { useMemo } from "react";
+import React, { useEffect, useMemo } from "react";
+import { OverlayModeType } from "./terminal-chat";
 
 export default function TerminalChatResponseItem({
   item,
   fullStdout = false,
+  setOverlayMode,
 }: {
   item: ResponseItem;
   fullStdout?: boolean;
+  setOverlayMode?: React.Dispatch<React.SetStateAction<OverlayModeType>>;
 }): React.ReactElement {
   switch (item.type) {
     case "message":
-      return <TerminalChatResponseMessage message={item} />;
+      return <TerminalChatResponseMessage setOverlayMode={setOverlayMode} message={item} />;
     case "function_call":
       return <TerminalChatResponseToolCall message={item} />;
     case "function_call_output":
@@ -98,9 +101,21 @@ const colorsByRole: Record<string, ForegroundColorName> = {
 
 function TerminalChatResponseMessage({
   message,
+  setOverlayMode
 }: {
   message: ResponseInputMessageItem | ResponseOutputMessage;
+  setOverlayMode?: React.Dispatch<React.SetStateAction<OverlayModeType>>;
 }) {
+
+  useEffect(() => {
+    if (message.role === 'system') {
+      const systemMessage = message.content.find((c) => c.type === 'input_text')?.text
+      if (systemMessage?.includes('has been deprecated')) {
+        setOverlayMode?.('model');
+      }
+    }
+  }, [message])
+
   return (
     <Box flexDirection="column">
       <Text bold color={colorsByRole[message.role] || "gray"}>

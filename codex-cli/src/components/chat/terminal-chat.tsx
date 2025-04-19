@@ -34,6 +34,8 @@ import OpenAI from "openai";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { inspect } from "util";
 
+export type OverlayModeType = "none" | "history" | "model" | "approval" | "help"
+
 type Props = {
   config: AppConfig;
   prompt?: string;
@@ -173,9 +175,7 @@ export default function TerminalChat({
     explanation,
     submitConfirmation,
   } = useConfirmation();
-  const [overlayMode, setOverlayMode] = useState<
-    "none" | "history" | "model" | "approval" | "help"
-  >("none");
+  const [overlayMode, setOverlayMode] = useState<OverlayModeType>("none");
 
   const [initialPrompt, setInitialPrompt] = useState(_initialPrompt);
   const [initialImagePaths, setInitialImagePaths] =
@@ -436,6 +436,7 @@ export default function TerminalChat({
       <Box flexDirection="column">
         {agent ? (
           <TerminalMessageHistory
+            setOverlayMode={setOverlayMode}
             batch={lastMessageBatch}
             groupCounts={groupCounts}
             items={items}

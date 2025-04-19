@@ -6,6 +6,7 @@ import TerminalChatResponseItem from "./terminal-chat-response-item.js";
 import TerminalHeader from "./terminal-header.js";
 import { Box, Static, Text } from "ink";
 import React, { useMemo } from "react";
+import { OverlayModeType } from "./terminal-chat.js";
 
 // A batch entry can either be a standalone response item or a grouped set of
 // items (e.g. auto‑approved tool‑call batches) that should be rendered
@@ -21,6 +22,7 @@ type MessageHistoryProps = {
   thinkingSeconds: number;
   headerProps: TerminalHeaderProps;
   fullStdout: boolean;
+  setOverlayMode: React.Dispatch<React.SetStateAction<OverlayModeType>>;
 };
 
 const MessageHistory: React.FC<MessageHistoryProps> = ({
@@ -29,6 +31,7 @@ const MessageHistory: React.FC<MessageHistoryProps> = ({
   loading,
   thinkingSeconds,
   fullStdout,
+  setOverlayMode,
 }) => {
   // Flatten batch entries to response items.
   const messages = useMemo(() => batch.map(({ item }) => item!), [batch]);
@@ -67,6 +70,7 @@ const MessageHistory: React.FC<MessageHistoryProps> = ({
               <TerminalChatResponseItem
                 item={message}
                 fullStdout={fullStdout}
+                setOverlayMode={setOverlayMode}
               />
             </Box>
           );
