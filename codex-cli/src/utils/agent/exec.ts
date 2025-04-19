@@ -33,6 +33,7 @@ export function exec(
 
   const opts: SpawnOptions = {
     timeout: timeoutInMillis || DEFAULT_TIMEOUT_MS,
+    shell: true,
     ...(workdir ? { cwd: workdir } : {}),
   };
   // Merge default writable roots with any user-specified ones.
