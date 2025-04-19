@@ -17,7 +17,6 @@ import { AgentLoop } from "./utils/agent/agent-loop";
 import { initLogger } from "./utils/agent/log";
 import { ReviewDecision } from "./utils/agent/review";
 import { AutoApprovalMode } from "./utils/auto-approval-mode";
-import { checkForUpdates } from "./utils/check-updates";
 import {
   loadConfig,
   PRETTY_PRINT,
@@ -252,10 +251,6 @@ config = {
   model: model ?? config.model,
   notify: Boolean(cli.flags.notify),
 };
-
-// Check for updates after loading config
-// This is important because we write state file in the config dir
-await checkForUpdates().catch();
 
 if (!(await isModelSupportedForResponses(config.model))) {
   // eslint-disable-next-line no-console
