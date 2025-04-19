@@ -29,7 +29,7 @@ import HelpOverlay from "../help-overlay.js";
 import HistoryOverlay from "../history-overlay.js";
 import ModelOverlay from "../model-overlay.js";
 import { Box, Text } from "ink";
-import { exec } from "node:child_process";
+import { spawn } from "node:child_process";
 import OpenAI from "openai";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { inspect } from "util";
@@ -364,9 +364,10 @@ export default function TerminalChat({
           const safePreview = preview.replace(/"/g, '\\"');
           const title = "Codex CLI";
           const cwd = PWD;
-          exec(
-            `osascript -e 'display notification "${safePreview}" with title "${title}" subtitle "${cwd}" sound name "Ping"'`,
-          );
+          spawn("osascript", [
+            "-e",
+            `display notification "${safePreview}" with title "${title}" subtitle "${cwd}" sound name "Ping"`,
+          ]);
         }
       }
     }
