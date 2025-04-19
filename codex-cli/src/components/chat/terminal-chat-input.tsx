@@ -119,7 +119,11 @@ export default function TerminalChatInput({
               : selectedSlashSuggestion + 1;
             setSelectedSlashSuggestion(nextIdx);
             // Autocomplete the command in the input
-            const cmd = matches[nextIdx].command;
+            const match = matches[nextIdx];
+            if (!match) {
+              return;
+            }
+            const cmd = match.command;
             setInput(cmd);
             setDraftInput(cmd);
             return;
