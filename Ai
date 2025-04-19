@@ -1,0 +1,57 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © iranfsrinfo
+
+//@version=6
+strategy("استراتژی ترکیبی پیشرفته v5", overlay=true, commission_type=strategy.commission.percent, commission_value=0.025, default_qty_type=strategy.percent_of_equity, default_qty_value=100)
+
+// ======== تنظیمات تخصصی ========
+fastMA     = ta.ema(close, 3)
+medMA      = ta.ema(close, 11)
+slowMA     = ta.ema(close, 34)
+rsi        = ta.rsi(close, 5)
+[_, _, histLine] = ta.macd(close, 4, 15, 3)
+atr        = ta.atr(7)
+volumeMA   = ta.sma(volume, 9)
+
+// محاسبه ADX دستی
+adx(len) =>
+    up = ta.change(high)
+    down = -ta.change(low)
+    trur = ta.rma(ta.tr, len)
+    plus = fixnan(100 * ta.rma(up > down and up > 0 ? up : 0, len) / trur)
+    minus = fixnan(100 * ta.rma(down > up and down > 0 ? down : 0, len) / trur)
+    sum = plus + minus
+    adx = 100 * ta.rma(math.abs(plus - minus) / (sum == 0 ? 1 : sum), len)
+adxValue = adx(24)
+
+// ======== فیلترها ========
+goldFilter = close > 1500 and timeframe.isdaily and year > 2010
+
+// ======== شرایط معاملاتی ========
+longCondition  = ta.crossover(fastMA, medMA) and close > slowMA + (atr * 0.15) and rsi < 34 and histLine > histLine[3] and volume > volumeMA * 1.28 and adxValue > 36 and goldFilter
+shortCondition = ta.crossunder(fastMA, medMA) and close < slowMA - (atr * 0.15) and rsi > 66 and histLine < histLine[3] and volume > volumeMA * 1.28 and adxValue > 36 and goldFilter
+
+// ======== مدیریت ریسک ========
+riskControl = 0.0068 * strategy.equity / (atr * 1.25)
+
+// ======== نوتیفیکیشن‌های پیشرفته ========
+alertMessageLong  = "🚨 سیگنال خرید:\nقیمت: {{close}}\nحجم: {{volume}}\nحد سود: " + str.tostring(close + atr*5.2)
+alertMessageShort = "🚨 سیگنال فروش:\nقیمت: {{close}}\nحجم: {{volume}}\nحد سود: " + str.tostring(close - atr*5.2)
+
+// ======== اجرای استراتژی ========
+strategy.entry("Long",  strategy.long,  condition=longCondition,  qty=riskControl, alert_message=alertMessageLong)
+strategy.entry("Short", strategy.short, condition=shortCondition, qty=riskControl, alert_message=alertMessageShort)
+
+strategy.exit("Exit Long", "Long", stop=close - atr*0.6, limit=close + atr*5.2, trail_points=atr*3.8, trail_offset=atr*0.55)
+strategy.exit("Exit Short", "Short", stop=close + atr*0.6, limit=close - atr*5.2, trail_points=atr*3.8, trail_offset=atr*0.55)
+
+// ======== هشدارهای سفارشی ========
+alertcondition(longCondition,  title='📢 هشدار خرید', message='سیگنال خرید در {{ticker}} - قیمت: {{close}}')
+alertcondition(shortCondition, title='📢 هشدار فروش', message='سیگنال فروش در {{ticker}} - قیمت: {{close}}')
+
+// ======== نمایشگرها ========
+plot(fastMA, "MA سریع", #FFD700, 2)
+plot(medMA, "MA متوسط", #FFA500, 2)
+plot(slowMA, "MA کند", #FF4500, 2)
+plotshape(longCondition, "▲ خرید", shape.triangleup, location.belowbar, #00FF00, size=size.large)
+plotshape(shortCondition, "▼ فروش", shape.triangledown, location.abovebar, #FF0000, size=size.large)
