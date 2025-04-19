@@ -1,6 +1,9 @@
 import type { Instance } from "ink";
 import type React from "react";
 
+// Cost‑tracking
+import { printAndResetSessionSummary } from "./session-cost.js";
+
 let inkRenderer: Instance | null = null;
 
 // Track whether the clean‑up routine has already executed so repeat calls are
@@ -78,5 +81,13 @@ export function onExit(): void {
     } catch {
       /* best‑effort – continue even if Ink throws */
     }
+  }
+
+  // Finally, print a brief token/cost summary for the session – best effort
+  // only, errors are swallowed so that shutdown always succeeds.
+  try {
+    printAndResetSessionSummary();
+  } catch {
+    /* ignore */
   }
 }

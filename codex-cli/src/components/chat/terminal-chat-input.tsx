@@ -9,6 +9,7 @@ import { TerminalChatCommandReview } from "./terminal-chat-command-review.js";
 import { log, isLoggingEnabled } from "../../utils/agent/log.js";
 import { loadConfig } from "../../utils/config.js";
 import { createInputItem } from "../../utils/input-utils.js";
+import { printAndResetSessionSummary } from "../../utils/session-cost.js";
 import { setSessionId } from "../../utils/session.js";
 import { SLASH_COMMANDS, type SlashCommand } from "../../utils/slash-commands";
 import {
@@ -301,7 +302,13 @@ export default function TerminalChatInput({
         setInput("");
         setSessionId("");
         setLastResponseId("");
+
+        // Clear the terminal first so the summary is printed on a fresh
+        // screen before the new session starts.
         clearTerminal();
+
+        // Show the token/cost summary for the session that just ended.
+        printAndResetSessionSummary();
 
         // Emit a system message to confirm the clear action.  We *append*
         // it so Ink's <Static> treats it as new output and actually renders it.

@@ -441,8 +441,14 @@ export default function TerminalChat({
   ).length;
 
   const contextLeftPercent = useMemo(
-    () => calculateContextPercentRemaining(items, model),
-    [items, model],
+    () =>
+      calculateContextPercentRemaining(
+        items,
+        model,
+        // static system instructions count towards the context budget too
+        config.instructions?.length ?? 0,
+      ),
+    [items, model, config.instructions],
   );
 
   return (

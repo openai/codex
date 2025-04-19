@@ -24,6 +24,25 @@ function isUserMessage(
  */
 export function maxTokensForModel(model: string): number {
   const lower = model.toLowerCase();
+  // Heuristics for common context window sizes. Keep the checks loosely
+  // ordered from *largest* to *smallest* so that more specific long‑context
+  // models are detected before their shorter generic counterparts.
+
+  // Special‑case for 1,047,576‑token demo model (gpt‑4‑long). We match either
+  // the literal number or "gpt-4.1" variants we occasionally encounter.
+  if (lower.includes("1,047,576") || /gpt-4\.1/i.test(lower)) {
+    return 1047576;
+  }
+
+  if (lower.includes("128k") || /gpt-4\.5|gpt-4o-mini|gpt-4o\b/i.test(lower)) {
+    return 128000;
+  }
+
+  // Experimental o‑series advertised at ~200k context
+  if (/\bo[134]\b|o[134]-mini|o1[- ]?pro/i.test(lower)) {
+    return 200000;
+  }
+
   if (lower.includes("32k")) {
     return 32000;
   }
@@ -46,8 +65,11 @@ export function maxTokensForModel(model: string): number {
 export function calculateContextPercentRemaining(
   items: Array<ResponseItem>,
   model: string,
+  extraContextChars = 0,
 ): number {
-  const used = approximateTokensUsed(items);
+  const tokensFromItems = approximateTokensUsed(items);
+  const extraTokens = Math.ceil(extraContextChars / 4);
+  const used = tokensFromItems + extraTokens;
   const max = maxTokensForModel(model);
   const remaining = Math.max(0, max - used);
   return (remaining / max) * 100;
