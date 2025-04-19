@@ -11,4 +11,9 @@ export enum ReviewDecision {
    * User wants an explanation of what the command does before deciding.
    */
   EXPLAIN = "explain",
+
+  /**
+   * User wants to confirm a command before executing it.
+   */
+  CONFIRM = "confirm",
 }
