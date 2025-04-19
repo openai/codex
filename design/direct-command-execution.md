@@ -54,15 +54,25 @@ export async function handleDirectCommand(
   // Split into argument array (handles quotes, etc.)
   const args = parseCommandIntoArgs(command);
   
-  // Create a mock approval that always returns YES
-  const mockApproval = async (
-    command: Array<string>,
-    _applyPatch?: ApplyPatchCommand
-  ): Promise<CommandConfirmation> => {
-    return {
-      review: ReviewDecision.YES,
-      command
-    };
+  // Use either auto-approval or standard approval flow based on configuration
+  const getApproval = (config: AppConfig) => {
+    // Check if user has explicitly opted in to auto-approval for direct commands
+    const autoApprove = config.directCommands?.autoApprove === true;
+    
+    if (autoApprove) {
+      // Auto-approve if user has explicitly enabled this in config
+      return async (command: Array<string>, applyPatch?: ApplyPatchCommand): 
+        Promise<CommandConfirmation> => {
+        return {
+          review: ReviewDecision.YES,
+          command
+        };
+      };
+    } else {
+      // Otherwise use the standard approval flow
+      // This will prompt the user for confirmation
+      return getCommandConfirmation;
+    }
   };
   
   // Use the existing execution path
@@ -140,6 +150,19 @@ The direct command would flow through the normal execution path, but with an aut
 ## Success Criteria
 
 1. Users can run common shell commands directly with the prefix
-2. Commands execute immediately without AI processing
-3. Output is displayed clearly in the terminal interface
-4. The implementation doesn't break existing functionality
+2. By default, prefixed commands still require explicit user approval (no auto-execution)
+3. Users must explicitly opt-in to automatic approval of direct commands via configuration
+4. Output is displayed clearly in the terminal interface, distinguishing direct commands from AI-generated ones
+5. The implementation doesn't break existing functionality
+
+## Configuration Options
+
+```yaml
+# ~/.codex/config.yaml
+directCommands:
+  enabled: true  # Enable direct command recognition (default: true)
+  autoApprove: false  # Auto-approve direct commands without confirmation (default: false)
+  prefix: "!"  # Command prefix character(s) (default: "!")
+```
+
+Users must explicitly set `autoApprove: true` to bypass the approval workflow for direct commands. This ensures that the security model remains intact by default while providing power users the option to enable more efficient workflows.
