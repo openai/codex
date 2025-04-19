@@ -1,5 +1,7 @@
-<h1 align="center">OpenAI Codex CLI</h1>
+<h1 align="center">OpenAI Codex CLI (Haleon Fork)</h1>
 <p align="center">Lightweight coding agent that runs in your terminal</p>
+
+<p align="center"><strong>Note:</strong> This is the "Haleon" fork (codename for tnn1t1s fork of OpenAI Codex).<br>It contains experimental features for agentic research and is not intended for consumer use.</p>
 
 <p align="center"><code>npm i -g @openai/codex</code></p>
 
@@ -20,6 +22,7 @@
 - [Memory \& Project Docs](#memoryprojectdocs)
 - [Non‑interactive / CI mode](#noninteractivecimode)
 - [Recipes](#recipes)
+- [Experimental Features](#experimental-features)
 - [Installation](#installation)
 - [Configuration](#configuration)
 - [FAQ](#faq)
@@ -230,6 +233,18 @@ Below are a few bite‑size examples you can copy‑paste. Replace the text in q
 | 5   | `codex "Explain what this regex does: ^(?=.*[A-Z]).{8,}$"`                      | Outputs a step‑by‑step human explanation.                                  |
 | 6   | `codex "Carefully review this repo, and propose 3 high impact well-scoped PRs"` | Suggests impactful PRs in the current codebase.                            |
 | 7   | `codex "Look for vulnerabilities and create a security review report"`          | Finds and explains security bugs.                                          |
+
+---
+
+## Experimental Features
+
+The Haleon fork includes several experimental features for agentic research that aren't in the main OpenAI Codex CLI.
+
+| Feature | Description | Usage Example |
+|---------|-------------|---------------|
+| **GitHub CLI Integration** | Seamlessly interact with GitHub directly from Codex. Create issues, manage PRs, and run workflows using the `gh` CLI. Requires [GitHub CLI](https://cli.github.com/) to be installed. | `gh issue create "Bug title" "Description"` <br> `gh pr create --title "Feature" --body "Implements X"` |
+
+> **Warning**: These experimental features are for research purposes only and may change without notice. They are not supported for production use.
 
 ---
 
