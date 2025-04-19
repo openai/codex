@@ -10,6 +10,7 @@ import { log, isLoggingEnabled } from "../../utils/agent/log.js";
 import { loadConfig } from "../../utils/config.js";
 import { createInputItem } from "../../utils/input-utils.js";
 import { setSessionId } from "../../utils/session.js";
+import { SLASH_COMMANDS, type SlashCommand } from "../../utils/slash-commands";
 import {
   loadCommandHistory,
   addToHistory,
@@ -70,12 +71,16 @@ export default function TerminalChatInput({
   // New: current conversation items so we can include them in bug reports
   items?: Array<ResponseItem>;
 }): React.ReactElement {
+  // Slash command suggestion index
+  const [selectedSlashSuggestion, setSelectedSlashSuggestion] =
+    useState<number>(0);
   const app = useApp();
   const [selectedSuggestion, setSelectedSuggestion] = useState<number>(0);
   const [input, setInput] = useState("");
   const [history, setHistory] = useState<Array<HistoryEntry>>([]);
   const [historyIndex, setHistoryIndex] = useState<number | null>(null);
   const [draftInput, setDraftInput] = useState<string>("");
+  const [skipNextSubmit, setSkipNextSubmit] = useState<boolean>(false);
 
   // Load command history on component mount
   useEffect(() => {
@@ -86,9 +91,92 @@ export default function TerminalChatInput({
 
     loadHistory();
   }, []);
+  // Reset slash suggestion index when input prefix changes
+  useEffect(() => {
+    if (input.trim().startsWith("/")) {
+      setSelectedSlashSuggestion(0);
+    }
+  }, [input]);
 
   useInput(
     (_input, _key) => {
+      // Slash command navigation: up/down to select, enter to fill
+      if (!confirmationPrompt && !loading && input.trim().startsWith("/")) {
+        const prefix = input.trim();
+        const matches = SLASH_COMMANDS.filter((cmd: SlashCommand) =>
+          cmd.command.startsWith(prefix),
+        );
+        if (matches.length > 0) {
+          if (_key.tab) {
+            // Cycle and fill slash command suggestions on Tab
+            const len = matches.length;
+            // Determine new index based on shift state
+            const nextIdx = _key.shift
+              ? selectedSlashSuggestion <= 0
+                ? len - 1
+                : selectedSlashSuggestion - 1
+              : selectedSlashSuggestion >= len - 1
+              ? 0
+              : selectedSlashSuggestion + 1;
+            setSelectedSlashSuggestion(nextIdx);
+            // Autocomplete the command in the input
+            const match = matches[nextIdx];
+            if (!match) {
+              return;
+            }
+            const cmd = match.command;
+            setInput(cmd);
+            setDraftInput(cmd);
+            return;
+          }
+          if (_key.upArrow) {
+            setSelectedSlashSuggestion((prev) =>
+              prev <= 0 ? matches.length - 1 : prev - 1,
+            );
+            return;
+          }
+          if (_key.downArrow) {
+            setSelectedSlashSuggestion((prev) =>
+              prev < 0 || prev >= matches.length - 1 ? 0 : prev + 1,
+            );
+            return;
+          }
+          if (_key.return) {
+            // Execute the currently selected slash command
+            const selIdx = selectedSlashSuggestion;
+            const cmdObj = matches[selIdx];
+            if (cmdObj) {
+              const cmd = cmdObj.command;
+              setInput("");
+              setDraftInput("");
+              setSelectedSlashSuggestion(0);
+              switch (cmd) {
+                case "/history":
+                  openOverlay();
+                  break;
+                case "/help":
+                  openHelpOverlay();
+                  break;
+                case "/compact":
+                  onCompact();
+                  break;
+                case "/model":
+                  openModelOverlay();
+                  break;
+                case "/approval":
+                  openApprovalOverlay();
+                  break;
+                case "/bug":
+                  onSubmit(cmd);
+                  break;
+                default:
+                  break;
+              }
+            }
+            return;
+          }
+        }
+      }
       if (!confirmationPrompt && !loading) {
         if (_key.upArrow) {
           if (history.length > 0) {
@@ -156,6 +244,16 @@ export default function TerminalChatInput({
   const onSubmit = useCallback(
     async (value: string) => {
       const inputValue = value.trim();
+      // If the user only entered a slash, do not send a chat message
+      if (inputValue === "/") {
+        setInput("");
+        return;
+      }
+      // Skip this submit if we just autocompleted a slash command
+      if (skipNextSubmit) {
+        setSkipNextSubmit(false);
+        return;
+      }
       if (!inputValue) {
         return;
       }
@@ -396,8 +494,9 @@ export default function TerminalChatInput({
       openApprovalOverlay,
       openModelOverlay,
       openHelpOverlay,
-      history, // Add history to the dependency array
+      history,
       onCompact,
+      skipNextSubmit,
       items,
     ],
   );
@@ -449,6 +548,25 @@ export default function TerminalChatInput({
           </Box>
         )}
       </Box>
+      {/* Slash command autocomplete suggestions */}
+      {input.trim().startsWith("/") && (
+        <Box flexDirection="column" paddingX={2} marginBottom={1}>
+          {SLASH_COMMANDS.filter((cmd: SlashCommand) =>
+            cmd.command.startsWith(input.trim()),
+          ).map((cmd: SlashCommand, idx: number) => (
+            <Box key={cmd.command}>
+              <Text
+                backgroundColor={
+                  idx === selectedSlashSuggestion ? "blackBright" : undefined
+                }
+              >
+                <Text color="blueBright">{cmd.command}</Text>
+                <Text> {cmd.description}</Text>
+              </Text>
+            </Box>
+          ))}
+        </Box>
+      )}
       <Box paddingX={2} marginBottom={1}>
         <Text dimColor>
           {isNew && !input ? (
