@@ -23,6 +23,7 @@ result
 .vscode/
 .idea/
 .history/
+.zed/
 *.swp
 *~
 

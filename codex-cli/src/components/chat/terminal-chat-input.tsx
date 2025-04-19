@@ -6,8 +6,10 @@ import type {
 } from "openai/resources/responses/responses.mjs";
 
 import { TerminalChatCommandReview } from "./terminal-chat-command-review.js";
+import TextCompletions from "./terminal-chat-completions.js";
 import { log, isLoggingEnabled } from "../../utils/agent/log.js";
 import { loadConfig } from "../../utils/config.js";
+import { getFileSystemSuggestions } from "../../utils/file-system-suggestions.js";
 import { createInputItem } from "../../utils/input-utils.js";
 import { setSessionId } from "../../utils/session.js";
 import { SLASH_COMMANDS, type SlashCommand } from "../../utils/slash-commands";
@@ -81,6 +83,9 @@ export default function TerminalChatInput({
   const [historyIndex, setHistoryIndex] = useState<number | null>(null);
   const [draftInput, setDraftInput] = useState<string>("");
   const [skipNextSubmit, setSkipNextSubmit] = useState<boolean>(false);
+  const [fsSuggestions, setFsSuggestions] = useState<Array<string>>([]);
+  const [selectedCompletion, setSelectedCompletion] = useState<number>(-1);
+  const [forceCursorToEnd, setForceCursorToEnd] = useState<boolean>(false);
 
   // Load command history on component mount
   useEffect(() => {
@@ -178,6 +183,36 @@ export default function TerminalChatInput({
         }
       }
       if (!confirmationPrompt && !loading) {
+        if (fsSuggestions.length > 0) {
+          if (_key.upArrow) {
+            setSelectedCompletion((prev) =>
+              prev <= 0 ? fsSuggestions.length - 1 : prev - 1,
+            );
+            return;
+          }
+
+          if (_key.downArrow) {
+            setSelectedCompletion((prev) =>
+              prev >= fsSuggestions.length - 1 ? 0 : prev + 1,
+            );
+            return;
+          }
+
+          if (_key.tab && selectedCompletion >= 0) {
+            const words = input.trim().split(/\s+/);
+            const selected = fsSuggestions[selectedCompletion];
+
+            if (words.length > 0 && selected) {
+              words[words.length - 1] = selected;
+              setInput(words.join(" "));
+              setFsSuggestions([]);
+              setSelectedCompletion(-1);
+              setForceCursorToEnd(true);
+            }
+            return;
+          }
+        }
+
         if (_key.upArrow) {
           if (history.length > 0) {
             if (historyIndex == null) {
@@ -210,6 +245,19 @@ export default function TerminalChatInput({
             setInput(history[newIndex]?.command ?? "");
           }
           return;
+        }
+
+        if (_key.tab) {
+          const words = input.split(/\s+/);
+          const mostRecentWord = words[words.length - 1];
+          if (mostRecentWord === undefined || mostRecentWord === "") {
+            return;
+          }
+          const completions = getFileSystemSuggestions(mostRecentWord);
+          setFsSuggestions(completions);
+          if (completions.length > 0) {
+            setSelectedCompletion(0);
+          }
         }
       }
 
@@ -481,6 +529,8 @@ export default function TerminalChatInput({
       setDraftInput("");
       setSelectedSuggestion(0);
       setInput("");
+      setFsSuggestions([]);
+      setSelectedCompletion(-1);
     },
     [
       setInput,
@@ -536,12 +586,27 @@ export default function TerminalChatInput({
               }
               showCursor
               value={input}
+              cursorToEnd={forceCursorToEnd}
               onChange={(value) => {
                 setDraftInput(value);
                 if (historyIndex != null) {
                   setHistoryIndex(null);
                 }
                 setInput(value);
+
+                // Clear tab completions if a space is typed
+                if (value.endsWith(" ")) {
+                  setFsSuggestions([]);
+                  setSelectedCompletion(-1);
+                } else if (fsSuggestions.length > 0) {
+                  // Update file suggestions as user types
+                  const words = value.trim().split(/\s+/);
+                  const mostRecentWord =
+                    words.length > 0 ? words[words.length - 1] : "";
+                  if (mostRecentWord !== undefined) {
+                    setFsSuggestions(getFileSystemSuggestions(mostRecentWord));
+                  }
+                }
               }}
               onSubmit={onSubmit}
             />
@@ -568,47 +633,51 @@ export default function TerminalChatInput({
         </Box>
       )}
       <Box paddingX={2} marginBottom={1}>
-        <Text dimColor>
-          {isNew && !input ? (
-            <>
-              try:{" "}
-              {suggestions.map((m, key) => (
-                <Fragment key={key}>
-                  {key !== 0 ? " | " : ""}
-                  <Text
-                    backgroundColor={
-                      key + 1 === selectedSuggestion ? "blackBright" : ""
-                    }
-                  >
-                    {m}
-                  </Text>
-                </Fragment>
-              ))}
-            </>
-          ) : (
-            <>
-              send q or ctrl+c to exit | send "/clear" to reset | send "/help"
-              for commands | press enter to send
-              {contextLeftPercent > 25 && (
-                <>
-                  {" — "}
-                  <Text color={contextLeftPercent > 40 ? "green" : "yellow"}>
-                    {Math.round(contextLeftPercent)}% context left
-                  </Text>
-                </>
-              )}
-              {contextLeftPercent <= 25 && (
-                <>
-                  {" — "}
-                  <Text color="red">
-                    {Math.round(contextLeftPercent)}% context left — send
-                    "/compact" to condense context
-                  </Text>
-                </>
-              )}
-            </>
-          )}
-        </Text>
+        {isNew && !input ? (
+          <Text dimColor>
+            try:{" "}
+            {suggestions.map((m, key) => (
+              <Fragment key={key}>
+                {key !== 0 ? " | " : ""}
+                <Text
+                  backgroundColor={
+                    key + 1 === selectedSuggestion ? "blackBright" : ""
+                  }
+                >
+                  {m}
+                </Text>
+              </Fragment>
+            ))}
+          </Text>
+        ) : fsSuggestions.length > 0 ? (
+          <TextCompletions
+            completions={fsSuggestions}
+            selectedCompletion={selectedCompletion}
+            displayLimit={5}
+          />
+        ) : (
+          <Text dimColor>
+            send q or ctrl+c to exit | send "/clear" to reset | send "/help" for
+            commands | press enter to send
+            {contextLeftPercent > 25 && (
+              <>
+                {" — "}
+                <Text color={contextLeftPercent > 40 ? "green" : "yellow"}>
+                  {Math.round(contextLeftPercent)}% context left
+                </Text>
+              </>
+            )}
+            {contextLeftPercent <= 25 && (
+              <>
+                {" — "}
+                <Text color="red">
+                  {Math.round(contextLeftPercent)}% context left — send
+                  "/compact" to condense context
+                </Text>
+              </>
+            )}
+          </Text>
+        )}
       </Box>
     </Box>
   );
