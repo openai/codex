@@ -135,7 +135,7 @@ export function TerminalChatCommandReview({
         );
       } else if (input === "a" && showAlwaysApprove) {
         onReviewCommand(ReviewDecision.ALWAYS);
-      } else if (input === "v") {
+      } else if (input === "s") {
         // switch approval mode
         onSwitchApprovalMode();
       } else if (key.escape) {
