@@ -1,4 +1,4 @@
-import { OPENAI_API_KEY } from "./config";
+import { getBaseUrl, getApiKey } from "./config";
 import OpenAI from "openai";
 
 const MODEL_LIST_TIMEOUT_MS = 2_000; // 2 seconds
@@ -12,44 +12,38 @@ export const RECOMMENDED_MODELS: Array<string> = ["o4-mini", "o3"];
  * lifetime of the process and the results are cached for subsequent calls.
  */
 
-let modelsPromise: Promise<Array<string>> | null = null;
-
-async function fetchModels(): Promise<Array<string>> {
+async function fetchModels(provider: string): Promise<Array<string>> {
   // If the user has not configured an API key we cannot hit the network.
-  if (!OPENAI_API_KEY) {
-    return RECOMMENDED_MODELS;
+  if (!getApiKey(provider)) {
+    throw new Error("No API key configured for provider: " + provider);
   }
 
+  const baseURL = getBaseUrl(provider);
   try {
-    const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+    const openai = new OpenAI({ apiKey: getApiKey(provider), baseURL });
     const list = await openai.models.list();
-
     const models: Array<string> = [];
     for await (const model of list as AsyncIterable<{ id?: string }>) {
       if (model && typeof model.id === "string") {
-        models.push(model.id);
+        let modelStr = model.id;
+        // fix for gemini
+        if (modelStr.startsWith("models/")) {
+          modelStr = modelStr.replace("models/", "");
+        }
+        models.push(modelStr);
       }
     }
 
     return models.sort();
-  } catch {
+  } catch (error) {
     return [];
   }
 }
 
-export function preloadModels(): void {
-  if (!modelsPromise) {
-    // Fire‑and‑forget – callers that truly need the list should `await`
-    // `getAvailableModels()` instead.
-    void getAvailableModels();
-  }
-}
-
-export async function getAvailableModels(): Promise<Array<string>> {
-  if (!modelsPromise) {
-    modelsPromise = fetchModels();
-  }
-  return modelsPromise;
+export async function getAvailableModels(
+  provider: string,
+): Promise<Array<string>> {
+  return fetchModels(provider.toLowerCase());
 }
 
 /**
@@ -70,7 +64,7 @@ export async function isModelSupportedForResponses(
 
   try {
     const models = await Promise.race<Array<string>>([
-      getAvailableModels(),
+      getAvailableModels("openai"),
       new Promise<Array<string>>((resolve) =>
         setTimeout(() => resolve([]), MODEL_LIST_TIMEOUT_MS),
       ),

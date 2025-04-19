@@ -10,6 +10,7 @@ import type { FullAutoErrorMode } from "./auto-approval-mode.js";
 
 import { log, isLoggingEnabled } from "./agent/log.js";
 import { AutoApprovalMode } from "./auto-approval-mode.js";
+import { providers } from "./providers.js";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { load as loadYaml, dump as dumpYaml } from "js-yaml";
 import { homedir } from "os";
@@ -40,12 +41,33 @@ export function setApiKey(apiKey: string): void {
   OPENAI_API_KEY = apiKey;
 }
 
+export function getBaseUrl(provider: string = "openai"): string | undefined {
+  const providerInfo = providers[provider.toLowerCase()];
+  if (providerInfo) {
+    return providerInfo.baseURL;
+  }
+  return undefined;
+}
+
+export function getApiKey(provider: string = "openai"): string | undefined {
+  const providerInfo = providers[provider.toLowerCase()];
+  if (providerInfo) {
+    if (providerInfo.name === "Ollama") {
+      return process.env[providerInfo.envKey] ?? "dummy";
+    }
+    return process.env[providerInfo.envKey];
+  }
+
+  return undefined;
+}
+
 // Formatting (quiet mode-only).
 export const PRETTY_PRINT = Boolean(process.env["PRETTY_PRINT"] || "");
 
 // Represents config as persisted in config.json.
 export type StoredConfig = {
   model?: string;
+  provider?: string;
   approvalMode?: AutoApprovalMode;
   fullAutoErrorMode?: FullAutoErrorMode;
   memory?: MemoryConfig;
@@ -74,6 +96,7 @@ export type MemoryConfig = {
 export type AppConfig = {
   apiKey?: string;
   model: string;
+  provider?: string;
   instructions: string;
   fullAutoErrorMode?: FullAutoErrorMode;
   memory?: MemoryConfig;
@@ -266,6 +289,7 @@ export const loadConfig = (
       (options.isFullContext
         ? DEFAULT_FULL_CONTEXT_MODEL
         : DEFAULT_AGENTIC_MODEL),
+    provider: storedConfig.provider,
     instructions: combinedInstructions,
     notify: storedConfig.notify === true,
   };
@@ -376,6 +400,7 @@ export const saveConfig = (
   // Create the config object to save
   const configToSave: StoredConfig = {
     model: config.model,
+    provider: config.provider,
   };
 
   // Add history settings if they exist
