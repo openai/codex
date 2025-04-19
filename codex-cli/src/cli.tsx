@@ -262,11 +262,9 @@ config = {
   notify: Boolean(cli.flags.notify),
 };
 
-<<<<<<< HEAD
 // Check for updates after loading config
 // This is important because we write state file in the config dir
 await checkForUpdates().catch();
-=======
 // ---------------------------------------------------------------------------
 // --flex-mode validation (only allowed for o3 and o4-mini)
 // ---------------------------------------------------------------------------
@@ -282,7 +280,6 @@ if (cli.flags.flexMode) {
     process.exit(1);
   }
 }
->>>>>>> 37819c1 (initial take)
 
 if (!(await isModelSupportedForResponses(config.model))) {
   // eslint-disable-next-line no-console
