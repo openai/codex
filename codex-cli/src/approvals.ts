@@ -359,6 +359,73 @@ export function isSafeCommand(
         reason: "Locate command",
         group: "Searching",
       };
+    case "gh":
+      switch (cmd1) {
+        case "--version":
+          return {
+            reason: "GitHub CLI version",
+            group: "GitHub",
+          };
+        case "issue":
+          switch (cmd2) {
+            case "list":
+              return {
+                reason: "List GitHub issues",
+                group: "GitHub",
+              };
+            case "view":
+              return {
+                reason: "View GitHub issue",
+                group: "GitHub",
+              };
+            default:
+              return {
+                reason: "GitHub issue operations",
+                group: "GitHub",
+              };
+          }
+        case "pr":
+          switch (cmd2) {
+            case "list":
+              return {
+                reason: "List GitHub PRs",
+                group: "GitHub",
+              };
+            case "view":
+              return {
+                reason: "View GitHub PR",
+                group: "GitHub",
+              };
+            default:
+              return {
+                reason: "GitHub PR operations",
+                group: "GitHub",
+              };
+          }
+        case "workflow":
+          switch (cmd2) {
+            case "list":
+              return {
+                reason: "List GitHub workflows",
+                group: "GitHub",
+              };
+            case "view":
+              return {
+                reason: "View GitHub workflow",
+                group: "GitHub",
+              };
+            default:
+              return {
+                reason: "GitHub workflow operations",
+                group: "GitHub",
+              };
+          }
+        default:
+          return {
+            reason: "GitHub CLI operations",
+            group: "GitHub",
+          };
+      }
     case "git":
       switch (cmd1) {
         case "status":
