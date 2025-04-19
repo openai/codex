@@ -3,7 +3,6 @@ import type { SpawnOptions } from "child_process";
 
 import { exec } from "./raw-exec.js";
 import { log } from "../log.js";
-import { realpathSync } from "fs";
 import { CONFIG_DIR } from "src/utils/config.js";
 
 function getCommonRoots() {
@@ -30,9 +29,7 @@ export function execWithSeatbelt(
     const { policies, params } = writableRoots
       .map((root, index) => ({
         policy: `(subpath (param "WRITABLE_ROOT_${index}"))`,
-        // the kernel resolves symlinks before handing them to seatbelt for checking
-        // so store the canonicalized form in the policy to be compared against
-        param: `-DWRITABLE_ROOT_${index}=${realpathSync(root)}`,
+        param: `-DWRITABLE_ROOT_${index}=${root}`,
       }))
       .reduce(
         (

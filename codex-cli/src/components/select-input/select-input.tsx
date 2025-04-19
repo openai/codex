@@ -1,5 +1,5 @@
-import Indicator, { type Props as IndicatorProps } from "./Indicator.js";
-import ItemComponent, { type Props as ItemProps } from "./Item.js";
+import Indicator, { type Props as IndicatorProps } from "./indicator.js";
+import ItemComponent, { type Props as ItemProps } from "./item.js";
 import isEqual from "fast-deep-equal";
 import { Box, useInput } from "ink";
 import React, {

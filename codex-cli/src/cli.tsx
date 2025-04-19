@@ -17,6 +17,7 @@ import { AgentLoop } from "./utils/agent/agent-loop";
 import { initLogger } from "./utils/agent/log";
 import { ReviewDecision } from "./utils/agent/review";
 import { AutoApprovalMode } from "./utils/auto-approval-mode";
+import { checkForUpdates } from "./utils/check-updates";
 import {
   loadConfig,
   PRETTY_PRINT,
@@ -69,6 +70,9 @@ const cli = meow(
     --project-doc <file>       Include an additional markdown file at <file> as context
     --full-stdout              Do not truncate stdout/stderr from command outputs
     --notify                   Enable desktop notifications for responses
+
+    --flex-mode               Use "flex-mode" processing mode for the request (only supported
+                              with models o3 and o4-mini)
 
   Dangerous options
     --dangerously-auto-approve-everything
@@ -138,6 +142,11 @@ const cli = meow(
       projectDoc: {
         type: "string",
         description: "Path to a markdown file to include as project doc",
+      },
+      flexMode: {
+        type: "boolean",
+        description:
+          "Enable the flex-mode service tier (only supported by models o3 and o4-mini)",
       },
       fullStdout: {
         type: "boolean",
@@ -249,8 +258,28 @@ config = {
   apiKey,
   ...config,
   model: model ?? config.model,
+  flexMode: Boolean(cli.flags.flexMode),
   notify: Boolean(cli.flags.notify),
 };
+
+// Check for updates after loading config
+// This is important because we write state file in the config dir
+await checkForUpdates().catch();
+// ---------------------------------------------------------------------------
+// --flex-mode validation (only allowed for o3 and o4-mini)
+// ---------------------------------------------------------------------------
+
+if (cli.flags.flexMode) {
+  const allowedFlexModels = new Set(["o3", "o4-mini"]);
+  if (!allowedFlexModels.has(config.model)) {
+    // eslint-disable-next-line no-console
+    console.error(
+      `The --flex-mode option is only supported when using the 'o3' or 'o4-mini' models. ` +
+        `Current model: '${config.model}'.`,
+    );
+    process.exit(1);
+  }
+}
 
 if (!(await isModelSupportedForResponses(config.model))) {
   // eslint-disable-next-line no-console
