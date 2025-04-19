@@ -1,6 +1,6 @@
 #!/bin/bash
-set -euo pipefail  # Exit on error, undefined vars, and pipeline failures
-IFS=$'\n\t'       # Stricter word splitting
+set -euo pipefail
+IFS=$'\n\t'
 
 # Flush existing rules and delete existing ipsets
 iptables -F
@@ -11,21 +11,63 @@ iptables -t mangle -F
 iptables -t mangle -X
 ipset destroy allowed-domains 2>/dev/null || true
 
-# First allow DNS and localhost before any restrictions
-# Allow outbound DNS
+# Allow DNS & localhost
 iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
-# Allow inbound DNS responses
 iptables -A INPUT -p udp --sport 53 -j ACCEPT
-# Allow localhost
 iptables -A INPUT -i lo -j ACCEPT
 iptables -A OUTPUT -o lo -j ACCEPT
 
-# Create ipset with CIDR support
+# Create ipset
 ipset create allowed-domains hash:net
 
-# Resolve and add other allowed domains
-for domain in \
-    "api.openai.com"; do
+# Add domains to allowlist
+ALLOWED_DOMAINS=(
+    # 🔑 OpenAI
+    "api.openai.com"
+
+    # 🟨 Node.js (npm)
+    "registry.npmjs.org"
+
+    # 🐍 Python (pip)
+    "pypi.org"
+    "files.pythonhosted.org"
+
+    # 🟦 Go (modules)
+    "proxy.golang.org"
+    "sum.golang.org"
+    "storage.googleapis.com"
+
+    # 🦀 Rust (cargo)
+    "crates.io"
+    "static.crates.io"
+    "github.com"
+    "objects.githubusercontent.com"
+
+    # ☕ Java (Maven, Gradle)
+    "repo1.maven.org"
+    "repo.maven.apache.org"
+    "jcenter.bintray.com"
+    "plugins.gradle.org"
+    "services.gradle.org"
+
+    # 🎯 C# / .NET (NuGet)
+    "api.nuget.org"
+    "www.nuget.org"
+    "globalcdn.nuget.org"
+
+    # 🐧 Linux distros (package mirrors)
+    "downloads.sourceforge.net"
+    "dl-cdn.alpinelinux.org"
+    "deb.debian.org"
+    "security.debian.org"
+
+    # 🐳 Docker
+    "registry-1.docker.io"
+    "auth.docker.io"
+    "production.cloudflare.docker.com"
+)
+
+for domain in "${ALLOWED_DOMAINS[@]}"; do
     echo "Resolving $domain..."
     ips=$(dig +short A "$domain")
     if [ -z "$ips" ]; then
@@ -34,43 +76,38 @@ for domain in \
     fi
 
     while read -r ip; do
-        if [[ ! "$ip" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
-            echo "ERROR: Invalid IP from DNS for $domain: $ip"
-            exit 1
+        if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Adding $ip for $domain"
+            ipset add allowed-domains "$ip"
+        else
+            echo "WARNING: Skipped invalid IP for $domain: $ip"
         fi
-        echo "Adding $ip for $domain"
-        ipset add allowed-domains "$ip"
     done < <(echo "$ips")
 done
 
-# Get host IP from default route
+# Detect host IP
 HOST_IP=$(ip route | grep default | cut -d" " -f3)
-if [ -z "$HOST_IP" ]; then
-    echo "ERROR: Failed to detect host IP"
-    exit 1
-fi
+[ -z "$HOST_IP" ] && { echo "ERROR: Failed to detect host IP"; exit 1; }
 
 HOST_NETWORK=$(echo "$HOST_IP" | sed "s/\.[0-9]*$/.0\/24/")
 echo "Host network detected as: $HOST_NETWORK"
 
-# Set up remaining iptables rules
 iptables -A INPUT -s "$HOST_NETWORK" -j ACCEPT
 iptables -A OUTPUT -d "$HOST_NETWORK" -j ACCEPT
 
-# Set default policies to DROP first
+# Set default DROP policy
 iptables -P INPUT DROP
 iptables -P FORWARD DROP
 iptables -P OUTPUT DROP
 
-# First allow established connections for already approved traffic
+# Allow existing connections
 iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 
-# Then allow only specific outbound traffic to allowed domains
+# Allow outbound traffic to IPs in allowed-domains
 iptables -A OUTPUT -m set --match-set allowed-domains dst -j ACCEPT
 
-# Append final REJECT rules for immediate error responses
-# For TCP traffic, send a TCP reset; for UDP, send ICMP port unreachable.
+# Reject everything else (clean failure response)
 iptables -A INPUT -p tcp -j REJECT --reject-with tcp-reset
 iptables -A INPUT -p udp -j REJECT --reject-with icmp-port-unreachable
 iptables -A OUTPUT -p tcp -j REJECT --reject-with tcp-reset
@@ -79,18 +116,26 @@ iptables -A FORWARD -p tcp -j REJECT --reject-with tcp-reset
 iptables -A FORWARD -p udp -j REJECT --reject-with icmp-port-unreachable
 
 echo "Firewall configuration complete"
-echo "Verifying firewall rules..."
+
+# Basic verification
+echo "Verifying blocked domain..."
 if curl --connect-timeout 5 https://example.com >/dev/null 2>&1; then
-    echo "ERROR: Firewall verification failed - was able to reach https://example.com"
+    echo "ERROR: Unexpected access to https://example.com"
     exit 1
 else
-    echo "Firewall verification passed - unable to reach https://example.com as expected"
+    echo "✔️ Firewall correctly blocks example.com"
 fi
 
-# Verify OpenAI API access
-if ! curl --connect-timeout 5 https://api.openai.com >/dev/null 2>&1; then
-    echo "ERROR: Firewall verification failed - unable to reach https://api.openai.com"
-    exit 1
-else
-    echo "Firewall verification passed - able to reach https://api.openai.com as expected"
-fi
+echo "Verifying access to package registries..."
+for test_domain in \
+    "https://api.openai.com" \
+    "https://registry.npmjs.org" \
+    "https://pypi.org/simple" \
+    "https://github.com"; do
+    if curl --connect-timeout 5 --head "$test_domain" >/dev/null 2>&1; then
+        echo "✔️ Able to reach $test_domain"
+    else
+        echo "❌ Failed to reach $test_domain"
+        exit 1
+    fi
+done
