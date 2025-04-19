@@ -2,7 +2,21 @@
 
 You can install any of these versions: `npm install -g codex@version`
 
-## 0.1.2504172351
+## `0.1.2504181820`
+
+### 🚀 Features
+
+- Add `/bug` report command (#312)
+- Notify when a newer version is available (#333)
+
+### 🐛 Bug Fixes
+
+- Update context left display logic in TerminalChatInput component (#307)
+- Improper spawn of sh on Windows Powershell (#318)
+- `/bug` report command, thinking indicator (#381)
+- Include pnpm lock file (#377)
+
+## `0.1.2504172351`
 
 ### 🚀 Features
 
@@ -14,7 +28,7 @@ You can install any of these versions: `npm install -g codex@version`
 - Raw-exec-process-group.test improve reliability and error handling (#280)
 - Canonicalize the writeable paths used in seatbelt policy (#275)
 
-## 0.1.2504172304
+## `0.1.2504172304`
 
 ### 🚀 Features
 
