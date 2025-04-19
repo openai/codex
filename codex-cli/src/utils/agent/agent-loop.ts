@@ -496,7 +496,6 @@ export class AgentLoop {
             if (this.model.startsWith("o")) {
               reasoning = { effort: "high" };
               if (this.model === "o3" || this.model === "o4-mini") {
-                // @ts-expect-error waiting for API type update
                 reasoning.summary = "auto";
               }
             }
@@ -517,6 +516,7 @@ export class AgentLoop {
               stream: true,
               parallel_tool_calls: false,
               reasoning,
+              ...(this.config.flexMode ? { service_tier: "flex" } : {}),
               tools: [
                 {
                   type: "function",
@@ -788,6 +788,41 @@ export class AgentLoop {
               // It was aborted for some other reason; surface the error.
               throw err;
             }
+            this.onLoading(false);
+            return;
+          }
+          // Suppress internal stack on JSON parse failures
+          if (err instanceof SyntaxError) {
+            this.onItem({
+              id: `error-${Date.now()}`,
+              type: "message",
+              role: "system",
+              content: [
+                {
+                  type: "input_text",
+                  text: "⚠️ Failed to parse streaming response (invalid JSON). Please `/clear` to reset.",
+                },
+              ],
+            });
+            this.onLoading(false);
+            return;
+          }
+          // Handle OpenAI API quota errors
+          if (
+            err instanceof Error &&
+            (err as { code?: string }).code === "insufficient_quota"
+          ) {
+            this.onItem({
+              id: `error-${Date.now()}`,
+              type: "message",
+              role: "system",
+              content: [
+                {
+                  type: "input_text",
+                  text: "⚠️ Insufficient quota. Please check your billing details and retry.",
+                },
+              ],
+            });
             this.onLoading(false);
             return;
           }
