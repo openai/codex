@@ -103,7 +103,7 @@ export async function handleExecCommand(
   // working directory so that edits are constrained to the project root.  If
   // the caller wishes to broaden or restrict the set it can be made
   // configurable in the future.
-  const safety = canAutoApprove(command, policy, [process.cwd()]);
+  const safety = canAutoApprove(command, policy, [process.cwd()], process.env, config);
 
   let runInSandbox: boolean;
   switch (safety.type) {

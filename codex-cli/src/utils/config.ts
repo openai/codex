@@ -56,6 +56,20 @@ export type StoredConfig = {
     saveHistory?: boolean;
     sensitivePatterns?: Array<string>;
   };
+  directCommands?: {
+    autoApprove?: boolean;
+    addToContext?: boolean;
+  };
+  git?: {
+    requireApprovalByDefault?: boolean;
+    autoApprovedCommands?: Array<string>;
+    requireApprovalCommands?: Array<string>;
+  };
+  githubCli?: {
+    requireApprovalByDefault?: boolean;
+    autoApprovedCommands?: Array<string>;
+    requireApprovalCommands?: Array<string>;
+  };
 };
 
 // Minimal config written on first run.  An *empty* model string ensures that
@@ -83,6 +97,20 @@ export type AppConfig = {
     maxSize: number;
     saveHistory: boolean;
     sensitivePatterns: Array<string>;
+  };
+  directCommands?: {
+    autoApprove?: boolean;
+    addToContext?: boolean;
+  };
+  git?: {
+    requireApprovalByDefault: boolean;
+    autoApprovedCommands: Array<string>;
+    requireApprovalCommands: Array<string>;
+  };
+  githubCli?: {
+    requireApprovalByDefault: boolean;
+    autoApprovedCommands: Array<string>;
+    requireApprovalCommands: Array<string>;
   };
 };
 
@@ -344,6 +372,42 @@ export const loadConfig = (
       sensitivePatterns: [],
     };
   }
+  
+  // Load direct commands settings if provided
+  if (storedConfig.directCommands !== undefined) {
+    config.directCommands = {
+      autoApprove: storedConfig.directCommands.autoApprove ?? false,
+      addToContext: storedConfig.directCommands.addToContext ?? false,
+    };
+  }
+  
+  // Load Git approval settings with defaults
+  config.git = {
+    // Git commands require approval by default for safety
+    requireApprovalByDefault: storedConfig.git?.requireApprovalByDefault ?? true,
+    // Default auto-approved Git commands (read-only commands)
+    autoApprovedCommands: storedConfig.git?.autoApprovedCommands ?? [
+      "status", "log", "diff", "branch", "show"
+    ],
+    // Default commands that always require approval (potentially destructive)
+    requireApprovalCommands: storedConfig.git?.requireApprovalCommands ?? [
+      "commit", "push", "merge", "rebase", "reset", "checkout"
+    ]
+  };
+  
+  // Load GitHub CLI approval settings with defaults
+  config.githubCli = {
+    // GitHub CLI commands are auto-approved by default (continuing current behavior)
+    requireApprovalByDefault: storedConfig.githubCli?.requireApprovalByDefault ?? false,
+    // Default auto-approved GitHub CLI commands (read-only commands)
+    autoApprovedCommands: storedConfig.githubCli?.autoApprovedCommands ?? [
+      "issue list", "issue view", "pr list", "pr view", "workflow list", "workflow view"
+    ],
+    // Default commands that always require approval (potentially destructive)
+    requireApprovalCommands: storedConfig.githubCli?.requireApprovalCommands ?? [
+      "pr create", "pr merge", "issue create", "issue close"
+    ]
+  };
 
   return config;
 };
@@ -384,6 +448,32 @@ export const saveConfig = (
       maxSize: config.history.maxSize,
       saveHistory: config.history.saveHistory,
       sensitivePatterns: config.history.sensitivePatterns,
+    };
+  }
+  
+  // Add direct commands settings if they exist
+  if (config.directCommands) {
+    configToSave.directCommands = {
+      autoApprove: config.directCommands.autoApprove,
+      addToContext: config.directCommands.addToContext,
+    };
+  }
+  
+  // Add Git approval settings if they exist
+  if (config.git) {
+    configToSave.git = {
+      requireApprovalByDefault: config.git.requireApprovalByDefault,
+      autoApprovedCommands: config.git.autoApprovedCommands,
+      requireApprovalCommands: config.git.requireApprovalCommands,
+    };
+  }
+  
+  // Add GitHub CLI approval settings if they exist
+  if (config.githubCli) {
+    configToSave.githubCli = {
+      requireApprovalByDefault: config.githubCli.requireApprovalByDefault,
+      autoApprovedCommands: config.githubCli.autoApprovedCommands,
+      requireApprovalCommands: config.githubCli.requireApprovalCommands,
     };
   }
 

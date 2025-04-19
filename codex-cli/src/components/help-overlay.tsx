@@ -55,6 +55,18 @@ export default function HelpOverlay({
         <Text>
           <Text color="cyan">/compact</Text> – condense context into a summary
         </Text>
+        
+        <Box marginTop={1}>
+          <Text bold dimColor>
+            Direct commands
+          </Text>
+        </Box>
+        <Text>
+          <Text color="magenta">!</Text><Text color="gray">command</Text> – execute shell command without adding to context
+        </Text>
+        <Text>
+          <Text color="magenta">$</Text><Text color="gray">command</Text> – execute shell command and add output to context
+        </Text>
 
         <Box marginTop={1}>
           <Text bold dimColor>
