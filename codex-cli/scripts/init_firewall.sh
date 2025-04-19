@@ -1,6 +1,12 @@
 #!/bin/bash
 set -euo pipefail  # Exit on error, undefined vars, and pipeline failures
 IFS=$'\n\t'       # Stricter word splitting
+# Optional flag to allow outbound traffic without restrictions
+ALLOW_OUTBOUND=false
+if [ "${1:-}" = "--allow-outbound" ]; then
+  ALLOW_OUTBOUND=true
+  shift
+fi
 
 # Flush existing rules and delete existing ipsets
 iptables -F
@@ -57,28 +63,42 @@ echo "Host network detected as: $HOST_NETWORK"
 iptables -A INPUT -s "$HOST_NETWORK" -j ACCEPT
 iptables -A OUTPUT -d "$HOST_NETWORK" -j ACCEPT
 
-# Set default policies to DROP first
+# Set default policies
 iptables -P INPUT DROP
 iptables -P FORWARD DROP
-iptables -P OUTPUT DROP
+if [ "$ALLOW_OUTBOUND" = true ]; then
+  iptables -P OUTPUT ACCEPT
+else
+  iptables -P OUTPUT DROP
+fi
 
 # First allow established connections for already approved traffic
 iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 
 # Then allow only specific outbound traffic to allowed domains
-iptables -A OUTPUT -m set --match-set allowed-domains dst -j ACCEPT
+# Then allow only specific outbound traffic to allowed domains, if restrictions are enabled
+if [ "$ALLOW_OUTBOUND" != true ]; then
+  iptables -A OUTPUT -m set --match-set allowed-domains dst -j ACCEPT
+fi
 
 # Append final REJECT rules for immediate error responses
 # For TCP traffic, send a TCP reset; for UDP, send ICMP port unreachable.
 iptables -A INPUT -p tcp -j REJECT --reject-with tcp-reset
 iptables -A INPUT -p udp -j REJECT --reject-with icmp-port-unreachable
-iptables -A OUTPUT -p tcp -j REJECT --reject-with tcp-reset
-iptables -A OUTPUT -p udp -j REJECT --reject-with icmp-port-unreachable
+if [ "$ALLOW_OUTBOUND" != true ]; then
+  iptables -A OUTPUT -p tcp -j REJECT --reject-with tcp-reset
+  iptables -A OUTPUT -p udp -j REJECT --reject-with icmp-port-unreachable
+fi
 iptables -A FORWARD -p tcp -j REJECT --reject-with tcp-reset
 iptables -A FORWARD -p udp -j REJECT --reject-with icmp-port-unreachable
 
 echo "Firewall configuration complete"
+# Skip verification if outbound is allowed
+if [ "$ALLOW_OUTBOUND" = true ]; then
+  echo "Allow-outbound flag set; skipping firewall verification"
+  exit 0
+fi
 echo "Verifying firewall rules..."
 if curl --connect-timeout 5 https://example.com >/dev/null 2>&1; then
     echo "ERROR: Firewall verification failed - was able to reach https://example.com"

@@ -2,7 +2,7 @@
 set -e
 
 # Usage:
-#   ./run_in_container.sh [--work_dir directory] "COMMAND"
+#   ./run_in_container.sh [--allow-outbound] [--work_dir directory] "COMMAND"
 #
 #   Examples:
 #     ./run_in_container.sh --work_dir project/code "ls -la"
@@ -10,16 +10,29 @@ set -e
 
 # Default the work directory to WORKSPACE_ROOT_DIR if not provided.
 WORK_DIR="${WORKSPACE_ROOT_DIR:-$(pwd)}"
+# By default, do not disable outbound firewall
+ALLOW_OUTBOUND=false
 
-# Parse optional flag.
-if [ "$1" = "--work_dir" ]; then
-  if [ -z "$2" ]; then
-    echo "Error: --work_dir flag provided but no directory specified."
-    exit 1
-  fi
-  WORK_DIR="$2"
-  shift 2
-fi
+# Parse optional flags: --allow-outbound and --work_dir
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --allow-outbound)
+      ALLOW_OUTBOUND=true
+      shift
+      ;;
+    --work_dir)
+      if [ -z "${2:-}" ]; then
+        echo "Error: --work_dir flag provided but no directory specified."
+        exit 1
+      fi
+      WORK_DIR="$2"
+      shift 2
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
 
 WORK_DIR=$(realpath "$WORK_DIR")
 
@@ -35,7 +48,7 @@ trap cleanup EXIT
 
 # Ensure a command is provided.
 if [ "$#" -eq 0 ]; then
-  echo "Usage: $0 [--work_dir directory] \"COMMAND\""
+  echo "Usage: $0 [--allow-outbound] [--work_dir directory] \"COMMAND\""
   exit 1
 fi
 
@@ -57,8 +70,14 @@ docker run --name "$CONTAINER_NAME" -d \
   codex \
   sleep infinity
 
-# Initialize the firewall inside the container.
-docker exec "$CONTAINER_NAME" bash -c "sudo /usr/local/bin/init_firewall.sh"
+# Initialize the firewall inside the container, passing allow-outbound if requested
+if [ "$ALLOW_OUTBOUND" = true ]; then
+  echo "Initializing firewall inside container (allowing outbound traffic)..."
+  docker exec "$CONTAINER_NAME" bash -c "sudo /usr/local/bin/init_firewall.sh --allow-outbound"
+else
+  echo "Initializing firewall inside container..."
+  docker exec "$CONTAINER_NAME" bash -c "sudo /usr/local/bin/init_firewall.sh"
+fi
 
 # Execute the provided command in the container, ensuring it runs in the work directory.
 # We use a parameterized bash command to safely handle the command and directory.
