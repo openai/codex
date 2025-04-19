@@ -67,7 +67,6 @@ Icon?
 # Unwanted package managers
 .yarn/
 yarn.lock
-pnpm-lock.yaml
 
 # release
 package.json-e
