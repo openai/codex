@@ -38,9 +38,9 @@
  *    - [ ] Document the known limitations and outline future work items.
  */
 
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import chalk from "chalk";
-import { InputHandler, TextInputProps } from "./input-handlers";
+import { InputHandler } from "./input-handlers";
 
 enum VimMode {
   Normal = "normal",
@@ -48,7 +48,7 @@ enum VimMode {
   // Future extension: Visual, Replace, etc.
 }
 
-export function useVimInputHandler({
+export const useVimInputHandler: InputHandler = ({
   value: originalValue,
   placeholder = "",
   focus = true,
@@ -57,13 +57,9 @@ export function useVimInputHandler({
   showCursor = true,
   onChange,
   onSubmit,
-}: TextInputProps): InputHandler {
-  const [state, setState] = useState({
-    cursorOffset: (originalValue || "").length,
-    cursorWidth: 0,
-    mode: VimMode.Insert, // start in insert mode
-  });
-
+  cursorState: [state, setState],
+}) => {
+  const [mode, switchMode] = useState<VimMode>(VimMode.Insert);
   // Sync state with prop changes (as in the default handler)
   useEffect(() => {
     setState((prevState) => {
@@ -76,11 +72,7 @@ export function useVimInputHandler({
     });
   }, [originalValue, focus, showCursor]);
 
-  function switchMode(newMode: VimMode) {
-    setState((prev) => ({ ...prev, mode: newMode }));
-  }
-
-  const { cursorOffset, cursorWidth, mode } = state;
+  const { cursorOffset, cursorWidth } = state;
   const cursorActualWidth = highlightPastedText ? cursorWidth : 0;
   const displayValue = mask ? mask.repeat(originalValue.length) : originalValue;
 
