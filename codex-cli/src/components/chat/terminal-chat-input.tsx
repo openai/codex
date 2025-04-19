@@ -15,6 +15,7 @@ import {
   addToHistory,
 } from "../../utils/storage/command-history.js";
 import { clearTerminal, onExit } from "../../utils/terminal.js";
+import { handleDirectCommand, isDirectCommandResult } from "../../utils/direct-command.js";
 import Spinner from "../vendor/ink-spinner.js";
 import TextInput from "../vendor/ink-text-input.js";
 import { Box, Text, useApp, useInput, useStdin } from "ink";
@@ -266,6 +267,114 @@ export default function TerminalChatInput({
 
           return;
         }
+      } else if (inputValue.startsWith("!") || inputValue.startsWith("$")) {
+        // Execute the command directly without using AI
+        setInput("");
+        
+        const config = loadConfig();
+        
+        // Add to history
+        const updatedHistory = await addToHistory(value, history, {
+          maxSize: config.history?.maxSize ?? 1000,
+          saveHistory: config.history?.saveHistory ?? true,
+          sensitivePatterns: config.history?.sensitivePatterns ?? [],
+        });
+        setHistory(updatedHistory);
+        setHistoryIndex(null);
+        setDraftInput("");
+        
+        // Show the command in the chat
+        setItems((prev) => [
+          ...prev,
+          {
+            id: `directcommand-${Date.now()}`,
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: inputValue }],
+          },
+        ]);
+        
+        try {
+          // Create a simple confirmation function
+          const getCommandConfirmation = async (command: Array<string>, applyPatch: any) => {
+            // Always approve if auto-approve is enabled
+            if (config.directCommands?.autoApprove) {
+              return { review: "yes", command };
+            }
+            
+            // Otherwise show a confirmation message
+            return new Promise((resolve) => {
+              // Set the confirmation prompt to trigger the review UI
+              setItems((prev) => [
+                ...prev,
+                {
+                  id: `confirm-${Date.now()}`,
+                  type: "message",
+                  role: "system",
+                  content: [{ 
+                    type: "input_text", 
+                    text: `Awaiting confirmation to execute: ${command.join(" ")}` 
+                  }],
+                },
+              ]);
+              
+              // Define what happens when user responds to confirmation
+              submitConfirmation = (decision, customDenyMessage) => {
+                resolve({
+                  review: decision,
+                  command,
+                  denyMessage: customDenyMessage
+                });
+                return true;
+              };
+            });
+          };
+          
+          // Execute the command
+          const result = await handleDirectCommand(
+            inputValue,
+            config,
+            getCommandConfirmation
+          );
+          
+          // Display the command output to the user
+          setItems((prev) => [
+            ...prev,
+            {
+              id: `directcommand-output-${Date.now()}`,
+              type: "message",
+              role: "system",
+              content: [{ 
+                type: "input_text", 
+                text: result.outputText 
+              }],
+            },
+          ]);
+          
+          // If this is a $ prefix and addToContext is true, add to AI context as well
+          if (isDirectCommandResult(result) && result.addToContext) {
+            // Create an input item that includes the command and its output
+            const context = `Command: ${result.originalCommand}\nOutput:\n${result.outputText}`;
+            const inputItem = await createInputItem(context, []);
+            submitInput([inputItem]);
+          }
+        } catch (error: any) {
+          // Display error to the user
+          setItems((prev) => [
+            ...prev,
+            {
+              id: `directcommand-error-${Date.now()}`,
+              type: "message",
+              role: "system",
+              content: [{ 
+                type: "input_text", 
+                text: `Error executing command: ${error?.message || String(error)}` 
+              }],
+            },
+          ]);
+        }
+        
+        return;
       }
 
       // detect image file paths for dynamic inclusion

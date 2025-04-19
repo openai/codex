@@ -56,6 +56,10 @@ export type StoredConfig = {
     saveHistory?: boolean;
     sensitivePatterns?: Array<string>;
   };
+  directCommands?: {
+    autoApprove?: boolean;
+    addToContext?: boolean;
+  };
 };
 
 // Minimal config written on first run.  An *empty* model string ensures that
@@ -83,6 +87,10 @@ export type AppConfig = {
     maxSize: number;
     saveHistory: boolean;
     sensitivePatterns: Array<string>;
+  };
+  directCommands?: {
+    autoApprove?: boolean;
+    addToContext?: boolean;
   };
 };
 
@@ -344,6 +352,14 @@ export const loadConfig = (
       sensitivePatterns: [],
     };
   }
+  
+  // Load direct commands settings if provided
+  if (storedConfig.directCommands !== undefined) {
+    config.directCommands = {
+      autoApprove: storedConfig.directCommands.autoApprove ?? false,
+      addToContext: storedConfig.directCommands.addToContext ?? false,
+    };
+  }
 
   return config;
 };
@@ -384,6 +400,14 @@ export const saveConfig = (
       maxSize: config.history.maxSize,
       saveHistory: config.history.saveHistory,
       sensitivePatterns: config.history.sensitivePatterns,
+    };
+  }
+  
+  // Add direct commands settings if they exist
+  if (config.directCommands) {
+    configToSave.directCommands = {
+      autoApprove: config.directCommands.autoApprove,
+      addToContext: config.directCommands.addToContext,
     };
   }
 

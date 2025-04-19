@@ -243,6 +243,7 @@ The Haleon fork includes several experimental features for agentic research that
 | Feature | Description | Usage Example |
 |---------|-------------|---------------|
 | **GitHub CLI Integration** | Seamlessly interact with GitHub directly from Codex. Create issues, manage PRs, and run workflows using the `gh` CLI. Requires [GitHub CLI](https://cli.github.com/) to be installed. | `gh issue create "Bug title" "Description"` <br> `gh pr create --title "Feature" --body "Implements X"` |
+| **Direct Command Execution** | Execute shell commands directly with fine-grained context control. Use prefixes to control whether command output is added to AI context. See [detailed documentation](./docs/features/direct-command-execution.md). | `!ls -la` (execute without adding to context) <br> `$cat file.txt` (execute and add output to context) |
 
 > **Warning**: These experimental features are for research purposes only and may change without notice. They are not supported for production use.
 
