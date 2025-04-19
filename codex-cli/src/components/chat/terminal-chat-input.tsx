@@ -407,6 +407,8 @@ export default function TerminalChatInput({
       <TerminalChatCommandReview
         confirmationPrompt={confirmationPrompt}
         onReviewCommand={submitConfirmation}
+        // allow switching approval mode via 'v'
+        onSwitchApprovalMode={openApprovalOverlay}
         explanation={explanation}
       />
     );
