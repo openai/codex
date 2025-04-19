@@ -15,10 +15,13 @@ const DEFAULT_DENY_MESSAGE =
 export function TerminalChatCommandReview({
   confirmationPrompt,
   onReviewCommand,
+  // callback to switch approval mode overlay
+  onSwitchApprovalMode,
   explanation: propExplanation,
 }: {
   confirmationPrompt: React.ReactNode;
   onReviewCommand: (decision: ReviewDecision, customMessage?: string) => void;
+  onSwitchApprovalMode: () => void;
   explanation?: string;
 }): React.ReactElement {
   const [mode, setMode] = React.useState<"select" | "input" | "explanation">(
@@ -70,6 +73,7 @@ export function TerminalChatCommandReview({
     const opts: Array<
       | { label: string; value: ReviewDecision }
       | { label: string; value: "edit" }
+      | { label: string; value: "switch" }
     > = [
       {
         label: "Yes (y)",
@@ -92,6 +96,11 @@ export function TerminalChatCommandReview({
       {
         label: "Edit or give feedback (e)",
         value: "edit",
+      },
+      // allow switching approval mode
+      {
+        label: "Switch approval mode (v)",
+        value: "switch",
       },
       {
         label: "No, and keep going (n)",
@@ -121,6 +130,9 @@ export function TerminalChatCommandReview({
         );
       } else if (input === "a" && showAlwaysApprove) {
         onReviewCommand(ReviewDecision.ALWAYS);
+      } else if (input === "v") {
+        // switch approval mode
+        onSwitchApprovalMode();
       } else if (key.escape) {
         onReviewCommand(ReviewDecision.NO_EXIT);
       }
@@ -191,9 +203,11 @@ export function TerminalChatCommandReview({
             <Text>Allow command?</Text>
             <Box paddingX={2} flexDirection="column" gap={1}>
               <Select
-                onChange={(value: ReviewDecision | "edit") => {
+                onChange={(value: ReviewDecision | "edit" | "switch") => {
                   if (value === "edit") {
                     setMode("input");
+                  } else if (value === "switch") {
+                    onSwitchApprovalMode();
                   } else {
                     onReviewCommand(value);
                   }
