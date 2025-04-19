@@ -33,7 +33,7 @@ import { exec } from "node:child_process";
 import OpenAI from "openai";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { inspect } from "util";
-import chalk from "chalk"; // Assuming chalk is needed here too based on ModelOverlay usage
+import chalk from "chalk"; 
 
 type Props = {
   config: AppConfig;
