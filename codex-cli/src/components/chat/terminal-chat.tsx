@@ -19,12 +19,15 @@ import { isLoggingEnabled, log } from "../../utils/agent/log.js";
 import { ReviewDecision } from "../../utils/agent/review.js";
 import { generateCompactSummary } from "../../utils/compact-summary.js";
 import { OPENAI_BASE_URL } from "../../utils/config.js";
+import { extractAppliedPatches as _extractAppliedPatches } from "../../utils/extract-applied-patches.js";
+import { getGitDiff } from "../../utils/get-diff.js";
 import { createInputItem } from "../../utils/input-utils.js";
 import { getAvailableModels } from "../../utils/model-utils.js";
 import { CLI_VERSION } from "../../utils/session.js";
 import { shortCwd } from "../../utils/short-path.js";
 import { saveRollout } from "../../utils/storage/save-rollout.js";
 import ApprovalModeOverlay from "../approval-mode-overlay.js";
+import DiffOverlay from "../diff-overlay.js";
 import HelpOverlay from "../help-overlay.js";
 import HistoryOverlay from "../history-overlay.js";
 import ModelOverlay from "../model-overlay.js";
@@ -180,8 +183,15 @@ export default function TerminalChat({
     submitConfirmation,
   } = useConfirmation();
   const [overlayMode, setOverlayMode] = useState<
-    "none" | "history" | "model" | "approval" | "help"
+    "none" | "history" | "model" | "approval" | "help" | "diff"
   >("none");
+
+  // Store the diff text when opening the diff overlay so the view isn’t
+  // recomputed on every re‑render while it is open.
+  // diffText is passed down to the DiffOverlay component. The setter is
+  // currently unused but retained for potential future updates. Prefix with
+  // an underscore so eslint ignores the unused variable.
+  const [diffText, _setDiffText] = useState<string>("");
 
   const [initialPrompt, setInitialPrompt] = useState(_initialPrompt);
   const [initialImagePaths, setInitialImagePaths] =
@@ -497,6 +507,26 @@ export default function TerminalChat({
             openModelOverlay={() => setOverlayMode("model")}
             openApprovalOverlay={() => setOverlayMode("approval")}
             openHelpOverlay={() => setOverlayMode("help")}
+            openDiffOverlay={() => {
+              const { isGitRepo, diff } = getGitDiff();
+              let text: string;
+              if (isGitRepo) {
+                text = diff;
+              } else {
+                text = "`/diff` — _not inside a git repository_";
+              }
+              setItems((prev) => [
+                ...prev,
+                {
+                  id: `diff-${Date.now()}`,
+                  type: "message",
+                  role: "system",
+                  content: [{ type: "input_text", text }],
+                },
+              ]);
+              // Ensure no overlay is shown.
+              setOverlayMode("none");
+            }}
             onCompact={handleCompact}
             active={overlayMode === "none"}
             interruptAgent={() => {
@@ -621,6 +651,13 @@ export default function TerminalChat({
 
         {overlayMode === "help" && (
           <HelpOverlay onExit={() => setOverlayMode("none")} />
+        )}
+
+        {overlayMode === "diff" && (
+          <DiffOverlay
+            diffText={diffText}
+            onExit={() => setOverlayMode("none")}
+          />
         )}
       </Box>
     </Box>
