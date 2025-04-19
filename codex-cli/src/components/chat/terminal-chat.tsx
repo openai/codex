@@ -205,9 +205,6 @@ export default function TerminalChat({
     );
   }
 
-  // We intentionally omit 'approvalPolicy' and 'confirmationPrompt' from the deps
-  // so switching modes or showing confirmation dialogs doesn’t tear down the loop.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     // Skip recreating the agent if awaiting a decision on a pending confirmation
     if (confirmationPrompt != null) {
@@ -303,6 +300,9 @@ export default function TerminalChat({
       agentRef.current = undefined;
       forceUpdate(); // re‑render after teardown too
     };
+  // We intentionally omit 'approvalPolicy' and 'confirmationPrompt' from the deps
+  // so switching modes or showing confirmation dialogs doesn’t tear down the loop.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     model,
     config,
