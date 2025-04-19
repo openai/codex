@@ -107,15 +107,21 @@ export default function TerminalChatInput({
         );
         if (matches.length > 0) {
           if (_key.tab) {
-            setSelectedSlashSuggestion((prev) => {
-              const len = matches.length;
-              // Shift+Tab to move up, Tab to move down
-              if (_key.shift) {
-                return prev <= 0 ? len - 1 : prev - 1;
-              } else {
-                return prev >= len - 1 ? 0 : prev + 1;
-              }
-            });
+            // Cycle and fill slash command suggestions on Tab
+            const len = matches.length;
+            // Determine new index based on shift state
+            const nextIdx = _key.shift
+              ? selectedSlashSuggestion <= 0
+                ? len - 1
+                : selectedSlashSuggestion - 1
+              : selectedSlashSuggestion >= len - 1
+              ? 0
+              : selectedSlashSuggestion + 1;
+            setSelectedSlashSuggestion(nextIdx);
+            // Autocomplete the command in the input
+            const cmd = matches[nextIdx].command;
+            setInput(cmd);
+            setDraftInput(cmd);
             return;
           }
           if (_key.upArrow) {
@@ -136,10 +142,40 @@ export default function TerminalChatInput({
             const cmdObj = matches[selIdx];
             if (cmdObj) {
               const cmd = cmdObj.command;
+              // Autocomplete
               if (prefix !== cmd) {
                 setInput(cmd);
                 setDraftInput(cmd);
                 setSelectedSlashSuggestion(0);
+                // If only one match, execute immediately
+                if (matches.length === 1) {
+                  // Execute the command
+                  setInput("");
+                  setDraftInput("");
+                  setSelectedSlashSuggestion(0);
+                  switch (cmd) {
+                    case "/history":
+                      openOverlay();
+                      break;
+                    case "/help":
+                      openHelpOverlay();
+                      break;
+                    case "/compact":
+                      onCompact();
+                      break;
+                    case "/model":
+                      openModelOverlay();
+                      break;
+                    case "/approval":
+                      openApprovalOverlay();
+                      break;
+                    case "/bug":
+                      onSubmit(cmd);
+                      break;
+                    default:
+                      break;
+                  }
+                }
               } else {
                 // Execute the selected slash command
                 setInput("");
@@ -160,6 +196,9 @@ export default function TerminalChatInput({
                     break;
                   case "/approval":
                     openApprovalOverlay();
+                    break;
+                  case "/bug":
+                    onSubmit(cmd);
                     break;
                   default:
                     break;
