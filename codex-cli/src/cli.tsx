@@ -61,6 +61,8 @@ const cli = meow(
     -c, --config                    Open the instructions file in your editor
     -w, --writable-root <path>      Writable folder for sandbox in full-auto mode (can be specified multiple times)
     -a, --approval-mode <mode>      Override the approval policy: 'suggest', 'auto-edit', or 'full-auto'
+    --git-approval <mode>           Control Git command approval behavior: 'auto' or 'prompt'
+    --github-approval <mode>        Control GitHub CLI command approval behavior: 'auto' or 'prompt'
 
     --auto-edit                Automatically approve file edits; still prompt for commands
     --full-auto                Automatically approve edits and commands when executed in the sandbox
@@ -149,6 +151,16 @@ const cli = meow(
       notify: {
         type: "boolean",
         description: "Enable desktop notifications for responses",
+      },
+      
+      // Git and GitHub CLI approval flags
+      gitApproval: {
+        type: "string",
+        description: "Control Git command approval behavior: 'auto' or 'prompt'",
+      },
+      githubApproval: {
+        type: "string",
+        description: "Control GitHub CLI command approval behavior: 'auto' or 'prompt'",
       },
 
       // Experimental mode where whole directory is loaded in context and model is requested
@@ -244,6 +256,40 @@ let config = loadConfig(undefined, undefined, {
 const prompt = cli.input[0];
 const model = cli.flags.model;
 const imagePaths = cli.flags.image as Array<string> | undefined;
+
+// Process Git approval flag
+if (cli.flags.gitApproval) {
+  if (!config.git) {
+    config.git = {
+      requireApprovalByDefault: true,
+      autoApprovedCommands: ["status", "log", "diff", "branch", "show"],
+      requireApprovalCommands: ["commit", "push", "merge", "rebase", "reset", "checkout"]
+    };
+  }
+  
+  if (cli.flags.gitApproval === "auto") {
+    config.git.requireApprovalByDefault = false;
+  } else if (cli.flags.gitApproval === "prompt") {
+    config.git.requireApprovalByDefault = true;
+  }
+}
+
+// Process GitHub CLI approval flag
+if (cli.flags.githubApproval) {
+  if (!config.githubCli) {
+    config.githubCli = {
+      requireApprovalByDefault: false,
+      autoApprovedCommands: ["issue list", "issue view", "pr list", "pr view", "workflow list", "workflow view"],
+      requireApprovalCommands: ["pr create", "pr merge", "issue create", "issue close"]
+    };
+  }
+  
+  if (cli.flags.githubApproval === "auto") {
+    config.githubCli.requireApprovalByDefault = false;
+  } else if (cli.flags.githubApproval === "prompt") {
+    config.githubCli.requireApprovalByDefault = true;
+  }
+}
 
 config = {
   apiKey,

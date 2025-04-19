@@ -74,6 +74,7 @@ export function canAutoApprove(
   policy: ApprovalPolicy,
   writableRoots: ReadonlyArray<string>,
   env: NodeJS.ProcessEnv = process.env,
+  config?: any, // Optional config for Git and GitHub CLI approvals
 ): SafetyAssessment {
   if (command[0] === "apply_patch") {
     return command.length === 2 && typeof command[1] === "string"
@@ -84,7 +85,7 @@ export function canAutoApprove(
         };
   }
 
-  const isSafe = isSafeCommand(command);
+  const isSafe = isSafeCommand(command, config);
   if (isSafe != null) {
     const { reason, group } = isSafe;
     return {
@@ -138,7 +139,7 @@ export function canAutoApprove(
     // all operators belong to an allow‑list. If so, the entire expression is
     // considered auto‑approvable.
 
-    const shellSafe = isEntireShellExpressionSafe(bashCmd);
+    const shellSafe = isEntireShellExpressionSafe(bashCmd, config);
     if (shellSafe != null) {
       const { reason, group } = shellSafe;
       return {
@@ -290,11 +291,78 @@ export type SafeCommandReason = {
 /**
  * If this is a "known safe" command, returns the (reason, group); otherwise,
  * returns null.
+ * 
+ * @param command The command to check
+ * @param config Optional config to check against for Git and GitHub CLI commands
  */
 export function isSafeCommand(
   command: ReadonlyArray<string>,
+  config?: any, // Using any type for backward compatibility
 ): SafeCommandReason | null {
   const [cmd0, cmd1, cmd2, cmd3] = command;
+  
+  // Check for Git and GitHub CLI commands against config if provided
+  if (config && cmd0) {
+    if (cmd0 === "git" && config.git) {
+      // Extract the subcommand (e.g., "status" from "git status")
+      const subcommand = cmd1 || "";
+      
+      // Check if the subcommand is explicitly allowed
+      if (config.git.autoApprovedCommands?.includes(subcommand)) {
+        return {
+          reason: `Git ${subcommand}`,
+          group: "Versioning"
+        };
+      }
+      
+      // Check if the subcommand is explicitly denied
+      if (config.git.requireApprovalCommands?.includes(subcommand)) {
+        return null;
+      }
+      
+      // Use the default setting
+      if (!config.git.requireApprovalByDefault) {
+        return {
+          reason: `Git ${subcommand}`,
+          group: "Versioning"
+        };
+      }
+      
+      // Default to requiring approval
+      return null;
+    }
+    
+    if (cmd0 === "gh" && config.githubCli) {
+      // For GitHub CLI, we need to handle multi-part commands (e.g., "gh issue list")
+      const subcommand = cmd1 ? (cmd2 ? `${cmd1} ${cmd2}` : cmd1) : "";
+      
+      // Check if the subcommand is explicitly allowed
+      if (config.githubCli.autoApprovedCommands?.some(cmd => 
+          subcommand === cmd || subcommand.startsWith(`${cmd} `))) {
+        return {
+          reason: `GitHub CLI ${subcommand}`,
+          group: "GitHub"
+        };
+      }
+      
+      // Check if the subcommand is explicitly denied
+      if (config.githubCli.requireApprovalCommands?.some(cmd => 
+          subcommand === cmd || subcommand.startsWith(`${cmd} `))) {
+        return null;
+      }
+      
+      // Use the default setting
+      if (!config.githubCli.requireApprovalByDefault) {
+        return {
+          reason: `GitHub CLI ${subcommand}`,
+          group: "GitHub"
+        };
+      }
+      
+      // Default to requiring approval
+      return null;
+    }
+  }
 
   switch (cmd0) {
     case "cd":
@@ -513,6 +581,7 @@ const SAFE_SHELL_OPERATORS: ReadonlySet<string> = new Set([
  */
 function isEntireShellExpressionSafe(
   parts: ReadonlyArray<ParseEntry>,
+  config?: any, // Optional config for Git and GitHub CLI approvals
 ): SafeCommandReason | null {
   if (parts.length === 0) {
     return null;
@@ -531,7 +600,7 @@ function isEntireShellExpressionSafe(
       if (currentSegment.length === 0) {
         return true; // nothing to validate (possible leading operator)
       }
-      const assessment = isSafeCommand(currentSegment);
+      const assessment = isSafeCommand(currentSegment, config);
       if (assessment == null) {
         return false;
       }
