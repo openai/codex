@@ -244,6 +244,8 @@ npm install -g @openai/codex
 yarn global add @openai/codex
 # or
 bun install -g @openai/codex
+# or
+pnpm add -g @openai/codex
 ```
 
 </details>
@@ -256,9 +258,12 @@ bun install -g @openai/codex
 git clone https://github.com/openai/codex.git
 cd codex/codex-cli
 
+# Enable corepack
+corepack enable
+
 # Install dependencies and build
-npm install
-npm run build
+pnpm install
+pnpm build
 
 # Get the usage and the options
 node ./dist/cli.js --help
@@ -267,7 +272,7 @@ node ./dist/cli.js --help
 node ./dist/cli.js
 
 # Or link the command globally for convenience
-npm link
+pnpm link
 ```
 
 </details>
@@ -283,6 +288,9 @@ Codex looks for config files in **`~/.codex/`**.
 model: o4-mini # Default model
 fullAutoErrorMode: ask-user # or ignore-and-continue
 notify: true # Enable desktop notifications for responses
+safeCommands:
+  - npm test # Automatically approve npm test
+  - yarn lint # Automatically approve yarn lint
 ```
 
 You can also define custom instructions:
@@ -376,7 +384,7 @@ More broadly we welcome contributions – whether you are opening your very firs
 
 - Create a _topic branch_ from `main` – e.g. `feat/interactive-prompt`.
 - Keep your changes focused. Multiple unrelated fixes should be opened as separate PRs.
-- Use `npm run test:watch` during development for super‑fast feedback.
+- Use `pnpm test:watch` during development for super‑fast feedback.
 - We use **Vitest** for unit tests, **ESLint** + **Prettier** for style, and **TypeScript** for type‑checking.
 - Before pushing, run the full test/type/lint suite:
 
@@ -403,14 +411,14 @@ npm test && npm run lint && npm run typecheck
 
 ```bash
 # Watch mode (tests rerun on change)
-npm run test:watch
+pnpm test:watch
 
 # Type‑check without emitting files
-npm run typecheck
+pnpm typecheck
 
 # Automatically fix lint + prettier issues
-npm run lint:fix
-npm run format:fix
+pnpm lint:fix
+pnpm format:fix
 ```
 
 #### Nix Flake Development
@@ -500,13 +508,13 @@ To publish a new version of the CLI, run the release scripts defined in `codex-c
 
 1. Open the `codex-cli` directory
 2. Make sure you're on a branch like `git checkout -b bump-version`
-3. Bump the version and `CLI_VERSION` to current datetime: `npm run release:version`
+3. Bump the version and `CLI_VERSION` to current datetime: `pnpm release:version`
 4. Commit the version bump (with DCO sign-off):
    ```bash
    git add codex-cli/src/utils/session.ts codex-cli/package.json
    git commit -s -m "chore(release): codex-cli v$(node -p \"require('./codex-cli/package.json').version\")"
    ```
-5. Copy README, build, and publish to npm: `npm run release`
+5. Copy README, build, and publish to npm: `pnpm release`
 6. Push to branch: `git push origin HEAD`
 
 ---
