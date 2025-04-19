@@ -20,7 +20,7 @@ iptables -A OUTPUT -o lo -j ACCEPT
 # Create ipset
 ipset create allowed-domains hash:net
 
-# Add domains to allowlist
+# Add domains to allowlist (common domains)
 ALLOWED_DOMAINS=(
     # 🔑 OpenAI
     "api.openai.com"
