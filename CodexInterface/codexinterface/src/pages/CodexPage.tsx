@@ -1,10 +1,10 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
 import { TreeView, TreeItem } from '../components/ui/tree-view'
 import { Checkbox } from '../components/ui/checkbox'
-import { Send, ArrowUp, ArrowRight, File, Folder, Plus, Paperclip } from 'lucide-react'
+import { Send, ArrowUp, ArrowRight, File, Folder, Plus, Paperclip, Loader2 } from 'lucide-react'
 
 // Type definitions
 interface TreeNode {
@@ -59,69 +59,16 @@ const CodexPage: React.FC = () => {
   const [prompt, setPrompt] = useState('')
   const [attachedFiles, setAttachedFiles] = useState<File[]>([])
   const fileInputRef = React.useRef<HTMLInputElement>(null)
+  const [messages, setMessages] = useState<Message[]>([])
+  const [loading, setLoading] = useState(false)
+  // Tracks if the assistant has sent any content chunks yet
+  const [assistantStarted, setAssistantStarted] = useState(false)
   
-  // Directory Tree State
-  const [directoryTree, setDirectoryTree] = useState<TreeNode[]>([
-    {
-      id: 'src',
-      label: 'src',
-      type: 'folder',
-      defaultExpanded: true,
-      children: [
-        {
-          id: 'components',
-          label: 'components',
-          type: 'folder',
-          defaultExpanded: true,
-          children: [
-            {
-              id: 'ui',
-              label: 'ui',
-              type: 'folder',
-              defaultExpanded: true,
-              children: [
-                { id: 'button.tsx', label: 'button.tsx', type: 'file' },
-                { id: 'card.tsx', label: 'card.tsx', type: 'file' },
-                { id: 'input.tsx', label: 'input.tsx', type: 'file' },
-                { id: 'tree-view.tsx', label: 'tree-view.tsx', type: 'file' },
-                { id: 'checkbox.tsx', label: 'checkbox.tsx', type: 'file' }
-              ]
-            },
-            { id: 'layout', label: 'layout', type: 'folder', children: [] }
-          ]
-        },
-        {
-          id: 'lib',
-          label: 'lib',
-          type: 'folder',
-          children: [
-            { id: 'utils.ts', label: 'utils.ts', type: 'file' }
-          ]
-        },
-        {
-          id: 'assets',
-          label: 'assets',
-          type: 'folder',
-          children: [
-            { id: 'react.svg', label: 'react.svg', type: 'file' }
-          ]
-        },
-        { id: 'App.tsx', label: 'App.tsx', type: 'file' },
-        { id: 'main.tsx', label: 'main.tsx', type: 'file' },
-        { id: 'index.css', label: 'index.css', type: 'file' }
-      ]
-    },
-    {
-      id: 'public',
-      label: 'public',
-      type: 'folder',
-      children: [
-        { id: 'vite.svg', label: 'vite.svg', type: 'file' }
-      ]
-    },
-    { id: 'package.json', label: 'package.json', type: 'file' },
-    { id: 'vite.config.ts', label: 'vite.config.ts', type: 'file' }
-  ])
+  // Directory Tree State (populated from server)
+  // Directory Tree State (populated from server)
+  const [directoryTree, setDirectoryTree] = useState<TreeNode[]>([])
+  // Loading state for directory tree
+  const [treeLoading, setTreeLoading] = useState(true)
   
   // Tools State
   const [tools, setTools] = useState<Tool[]>([
@@ -145,43 +92,158 @@ const CodexPage: React.FC = () => {
     inboundTokenCost: 0.00003
   })
   
-  // Chat messages state
-  const [messages, setMessages] = useState<Message[]>([
-    { 
-      id: 1, 
-      content: "Hello, how can I help you with your project?", 
-      isUser: false, 
-      timestamp: new Date(Date.now() - 1000 * 60 * 5) 
-    },
-    { 
-      id: 2, 
-      content: "I need help creating an interface with various components.", 
-      isUser: true, 
-      timestamp: new Date(Date.now() - 1000 * 60 * 4) 
-    },
-    { 
-      id: 3, 
-      content: "I'll create a UI with all the requested components using ShadCN and Tailwind.", 
-      isUser: false, 
-      timestamp: new Date(Date.now() - 1000 * 60 * 3) 
+  // Initialize conversation state and subscribe to server updates
+  useEffect(() => {
+    // Fetch initial state
+    async function initialize() {
+      try {
+        const res = await fetch('/state')
+        const data = await res.json()
+        const items: Array<any> = data.items || []
+        const initialMessages = items.map((item, index) => {
+          const chunks = Array.isArray(item.content) ? item.content : []
+          const content = chunks.map((c: any) => {
+            const text = c.text || ''
+            return c.type && c.type !== 'input_text'
+              ? `[${c.type}] ${text}`
+              : text
+          }).join('')
+          const isUser = item.role === 'user'
+          return { id: index, content, isUser, timestamp: new Date() }
+        })
+        setMessages(initialMessages)
+        // Set directory tree from server
+        if (Array.isArray(data.tree)) {
+        setDirectoryTree(data.tree)
+        setTreeLoading(false)
+        }
+      } catch (err) {
+        console.error('Failed to fetch initial state', err)
+        setTreeLoading(false)
+      }
     }
-  ])
+    initialize()
+    // Connect to WebSocket for streaming updates
+    const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
+    const socket = new WebSocket(`${protocol}://${window.location.host}/codex-ws`)
+    socket.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data)
+        // Handle incremental filesystem events
+        if (msg.type === 'fs_event') {
+          const { event: fsEvent, path: fsPath, nodeType } = msg as any
+          // Apply filesystem event to directory tree
+          setDirectoryTree(prev => {
+            const clone = JSON.parse(JSON.stringify(prev)) as TreeNode[]
+            const segments = fsPath.split('/')
+            const parentSegments = segments.slice(0, -1)
+            const parentId = parentSegments.join('/')
+            const findNode = (nodes: TreeNode[], id: string): TreeNode | null => {
+              for (const n of nodes) {
+                if (n.id === id) return n
+                if (n.children) {
+                  const found = findNode(n.children, id)
+                  if (found) return found
+                }
+              }
+              return null
+            }
+            let siblings: TreeNode[] = clone
+            if (parentId) {
+              const parentNode = findNode(clone, parentId)
+              if (!parentNode) return prev
+              parentNode.children = parentNode.children || []
+              siblings = parentNode.children
+            }
+            const name = segments[segments.length - 1]
+            if (fsEvent === 'unlink') {
+              const idx = siblings.findIndex(n => n.id === fsPath)
+              if (idx !== -1) siblings.splice(idx, 1)
+            } else if (fsEvent === 'add') {
+              const idx = siblings.findIndex(n => n.id === fsPath)
+              const newNode: TreeNode = { id: fsPath, label: name, type: nodeType, defaultExpanded: false }
+              if (nodeType === 'folder') newNode.children = []
+              if (idx !== -1) siblings[idx] = newNode
+              else siblings.push(newNode)
+            }
+            return clone
+          })
+          return
+        }
+        // Handle loading indicator notifications
+        if (msg.type === 'loading') {
+          setLoading(msg.loading)
+          // Reset assistant start on new loading cycle
+          if (msg.loading) setAssistantStarted(false)
+          // Toggle activity indicator color for run-level loading
+          setActivityStyle(msg.loading ? loadingActivityStyle : defaultActivityStyle)
+          return
+        }
+        if (msg.type === 'item' && msg.item) {
+          const item = msg.item
+          // Format content, including headers for non-text types
+          const chunks = Array.isArray(item.content) ? item.content : []
+          const formatted = chunks.map((c: any) => {
+            const text = c.text || ''
+            return c.type && c.type !== 'input_text'
+              ? `[${c.type}] ${text}`
+              : text
+          }).join('')
+          const isUser = item.role === 'user'
+          // Mark assistant as started when receiving first assistant chunk
+          if (!isUser && formatted && !assistantStarted) {
+            setAssistantStarted(true)
+          }
+          const newId = typeof item.id === 'number' ? item.id : Date.now()
+          setMessages(prev => {
+            // Deduplicate user messages
+            if (isUser) {
+              const last = prev[prev.length - 1]
+              if (last && last.isUser && last.content === formatted) {
+                return prev
+              }
+              return [...prev, { id: newId, content: formatted, isUser, timestamp: new Date() }]
+            }
+            // If assistant streaming, merge into last message
+            const last = prev[prev.length - 1]
+            if (last && !last.isUser) {
+              // Avoid duplicate identical chunks
+              if (formatted && last.content.endsWith(formatted)) {
+                return prev
+              }
+              const updated = [...prev]
+              updated[updated.length - 1] = {
+                ...last,
+                content: last.content + formatted,
+                timestamp: new Date(),
+              }
+              return updated
+            }
+            // Otherwise, start a new assistant message
+            return [...prev, { id: newId, content: formatted, isUser, timestamp: new Date() }]
+          })
+        }
+      } catch (e) {
+        console.error('Error parsing WebSocket message', e)
+      }
+    }
+    socket.onerror = (err) => console.error('WebSocket error', err)
+    return () => { socket.close() }
+  }, [])
   
   // Activity indicator style state
-  const [activityStyle, setActivityStyle] = useState<ActivityIndicatorStyle>({
-    outerBorder: {
-      color: 'rgba(92,124,250,0.5)',
-      animate: 'none'
-    },
-    middleBorder: {
-      color: 'rgba(92,124,250,0.2)',
-      animate: 'pulse'
-    },
-    center: {
-      color: 'rgb(92,124,250)',
-      animate: 'none'
-    }
-  })
+  // Default and loading styles for the activity indicator
+  const defaultActivityStyle: ActivityIndicatorStyle = {
+    outerBorder: { color: 'rgba(92,124,250,0.5)', animate: 'none' },
+    middleBorder: { color: 'rgba(92,124,250,0.2)', animate: 'pulse' },
+    center:       { color: 'rgb(92,124,250)', animate: 'none' }
+  }
+  const loadingActivityStyle: ActivityIndicatorStyle = {
+    outerBorder: { color: 'rgba(248,113,113,0.5)', animate: 'spin' },
+    middleBorder:{ color: 'rgba(248,113,113,0.7)', animate: 'pulse' },
+    center:      { color: 'rgb(248,113,113)', animate: 'spin' }
+  }
+  const [activityStyle, setActivityStyle] = useState<ActivityIndicatorStyle>(defaultActivityStyle)
   
   // Calculate API cost
   const calculateApiCost = () => {
@@ -203,31 +265,28 @@ const CodexPage: React.FC = () => {
     ))
   }
   
-  // Handle send message
-  const handleSendMessage = () => {
+  // Handle send message: append user message locally, show loading, then post prompt
+  const handleSendMessage = async () => {
     if (!prompt.trim()) return
-    
-    // Add user message
-    const newUserMessage: Message = {
-      id: messages.length + 1,
-      content: prompt,
-      isUser: true,
-      timestamp: new Date()
+    // Append user message immediately
+    const content = prompt
+    const newId = Date.now()
+    setMessages(prev => [...prev, { id: newId, content, isUser: true, timestamp: new Date() }])
+    // Show loading spinner and red activity indicator
+    setLoading(true)
+    setActivityStyle(loadingActivityStyle)
+    setAssistantStarted(false)
+    // Send prompt to server
+    try {
+      await fetch('/prompt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt }),
+      })
+    } catch (err) {
+      console.error('Error sending prompt', err)
     }
-    
-    setMessages([...messages, newUserMessage])
     setPrompt('')
-    
-    // Simulate AI response (in a real app, this would be an API call)
-    setTimeout(() => {
-      const newAiMessage: Message = {
-        id: messages.length + 2,
-        content: "I've received your message and I'm processing your request.",
-        isUser: false,
-        timestamp: new Date()
-      }
-      setMessages(prev => [...prev, newAiMessage])
-    }, 1000)
   }
   
   // Recursive function to render tree nodes
@@ -247,7 +306,7 @@ const CodexPage: React.FC = () => {
   return (
     <div className="grid grid-cols-12 gap-6 h-[calc(100vh-4rem-3rem)]">
       {/* Left column - Activity, Tools, and Directory Tree */}
-      <div className="col-span-4 flex flex-col gap-6">
+      <div className="col-span-4 flex flex-col gap-6 h-full">
         {/* Top row with Activity indicator and Tools/Knowledge */}
         <div className="flex h-32 space-x-2">
           {/* Activity indicator (left) */}
@@ -310,14 +369,20 @@ const CodexPage: React.FC = () => {
         </div>
         
         {/* Directory Tree */}
-        <Card className="flex-grow border border-zinc-800 shadow-[0_0_15px_rgba(0,0,0,0.5),inset_0_0_10px_rgba(92,124,250,0.1)] bg-zinc-800/40 backdrop-blur-sm overflow-hidden relative before:absolute before:inset-0 before:border-t before:border-zinc-700/30 before:rounded-lg">
-          <CardHeader className="p-4 relative z-10">
+        <Card className="flex flex-col flex-grow border border-zinc-800 shadow-[0_0_15px_rgba(0,0,0,0.5),inset_0_0_10px_rgba(92,124,250,0.1)] bg-zinc-800/40 backdrop-blur-sm overflow-hidden">
+          <CardHeader className="p-4 flex-none z-10">
             <CardTitle className="text-primary-foreground">Directory Tree</CardTitle>
           </CardHeader>
-          <CardContent className="p-4 pt-0 relative z-10 h-[calc(100%-4rem)] overflow-auto">
-            <TreeView>
-              {renderTreeNodes(directoryTree)}
-            </TreeView>
+          <CardContent className="p-4 pt-0 flex-grow overflow-auto">
+            {treeLoading ? (
+              <div className="h-full flex items-center justify-center">
+                <Loader2 className="animate-spin h-8 w-8 text-zinc-500" />
+              </div>
+            ) : (
+              <TreeView>
+                {renderTreeNodes(directoryTree)}
+              </TreeView>
+            )}
           </CardContent>
         </Card>
       </div>
@@ -394,6 +459,15 @@ const CodexPage: React.FC = () => {
                   </div>
                 </div>
               ))}
+              {/* Loading indicator bubble when awaiting first assistant chunk */}
+              {/* Show loading spinner until assistant chunks start */}
+              {loading && !assistantStarted && (
+                <div key="loading" className="flex justify-end">
+                  <div className="max-w-[75%] p-3 rounded-lg text-zinc-100 shadow-md bg-primary/20 border border-primary/10 flex items-center">
+                    <Loader2 className="animate-spin h-5 w-5 text-zinc-100" />
+                  </div>
+                </div>
+              )}
             </div>
           </CardContent>
         </Card>

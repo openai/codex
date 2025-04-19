@@ -51,6 +51,8 @@ const LogithmPage: React.FC = () => {
   // Chunking settings
   const [chunkSize, setChunkSize] = useState<number>(512);
   const [chunkOverlap, setChunkOverlap] = useState<number>(50);
+  // Chunking strategy: 'recursive' or 'html'
+  const [chunkStrategy, setChunkStrategy] = useState<'recursive' | 'html'>('recursive');
   
   // Embedding models
   const [embeddingModels, setEmbeddingModels] = useState<EmbeddingModel[]>([
@@ -136,6 +138,39 @@ const LogithmPage: React.FC = () => {
   
   // Get selected document
   const selectedDocument = documents.find(d => d.id === selectedDocumentId);
+  // Compute text chunks based on strategy
+  const chunks = React.useMemo(() => {
+    const text = documentContent || '';
+    if (chunkStrategy === 'html') {
+      // HTML block-level split
+      try {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(text, 'text/html');
+        const blocks = Array.from(doc.body.querySelectorAll('p,div,li,h1,h2,h3,h4,h5,h6'));
+        if (blocks.length > 0) {
+          return blocks.map(el => el.textContent || '');
+        }
+      } catch {
+        // fallback to full text
+      }
+    }
+    // Default: recursive character splitting
+    const size = chunkSize;
+    const overlap = chunkOverlap;
+    const out: string[] = [];
+    let start = 0;
+    while (start < text.length) {
+      const end = Math.min(text.length, start + size);
+      out.push(text.slice(start, end));
+      start = end - overlap;
+      if (start < 0) start = 0;
+      if (end >= text.length) break;
+    }
+    return out;
+  }, [documentContent, chunkStrategy, chunkSize, chunkOverlap]);
+
+  // Colors for chunk highlighting
+  const chunkColors = ['rgba(255,0,0,0.1)', 'rgba(0,255,0,0.1)', 'rgba(0,0,255,0.1)', 'rgba(255,255,0,0.1)', 'rgba(0,255,255,0.1)', 'rgba(255,0,255,0.1)'];
 
   return (
     <div className="grid grid-cols-12 gap-3 h-[calc(100vh-4rem-3rem)]">
@@ -180,6 +215,19 @@ const LogithmPage: React.FC = () => {
                     onValueChange={(value: number[]) => setChunkOverlap(value[0])}
                     className="w-full"
                   />
+                </div>
+                {/* Chunking strategy selector */}
+                <div className="space-y-2">
+                  <Label htmlFor="chunk-strategy">Chunking Strategy</Label>
+                  <select
+                    id="chunk-strategy"
+                    value={chunkStrategy}
+                    onChange={(e) => setChunkStrategy(e.target.value as 'recursive' | 'html')}
+                    className="w-full h-10 rounded-md border border-zinc-700 bg-zinc-800/60 px-3 py-2 text-sm text-zinc-200"
+                  >
+                    <option value="recursive">Recursive Character Split</option>
+                    <option value="html">HTML Block Split</option>
+                  </select>
                 </div>
               </div>
               
@@ -373,6 +421,29 @@ const LogithmPage: React.FC = () => {
             Add all documents
           </Button>
         </div>
+      </div>
+      {/* Right Column - Document View */}
+      <div className="col-span-5 flex flex-col gap-3 h-full">
+        <Card className="flex flex-col flex-grow border border-zinc-800 shadow-[0_0_15px_rgba(0,0,0,0.5),inset_0_0_10px_rgba(92,124,250,0.1)] bg-zinc-800/40 backdrop-blur-sm overflow-hidden">
+          <CardHeader className="p-4 flex-none z-10">
+            <div className="flex items-center gap-2">
+              <FileText size={18} className="text-primary/80" />
+              <CardTitle className="text-primary-foreground">Document View</CardTitle>
+            </div>
+          </CardHeader>
+          <CardContent className="p-4 flex-grow overflow-auto">
+            <div style={{ whiteSpace: 'pre-wrap' }}>
+              {chunks.map((chunk, idx) => (
+                <span
+                  key={idx}
+                  style={{ backgroundColor: chunkColors[idx % chunkColors.length] }}
+                >
+                  {chunk}
+                </span>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
       </div>
     </div>
   )

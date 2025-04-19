@@ -1,0 +1,12 @@
+node_modules
+codex-cli/node_modules
+CodexInterface/codexinterface/node_modules
+dist
+build
+*.log
+*.tmp
+docker-compose*.yml
+Dockerfile
+*.md
+*.env
+**/coverage
