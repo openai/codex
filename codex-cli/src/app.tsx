@@ -60,7 +60,7 @@ export default function App({
           <Text>
             ● OpenAI <Text bold>Codex</Text>{" "}
             <Text dimColor>
-              (research preview) <Text color="blueBright">v{CLI_VERSION}</Text>
+              (tnn1t1s Haleon preview) <Text color="blueBright">v{CLI_VERSION}</Text>
             </Text>
           </Text>
         </Box>

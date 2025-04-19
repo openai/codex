@@ -39,7 +39,7 @@ const TerminalHeader: React.FC<TerminalHeaderProps> = ({
             <Text>
               ● OpenAI <Text bold>Codex</Text>{" "}
               <Text dimColor>
-                (research preview) <Text color="blueBright">v{version}</Text>
+                (tnn1t1s Haleon preview) <Text color="blueBright">v{version}</Text>
               </Text>
             </Text>
           </Box>
