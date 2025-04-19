@@ -33,6 +33,7 @@ import { exec } from "node:child_process";
 import OpenAI from "openai";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { inspect } from "util";
+import chalk from "chalk"; // Assuming chalk is needed here too based on ModelOverlay usage
 
 type Props = {
   config: AppConfig;
@@ -99,12 +100,8 @@ async function generateCommandExplanation(
     let errorMessage = "Unable to generate explanation due to an error.";
 
     if (error instanceof Error) {
-      // Include specific error message for better debugging
       errorMessage = `Unable to generate explanation: ${error.message}`;
-
-      // If it's an API error, check for more specific information
       if ("status" in error && typeof error.status === "number") {
-        // Handle API-specific errors
         if (error.status === 401) {
           errorMessage =
             "Unable to generate explanation: API key is invalid or expired.";
@@ -133,6 +130,7 @@ export default function TerminalChat({
   // Desktop notification setting
   const notify = config.notify;
   const [model, setModel] = useState<string>(config.model);
+  const [availableModels, setAvailableModels] = useState<Array<string>>([]); // State to hold available models
   const [lastResponseId, setLastResponseId] = useState<string | null>(null);
   const [items, setItems] = useState<Array<ResponseItem>>([]);
   const [loading, setLoading] = useState<boolean>(false);
@@ -300,15 +298,10 @@ export default function TerminalChat({
       agentRef.current = undefined;
       forceUpdate(); // re‑render after teardown too
     };
-  // We intentionally omit 'approvalPolicy' and 'confirmationPrompt' from the deps
-  // so switching modes or showing confirmation dialogs doesn’t tear down the loop.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    model,
-    config,
-    requestConfirmation,
-    additionalWritableRoots,
-  ]);
+    // We intentionally omit 'approvalPolicy' and 'confirmationPrompt' from the deps
+    // so switching modes or showing confirmation dialogs doesn’t tear down the loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [model, config, requestConfirmation, additionalWritableRoots]);
 
   // whenever loading starts/stops, reset or start a timer — but pause the
   // timer while a confirmation overlay is displayed so we don't trigger a
@@ -417,6 +410,7 @@ export default function TerminalChat({
   useEffect(() => {
     (async () => {
       const available = await getAvailableModels();
+      setAvailableModels(available); // <--- ADDED THIS LINE
       if (model && available.length > 0 && !available.includes(model)) {
         setItems((prev) => [
           ...prev,
@@ -460,6 +454,7 @@ export default function TerminalChat({
             items={items}
             userMsgCount={userMsgCount}
             confirmationPrompt={confirmationPrompt}
+            explanation={explanation} // Pass explanation down
             loading={loading}
             thinkingSeconds={thinkingSeconds}
             fullStdout={fullStdout}
@@ -543,11 +538,42 @@ export default function TerminalChat({
         {overlayMode === "history" && (
           <HistoryOverlay items={items} onExit={() => setOverlayMode("none")} />
         )}
+        {/* ModelOverlay is rendered here */}
         {overlayMode === "model" && (
           <ModelOverlay
             currentModel={model}
             hasLastResponse={Boolean(lastResponseId)}
             onSelect={(newModel) => {
+              // This validation logic was in ModelOverlay in the previous snippet,
+              // but the PR description suggests TerminalChat might also handle it or trigger the error display.
+              // Keeping it here for clarity based on PR description point 4 ("CLI feedback").
+              // The ModelOverlay's onSelect should likely filter/disable unavailable options,
+              // but TerminalChat might handle the final state update and error message display.
+              // If ModelOverlay handles the error display internally based on availableModels prop,
+              // then this check might be redundant here, but necessary for the CLI feedback point.
+
+              if (!availableModels.includes(newModel)) {
+                // Display error message directly in chat history
+                setItems((prev) => [
+                  ...prev,
+                  {
+                    id: `model-not-available-${Date.now()}`,
+                    type: "message",
+                    role: "system",
+                    content: [
+                      {
+                        type: "input_text",
+                        text: `${chalk.red("Error:")} Model "${chalk.bold(newModel)}" is not available.\nAvailable models: ${chalk.green(availableModels.join(", "))}`,
+                      },
+                    ],
+                  },
+                ]);
+                // Close the overlay without changing the model
+                setOverlayMode("none");
+                return;
+              }
+
+              // If model is available, proceed with switching
               if (isLoggingEnabled()) {
                 log(
                   "TerminalChat: interruptAgent invoked – calling agent.cancel()",
@@ -556,14 +582,16 @@ export default function TerminalChat({
                   log("TerminalChat: agent is not ready yet");
                 }
               }
-              agent?.cancel();
-              setLoading(false);
+              agent?.cancel(); // Cancel any ongoing agent activity
+              setLoading(false); // Stop loading indicator
 
-              setModel(newModel);
+              setModel(newModel); // Update the model state
+              // Reset lastResponseId if the model actually changed
               setLastResponseId((prev) =>
                 prev && newModel !== model ? null : prev,
               );
 
+              // Add a system message to indicate the model switch
               setItems((prev) => [
                 ...prev,
                 {
@@ -579,9 +607,12 @@ export default function TerminalChat({
                 },
               ]);
 
+              // Close the overlay
               setOverlayMode("none");
             }}
             onExit={() => setOverlayMode("none")}
+            availableModels={availableModels} // Pass the fetched list down
+            setModels={setAvailableModels} // Pass the setter down (ModelOverlay might also fetch or filter)
           />
         )}
 
@@ -597,7 +628,11 @@ export default function TerminalChat({
               setApprovalPolicy(newMode as ApprovalPolicy);
               // update existing AgentLoop instance
               if (agentRef.current) {
-                (agentRef.current as unknown as { approvalPolicy: ApprovalPolicy }).approvalPolicy = newMode as ApprovalPolicy;
+                (
+                  agentRef.current as unknown as {
+                    approvalPolicy: ApprovalPolicy;
+                  }
+                ).approvalPolicy = newMode as ApprovalPolicy;
               }
               setItems((prev) => [
                 ...prev,
