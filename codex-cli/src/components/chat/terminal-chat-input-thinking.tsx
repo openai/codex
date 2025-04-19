@@ -1,82 +1,28 @@
 import { log, isLoggingEnabled } from "../../utils/agent/log.js";
-import Spinner from "../vendor/ink-spinner.js";
 import { Box, Text, useInput, useStdin } from "ink";
 import React, { useState } from "react";
 import { useInterval } from "use-interval";
 
-const thinkingTexts = ["Thinking"]; /* [
-  "Consulting the rubber duck",
-  "Maximizing paperclips",
-  "Reticulating splines",
-  "Immanentizing the Eschaton",
-  "Thinking",
-  "Thinking about thinking",
-  "Spinning in circles",
-  "Counting dust specks",
-  "Updating priors",
-  "Feeding the utility monster",
-  "Taking off",
-  "Wireheading",
-  "Counting to infinity",
-  "Staring into the Basilisk",
-  "Negotiationing acausal trades",
-  "Searching the library of babel",
-  "Multiplying matrices",
-  "Solving the halting problem",
-  "Counting grains of sand",
-  "Simulating a simulation",
-  "Asking the oracle",
-  "Detangling qubits",
-  "Reading tea leaves",
-  "Pondering universal love and transcendent joy",
-  "Feeling the AGI",
-  "Shaving the yak",
-  "Escaping local minima",
-  "Pruning the search tree",
-  "Descending the gradient",
-  "Bikeshedding",
-  "Securing funding",
-  "Rewriting in Rust",
-  "Engaging infinite improbability drive",
-  "Clapping with one hand",
-  "Synthesizing",
-  "Rebasing thesis onto antithesis",
-  "Transcending the loop",
-  "Frogeposting",
-  "Summoning",
-  "Peeking beyond the veil",
-  "Seeking",
-  "Entering deep thought",
-  "Meditating",
-  "Decomposing",
-  "Creating",
-  "Beseeching the machine spirit",
-  "Calibrating moral compass",
-  "Collapsing the wave function",
-  "Doodling",
-  "Translating whale song",
-  "Whispering to silicon",
-  "Looking for semicolons",
-  "Asking ChatGPT",
-  "Bargaining with entropy",
-  "Channeling",
-  "Cooking",
-  "Parroting stochastically",
-]; */
+// Retaining a single static placeholder text for potential future use.  The
+// more elaborate randomised thinking prompts were removed to streamline the
+// UI – the elapsed‑time counter now provides sufficient feedback.
 
 export default function TerminalChatInputThinking({
   onInterrupt,
   active,
+  thinkingSeconds,
 }: {
   onInterrupt: () => void;
   active: boolean;
+  thinkingSeconds: number;
 }): React.ReactElement {
-  const [dots, setDots] = useState("");
   const [awaitingConfirm, setAwaitingConfirm] = useState(false);
+  const [dots, setDots] = useState("");
 
-  const [thinkingText, setThinkingText] = useState(
-    () => thinkingTexts[Math.floor(Math.random() * thinkingTexts.length)],
-  );
+  // Animate the ellipsis
+  useInterval(() => {
+    setDots((prev) => (prev.length < 3 ? prev + "." : ""));
+  }, 500);
 
   const { stdin, setRawMode } = useStdin();
 
@@ -110,25 +56,7 @@ export default function TerminalChatInputThinking({
     };
   }, [stdin, awaitingConfirm, onInterrupt, active, setRawMode]);
 
-  useInterval(() => {
-    setDots((prev) => (prev.length < 3 ? prev + "." : ""));
-  }, 500);
-
-  useInterval(
-    () => {
-      setThinkingText((prev) => {
-        let next = prev;
-        if (thinkingTexts.length > 1) {
-          while (next === prev) {
-            next =
-              thinkingTexts[Math.floor(Math.random() * thinkingTexts.length)];
-          }
-        }
-        return next;
-      });
-    },
-    active ? 30000 : null,
-  );
+  // No timers required beyond tracking the elapsed seconds supplied via props.
 
   useInput(
     (_input, key) => {
@@ -153,12 +81,41 @@ export default function TerminalChatInputThinking({
     { isActive: active },
   );
 
+  // Custom ball animation including the elapsed seconds
+  const ballFrames = [
+    "( ●    )",
+    "(  ●   )",
+    "(   ●  )",
+    "(    ● )",
+    "(     ●)",
+    "(    ● )",
+    "(   ●  )",
+    "(  ●   )",
+    "( ●    )",
+    "(●     )",
+  ];
+
+  const [frame, setFrame] = useState(0);
+
+  useInterval(() => {
+    setFrame((idx) => (idx + 1) % ballFrames.length);
+  }, 80);
+
+  // Preserve the spinner (ball) animation while keeping the elapsed seconds
+  // text static.  We achieve this by rendering the bouncing ball inside the
+  // parentheses and appending the seconds counter *after* the spinner rather
+  // than injecting it directly next to the ball (which caused the counter to
+  // move horizontally together with the ball).
+
+  const frameTemplate = ballFrames[frame] ?? ballFrames[0];
+  const frameWithSeconds = `${frameTemplate} ${thinkingSeconds}s`;
+
   return (
     <Box flexDirection="column" gap={1}>
       <Box gap={2}>
-        <Spinner type="ball" />
+        <Text>{frameWithSeconds}</Text>
         <Text>
-          {thinkingText}
+          Thinking
           {dots}
         </Text>
       </Box>
