@@ -65,7 +65,7 @@ importers:
         specifier: ^10.1.0
         version: 10.1.1
       openai:
-        specifier: ^4.89.0
+        specifier: ^4.95.1
         version: 4.95.1(ws@8.18.1)(zod@3.24.3)
       react:
         specifier: ^18.2.0
@@ -2739,7 +2739,7 @@ snapshots:
 
   '@types/node-fetch@2.6.12':
     dependencies:
-      '@types/node': 18.19.86
+      '@types/node': 22.14.1
       form-data: 4.0.2
 
   '@types/node@18.19.86':
