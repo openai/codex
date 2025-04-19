@@ -1,3 +1,43 @@
+/**
+ * Vim Input Handler Feature Completion Checklist
+ *
+ * Core Milestones:
+ * 1. Basic Mode Functionality
+ *    - [x] **Mode Switching Implementation**
+ *         - [x] Start in Insert mode by default.
+ *         - [x] Switch from Insert mode to Normal mode using ESC.
+ *         - [x] In Normal mode, use "i" to enter Insert mode.
+ *         - [ ] In Normal mode, support additional Insert mode entry commands:
+ *               "a" (append after cursor), "A" (append at end), "I" (insert at beginning)
+ *               and any other keys appropriate for a single-line input.
+ *
+ * 2. Insert Mode Enhancements
+ *    - [ ] Ensure text insertion mimics the default input handler.
+ *    - [ ] Handle special keys (newline, backspace, etc.) appropriately.
+ *
+ * 3. Normal Mode Navigation & Editing
+ *    - [x] **Basic Navigation**
+ *         - [x] 'h' to move cursor left.
+ *         - [x] 'l' to move cursor right.
+ *    - [x] **Editing Operations**
+ *         - [x] 'x' to delete the character under the cursor.
+ *    - [ ] **Advanced Commands (Future Milestone)**
+ *         - Support additional motions like "w" and "b" for word navigation.
+ *         - Implement deletion and change commands (e.g., "dw", "dd", etc.).
+ *
+ * 4. UI/UX and Visual Feedback Improvements
+ *    - [x] Display a clear mode indicator (e.g., "INSERT" vs. "NORMAL").
+ *    - [ ] Enhance caret highlighting and overall styling based on mode.
+ *
+ * 5. Extensibility and Customization
+ *    - [ ] Architect the code to allow future integration of additional Vim modes (Visual, Replace, etc.).
+ *    - [ ] Allow customizable keybindings in future iterations.
+ *
+ * 6. Testing & Documentation
+ *    - [ ] Add unit tests for both Insert and Normal mode behaviors.
+ *    - [ ] Document the known limitations and outline future work items.
+ */
+
 import { useState, useEffect } from "react";
 import chalk from "chalk";
 import { InputHandler, TextInputProps } from "./input-handlers";
