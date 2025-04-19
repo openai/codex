@@ -10,12 +10,14 @@
     "test": "pnpm --filter @openai/codex run test",
     "lint": "pnpm --filter @openai/codex run lint",
     "typecheck": "pnpm --filter @openai/codex run typecheck",
+    "changelog": "git-cliff --config cliff.toml --output CHANGELOG.ignore.md $LAST_RELEASE_TAG..HEAD",
     "prepare": "husky",
-    "changelog": "git-cliff --config cliff.toml --output CHANGELOG.ignore.md $LAST_RELEASE_TAG..HEAD"
+    "husky:add": "husky add"
   },
   "devDependencies": {
     "git-cliff": "^2.8.0",
     "husky": "^9.1.7",
+    "lint-staged": "^15.5.1",
     "prettier": "^3.5.3"
   },
   "resolutions": {
@@ -29,6 +31,15 @@
   "engines": {
     "node": ">=22",
     "pnpm": ">=9.0.0"
+  },
+  "lint-staged": {
+    "*.json": "prettier --write",
+    "*.md": "prettier --write",
+    ".github/workflows/*.yml": "prettier --write",
+    "**/*.{js,ts,tsx}": [
+      "pnpm --filter @openai/codex run lint",
+      "pnpm --filter @openai/codex run typecheck"
+    ]
   },
   "packageManager": "pnpm@10.8.1"
 }
