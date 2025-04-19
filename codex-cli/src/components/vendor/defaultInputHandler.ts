@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, } from "react";
 import chalk from "chalk";
 import { InputHandler, TextInputProps } from "./input-handlers";
 
@@ -37,7 +37,7 @@ function findNextWordJump(prompt: string, cursorOffset: number) {
   return prompt.length;
 }
 
-export function useDefaultInputHandler({
+export const useDefaultInputHandler: InputHandler = ({
   value: originalValue,
   placeholder = "",
   focus = true,
@@ -47,7 +47,7 @@ export function useDefaultInputHandler({
   onChange,
   onSubmit,
   cursorToEnd = false,
-}: TextInputProps): InputHandler {
+}: TextInputProps) => {
   const [state, setState] = useState({
     cursorOffset: (originalValue || "").length,
     cursorWidth: 0,

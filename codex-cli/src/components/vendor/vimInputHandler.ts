@@ -12,8 +12,8 @@
  *               and any other keys appropriate for a single-line input.
  *
  * 2. Insert Mode Enhancements
- *    - [ ] Ensure text insertion mimics the default input handler.
- *    - [ ] Handle special keys (newline, backspace, etc.) appropriately.
+ *    - [x] Ensure text insertion mimics the default input handler.
+ *    - [x] Handle special keys (newline, backspace, etc.) appropriately.
  *
  * 3. Normal Mode Navigation & Editing
  *    - [x] **Basic Navigation**
@@ -39,6 +39,7 @@
  */
 
 import { useEffect, useState } from "react";
+import { useDefaultInputHandler } from "./defaultInputHandler";
 import chalk from "chalk";
 import { InputHandler } from "./input-handlers";
 
@@ -76,6 +77,19 @@ export const useVimInputHandler: InputHandler = ({
   const cursorActualWidth = highlightPastedText ? cursorWidth : 0;
   const displayValue = mask ? mask.repeat(originalValue.length) : originalValue;
 
+  // Create a default handler instance to delegate to when in Insert mode
+  const defaultHandlerObj = useDefaultInputHandler({
+    value: originalValue,
+    placeholder,
+    focus,
+    mask,
+    highlightPastedText,
+    showCursor,
+    onChange,
+    onSubmit,
+    cursorState: [state, setState],
+  });
+
   // Basic rendering similar to default – you can expand this later.
   let renderedValue = showCursor && focus ? "" : displayValue;
   let renderedPlaceholder = placeholder ? chalk.grey(placeholder) : undefined;
@@ -104,55 +118,36 @@ export const useVimInputHandler: InputHandler = ({
       : chalk.bgBlue.white(" NORMAL ");
 
   const handler = (input: string, key: any) => {
+    if (mode === VimMode.Insert) {
+      // In Insert mode, override escape key handling.
+      if (key.escape) {
+        switchMode(VimMode.Normal);
+        return;
+      }
+      // Delegate all other keys to the default input handler.
+      defaultHandlerObj.handler(input, key);
+      return;
+    }
+
+    // Normal mode handling.
     let nextCursorOffset = cursorOffset;
     let nextValue = originalValue;
     let nextCursorWidth = 0;
 
-    if (mode === VimMode.Insert) {
-      // In insert mode: allow normal text entry
-      if (key.escape) {
-        // Leave insert mode → switch to normal mode
-        switchMode(VimMode.Normal);
-        return;
+    if (input === "i") {
+      switchMode(VimMode.Insert);
+      return;
+    } else if (input === "h") {
+      nextCursorOffset = Math.max(cursorOffset - 1, 0);
+    } else if (input === "l") {
+      nextCursorOffset = Math.min(cursorOffset + 1, originalValue.length);
+    } else if (input === "x") {
+      if (cursorOffset < originalValue.length) {
+        nextValue =
+          originalValue.slice(0, cursorOffset) +
+          originalValue.slice(cursorOffset + 1);
+        onChange(nextValue);
       }
-      if (key.return) {
-        if (onSubmit) {
-          onSubmit(originalValue);
-        }
-        return;
-      }
-      // Basic text input insertion similar to default handler:
-      nextValue =
-        originalValue.slice(0, cursorOffset) +
-        input +
-        originalValue.slice(cursorOffset);
-      nextCursorOffset += input.length;
-      if (input.length > 1) {
-        nextCursorWidth = input.length;
-      }
-      onChange(nextValue);
-    } else if (mode === VimMode.Normal) {
-      // In normal mode: execute commands instead of inserting text
-      if (input === "i") {
-        // Enter insert mode
-        switchMode(VimMode.Insert);
-        return;
-      } else if (input === "h") {
-        // Move cursor left
-        nextCursorOffset = Math.max(cursorOffset - 1, 0);
-      } else if (input === "l") {
-        // Move cursor right
-        nextCursorOffset = Math.min(cursorOffset + 1, originalValue.length);
-      } else if (input === "x") {
-        // Delete character under cursor
-        if (cursorOffset < originalValue.length) {
-          nextValue =
-            originalValue.slice(0, cursorOffset) +
-            originalValue.slice(cursorOffset + 1);
-          onChange(nextValue);
-        }
-      }
-      // (Future normal mode commands can be added here)
     }
     setState((prev) => ({
       ...prev,
@@ -163,6 +158,6 @@ export const useVimInputHandler: InputHandler = ({
 
   return {
     handler,
-    output: (renderedValue || renderedPlaceholder) + modeIndicator,
+    output: (mode === VimMode.Insert ? defaultHandlerObj.output : (renderedValue || renderedPlaceholder)) + modeIndicator,
   };
 }

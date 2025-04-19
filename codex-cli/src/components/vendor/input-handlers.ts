@@ -1,14 +1,8 @@
 import { useInput } from "ink";
 
-export type InputHandler = {
-  /**
-   * The handler function to supply to `useInput`.
-   */
-  handler: Parameters<typeof useInput>[0]
-  /**
-   * Output rendered for the user.
-   */
-  output: string | undefined
+export type CursorState = {
+  cursorOffset: number;
+  cursorWidth: number;
 }
 
 export type TextInputProps = {
@@ -58,3 +52,21 @@ export type TextInputProps = {
    */
   readonly cursorToEnd?: boolean;
 };
+
+export type InputHandlerProps = TextInputProps & {
+  /**
+   * State of the cursor.
+   */
+  cursorState: [CursorState, React.Dispatch<React.SetStateAction<CursorState>>];
+}
+
+export type InputHandler = (props: InputHandlerProps) => {
+  /**
+   * The handler function to supply to `useInput`.
+   */
+  handler: Parameters<typeof useInput>[0]
+  /**
+   * Output rendered for the user.
+   */
+  output: string | undefined
+}
