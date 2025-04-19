@@ -90,27 +90,33 @@ export const useVimInputHandler: InputHandler = ({
     cursorState: [state, setState],
   });
 
-  // Basic rendering similar to default – you can expand this later.
-  let renderedValue = showCursor && focus ? "" : displayValue;
-  let renderedPlaceholder = placeholder ? chalk.grey(placeholder) : undefined;
-
-  if (showCursor && focus) {
-    renderedPlaceholder =
-      placeholder.length > 0
-        ? chalk.inverse(placeholder[0]) + chalk.grey(placeholder.slice(1))
+  // Helper function to render the input with appropriate cursor visualization
+  const renderCursorValue = (
+    text: string,
+    cursorOffset: number,
+    mode: VimMode
+  ): string => {
+    if (text.length === 0) {
+      // If no text, show a cursor placeholder.
+      return mode === VimMode.Insert
+        ? chalk.inverse("│")
         : chalk.inverse(" ");
-    let i = 0;
-    for (const char of displayValue) {
-      renderedValue +=
-        i >= cursorOffset - cursorActualWidth && i < cursorOffset
-          ? chalk.inverse(char)
-          : char;
-      i++;
     }
-    if (cursorOffset === displayValue.length) {
-      renderedValue += chalk.inverse(" ");
+    if (cursorOffset < text.length) {
+      return mode === VimMode.Insert
+        ? text.slice(0, cursorOffset) + chalk.inverse("│") + text.slice(cursorOffset)
+        : text.slice(0, cursorOffset) +
+            chalk.inverse(text.charAt(cursorOffset)) +
+            text.slice(cursorOffset + 1);
+    } else {
+      // Cursor is at the end of the text.
+      return text + (mode === VimMode.Insert ? chalk.inverse("│") : chalk.inverse(" "));
     }
-  }
+  };
+
+  const renderedValue = showCursor && focus
+    ? renderCursorValue(displayValue, cursorOffset, mode)
+    : (displayValue || (placeholder ? chalk.grey(placeholder) : ""));
   // Prepend a mode indicator (e.g. "INSERT" in green, "NORMAL" in blue)
   const modeIndicator =
     mode === VimMode.Insert
@@ -158,6 +164,6 @@ export const useVimInputHandler: InputHandler = ({
 
   return {
     handler,
-    output: (mode === VimMode.Insert ? defaultHandlerObj.output : (renderedValue || renderedPlaceholder)) + modeIndicator,
+    output: renderedValue + modeIndicator,
   };
 }
