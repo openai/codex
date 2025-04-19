@@ -15,7 +15,6 @@ import {
   addToHistory,
 } from "../../utils/storage/command-history.js";
 import { clearTerminal, onExit } from "../../utils/terminal.js";
-import Spinner from "../vendor/ink-spinner.js";
 import TextInput from "../vendor/ink-text-input.js";
 import { Box, Text, useApp, useInput, useStdin } from "ink";
 import { fileURLToPath } from "node:url";
@@ -45,6 +44,7 @@ export default function TerminalChatInput({
   onCompact,
   interruptAgent,
   active,
+  thinkingSeconds,
   items = [],
 }: {
   isNew: boolean;
@@ -66,6 +66,7 @@ export default function TerminalChatInput({
   onCompact: () => void;
   interruptAgent: () => void;
   active: boolean;
+  thinkingSeconds: number;
   // New: current conversation items so we can include them in bug reports
   items?: Array<ResponseItem>;
 }): React.ReactElement {
@@ -265,7 +266,9 @@ export default function TerminalChatInput({
             items: items ?? [],
             cliVersion: CLI_VERSION,
             model: loadConfig().model ?? "unknown",
-            platform: `${os.platform()} ${os.arch()} ${os.release()}`,
+            platform: [os.platform(), os.arch(), os.release()]
+              .map((s) => `\`${s}\``)
+              .join(" | "),
           });
 
           // Open the URL in the user's default browser
@@ -416,6 +419,7 @@ export default function TerminalChatInput({
           <TerminalChatInputThinking
             onInterrupt={interruptAgent}
             active={active}
+            thinkingSeconds={thinkingSeconds}
           />
         ) : (
           <Box paddingX={1}>
@@ -491,12 +495,42 @@ export default function TerminalChatInput({
 function TerminalChatInputThinking({
   onInterrupt,
   active,
+  thinkingSeconds,
 }: {
   onInterrupt: () => void;
   active: boolean;
+  thinkingSeconds: number;
 }) {
-  const [dots, setDots] = useState("");
   const [awaitingConfirm, setAwaitingConfirm] = useState(false);
+  const [dots, setDots] = useState("");
+
+  // Animate ellipsis
+  useInterval(() => {
+    setDots((prev) => (prev.length < 3 ? prev + "." : ""));
+  }, 500);
+
+  // Spinner frames with embedded seconds
+  const ballFrames = [
+    "( ●    )",
+    "(  ●   )",
+    "(   ●  )",
+    "(    ● )",
+    "(     ●)",
+    "(    ● )",
+    "(   ●  )",
+    "(  ●   )",
+    "( ●    )",
+    "(●     )",
+  ];
+  const [frame, setFrame] = useState(0);
+
+  useInterval(() => {
+    setFrame((idx) => (idx + 1) % ballFrames.length);
+  }, 80);
+
+  // Keep the elapsed‑seconds text fixed while the ball animation moves.
+  const frameTemplate = ballFrames[frame] ?? ballFrames[0];
+  const frameWithSeconds = `${frameTemplate} ${thinkingSeconds}s`;
 
   // ---------------------------------------------------------------------
   // Raw stdin listener to catch the case where the terminal delivers two
@@ -544,10 +578,7 @@ function TerminalChatInputThinking({
     };
   }, [stdin, awaitingConfirm, onInterrupt, active, setRawMode]);
 
-  // Cycle the "Thinking…" animation dots.
-  useInterval(() => {
-    setDots((prev) => (prev.length < 3 ? prev + "." : ""));
-  }, 500);
+  // No local timer: the parent component supplies the elapsed time via props.
 
   // Listen for the escape key to allow the user to interrupt the current
   // operation. We require two presses within a short window (1.5s) to avoid
@@ -578,8 +609,11 @@ function TerminalChatInputThinking({
   return (
     <Box flexDirection="column" gap={1}>
       <Box gap={2}>
-        <Spinner type="ball" />
-        <Text>Thinking{dots}</Text>
+        <Text>{frameWithSeconds}</Text>
+        <Text>
+          Thinking
+          {dots}
+        </Text>
       </Box>
       {awaitingConfirm && (
         <Text dimColor>
