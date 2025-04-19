@@ -23,9 +23,55 @@ iptables -A OUTPUT -o lo -j ACCEPT
 # Create ipset with CIDR support
 ipset create allowed-domains hash:net
 
+# Add domains to allowlist
+ALLOWED_DOMAINS=(
+    # 🔑 OpenAI
+    "api.openai.com"
+
+    # 🟨 Node.js (npm)
+    "registry.npmjs.org"
+
+    # 🐍 Python (pip)
+    "pypi.org"
+    "files.pythonhosted.org"
+
+    # 🟦 Go (modules)
+    "proxy.golang.org"
+    "sum.golang.org"
+    "storage.googleapis.com"
+
+    # 🦀 Rust (cargo)
+    "crates.io"
+    "static.crates.io"
+    "github.com"
+    "objects.githubusercontent.com"
+
+    # ☕ Java (Maven, Gradle)
+    "repo1.maven.org"
+    "repo.maven.apache.org"
+    "jcenter.bintray.com"
+    "plugins.gradle.org"
+    "services.gradle.org"
+
+    # 🎯 C# / .NET (NuGet)
+    "api.nuget.org"
+    "www.nuget.org"
+    "globalcdn.nuget.org"
+
+    # 🐧 Linux distros (package mirrors)
+    "downloads.sourceforge.net"
+    "dl-cdn.alpinelinux.org"
+    "deb.debian.org"
+    "security.debian.org"
+
+    # 🐳 Docker
+    "registry-1.docker.io"
+    "auth.docker.io"
+    "production.cloudflare.docker.com"
+)
+
 # Resolve and add other allowed domains
-for domain in \
-    "api.openai.com"; do
+for domain in "${ALLOWED_DOMAINS[@]}"; do
     echo "Resolving $domain..."
     ips=$(dig +short A "$domain")
     if [ -z "$ips" ]; then
