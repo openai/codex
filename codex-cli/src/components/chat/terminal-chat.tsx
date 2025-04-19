@@ -517,6 +517,7 @@ export default function TerminalChat({
               return {};
             }}
             items={items}
+            thinkingSeconds={thinkingSeconds}
           />
         )}
         {overlayMode === "history" && (
