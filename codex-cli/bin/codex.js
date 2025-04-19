@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+
 // Unified entry point for Codex CLI on all platforms
 // Dynamically loads the compiled ESM bundle in dist/cli.js
 
@@ -18,7 +19,9 @@ const cliUrl = pathToFileURL(cliPath).href;
   try {
     await import(cliUrl);
   } catch (err) {
+    // eslint-disable-next-line no-console
     console.error(err);
+    // eslint-disable-next-line no-undef
     process.exit(1);
   }
 })();
