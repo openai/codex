@@ -19,40 +19,47 @@ jobs:
         with:
           node-version: 22
 
-      # Run codex-cli/ tasks first because they are higher signal.
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.8.1
+          run_install: false
 
-      - name: Install dependencies (codex-cli)
-        working-directory: codex-cli
-        run: npm ci
-
-      - name: Check formatting (codex-cli)
-        working-directory: codex-cli
-        run: npm run format
-
-      - name: Run tests (codex-cli)
-        working-directory: codex-cli
-        run: npm run test
-
-      - name: Lint (codex-cli)
-        working-directory: codex-cli
+      - name: Get pnpm store directory
+        id: pnpm-cache
+        shell: bash
         run: |
-          npm run lint -- \
+          echo "store_path=$(pnpm store path --silent)" >> $GITHUB_OUTPUT
+
+      - name: Setup pnpm cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-cache.outputs.store_path }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
+
+      - name: Install dependencies
+        run: pnpm install
+
+      # Run all tasks using workspace filters
+
+      - name: Check formatting
+        run: pnpm run format
+
+      - name: Run tests
+        run: pnpm run test
+
+      - name: Lint
+        run: |
+          pnpm --filter @openai/codex exec -- eslint src tests --ext ts --ext tsx \
+            --report-unused-disable-directives \
             --rule "no-console:error" \
             --rule "no-debugger:error" \
             --max-warnings=-1
 
-      - name: Type‑check (codex-cli)
-        working-directory: codex-cli
-        run: npm run typecheck
+      - name: Type-check
+        run: pnpm run typecheck
 
-      - name: Build (codex-cli)
-        working-directory: codex-cli
-        run: npm run build
-
-      # Run formatting checks in the root directory last.
-
-      - name: Install dependencies (root)
-        run: npm ci
-
-      - name: Check formatting (root)
-        run: npm run format
+      - name: Build
+        run: pnpm run build
