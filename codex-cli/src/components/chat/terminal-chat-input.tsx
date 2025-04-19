@@ -137,72 +137,35 @@ export default function TerminalChatInput({
             return;
           }
           if (_key.return) {
-            const prefix = input.trim();
+            // Execute the currently selected slash command
             const selIdx = selectedSlashSuggestion;
             const cmdObj = matches[selIdx];
             if (cmdObj) {
               const cmd = cmdObj.command;
-              // Autocomplete
-              if (prefix !== cmd) {
-                setInput(cmd);
-                setDraftInput(cmd);
-                setSelectedSlashSuggestion(0);
-                // If only one match, execute immediately
-                if (matches.length === 1) {
-                  // Execute the command
-                  setInput("");
-                  setDraftInput("");
-                  setSelectedSlashSuggestion(0);
-                  switch (cmd) {
-                    case "/history":
-                      openOverlay();
-                      break;
-                    case "/help":
-                      openHelpOverlay();
-                      break;
-                    case "/compact":
-                      onCompact();
-                      break;
-                    case "/model":
-                      openModelOverlay();
-                      break;
-                    case "/approval":
-                      openApprovalOverlay();
-                      break;
-                    case "/bug":
-                      onSubmit(cmd);
-                      break;
-                    default:
-                      break;
-                  }
-                }
-              } else {
-                // Execute the selected slash command
-                setInput("");
-                setDraftInput("");
-                setSelectedSlashSuggestion(0);
-                switch (cmd) {
-                  case "/history":
-                    openOverlay();
-                    break;
-                  case "/help":
-                    openHelpOverlay();
-                    break;
-                  case "/compact":
-                    onCompact();
-                    break;
-                  case "/model":
-                    openModelOverlay();
-                    break;
-                  case "/approval":
-                    openApprovalOverlay();
-                    break;
-                  case "/bug":
-                    onSubmit(cmd);
-                    break;
-                  default:
-                    break;
-                }
+              setInput("");
+              setDraftInput("");
+              setSelectedSlashSuggestion(0);
+              switch (cmd) {
+                case "/history":
+                  openOverlay();
+                  break;
+                case "/help":
+                  openHelpOverlay();
+                  break;
+                case "/compact":
+                  onCompact();
+                  break;
+                case "/model":
+                  openModelOverlay();
+                  break;
+                case "/approval":
+                  openApprovalOverlay();
+                  break;
+                case "/bug":
+                  onSubmit(cmd);
+                  break;
+                default:
+                  break;
               }
             }
             return;
