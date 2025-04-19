@@ -44,7 +44,11 @@ jobs:
 
       # Run all tasks using workspace filters
 
-      - name: Check formatting
+      - name: Check TypeScript code formatting
+        working-directory: codex-cli
+        run: pnpm run format
+
+      - name: Check Markdown and config file formatting
         run: pnpm run format
 
       - name: Run tests
