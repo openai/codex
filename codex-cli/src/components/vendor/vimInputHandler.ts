@@ -76,7 +76,7 @@ export function useVimInputHandler({
     let nextValue = originalValue;
     let nextCursorWidth = 0;
 
-    if (state.mode === VimMode.Insert) {
+    if (mode === VimMode.Insert) {
       // In insert mode: allow normal text entry
       if (key.escape) {
         // Leave insert mode → switch to normal mode
@@ -99,7 +99,7 @@ export function useVimInputHandler({
         nextCursorWidth = input.length;
       }
       onChange(nextValue);
-    } else if (state.mode === VimMode.Normal) {
+    } else if (mode === VimMode.Normal) {
       // In normal mode: execute commands instead of inserting text
       if (input === "i") {
         // Enter insert mode
@@ -122,11 +122,11 @@ export function useVimInputHandler({
       }
       // (Future normal mode commands can be added here)
     }
-    setState({
+    setState((prev) => ({
+      ...prev,
       cursorOffset: nextCursorOffset,
       cursorWidth: nextCursorWidth,
-      mode: state.mode,
-    });
+    }));
   };
 
   return {
