@@ -6,19 +6,19 @@ import type {
 } from "openai/resources/responses/responses.mjs";
 
 import { TerminalChatCommandReview } from "./terminal-chat-command-review.js";
-import { log, isLoggingEnabled } from "../../utils/agent/log.js";
+import { isLoggingEnabled, log } from "../../utils/agent/log.js";
 import { loadConfig } from "../../utils/config.js";
 import { createInputItem } from "../../utils/input-utils.js";
 import { setSessionId } from "../../utils/session.js";
 import {
-  loadCommandHistory,
   addToHistory,
+  loadCommandHistory,
 } from "../../utils/storage/command-history.js";
 import { clearTerminal, onExit } from "../../utils/terminal.js";
 import TextInput from "../vendor/ink-text-input.js";
 import { Box, Text, useApp, useInput, useStdin } from "ink";
 import { fileURLToPath } from "node:url";
-import React, { useCallback, useState, Fragment, useEffect } from "react";
+import React, { Fragment, useCallback, useEffect, useState } from "react";
 import { useInterval } from "use-interval";
 
 const suggestions = [
@@ -207,8 +207,7 @@ export default function TerminalChatInput({
 
         // Emit a system message to confirm the clear action.  We *append*
         // it so Ink's <Static> treats it as new output and actually renders it.
-        setItems((prev) => [
-          ...prev,
+        setItems(() => [
           {
             id: `clear-${Date.now()}`,
             type: "message",
