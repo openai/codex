@@ -103,7 +103,7 @@ export function TerminalChatCommandReview({
       },
       // allow switching approval mode
       {
-        label: "Switch approval mode (v)",
+        label: "Switch approval mode (s)",
         value: "switch",
       },
       {
