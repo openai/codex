@@ -346,7 +346,7 @@ if (quietMode) {
     imagePaths: imagePaths || [],
     approvalPolicy: autoApproveEverything
       ? AutoApprovalMode.FULL_AUTO
-      : AutoApprovalMode.SUGGEST,
+      : config.approvalMode || AutoApprovalMode.SUGGEST,
     additionalWritableRoots,
     config,
   });
@@ -364,14 +364,15 @@ if (quietMode) {
 //    it is more dangerous than --fullAuto we deliberately give it lower
 //    priority so a user specifying both flags still gets the safer behaviour.
 // 3. --autoEdit – automatically approve edits, but prompt for commands.
-// 4. Default – suggest mode (prompt for everything).
+// 4. config.approvalMode - use the approvalMode setting from ~/.codex/config.json.
+// 5. Default – suggest mode (prompt for everything).
 
 const approvalPolicy: ApprovalPolicy =
   cli.flags.fullAuto || cli.flags.approvalMode === "full-auto"
     ? AutoApprovalMode.FULL_AUTO
     : cli.flags.autoEdit || cli.flags.approvalMode === "auto-edit"
     ? AutoApprovalMode.AUTO_EDIT
-    : AutoApprovalMode.SUGGEST;
+    : config.approvalMode || AutoApprovalMode.SUGGEST;
 
 preloadModels();
 

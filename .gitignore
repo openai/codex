@@ -26,6 +26,10 @@ result
 *.swp
 *~
 
+# cli tools
+CLAUDE.md
+.claude/
+
 # caches
 .cache/
 .turbo/
