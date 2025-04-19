@@ -791,6 +791,41 @@ export class AgentLoop {
             this.onLoading(false);
             return;
           }
+          // Suppress internal stack on JSON parse failures
+          if (err instanceof SyntaxError) {
+            this.onItem({
+              id: `error-${Date.now()}`,
+              type: "message",
+              role: "system",
+              content: [
+                {
+                  type: "input_text",
+                  text: "⚠️ Failed to parse streaming response (invalid JSON). Please `/clear` to reset.",
+                },
+              ],
+            });
+            this.onLoading(false);
+            return;
+          }
+          // Handle OpenAI API quota errors
+          if (
+            err instanceof Error &&
+            (err as { code?: string }).code === "insufficient_quota"
+          ) {
+            this.onItem({
+              id: `error-${Date.now()}`,
+              type: "message",
+              role: "system",
+              content: [
+                {
+                  type: "input_text",
+                  text: "⚠️ Insufficient quota. Please check your billing details and retry.",
+                },
+              ],
+            });
+            this.onLoading(false);
+            return;
+          }
           throw err;
         } finally {
           this.currentStream = null;
