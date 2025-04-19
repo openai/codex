@@ -14,9 +14,7 @@ export default function DiffOverlay({
   diffText: string;
   onExit: () => void;
 }): JSX.Element {
-  const lines = diffText.length > 0 ? diffText.split("\n") : [
-    "(no changes)",
-  ];
+  const lines = diffText.length > 0 ? diffText.split("\n") : ["(no changes)"];
 
   const [cursor, setCursor] = useState(0);
 
@@ -88,9 +86,7 @@ export default function DiffOverlay({
       </Box>
 
       <Box paddingX={1}>
-        <Text dimColor>
-          esc Close ↑↓ Scroll PgUp/PgDn g/G First/Last
-        </Text>
+        <Text dimColor>esc Close ↑↓ Scroll PgUp/PgDn g/G First/Last</Text>
       </Box>
     </Box>
   );
