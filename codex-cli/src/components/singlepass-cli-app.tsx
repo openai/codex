@@ -400,7 +400,7 @@ export function SinglePassApp({
       });
       const chatResp = await openai.beta.chat.completions.parse({
         model: config.model,
-        ...(config.flex ? { service_tier: "flex" } : {}),
+        ...(config.flexMode ? { service_tier: "flex" } : {}),
         messages: [
           {
             role: "user",

@@ -29,7 +29,7 @@ const TerminalHeader: React.FC<TerminalHeaderProps> = ({
 }) => {
   return (
     <>
-          {terminalRows < 10 ? (
+      {terminalRows < 10 ? (
         // Compact header for small terminal windows
         <Text>
           ● Codex v{version} – {PWD} – {model} –{" "}
