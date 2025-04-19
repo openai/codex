@@ -349,6 +349,8 @@ export default function TerminalChatInput({
         // allow switching approval mode via 'v'
         onSwitchApprovalMode={openApprovalOverlay}
         explanation={explanation}
+        // disable when input is inactive (e.g., overlay open)
+        isActive={active}
       />
     );
   }

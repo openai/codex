@@ -206,6 +206,13 @@ export default function TerminalChat({
   }
 
   useEffect(() => {
+    // Skip recreating the agent if awaiting a decision on a pending confirmation
+    if (confirmationPrompt != null) {
+      if (isLoggingEnabled()) {
+        log("skip AgentLoop recreation due to pending confirmationPrompt");
+      }
+      return;
+    }
     if (isLoggingEnabled()) {
       log("creating NEW AgentLoop");
       log(
@@ -296,7 +303,6 @@ export default function TerminalChat({
   }, [
     model,
     config,
-    approvalPolicy,
     requestConfirmation,
     additionalWritableRoots,
   ]);
@@ -580,12 +586,16 @@ export default function TerminalChat({
           <ApprovalModeOverlay
             currentMode={approvalPolicy}
             onSelect={(newMode) => {
-              agent?.cancel();
-              setLoading(false);
+              // update approval policy without cancelling an in-progress session
               if (newMode === approvalPolicy) {
                 return;
               }
+              // update state
               setApprovalPolicy(newMode as ApprovalPolicy);
+              // update existing AgentLoop instance
+              if (agentRef.current) {
+                (agentRef.current as any).approvalPolicy = newMode as ApprovalPolicy;
+              }
               setItems((prev) => [
                 ...prev,
                 {

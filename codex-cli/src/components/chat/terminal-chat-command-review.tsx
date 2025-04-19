@@ -18,11 +18,15 @@ export function TerminalChatCommandReview({
   // callback to switch approval mode overlay
   onSwitchApprovalMode,
   explanation: propExplanation,
+  // whether this review Select is active (listening for keys)
+  isActive = true,
 }: {
   confirmationPrompt: React.ReactNode;
   onReviewCommand: (decision: ReviewDecision, customMessage?: string) => void;
   onSwitchApprovalMode: () => void;
   explanation?: string;
+  // when false, disable the underlying Select so it won't capture input
+  isActive?: boolean;
 }): React.ReactElement {
   const [mode, setMode] = React.useState<"select" | "input" | "explanation">(
     "select",
@@ -115,7 +119,8 @@ export function TerminalChatCommandReview({
     return opts;
   }, [showAlwaysApprove]);
 
-  useInput((input, key) => {
+  useInput(
+    (input, key) => {
     if (mode === "select") {
       if (input === "y") {
         onReviewCommand(ReviewDecision.YES);
@@ -155,7 +160,8 @@ export function TerminalChatCommandReview({
         );
       }
     }
-  });
+    }, { isActive }
+  );
 
   return (
     <Box flexDirection="column" gap={1} borderStyle="round" marginTop={1}>
@@ -203,6 +209,8 @@ export function TerminalChatCommandReview({
             <Text>Allow command?</Text>
             <Box paddingX={2} flexDirection="column" gap={1}>
               <Select
+                isDisabled={!isActive}
+                visibleOptionCount={approvalOptions.length}
                 onChange={(value: ReviewDecision | "edit" | "switch") => {
                   if (value === "edit") {
                     setMode("input");
