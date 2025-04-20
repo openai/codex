@@ -154,46 +154,4 @@ describe("TerminalChatInput multiline functionality", () => {
 
     cleanup();
   });
-
-  // Note: We're skipping this test for now as it requires more complex mocking
-  // of the history functionality. The multiline history behavior is already tested
-  // in multiline-history-behavior.test.tsx
-  it("supports history navigation in multiline mode", async () => {
-    const submitInput = vi.fn();
-
-    const props: ComponentProps<typeof TerminalChatInput> = {
-      isNew: false,
-      loading: false,
-      submitInput,
-      confirmationPrompt: null,
-      explanation: undefined,
-      submitConfirmation: () => {},
-      setLastResponseId: () => {},
-      setItems: () => {},
-      contextLeftPercent: 50,
-      openOverlay: () => {},
-      openDiffOverlay: () => {},
-      openModelOverlay: () => {},
-      openApprovalOverlay: () => {},
-      openHelpOverlay: () => {},
-      onCompact: () => {},
-      interruptAgent: () => {},
-      active: true,
-      thinkingSeconds: 0,
-    };
-
-    const { stdin, flush, cleanup } = renderTui(
-      <TerminalChatInput {...props} />,
-    );
-
-    // Wait for initial render
-    await flush();
-
-    // Press up arrow to navigate to history
-    await type(stdin, "\u001B[A", flush);
-
-    // This test is skipped, so we don't need to make assertions
-
-    cleanup();
-  });
 });
