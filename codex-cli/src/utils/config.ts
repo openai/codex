@@ -433,7 +433,6 @@ export const saveConfig = (
   }
 
   if (ext === ".yaml" || ext === ".yml") {
-<<<<<<< HEAD
     writeFileSync(targetPath, dumpYaml({ model: config.model, provider: config.provider }), "utf-8");
   } else {
     writeFileSync(
@@ -441,11 +440,6 @@ export const saveConfig = (
       JSON.stringify({ model: config.model, provider: config.provider }, null, 2),
       "utf-8",
     );
-=======
-    writeFileSync(targetPath, dumpYaml(configToSave), "utf-8");
-  } else {
-    writeFileSync(targetPath, JSON.stringify(configToSave, null, 2), "utf-8");
->>>>>>> origin/main
   }
 
   writeFileSync(instructionsPath, config.instructions, "utf-8");
