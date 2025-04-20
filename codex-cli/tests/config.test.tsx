@@ -1,6 +1,12 @@
 import type * as fsType from "fs";
 
-import { loadConfig, saveConfig, saveRepoConfig, discoverRepoConfigPath, REPO_CONFIG_JSON_FILEPATH } from "../src/utils/config.js"; // parent import first
+import {
+  loadConfig,
+  saveConfig,
+  saveRepoConfig,
+  discoverRepoConfigPath,
+  REPO_CONFIG_JSON_FILEPATH,
+} from "../src/utils/config.js"; // parent import first
 import { AutoApprovalMode } from "../src/utils/auto-approval-mode.js";
 import { tmpdir } from "os";
 import { join } from "path";
