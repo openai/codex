@@ -19,7 +19,11 @@ export const defaultSpinnerFrames: string[] = [
 export function getSeasonalFrames(
   defaultFrames: string[] = defaultSpinnerFrames,
 ): string[] {
-  const now = new Date();
+  // Check for FAKE_DATE environment variable
+  const now = process.env['FAKE_DATE']
+    ? new Date(process.env['FAKE_DATE'])
+    : new Date();
+    
   const year = now.getFullYear();
   const msPerDay = 1000 * 60 * 60 * 24;
 
