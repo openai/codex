@@ -184,9 +184,8 @@ export default function TerminalChat({
     explanation,
     submitConfirmation,
   } = useConfirmation();
-  
   const [overlayMode, setOverlayMode] = useState<OverlayModeType>("none");
-  
+
   // Store the diff text when opening the diff overlay so the view isn’t
   // recomputed on every re‑render while it is open.
   // diffText is passed down to the DiffOverlay component. The setter is
@@ -461,7 +460,7 @@ export default function TerminalChat({
       <Box flexDirection="column">
         {agent ? (
           <TerminalMessageHistory
-            setOverlayMode={setOverlayMode}
+          setOverlayMode={setOverlayMode}
             batch={lastMessageBatch}
             groupCounts={groupCounts}
             items={items}
