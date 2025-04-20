@@ -1,6 +1,6 @@
 import type * as fsType from "fs";
 
-import { loadConfig, saveConfig } from "../src/utils/config.js"; // parent import first
+import { loadConfig, saveConfig, saveRepoConfig, discoverRepoConfigPath, REPO_CONFIG_JSON_FILEPATH } from "../src/utils/config.js"; // parent import first
 import { AutoApprovalMode } from "../src/utils/auto-approval-mode.js";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -147,4 +147,130 @@ test("loads and saves approvalMode correctly", () => {
     disableProjectDoc: true,
   });
   expect(reloadedConfig.approvalMode).toBe(AutoApprovalMode.FULL_AUTO);
+});
+
+test("discovers repository config in current directory", () => {
+  // Create a repository config file in the current directory
+  const repoConfigPath = join(testDir, REPO_CONFIG_JSON_FILEPATH);
+  memfs[repoConfigPath] = JSON.stringify({ model: "repo-model" }, null, 2);
+
+  // Discover the repository config path
+  const discoveredPath = discoverRepoConfigPath(testDir);
+
+  // Verify the discovered path matches the expected path
+  expect(discoveredPath).toBe(repoConfigPath);
+});
+
+test("discovers repository config in git root", () => {
+  // Create a git directory to simulate a git repository
+  const gitDir = join(testDir, ".git");
+  memfs[gitDir] = "";
+
+  // Create a repository config file in the git root
+  const repoConfigPath = join(testDir, REPO_CONFIG_JSON_FILEPATH);
+  memfs[repoConfigPath] = JSON.stringify({ model: "repo-model" }, null, 2);
+
+  // Create a subdirectory
+  const subDir = join(testDir, "subdir");
+
+  // Discover the repository config path from the subdirectory
+  const discoveredPath = discoverRepoConfigPath(subDir);
+
+  // Verify the discovered path matches the expected path in the git root
+  expect(discoveredPath).toBe(repoConfigPath);
+});
+
+test("saves repository config correctly", () => {
+  const testConfig = {
+    model: "repo-specific-model",
+    instructions: "repo instructions",
+    notify: true,
+    approvalMode: AutoApprovalMode.FULL_AUTO,
+  };
+
+  // Save repository config
+  saveRepoConfig(testConfig, testDir);
+
+  // Check that the repository config file was created
+  const repoConfigPath = join(testDir, REPO_CONFIG_JSON_FILEPATH);
+  expect(memfs[repoConfigPath]).toBeDefined();
+
+  // Verify the content of the repository config file
+  const savedConfig = JSON.parse(memfs[repoConfigPath] || "{}");
+  expect(savedConfig.model).toBe(testConfig.model);
+  expect(savedConfig.approvalMode).toBe(testConfig.approvalMode);
+});
+
+test("repository config takes precedence over global config", () => {
+  // Setup global config
+  memfs[testConfigPath] = JSON.stringify(
+    {
+      model: "global-model",
+      approvalMode: AutoApprovalMode.SUGGEST,
+      safeCommands: ["npm test"],
+    },
+    null,
+    2,
+  );
+
+  // Setup repository config
+  const repoConfigPath = join(testDir, REPO_CONFIG_JSON_FILEPATH);
+  memfs[repoConfigPath] = JSON.stringify(
+    {
+      model: "repo-model",
+      approvalMode: AutoApprovalMode.FULL_AUTO,
+      safeCommands: ["npm run build"],
+    },
+    null,
+    2,
+  );
+
+  // Load config
+  const config = loadConfig(testConfigPath, testInstructionsPath, {
+    cwd: testDir,
+    disableProjectDoc: true,
+  });
+
+  // Verify that repository config values take precedence
+  expect(config.model).toBe("repo-model");
+  expect(config.approvalMode).toBe(AutoApprovalMode.FULL_AUTO);
+
+  // Verify that safeCommands are merged
+  expect(config.safeCommands).toContain("npm test");
+  expect(config.safeCommands).toContain("npm run build");
+  expect(config.safeCommands?.length).toBe(2);
+});
+
+test("disableRepoConfig option prevents loading repository config", () => {
+  // Setup global config
+  memfs[testConfigPath] = JSON.stringify(
+    {
+      model: "global-model",
+      approvalMode: AutoApprovalMode.SUGGEST,
+    },
+    null,
+    2,
+  );
+
+  // Setup repository config
+  const repoConfigPath = join(testDir, REPO_CONFIG_JSON_FILEPATH);
+  memfs[repoConfigPath] = JSON.stringify(
+    {
+      model: "repo-model",
+      approvalMode: AutoApprovalMode.FULL_AUTO,
+    },
+    null,
+    2,
+  );
+
+  // Load config with disableRepoConfig option
+  const config = loadConfig(testConfigPath, testInstructionsPath, {
+    cwd: testDir,
+    disableProjectDoc: true,
+    disableRepoConfig: true,
+  });
+
+  // Verify that global config values are used
+  expect(config.model).toBe("global-model");
+  expect(config.approvalMode).toBe(AutoApprovalMode.SUGGEST);
 });

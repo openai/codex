@@ -177,7 +177,7 @@ The hardening mechanism Codex uses depends on your OS:
 | `codex -q "…"`                       | Non‑interactive "quiet mode"        | `codex -q --json "explain utils.ts"` |
 | `codex completion <bash\|zsh\|fish>` | Print shell completion script       | `codex completion bash`              |
 
-Key flags: `--model/-m`, `--approval-mode/-a`, `--quiet/-q`, and `--notify`.
+Key flags: `--model/-m`, `--approval-mode/-a`, `--quiet/-q`, `--no-repo-config`, and `--notify`.
 
 ---
 
@@ -281,7 +281,11 @@ pnpm link
 
 ## Configuration
 
-Codex looks for config files in **`~/.codex/`** (either YAML or JSON format).
+Codex supports both global and repository-specific configuration files in YAML or JSON format.
+
+### Global Configuration
+
+Global configuration is stored in **`~/.codex/`**:
 
 ```yaml
 # ~/.codex/config.yaml
@@ -303,6 +307,24 @@ safeCommands:
   "notify": true
 }
 ```
+
+### Repository-Specific Configuration
+
+You can also define repository-specific configuration in **`./.codex/config.json`** or **`./.codex/config.yaml`** within your project:
+
+```yaml
+# ./.codex/config.yaml
+model: gpt-4.1 # Override model for this repository
+approvalMode: auto-edit # Different approval mode for this project
+safeCommands:
+  - npm run build # Project-specific safe commands
+```
+
+Repository-specific configuration takes precedence over global configuration. Codex will look for config files in the current directory first, then walk up to the Git root directory.
+
+You can disable repository-specific configuration with the `--no-repo-config` flag.
+
+### Custom Instructions
 
 You can also define custom instructions:
 

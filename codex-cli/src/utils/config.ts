@@ -31,6 +31,12 @@ export const CONFIG_YML_FILEPATH = join(CONFIG_DIR, "config.yml");
 export const CONFIG_FILEPATH = CONFIG_JSON_FILEPATH;
 export const INSTRUCTIONS_FILEPATH = join(CONFIG_DIR, "instructions.md");
 
+// Repository-specific configuration paths
+export const REPO_CONFIG_DIR = ".codex";
+export const REPO_CONFIG_JSON_FILEPATH = join(REPO_CONFIG_DIR, "config.json");
+export const REPO_CONFIG_YAML_FILEPATH = join(REPO_CONFIG_DIR, "config.yaml");
+export const REPO_CONFIG_YML_FILEPATH = join(REPO_CONFIG_DIR, "config.yml");
+
 export const OPENAI_TIMEOUT_MS =
   parseInt(process.env["OPENAI_TIMEOUT_MS"] || "0", 10) || undefined;
 export const OPENAI_BASE_URL = process.env["OPENAI_BASE_URL"] || "";
@@ -188,7 +194,92 @@ export type LoadConfigOptions = {
   projectDocPath?: string;
   /** Whether we are in fullcontext mode. */
   isFullContext?: boolean;
+  /** Disable repository-specific configuration */
+  disableRepoConfig?: boolean;
 };
+
+/**
+ * Load configuration from a file path
+ *
+ * @param filePath Path to the configuration file
+ * @returns Parsed configuration or empty object if file doesn't exist or parsing fails
+ */
+function loadConfigFromFile(filePath: string): StoredConfig {
+  if (!existsSync(filePath)) {
+    return {};
+  }
+
+  try {
+    const raw = readFileSync(filePath, "utf-8");
+    const ext = extname(filePath).toLowerCase();
+    if (ext === ".yaml" || ext === ".yml") {
+      return loadYaml(raw) as unknown as StoredConfig;
+    } else {
+      return JSON.parse(raw);
+    }
+  } catch {
+    // If parsing fails, fall back to empty config to avoid crashing.
+    return {};
+  }
+}
+
+/**
+ * Discover repository-specific configuration file path
+ *
+ * @param cwd Current working directory
+ * @returns Path to the repository config file or null if not found
+ */
+export function discoverRepoConfigPath(cwd: string): string | null {
+  const workingDir = resolvePath(cwd);
+
+  // 1) Look in the explicit CWD first
+  const cwdJsonPath = join(workingDir, REPO_CONFIG_JSON_FILEPATH);
+  const cwdYamlPath = join(workingDir, REPO_CONFIG_YAML_FILEPATH);
+  const cwdYmlPath = join(workingDir, REPO_CONFIG_YML_FILEPATH);
+
+  if (existsSync(cwdJsonPath)) {
+    return cwdJsonPath;
+  }
+  if (existsSync(cwdYamlPath)) {
+    return cwdYamlPath;
+  }
+  if (existsSync(cwdYmlPath)) {
+    return cwdYmlPath;
+  }
+
+  // 2) Fallback: walk up to the Git root and look there
+  let dir = workingDir;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const gitPath = join(dir, ".git");
+    if (existsSync(gitPath)) {
+      // Once we hit the Git root, search its top‑level for the config
+      const rootJsonPath = join(dir, REPO_CONFIG_JSON_FILEPATH);
+      const rootYamlPath = join(dir, REPO_CONFIG_YAML_FILEPATH);
+      const rootYmlPath = join(dir, REPO_CONFIG_YML_FILEPATH);
+
+      if (existsSync(rootJsonPath)) {
+        return rootJsonPath;
+      }
+      if (existsSync(rootYamlPath)) {
+        return rootYamlPath;
+      }
+      if (existsSync(rootYmlPath)) {
+        return rootYmlPath;
+      }
+
+      // If Git root but no config, stop looking.
+      return null;
+    }
+
+    const parent = dirname(dir);
+    if (parent === dir) {
+      // Reached filesystem root without finding Git.
+      return null;
+    }
+    dir = parent;
+  }
+}
 
 export const loadConfig = (
   configPath: string | undefined = CONFIG_FILEPATH,
@@ -209,21 +300,44 @@ export const loadConfig = (
     }
   }
 
-  let storedConfig: StoredConfig = {};
-  if (existsSync(actualConfigPath)) {
-    const raw = readFileSync(actualConfigPath, "utf-8");
-    const ext = extname(actualConfigPath).toLowerCase();
-    try {
-      if (ext === ".yaml" || ext === ".yml") {
-        storedConfig = loadYaml(raw) as unknown as StoredConfig;
-      } else {
-        storedConfig = JSON.parse(raw);
+  // Load global configuration
+  const globalConfig = loadConfigFromFile(actualConfigPath);
+
+  // Load repository-specific configuration if enabled
+  let repoConfig: StoredConfig = {};
+  let repoConfigPath: string | null = null;
+
+  if (!options.disableRepoConfig) {
+    const cwd = options.cwd ?? process.cwd();
+    repoConfigPath = discoverRepoConfigPath(cwd);
+
+    if (repoConfigPath) {
+      repoConfig = loadConfigFromFile(repoConfigPath);
+      if (isLoggingEnabled()) {
+        log(`[codex] Loaded repository config from ${repoConfigPath}`);
       }
-    } catch {
-      // If parsing fails, fall back to empty config to avoid crashing.
-      storedConfig = {};
+    } else {
+      if (isLoggingEnabled()) {
+        log(`[codex] No repository config found in ${cwd}`);
+      }
     }
   }
+
+  // Merge configurations: repository config takes precedence over global config
+  const storedConfig: StoredConfig = {
+    ...globalConfig,
+    ...repoConfig,
+    // Special handling for nested objects
+    history: {
+      ...globalConfig.history,
+      ...repoConfig.history,
+    },
+    // Merge arrays instead of replacing them
+    safeCommands: [
+      ...(globalConfig.safeCommands || []),
+      ...(repoConfig.safeCommands || []),
+    ],
+  };
 
   const instructionsFilePathResolved =
     instructionsPath ?? INSTRUCTIONS_FILEPATH;
@@ -363,6 +477,48 @@ export const loadConfig = (
   }
 
   return config;
+};
+
+/**
+ * Save configuration to a repository-specific config file
+ *
+ * @param config Configuration to save
+ * @param repoPath Path to the repository root directory
+ */
+export const saveRepoConfig = (
+  config: AppConfig,
+  repoPath: string = process.cwd(),
+): void => {
+  // Create .codex directory if it doesn't exist
+  const configDir = join(repoPath, REPO_CONFIG_DIR);
+  if (!existsSync(configDir)) {
+    mkdirSync(configDir, { recursive: true });
+  }
+
+  // Default to JSON format for repository config
+  const targetPath = join(repoPath, REPO_CONFIG_JSON_FILEPATH);
+
+  // Create the config object to save
+  const configToSave: StoredConfig = {
+    model: config.model,
+    approvalMode: config.approvalMode,
+  };
+
+  // Add history settings if they exist
+  if (config.history) {
+    configToSave.history = {
+      maxSize: config.history.maxSize,
+      saveHistory: config.history.saveHistory,
+      sensitivePatterns: config.history.sensitivePatterns,
+    };
+  }
+
+  // Save: User-defined safe commands
+  if (config.safeCommands && config.safeCommands.length > 0) {
+    configToSave.safeCommands = config.safeCommands;
+  }
+
+  writeFileSync(targetPath, JSON.stringify(configToSave, null, 2), "utf-8");
 };
 
 export const saveConfig = (
