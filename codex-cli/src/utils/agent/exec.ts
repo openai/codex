@@ -16,7 +16,7 @@ const DEFAULT_TIMEOUT_MS = 10_000; // 10 seconds
 function requiresShell(cmd: Array<string>): boolean {
   // If the command is a single string that contains shell operators,
   // it needs to be run with shell: true
-  if (cmd.length === 1) {
+  if (cmd.length === 1 && cmd[0] !== undefined) {
     const tokens = parse(cmd[0]) as Array<ParseEntry>;
     return tokens.some((token) => typeof token === "object" && "op" in token);
   }
