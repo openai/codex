@@ -436,44 +436,25 @@ export const saveConfig = (
     configToSave.safeCommands = config.safeCommands;
   }
 
+  // Add rate limits to configToSave if they exist
+  if (config.rateLimits) {
+    configToSave.rateLimits = config.rateLimits;
+  }
+
+  // Add memory settings if they exist
+  if (config.memory) {
+    configToSave.memory = config.memory;
+  }
+
+  // Add fullAutoErrorMode if it exists
+  if (config.fullAutoErrorMode) {
+    configToSave.fullAutoErrorMode = config.fullAutoErrorMode;
+  }
+
   if (ext === ".yaml" || ext === ".yml") {
-<<<<<<< HEAD
-    // Create a StoredConfig object with all the necessary fields
-    const storedConfig: StoredConfig = {
-      model: config.model,
-      rateLimits: config.rateLimits,
-    };
-
-    // Add optional fields if they exist
-    if (config.fullAutoErrorMode) {
-      storedConfig.fullAutoErrorMode = config.fullAutoErrorMode;
-    }
-    if (config.memory) {
-      storedConfig.memory = config.memory;
-    }
-
-    writeFileSync(targetPath, dumpYaml(storedConfig), "utf-8");
-  } else {
-    // Create a StoredConfig object with all the necessary fields
-    const storedConfig: StoredConfig = {
-      model: config.model,
-      rateLimits: config.rateLimits,
-    };
-
-    // Add optional fields if they exist
-    if (config.fullAutoErrorMode) {
-      storedConfig.fullAutoErrorMode = config.fullAutoErrorMode;
-    }
-    if (config.memory) {
-      storedConfig.memory = config.memory;
-    }
-
-    writeFileSync(targetPath, JSON.stringify(storedConfig, null, 2), "utf-8");
-=======
     writeFileSync(targetPath, dumpYaml(configToSave), "utf-8");
   } else {
     writeFileSync(targetPath, JSON.stringify(configToSave, null, 2), "utf-8");
->>>>>>> main
   }
 
   writeFileSync(instructionsPath, config.instructions, "utf-8");
