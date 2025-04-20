@@ -88,6 +88,7 @@ describe("AgentLoop – rate‑limit handling", () => {
         config: {
           model: "any",
           instructions: "",
+          notify: false,
           rateLimits: {
             maxRetries: DEFAULT_RATE_LIMIT_MAX_RETRIES,
             initialRetryDelayMs: DEFAULT_RATE_LIMIT_INITIAL_RETRY_DELAY_MS,
@@ -174,6 +175,7 @@ describe("AgentLoop – rate‑limit handling", () => {
         config: {
           model: "any",
           instructions: "",
+          notify: false,
           rateLimits: {
             maxRetries: customMaxRetries,
             initialRetryDelayMs: customInitialDelay,
@@ -181,6 +183,7 @@ describe("AgentLoop – rate‑limit handling", () => {
             jitterFactor: customJitter,
           },
         },
+        additionalWritableRoots: [],
         onItem: (i) => received.push(i),
         onLoading: () => {},
         getCommandConfirmation: async () => ({ review: "yes" } as any),

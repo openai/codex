@@ -69,6 +69,7 @@ describe("AgentLoop – generic network/server errors", () => {
       config: {
         model: "any",
         instructions: "",
+        notify: false,
         rateLimits: {
           maxRetries: DEFAULT_RATE_LIMIT_MAX_RETRIES,
           initialRetryDelayMs: DEFAULT_RATE_LIMIT_INITIAL_RETRY_DELAY_MS,
@@ -123,6 +124,7 @@ describe("AgentLoop – generic network/server errors", () => {
       config: {
         model: "any",
         instructions: "",
+        notify: false,
         rateLimits: {
           maxRetries: DEFAULT_RATE_LIMIT_MAX_RETRIES,
           initialRetryDelayMs: DEFAULT_RATE_LIMIT_INITIAL_RETRY_DELAY_MS,
