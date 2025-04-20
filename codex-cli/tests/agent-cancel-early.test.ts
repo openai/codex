@@ -88,6 +88,7 @@ describe("cancel before first function_call", () => {
     const { _test } = (await import("openai")) as any;
 
     const agent = new AgentLoop({
+      additionalWritableRoots: [],
       model: "any",
       instructions: "",
       approvalPolicy: { mode: "auto" } as any,
@@ -95,7 +96,7 @@ describe("cancel before first function_call", () => {
       onLoading: () => {},
       getCommandConfirmation: async () => ({ review: "yes" } as any),
       onLastResponseId: () => {},
-      config: { model: "any", instructions: "" },
+      config: { model: "any", instructions: "", notify: false },
     });
 
     // Start first run.

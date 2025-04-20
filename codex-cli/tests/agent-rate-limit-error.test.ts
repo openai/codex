@@ -95,6 +95,7 @@ describe("AgentLoop – rate‑limit handling", () => {
             jitterFactor: DEFAULT_RATE_LIMIT_JITTER_FACTOR,
           },
         },
+        additionalWritableRoots: [],
         onItem: (i) => received.push(i),
         onLoading: () => {},
         getCommandConfirmation: async () => ({ review: "yes" } as any),

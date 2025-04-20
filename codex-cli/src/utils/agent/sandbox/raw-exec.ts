@@ -8,6 +8,7 @@ import type {
 } from "child_process";
 
 import { log, isLoggingEnabled } from "../log.js";
+import { adaptCommandForPlatform } from "../platform-commands.js";
 import { spawn } from "child_process";
 import * as os from "os";
 
@@ -23,7 +24,21 @@ export function exec(
   _writableRoots: Array<string>,
   abortSignal?: AbortSignal,
 ): Promise<ExecResult> {
-  const prog = command[0];
+  // Adapt command for the current platform (e.g., convert 'ls' to 'dir' on Windows)
+  const adaptedCommand = adaptCommandForPlatform(command);
+
+  if (
+    isLoggingEnabled() &&
+    JSON.stringify(adaptedCommand) !== JSON.stringify(command)
+  ) {
+    log(
+      `Command adapted for platform: ${command.join(
+        " ",
+      )} -> ${adaptedCommand.join(" ")}`,
+    );
+  }
+
+  const prog = adaptedCommand[0];
   if (typeof prog !== "string") {
     return Promise.resolve({
       stdout: "",
@@ -72,7 +87,7 @@ export function exec(
     detached: true,
   };
 
-  const child: ChildProcess = spawn(prog, command.slice(1), fullOptions);
+  const child: ChildProcess = spawn(prog, adaptedCommand.slice(1), fullOptions);
   // If an AbortSignal is provided, ensure the spawned process is terminated
   // when the signal is triggered so that cancellations propagate down to any
   // long‑running child processes. We default to SIGTERM to give the process a
