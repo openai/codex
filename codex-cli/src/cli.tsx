@@ -261,7 +261,6 @@ config = {
 
 // Check for updates after loading config
 // This is important because we write state file in the config dir
-await checkForUpdates().catch();
 // ---------------------------------------------------------------------------
 // --flex-mode validation (only allowed for o3 and o4-mini)
 // ---------------------------------------------------------------------------
