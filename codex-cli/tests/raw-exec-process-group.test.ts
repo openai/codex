@@ -50,7 +50,6 @@ describe("rawExec – abort kills entire process group", () => {
 
     if (pidMatch) {
       const sleepPid = Number(pidMatch[1]);
-      console.log(`Test debug: Found sleep process with PID ${sleepPid}`);
 
       // Wait a bit longer to ensure process cleanup has completed (especially important in CI)
       await new Promise((r) => setTimeout(r, 500));
@@ -59,14 +58,11 @@ describe("rawExec – abort kills entire process group", () => {
       let alive = true;
       try {
         process.kill(sleepPid, 0);
-        console.log(`Test debug: Process ${sleepPid} is still alive`);
       } catch (error: any) {
         // Check if error is ESRCH (No such process)
         if (error.code === "ESRCH") {
-          console.log(`Test debug: Process ${sleepPid} is dead as expected (ESRCH)`);
           alive = false; // Process is dead, as expected.
         } else {
-          console.log(`Test debug: Error checking process: ${error.code}`);
           throw error;
         }
       }
@@ -75,7 +71,6 @@ describe("rawExec – abort kills entire process group", () => {
       // If PID was not printed, it implies bash was killed very early.
       // The test passes implicitly in this scenario as the abort mechanism
       // successfully stopped the command execution quickly.
-      console.log(`Test debug: No PID found in output: "${stdout.trim()}"`);
       expect(true).toBe(true);
     }
   });
