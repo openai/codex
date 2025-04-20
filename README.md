@@ -26,6 +26,7 @@
 - [Funding Opportunity](#funding-opportunity)
 - [Contributing](#contributing)
   - [Development workflow](#development-workflow)
+    - [Nix Flake Development](#nix-flake-development)
   - [Writing high‑impact code changes](#writing-highimpact-code-changes)
   - [Opening a pull request](#opening-a-pull-request)
   - [Review process](#review-process)
@@ -68,6 +69,14 @@ export OPENAI_API_KEY="your-api-key-here"
 ```
 
 > **Note:** This command sets the key only for your current terminal session. To make it permanent, add the `export` line to your shell's configuration file (e.g., `~/.zshrc`).
+>
+> **Tip:** You can also place your API key into a `.env` file at the root of your project:
+>
+> ```env
+> OPENAI_API_KEY=your-api-key-here
+> ```
+>
+> The CLI will automatically load variables from `.env` (via `dotenv/config`).
 
 Run interactively:
 
@@ -111,11 +120,11 @@ And it's **fully open-source** so you can see and contribute to how it develops!
 Codex lets you decide _how much autonomy_ the agent receives and auto-approval policy via the
 `--approval-mode` flag (or the interactive onboarding prompt):
 
-| Mode                      | What the agent may do without asking            | Still requires approval                                         |
-| ------------------------- | ----------------------------------------------- | --------------------------------------------------------------- |
-| **Suggest** <br>(default) | • Read any file in the repo                     | • **All** file writes/patches <br>• **All** shell/Bash commands |
-| **Auto Edit**             | • Read **and** apply‑patch writes to files      | • **All** shell/Bash commands                                   |
-| **Full Auto**             | • Read/write files <br>• Execute shell commands | –                                                               |
+| Mode                      | What the agent may do without asking                                                               | Still requires approval                                                                         |
+| ------------------------- | -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| **Suggest** <br>(default) | • Read any file in the repo                                                                        | • **All** file writes/patches <br>• **Any** arbitrary shell commands (aside from reading files) |
+| **Auto Edit**             | • Read **and** apply‑patch writes to files                                                         | • **All** shell commands                                                                        |
+| **Full Auto**             | • Read/write files <br>• Execute shell commands (network disabled, writes limited to your workdir) | –                                                                                               |
 
 In **Full Auto** every command is run **network‑disabled** and confined to the
 current working directory (plus temporary files) for defense‑in‑depth. Codex
@@ -168,7 +177,7 @@ The hardening mechanism Codex uses depends on your OS:
 | `codex -q "…"`                       | Non‑interactive "quiet mode"        | `codex -q --json "explain utils.ts"` |
 | `codex completion <bash\|zsh\|fish>` | Print shell completion script       | `codex completion bash`              |
 
-Key flags: `--model/-m`, `--approval-mode/-a`, and `--quiet/-q`.
+Key flags: `--model/-m`, `--approval-mode/-a`, `--quiet/-q`, and `--notify`.
 
 ---
 
@@ -198,6 +207,14 @@ Run Codex head‑less in pipelines. Example GitHub Action step:
 
 Set `CODEX_QUIET_MODE=1` to silence interactive UI noise.
 
+## Tracing / Verbose Logging
+
+Setting the environment variable `DEBUG=true` prints full API request and response details:
+
+```shell
+DEBUG=true codex
+```
+
 ---
 
 ## Recipes
@@ -225,6 +242,10 @@ Below are a few bite‑size examples you can copy‑paste. Replace the text in q
 npm install -g @openai/codex
 # or
 yarn global add @openai/codex
+# or
+bun install -g @openai/codex
+# or
+pnpm add -g @openai/codex
 ```
 
 </details>
@@ -237,9 +258,12 @@ yarn global add @openai/codex
 git clone https://github.com/openai/codex.git
 cd codex/codex-cli
 
+# Enable corepack
+corepack enable
+
 # Install dependencies and build
-npm install
-npm run build
+pnpm install
+pnpm build
 
 # Get the usage and the options
 node ./dist/cli.js --help
@@ -248,7 +272,7 @@ node ./dist/cli.js --help
 node ./dist/cli.js
 
 # Or link the command globally for convenience
-npm link
+pnpm link
 ```
 
 </details>
@@ -257,12 +281,27 @@ npm link
 
 ## Configuration
 
-Codex looks for config files in **`~/.codex/`**.
+Codex looks for config files in **`~/.codex/`** (either YAML or JSON format).
 
 ```yaml
 # ~/.codex/config.yaml
 model: o4-mini # Default model
+approvalMode: suggest # or auto-edit, full-auto
 fullAutoErrorMode: ask-user # or ignore-and-continue
+notify: true # Enable desktop notifications for responses
+safeCommands:
+  - npm test # Automatically approve npm test
+  - yarn lint # Automatically approve yarn lint
+```
+
+```json
+// ~/.codex/config.json
+{
+  "model": "o4-mini",
+  "approvalMode": "suggest",
+  "fullAutoErrorMode": "ask-user",
+  "notify": true
+}
 ```
 
 You can also define custom instructions:
@@ -285,23 +324,28 @@ In 2021, OpenAI released Codex, an AI system designed to generate code from natu
 </details>
 
 <details>
-<summary>How do I stop Codex from touching my repo?</summary>
+<summary>Which models are supported?</summary>
 
-Codex always runs in a **sandbox first**. If a proposed command or file change looks suspicious you can simply answer **n** when prompted and nothing happens to your working tree.
+Any model available with [Responses API](https://platform.openai.com/docs/api-reference/responses). The default is `o4-mini`, but pass `--model gpt-4.1` or set `model: gpt-4.1` in your config file to override.
+
+</details>
+<details>
+<summary>Why does <code>o3</code> or <code>o4-mini</code> not work for me?</summary>
+
+It's possible that your [API account needs to be verified](https://help.openai.com/en/articles/10910291-api-organization-verification) in order to start streaming responses and seeing chain of thought summaries from the API. If you're still running into issues, please let us know!
 
 </details>
 
+<details>
+<summary>How do I stop Codex from editing my files?</summary>
+
+Codex runs model-generated commands in a sandbox. If a proposed command or file change doesn't look right, you can simply type **n** to deny the command or give the model feedback.
+
+</details>
 <details>
 <summary>Does it work on Windows?</summary>
 
 Not directly. It requires [Windows Subsystem for Linux (WSL2)](https://learn.microsoft.com/en-us/windows/wsl/install) – Codex has been tested on macOS and Linux with Node ≥ 22.
-
-</details>
-
-<details>
-<summary>Which models are supported?</summary>
-
-Any model available with [Responses API](https://platform.openai.com/docs/api-reference/responses). The default is `o4-mini`, but pass `--model gpt-4o` or set `model: gpt-4o` in your config file to override.
 
 </details>
 
@@ -351,7 +395,7 @@ More broadly we welcome contributions – whether you are opening your very firs
 
 - Create a _topic branch_ from `main` – e.g. `feat/interactive-prompt`.
 - Keep your changes focused. Multiple unrelated fixes should be opened as separate PRs.
-- Use `npm run test:watch` during development for super‑fast feedback.
+- Use `pnpm test:watch` during development for super‑fast feedback.
 - We use **Vitest** for unit tests, **ESLint** + **Prettier** for style, and **TypeScript** for type‑checking.
 - Before pushing, run the full test/type/lint suite:
 
@@ -378,14 +422,39 @@ npm test && npm run lint && npm run typecheck
 
 ```bash
 # Watch mode (tests rerun on change)
-npm run test:watch
+pnpm test:watch
 
 # Type‑check without emitting files
-npm run typecheck
+pnpm typecheck
 
 # Automatically fix lint + prettier issues
-npm run lint:fix
-npm run format:fix
+pnpm lint:fix
+pnpm format:fix
+```
+
+#### Nix Flake Development
+
+Prerequisite: Nix >= 2.4 with flakes enabled (`experimental-features = nix-command flakes` in `~/.config/nix/nix.conf`).
+
+Enter a Nix development shell:
+
+```bash
+nix develop
+```
+
+This shell includes Node.js, installs dependencies, builds the CLI, and provides a `codex` command alias.
+
+Build and run the CLI directly:
+
+```bash
+nix build
+./result/bin/codex --help
+```
+
+Run the CLI via the flake app:
+
+```bash
+nix run .#codex
 ```
 
 ### Writing high‑impact code changes
@@ -450,13 +519,13 @@ To publish a new version of the CLI, run the release scripts defined in `codex-c
 
 1. Open the `codex-cli` directory
 2. Make sure you're on a branch like `git checkout -b bump-version`
-3. Bump the version and `CLI_VERSION` to current datetime: `npm run release:version`
+3. Bump the version and `CLI_VERSION` to current datetime: `pnpm release:version`
 4. Commit the version bump (with DCO sign-off):
    ```bash
    git add codex-cli/src/utils/session.ts codex-cli/package.json
    git commit -s -m "chore(release): codex-cli v$(node -p \"require('./codex-cli/package.json').version\")"
    ```
-5. Copy README, build, and publish to npm: `npm run release`
+5. Copy README, build, and publish to npm: `pnpm release`
 6. Push to branch: `git push origin HEAD`
 
 ---

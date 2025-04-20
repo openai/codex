@@ -8,7 +8,7 @@ import type {
 } from "openai/resources/responses/responses.mjs";
 import type { Reasoning } from "openai/resources.mjs";
 
-import { log, isLoggingEnabled } from "./log.js";
+import { log } from "./log.js";
 import { OPENAI_BASE_URL, OPENAI_TIMEOUT_MS } from "../config.js";
 import { parseToolCallArguments } from "../parsers.js";
 import {
@@ -32,6 +32,7 @@ export type CommandConfirmation = {
   review: ReviewDecision;
   applyPatch?: ApplyPatchCommand | undefined;
   customDenyMessage?: string;
+  explanation?: string;
 };
 
 const alreadyProcessedResponses = new Set();
@@ -43,6 +44,9 @@ type AgentLoopParams = {
   approvalPolicy: ApprovalPolicy;
   onItem: (item: ResponseItem) => void;
   onLoading: (loading: boolean) => void;
+
+  /** Extra writable roots to use with sandbox execution. */
+  additionalWritableRoots: ReadonlyArray<string>;
 
   /** Called when the command is not auto-approved to request explicit user review. */
   getCommandConfirmation: (
@@ -57,6 +61,7 @@ export class AgentLoop {
   private instructions?: string;
   private approvalPolicy: ApprovalPolicy;
   private config: AppConfig;
+  private additionalWritableRoots: ReadonlyArray<string>;
 
   // Using `InstanceType<typeof OpenAI>` sidesteps typing issues with the OpenAI package under
   // the TS 5+ `moduleResolution=bundler` setup. OpenAI client instance. We keep the concrete
@@ -111,15 +116,13 @@ export class AgentLoop {
 
     // Reset the current stream to allow new requests
     this.currentStream = null;
-    if (isLoggingEnabled()) {
-      log(
-        `AgentLoop.cancel() invoked – currentStream=${Boolean(
-          this.currentStream,
-        )} execAbortController=${Boolean(
-          this.execAbortController,
-        )} generation=${this.generation}`,
-      );
-    }
+    log(
+      `AgentLoop.cancel() invoked – currentStream=${Boolean(
+        this.currentStream,
+      )} execAbortController=${Boolean(this.execAbortController)} generation=${
+        this.generation
+      }`,
+    );
     (
       this.currentStream as { controller?: { abort?: () => void } } | null
     )?.controller?.abort?.();
@@ -131,9 +134,7 @@ export class AgentLoop {
 
     // Create a new abort controller for future tool calls
     this.execAbortController = new AbortController();
-    if (isLoggingEnabled()) {
-      log("AgentLoop.cancel(): execAbortController.abort() called");
-    }
+    log("AgentLoop.cancel(): execAbortController.abort() called");
 
     // NOTE: We intentionally do *not* clear `lastResponseId` here.  If the
     // stream produced a `function_call` before the user cancelled, OpenAI now
@@ -169,9 +170,7 @@ export class AgentLoop {
     // this.onItem(cancelNotice);
 
     this.generation += 1;
-    if (isLoggingEnabled()) {
-      log(`AgentLoop.cancel(): generation bumped to ${this.generation}`);
-    }
+    log(`AgentLoop.cancel(): generation bumped to ${this.generation}`);
   }
 
   /**
@@ -212,6 +211,7 @@ export class AgentLoop {
     onLoading,
     getCommandConfirmation,
     onLastResponseId,
+    additionalWritableRoots,
   }: AgentLoopParams & { config?: AppConfig }) {
     this.model = model;
     this.instructions = instructions;
@@ -228,6 +228,7 @@ export class AgentLoop {
         model,
         instructions: instructions ?? "",
       } as AppConfig);
+    this.additionalWritableRoots = additionalWritableRoots;
     this.onItem = onItem;
     this.onLoading = onLoading;
     this.getCommandConfirmation = getCommandConfirmation;
@@ -308,13 +309,11 @@ export class AgentLoop {
     const callId: string = (item as any).call_id ?? (item as any).id;
 
     const args = parseToolCallArguments(rawArguments ?? "{}");
-    if (isLoggingEnabled()) {
-      log(
-        `handleFunctionCall(): name=${
-          name ?? "undefined"
-        } callId=${callId} args=${rawArguments}`,
-      );
-    }
+    log(
+      `handleFunctionCall(): name=${
+        name ?? "undefined"
+      } callId=${callId} args=${rawArguments}`,
+    );
 
     if (args == null) {
       const outputItem: ResponseInputItem.FunctionCallOutput = {
@@ -357,6 +356,7 @@ export class AgentLoop {
         args,
         this.config,
         this.approvalPolicy,
+        this.additionalWritableRoots,
         this.getCommandConfirmation,
         this.execAbortController?.signal,
       );
@@ -399,11 +399,9 @@ export class AgentLoop {
       // Create a fresh AbortController for this run so that tool calls from a
       // previous run do not accidentally get signalled.
       this.execAbortController = new AbortController();
-      if (isLoggingEnabled()) {
-        log(
-          `AgentLoop.run(): new execAbortController created (${this.execAbortController.signal}) for generation ${this.generation}`,
-        );
-      }
+      log(
+        `AgentLoop.run(): new execAbortController created (${this.execAbortController.signal}) for generation ${this.generation}`,
+      );
       // NOTE: We no longer (re‑)attach an `abort` listener to `hardAbort` here.
       // A single listener that forwards the `abort` to the current
       // `execAbortController` is installed once in the constructor. Re‑adding a
@@ -488,18 +486,15 @@ export class AgentLoop {
             if (this.model.startsWith("o")) {
               reasoning = { effort: "high" };
               if (this.model === "o3" || this.model === "o4-mini") {
-                // @ts-expect-error waiting for API type update
                 reasoning.summary = "auto";
               }
             }
             const mergedInstructions = [prefix, this.instructions]
               .filter(Boolean)
               .join("\n");
-            if (isLoggingEnabled()) {
-              log(
-                `instructions (length ${mergedInstructions.length}): ${mergedInstructions}`,
-              );
-            }
+            log(
+              `instructions (length ${mergedInstructions.length}): ${mergedInstructions}`,
+            );
             // eslint-disable-next-line no-await-in-loop
             stream = await this.oai.responses.create({
               model: this.model,
@@ -509,6 +504,7 @@ export class AgentLoop {
               stream: true,
               parallel_tool_calls: false,
               reasoning,
+              ...(this.config.flexMode ? { service_tier: "flex" } : {}),
               tools: [
                 {
                   type: "function",
@@ -599,7 +595,7 @@ export class AgentLoop {
 
                 // Parse suggested retry time from error message, e.g., "Please try again in 1.3s"
                 const msg = errCtx?.message ?? "";
-                const m = /retry again in ([\d.]+)s/i.exec(msg);
+                const m = /(?:retry|try) again in ([\d.]+)s/i.exec(msg);
                 if (m && m[1]) {
                   const suggested = parseFloat(m[1]) * 1000;
                   if (!Number.isNaN(suggested)) {
@@ -725,9 +721,7 @@ export class AgentLoop {
         try {
           // eslint-disable-next-line no-await-in-loop
           for await (const event of stream) {
-            if (isLoggingEnabled()) {
-              log(`AgentLoop.run(): response event ${event.type}`);
-            }
+            log(`AgentLoop.run(): response event ${event.type}`);
 
             // process and surface each item (no‑op until we can depend on streaming events)
             if (event.type === "response.output_item.done") {
@@ -780,6 +774,41 @@ export class AgentLoop {
               // It was aborted for some other reason; surface the error.
               throw err;
             }
+            this.onLoading(false);
+            return;
+          }
+          // Suppress internal stack on JSON parse failures
+          if (err instanceof SyntaxError) {
+            this.onItem({
+              id: `error-${Date.now()}`,
+              type: "message",
+              role: "system",
+              content: [
+                {
+                  type: "input_text",
+                  text: "⚠️ Failed to parse streaming response (invalid JSON). Please `/clear` to reset.",
+                },
+              ],
+            });
+            this.onLoading(false);
+            return;
+          }
+          // Handle OpenAI API quota errors
+          if (
+            err instanceof Error &&
+            (err as { code?: string }).code === "insufficient_quota"
+          ) {
+            this.onItem({
+              id: `error-${Date.now()}`,
+              type: "message",
+              role: "system",
+              content: [
+                {
+                  type: "input_text",
+                  text: "⚠️ Insufficient quota. Please check your billing details and retry.",
+                },
+              ],
+            });
             this.onLoading(false);
             return;
           }

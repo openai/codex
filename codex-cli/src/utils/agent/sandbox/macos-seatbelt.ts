@@ -3,12 +3,11 @@ import type { SpawnOptions } from "child_process";
 
 import { exec } from "./raw-exec.js";
 import { log } from "../log.js";
-import { CONFIG_DIR } from "src/utils/config.js";
+
 import { loadIgnorePatternsAsSBPLDenyRules } from "src/utils/ignore-patterns.js";
 
 function getCommonRoots() {
   return [
-    CONFIG_DIR,
     // Without this root, it'll cause:
     // pyenv: cannot rehash: $HOME/.pyenv/shims isn't writable
     `${process.env["HOME"]}/.pyenv`,
@@ -18,16 +17,17 @@ function getCommonRoots() {
 export function execWithSeatbelt(
   cmd: Array<string>,
   opts: SpawnOptions,
-  writableRoots: Array<string>,
+  writableRoots: ReadonlyArray<string>,
   abortSignal?: AbortSignal,
 ): Promise<ExecResult> {
   let scopedWritePolicy: string;
   let policyTemplateParams: Array<string>;
-  if (writableRoots.length > 0) {
-    // Add `~/.codex` to the list of writable roots
-    // (if there's any already, not in read-only mode)
-    getCommonRoots().map((root) => writableRoots.push(root));
-    const { policies, params } = writableRoots
+
+  const fullWritableRoots = [...writableRoots, ...getCommonRoots()];
+  // In practice, fullWritableRoots will be non-empty, but we check just in
+  // case the logic to build up fullWritableRoots changes.
+  if (fullWritableRoots.length > 0) {
+    const { policies, params } = fullWritableRoots
       .map((root, index) => ({
         policy: `(subpath (param "WRITABLE_ROOT_${index}"))`,
         param: `-DWRITABLE_ROOT_${index}=${root}`,
