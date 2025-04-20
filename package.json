@@ -38,7 +38,6 @@
   "lint-staged": {
     "*.{json,md,yml}": "biome format --write",
     "**/*.{js,ts,tsx}": [
-      "biome check --apply",
       "pnpm --filter @openai/codex run typecheck"
     ]
   },
