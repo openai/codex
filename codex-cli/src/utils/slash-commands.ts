@@ -24,4 +24,9 @@ export const SLASH_COMMANDS: Array<SlashCommand> = [
   { command: "/model", description: "Open model selection panel" },
   { command: "/approval", description: "Open approval mode selection panel" },
   { command: "/bug", description: "Generate a prefilled GitHub bug report" },
+  {
+    command: "/diff",
+    description:
+      "Show git diff of the working directory (or applied patches if not in git)",
+  },
 ];

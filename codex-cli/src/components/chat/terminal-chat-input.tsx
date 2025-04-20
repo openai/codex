@@ -42,6 +42,7 @@ export default function TerminalChatInput({
   openModelOverlay,
   openApprovalOverlay,
   openHelpOverlay,
+  openDiffOverlay,
   onCompact,
   interruptAgent,
   active,
@@ -64,6 +65,7 @@ export default function TerminalChatInput({
   openModelOverlay: () => void;
   openApprovalOverlay: () => void;
   openHelpOverlay: () => void;
+  openDiffOverlay: () => void;
   onCompact: () => void;
   interruptAgent: () => void;
   active: boolean;
@@ -166,6 +168,9 @@ export default function TerminalChatInput({
                 case "/approval":
                   openApprovalOverlay();
                   break;
+                case "/diff":
+                  openDiffOverlay();
+                  break;
                 case "/bug":
                   onSubmit(cmd);
                   break;
@@ -267,6 +272,12 @@ export default function TerminalChatInput({
       if (inputValue === "/help") {
         setInput("");
         openHelpOverlay();
+        return;
+      }
+
+      if (inputValue === "/diff") {
+        setInput("");
+        openDiffOverlay();
         return;
       }
 
@@ -498,6 +509,7 @@ export default function TerminalChatInput({
       openApprovalOverlay,
       openModelOverlay,
       openHelpOverlay,
+      openDiffOverlay,
       history,
       onCompact,
       skipNextSubmit,

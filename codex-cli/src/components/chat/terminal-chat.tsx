@@ -1,14 +1,16 @@
-import type { ColorName } from "chalk";
-import type { ResponseItem } from "openai/resources/responses/responses.mjs";
 import type { ApplyPatchCommand, ApprovalPolicy } from "../../approvals.js";
 import type { CommandConfirmation } from "../../utils/agent/agent-loop.js";
 import type { AppConfig } from "../../utils/config.js";
+import type { ColorName } from "chalk";
+import type { ResponseItem } from "openai/resources/responses/responses.mjs";
 
-import { exec } from "node:child_process";
-import { inspect } from "node:util";
-import { Box, Text } from "ink";
-import OpenAI from "openai";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import TerminalChatInput from "./terminal-chat-input.js";
+import { TerminalChatToolCallCommand } from "./terminal-chat-tool-call-command.js";
+import {
+  calculateContextPercentRemaining,
+  uniqueById,
+} from "./terminal-chat-utils.js";
+import TerminalMessageHistory from "./terminal-message-history.js";
 import { formatCommandForDisplay } from "../../format-command.js";
 import { useConfirmation } from "../../hooks/use-confirmation.js";
 import { useTerminalSize } from "../../hooks/use-terminal-size.js";
@@ -17,22 +19,23 @@ import { isLoggingEnabled, log } from "../../utils/agent/log.js";
 import { ReviewDecision } from "../../utils/agent/review.js";
 import { generateCompactSummary } from "../../utils/compact-summary.js";
 import { OPENAI_BASE_URL } from "../../utils/config.js";
+import { extractAppliedPatches as _extractAppliedPatches } from "../../utils/extract-applied-patches.js";
+import { getGitDiff } from "../../utils/get-diff.js";
 import { createInputItem } from "../../utils/input-utils.js";
 import { getAvailableModels } from "../../utils/model-utils.js";
 import { CLI_VERSION } from "../../utils/session.js";
 import { shortCwd } from "../../utils/short-path.js";
 import { saveRollout } from "../../utils/storage/save-rollout.js";
 import ApprovalModeOverlay from "../approval-mode-overlay.js";
+import DiffOverlay from "../diff-overlay.js";
 import HelpOverlay from "../help-overlay.js";
 import HistoryOverlay from "../history-overlay.js";
 import ModelOverlay from "../model-overlay.js";
-import TerminalChatInput from "./terminal-chat-input.js";
-import { TerminalChatToolCallCommand } from "./terminal-chat-tool-call-command.js";
-import {
-  calculateContextPercentRemaining,
-  uniqueById,
-} from "./terminal-chat-utils.js";
-import TerminalMessageHistory from "./terminal-message-history.js";
+import { Box, Text } from "ink";
+import { spawn } from "node:child_process";
+import OpenAI from "openai";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { inspect } from "util";
 
 type Props = {
   config: AppConfig;
@@ -44,7 +47,7 @@ type Props = {
 };
 
 const colorsByPolicy: Record<ApprovalPolicy, ColorName | undefined> = {
-  suggest: undefined,
+  "suggest": undefined,
   "auto-edit": "greenBright",
   "full-auto": "green",
 };
@@ -64,7 +67,7 @@ async function generateCommandExplanation(
   try {
     // Create a temporary OpenAI client
     const oai = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
+      apiKey: process.env["OPENAI_API_KEY"],
       baseURL: OPENAI_BASE_URL,
     });
 
@@ -180,8 +183,15 @@ export default function TerminalChat({
     submitConfirmation,
   } = useConfirmation();
   const [overlayMode, setOverlayMode] = useState<
-    "none" | "history" | "model" | "approval" | "help"
+    "none" | "history" | "model" | "approval" | "help" | "diff"
   >("none");
+
+  // Store the diff text when opening the diff overlay so the view isn’t
+  // recomputed on every re‑render while it is open.
+  // diffText is passed down to the DiffOverlay component. The setter is
+  // currently unused but retained for potential future updates. Prefix with
+  // an underscore so eslint ignores the unused variable.
+  const [diffText, _setDiffText] = useState<string>("");
 
   const [initialPrompt, setInitialPrompt] = useState(_initialPrompt);
   const [initialImagePaths, setInitialImagePaths] =
@@ -364,9 +374,10 @@ export default function TerminalChat({
           const safePreview = preview.replace(/"/g, '\\"');
           const title = "Codex CLI";
           const cwd = PWD;
-          exec(
-            `osascript -e 'display notification "${safePreview}" with title "${title}" subtitle "${cwd}" sound name "Ping"'`,
-          );
+          spawn("osascript", [
+            "-e",
+            `display notification "${safePreview}" with title "${title}" subtitle "${cwd}" sound name "Ping"`,
+          ]);
         }
       }
     }
@@ -497,6 +508,26 @@ export default function TerminalChat({
             openModelOverlay={() => setOverlayMode("model")}
             openApprovalOverlay={() => setOverlayMode("approval")}
             openHelpOverlay={() => setOverlayMode("help")}
+            openDiffOverlay={() => {
+              const { isGitRepo, diff } = getGitDiff();
+              let text: string;
+              if (isGitRepo) {
+                text = diff;
+              } else {
+                text = "`/diff` — _not inside a git repository_";
+              }
+              setItems((prev) => [
+                ...prev,
+                {
+                  id: `diff-${Date.now()}`,
+                  type: "message",
+                  role: "system",
+                  content: [{ type: "input_text", text }],
+                },
+              ]);
+              // Ensure no overlay is shown.
+              setOverlayMode("none");
+            }}
             onCompact={handleCompact}
             active={overlayMode === "none"}
             interruptAgent={() => {
@@ -621,6 +652,13 @@ export default function TerminalChat({
 
         {overlayMode === "help" && (
           <HelpOverlay onExit={() => setOverlayMode("none")} />
+        )}
+
+        {overlayMode === "diff" && (
+          <DiffOverlay
+            diffText={diffText}
+            onExit={() => setOverlayMode("none")}
+          />
         )}
       </Box>
     </Box>
