@@ -378,27 +378,36 @@ export function isSafeCommand(
         reason: "Locate command",
         group: "Searching",
       };
-    case "git": {
-      // Common Git operations: allow commit and push (run outside sandbox), and read-only commands
+    case "git":
       switch (cmd1) {
         case "status":
-          return { reason: "Git status", group: "Versioning" };
+          return {
+            reason: "Git status",
+            group: "Versioning",
+          };
         case "branch":
-          return { reason: "List Git branches", group: "Versioning" };
+          return {
+            reason: "List Git branches",
+            group: "Versioning",
+          };
         case "log":
-          return { reason: "Git log", group: "Versioning" };
+          return {
+            reason: "Git log",
+            group: "Using git",
+          };
         case "diff":
-          return { reason: "Git diff", group: "Versioning" };
+          return {
+            reason: "Git diff",
+            group: "Using git",
+          };
         case "show":
-          return { reason: "Git show", group: "Versioning" };
-        case "commit":
-          return { reason: "Git commit (save changes)", group: "Versioning" };
-        case "push":
-          return { reason: "Git push (push commits to remote)", group: "Versioning" };
+          return {
+            reason: "Git show",
+            group: "Using git",
+          };
         default:
           return null;
       }
-    }
     case "cargo":
       if (cmd1 === "check") {
         return {
