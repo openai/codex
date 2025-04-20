@@ -1,5 +1,11 @@
 # deps
+# Node.js dependencies
 node_modules
+.pnpm-store
+.pnpm-debug.log
+
+# Keep pnpm-lock.yaml
+!pnpm-lock.yaml
 
 # build
 dist/
@@ -19,6 +25,10 @@ result
 .history/
 *.swp
 *~
+
+# cli tools
+CLAUDE.md
+.claude/
 
 # caches
 .cache/
@@ -61,7 +71,6 @@ Icon?
 # Unwanted package managers
 .yarn/
 yarn.lock
-pnpm-lock.yaml
 
 # release
 package.json-e

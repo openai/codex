@@ -17,6 +17,7 @@ import { AgentLoop } from "./utils/agent/agent-loop";
 import { initLogger } from "./utils/agent/log";
 import { ReviewDecision } from "./utils/agent/review";
 import { AutoApprovalMode } from "./utils/auto-approval-mode";
+import { checkForUpdates } from "./utils/check-updates";
 import {
   loadConfig,
   PRETTY_PRINT,
@@ -69,6 +70,9 @@ const cli = meow(
     --project-doc <file>       Include an additional markdown file at <file> as context
     --full-stdout              Do not truncate stdout/stderr from command outputs
     --notify                   Enable desktop notifications for responses
+
+    --flex-mode               Use "flex-mode" processing mode for the request (only supported
+                              with models o3 and o4-mini)
 
   Dangerous options
     --dangerously-auto-approve-everything
@@ -138,6 +142,11 @@ const cli = meow(
       projectDoc: {
         type: "string",
         description: "Path to a markdown file to include as project doc",
+      },
+      flexMode: {
+        type: "boolean",
+        description:
+          "Enable the flex-mode service tier (only supported by models o3 and o4-mini)",
       },
       fullStdout: {
         type: "boolean",
@@ -249,8 +258,28 @@ config = {
   apiKey,
   ...config,
   model: model ?? config.model,
+  flexMode: Boolean(cli.flags.flexMode),
   notify: Boolean(cli.flags.notify),
 };
+
+// Check for updates after loading config
+// This is important because we write state file in the config dir
+await checkForUpdates().catch();
+// ---------------------------------------------------------------------------
+// --flex-mode validation (only allowed for o3 and o4-mini)
+// ---------------------------------------------------------------------------
+
+if (cli.flags.flexMode) {
+  const allowedFlexModels = new Set(["o3", "o4-mini"]);
+  if (!allowedFlexModels.has(config.model)) {
+    // eslint-disable-next-line no-console
+    console.error(
+      `The --flex-mode option is only supported when using the 'o3' or 'o4-mini' models. ` +
+        `Current model: '${config.model}'.`,
+    );
+    process.exit(1);
+  }
+}
 
 if (!(await isModelSupportedForResponses(config.model))) {
   // eslint-disable-next-line no-console
@@ -298,9 +327,6 @@ const additionalWritableRoots: ReadonlyArray<string> = (
 
 // If we are running in --quiet mode, do that and exit.
 const quietMode = Boolean(cli.flags.quiet);
-const autoApproveEverything = Boolean(
-  cli.flags.dangerouslyAutoApproveEverything,
-);
 const fullStdout = Boolean(cli.flags.fullStdout);
 
 if (quietMode) {
@@ -312,12 +338,19 @@ if (quietMode) {
     );
     process.exit(1);
   }
+
+  // Determine approval policy for quiet mode based on flags
+  const quietApprovalPolicy: ApprovalPolicy =
+    cli.flags.fullAuto || cli.flags.approvalMode === "full-auto"
+      ? AutoApprovalMode.FULL_AUTO
+      : cli.flags.autoEdit || cli.flags.approvalMode === "auto-edit"
+      ? AutoApprovalMode.AUTO_EDIT
+      : config.approvalMode || AutoApprovalMode.SUGGEST;
+
   await runQuietMode({
     prompt: prompt as string,
     imagePaths: imagePaths || [],
-    approvalPolicy: autoApproveEverything
-      ? AutoApprovalMode.FULL_AUTO
-      : AutoApprovalMode.SUGGEST,
+    approvalPolicy: quietApprovalPolicy,
     additionalWritableRoots,
     config,
   });
@@ -335,14 +368,15 @@ if (quietMode) {
 //    it is more dangerous than --fullAuto we deliberately give it lower
 //    priority so a user specifying both flags still gets the safer behaviour.
 // 3. --autoEdit – automatically approve edits, but prompt for commands.
-// 4. Default – suggest mode (prompt for everything).
+// 4. config.approvalMode - use the approvalMode setting from ~/.codex/config.json.
+// 5. Default – suggest mode (prompt for everything).
 
 const approvalPolicy: ApprovalPolicy =
   cli.flags.fullAuto || cli.flags.approvalMode === "full-auto"
     ? AutoApprovalMode.FULL_AUTO
     : cli.flags.autoEdit || cli.flags.approvalMode === "auto-edit"
     ? AutoApprovalMode.AUTO_EDIT
-    : AutoApprovalMode.SUGGEST;
+    : config.approvalMode || AutoApprovalMode.SUGGEST;
 
 preloadModels();
 
@@ -440,7 +474,12 @@ async function runQuietMode({
     getCommandConfirmation: (
       _command: Array<string>,
     ): Promise<CommandConfirmation> => {
-      return Promise.resolve({ review: ReviewDecision.NO_CONTINUE });
+      // In quiet mode, default to NO_CONTINUE, except when in full-auto mode
+      const reviewDecision =
+        approvalPolicy === AutoApprovalMode.FULL_AUTO
+          ? ReviewDecision.YES
+          : ReviewDecision.NO_CONTINUE;
+      return Promise.resolve({ review: reviewDecision });
     },
     onLastResponseId: () => {
       /* intentionally ignored in quiet mode */

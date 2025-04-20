@@ -1,0 +1,12 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`Check for updates > should outputs the update message when package is outdated 1`] = `
+"
+   ╭─────────────────────────────────────────────────────────────╮
+   │                                                             │
+   │              Update available! 1.0.0 → 2.0.0.               │
+   │   To update, run: npm install -g @openai/codex to update.   │
+   │                                                             │
+   ╰─────────────────────────────────────────────────────────────╯
+"
+`;

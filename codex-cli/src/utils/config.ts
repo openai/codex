@@ -56,6 +56,8 @@ export type StoredConfig = {
     saveHistory?: boolean;
     sensitivePatterns?: Array<string>;
   };
+  /** User-defined safe commands */
+  safeCommands?: Array<string>;
 };
 
 // Minimal config written on first run.  An *empty* model string ensures that
@@ -75,15 +77,21 @@ export type AppConfig = {
   apiKey?: string;
   model: string;
   instructions: string;
+  approvalMode?: AutoApprovalMode;
   fullAutoErrorMode?: FullAutoErrorMode;
   memory?: MemoryConfig;
   /** Whether to enable desktop notifications for responses */
   notify: boolean;
+
+  /** Enable the "flex-mode" processing mode for supported models (o3, o4-mini) */
+  flexMode?: boolean;
   history?: {
     maxSize: number;
     saveHistory: boolean;
     sensitivePatterns: Array<string>;
   };
+  /** User-defined safe commands */
+  safeCommands?: Array<string>;
 };
 
 // ---------------------------------------------------------------------------
@@ -268,6 +276,8 @@ export const loadConfig = (
         : DEFAULT_AGENTIC_MODEL),
     instructions: combinedInstructions,
     notify: storedConfig.notify === true,
+    approvalMode: storedConfig.approvalMode,
+    safeCommands: storedConfig.safeCommands ?? [],
   };
 
   // -----------------------------------------------------------------------
@@ -345,6 +355,13 @@ export const loadConfig = (
     };
   }
 
+  // Load user-defined safe commands
+  if (Array.isArray(storedConfig.safeCommands)) {
+    config.safeCommands = storedConfig.safeCommands.map(String);
+  } else {
+    config.safeCommands = [];
+  }
+
   return config;
 };
 
@@ -376,6 +393,7 @@ export const saveConfig = (
   // Create the config object to save
   const configToSave: StoredConfig = {
     model: config.model,
+    approvalMode: config.approvalMode,
   };
 
   // Add history settings if they exist
@@ -385,6 +403,10 @@ export const saveConfig = (
       saveHistory: config.history.saveHistory,
       sensitivePatterns: config.history.sensitivePatterns,
     };
+  }
+  // Save: User-defined safe commands
+  if (config.safeCommands && config.safeCommands.length > 0) {
+    configToSave.safeCommands = config.safeCommands;
   }
 
   if (ext === ".yaml" || ext === ".yml") {
