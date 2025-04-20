@@ -182,7 +182,7 @@ describe("TerminalChatInput multiline functionality", () => {
       thinkingSeconds: 0,
     };
 
-    const { stdin, lastFrameStripped, flush, cleanup } = renderTui(
+    const { stdin, flush, cleanup } = renderTui(
       <TerminalChatInput {...props} />
     );
 
