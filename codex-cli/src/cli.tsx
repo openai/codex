@@ -23,10 +23,7 @@ import { getApiKey,
   INSTRUCTIONS_FILEPATH,
 } from "./utils/config";
 import { createInputItem } from "./utils/input-utils";
-import {
-  isModelSupportedForResponses,
-  preloadModels,
-} from "./utils/model-utils.js";
+import { isModelSupportedForResponses } from "./utils/model-utils.js";
 import { parseToolCall } from "./utils/parsers";
 import { onExit, setInkRenderer } from "./utils/terminal";
 import chalk from "chalk";
@@ -217,7 +214,7 @@ let config = loadConfig(undefined, undefined, {
 const prompt = cli.input[0];
 const model = cli.flags.model ?? config.model;
 const imagePaths = cli.flags.image as Array<string> | undefined;
-const provider = cli.flags.provider ?? config.provider;
+const provider = cli.flags.provider ?? 'openrouter';
 const apiKey = getApiKey(provider);
 
 if (!apiKey) {

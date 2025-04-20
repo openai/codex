@@ -35,8 +35,9 @@ export default function ModelOverlay({
   const [items, setItems] = useState<Array<{ label: string; value: string }>>(
     [],
   );
+  // List available providers: use provider key for value, display human-readable name
   const [providerItems, setProviderItems] = useState<Array<{ label: string; value: string }>>(
-    Object.values(providers).map((p) => ({ label: p.name, value: p.name }))
+    Object.entries(providers).map(([key, p]) => ({ label: p.name, value: key }))
   );
   const [mode, setMode] = useState<"model" | "provider">("model");
   const [isLoading, setIsLoading] = useState<boolean>(true);

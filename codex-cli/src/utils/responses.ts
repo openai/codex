@@ -3,52 +3,7 @@ import type { ResponseCreateParams, Response } from 'openai/resources/responses/
 // Define interfaces based on OpenAI API documentation
 type ResponseCreateInput = ResponseCreateParams;
 type ResponseOutput = Response;
-// interface ResponseOutput {
-//   id: string;
-//   object: 'response';
-//   created_at: number;
-//   status: 'completed' | 'failed' | 'in_progress' | 'incomplete';
-//   error: { code: string; message: string } | null;
-//   incomplete_details: { reason: string } | null;
-//   instructions: string | null;
-//   max_output_tokens: number | null;
-//   model: string;
-//   output: Array<{
-//     type: 'message';
-//     id: string;
-//     status: 'completed' | 'in_progress';
-//     role: 'assistant';
-//     content: Array<{
-//       type: 'output_text' | 'function_call';
-//       text?: string;
-//       annotations?: Array<any>;
-//       tool_call?: {
-//         id: string;
-//         type: 'function';
-//         function: { name: string; arguments: string };
-//       };
-//     }>;
-//   }>;
-//   parallel_tool_calls: boolean;
-//   previous_response_id: string | null;
-//   reasoning: { effort: string | null; summary: string | null };
-//   store: boolean;
-//   temperature: number;
-//   text: { format: { type: 'text' } };
-//   tool_choice: string | object;
-//   tools: Array<any>;
-//   top_p: number;
-//   truncation: string;
-//   usage: {
-//     input_tokens: number;
-//     input_tokens_details: { cached_tokens: number };
-//     output_tokens: number;
-//     output_tokens_details: { reasoning_tokens: number };
-//     total_tokens: number;
-//   } | null;
-//   user: string | null;
-//   metadata: Record<string, string>;
-// }
+
 
 type ResponseEvent =
   | { type: 'response.created'; response: Partial<ResponseOutput> }
