@@ -192,7 +192,15 @@ export abstract class BaseProvider implements LLMProvider {
    * @returns Standardized error
    */
   standardizeError(error: any): StandardizedError {
-    if (this.isRateLimitError(error)) {
+    // Check for authentication errors first
+    if (error?.status === 401 || error?.status === 403) {
+      return {
+        type: ProviderErrorType.AUTHENTICATION,
+        message: this.formatErrorMessage(error),
+        originalError: error,
+        retryable: false,
+      };
+    } else if (this.isRateLimitError(error)) {
       return {
         type: ProviderErrorType.RATE_LIMIT,
         message: this.formatErrorMessage(error),
@@ -234,13 +242,6 @@ export abstract class BaseProvider implements LLMProvider {
         message: this.formatErrorMessage(error),
         originalError: error,
         retryable: true,
-      };
-    } else if (error?.status === 401 || error?.status === 403) {
-      return {
-        type: ProviderErrorType.AUTHENTICATION,
-        message: this.formatErrorMessage(error),
-        originalError: error,
-        retryable: false,
       };
     } else {
       return {
