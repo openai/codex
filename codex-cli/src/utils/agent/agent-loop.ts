@@ -8,7 +8,7 @@ import type {
 } from "openai/resources/responses/responses.mjs";
 import type { Reasoning } from "openai/resources.mjs";
 
-import { log, isLoggingEnabled } from "./log.js";
+import { log } from "./log.js";
 import { OPENAI_BASE_URL, OPENAI_TIMEOUT_MS } from "../config.js";
 import { parseToolCallArguments } from "../parsers.js";
 import {
@@ -116,15 +116,13 @@ export class AgentLoop {
 
     // Reset the current stream to allow new requests
     this.currentStream = null;
-    if (isLoggingEnabled()) {
-      log(
-        `AgentLoop.cancel() invoked – currentStream=${Boolean(
-          this.currentStream,
-        )} execAbortController=${Boolean(
-          this.execAbortController,
-        )} generation=${this.generation}`,
-      );
-    }
+    log(
+      `AgentLoop.cancel() invoked – currentStream=${Boolean(
+        this.currentStream,
+      )} execAbortController=${Boolean(this.execAbortController)} generation=${
+        this.generation
+      }`,
+    );
     (
       this.currentStream as { controller?: { abort?: () => void } } | null
     )?.controller?.abort?.();
@@ -136,9 +134,7 @@ export class AgentLoop {
 
     // Create a new abort controller for future tool calls
     this.execAbortController = new AbortController();
-    if (isLoggingEnabled()) {
-      log("AgentLoop.cancel(): execAbortController.abort() called");
-    }
+    log("AgentLoop.cancel(): execAbortController.abort() called");
 
     // NOTE: We intentionally do *not* clear `lastResponseId` here.  If the
     // stream produced a `function_call` before the user cancelled, OpenAI now
@@ -174,9 +170,7 @@ export class AgentLoop {
     // this.onItem(cancelNotice);
 
     this.generation += 1;
-    if (isLoggingEnabled()) {
-      log(`AgentLoop.cancel(): generation bumped to ${this.generation}`);
-    }
+    log(`AgentLoop.cancel(): generation bumped to ${this.generation}`);
   }
 
   /**
@@ -315,13 +309,11 @@ export class AgentLoop {
     const callId: string = (item as any).call_id ?? (item as any).id;
 
     const args = parseToolCallArguments(rawArguments ?? "{}");
-    if (isLoggingEnabled()) {
-      log(
-        `handleFunctionCall(): name=${
-          name ?? "undefined"
-        } callId=${callId} args=${rawArguments}`,
-      );
-    }
+    log(
+      `handleFunctionCall(): name=${
+        name ?? "undefined"
+      } callId=${callId} args=${rawArguments}`,
+    );
 
     if (args == null) {
       const outputItem: ResponseInputItem.FunctionCallOutput = {
@@ -407,11 +399,9 @@ export class AgentLoop {
       // Create a fresh AbortController for this run so that tool calls from a
       // previous run do not accidentally get signalled.
       this.execAbortController = new AbortController();
-      if (isLoggingEnabled()) {
-        log(
-          `AgentLoop.run(): new execAbortController created (${this.execAbortController.signal}) for generation ${this.generation}`,
-        );
-      }
+      log(
+        `AgentLoop.run(): new execAbortController created (${this.execAbortController.signal}) for generation ${this.generation}`,
+      );
       // NOTE: We no longer (re‑)attach an `abort` listener to `hardAbort` here.
       // A single listener that forwards the `abort` to the current
       // `execAbortController` is installed once in the constructor. Re‑adding a
@@ -502,11 +492,9 @@ export class AgentLoop {
             const mergedInstructions = [prefix, this.instructions]
               .filter(Boolean)
               .join("\n");
-            if (isLoggingEnabled()) {
-              log(
-                `instructions (length ${mergedInstructions.length}): ${mergedInstructions}`,
-              );
-            }
+            log(
+              `instructions (length ${mergedInstructions.length}): ${mergedInstructions}`,
+            );
             // eslint-disable-next-line no-await-in-loop
             stream = await this.oai.responses.create({
               model: this.model,
@@ -733,9 +721,7 @@ export class AgentLoop {
         try {
           // eslint-disable-next-line no-await-in-loop
           for await (const event of stream) {
-            if (isLoggingEnabled()) {
-              log(`AgentLoop.run(): response event ${event.type}`);
-            }
+            log(`AgentLoop.run(): response event ${event.type}`);
 
             // process and surface each item (no‑op until we can depend on streaming events)
             if (event.type === "response.output_item.done") {
