@@ -345,15 +345,27 @@ export default function TerminalChatInput({
 
         // Emit a system message to confirm the clear action.  We *append*
         // it so Ink's <Static> treats it as new output and actually renders it.
-        setItems((prev) => [
-          ...prev,
-          {
-            id: `clear-${Date.now()}`,
-            type: "message",
-            role: "system",
-            content: [{ type: "input_text", text: "Context cleared" }],
-          },
-        ]);
+        setItems((prev) => {
+          const filteredOldItems = prev.filter((item) => {
+            if (
+              item.type === "message" &&
+              (item.role === "user" || item.role === "assistant")
+            ) {
+              return false;
+            }
+            return true;
+          });
+
+          return [
+            ...filteredOldItems,
+            {
+              id: `clear-${Date.now()}`,
+              type: "message",
+              role: "system",
+              content: [{ type: "input_text", text: "Terminal cleared" }],
+            },
+          ];
+        });
 
         return;
       } else if (inputValue === "/clearhistory") {
