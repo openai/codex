@@ -1,5 +1,5 @@
 // Default spinner frames (bouncing ball)
-export const defaultSpinnerFrames: string[] = [
+export const defaultSpinnerFrames: Array<string> = [
   "( ●    )",
   "(  ●   )",
   "(   ●  )",
@@ -17,8 +17,8 @@ export const defaultSpinnerFrames: string[] = [
  * with a seasonal emoji if within one week of certain holidays.
  */
 export function getSeasonalFrames(
-  defaultFrames: string[] = defaultSpinnerFrames,
-): string[] {
+  defaultFrames: Array<string> = defaultSpinnerFrames,
+): Array<string> {
   // Check for FAKE_DATE environment variable
   const now = process.env['FAKE_DATE']
     ? new Date(process.env['FAKE_DATE'])

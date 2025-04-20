@@ -199,7 +199,7 @@ describe('getSeasonalFrames', () => {
     
     // Need to mock the constructor and new Date() calls differently
     const DateSpy = vi.spyOn(global, 'Date');
-    DateSpy.mockImplementation((...args: any[]) => {
+    DateSpy.mockImplementation((...args: Array<any>) => {
       if (args.length === 0) {
         return halloweenDate;
       }
@@ -224,7 +224,7 @@ describe('getSeasonalFrames', () => {
     
     // Need to mock the constructor and new Date() calls differently
     const DateSpy = vi.spyOn(global, 'Date');
-    DateSpy.mockImplementation((...args: any[]) => {
+    DateSpy.mockImplementation((...args: Array<any>) => {
       if (args.length === 0) {
         return christmasDate;
       }

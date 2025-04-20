@@ -1,8 +1,8 @@
 import { log, isLoggingEnabled } from "../../utils/agent/log.js";
+import { getSeasonalFrames, defaultSpinnerFrames } from "../../utils/seasonal.js";
 import { Box, Text, useInput, useStdin } from "ink";
 import React, { useState } from "react";
 import { useInterval } from "use-interval";
-import { getSeasonalFrames, defaultSpinnerFrames } from "../../utils/seasonal.js";
 
 // Retaining a single static placeholder text for potential future use.  The
 // more elaborate randomised thinking prompts were removed to streamline the
