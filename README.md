@@ -396,7 +396,7 @@ More broadly we welcome contributions – whether you are opening your very firs
 - Create a _topic branch_ from `main` – e.g. `feat/interactive-prompt`.
 - Keep your changes focused. Multiple unrelated fixes should be opened as separate PRs.
 - Use `pnpm test:watch` during development for super‑fast feedback.
-- We use **Vitest** for unit tests, **ESLint** + **Prettier** for style, and **TypeScript** for type‑checking.
+- We use **Vitest** for unit tests, **Biome** for linting and formatting, and **TypeScript** for type‑checking.
 - Before pushing, run the full test/type/lint suite:
 
 ### Git Hooks with Husky
@@ -409,7 +409,7 @@ This project uses [Husky](https://typicode.github.io/husky/) to enforce code qua
 These hooks help maintain code quality and prevent pushing code with failing tests. For more details, see [HUSKY.md](./codex-cli/HUSKY.md).
 
 ```bash
-npm test && npm run lint && npm run typecheck
+pnpm test && pnpm run lint && pnpm run typecheck
 ```
 
 - If you have **not** yet signed the Contributor License Agreement (CLA), add a PR comment containing the exact text
@@ -428,8 +428,7 @@ pnpm test:watch
 pnpm typecheck
 
 # Automatically fix lint + prettier issues
-pnpm lint:fix
-pnpm format:fix
+pnpm check:fix
 ```
 
 #### Nix Flake Development
@@ -467,7 +466,7 @@ nix run .#codex
 ### Opening a pull request
 
 - Fill in the PR template (or include similar information) – **What? Why? How?**
-- Run **all** checks locally (`npm test && npm run lint && npm run typecheck`). CI failures that could have been caught locally slow down the process.
+- Run **all** checks locally (`pnpm test && pnpm run lint && pnpm run typecheck`). CI failures that could have been caught locally slow down the process.
 - Make sure your branch is up‑to‑date with `main` and that you have resolved merge conflicts.
 - Mark the PR as **Ready for review** only when you believe it is in a merge‑able state.
 

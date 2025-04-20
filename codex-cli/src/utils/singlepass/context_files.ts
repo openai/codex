@@ -1,8 +1,8 @@
 /* eslint-disable no-await-in-loop */
 
-import * as fsSync from "fs";
-import fs from "fs/promises";
-import path from "path";
+import * as fsSync from "node:fs";
+import fs from "node:fs/promises";
+import path from "node:path";
 
 /** Represents file contents with absolute path. */
 export interface FileContent {
@@ -83,8 +83,8 @@ class LRUFileCache {
 }
 
 // Environment-based defaults
-const MAX_CACHE_ENTRIES = parseInt(
-  process.env["TENX_FILE_CACHE_MAX_ENTRIES"] || "1000",
+const MAX_CACHE_ENTRIES = Number.parseInt(
+  process.env.TENX_FILE_CACHE_MAX_ENTRIES || "1000",
   10,
 );
 

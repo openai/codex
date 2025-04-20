@@ -1,11 +1,11 @@
+import type { ResponseItem } from "openai/resources/responses/responses.mjs";
 import type { TerminalHeaderProps } from "./terminal-header.js";
 import type { GroupedResponseItem } from "./use-message-grouping.js";
-import type { ResponseItem } from "openai/resources/responses/responses.mjs";
 
-import TerminalChatResponseItem from "./terminal-chat-response-item.js";
-import TerminalHeader from "./terminal-header.js";
 import { Box, Static } from "ink";
 import React from "react";
+import TerminalChatResponseItem from "./terminal-chat-response-item.js";
+import TerminalHeader from "./terminal-header.js";
 
 // A batch entry can either be a standalone response item or a grouped set of
 // items (e.g. auto‑approved tool‑call batches) that should be rendered

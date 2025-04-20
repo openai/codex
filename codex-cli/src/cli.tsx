@@ -5,12 +5,19 @@ import "dotenv/config";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (process as any).noDeprecation = true;
 
+import type { ResponseItem } from "openai/resources/responses/responses";
 import type { AppRollout } from "./app";
 import type { ApprovalPolicy } from "./approvals";
 import type { CommandConfirmation } from "./utils/agent/agent-loop";
 import type { AppConfig } from "./utils/config";
-import type { ResponseItem } from "openai/resources/responses/responses";
 
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import chalk from "chalk";
+import { render } from "ink";
+import meow from "meow";
+import React from "react";
 import App from "./app";
 import { runSinglePass } from "./cli-singlepass";
 import { AgentLoop } from "./utils/agent/agent-loop";
@@ -19,9 +26,9 @@ import { ReviewDecision } from "./utils/agent/review";
 import { AutoApprovalMode } from "./utils/auto-approval-mode";
 import { checkForUpdates } from "./utils/check-updates";
 import {
-  loadConfig,
-  PRETTY_PRINT,
   INSTRUCTIONS_FILEPATH,
+  PRETTY_PRINT,
+  loadConfig,
 } from "./utils/config";
 import { createInputItem } from "./utils/input-utils";
 import {
@@ -30,13 +37,6 @@ import {
 } from "./utils/model-utils.js";
 import { parseToolCall } from "./utils/parsers";
 import { onExit, setInkRenderer } from "./utils/terminal";
-import chalk from "chalk";
-import { spawnSync } from "child_process";
-import fs from "fs";
-import { render } from "ink";
-import meow from "meow";
-import path from "path";
-import React from "react";
 
 // Call this early so `tail -F "$TMPDIR/oai-codex/codex-cli-latest.log"` works
 // immediately. This must be run with DEBUG=1 for logging to work.
@@ -218,7 +218,7 @@ if (cli.flags.config) {
   }
   const filePath = INSTRUCTIONS_FILEPATH;
   const editor =
-    process.env["EDITOR"] || (process.platform === "win32" ? "notepad" : "vi");
+    process.env.EDITOR || (process.platform === "win32" ? "notepad" : "vi");
   spawnSync(editor, [filePath], { stdio: "inherit" });
   process.exit(0);
 }
@@ -227,17 +227,14 @@ if (cli.flags.config) {
 // API key handling
 // ---------------------------------------------------------------------------
 
-const apiKey = process.env["OPENAI_API_KEY"];
+const apiKey = process.env.OPENAI_API_KEY;
 
 if (!apiKey) {
   // eslint-disable-next-line no-console
   console.error(
-    `\n${chalk.red("Missing OpenAI API key.")}\n\n` +
-      `Set the environment variable ${chalk.bold("OPENAI_API_KEY")} ` +
-      `and re-run this command.\n` +
-      `You can create a key here: ${chalk.bold(
-        chalk.underline("https://platform.openai.com/account/api-keys"),
-      )}\n`,
+    `\n${chalk.red("Missing OpenAI API key.")}\n\nSet the environment variable ${chalk.bold("OPENAI_API_KEY")} and re-run this command.\nYou can create a key here: ${chalk.bold(
+      chalk.underline("https://platform.openai.com/account/api-keys"),
+    )}\n`,
   );
   process.exit(1);
 }
@@ -274,8 +271,7 @@ if (cli.flags.flexMode) {
   if (!allowedFlexModels.has(config.model)) {
     // eslint-disable-next-line no-console
     console.error(
-      `The --flex-mode option is only supported when using the 'o3' or 'o4-mini' models. ` +
-        `Current model: '${config.model}'.`,
+      `The --flex-mode option is only supported when using the 'o3' or 'o4-mini' models. Current model: '${config.model}'.`,
     );
     process.exit(1);
   }
@@ -284,10 +280,7 @@ if (cli.flags.flexMode) {
 if (!(await isModelSupportedForResponses(config.model))) {
   // eslint-disable-next-line no-console
   console.error(
-    `The model "${config.model}" does not appear in the list of models ` +
-      `available to your account. Double‑check the spelling (use\n` +
-      `  openai models list\n` +
-      `to see the full list) or choose another model with the --model flag.`,
+    `The model "${config.model}" does not appear in the list of models available to your account. Double‑check the spelling (use\n  openai models list\nto see the full list) or choose another model with the --model flag.`,
   );
   process.exit(1);
 }
@@ -333,7 +326,7 @@ const autoApproveEverything = Boolean(
 const fullStdout = Boolean(cli.flags.fullStdout);
 
 if (quietMode) {
-  process.env["CODEX_QUIET_MODE"] = "1";
+  process.env.CODEX_QUIET_MODE = "1";
   if (!prompt || prompt.trim() === "") {
     // eslint-disable-next-line no-console
     console.error(
@@ -371,8 +364,8 @@ const approvalPolicy: ApprovalPolicy =
   cli.flags.fullAuto || cli.flags.approvalMode === "full-auto"
     ? AutoApprovalMode.FULL_AUTO
     : cli.flags.autoEdit || cli.flags.approvalMode === "auto-edit"
-    ? AutoApprovalMode.AUTO_EDIT
-    : config.approvalMode || AutoApprovalMode.SUGGEST;
+      ? AutoApprovalMode.AUTO_EDIT
+      : config.approvalMode || AutoApprovalMode.SUGGEST;
 
 preloadModels();
 
@@ -387,7 +380,7 @@ const instance = render(
     fullStdout={fullStdout}
   />,
   {
-    patchConsole: process.env["DEBUG"] ? false : true,
+    patchConsole: !process.env.DEBUG,
   },
 );
 setInkRenderer(instance);

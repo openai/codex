@@ -1,10 +1,10 @@
-import { CONFIG_DIR } from "./config";
-import boxen from "boxen";
-import chalk from "chalk";
 import * as cp from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import boxen from "boxen";
+import chalk from "chalk";
 import which from "which";
+import { CONFIG_DIR } from "./config";
 
 interface UpdateCheckState {
   lastUpdateCheck?: string;

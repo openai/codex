@@ -1,8 +1,8 @@
-import { loadConfig, PROJECT_DOC_MAX_BYTES } from "../src/utils/config.js";
-import { mkdirSync, rmSync, writeFileSync, mkdtempSync } from "fs";
-import { tmpdir } from "os";
-import { join } from "path";
-import { describe, expect, test, beforeEach, afterEach, vi } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { PROJECT_DOC_MAX_BYTES, loadConfig } from "../src/utils/config.js";
 
 let projectDir: string;
 let configPath: string;

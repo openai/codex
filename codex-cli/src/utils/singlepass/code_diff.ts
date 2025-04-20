@@ -85,10 +85,10 @@ export function generateDiffStats(diffContent: string): [number, number] {
  ************************************************/
 function generateDiffHeader(fileOp: FileOperation): string {
   const TTY_WIDTH = 80;
-  const separatorLine = "=".repeat(TTY_WIDTH) + "\n";
-  const subSeparatorLine = "-".repeat(TTY_WIDTH) + "\n";
+  const separatorLine = `${"=".repeat(TTY_WIDTH)}\n`;
+  const subSeparatorLine = `${"-".repeat(TTY_WIDTH)}\n`;
   const headerLine = `Changes for: ${fileOp.path}`;
-  return separatorLine + headerLine + "\n" + subSeparatorLine;
+  return `${separatorLine + headerLine}\n${subSeparatorLine}`;
 }
 
 /****************************************************************
@@ -107,12 +107,12 @@ export function generateDiffSummary(
 
     if (fileOp.delete) {
       // file will be deleted
-      combinedDiffs += diffHeader + "File will be deleted.\n\n";
+      combinedDiffs += `${diffHeader}File will be deleted.\n\n`;
       opsToApply.push(fileOp);
       continue;
-    } else if (fileOp.move_to) {
-      combinedDiffs +=
-        diffHeader + `File will be moved to: ${fileOp.move_to}\n\n`;
+    }
+    if (fileOp.move_to) {
+      combinedDiffs += `${diffHeader}File will be moved to: ${fileOp.move_to}\n\n`;
       opsToApply.push(fileOp);
       continue;
     }
@@ -133,7 +133,7 @@ export function generateDiffSummary(
     );
     if (diffOutput.trim()) {
       const coloredDiff = generateColoredDiff(diffOutput);
-      combinedDiffs += diffHeader + coloredDiff + "\n";
+      combinedDiffs += `${diffHeader + coloredDiff}\n`;
       opsToApply.push(fileOp);
     }
   }

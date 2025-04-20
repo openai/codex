@@ -1,11 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-import { useTerminalSize } from "../../hooks/use-terminal-size";
-import TextBuffer from "../../text-buffer.js";
+import { EventEmitter } from "node:events";
 import chalk from "chalk";
 import { Box, Text, useInput, useStdin } from "ink";
-import { EventEmitter } from "node:events";
 import React, { useRef, useState } from "react";
+import { useTerminalSize } from "../../hooks/use-terminal-size";
+import TextBuffer from "../../text-buffer.js";
 
 /* --------------------------------------------------------------------------
  * Polyfill missing `ref()` / `unref()` methods on the mock `Stdin` stream
@@ -26,11 +26,11 @@ import React, { useRef, useState } from "react";
 //
 const proto: any = EventEmitter.prototype;
 
-if (typeof proto["ref"] !== "function") {
-  proto["ref"] = function ref() {};
+if (typeof proto.ref !== "function") {
+  proto.ref = function ref() {};
 }
-if (typeof proto["unref"] !== "function") {
-  proto["unref"] = function unref() {};
+if (typeof proto.unref !== "function") {
+  proto.unref = function unref() {};
 }
 
 /*
@@ -44,9 +44,9 @@ if (typeof proto["unref"] !== "function") {
 
 // Preserve original emit to avoid infinite recursion.
 // eslint‑disable‑next‑line @typescript-eslint/no‑unsafe‑assignment
-const originalEmit = proto["emit"] as (...args: Array<any>) => boolean;
+const originalEmit = proto.emit as (...args: Array<any>) => boolean;
 
-proto["emit"] = function patchedEmit(
+proto.emit = function patchedEmit(
   this: any,
   event: string,
   ...args: Array<any>
@@ -55,8 +55,8 @@ proto["emit"] = function patchedEmit(
     const chunk = args[0] as string;
 
     if (
-      process.env["TEXTBUFFER_DEBUG"] === "1" ||
-      process.env["TEXTBUFFER_DEBUG"] === "true"
+      process.env.TEXTBUFFER_DEBUG === "1" ||
+      process.env.TEXTBUFFER_DEBUG === "true"
     ) {
       // eslint-disable-next-line no-console
       console.log("[MultilineTextEditor:stdin] data", JSON.stringify(chunk));
@@ -82,8 +82,8 @@ proto["emit"] = function patchedEmit(
         const ret = (this as any)._inkBuffered ?? null;
         (this as any)._inkBuffered = null;
         if (
-          process.env["TEXTBUFFER_DEBUG"] === "1" ||
-          process.env["TEXTBUFFER_DEBUG"] === "true"
+          process.env.TEXTBUFFER_DEBUG === "1" ||
+          process.env.TEXTBUFFER_DEBUG === "true"
         ) {
           // eslint-disable-next-line no-console
           console.log("[MultilineTextEditor:stdin.read]", JSON.stringify(ret));
@@ -102,8 +102,8 @@ proto["emit"] = function patchedEmit(
 
       // Notify listeners that data is ready in a way Ink understands.
       if (
-        process.env["TEXTBUFFER_DEBUG"] === "1" ||
-        process.env["TEXTBUFFER_DEBUG"] === "true"
+        process.env.TEXTBUFFER_DEBUG === "1" ||
+        process.env.TEXTBUFFER_DEBUG === "true"
       ) {
         // eslint-disable-next-line no-console
         console.log(
@@ -252,8 +252,8 @@ const MultilineTextEditorInner = (
       }
 
       if (
-        process.env["TEXTBUFFER_DEBUG"] === "1" ||
-        process.env["TEXTBUFFER_DEBUG"] === "true"
+        process.env.TEXTBUFFER_DEBUG === "1" ||
+        process.env.TEXTBUFFER_DEBUG === "true"
       ) {
         // eslint-disable-next-line no-console
         console.log("[MultilineTextEditor] event", { input, key });
@@ -327,8 +327,8 @@ const MultilineTextEditorInner = (
 
       // Delegate remaining keys to our pure TextBuffer
       if (
-        process.env["TEXTBUFFER_DEBUG"] === "1" ||
-        process.env["TEXTBUFFER_DEBUG"] === "true"
+        process.env.TEXTBUFFER_DEBUG === "1" ||
+        process.env.TEXTBUFFER_DEBUG === "true"
       ) {
         // eslint-disable-next-line no-console
         console.log("[MultilineTextEditor] key event", { input, key });

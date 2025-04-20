@@ -1,7 +1,7 @@
-import * as fsSync from "fs";
-import * as fs from "fs/promises";
-import * as os from "os";
-import * as path from "path";
+import * as fsSync from "node:fs";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 
 interface Logger {
   /** Checking this can be used to avoid constructing a large log message. */
@@ -12,7 +12,7 @@ interface Logger {
 
 class AsyncLogger implements Logger {
   private queue: Array<string> = [];
-  private isWriting: boolean = false;
+  private isWriting = false;
 
   constructor(private filePath: string) {
     this.filePath = filePath;
@@ -80,7 +80,8 @@ let logger: Logger;
 export function initLogger(): Logger {
   if (logger) {
     return logger;
-  } else if (!process.env["DEBUG"]) {
+  }
+  if (!process.env.DEBUG) {
     logger = new EmptyLogger();
     return logger;
   }

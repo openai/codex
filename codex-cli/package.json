@@ -10,11 +10,13 @@
     "node": ">=22"
   },
   "scripts": {
-    "format": "prettier --check src tests",
-    "format:fix": "prettier --write src tests",
+    "format": "biome format .",
+    "format:fix": "biome format --write .",
     "dev": "tsc --watch",
-    "lint": "eslint src tests --ext ts --ext tsx --report-unused-disable-directives --max-warnings 0",
-    "lint:fix": "eslint src tests --ext ts --ext tsx --fix",
+    "lint": "biome lint .",
+    "lint:fix": "biome lint --apply .",
+    "check": "biome check .",
+    "check:fix": "biome check --apply .",
     "test": "vitest run",
     "test:watch": "vitest --watch",
     "typecheck": "tsc --noEmit",
@@ -25,12 +27,7 @@
     "release:build-and-publish": "pnpm run build && npm publish",
     "release": "pnpm run release:readme && pnpm run release:version && pnpm install && pnpm run release:build-and-publish"
   },
-  "files": [
-    "README.md",
-    "bin",
-    "dist",
-    "src"
-  ],
+  "files": ["README.md", "bin", "dist", "src"],
   "dependencies": {
     "@inkjs/ui": "^2.0.0",
     "chalk": "^5.2.0",
@@ -54,24 +51,17 @@
     "zod": "^3.24.3"
   },
   "devDependencies": {
-    "@eslint/js": "^9.22.0",
+    "@biomejs/biome": "^1.9.4",
     "@types/diff": "^7.0.2",
     "@types/js-yaml": "^4.0.9",
     "@types/marked-terminal": "^6.1.1",
     "@types/react": "^18.0.32",
     "@types/shell-quote": "^1.7.5",
     "@types/which": "^3.0.4",
-    "@typescript-eslint/eslint-plugin": "^7.18.0",
-    "@typescript-eslint/parser": "^7.18.0",
     "boxen": "^8.0.1",
     "esbuild": "^0.25.2",
-    "eslint-plugin-import": "^2.31.0",
-    "eslint-plugin-react": "^7.32.2",
-    "eslint-plugin-react-hooks": "^4.6.0",
-    "eslint-plugin-react-refresh": "^0.4.19",
     "husky": "^9.1.7",
     "ink-testing-library": "^3.0.0",
-    "prettier": "^2.8.7",
     "punycode": "^2.3.1",
     "ts-node": "^10.9.1",
     "typescript": "^5.0.3",

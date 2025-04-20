@@ -1,9 +1,9 @@
 // Ctrl+Enter (CSI‑u 13;5u) should submit the buffer.
 
-import { renderTui } from "./ui-test-helpers.js";
-import MultilineTextEditor from "../src/components/chat/multiline-editor.js";
 import * as React from "react";
-import { describe, it, expect, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import MultilineTextEditor from "../src/components/chat/multiline-editor.js";
+import { renderTui } from "./ui-test-helpers.js";
 
 async function type(
   stdin: NodeJS.WritableStream,
@@ -34,7 +34,7 @@ describe("MultilineTextEditor – Ctrl+Enter submits", () => {
     await flush();
 
     expect(onSubmit).toHaveBeenCalledTimes(1);
-    expect(onSubmit.mock.calls[0]![0]).toBe("hello");
+    expect(onSubmit.mock.calls[0]?.[0]).toBe("hello");
 
     cleanup();
   });

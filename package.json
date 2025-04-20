@@ -4,21 +4,24 @@
   "description": "Tools for repo-wide maintenance.",
   "scripts": {
     "release": "pnpm --filter @openai/codex run release",
-    "format": "prettier --check *.json *.md .github/workflows/*.yml",
-    "format:fix": "prettier --write *.json *.md .github/workflows/*.yml",
+    "format": "biome format .",
+    "format:fix": "biome format --write .",
+    "lint": "biome lint .",
+    "lint:fix": "biome lint --apply .",
+    "check": "biome check .",
+    "check:fix": "biome check --apply .",
     "build": "pnpm --filter @openai/codex run build",
     "test": "pnpm --filter @openai/codex run test",
-    "lint": "pnpm --filter @openai/codex run lint",
     "typecheck": "pnpm --filter @openai/codex run typecheck",
     "changelog": "git-cliff --config cliff.toml --output CHANGELOG.ignore.md $LAST_RELEASE_TAG..HEAD",
     "prepare": "husky",
     "husky:add": "husky add"
   },
   "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
     "git-cliff": "^2.8.0",
     "husky": "^9.1.7",
-    "lint-staged": "^15.5.1",
-    "prettier": "^3.5.3"
+    "lint-staged": "^15.5.1"
   },
   "resolutions": {
     "braces": "^3.0.3",
@@ -33,11 +36,9 @@
     "pnpm": ">=9.0.0"
   },
   "lint-staged": {
-    "*.json": "prettier --write",
-    "*.md": "prettier --write",
-    ".github/workflows/*.yml": "prettier --write",
+    "*.{json,md,yml}": "biome format --write",
     "**/*.{js,ts,tsx}": [
-      "pnpm --filter @openai/codex run lint",
+      "biome check --apply",
       "pnpm --filter @openai/codex run typecheck"
     ]
   },

@@ -1,12 +1,12 @@
-import type { ParseEntry, ControlOperator } from "shell-quote";
+import type { ControlOperator, ParseEntry } from "shell-quote";
 
+import * as path from "node:path";
+import { parse } from "shell-quote";
 import {
   identify_files_added,
   identify_files_needed,
 } from "./utils/agent/apply-patch";
 import { loadConfig } from "./utils/config";
-import * as path from "path";
-import { parse } from "shell-quote";
 
 export type SafetyAssessment = {
   /**
@@ -278,9 +278,8 @@ function tryParseApplyPatch(bashArg: string): string | null {
   );
   if (heredocMatch != null && typeof heredocMatch[2] === "string") {
     return heredocMatch[2].trim();
-  } else {
-    return heredoc.trim();
   }
+  return heredoc.trim();
 }
 
 export type SafeCommandReason = {

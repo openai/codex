@@ -2,10 +2,10 @@
 
 import type { ResponseItem } from "openai/resources/responses/responses";
 
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { loadConfig } from "../config";
-import fs from "fs/promises";
-import os from "os";
-import path from "path";
 
 const SESSIONS_ROOT = path.join(os.homedir(), ".codex", "sessions");
 

@@ -1,7 +1,7 @@
-import { log, isLoggingEnabled } from "../../utils/agent/log.js";
 import { Box, Text, useInput, useStdin } from "ink";
 import React, { useState } from "react";
 import { useInterval } from "use-interval";
+import { isLoggingEnabled, log } from "../../utils/agent/log.js";
 
 // Retaining a single static placeholder text for potential future use.  The
 // more elaborate randomised thinking prompts were removed to streamline the
@@ -21,7 +21,7 @@ export default function TerminalChatInputThinking({
 
   // Animate the ellipsis
   useInterval(() => {
-    setDots((prev) => (prev.length < 3 ? prev + "." : ""));
+    setDots((prev) => (prev.length < 3 ? `${prev}.` : ""));
   }, 500);
 
   const { stdin, setRawMode } = useStdin();

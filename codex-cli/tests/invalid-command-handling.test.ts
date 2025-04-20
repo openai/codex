@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 // ---------------------------------------------------------------------------
 // Low‑level rawExec test ------------------------------------------------------
@@ -26,7 +26,7 @@ vi.mock("../src/approvals.js", () => {
   return {
     __esModule: true,
     canAutoApprove: () =>
-      ({ type: "auto-approve", runInSandbox: false } as any),
+      ({ type: "auto-approve", runInSandbox: false }) as any,
     isSafeCommand: () => null,
   };
 });
@@ -51,7 +51,7 @@ describe("handleExecCommand – invalid executable", () => {
     const execInput = { cmd: ["git show"] } as any;
     const config = { model: "any", instructions: "" } as any;
     const policy = { mode: "auto" } as any;
-    const getConfirmation = async () => ({ review: "yes" } as any);
+    const getConfirmation = async () => ({ review: "yes" }) as any;
 
     const additionalWritableRoots: Array<string> = [];
     const { outputText, metadata } = await handleExecCommand(
@@ -62,7 +62,7 @@ describe("handleExecCommand – invalid executable", () => {
       getConfirmation,
     );
 
-    expect(metadata["exit_code"]).not.toBe(0);
+    expect(metadata.exit_code).not.toBe(0);
     expect(String(outputText).length).toBeGreaterThan(0);
   });
 });

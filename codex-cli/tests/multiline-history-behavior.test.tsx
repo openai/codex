@@ -14,9 +14,9 @@
  *  (it.todo) until the implementation is aligned.
  * ----------------------------------------------------------------------- */
 
-import { renderTui } from "./ui-test-helpers.js";
 import * as React from "react";
-import { describe, it, expect, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { renderTui } from "./ui-test-helpers.js";
 
 // ---------------------------------------------------------------------------
 //  Module mocks *must* be registered *before* the module under test is

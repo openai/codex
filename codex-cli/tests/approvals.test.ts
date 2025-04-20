@@ -1,7 +1,7 @@
 import type { SafetyAssessment } from "../src/approvals";
 
+import { describe, expect, test, vi } from "vitest";
 import { canAutoApprove } from "../src/approvals";
-import { describe, test, expect, vi } from "vitest";
 
 vi.mock("../src/utils/config", () => ({
   loadConfig: () => ({

@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from "react";
-import { Text, useInput } from "ink";
 import chalk from "chalk";
+import { Text, useInput } from "ink";
+import React, { useEffect, useState } from "react";
 import type { Except } from "type-fest";
 
 export type TextInputProps = {
@@ -61,7 +61,7 @@ function findPrevWordJump(prompt: string, cursorOffset: number) {
   }
 
   // Include the last match unless it is the first character
-  if (lastMatch != 0) {
+  if (lastMatch !== 0) {
     lastMatch += 1;
   }
   return lastMatch;
@@ -181,10 +181,7 @@ function TextInput({
               onSubmit(originalValue);
             }
           } else {
-            const newValue =
-              originalValue.slice(0, cursorOffset) +
-              "\n" +
-              originalValue.slice(cursorOffset);
+            const newValue = `${originalValue.slice(0, cursorOffset)}\n${originalValue.slice(cursorOffset)}`;
 
             setState({
               cursorOffset: cursorOffset + 1,
@@ -206,10 +203,7 @@ function TextInput({
               onSubmit(originalValue);
             }
           } else {
-            const newValue =
-              originalValue.slice(0, cursorOffset) +
-              "\n" +
-              originalValue.slice(cursorOffset);
+            const newValue = `${originalValue.slice(0, cursorOffset)}\n${originalValue.slice(cursorOffset)}`;
 
             setState({
               cursorOffset: cursorOffset + 1,
@@ -248,10 +242,7 @@ function TextInput({
           // And then when Option+ENTER is pressed, we want to insert a newline.
           // However, even with the settings, the input="\n" and only key.shift is True.
           // This is likely an artifact of how ink works.
-          nextValue =
-            originalValue.slice(0, cursorOffset) +
-            "\n" +
-            originalValue.slice(cursorOffset, originalValue.length);
+          nextValue = `${originalValue.slice(0, cursorOffset)}\n${originalValue.slice(cursorOffset, originalValue.length)}`;
           nextCursorOffset++;
         } else {
           // Handle Enter key: support bash-style line continuation with backslash
@@ -325,7 +316,7 @@ function TextInput({
         }
 
         // Include the last match unless it is the first character
-        if (lastMatch != 0) {
+        if (lastMatch !== 0) {
           lastMatch += 1;
         }
 

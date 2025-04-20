@@ -1,9 +1,9 @@
-import type { TerminalChatSession } from "../../utils/session.js";
 import type { ResponseItem } from "openai/resources/responses/responses";
+import type { TerminalChatSession } from "../../utils/session.js";
 
-import TerminalChatResponseItem from "./terminal-chat-response-item";
 import { Box, Text } from "ink";
 import React from "react";
+import TerminalChatResponseItem from "./terminal-chat-response-item";
 
 export default function TerminalChatPastRollout({
   session,

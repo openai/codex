@@ -3,9 +3,14 @@
 import type { AppConfig } from "../utils/config";
 import type { FileOperation } from "../utils/singlepass/file_ops";
 
-import Spinner from "./vendor/ink-spinner"; // Third‑party / vendor components
-import TextInput from "./vendor/ink-text-input";
-import { OPENAI_TIMEOUT_MS, OPENAI_BASE_URL } from "../utils/config";
+import * as fsSync from "node:fs";
+import * as fsPromises from "node:fs/promises";
+import path from "node:path";
+import { Box, Text, useApp, useInput } from "ink";
+import OpenAI from "openai";
+import { zodResponseFormat } from "openai/helpers/zod";
+import React, { useEffect, useState, useRef } from "react";
+import { OPENAI_BASE_URL, OPENAI_TIMEOUT_MS } from "../utils/config";
 import {
   generateDiffSummary,
   generateEditSummary,
@@ -17,13 +22,8 @@ import {
   makeAsciiDirectoryStructure,
 } from "../utils/singlepass/context_files";
 import { EditedFilesSchema } from "../utils/singlepass/file_ops";
-import * as fsSync from "fs";
-import * as fsPromises from "fs/promises";
-import { Box, Text, useApp, useInput } from "ink";
-import OpenAI from "openai";
-import { zodResponseFormat } from "openai/helpers/zod";
-import path from "path";
-import React, { useEffect, useState, useRef } from "react";
+import Spinner from "./vendor/ink-spinner"; // Third‑party / vendor components
+import TextInput from "./vendor/ink-text-input";
 
 /** Maximum number of characters allowed in the context passed to the model. */
 const MAX_CONTEXT_CHARACTER_LIMIT = 2_000_000;
@@ -43,11 +43,8 @@ function loadPromptHistory(): Array<string> {
   }
   // fallback to process.env-based temp storage if localStorage isn't available
   try {
-    if (process && process.env && process.env["HOME"]) {
-      const p = path.join(
-        process.env["HOME"],
-        ".codex_singlepass_history.json",
-      );
+    if (process?.env?.HOME) {
+      const p = path.join(process.env.HOME, ".codex_singlepass_history.json");
       if (fsSync.existsSync(p)) {
         return JSON.parse(fsSync.readFileSync(p, "utf8"));
       }
@@ -68,11 +65,8 @@ function savePromptHistory(history: Array<string>) {
   }
   // fallback to process.env-based temp storage if localStorage isn't available
   try {
-    if (process && process.env && process.env["HOME"]) {
-      const p = path.join(
-        process.env["HOME"],
-        ".codex_singlepass_history.json",
-      );
+    if (process?.env?.HOME) {
+      const p = path.join(process.env.HOME, ".codex_singlepass_history.json");
       fsSync.writeFileSync(p, JSON.stringify(history), "utf8");
     }
   } catch {
@@ -88,7 +82,7 @@ function WorkingSpinner({ text = "Working" }: { text?: string }) {
 
   useEffect(() => {
     const interval = setInterval(() => {
-      setDots((d) => (d.length < 3 ? d + "." : ""));
+      setDots((d) => (d.length < 3 ? `${d}.` : ""));
     }, 400);
     return () => clearInterval(interval);
   }, []);
@@ -505,7 +499,7 @@ export function SinglePassApp({
 
   if (quietExit) {
     setTimeout(() => {
-      onExit && onExit();
+      onExit?.();
       app.exit();
     }, 100);
     return <Text>Session complete.</Text>;
@@ -617,9 +611,8 @@ export function SinglePassApp({
                 setShowDirInfo(true);
                 setPrompt("");
                 return;
-              } else {
-                setShowDirInfo(false);
               }
+              setShowDirInfo(false);
 
               // Continue if prompt is empty.
               if (!val) {

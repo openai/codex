@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 // Utility: fake OpenAI SDK that can be instructed to fail with 5xx a set
 // number of times before succeeding.
@@ -19,7 +19,7 @@ const openAiState: { createSpy?: ReturnType<typeof vi.fn> } = {};
 vi.mock("openai", () => {
   class FakeOpenAI {
     public responses = {
-      create: (...args: Array<any>) => openAiState.createSpy!(...args),
+      create: (...args: Array<any>) => openAiState.createSpy?.(...args),
     };
   }
 
@@ -35,7 +35,7 @@ vi.mock("openai", () => {
 vi.mock("../src/approvals.js", () => ({
   __esModule: true,
   alwaysApprovedCommands: new Set<string>(),
-  canAutoApprove: () => ({ type: "auto-approve", runInSandbox: false } as any),
+  canAutoApprove: () => ({ type: "auto-approve", runInSandbox: false }) as any,
   isSafeCommand: () => null,
 }));
 
@@ -100,7 +100,7 @@ describe("AgentLoop – automatic retry on 5xx errors", () => {
       additionalWritableRoots: [],
       onItem: (i) => received.push(i),
       onLoading: () => {},
-      getCommandConfirmation: async () => ({ review: "yes" } as any),
+      getCommandConfirmation: async () => ({ review: "yes" }) as any,
       onLastResponseId: () => {},
     });
 
@@ -138,7 +138,7 @@ describe("AgentLoop – automatic retry on 5xx errors", () => {
       additionalWritableRoots: [],
       onItem: (i) => received.push(i),
       onLoading: () => {},
-      getCommandConfirmation: async () => ({ review: "yes" } as any),
+      getCommandConfirmation: async () => ({ review: "yes" }) as any,
       onLastResponseId: () => {},
     });
 

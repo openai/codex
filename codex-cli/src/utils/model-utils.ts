@@ -1,5 +1,5 @@
-import { OPENAI_API_KEY } from "./config";
 import OpenAI from "openai";
+import { OPENAI_API_KEY } from "./config";
 
 const MODEL_LIST_TIMEOUT_MS = 2_000; // 2 seconds
 export const RECOMMENDED_MODELS: Array<string> = ["o4-mini", "o3"];

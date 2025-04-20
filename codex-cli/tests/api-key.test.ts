@@ -1,20 +1,20 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 // We import the module *lazily* inside each test so that we can control the
 // OPENAI_API_KEY env var independently per test case. Node's module cache
 // would otherwise capture the value present during the first import.
 
-const ORIGINAL_ENV_KEY = process.env["OPENAI_API_KEY"];
+const ORIGINAL_ENV_KEY = process.env.OPENAI_API_KEY;
 
 beforeEach(() => {
-  delete process.env["OPENAI_API_KEY"];
+  process.env.OPENAI_API_KEY = undefined;
 });
 
 afterEach(() => {
   if (ORIGINAL_ENV_KEY !== undefined) {
-    process.env["OPENAI_API_KEY"] = ORIGINAL_ENV_KEY;
+    process.env.OPENAI_API_KEY = ORIGINAL_ENV_KEY;
   } else {
-    delete process.env["OPENAI_API_KEY"];
+    process.env.OPENAI_API_KEY = undefined;
   }
 });
 

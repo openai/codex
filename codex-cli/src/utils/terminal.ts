@@ -11,7 +11,7 @@ let didRunOnExit = false;
 export function setInkRenderer(renderer: Instance): void {
   inkRenderer = renderer;
 
-  if (process.env["CODEX_FPS_DEBUG"]) {
+  if (process.env.CODEX_FPS_DEBUG) {
     let last = Date.now();
     const logFrame = () => {
       const now = Date.now();
@@ -39,7 +39,7 @@ export function setInkRenderer(renderer: Instance): void {
 }
 
 export function clearTerminal(): void {
-  if (process.env["CODEX_QUIET_MODE"] === "1") {
+  if (process.env.CODEX_QUIET_MODE === "1") {
     return;
   }
 

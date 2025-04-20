@@ -55,12 +55,7 @@ jobs:
         run: pnpm run test
 
       - name: Lint
-        run: |
-          pnpm --filter @openai/codex exec -- eslint src tests --ext ts --ext tsx \
-            --report-unused-disable-directives \
-            --rule "no-console:error" \
-            --rule "no-debugger:error" \
-            --max-warnings=-1
+        run: pnpm run lint
 
       - name: Type-check
         run: pnpm run typecheck

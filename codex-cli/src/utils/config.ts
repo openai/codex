@@ -8,12 +8,12 @@
 
 import type { FullAutoErrorMode } from "./auto-approval-mode.js";
 
-import { log, isLoggingEnabled } from "./agent/log.js";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, extname, join, resolve as resolvePath } from "node:path";
+import { dump as dumpYaml, load as loadYaml } from "js-yaml";
+import { isLoggingEnabled, log } from "./agent/log.js";
 import { AutoApprovalMode } from "./auto-approval-mode.js";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { load as loadYaml, dump as dumpYaml } from "js-yaml";
-import { homedir } from "os";
-import { dirname, join, extname, resolve as resolvePath } from "path";
 
 export const DEFAULT_AGENTIC_MODEL = "o4-mini";
 export const DEFAULT_FULL_CONTEXT_MODEL = "gpt-4.1";
@@ -32,16 +32,16 @@ export const CONFIG_FILEPATH = CONFIG_JSON_FILEPATH;
 export const INSTRUCTIONS_FILEPATH = join(CONFIG_DIR, "instructions.md");
 
 export const OPENAI_TIMEOUT_MS =
-  parseInt(process.env["OPENAI_TIMEOUT_MS"] || "0", 10) || undefined;
-export const OPENAI_BASE_URL = process.env["OPENAI_BASE_URL"] || "";
-export let OPENAI_API_KEY = process.env["OPENAI_API_KEY"] || "";
+  Number.parseInt(process.env.OPENAI_TIMEOUT_MS || "0", 10) || undefined;
+export const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || "";
+export let OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 
 export function setApiKey(apiKey: string): void {
   OPENAI_API_KEY = apiKey;
 }
 
 // Formatting (quiet mode-only).
-export const PRETTY_PRINT = Boolean(process.env["PRETTY_PRINT"] || "");
+export const PRETTY_PRINT = Boolean(process.env.PRETTY_PRINT || "");
 
 // Represents config as persisted in config.json.
 export type StoredConfig = {
@@ -66,7 +66,7 @@ export type StoredConfig = {
 export const EMPTY_STORED_CONFIG: StoredConfig = { model: "" };
 
 // Pre‑stringified JSON variant so we don’t stringify repeatedly.
-const EMPTY_CONFIG_JSON = JSON.stringify(EMPTY_STORED_CONFIG, null, 2) + "\n";
+const EMPTY_CONFIG_JSON = `${JSON.stringify(EMPTY_STORED_CONFIG, null, 2)}\n`;
 
 export type MemoryConfig = {
   enabled: boolean;
@@ -233,8 +233,7 @@ export const loadConfig = (
 
   // Project doc support.
   const shouldLoadProjectDoc =
-    !options.disableProjectDoc &&
-    process.env["CODEX_DISABLE_PROJECT_DOC"] !== "1";
+    !options.disableProjectDoc && process.env.CODEX_DISABLE_PROJECT_DOC !== "1";
 
   let projectDoc = "";
   let projectDocPath: string | null = null;

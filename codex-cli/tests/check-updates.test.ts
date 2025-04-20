@@ -1,13 +1,13 @@
-import { describe, it, expect, vi } from "vitest";
+import { execFile } from "node:child_process";
+import { join } from "node:path";
+import { beforeEach } from "node:test";
+import { CONFIG_DIR } from "src/utils/config.js";
+import { describe, expect, it, vi } from "vitest";
 import {
   checkForUpdates,
   checkOutdated,
   getNPMCommandPath,
 } from "../src/utils/check-updates.js";
-import { execFile } from "node:child_process";
-import { join } from "node:path";
-import { CONFIG_DIR } from "src/utils/config.js";
-import { beforeEach } from "node:test";
 
 vi.mock("which", () => ({
   default: vi.fn(() => "/usr/local/bin/npm"),

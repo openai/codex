@@ -1,8 +1,8 @@
-import { renderTui } from "./ui-test-helpers.js";
+import * as React from "react";
+import { describe, expect, it, vi } from "vitest";
 import MultilineTextEditor from "../src/components/chat/multiline-editor.js";
 import TextBuffer from "../src/text-buffer.js";
-import * as React from "react";
-import { describe, it, expect, vi } from "vitest";
+import { renderTui } from "./ui-test-helpers.js";
 
 async function type(
   stdin: NodeJS.WritableStream,

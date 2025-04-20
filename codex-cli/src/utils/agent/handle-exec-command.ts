@@ -1,17 +1,17 @@
-import type { CommandConfirmation } from "./agent-loop.js";
-import type { AppConfig } from "../config.js";
-import type { ExecInput } from "./sandbox/interface.js";
-import type { ApplyPatchCommand, ApprovalPolicy } from "../../approvals.js";
 import type { ResponseInputItem } from "openai/resources/responses/responses.mjs";
+import type { ApplyPatchCommand, ApprovalPolicy } from "../../approvals.js";
+import type { AppConfig } from "../config.js";
+import type { CommandConfirmation } from "./agent-loop.js";
+import type { ExecInput } from "./sandbox/interface.js";
 
+import { access } from "node:fs/promises";
+import { canAutoApprove } from "../../approvals.js";
+import { formatCommandForDisplay } from "../../format-command.js";
+import { FullAutoErrorMode } from "../auto-approval-mode.js";
 import { exec, execApplyPatch } from "./exec.js";
 import { isLoggingEnabled, log } from "./log.js";
 import { ReviewDecision } from "./review.js";
-import { FullAutoErrorMode } from "../auto-approval-mode.js";
 import { SandboxType } from "./sandbox/interface.js";
-import { canAutoApprove } from "../../approvals.js";
-import { formatCommandForDisplay } from "../../format-command.js";
-import { access } from "fs/promises";
 
 // ---------------------------------------------------------------------------
 // Session‑level cache of commands that the user has chosen to always approve.
@@ -170,21 +170,19 @@ export async function handleExecCommand(
     );
     if (review != null) {
       return review;
-    } else {
-      // The user has approved the command, so we will run it outside of the
-      // sandbox.
-      const summary = await execCommand(
-        args,
-        applyPatch,
-        false,
-        additionalWritableRoots,
-        abortSignal,
-      );
-      return convertSummaryToResult(summary);
     }
-  } else {
+    // The user has approved the command, so we will run it outside of the
+    // sandbox.
+    const summary = await execCommand(
+      args,
+      applyPatch,
+      false,
+      additionalWritableRoots,
+      abortSignal,
+    );
     return convertSummaryToResult(summary);
   }
+  return convertSummaryToResult(summary);
 }
 
 function convertSummaryToResult(
@@ -284,9 +282,11 @@ async function getSandbox(runInSandbox: boolean): Promise<SandboxType> {
   if (runInSandbox) {
     if (process.platform === "darwin") {
       return SandboxType.MACOS_SEATBELT;
-    } else if (await isInLinux()) {
+    }
+    if (await isInLinux()) {
       return SandboxType.NONE;
-    } else if (process.platform === "win32") {
+    }
+    if (process.platform === "win32") {
       // On Windows, we don't have a sandbox implementation yet, so we fall back to NONE
       // instead of throwing an error, which would crash the application
       log(
@@ -296,9 +296,8 @@ async function getSandbox(runInSandbox: boolean): Promise<SandboxType> {
     }
     // For other platforms, still throw an error as before
     throw new Error("Sandbox was mandated, but no sandbox is available!");
-  } else {
-    return SandboxType.NONE;
   }
+  return SandboxType.NONE;
 }
 
 /**
@@ -346,7 +345,6 @@ async function askUserPermission(
         },
       ],
     };
-  } else {
-    return null;
   }
+  return null;
 }

@@ -1,9 +1,9 @@
-import React from "react";
 import { Box, Text } from "ink";
-import { styles } from "./theme";
+import React from "react";
 import { SelectOption } from "./select-option";
-import { useSelectState } from "./use-select-state";
+import { styles } from "./theme";
 import { useSelect } from "./use-select";
+import { useSelectState } from "./use-select-state";
 export function Select({
   isDisabled = false,
   visibleOptionCount = 5,

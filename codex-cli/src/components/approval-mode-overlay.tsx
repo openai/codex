@@ -1,7 +1,7 @@
-import TypeaheadOverlay from "./typeahead-overlay.js";
-import { AutoApprovalMode } from "../utils/auto-approval-mode.js";
 import { Text } from "ink";
 import React from "react";
+import { AutoApprovalMode } from "../utils/auto-approval-mode.js";
+import TypeaheadOverlay from "./typeahead-overlay.js";
 
 type Props = {
   currentMode: string;

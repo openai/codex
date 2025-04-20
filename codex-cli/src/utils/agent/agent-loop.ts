@@ -1,30 +1,30 @@
-import type { ReviewDecision } from "./review.js";
-import type { ApplyPatchCommand, ApprovalPolicy } from "../../approvals.js";
-import type { AppConfig } from "../config.js";
+import type { Reasoning } from "openai/resources.mjs";
 import type {
   ResponseFunctionToolCall,
   ResponseInputItem,
   ResponseItem,
 } from "openai/resources/responses/responses.mjs";
-import type { Reasoning } from "openai/resources.mjs";
+import type { ApplyPatchCommand, ApprovalPolicy } from "../../approvals.js";
+import type { AppConfig } from "../config.js";
+import type { ReviewDecision } from "./review.js";
 
-import { log, isLoggingEnabled } from "./log.js";
+import { randomUUID } from "node:crypto";
+import OpenAI, { APIConnectionTimeoutError } from "openai";
 import { OPENAI_BASE_URL, OPENAI_TIMEOUT_MS } from "../config.js";
 import { parseToolCallArguments } from "../parsers.js";
 import {
-  ORIGIN,
   CLI_VERSION,
+  ORIGIN,
   getSessionId,
   setCurrentModel,
   setSessionId,
 } from "../session.js";
 import { handleExecCommand } from "./handle-exec-command.js";
-import { randomUUID } from "node:crypto";
-import OpenAI, { APIConnectionTimeoutError } from "openai";
+import { isLoggingEnabled, log } from "./log.js";
 
 // Wait time before retrying after rate limit errors (ms).
-const RATE_LIMIT_RETRY_WAIT_MS = parseInt(
-  process.env["OPENAI_RATE_LIMIT_RETRY_WAIT_MS"] || "2500",
+const RATE_LIMIT_RETRY_WAIT_MS = Number.parseInt(
+  process.env.OPENAI_RATE_LIMIT_RETRY_WAIT_MS || "2500",
   10,
 );
 
@@ -242,7 +242,7 @@ export class AgentLoop {
     this.sessionId = getSessionId() || randomUUID().replaceAll("-", "");
     // Configure OpenAI client with optional timeout (ms) from environment
     const timeoutMs = OPENAI_TIMEOUT_MS;
-    const apiKey = this.config.apiKey ?? process.env["OPENAI_API_KEY"] ?? "";
+    const apiKey = this.config.apiKey ?? process.env.OPENAI_API_KEY ?? "";
     this.oai = new OpenAI({
       // The OpenAI JS SDK only requires `apiKey` when making requests against
       // the official API.  When running unit‑tests we stub out all network
@@ -380,7 +380,7 @@ export class AgentLoop {
 
   public async run(
     input: Array<ResponseInputItem>,
-    previousResponseId: string = "",
+    previousResponseId = "",
   ): Promise<void> {
     // ---------------------------------------------------------------------
     // Top‑level error wrapper so that known transient network issues like
@@ -551,8 +551,10 @@ export class AgentLoop {
             // do not define the class.  Falling back to `false` when the
             // export is absent ensures the check never throws.
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const ApiConnErrCtor = (OpenAI as any).APIConnectionError as  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              | (new (...args: any) => Error)
+            const ApiConnErrCtor = (OpenAI as any).APIConnectionError as // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              | (new (
+                  ...args: any
+                ) => Error)
               | undefined;
             const isConnectionError = ApiConnErrCtor
               ? error instanceof ApiConnErrCtor
@@ -608,8 +610,8 @@ export class AgentLoop {
                 // Parse suggested retry time from error message, e.g., "Please try again in 1.3s"
                 const msg = errCtx?.message ?? "";
                 const m = /(?:retry|try) again in ([\d.]+)s/i.exec(msg);
-                if (m && m[1]) {
-                  const suggested = parseFloat(m[1]) * 1000;
+                if (m?.[1]) {
+                  const suggested = Number.parseFloat(m[1]) * 1000;
                   if (!Number.isNaN(suggested)) {
                     delayMs = suggested;
                   }
@@ -622,33 +624,32 @@ export class AgentLoop {
                 // eslint-disable-next-line no-await-in-loop
                 await new Promise((resolve) => setTimeout(resolve, delayMs));
                 continue;
-              } else {
-                // We have exhausted all retry attempts. Surface a message so the user understands
-                // why the request failed and can decide how to proceed (e.g. wait and retry later
-                // or switch to a different model / account).
-
-                const errorDetails = [
-                  `Status: ${status || "unknown"}`,
-                  `Code: ${errCtx.code || "unknown"}`,
-                  `Type: ${errCtx.type || "unknown"}`,
-                  `Message: ${errCtx.message || "unknown"}`,
-                ].join(", ");
-
-                this.onItem({
-                  id: `error-${Date.now()}`,
-                  type: "message",
-                  role: "system",
-                  content: [
-                    {
-                      type: "input_text",
-                      text: `⚠️  Rate limit reached. Error details: ${errorDetails}. Please try again later.`,
-                    },
-                  ],
-                });
-
-                this.onLoading(false);
-                return;
               }
+              // We have exhausted all retry attempts. Surface a message so the user understands
+              // why the request failed and can decide how to proceed (e.g. wait and retry later
+              // or switch to a different model / account).
+
+              const errorDetails = [
+                `Status: ${status || "unknown"}`,
+                `Code: ${errCtx.code || "unknown"}`,
+                `Type: ${errCtx.type || "unknown"}`,
+                `Message: ${errCtx.message || "unknown"}`,
+              ].join(", ");
+
+              this.onItem({
+                id: `error-${Date.now()}`,
+                type: "message",
+                role: "system",
+                content: [
+                  {
+                    type: "input_text",
+                    text: `⚠️  Rate limit reached. Error details: ${errorDetails}. Please try again later.`,
+                  },
+                ],
+              });
+
+              this.onLoading(false);
+              return;
             }
 
             const isClientError =
@@ -968,8 +969,10 @@ export class AgentLoop {
 
         // Direct instance check for connection errors thrown by the OpenAI SDK.
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const ApiConnErrCtor = (OpenAI as any).APIConnectionError as  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          | (new (...args: any) => Error)
+        const ApiConnErrCtor = (OpenAI as any).APIConnectionError as // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          | (new (
+              ...args: any
+            ) => Error)
           | undefined;
         if (ApiConnErrCtor && e instanceof ApiConnErrCtor) {
           return true;
@@ -1061,17 +1064,13 @@ export class AgentLoop {
           const e: any = err;
 
           const reqId =
-            e.request_id ??
-            (e.cause && e.cause.request_id) ??
-            (e.cause && e.cause.requestId);
+            e.request_id ?? e.cause?.request_id ?? e.cause?.requestId;
 
           const errorDetails = [
-            `Status: ${e.status || (e.cause && e.cause.status) || "unknown"}`,
-            `Code: ${e.code || (e.cause && e.cause.code) || "unknown"}`,
-            `Type: ${e.type || (e.cause && e.cause.type) || "unknown"}`,
-            `Message: ${
-              e.message || (e.cause && e.cause.message) || "unknown"
-            }`,
+            `Status: ${e.status || (e.cause?.status) || "unknown"}`,
+            `Code: ${e.code || (e.cause?.code) || "unknown"}`,
+            `Type: ${e.type || (e.cause?.type) || "unknown"}`,
+            `Message: ${e.message || (e.cause?.message) || "unknown"}`,
           ].join(", ");
 
           const msgText = `⚠️  OpenAI rejected the request${

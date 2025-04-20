@@ -1,26 +1,26 @@
-import type { ReviewDecision } from "../../utils/agent/review.js";
-import type { HistoryEntry } from "../../utils/storage/command-history.js";
 import type {
   ResponseInputItem,
   ResponseItem,
 } from "openai/resources/responses/responses.mjs";
+import type { ReviewDecision } from "../../utils/agent/review.js";
+import type { HistoryEntry } from "../../utils/storage/command-history.js";
 
-import { TerminalChatCommandReview } from "./terminal-chat-command-review.js";
-import { log, isLoggingEnabled } from "../../utils/agent/log.js";
+import { fileURLToPath } from "node:url";
+import { Box, Text, useApp, useInput, useStdin } from "ink";
+import React, { useCallback, useState, Fragment, useEffect } from "react";
+import { useInterval } from "use-interval";
+import { isLoggingEnabled, log } from "../../utils/agent/log.js";
 import { loadConfig } from "../../utils/config.js";
 import { createInputItem } from "../../utils/input-utils.js";
 import { setSessionId } from "../../utils/session.js";
 import { SLASH_COMMANDS, type SlashCommand } from "../../utils/slash-commands";
 import {
-  loadCommandHistory,
   addToHistory,
+  loadCommandHistory,
 } from "../../utils/storage/command-history.js";
 import { clearTerminal, onExit } from "../../utils/terminal.js";
 import TextInput from "../vendor/ink-text-input.js";
-import { Box, Text, useApp, useInput, useStdin } from "ink";
-import { fileURLToPath } from "node:url";
-import React, { useCallback, useState, Fragment, useEffect } from "react";
-import { useInterval } from "use-interval";
+import { TerminalChatCommandReview } from "./terminal-chat-command-review.js";
 
 const suggestions = [
   "explain this codebase to me",
@@ -116,8 +116,8 @@ export default function TerminalChatInput({
                 ? len - 1
                 : selectedSlashSuggestion - 1
               : selectedSlashSuggestion >= len - 1
-              ? 0
-              : selectedSlashSuggestion + 1;
+                ? 0
+                : selectedSlashSuggestion + 1;
             setSelectedSlashSuggestion(nextIdx);
             // Autocomplete the command in the input
             const match = matches[nextIdx];
@@ -297,7 +297,8 @@ export default function TerminalChatInput({
           process.exit(0);
         }, 60);
         return;
-      } else if (inputValue === "/clear" || inputValue === "clear") {
+      }
+      if (inputValue === "/clear" || inputValue === "clear") {
         setInput("");
         setSessionId("");
         setLastResponseId("");
@@ -316,7 +317,8 @@ export default function TerminalChatInput({
         ]);
 
         return;
-      } else if (inputValue === "/clearhistory") {
+      }
+      if (inputValue === "/clearhistory") {
         setInput("");
 
         // Import clearCommandHistory function to avoid circular dependencies
@@ -342,7 +344,8 @@ export default function TerminalChatInput({
         );
 
         return;
-      } else if (inputValue === "/bug") {
+      }
+      if (inputValue === "/bug") {
         // Generate a GitHub bug report URL pre‑filled with session details
         setInput("");
 
@@ -406,7 +409,8 @@ export default function TerminalChatInput({
         }
 
         return;
-      } else if (inputValue.startsWith("/")) {
+      }
+      if (inputValue.startsWith("/")) {
         // Handle invalid/unrecognized commands.
         // Only single-word inputs starting with '/' (e.g., /command) that are not recognized are caught here.
         // Any other input, including those starting with '/' but containing spaces
@@ -531,8 +535,7 @@ export default function TerminalChatInput({
               placeholder={
                 selectedSuggestion
                   ? `"${suggestions[selectedSuggestion - 1]}"`
-                  : "send a message" +
-                    (isNew ? " or press tab to select a suggestion" : "")
+                  : `send a message${isNew ? " or press tab to select a suggestion" : ""}`
               }
               showCursor
               value={input}
@@ -628,7 +631,7 @@ function TerminalChatInputThinking({
 
   // Animate ellipsis
   useInterval(() => {
-    setDots((prev) => (prev.length < 3 ? prev + "." : ""));
+    setDots((prev) => (prev.length < 3 ? `${prev}.` : ""));
   }, 500);
 
   // Spinner frames with embedded seconds

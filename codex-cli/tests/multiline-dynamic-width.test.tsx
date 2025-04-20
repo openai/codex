@@ -8,10 +8,10 @@
 //   2.  The caret (highlighted inverse character) is still kept in view after
 //       the horizontal shrink so that editing remains possible.
 
-import { renderTui } from "./ui-test-helpers.js";
-import MultilineTextEditor from "../src/components/chat/multiline-editor.js";
 import * as React from "react";
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
+import MultilineTextEditor from "../src/components/chat/multiline-editor.js";
+import { renderTui } from "./ui-test-helpers.js";
 
 // Helper to synchronously type text then flush Ink's timers so that the next
 // `lastFrame()` call sees the updated UI.
@@ -69,7 +69,7 @@ describe("MultilineTextEditor – dynamic width", () => {
     // visible in the rendered slice.
     const frameAfter = lastFrame() || "";
     // eslint-disable-next-line no-console
-    console.log("FRAME AFTER RESIZE:\n" + frameAfter);
+    console.log(`FRAME AFTER RESIZE:\n${frameAfter}`);
     expect(frameAfter.includes("z")).toBe(true);
 
     cleanup();

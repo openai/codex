@@ -1,7 +1,7 @@
-import { existsSync } from "fs";
-import fs from "fs/promises";
-import os from "os";
-import path from "path";
+import { existsSync } from "node:fs";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
 const HISTORY_FILE = path.join(os.homedir(), ".codex", "history.json");
 const DEFAULT_HISTORY_SIZE = 1000;

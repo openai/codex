@@ -1,6 +1,6 @@
-import React from "react";
-import { Box, Text } from "ink";
 import figures from "figures";
+import { Box, Text } from "ink";
+import React from "react";
 import { styles } from "./theme";
 export function SelectOption({ isFocused, isSelected, children }) {
   return React.createElement(

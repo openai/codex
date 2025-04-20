@@ -6,12 +6,12 @@ This project uses [Husky](https://typicode.github.io/husky/) to enforce code qua
 
 - **Pre-commit Hook**: Runs lint-staged to check files that are about to be committed.
 
-  - Lints and formats TypeScript/TSX files using ESLint and Prettier
-  - Formats JSON, MD, and YML files using Prettier
+  - Lints and formats TypeScript/TSX files using Biome
+  - Formats JSON, MD, and YML files using Biome
 
 - **Pre-push Hook**: Runs tests and type checking before pushing to the remote repository.
-  - Executes `npm test` to run all tests
-  - Executes `npm run typecheck` to check TypeScript types
+  - Executes `pnpm test` to run all tests
+  - Executes `pnpm run typecheck` to check TypeScript types
 
 ## Benefits
 
@@ -40,6 +40,6 @@ Note: Please use these bypass options sparingly and only when absolutely necessa
 
 If you encounter any issues with the hooks:
 
-1. Make sure you have the latest dependencies installed: `npm install`
+1. Make sure you have the latest dependencies installed: `pnpm install`
 2. Ensure the hook scripts are executable (Unix systems): `chmod +x .husky/pre-commit .husky/pre-push`
-3. Check if there are any ESLint or Prettier configuration issues in your code
+3. Check if there are any Biome configuration issues in your code

@@ -1,15 +1,15 @@
-import type { ExecInput, ExecResult } from "./sandbox/interface.js";
-import type { SpawnOptions } from "child_process";
+import type { SpawnOptions } from "node:child_process";
 import type { ParseEntry } from "shell-quote";
+import type { ExecInput, ExecResult } from "./sandbox/interface.js";
 
+import fs from "node:fs";
+import os from "node:os";
+import { parse } from "shell-quote";
+import { formatCommandForDisplay } from "../../format-command.js";
 import { process_patch } from "./apply-patch.js";
 import { SandboxType } from "./sandbox/interface.js";
 import { execWithSeatbelt } from "./sandbox/macos-seatbelt.js";
 import { exec as rawExec } from "./sandbox/raw-exec.js";
-import { formatCommandForDisplay } from "../../format-command.js";
-import fs from "fs";
-import os from "os";
-import { parse } from "shell-quote";
 
 const DEFAULT_TIMEOUT_MS = 10_000; // 10 seconds
 

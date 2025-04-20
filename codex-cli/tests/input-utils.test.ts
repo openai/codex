@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from "vitest";
-import fs from "fs/promises";
+import fs from "node:fs/promises";
+import { describe, expect, it, vi } from "vitest";
 import { createInputItem } from "../src/utils/input-utils.js";
 
 describe("createInputItem", () => {

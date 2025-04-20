@@ -1,7 +1,7 @@
-import { renderTui } from "./ui-test-helpers.js";
-import TerminalChatResponseItem from "../src/components/chat/terminal-chat-response-item.js";
 import React from "react";
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
+import TerminalChatResponseItem from "../src/components/chat/terminal-chat-response-item.js";
+import { renderTui } from "./ui-test-helpers.js";
 
 // Component under test
 

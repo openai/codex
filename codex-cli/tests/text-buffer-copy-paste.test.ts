@@ -1,5 +1,5 @@
+import { describe, expect, it } from "vitest";
 import TextBuffer from "../src/text-buffer.js";
-import { describe, it, expect } from "vitest";
 
 // These tests ensure that the TextBuffer copy‑&‑paste logic keeps parity with
 // the Rust reference implementation (`textarea.rs`).  When a multi‑line

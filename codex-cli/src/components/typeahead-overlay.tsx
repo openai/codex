@@ -1,7 +1,7 @@
-import SelectInput from "./select-input/select-input.js";
-import TextInput from "./vendor/ink-text-input.js";
 import { Box, Text, useInput } from "ink";
 import React, { useState } from "react";
+import SelectInput from "./select-input/select-input.js";
+import TextInput from "./vendor/ink-text-input.js";
 
 export type TypeaheadItem = { label: string; value: string };
 
@@ -96,8 +96,8 @@ export default function TypeaheadOverlay({
   const selectItems = ranked;
 
   if (
-    process.env["DEBUG_TYPEAHEAD"] === "1" ||
-    process.env["DEBUG_TYPEAHEAD"] === "true"
+    process.env.DEBUG_TYPEAHEAD === "1" ||
+    process.env.DEBUG_TYPEAHEAD === "true"
   ) {
     // eslint-disable-next-line no-console
     console.log(

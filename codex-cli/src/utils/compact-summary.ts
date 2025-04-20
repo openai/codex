@@ -1,7 +1,7 @@
 import type { ResponseItem } from "openai/resources/responses/responses.mjs";
 
-import { OPENAI_BASE_URL } from "./config.js";
 import OpenAI from "openai";
+import { OPENAI_BASE_URL } from "./config.js";
 
 /**
  * Generate a condensed summary of the conversation items.
@@ -22,7 +22,7 @@ export async function generateCompactSummary(
   flexMode = false,
 ): Promise<string> {
   const oai = new OpenAI({
-    apiKey: process.env["OPENAI_API_KEY"],
+    apiKey: process.env.OPENAI_API_KEY,
     baseURL: OPENAI_BASE_URL,
   });
 

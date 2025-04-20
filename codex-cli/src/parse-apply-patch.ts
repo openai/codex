@@ -38,7 +38,8 @@ export function parseApplyPatch(patch: string): Array<ApplyPatchOp> | null {
   if (!patch.startsWith(PATCH_PREFIX)) {
     // Patch must begin with '*** Begin Patch'
     return null;
-  } else if (!patch.endsWith(PATCH_SUFFIX)) {
+  }
+  if (!patch.endsWith(PATCH_SUFFIX)) {
     // Patch must end with '*** End Patch'
     return null;
   }
@@ -55,20 +56,23 @@ export function parseApplyPatch(patch: string): Array<ApplyPatchOp> | null {
   for (const line of lines) {
     if (line.startsWith(END_OF_FILE_PREFIX)) {
       continue;
-    } else if (line.startsWith(ADD_FILE_PREFIX)) {
+    }
+    if (line.startsWith(ADD_FILE_PREFIX)) {
       ops.push({
         type: "create",
         path: line.slice(ADD_FILE_PREFIX.length).trim(),
         content: "",
       });
       continue;
-    } else if (line.startsWith(DELETE_FILE_PREFIX)) {
+    }
+    if (line.startsWith(DELETE_FILE_PREFIX)) {
       ops.push({
         type: "delete",
         path: line.slice(DELETE_FILE_PREFIX.length).trim(),
       });
       continue;
-    } else if (line.startsWith(UPDATE_FILE_PREFIX)) {
+    }
+    if (line.startsWith(UPDATE_FILE_PREFIX)) {
       ops.push({
         type: "update",
         path: line.slice(UPDATE_FILE_PREFIX.length).trim(),
@@ -99,7 +103,7 @@ export function parseApplyPatch(patch: string): Array<ApplyPatchOp> | null {
     } else if (line.startsWith("-")) {
       lastOp.deleted += 1;
     }
-    lastOp.update += lastOp.update ? "\n" + line : line;
+    lastOp.update += lastOp.update ? `\n${line}` : line;
   }
 
   return ops;

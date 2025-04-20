@@ -1,17 +1,17 @@
 // Based on reference implementation from
 // https://cookbook.openai.com/examples/gpt4-1_prompting_guide#reference-implementation-apply_patchpy
 
-import fs from "fs";
-import path from "path";
+import fs from "node:fs";
+import path from "node:path";
 import {
   ADD_FILE_PREFIX,
   DELETE_FILE_PREFIX,
   END_OF_FILE_PREFIX,
+  HUNK_ADD_LINE_PREFIX,
   MOVE_FILE_TO_PREFIX,
+  PATCH_PREFIX,
   PATCH_SUFFIX,
   UPDATE_FILE_PREFIX,
-  HUNK_ADD_LINE_PREFIX,
-  PATCH_PREFIX,
 } from "src/parse-apply-patch";
 
 // -----------------------------------------------------------------------------
@@ -111,10 +111,7 @@ class Parser {
     if (this.index >= this.lines.length) {
       return true;
     }
-    if (
-      prefixes &&
-      prefixes.some((p) => this.lines[this.index]!.startsWith(p.trim()))
-    ) {
+    if (prefixes?.some((p) => this.lines[this.index]?.startsWith(p.trim()))) {
       return true;
     }
     return false;
@@ -122,17 +119,17 @@ class Parser {
 
   private startswith(prefix: string | Array<string>): boolean {
     const prefixes = Array.isArray(prefix) ? prefix : [prefix];
-    return prefixes.some((p) => this.lines[this.index]!.startsWith(p));
+    return prefixes.some((p) => this.lines[this.index]?.startsWith(p));
   }
 
   private read_str(prefix = "", returnEverything = false): string {
     if (this.index >= this.lines.length) {
       throw new DiffError(`Index: ${this.index} >= ${this.lines.length}`);
     }
-    if (this.lines[this.index]!.startsWith(prefix)) {
+    if (this.lines[this.index]?.startsWith(prefix)) {
       const text = returnEverything
         ? this.lines[this.index]
-        : this.lines[this.index]!.slice(prefix.length);
+        : this.lines[this.index]?.slice(prefix.length);
       this.index += 1;
       return text ?? "";
     }
@@ -225,7 +222,7 @@ class Parser {
           !fileLines.slice(0, index).some((s) => s.trim() === defStr.trim())
         ) {
           for (let i = index; i < fileLines.length; i++) {
-            if (fileLines[i]!.trim() === defStr.trim()) {
+            if (fileLines[i]?.trim() === defStr.trim()) {
               index = i + 1;
               this.fuzz += 1;
               found = true;
@@ -249,9 +246,8 @@ class Parser {
         const ctxText = nextChunkContext.join("\n");
         if (eof) {
           throw new DiffError(`Invalid EOF Context ${index}:\n${ctxText}`);
-        } else {
-          throw new DiffError(`Invalid Context ${index}:\n${ctxText}`);
         }
+        throw new DiffError(`Invalid Context ${index}:\n${ctxText}`);
       }
       this.fuzz += fuzz;
       for (const ch of chunks) {
@@ -390,7 +386,7 @@ function peek_next_section(
       // the model sometimes doesn't fully adhere to the spec and returns lines without leading
       // whitespace for context lines.
       mode = "keep";
-      line = " " + line;
+      line = ` ${line}`;
 
       // TODO: Re-enable strict mode.
       // throw new DiffError(`Invalid Line: ${line}`)

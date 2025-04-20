@@ -1,4 +1,4 @@
-import { test, expect } from "vitest";
+import { expect, test } from "vitest";
 import { SLASH_COMMANDS, type SlashCommand } from "../src/utils/slash-commands";
 
 test("SLASH_COMMANDS includes expected commands", () => {

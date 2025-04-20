@@ -1,8 +1,8 @@
+import type { ResponseFunctionToolCall } from "openai/resources/responses/responses.mjs";
 import type {
   ExecInput,
   ExecOutputMetadata,
 } from "./agent/sandbox/interface.js";
-import type { ResponseFunctionToolCall } from "openai/resources/responses/responses.mjs";
 
 import { log } from "node:console";
 import { formatCommandForDisplay } from "src/format-command.js";
@@ -23,7 +23,7 @@ export function parseToolCallOutput(toolCallOutput: string): {
     };
   } catch (err) {
     return {
-      output: `Failed to parse JSON result`,
+      output: "Failed to parse JSON result",
       metadata: {
         exit_code: 1,
         duration_seconds: 0,
@@ -99,7 +99,6 @@ function toStringArray(obj: unknown): Array<string> | undefined {
   if (Array.isArray(obj) && obj.every((item) => typeof item === "string")) {
     const arrayOfStrings: Array<string> = obj;
     return arrayOfStrings;
-  } else {
-    return undefined;
   }
+  return undefined;
 }

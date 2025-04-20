@@ -1,8 +1,9 @@
+import { expect, test } from "vitest";
 import {
   ActionType,
+  DiffError,
   apply_commit,
   assemble_changes,
-  DiffError,
   identify_files_added,
   identify_files_needed,
   load_files,
@@ -10,7 +11,6 @@ import {
   process_patch,
   text_to_patch,
 } from "../src/utils/agent/apply-patch.js";
-import { test, expect } from "vitest";
 
 function createInMemoryFS(initialFiles: Record<string, string>) {
   const files: Record<string, string> = { ...initialFiles };
@@ -21,9 +21,8 @@ function createInMemoryFS(initialFiles: Record<string, string>) {
     const file = files[p];
     if (typeof file === "string") {
       return file;
-    } else {
-      throw new Error(`File not found: ${p}`);
     }
+    throw new Error(`File not found: ${p}`);
   };
 
   const writeFn = (p: string, content: string): void => {
@@ -222,7 +221,8 @@ test("process_patch - invalid patch throws DiffError", () => {
 
 test("process_patch - tolerates omitted space for keep line", () => {
   const original = "line1\nline2\nline3";
-  const patch = `*** Begin Patch\n*** Update File: foo.txt\n@@\n line1\n-line2\n+some new line2\nline3\n*** End Patch`;
+  const patch =
+    "*** Begin Patch\n*** Update File: foo.txt\n@@\n line1\n-line2\n+some new line2\nline3\n*** End Patch";
   const fs = createInMemoryFS({ "foo.txt": original });
   process_patch(patch, fs.openFn, fs.writeFn, fs.removeFn);
   expect(fs.files["foo.txt"]).toBe("line1\nsome new line2\nline3");

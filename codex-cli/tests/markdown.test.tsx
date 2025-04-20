@@ -1,7 +1,7 @@
-import { renderTui } from "./ui-test-helpers.js";
-import { Markdown } from "../src/components/chat/terminal-chat-response-item.js";
 import React from "react";
-import { it, expect } from "vitest";
+import { expect, it } from "vitest";
+import { Markdown } from "../src/components/chat/terminal-chat-response-item.js";
+import { renderTui } from "./ui-test-helpers.js";
 
 /** Simple sanity check that the Markdown component renders bold/italic text.
  * We strip ANSI codes, so the output should contain the raw words. */

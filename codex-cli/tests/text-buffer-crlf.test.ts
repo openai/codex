@@ -1,5 +1,5 @@
+import { describe, expect, it } from "vitest";
 import TextBuffer from "../src/text-buffer.js";
-import { describe, it, expect } from "vitest";
 
 describe("TextBuffer – newline normalisation", () => {
   it("insertStr should split on \r and \r\n sequences", () => {

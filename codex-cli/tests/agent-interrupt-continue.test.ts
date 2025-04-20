@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentLoop } from "../src/utils/agent/agent-loop.js";
 
 // Create a state holder for our mocks
@@ -47,7 +47,7 @@ describe("Agent interrupt and continue", () => {
       onLoading: (loading) => {
         loadingState = loading;
       },
-      getCommandConfirmation: async () => ({ review: "yes" } as any),
+      getCommandConfirmation: async () => ({ review: "yes" }) as any,
       onLastResponseId: () => {},
     });
 

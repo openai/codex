@@ -1,10 +1,10 @@
-import type * as fsType from "fs";
+import type * as fsType from "node:fs";
 
-import { loadConfig, saveConfig } from "../src/utils/config.js"; // parent import first
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { AutoApprovalMode } from "../src/utils/auto-approval-mode.js";
-import { tmpdir } from "os";
-import { join } from "path";
-import { test, expect, beforeEach, afterEach, vi } from "vitest";
+import { loadConfig, saveConfig } from "../src/utils/config.js"; // parent import first
 
 // In‑memory FS store
 let memfs: Record<string, string> = {};
@@ -30,7 +30,7 @@ vi.mock("fs", async () => {
     },
     rmSync: (path: string) => {
       // recursively delete any key under this prefix
-      const prefix = path.endsWith("/") ? path : path + "/";
+      const prefix = path.endsWith("/") ? path : `${path}/`;
       for (const key of Object.keys(memfs)) {
         if (key === path || key.startsWith(prefix)) {
           delete memfs[key];
@@ -105,7 +105,7 @@ test("loads user instructions + project doc when codex.md is present", () => {
   // 3) assert we got both pieces concatenated
   expect(cfg.model).toBe("mymodel");
   expect(cfg.instructions).toBe(
-    userInstr + "\n\n--- project-doc ---\n\n" + projectDoc,
+    `${userInstr}\n\n--- project-doc ---\n\n${projectDoc}`,
   );
 });
 

@@ -1,8 +1,8 @@
 import type { AgentLoop } from "../../utils/agent/agent-loop.js";
 
-import { Box, Text } from "ink";
 import path from "node:path";
-import React from "react";
+import { Box, Text } from "ink";
+import type React from "react";
 
 export interface TerminalHeaderProps {
   terminalRows: number;

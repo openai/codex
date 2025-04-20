@@ -1,5 +1,5 @@
+import { describe, expect, it, vi } from "vitest";
 import TextBuffer from "../src/text-buffer";
-import { describe, it, expect, vi } from "vitest";
 
 /* -------------------------------------------------------------------------
  *  External $EDITOR integration – behavioural contract

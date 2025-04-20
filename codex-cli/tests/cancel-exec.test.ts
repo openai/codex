@@ -1,5 +1,5 @@
+import { describe, expect, it } from "vitest";
 import { exec as rawExec } from "../src/utils/agent/sandbox/raw-exec.js";
-import { describe, it, expect } from "vitest";
 
 // Import the low‑level exec implementation so we can verify that AbortSignal
 // correctly terminates a spawned process. We bypass the higher‑level wrappers

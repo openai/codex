@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 // This test reproduces the real‑world issue where the user cancels the current
 // task (Esc Esc) but the model’s response has already started to stream — the
 // partial answer still shows up in the UI.
@@ -99,7 +99,7 @@ describe("Agent cancellation race", () => {
       approvalPolicy: { mode: "auto" } as any,
       onItem: (i) => items.push(i),
       onLoading: () => {},
-      getCommandConfirmation: async () => ({ review: "yes" } as any),
+      getCommandConfirmation: async () => ({ review: "yes" }) as any,
       onLastResponseId: () => {},
     });
 

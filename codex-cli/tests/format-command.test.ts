@@ -1,5 +1,5 @@
+import { describe, expect, test } from "vitest";
 import { formatCommandForDisplay } from "../src/format-command";
-import { describe, test, expect } from "vitest";
 
 describe("formatCommandForDisplay()", () => {
   test("ensure empty string arg appears in output", () => {

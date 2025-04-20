@@ -1,6 +1,6 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
 import * as esbuild from "esbuild";
-import * as fs from "fs";
-import * as path from "path";
 /**
  * ink attempts to import react-devtools-core in an ESM-unfriendly way:
  *
@@ -39,7 +39,6 @@ const isDevBuild =
 
 const plugins = [ignoreReactDevToolsPlugin];
 
-
 // Add a shebang that enables source‑map support for dev builds so that stack
 // traces point to the original TypeScript lines without requiring callers to
 // remember to set NODE_OPTIONS manually.
@@ -50,7 +49,9 @@ if (isDevBuild) {
     name: "dev-shebang",
     setup(build) {
       build.onEnd(async () => {
-        const outFile = path.resolve(isDevBuild ? "dist/cli-dev.js" : "dist/cli.js");
+        const outFile = path.resolve(
+          isDevBuild ? "dist/cli-dev.js" : "dist/cli.js",
+        );
         let code = await fs.promises.readFile(outFile, "utf8");
         if (code.startsWith("#!")) {
           code = code.replace(/^#!.*\n/, devShebangLine);

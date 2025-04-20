@@ -2,7 +2,7 @@
  * Utility functions for handling platform-specific commands
  */
 
-import { log, isLoggingEnabled } from "./log.js";
+import { isLoggingEnabled, log } from "./log.js";
 
 /**
  * Map of Unix commands to their Windows equivalents

@@ -1,8 +1,8 @@
 import React from "react";
 import type { ComponentProps } from "react";
-import { renderTui } from "./ui-test-helpers.js";
+import { describe, expect, it } from "vitest";
 import TerminalChatInput from "../src/components/chat/terminal-chat-input.js";
-import { describe, it, expect } from "vitest";
+import { renderTui } from "./ui-test-helpers.js";
 
 describe("TerminalChatInput compact command", () => {
   it("shows /compact hint when context is low", async () => {

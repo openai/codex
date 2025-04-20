@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 // ---------------------------------------------------------------------------
 // Mock helpers
@@ -17,7 +17,7 @@ vi.mock("openai", () => {
   class FakeOpenAI {
     public responses = {
       // Will be replaced per‑test via `openAiState.createSpy`.
-      create: (...args: Array<any>) => openAiState.createSpy!(...args),
+      create: (...args: Array<any>) => openAiState.createSpy?.(...args),
     };
   }
 
@@ -37,7 +37,7 @@ vi.mock("openai", () => {
 vi.mock("../src/approvals.js", () => ({
   __esModule: true,
   alwaysApprovedCommands: new Set<string>(),
-  canAutoApprove: () => ({ type: "auto-approve", runInSandbox: false } as any),
+  canAutoApprove: () => ({ type: "auto-approve", runInSandbox: false }) as any,
   isSafeCommand: () => null,
 }));
 
@@ -82,7 +82,7 @@ describe("AgentLoop – rate‑limit handling", () => {
         additionalWritableRoots: [],
         onItem: (i) => received.push(i),
         onLoading: () => {},
-        getCommandConfirmation: async () => ({ review: "yes" } as any),
+        getCommandConfirmation: async () => ({ review: "yes" }) as any,
         onLastResponseId: () => {},
       });
 

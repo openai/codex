@@ -8,13 +8,13 @@ import type {
   ResponseReasoningItem,
 } from "openai/resources/responses/responses";
 
-import { useTerminalSize } from "../../hooks/use-terminal-size";
-import { parseToolCall, parseToolCallOutput } from "../../utils/parsers";
 import chalk, { type ForegroundColorName } from "chalk";
 import { Box, Text } from "ink";
 import { parse, setOptions } from "marked";
 import TerminalRenderer from "marked-terminal";
 import React, { useMemo } from "react";
+import { useTerminalSize } from "../../hooks/use-terminal-size";
+import { parseToolCall, parseToolCallOutput } from "../../utils/parsers";
 
 export default function TerminalChatResponseItem({
   item,
@@ -113,14 +113,14 @@ function TerminalChatResponseMessage({
               c.type === "output_text"
                 ? c.text
                 : c.type === "refusal"
-                ? c.refusal
-                : c.type === "input_text"
-                ? c.text
-                : c.type === "input_image"
-                ? "<Image>"
-                : c.type === "input_file"
-                ? c.filename
-                : "", // unknown content type
+                  ? c.refusal
+                  : c.type === "input_text"
+                    ? c.text
+                    : c.type === "input_image"
+                      ? "<Image>"
+                      : c.type === "input_file"
+                        ? c.filename
+                        : "", // unknown content type
           )
           .join(" ")}
       </Markdown>

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 // ---------------------------------------------------------------------------
 //  Utility helpers & OpenAI mock (lightweight – focuses on network failures)
@@ -9,7 +9,7 @@ const openAiState: { createSpy?: ReturnType<typeof vi.fn> } = {};
 vi.mock("openai", () => {
   class FakeOpenAI {
     public responses = {
-      create: (...args: Array<any>) => openAiState.createSpy!(...args),
+      create: (...args: Array<any>) => openAiState.createSpy?.(...args),
     };
   }
 
@@ -26,7 +26,7 @@ vi.mock("openai", () => {
 vi.mock("../src/approvals.js", () => ({
   __esModule: true,
   alwaysApprovedCommands: new Set<string>(),
-  canAutoApprove: () => ({ type: "auto-approve", runInSandbox: false } as any),
+  canAutoApprove: () => ({ type: "auto-approve", runInSandbox: false }) as any,
   isSafeCommand: () => null,
 }));
 
@@ -62,7 +62,7 @@ describe("AgentLoop – generic network/server errors", () => {
       approvalPolicy: { mode: "auto" } as any,
       onItem: (i) => received.push(i),
       onLoading: () => {},
-      getCommandConfirmation: async () => ({ review: "yes" } as any),
+      getCommandConfirmation: async () => ({ review: "yes" }) as any,
       onLastResponseId: () => {},
     });
 
@@ -106,7 +106,7 @@ describe("AgentLoop – generic network/server errors", () => {
       approvalPolicy: { mode: "auto" } as any,
       onItem: (i) => received.push(i),
       onLoading: () => {},
-      getCommandConfirmation: async () => ({ review: "yes" } as any),
+      getCommandConfirmation: async () => ({ review: "yes" }) as any,
       onLastResponseId: () => {},
     });
 

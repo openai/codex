@@ -3,15 +3,15 @@
 // Unified entry point for Codex CLI on all platforms
 // Dynamically loads the compiled ESM bundle in dist/cli.js
 
-import path from 'path';
-import { fileURLToPath, pathToFileURL } from 'url';
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 // Determine this script's directory
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Resolve the path to the compiled CLI bundle
-const cliPath = path.resolve(__dirname, '../dist/cli.js');
+const cliPath = path.resolve(__dirname, "../dist/cli.js");
 const cliUrl = pathToFileURL(cliPath).href;
 
 // Load and execute the CLI

@@ -51,7 +51,8 @@ export function buildBugReportUrl({
         const it = items[j];
         if (it?.type === "message" && it?.role === "user") {
           break;
-        } else if (
+        }
+        if (
           it?.type === "reasoning" ||
           (it?.type === "message" && it?.role === "assistant")
         ) {

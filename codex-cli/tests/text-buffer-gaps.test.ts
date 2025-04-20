@@ -1,5 +1,5 @@
+import { describe, expect, it } from "vitest";
 import TextBuffer from "../src/text-buffer";
-import { describe, it, expect } from "vitest";
 
 // The purpose of this test‑suite is NOT to make the implementation green today
 // – quite the opposite.  We capture behaviours that are already covered by the

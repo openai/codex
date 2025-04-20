@@ -6,7 +6,7 @@
  */
 
 import * as React from "react";
-import { describe, it, expect, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 // ---------------------------------------------------------------------------
 //  Mock <select-input> so we can capture the props that TypeaheadOverlay

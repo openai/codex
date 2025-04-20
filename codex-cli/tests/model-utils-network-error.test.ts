@@ -1,10 +1,10 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 // The model‑utils module reads OPENAI_API_KEY at import time. We therefore
 // need to tweak the env var *before* importing the module in each test and
 // make sure the module cache is cleared.
 
-const ORIGINAL_ENV_KEY = process.env["OPENAI_API_KEY"];
+const ORIGINAL_ENV_KEY = process.env.OPENAI_API_KEY;
 
 // Holders so individual tests can adjust behaviour of the OpenAI mock.
 const openAiState: { listSpy?: ReturnType<typeof vi.fn> } = {};
@@ -13,7 +13,7 @@ vi.mock("openai", () => {
   class FakeOpenAI {
     public models = {
       // `listSpy` will be swapped out by the tests
-      list: (...args: Array<any>) => openAiState.listSpy!(...args),
+      list: (...args: Array<any>) => openAiState.listSpy?.(...args),
     };
   }
 
@@ -27,16 +27,16 @@ describe("model-utils – offline resilience", () => {
   afterEach(() => {
     // Restore env var & module cache so tests are isolated.
     if (ORIGINAL_ENV_KEY !== undefined) {
-      process.env["OPENAI_API_KEY"] = ORIGINAL_ENV_KEY;
+      process.env.OPENAI_API_KEY = ORIGINAL_ENV_KEY;
     } else {
-      delete process.env["OPENAI_API_KEY"];
+      process.env.OPENAI_API_KEY = undefined;
     }
     vi.resetModules();
     openAiState.listSpy = undefined;
   });
 
   it("returns true when API key absent (no network available)", async () => {
-    delete process.env["OPENAI_API_KEY"];
+    process.env.OPENAI_API_KEY = undefined;
 
     // Re‑import after env change so the module picks up the new state.
     vi.resetModules();
@@ -49,7 +49,7 @@ describe("model-utils – offline resilience", () => {
   });
 
   it("falls back gracefully when openai.models.list throws a network error", async () => {
-    process.env["OPENAI_API_KEY"] = "dummy";
+    process.env.OPENAI_API_KEY = "dummy";
 
     const netErr: any = new Error("socket hang up");
     netErr.code = "ECONNRESET";

@@ -2,7 +2,7 @@
 
 import type { FileContent } from "./context_files.js";
 
-import path from "path";
+import path from "node:path";
 
 /**
  * Builds file-size and total-size maps for the provided files, keyed by absolute path.

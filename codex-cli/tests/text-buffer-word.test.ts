@@ -1,5 +1,5 @@
+import { describe, expect, test } from "vitest";
 import TextBuffer from "../src/text-buffer.js";
-import { describe, test, expect } from "vitest";
 
 describe("TextBuffer – word‑wise navigation & deletion", () => {
   test("wordRight moves to end‑of‑line when no further boundary", () => {

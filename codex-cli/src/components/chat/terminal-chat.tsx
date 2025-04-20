@@ -1,16 +1,14 @@
+import type { ColorName } from "chalk";
+import type { ResponseItem } from "openai/resources/responses/responses.mjs";
 import type { ApplyPatchCommand, ApprovalPolicy } from "../../approvals.js";
 import type { CommandConfirmation } from "../../utils/agent/agent-loop.js";
 import type { AppConfig } from "../../utils/config.js";
-import type { ColorName } from "chalk";
-import type { ResponseItem } from "openai/resources/responses/responses.mjs";
 
-import TerminalChatInput from "./terminal-chat-input.js";
-import { TerminalChatToolCallCommand } from "./terminal-chat-tool-call-command.js";
-import {
-  calculateContextPercentRemaining,
-  uniqueById,
-} from "./terminal-chat-utils.js";
-import TerminalMessageHistory from "./terminal-message-history.js";
+import { exec } from "node:child_process";
+import { inspect } from "node:util";
+import { Box, Text } from "ink";
+import OpenAI from "openai";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { formatCommandForDisplay } from "../../format-command.js";
 import { useConfirmation } from "../../hooks/use-confirmation.js";
 import { useTerminalSize } from "../../hooks/use-terminal-size.js";
@@ -28,11 +26,13 @@ import ApprovalModeOverlay from "../approval-mode-overlay.js";
 import HelpOverlay from "../help-overlay.js";
 import HistoryOverlay from "../history-overlay.js";
 import ModelOverlay from "../model-overlay.js";
-import { Box, Text } from "ink";
-import { exec } from "node:child_process";
-import OpenAI from "openai";
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { inspect } from "util";
+import TerminalChatInput from "./terminal-chat-input.js";
+import { TerminalChatToolCallCommand } from "./terminal-chat-tool-call-command.js";
+import {
+  calculateContextPercentRemaining,
+  uniqueById,
+} from "./terminal-chat-utils.js";
+import TerminalMessageHistory from "./terminal-message-history.js";
 
 type Props = {
   config: AppConfig;
@@ -44,7 +44,7 @@ type Props = {
 };
 
 const colorsByPolicy: Record<ApprovalPolicy, ColorName | undefined> = {
-  "suggest": undefined,
+  suggest: undefined,
   "auto-edit": "greenBright",
   "full-auto": "green",
 };
@@ -64,7 +64,7 @@ async function generateCommandExplanation(
   try {
     // Create a temporary OpenAI client
     const oai = new OpenAI({
-      apiKey: process.env["OPENAI_API_KEY"],
+      apiKey: process.env.OPENAI_API_KEY,
       baseURL: OPENAI_BASE_URL,
     });
 

@@ -1,16 +1,16 @@
+import type { SpawnOptions } from "node:child_process";
 import type { ExecResult } from "./interface.js";
-import type { SpawnOptions } from "child_process";
 
-import { exec } from "./raw-exec.js";
-import { log } from "../log.js";
 import { CONFIG_DIR } from "src/utils/config.js";
+import { log } from "../log.js";
+import { exec } from "./raw-exec.js";
 
 function getCommonRoots() {
   return [
     CONFIG_DIR,
     // Without this root, it'll cause:
     // pyenv: cannot rehash: $HOME/.pyenv/shims isn't writable
-    `${process.env["HOME"]}/.pyenv`,
+    `${process.env.HOME}/.pyenv`,
   ];
 }
 

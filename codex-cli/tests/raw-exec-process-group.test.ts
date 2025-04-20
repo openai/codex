@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { exec as rawExec } from "../src/utils/agent/sandbox/raw-exec.js";
 
 // Regression test: When cancelling an in‑flight `rawExec()` the implementation

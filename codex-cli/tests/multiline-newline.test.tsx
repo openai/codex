@@ -1,7 +1,7 @@
-import { renderTui } from "./ui-test-helpers.js";
-import MultilineTextEditor from "../src/components/chat/multiline-editor.js";
 import * as React from "react";
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
+import MultilineTextEditor from "../src/components/chat/multiline-editor.js";
+import { renderTui } from "./ui-test-helpers.js";
 
 // Helper to send keystrokes and wait for Ink's async timing so that the frame
 // reflects the input.
@@ -39,9 +39,7 @@ describe("MultilineTextEditor – inserting new lines", () => {
     const lines = frame.split("\n");
 
     // eslint-disable-next-line no-console
-    console.log(
-      "\n--- RENDERED FRAME ---\n" + frame + "\n---------------------",
-    );
+    console.log(`\n--- RENDERED FRAME ---\n${frame}\n---------------------`);
 
     // We expect at least two rendered lines and the texts to appear on their
     // own respective rows.

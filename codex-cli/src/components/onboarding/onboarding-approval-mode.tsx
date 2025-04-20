@@ -1,8 +1,8 @@
+import { Box, Text } from "ink";
+import type React from "react";
+import { AutoApprovalMode } from "src/utils/auto-approval-mode";
 // @ts-expect-error select.js is JavaScript and has no types
 import { Select } from "../vendor/ink-select/select";
-import { Box, Text } from "ink";
-import React from "react";
-import { AutoApprovalMode } from "src/utils/auto-approval-mode";
 
 // TODO: figure out why `cli-spinners` fails on Node v20.9.0
 // which is why we have to do this in the first place

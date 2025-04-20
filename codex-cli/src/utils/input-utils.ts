@@ -1,8 +1,8 @@
 import type { ResponseInputItem } from "openai/resources/responses/responses";
 
+import fs from "node:fs/promises";
+import path from "node:path";
 import { fileTypeFromBuffer } from "file-type";
-import fs from "fs/promises";
-import path from "path";
 
 export async function createInputItem(
   text: string,

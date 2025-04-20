@@ -1,8 +1,8 @@
-import { parseApplyPatch } from "../../parse-apply-patch";
-import { shortenPath } from "../../utils/short-path";
 import chalk from "chalk";
 import { Text } from "ink";
 import React from "react";
+import { parseApplyPatch } from "../../parse-apply-patch";
+import { shortenPath } from "../../utils/short-path";
 
 export function TerminalChatToolCallCommand({
   commandForDisplay,
@@ -52,23 +52,24 @@ export function TerminalChatToolCallCommand({
                   {line}
                 </Text>
               );
-            } else if (line.match(/^\s*\*\s+/)) {
+            }
+            if (line.match(/^\s*\*\s+/)) {
               // Style bullet points
               return (
                 <Text key={i} color="magenta">
                   {line}
                 </Text>
               );
-            } else if (line.match(/^(WARNING|CAUTION|NOTE):/i)) {
+            }
+            if (line.match(/^(WARNING|CAUTION|NOTE):/i)) {
               // Style warnings
               return (
                 <Text key={i} bold color="red">
                   {line}
                 </Text>
               );
-            } else {
-              return <Text key={i}>{line}</Text>;
             }
+            return <Text key={i}>{line}</Text>;
           })}
         </>
       )}

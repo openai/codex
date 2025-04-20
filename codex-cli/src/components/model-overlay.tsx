@@ -1,10 +1,10 @@
-import TypeaheadOverlay from "./typeahead-overlay.js";
-import {
-  getAvailableModels,
-  RECOMMENDED_MODELS,
-} from "../utils/model-utils.js";
 import { Box, Text, useInput } from "ink";
 import React, { useEffect, useState } from "react";
+import {
+  RECOMMENDED_MODELS,
+  getAvailableModels,
+} from "../utils/model-utils.js";
+import TypeaheadOverlay from "./typeahead-overlay.js";
 
 /**
  * Props for <ModelOverlay>.

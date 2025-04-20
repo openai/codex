@@ -2,10 +2,10 @@
 // Shift+Enter instead of a bare line‑feed.  Pressing Shift+Enter in that
 // environment should insert a newline **without** triggering submission.
 
-import { renderTui } from "./ui-test-helpers.js";
-import MultilineTextEditor from "../src/components/chat/multiline-editor.js";
 import * as React from "react";
-import { describe, it, expect, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import MultilineTextEditor from "../src/components/chat/multiline-editor.js";
+import { renderTui } from "./ui-test-helpers.js";
 
 async function type(
   stdin: NodeJS.WritableStream,

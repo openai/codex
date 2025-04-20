@@ -166,11 +166,11 @@ function buildLists(items: Array<ResponseItem>): {
     //    that is an array of strings. These are rendered as the joined command
     //    line for familiarity with traditional shells.
     const argsObj = argsJson as Record<string, unknown> | undefined;
-    const cmdArray: Array<string> | undefined = Array.isArray(argsObj?.["cmd"])
-      ? (argsObj!["cmd"] as Array<string>)
-      : Array.isArray(argsObj?.["command"])
-      ? (argsObj!["command"] as Array<string>)
-      : undefined;
+    const cmdArray: Array<string> | undefined = Array.isArray(argsObj?.cmd)
+      ? (argsObj?.cmd as Array<string>)
+      : Array.isArray(argsObj?.command)
+        ? (argsObj?.command as Array<string>)
+        : undefined;
 
     if (cmdArray && cmdArray.length > 0) {
       commands.push(cmdArray.join(" "));
@@ -191,7 +191,7 @@ function buildLists(items: Array<ResponseItem>): {
           const lines = patchTextMaybe.split("\n");
           for (const line of lines) {
             const m = line.match(/^[-+]{3} [ab]\/(.+)$/);
-            if (m && m[1]) {
+            if (m?.[1]) {
               filesSet.add(m[1]);
             }
           }

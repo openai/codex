@@ -12,8 +12,8 @@
 // remove the `.fails` flag.
 // ---------------------------------------------------------------------------
 
+import { describe, expect, it, vi } from "vitest";
 import { AgentLoop } from "../src/utils/agent/agent-loop.js";
-import { describe, it, expect, vi } from "vitest";
 
 // --- OpenAI mock -----------------------------------------------------------
 
@@ -110,7 +110,7 @@ describe("thinking time counter", () => {
       additionalWritableRoots: [],
       onItem: (i) => items.push(i),
       onLoading: () => {},
-      getCommandConfirmation: async () => ({ review: "yes" } as any),
+      getCommandConfirmation: async () => ({ review: "yes" }) as any,
       onLastResponseId: () => {},
     });
 
@@ -143,7 +143,7 @@ describe("thinking time counter", () => {
 
     const perTaskDurations = perTaskMsgs.map((m) => {
       const match = m.content[0].text.match(/Thinking time: (\d+) s/);
-      return match ? parseInt(match[1]!, 10) : NaN;
+      return match ? Number.parseInt(match[1]!, 10) : Number.NaN;
     });
 
     // First run ~10s, second run ~0.5s
@@ -165,7 +165,7 @@ describe("thinking time counter", () => {
 
     const globalDurations = globalMsgs.map((m) => {
       const match = m.content[0].text.match(/Total thinking time: (\d+) s/);
-      return match ? parseInt(match[1]!, 10) : NaN;
+      return match ? Number.parseInt(match[1]!, 10) : Number.NaN;
     });
 
     // Total after second run should exceed total after first

@@ -1,3 +1,5 @@
+import { Box, Text, useInput } from "ink";
+import React from "react";
 import { ReviewDecision } from "../../utils/agent/review";
 // TODO: figure out why `cli-spinners` fails on Node v20.9.0
 // which is why we have to do this in the first place
@@ -5,8 +7,6 @@ import { ReviewDecision } from "../../utils/agent/review";
 // @ts-expect-error select.js is JavaScript and has no types
 import { Select } from "../vendor/ink-select/select";
 import TextInput from "../vendor/ink-text-input";
-import { Box, Text, useInput } from "ink";
-import React from "react";
 
 // default deny‑reason:
 const DEFAULT_DENY_MESSAGE =
@@ -188,15 +188,14 @@ export function TerminalChatCommandReview({
                       );
                     }
                     // Apply different styling to headings (numbered items)
-                    else if (line.match(/^\d+\.\s+/)) {
+                    if (line.match(/^\d+\.\s+/)) {
                       return (
                         <Text key={i} bold color="cyan">
                           {line}
                         </Text>
                       );
-                    } else {
-                      return <Text key={i}>{line}</Text>;
                     }
+                    return <Text key={i}>{line}</Text>;
                   })}
                 </>
               ) : (

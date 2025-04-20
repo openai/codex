@@ -55,8 +55,8 @@ function cpSlice(str: string, start: number, end?: number): string {
 
 // Enable verbose logging only when requested via env var.
 const DEBUG =
-  process.env["TEXTBUFFER_DEBUG"] === "1" ||
-  process.env["TEXTBUFFER_DEBUG"] === "true";
+  process.env.TEXTBUFFER_DEBUG === "1" ||
+  process.env.TEXTBUFFER_DEBUG === "true";
 
 function dbg(...args: Array<unknown>): void {
   if (DEBUG) {
@@ -137,8 +137,8 @@ export default class TextBuffer {
 
     const editor =
       opts.editor ??
-      process.env["VISUAL"] ??
-      process.env["EDITOR"] ??
+      process.env.VISUAL ??
+      process.env.EDITOR ??
       (process.platform === "win32" ? "notepad" : "vi");
 
     // Prepare a temporary file with the current contents.  We use mkdtempSync
@@ -774,42 +774,29 @@ export default class TextBuffer {
     const beforeVer = this.version;
     const [beforeRow, beforeCol] = this.getCursor();
 
-    if (key["escape"]) {
+    if (key.escape) {
       return false;
     }
 
     /* new line — Ink sets either `key.return` *or* passes a literal "\n" */
-    if (key["return"] || input === "\r" || input === "\n") {
+    if (key.return || input === "\r" || input === "\n") {
       this.newline();
-    } else if (
-      key["leftArrow"] &&
-      !key["meta"] &&
-      !key["ctrl"] &&
-      !key["alt"]
-    ) {
+    } else if (key.leftArrow && !key.meta && !key.ctrl && !key.alt) {
       /* navigation */
       this.move("left");
-    } else if (
-      key["rightArrow"] &&
-      !key["meta"] &&
-      !key["ctrl"] &&
-      !key["alt"]
-    ) {
+    } else if (key.rightArrow && !key.meta && !key.ctrl && !key.alt) {
       this.move("right");
-    } else if (key["upArrow"]) {
+    } else if (key.upArrow) {
       this.move("up");
-    } else if (key["downArrow"]) {
+    } else if (key.downArrow) {
       this.move("down");
-    } else if ((key["meta"] || key["ctrl"] || key["alt"]) && key["leftArrow"]) {
+    } else if ((key.meta || key.ctrl || key.alt) && key.leftArrow) {
       this.move("wordLeft");
-    } else if (
-      (key["meta"] || key["ctrl"] || key["alt"]) &&
-      key["rightArrow"]
-    ) {
+    } else if ((key.meta || key.ctrl || key.alt) && key.rightArrow) {
       this.move("wordRight");
-    } else if (key["home"]) {
+    } else if (key.home) {
       this.move("home");
-    } else if (key["end"]) {
+    } else if (key.end) {
       this.move("end");
     }
     /* delete */
@@ -819,16 +806,16 @@ export default class TextBuffer {
     // Backspace for parity with textarea.rs and to make interactive tests
     // feedable through the simpler `(ch, {}, vp)` path.
     else if (
-      (key["meta"] || key["ctrl"] || key["alt"]) &&
-      (key["backspace"] || input === "\x7f")
+      (key.meta || key.ctrl || key.alt) &&
+      (key.backspace || input === "\x7f")
     ) {
       this.deleteWordLeft();
-    } else if ((key["meta"] || key["ctrl"] || key["alt"]) && key["delete"]) {
+    } else if ((key.meta || key.ctrl || key.alt) && key.delete) {
       this.deleteWordRight();
     } else if (
-      key["backspace"] ||
+      key.backspace ||
       input === "\x7f" ||
-      (key["delete"] && !key["shift"])
+      (key.delete && !key.shift)
     ) {
       // Treat un‑modified "delete" (the common Mac backspace key) as a
       // standard backspace.  Holding Shift+Delete continues to perform a
@@ -839,9 +826,9 @@ export default class TextBuffer {
     // Forward deletion (Fn+Delete on macOS, or Delete key with Shift held after
     // the branch above) – remove the character *under / to the right* of the
     // caret, merging lines when at EOL similar to many editors.
-    else if (key["delete"]) {
+    else if (key.delete) {
       this.del();
-    } else if (input && !key["ctrl"] && !key["meta"]) {
+    } else if (input && !key.ctrl && !key.meta) {
       this.insert(input);
     }
 

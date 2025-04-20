@@ -1,7 +1,7 @@
-import path from "path";
+import path from "node:path";
 
 export function shortenPath(p: string, maxLength = 40): string {
-  const home = process.env["HOME"];
+  const home = process.env.HOME;
   // Replace home directory with '~' if applicable.
   const displayPath =
     home !== undefined && p.startsWith(home) ? p.replace(home, "~") : p;

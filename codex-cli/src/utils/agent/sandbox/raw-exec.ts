@@ -1,16 +1,16 @@
-import type { ExecResult } from "./interface";
 import type {
   ChildProcess,
   SpawnOptions,
   SpawnOptionsWithStdioTuple,
   StdioNull,
   StdioPipe,
-} from "child_process";
+} from "node:child_process";
+import type { ExecResult } from "./interface";
 
-import { log, isLoggingEnabled } from "../log.js";
+import { spawn } from "node:child_process";
+import * as os from "node:os";
+import { isLoggingEnabled, log } from "../log.js";
 import { adaptCommandForPlatform } from "../platform-commands.js";
-import { spawn } from "child_process";
-import * as os from "os";
 
 const MAX_BUFFER = 1024 * 100; // 100 KB
 

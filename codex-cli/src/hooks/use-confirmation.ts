@@ -1,8 +1,8 @@
+import type React from "react";
 // use-confirmation.ts
 import type { ReviewDecision } from "../utils/agent/review";
-import type React from "react";
 
-import { useState, useCallback, useRef } from "react";
+import { useCallback, useRef, useState } from "react";
 
 type ConfirmationResult = {
   decision: ReviewDecision;

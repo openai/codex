@@ -1,26 +1,26 @@
-import type { MultilineTextEditorHandle } from "./multiline-editor";
-import type { ReviewDecision } from "../../utils/agent/review.js";
-import type { HistoryEntry } from "../../utils/storage/command-history.js";
 import type {
   ResponseInputItem,
   ResponseItem,
 } from "openai/resources/responses/responses.mjs";
+import type { ReviewDecision } from "../../utils/agent/review.js";
+import type { HistoryEntry } from "../../utils/storage/command-history.js";
+import type { MultilineTextEditorHandle } from "./multiline-editor";
 
-import MultilineTextEditor from "./multiline-editor";
-import { TerminalChatCommandReview } from "./terminal-chat-command-review.js";
-import { log, isLoggingEnabled } from "../../utils/agent/log.js";
+import { fileURLToPath } from "node:url";
+import { Box, Text, useApp, useInput, useStdin } from "ink";
+import React, { useCallback, useState, Fragment, useEffect } from "react";
+import { useInterval } from "use-interval";
+import { isLoggingEnabled, log } from "../../utils/agent/log.js";
 import { loadConfig } from "../../utils/config.js";
 import { createInputItem } from "../../utils/input-utils.js";
 import { setSessionId } from "../../utils/session.js";
 import {
-  loadCommandHistory,
   addToHistory,
+  loadCommandHistory,
 } from "../../utils/storage/command-history.js";
 import { clearTerminal, onExit } from "../../utils/terminal.js";
-import { Box, Text, useApp, useInput, useStdin } from "ink";
-import { fileURLToPath } from "node:url";
-import React, { useCallback, useState, Fragment, useEffect } from "react";
-import { useInterval } from "use-interval";
+import MultilineTextEditor from "./multiline-editor";
+import { TerminalChatCommandReview } from "./terminal-chat-command-review.js";
 
 const suggestions = [
   "explain this codebase to me",
@@ -34,7 +34,7 @@ const typeHelpText = `ctrl+c to exit | "/clear" to reset context | "/help" for c
 // DEBUG_TCI environment variable is truthy.  The traces help while debugging
 // unit‑test failures but remain silent in production.
 const DEBUG_HIST =
-  process.env["DEBUG_TCI"] === "1" || process.env["DEBUG_TCI"] === "true";
+  process.env.DEBUG_TCI === "1" || process.env.DEBUG_TCI === "true";
 
 // Placeholder for potential dynamic prompts – currently not used.
 
@@ -251,7 +251,8 @@ export default function TerminalChatInput({
           process.exit(0);
         }, 60);
         return;
-      } else if (inputValue === "/clear" || inputValue === "clear") {
+      }
+      if (inputValue === "/clear" || inputValue === "clear") {
         setInput("");
         setSessionId("");
         setLastResponseId("");
@@ -270,7 +271,8 @@ export default function TerminalChatInput({
         ]);
 
         return;
-      } else if (inputValue === "/clearhistory") {
+      }
+      if (inputValue === "/clearhistory") {
         setInput("");
 
         // Import clearCommandHistory function to avoid circular dependencies
@@ -439,7 +441,7 @@ function TerminalChatInputThinking({
 
   // Animate ellipsis
   useInterval(() => {
-    setDots((prev) => (prev.length < 3 ? prev + "." : ""));
+    setDots((prev) => (prev.length < 3 ? `${prev}.` : ""));
   }, 500);
 
   // Spinner frames with seconds embedded
