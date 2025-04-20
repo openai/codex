@@ -37,7 +37,13 @@ import OpenAI from "openai";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { inspect } from "util";
 
-export type OverlayModeType =  "none" | "history" | "model" | "approval" | "help" | "diff" 
+export type OverlayModeType =
+  | "none"
+  | "history"
+  | "model"
+  | "approval"
+  | "help"
+  | "diff";
 
 type Props = {
   config: AppConfig;
@@ -460,7 +466,7 @@ export default function TerminalChat({
       <Box flexDirection="column">
         {agent ? (
           <TerminalMessageHistory
-          setOverlayMode={setOverlayMode}
+            setOverlayMode={setOverlayMode}
             batch={lastMessageBatch}
             groupCounts={groupCounts}
             items={items}
