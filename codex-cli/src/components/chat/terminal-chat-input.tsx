@@ -20,7 +20,13 @@ import {
 import { clearTerminal, onExit } from "../../utils/terminal.js";
 import { Box, Text, useApp, useInput, useStdin } from "ink";
 import { fileURLToPath } from "node:url";
-import React, { useCallback, useState, Fragment, useEffect, useRef } from "react";
+import React, {
+  useCallback,
+  useState,
+  Fragment,
+  useEffect,
+  useRef,
+} from "react";
 import { useInterval } from "use-interval";
 
 const suggestions = [
