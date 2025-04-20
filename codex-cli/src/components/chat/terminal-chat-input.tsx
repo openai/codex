@@ -1,3 +1,4 @@
+import type { MultilineTextEditorHandle } from "./multiline-editor";
 import type { ReviewDecision } from "../../utils/agent/review.js";
 import type { HistoryEntry } from "../../utils/storage/command-history.js";
 import type {
@@ -5,6 +6,7 @@ import type {
   ResponseItem,
 } from "openai/resources/responses/responses.mjs";
 
+import MultilineTextEditor from "./multiline-editor";
 import { TerminalChatCommandReview } from "./terminal-chat-command-review.js";
 import { log, isLoggingEnabled } from "../../utils/agent/log.js";
 import { loadConfig } from "../../utils/config.js";
@@ -16,10 +18,15 @@ import {
   addToHistory,
 } from "../../utils/storage/command-history.js";
 import { clearTerminal, onExit } from "../../utils/terminal.js";
-import TextInput from "../vendor/ink-text-input.js";
 import { Box, Text, useApp, useInput, useStdin } from "ink";
 import { fileURLToPath } from "node:url";
-import React, { useCallback, useState, Fragment, useEffect } from "react";
+import React, {
+  useCallback,
+  useState,
+  Fragment,
+  useEffect,
+  useRef,
+} from "react";
 import { useInterval } from "use-interval";
 
 const suggestions = [
@@ -83,6 +90,12 @@ export default function TerminalChatInput({
   const [historyIndex, setHistoryIndex] = useState<number | null>(null);
   const [draftInput, setDraftInput] = useState<string>("");
   const [skipNextSubmit, setSkipNextSubmit] = useState<boolean>(false);
+  // Multiline text editor key to force remount after submission
+  const [editorKey, setEditorKey] = useState(0);
+  // Imperative handle from the multiline editor so we can query caret position
+  const editorRef = useRef<MultilineTextEditorHandle | null>(null);
+  // Track the caret row across keystrokes
+  const prevCursorRow = useRef<number | null>(null);
 
   // Load command history on component mount
   useEffect(() => {
@@ -184,9 +197,15 @@ export default function TerminalChatInput({
       }
       if (!confirmationPrompt && !loading) {
         if (_key.upArrow) {
-          if (history.length > 0) {
+          // Only recall history when the caret was *already* on the very first
+          // row *before* this key-press.
+          const cursorRow = editorRef.current?.getRow?.() ?? 0;
+          const wasAtFirstRow = (prevCursorRow.current ?? cursorRow) === 0;
+
+          if (history.length > 0 && cursorRow === 0 && wasAtFirstRow) {
             if (historyIndex == null) {
-              setDraftInput(input);
+              const currentDraft = editorRef.current?.getText?.() ?? input;
+              setDraftInput(currentDraft);
             }
 
             let newIndex: number;
@@ -197,26 +216,36 @@ export default function TerminalChatInput({
             }
             setHistoryIndex(newIndex);
             setInput(history[newIndex]?.command ?? "");
+            // Re-mount the editor so it picks up the new initialText
+            setEditorKey((k) => k + 1);
+            return; // we handled the key
           }
-          return;
+          // Otherwise let the event propagate so the editor moves the caret
         }
 
         if (_key.downArrow) {
-          if (historyIndex == null) {
-            return;
+          // Only move forward in history when we're already *in* history mode
+          // AND the caret sits on the last line of the buffer
+          if (historyIndex != null && editorRef.current?.isCursorAtLastRow()) {
+            const newIndex = historyIndex + 1;
+            if (newIndex >= history.length) {
+              setHistoryIndex(null);
+              setInput(draftInput);
+              setEditorKey((k) => k + 1);
+            } else {
+              setHistoryIndex(newIndex);
+              setInput(history[newIndex]?.command ?? "");
+              setEditorKey((k) => k + 1);
+            }
+            return; // handled
           }
-
-          const newIndex = historyIndex + 1;
-          if (newIndex >= history.length) {
-            setHistoryIndex(null);
-            setInput(draftInput);
-          } else {
-            setHistoryIndex(newIndex);
-            setInput(history[newIndex]?.command ?? "");
-          }
-          return;
+          // Otherwise let it propagate
         }
       }
+
+      // Update the cached cursor position *after* we've potentially handled
+      // the key so that the next event has the correct "previous" reference.
+      prevCursorRow.current = editorRef.current?.getRow?.() ?? null;
 
       if (input.trim() === "" && isNew) {
         if (_key.tab) {
@@ -537,25 +566,27 @@ export default function TerminalChatInput({
             thinkingSeconds={thinkingSeconds}
           />
         ) : (
-          <Box paddingX={1}>
-            <TextInput
-              focus={active}
-              placeholder={
-                selectedSuggestion
-                  ? `"${suggestions[selectedSuggestion - 1]}"`
-                  : "send a message" +
-                    (isNew ? " or press tab to select a suggestion" : "")
-              }
-              showCursor
-              value={input}
-              onChange={(value) => {
-                setDraftInput(value);
+          <Box>
+            <MultilineTextEditor
+              ref={editorRef}
+              onChange={(txt: string) => {
+                setDraftInput(txt);
                 if (historyIndex != null) {
                   setHistoryIndex(null);
                 }
-                setInput(value);
+                setInput(txt);
               }}
-              onSubmit={onSubmit}
+              key={editorKey}
+              initialText={input}
+              height={6}
+              focus={active}
+              onSubmit={(txt) => {
+                onSubmit(txt);
+                setEditorKey((k) => k + 1);
+                setInput("");
+                setHistoryIndex(null);
+                setDraftInput("");
+              }}
             />
           </Box>
         )}
@@ -600,7 +631,7 @@ export default function TerminalChatInput({
           ) : (
             <>
               send q or ctrl+c to exit | send "/clear" to reset | send "/help"
-              for commands | press enter to send
+              for commands | press enter to send | shift+enter for new line
               {contextLeftPercent > 25 && (
                 <>
                   {" — "}
