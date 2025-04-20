@@ -46,14 +46,6 @@ export type OverlayModeType =
   | "help"
   | "diff";
 
-export type OverlayModeType =
-  | "none"
-  | "history"
-  | "model"
-  | "approval"
-  | "help"
-  | "diff";
-
 type Props = {
   config: AppConfig;
   prompt?: string;
@@ -107,7 +99,6 @@ async function generateCommandExplanation(
         },
       ],
     });
-
     // Extract the explanation from the response
     const explanation =
       response.choices[0]?.message.content || "Unable to generate explanation.";
@@ -149,7 +140,7 @@ export default function TerminalChat({
   // Desktop notification setting
   const notify = config.notify;
   const [model, setModel] = useState<string>(config.model);
-  const [availableModels, setAvailableModels] = useState<Array<string>>([]); // State to hold available models
+  const [availableModels, setAvailableModels] = useState<Array<string>>([]);
   const [lastResponseId, setLastResponseId] = useState<string | null>(null);
   const [items, setItems] = useState<Array<ResponseItem>>([]);
   const [loading, setLoading] = useState<boolean>(false);
@@ -424,7 +415,7 @@ export default function TerminalChat({
   useEffect(() => {
     (async () => {
       const available = await getAvailableModels();
-      setAvailableModels(available); // <--- ADDED THIS LINE (fixes available models list)
+      setAvailableModels(available);
       if (model && available.length > 0 && !available.includes(model)) {
         setItems((prev) => [
           ...prev,
@@ -469,7 +460,7 @@ export default function TerminalChat({
             items={items}
             userMsgCount={userMsgCount}
             confirmationPrompt={confirmationPrompt}
-            explanation={explanation} // Pass explanation down
+            explanation={explanation}
             loading={loading}
             thinkingSeconds={thinkingSeconds}
             fullStdout={fullStdout}
@@ -513,24 +504,22 @@ export default function TerminalChat({
             openApprovalOverlay={() => setOverlayMode("approval")}
             openHelpOverlay={() => setOverlayMode("help")}
             openDiffOverlay={() => {
-              const { isGitRepo, diff } = getGitDiff(); // Uses the function from the missing file
+              const { isGitRepo, diff } = getGitDiff();
               let text: string;
               if (isGitRepo) {
-                text = diff; // Use the actual diff
+                text = diff;
               } else {
-                text = "`/diff` — _not inside a git repository_"; // Message if not a git repo
+                text = "`/diff` — _not inside a git repository_";
               }
-              // Add the diff or message to the chat history
               setItems((prev) => [
                 ...prev,
                 {
                   id: `diff-${Date.now()}`,
                   type: "message",
-                  role: "system", // Or perhaps 'user' since it's a user command result
+                  role: "system",
                   content: [{ type: "input_text", text }],
-                } as ResponseItem, // Cast for type safety
+                } as ResponseItem,
               ]);
-              // Ensure no overlay is shown immediately after /diff command is processed
               setOverlayMode("none");
             }}
             onCompact={handleCompact}
@@ -572,15 +561,14 @@ export default function TerminalChat({
         {overlayMode === "history" && (
           <HistoryOverlay items={items} onExit={() => setOverlayMode("none")} />
         )}
-        {/* ModelOverlay is rendered here */}
         {overlayMode === "model" && (
           <ModelOverlay
             currentModel={model}
             hasLastResponse={Boolean(lastResponseId)}
             onSelect={(newModel) => {
-              // Check if the selected model is available (from your branch's changes)
+              // Check if the selected model is available
               if (!availableModels.includes(newModel)) {
-                // Display error message directly in chat history if not available (from your branch's changes)
+                // Display error message directly in chat history if not available
                 setItems(
                   (prev) =>
                     [
@@ -588,10 +576,10 @@ export default function TerminalChat({
                       {
                         id: `model-not-available-${Date.now()}`,
                         type: "message",
-                        role: "system", // Consider 'system' for errors like this
+                        role: "system",
                         content: [
                           {
-                            type: "input_text", // Using input_text to render as a system message
+                            type: "input_text",
                             text: `${chalk.red("Error:")} Model "${chalk.bold(
                               newModel,
                             )}" is not available.\nAvailable models: ${chalk.green(
@@ -601,24 +589,18 @@ export default function TerminalChat({
                         ],
                       },
                     ] as ResponseItem[],
-                ); // Cast for type safety
+                );
                 // Close the overlay without changing the model
                 setOverlayMode("none");
                 return; // Exit the handler if the model is unavailable
               }
 
-              // If model is available, proceed with switching (Combined logic from both branches)
-              // Note: Logging calls appear slightly different between branches, combined here
-              if (log) {
-                // Check if log is enabled before using it
-                log(
-                  "TerminalChat: Switching model - cancelling agent and updating state",
-                ); // More descriptive log message
-                if (!agent) {
-                  log(
-                    "TerminalChat: agent is not ready yet during model switch",
-                  );
-                }
+              // If model is available, proceed with switching
+              log(
+                "TerminalChat: Switching model - cancelling agent and updating state",
+              );
+              if (!agent) {
+                log("TerminalChat: agent is not ready yet during model switch");
               }
               agent?.cancel(); // Cancel any ongoing agent activity
               setLoading(false); // Stop loading indicator
@@ -646,14 +628,13 @@ export default function TerminalChat({
                       ],
                     },
                   ] as ResponseItem[],
-              ); // Cast for type safety
+              );
 
               // Close the overlay
               setOverlayMode("none");
             }}
             onExit={() => setOverlayMode("none")}
-            availableModels={availableModels} // Pass the fetched list down
-            // Removed setModels prop as ModelOverlay shouldn't manage availableModels state
+            availableModels={availableModels}
           />
         )}
 
@@ -691,7 +672,7 @@ export default function TerminalChat({
                       ],
                     },
                   ] as ResponseItem[],
-              ); // Cast for type safety
+              );
 
               setOverlayMode("none");
             }}
