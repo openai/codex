@@ -111,6 +111,7 @@ function TerminalChatResponseMessage({
   message: ResponseInputMessageItem | ResponseOutputMessage;
   setOverlayMode?: React.Dispatch<React.SetStateAction<OverlayModeType>>;
 }) {
+  // auto switch to model mode if the system message contains "has been deprecated"
   useEffect(() => {
     if (message.role === "system") {
       const systemMessage = message.content.find(
