@@ -1,3 +1,4 @@
+import type { OverlayModeType } from "./terminal-chat";
 import type { TerminalRendererOptions } from "marked-terminal";
 import type {
   ResponseFunctionToolCallItem,
@@ -15,7 +16,6 @@ import { Box, Text } from "ink";
 import { parse, setOptions } from "marked";
 import TerminalRenderer from "marked-terminal";
 import React, { useEffect, useMemo } from "react";
-import { OverlayModeType } from "./terminal-chat";
 
 export default function TerminalChatResponseItem({
   item,
@@ -120,7 +120,7 @@ function TerminalChatResponseMessage({
         setOverlayMode?.("model");
       }
     }
-  }, [message]);
+  }, [message, setOverlayMode]);
 
   return (
     <Box flexDirection="column">
