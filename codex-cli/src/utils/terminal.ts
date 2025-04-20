@@ -51,7 +51,7 @@ export function clearTerminal(): void {
     inkRenderer.clear();
   }
   // Also clear scrollback and primary buffer to ensure a truly blank slate
-  process.stdout.write('\x1b[3J\x1b[H\x1b[2J');
+  process.stdout.write("\x1b[3J\x1b[H\x1b[2J");
 }
 
 export function onExit(): void {

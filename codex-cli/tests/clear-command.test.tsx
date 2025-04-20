@@ -165,4 +165,4 @@ describe("clearTerminal", () => {
       delete process.env["CODEX_QUIET_MODE"];
     }
   });
-}); 
+});
