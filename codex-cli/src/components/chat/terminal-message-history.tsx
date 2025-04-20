@@ -4,7 +4,7 @@ import type { ResponseItem } from "openai/resources/responses/responses.mjs";
 
 import TerminalChatResponseItem from "./terminal-chat-response-item.js";
 import TerminalHeader from "./terminal-header.js";
-import { Box, Static, Text } from "ink";
+import { Box, Static } from "ink";
 import React, { useMemo } from "react";
 
 // A batch entry can either be a standalone response item or a grouped set of
@@ -26,30 +26,31 @@ type MessageHistoryProps = {
 const MessageHistory: React.FC<MessageHistoryProps> = ({
   batch,
   headerProps,
-  loading,
-  thinkingSeconds,
+  // `loading` and `thinkingSeconds` handled by input component now.
+  loading: _loading,
+  thinkingSeconds: _thinkingSeconds,
   fullStdout,
 }) => {
-  const [messages, debug] = useMemo(
-    () => [batch.map(({ item }) => item!), process.env["DEBUG"]],
-    [batch],
-  );
+  // Flatten batch entries to response items.
+  const messages = useMemo(() => batch.map(({ item }) => item!), [batch]);
 
   return (
     <Box flexDirection="column">
-      {loading && debug && (
-        <Box marginTop={1}>
-          <Text color="yellow">{`(${thinkingSeconds}s)`}</Text>
-        </Box>
-      )}
+      {/* The dedicated thinking indicator in the input area now displays the
+          elapsed time, so we no longer render a separate counter here. */}
       <Static items={["header", ...messages]}>
         {(item, index) => {
           if (item === "header") {
             return <TerminalHeader key="header" {...headerProps} />;
           }
 
-          // After the guard above `item` can only be a ResponseItem.
+          // After the guard above, item is a ResponseItem
           const message = item as ResponseItem;
+          // Suppress empty reasoning updates (i.e. items with an empty summary).
+          const msg = message as unknown as { summary?: Array<unknown> };
+          if (msg.summary?.length === 0) {
+            return null;
+          }
           return (
             <Box
               key={`${message.id}-${index}`}

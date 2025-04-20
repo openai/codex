@@ -11,7 +11,7 @@
     ],
     "types": ["node"],
     "baseUrl": "./",
-    "resolveJsonModule": false, // ESM doesn't yet support JSON modules.
+    "resolveJsonModule": true, // ESM doesn't yet support JSON modules.
     "jsx": "react",
     "declaration": true,
     "newLine": "lf",
@@ -30,5 +30,5 @@
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true
   },
-  "include": ["src", "tests"]
+  "include": ["src", "tests", "bin"]
 }

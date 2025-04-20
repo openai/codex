@@ -3,6 +3,16 @@
 
 import fs from "fs";
 import path from "path";
+import {
+  ADD_FILE_PREFIX,
+  DELETE_FILE_PREFIX,
+  END_OF_FILE_PREFIX,
+  MOVE_FILE_TO_PREFIX,
+  PATCH_SUFFIX,
+  UPDATE_FILE_PREFIX,
+  HUNK_ADD_LINE_PREFIX,
+  PATCH_PREFIX,
+} from "src/parse-apply-patch";
 
 // -----------------------------------------------------------------------------
 // Types & Models
@@ -103,7 +113,7 @@ class Parser {
     }
     if (
       prefixes &&
-      prefixes.some((p) => this.lines[this.index]!.startsWith(p))
+      prefixes.some((p) => this.lines[this.index]!.startsWith(p.trim()))
     ) {
       return true;
     }
@@ -130,13 +140,13 @@ class Parser {
   }
 
   parse(): void {
-    while (!this.is_done(["*** End Patch"])) {
-      let path = this.read_str("*** Update File: ");
+    while (!this.is_done([PATCH_SUFFIX])) {
+      let path = this.read_str(UPDATE_FILE_PREFIX);
       if (path) {
         if (this.patch.actions[path]) {
           throw new DiffError(`Update File Error: Duplicate Path: ${path}`);
         }
-        const moveTo = this.read_str("*** Move to: ");
+        const moveTo = this.read_str(MOVE_FILE_TO_PREFIX);
         if (!(path in this.current_files)) {
           throw new DiffError(`Update File Error: Missing File: ${path}`);
         }
@@ -146,7 +156,7 @@ class Parser {
         this.patch.actions[path] = action;
         continue;
       }
-      path = this.read_str("*** Delete File: ");
+      path = this.read_str(DELETE_FILE_PREFIX);
       if (path) {
         if (this.patch.actions[path]) {
           throw new DiffError(`Delete File Error: Duplicate Path: ${path}`);
@@ -157,7 +167,7 @@ class Parser {
         this.patch.actions[path] = { type: ActionType.DELETE, chunks: [] };
         continue;
       }
-      path = this.read_str("*** Add File: ");
+      path = this.read_str(ADD_FILE_PREFIX);
       if (path) {
         if (this.patch.actions[path]) {
           throw new DiffError(`Add File Error: Duplicate Path: ${path}`);
@@ -170,7 +180,7 @@ class Parser {
       }
       throw new DiffError(`Unknown Line: ${this.lines[this.index]}`);
     }
-    if (!this.startswith("*** End Patch")) {
+    if (!this.startswith(PATCH_SUFFIX.trim())) {
       throw new DiffError("Missing End Patch");
     }
     this.index += 1;
@@ -183,11 +193,11 @@ class Parser {
 
     while (
       !this.is_done([
-        "*** End Patch",
-        "*** Update File:",
-        "*** Delete File:",
-        "*** Add File:",
-        "*** End of File",
+        PATCH_SUFFIX,
+        UPDATE_FILE_PREFIX,
+        DELETE_FILE_PREFIX,
+        ADD_FILE_PREFIX,
+        END_OF_FILE_PREFIX,
       ])
     ) {
       const defStr = this.read_str("@@ ");
@@ -258,14 +268,14 @@ class Parser {
     const lines: Array<string> = [];
     while (
       !this.is_done([
-        "*** End Patch",
-        "*** Update File:",
-        "*** Delete File:",
-        "*** Add File:",
+        PATCH_SUFFIX,
+        UPDATE_FILE_PREFIX,
+        DELETE_FILE_PREFIX,
+        ADD_FILE_PREFIX,
       ])
     ) {
       const s = this.read_str();
-      if (!s.startsWith("+")) {
+      if (!s.startsWith(HUNK_ADD_LINE_PREFIX)) {
         throw new DiffError(`Invalid Add File Line: ${s}`);
       }
       lines.push(s.slice(1));
@@ -349,12 +359,14 @@ function peek_next_section(
   while (index < lines.length) {
     const s = lines[index]!;
     if (
-      s.startsWith("@@") ||
-      s.startsWith("*** End Patch") ||
-      s.startsWith("*** Update File:") ||
-      s.startsWith("*** Delete File:") ||
-      s.startsWith("*** Add File:") ||
-      s.startsWith("*** End of File")
+      [
+        "@@",
+        PATCH_SUFFIX,
+        UPDATE_FILE_PREFIX,
+        DELETE_FILE_PREFIX,
+        ADD_FILE_PREFIX,
+        END_OF_FILE_PREFIX,
+      ].some((p) => s.startsWith(p.trim()))
     ) {
       break;
     }
@@ -367,7 +379,7 @@ function peek_next_section(
     index += 1;
     const lastMode: "keep" | "add" | "delete" = mode;
     let line = s;
-    if (line[0] === "+") {
+    if (line[0] === HUNK_ADD_LINE_PREFIX) {
       mode = "add";
     } else if (line[0] === "-") {
       mode = "delete";
@@ -412,7 +424,7 @@ function peek_next_section(
       ins_lines: insLines,
     });
   }
-  if (index < lines.length && lines[index] === "*** End of File") {
+  if (index < lines.length && lines[index] === END_OF_FILE_PREFIX) {
     index += 1;
     return [old, chunks, index, true];
   }
@@ -430,8 +442,8 @@ export function text_to_patch(
   const lines = text.trim().split("\n");
   if (
     lines.length < 2 ||
-    !(lines[0] ?? "").startsWith("*** Begin Patch") ||
-    lines[lines.length - 1] !== "*** End Patch"
+    !(lines[0] ?? "").startsWith(PATCH_PREFIX.trim()) ||
+    lines[lines.length - 1] !== PATCH_SUFFIX.trim()
   ) {
     throw new DiffError("Invalid patch text");
   }
@@ -445,11 +457,11 @@ export function identify_files_needed(text: string): Array<string> {
   const lines = text.trim().split("\n");
   const result = new Set<string>();
   for (const line of lines) {
-    if (line.startsWith("*** Update File: ")) {
-      result.add(line.slice("*** Update File: ".length));
+    if (line.startsWith(UPDATE_FILE_PREFIX)) {
+      result.add(line.slice(UPDATE_FILE_PREFIX.length));
     }
-    if (line.startsWith("*** Delete File: ")) {
-      result.add(line.slice("*** Delete File: ".length));
+    if (line.startsWith(DELETE_FILE_PREFIX)) {
+      result.add(line.slice(DELETE_FILE_PREFIX.length));
     }
   }
   return [...result];
@@ -459,8 +471,8 @@ export function identify_files_added(text: string): Array<string> {
   const lines = text.trim().split("\n");
   const result = new Set<string>();
   for (const line of lines) {
-    if (line.startsWith("*** Add File: ")) {
-      result.add(line.slice("*** Add File: ".length));
+    if (line.startsWith(ADD_FILE_PREFIX)) {
+      result.add(line.slice(ADD_FILE_PREFIX.length));
     }
   }
   return [...result];
@@ -581,8 +593,8 @@ export function process_patch(
   writeFn: (p: string, c: string) => void,
   removeFn: (p: string) => void,
 ): string {
-  if (!text.startsWith("*** Begin Patch")) {
-    throw new DiffError("Patch must start with *** Begin Patch");
+  if (!text.startsWith(PATCH_PREFIX)) {
+    throw new DiffError("Patch must start with *** Begin Patch\\n");
   }
   const paths = identify_files_needed(text);
   const orig = load_files(paths, openFn);

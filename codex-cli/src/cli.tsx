@@ -12,7 +12,7 @@ import type { AppConfig } from "./utils/config";
 import type { ResponseItem } from "openai/resources/responses/responses";
 
 import App from "./app";
-import { runSinglePass } from "./cli_singlepass";
+import { runSinglePass } from "./cli-singlepass";
 import { AgentLoop } from "./utils/agent/agent-loop";
 import { initLogger } from "./utils/agent/log";
 import { ReviewDecision } from "./utils/agent/review";
@@ -50,13 +50,14 @@ const cli = meow(
     $ codex completion <bash|zsh|fish>
 
   Options
-    -h, --help                 Show usage and exit
-    -m, --model <model>        Model to use for completions (default: o4-mini)
-    -i, --image <path>         Path(s) to image files to include as input
-    -v, --view <rollout>       Inspect a previously saved rollout instead of starting a session
-    -q, --quiet                Non-interactive mode that only prints the assistant's final output
-    -c, --config               Open the instructions file in your editor
-    -a, --approval-mode <mode> Override the approval policy: 'suggest', 'auto-edit', or 'full-auto'
+    -h, --help                      Show usage and exit
+    -m, --model <model>             Model to use for completions (default: o4-mini)
+    -i, --image <path>              Path(s) to image files to include as input
+    -v, --view <rollout>            Inspect a previously saved rollout instead of starting a session
+    -q, --quiet                     Non-interactive mode that only prints the assistant's final output
+    -c, --config                    Open the instructions file in your editor
+    -w, --writable-root <path>      Writable folder for sandbox in full-auto mode (can be specified multiple times)
+    -a, --approval-mode <mode>      Override the approval policy: 'suggest', 'auto-edit', or 'full-auto'
 
     --auto-edit                Automatically approve file edits; still prompt for commands
     --full-auto                Automatically approve edits and commands when executed in the sandbox
@@ -64,6 +65,10 @@ const cli = meow(
     --no-project-doc           Do not automatically include the repository's 'codex.md'
     --project-doc <file>       Include an additional markdown file at <file> as context
     --full-stdout              Do not truncate stdout/stderr from command outputs
+    --notify                   Enable desktop notifications for responses
+
+    --flex-mode               Use "flex-mode" processing mode for the request (only supported
+                              with models o3 and o4-mini)
 
   Dangerous options
     --dangerously-auto-approve-everything
@@ -120,6 +125,13 @@ const cli = meow(
         description:
           "Determine the approval mode for Codex (default: suggest) Values: suggest, auto-edit, full-auto",
       },
+      writableRoot: {
+        type: "string",
+        isMultiple: true,
+        aliases: ["w"],
+        description:
+          "Writable folder for sandbox in full-auto mode (can be specified multiple times)",
+      },
       noProjectDoc: {
         type: "boolean",
         description: "Disable automatic inclusion of project‑level codex.md",
@@ -128,11 +140,21 @@ const cli = meow(
         type: "string",
         description: "Path to a markdown file to include as project doc",
       },
+      flexMode: {
+        type: "boolean",
+        description:
+          "Enable the flex-mode service tier (only supported by models o3 and o4-mini)",
+      },
       fullStdout: {
         type: "boolean",
         description:
           "Disable truncation of command stdout/stderr messages (show everything)",
         aliases: ["no-truncate"],
+      },
+      // Notification
+      notify: {
+        type: "boolean",
+        description: "Enable desktop notifications for responses",
       },
 
       // Experimental mode where whole directory is loaded in context and model is requested
@@ -237,6 +259,25 @@ config = {
   model,
 };
 
+// Check for updates after loading config
+// This is important because we write state file in the config dir
+await checkForUpdates().catch();
+// ---------------------------------------------------------------------------
+// --flex-mode validation (only allowed for o3 and o4-mini)
+// ---------------------------------------------------------------------------
+
+if (cli.flags.flexMode) {
+  const allowedFlexModels = new Set(["o3", "o4-mini"]);
+  if (!allowedFlexModels.has(config.model)) {
+    // eslint-disable-next-line no-console
+    console.error(
+      `The --flex-mode option is only supported when using the 'o3' or 'o4-mini' models. ` +
+        `Current model: '${config.model}'.`,
+    );
+    process.exit(1);
+  }
+}
+
 if (!(await isModelSupportedForResponses(config.model))) {
   // eslint-disable-next-line no-console
   console.error(
@@ -276,11 +317,13 @@ if (fullContextMode) {
   process.exit(0);
 }
 
+// Ensure that all values in additionalWritableRoots are absolute paths.
+const additionalWritableRoots: ReadonlyArray<string> = (
+  cli.flags.writableRoot ?? []
+).map((p) => path.resolve(p));
+
 // If we are running in --quiet mode, do that and exit.
 const quietMode = Boolean(cli.flags.quiet);
-const autoApproveEverything = Boolean(
-  cli.flags.dangerouslyAutoApproveEverything,
-);
 const fullStdout = Boolean(cli.flags.fullStdout);
 
 if (quietMode) {
@@ -292,12 +335,20 @@ if (quietMode) {
     );
     process.exit(1);
   }
+
+  // Determine approval policy for quiet mode based on flags
+  const quietApprovalPolicy: ApprovalPolicy =
+    cli.flags.fullAuto || cli.flags.approvalMode === "full-auto"
+      ? AutoApprovalMode.FULL_AUTO
+      : cli.flags.autoEdit || cli.flags.approvalMode === "auto-edit"
+      ? AutoApprovalMode.AUTO_EDIT
+      : config.approvalMode || AutoApprovalMode.SUGGEST;
+
   await runQuietMode({
     prompt: prompt as string,
     imagePaths: imagePaths || [],
-    approvalPolicy: autoApproveEverything
-      ? AutoApprovalMode.FULL_AUTO
-      : AutoApprovalMode.SUGGEST,
+    approvalPolicy: quietApprovalPolicy,
+    additionalWritableRoots,
     config,
   });
   onExit();
@@ -314,14 +365,15 @@ if (quietMode) {
 //    it is more dangerous than --fullAuto we deliberately give it lower
 //    priority so a user specifying both flags still gets the safer behaviour.
 // 3. --autoEdit – automatically approve edits, but prompt for commands.
-// 4. Default – suggest mode (prompt for everything).
+// 4. config.approvalMode - use the approvalMode setting from ~/.codex/config.json.
+// 5. Default – suggest mode (prompt for everything).
 
 const approvalPolicy: ApprovalPolicy =
   cli.flags.fullAuto || cli.flags.approvalMode === "full-auto"
     ? AutoApprovalMode.FULL_AUTO
     : cli.flags.autoEdit || cli.flags.approvalMode === "auto-edit"
     ? AutoApprovalMode.AUTO_EDIT
-    : AutoApprovalMode.SUGGEST;
+    : config.approvalMode || AutoApprovalMode.SUGGEST;
 
 
 
@@ -332,6 +384,7 @@ const instance = render(
     rollout={rollout}
     imagePaths={imagePaths}
     approvalPolicy={approvalPolicy}
+    additionalWritableRoots={additionalWritableRoots}
     fullStdout={fullStdout}
   />,
   {
@@ -393,11 +446,13 @@ async function runQuietMode({
   prompt,
   imagePaths,
   approvalPolicy,
+  additionalWritableRoots,
   config,
 }: {
   prompt: string;
   imagePaths: Array<string>;
   approvalPolicy: ApprovalPolicy;
+  additionalWritableRoots: ReadonlyArray<string>;
   config: AppConfig;
 }): Promise<void> {
   const agent = new AgentLoop({
@@ -405,6 +460,7 @@ async function runQuietMode({
     config: config,
     instructions: config.instructions,
     approvalPolicy,
+    additionalWritableRoots,
     onItem: (item: ResponseItem) => {
       // eslint-disable-next-line no-console
       console.log(formatResponseItemForQuietMode(item));
@@ -415,7 +471,12 @@ async function runQuietMode({
     getCommandConfirmation: (
       _command: Array<string>,
     ): Promise<CommandConfirmation> => {
-      return Promise.resolve({ review: ReviewDecision.NO_CONTINUE });
+      // In quiet mode, default to NO_CONTINUE, except when in full-auto mode
+      const reviewDecision =
+        approvalPolicy === AutoApprovalMode.FULL_AUTO
+          ? ReviewDecision.YES
+          : ReviewDecision.NO_CONTINUE;
+      return Promise.resolve({ review: reviewDecision });
     },
     onLastResponseId: () => {
       /* intentionally ignored in quiet mode */

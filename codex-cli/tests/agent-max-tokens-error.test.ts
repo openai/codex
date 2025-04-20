@@ -58,6 +58,7 @@ describe("AgentLoop – max_tokens too large error", () => {
     const received: Array<any> = [];
 
     const agent = new AgentLoop({
+      additionalWritableRoots: [],
       model: "any",
       instructions: "",
       approvalPolicy: { mode: "auto" } as any,
