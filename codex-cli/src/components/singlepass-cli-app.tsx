@@ -417,6 +417,7 @@ export function SinglePassApp({
       });
       const chatResp = await openai.beta.chat.completions.parse({
         model: config.model,
+        ...(config.flexMode ? { service_tier: "flex" } : {}),
         messages: [
           {
             role: "user",
