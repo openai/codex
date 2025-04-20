@@ -102,6 +102,11 @@ export default function TerminalChatInput({
 
   useInput(
     (_input, _key) => {
+      // Support Shift+Enter for new line
+      if (_key.shift && _key.return) {
+        setInput((prev) => prev + "\n");
+        return;
+      }
       // Slash command navigation: up/down to select, enter to fill
       if (!confirmationPrompt && !loading && input.trim().startsWith("/")) {
         const prefix = input.trim();
