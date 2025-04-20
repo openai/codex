@@ -2,11 +2,11 @@
 
 exports[`checkForUpdates() > renders a box when a newer version exists and no global installer 1`] = `
 "
-   ╭──────────────────────────────────────╮
-   │                                      │
-   │   Update available! 1.0.0 → 2.0.0.   │
-   │   To update, run bun add -g my-pkg   │
-   │                                      │
-   ╰──────────────────────────────────────╯
+   ╭─────────────────────────────────────────────────╮
+   │                                                 │
+   │        Update available! 1.0.0 → 2.0.0.         │
+   │   To update, run bun add -g my-pkg to update.   │
+   │                                                 │
+   ╰─────────────────────────────────────────────────╯
 "
 `;

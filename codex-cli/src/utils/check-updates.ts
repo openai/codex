@@ -44,7 +44,7 @@ export function renderUpdateCommand({
 
 function renderUpdateMessage(options: UpdateOptions) {
   const updateCommand = renderUpdateCommand(options);
-  return `To update, run ${chalk.magenta(updateCommand)}`;
+  return `To update, run ${chalk.magenta(updateCommand)} to update.`;
 }
 
 async function writeState(stateFilePath: string, state: UpdateCheckState) {
