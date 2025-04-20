@@ -1,4 +1,4 @@
-import { OPENAI_API_KEY } from "./config";
+import { OPENAI_API_KEY, OPENAI_ORGANIZATION, OPENAI_PROJECT } from "./config";
 import OpenAI from "openai";
 
 const MODEL_LIST_TIMEOUT_MS = 2_000; // 2 seconds
@@ -21,7 +21,18 @@ async function fetchModels(): Promise<Array<string>> {
   }
 
   try {
-    const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+    const headers: Record<string, string> = {};
+    if (OPENAI_ORGANIZATION) {
+      headers["OpenAI-Organization"] = OPENAI_ORGANIZATION;
+    }
+    if (OPENAI_PROJECT) {
+      headers["OpenAI-Project"] = OPENAI_PROJECT;
+    }
+    
+    const openai = new OpenAI({ 
+      apiKey: OPENAI_API_KEY,
+      defaultHeaders: headers
+    });
     const list = await openai.models.list();
 
     const models: Array<string> = [];

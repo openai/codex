@@ -5,7 +5,12 @@ import type { FileOperation } from "../utils/singlepass/file_ops";
 
 import Spinner from "./vendor/ink-spinner"; // Third‑party / vendor components
 import TextInput from "./vendor/ink-text-input";
-import { OPENAI_TIMEOUT_MS, OPENAI_BASE_URL } from "../utils/config";
+import { 
+  OPENAI_TIMEOUT_MS, 
+  OPENAI_BASE_URL,
+  OPENAI_ORGANIZATION,
+  OPENAI_PROJECT 
+} from "../utils/config";
 import {
   generateDiffSummary,
   generateEditSummary,
@@ -393,10 +398,19 @@ export function SinglePassApp({
         files,
       });
 
+      const headers: Record<string, string> = {};
+      if (OPENAI_ORGANIZATION) {
+        headers["OpenAI-Organization"] = OPENAI_ORGANIZATION;
+      }
+      if (OPENAI_PROJECT) {
+        headers["OpenAI-Project"] = OPENAI_PROJECT;
+      }
+
       const openai = new OpenAI({
         apiKey: config.apiKey ?? "",
         baseURL: OPENAI_BASE_URL || undefined,
         timeout: OPENAI_TIMEOUT_MS,
+        defaultHeaders: headers,
       });
       const chatResp = await openai.beta.chat.completions.parse({
         model: config.model,
