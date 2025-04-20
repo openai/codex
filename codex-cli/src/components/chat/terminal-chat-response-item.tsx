@@ -122,6 +122,8 @@ function TerminalChatResponseMessage({
     }
   }, [message, setOverlayMode]);
 
+  // console.log("TerminalChatResponseMessage", message);
+
   return (
     <Box flexDirection="column">
       <Text bold color={colorsByRole[message.role] || "gray"}>
