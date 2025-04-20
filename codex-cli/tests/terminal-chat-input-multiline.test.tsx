@@ -158,7 +158,7 @@ describe("TerminalChatInput multiline functionality", () => {
   // Note: We're skipping this test for now as it requires more complex mocking
   // of the history functionality. The multiline history behavior is already tested
   // in multiline-history-behavior.test.tsx
-  it.skip("supports history navigation in multiline mode", async () => {
+  it("supports history navigation in multiline mode", async () => {
     const submitInput = vi.fn();
 
     const props: ComponentProps<typeof TerminalChatInput> = {
