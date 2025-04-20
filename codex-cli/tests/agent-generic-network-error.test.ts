@@ -4,23 +4,36 @@ import { describe, it, expect, vi } from "vitest";
 //  Utility helpers & OpenAI mock (lightweight – focuses on network failures)
 // ---------------------------------------------------------------------------
 
+// Keep reference so test cases can programmatically change behaviour of the
+// fake OpenAI client.
 const openAiState: { createSpy?: ReturnType<typeof vi.fn> } = {};
 
 vi.mock("openai", () => {
   class FakeOpenAI {
     public responses = {
+      // Will be replaced per‑test via `openAiState.createSpy`.
       create: (...args: Array<any>) => openAiState.createSpy!(...args),
     };
   }
 
   class APIConnectionTimeoutError extends Error {}
 
+  class AzureOpenAI extends FakeOpenAI {}
+
   return {
     __esModule: true,
     default: FakeOpenAI,
+    AzureOpenAI,
     APIConnectionTimeoutError,
   };
 });
+
+// Mock Azure Identity package
+vi.mock("@azure/identity", () => ({
+  __esModule: true,
+  DefaultAzureCredential: class {},
+  getBearerTokenProvider: () => ({}),
+}));
 
 // Stub approvals / formatting helpers – unrelated to network handling.
 vi.mock("../src/approvals.js", () => ({

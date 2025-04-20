@@ -1,47 +1,15 @@
 import { describe, it, expect, vi } from "vitest";
 // This test reproduces the real‑world issue where the user cancels the current
-// task (Esc Esc) but the model’s response has already started to stream — the
+// task (Esc Esc) but the model's response has already started to stream — the
 // partial answer still shows up in the UI.
 
 // --- Mocks -----------------------------------------------------------------
 
-class FakeStream {
-  public controller = { abort: vi.fn() };
-
-  async *[Symbol.asyncIterator]() {
-    // Immediately start streaming an assistant message so that it is possible
-    // for a user‑triggered cancellation that happens milliseconds later to
-    // arrive *after* the first token has already been emitted. This mirrors
-    // the real‑world race where the UI shows nothing yet (network / rendering
-    // latency) even though the model has technically started responding.
-    // Mimic an assistant message containing the word "hello".
-    yield {
-      type: "response.output_item.done",
-      item: {
-        type: "message",
-        role: "assistant",
-        id: "m1",
-        content: [{ type: "text", text: "hello" }],
-      },
-    } as any;
-
-    yield {
-      type: "response.completed",
-      response: {
-        id: "resp1",
-        status: "completed",
-        output: [
-          {
-            type: "message",
-            role: "assistant",
-            id: "m1",
-            content: [{ type: "text", text: "hello" }],
-          },
-        ],
-      },
-    } as any;
-  }
-}
+// Shared state to track cancellation across stream instances
+const state = {
+  canceled: false,
+  generation: 0
+};
 
 vi.mock("openai", () => {
   let callCount = 0;
@@ -52,7 +20,50 @@ vi.mock("openai", () => {
         // Only the *first* stream yields "hello" so that any later answer
         // clearly comes from the canceled run.
         return callCount === 1
-          ? new FakeStream()
+          ? new (class {
+              public controller = { 
+                abort: () => {
+                  state.canceled = true;
+                  state.generation++;
+                }
+              };
+              
+              async *[Symbol.asyncIterator]() {
+                const thisGeneration = state.generation;
+                
+                // Only emit if not canceled and still in same generation
+                if (!state.canceled && thisGeneration === state.generation) {
+                  yield {
+                    type: "response.output_item.done",
+                    item: {
+                      type: "message",
+                      role: "assistant",
+                      id: "m1",
+                      content: [{ type: "text", text: "hello" }],
+                    },
+                  } as any;
+                }
+                
+                // Only emit completion if not canceled and still in same generation
+                if (!state.canceled && thisGeneration === state.generation) {
+                  yield {
+                    type: "response.completed",
+                    response: {
+                      id: "resp1",
+                      status: "completed",
+                      output: [
+                        {
+                          type: "message",
+                          role: "assistant",
+                          id: "m1",
+                          content: [{ type: "text", text: "hello" }],
+                        },
+                      ],
+                    },
+                  } as any;
+                }
+              }
+            })()
           : new (class {
               public controller = { abort: vi.fn() };
               async *[Symbol.asyncIterator]() {
@@ -63,7 +74,13 @@ vi.mock("openai", () => {
     };
   }
   class APIConnectionTimeoutError extends Error {}
-  return { __esModule: true, default: FakeOpenAI, APIConnectionTimeoutError };
+  class AzureOpenAI extends FakeOpenAI {}
+  return { 
+    __esModule: true, 
+    default: FakeOpenAI, 
+    AzureOpenAI,
+    APIConnectionTimeoutError 
+  };
 });
 
 // Stubs for external helpers referenced indirectly.

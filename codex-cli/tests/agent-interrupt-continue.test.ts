@@ -8,14 +8,27 @@ const openAiState = {
 
 // Mock the OpenAI client
 vi.mock("openai", () => {
+  class FakeOpenAI {
+    responses = {
+      create: openAiState.createSpy,
+    };
+  }
+
+  class FakeAzureOpenAI extends FakeOpenAI {}
+
   return {
-    default: class MockOpenAI {
-      responses = {
-        create: openAiState.createSpy,
-      };
-    },
+    __esModule: true,
+    default: FakeOpenAI,
+    AzureOpenAI: FakeAzureOpenAI,
   };
 });
+
+// Mock Azure Identity package
+vi.mock("@azure/identity", () => ({
+  __esModule: true,
+  DefaultAzureCredential: class {},
+  getBearerTokenProvider: () => ({}),
+}));
 
 describe("Agent interrupt and continue", () => {
   beforeEach(() => {

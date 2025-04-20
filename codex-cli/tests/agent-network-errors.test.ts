@@ -34,12 +34,22 @@ vi.mock("openai", () => {
     };
   }
 
+  class FakeAzureOpenAI extends FakeOpenAI {}
+
   return {
     __esModule: true,
     default: FakeOpenAI,
+    AzureOpenAI: FakeAzureOpenAI,
     APIConnectionTimeoutError,
   };
 });
+
+// Mock Azure Identity package
+vi.mock("@azure/identity", () => ({
+  __esModule: true,
+  DefaultAzureCredential: class {},
+  getBearerTokenProvider: () => ({}),
+}));
 
 // Stub approvals / formatting helpers – not relevant here.
 vi.mock("../src/approvals.js", () => ({

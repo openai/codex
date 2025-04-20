@@ -59,10 +59,12 @@ vi.mock("openai", () => {
   }
 
   class APIConnectionTimeoutError extends Error {}
+  class AzureOpenAI extends FakeOpenAI {}
 
   return {
     __esModule: true,
     default: FakeOpenAI,
+    AzureOpenAI,
     APIConnectionTimeoutError,
     _test: {
       getBodies: () => invocationBodies,

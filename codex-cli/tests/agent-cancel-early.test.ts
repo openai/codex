@@ -54,11 +54,14 @@ vi.mock("openai", () => {
     };
   }
 
+  class FakeAzureOpenAI extends FakeOpenAI {}
+
   class APIConnectionTimeoutError extends Error {}
 
   return {
     __esModule: true,
     default: FakeOpenAI,
+    AzureOpenAI: FakeAzureOpenAI,
     APIConnectionTimeoutError,
     _test: { getBodies: () => bodies },
   };
@@ -79,6 +82,13 @@ vi.mock("../src/utils/agent/log.js", () => ({
   __esModule: true,
   log: () => {},
   isLoggingEnabled: () => false,
+}));
+
+// Mock Azure Identity package
+vi.mock("@azure/identity", () => ({
+  __esModule: true,
+  DefaultAzureCredential: class {},
+  getBearerTokenProvider: () => ({}),
 }));
 
 import { AgentLoop } from "../src/utils/agent/agent-loop.js";

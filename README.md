@@ -62,7 +62,7 @@ Install globally:
 npm install -g @openai/codex
 ```
 
-Next, set your OpenAI API key as an environment variable:
+Next, set your OpenAI API key as an environment variable ([if trying with Azure OpenAI, see below](#environment-variables)):
 
 ```shell
 export OPENAI_API_KEY="your-api-key-here"
@@ -94,9 +94,9 @@ codex "explain this codebase to me"
 codex --approval-mode full-auto "create the fanciest todo-list app"
 ```
 
-That’s it – Codex will scaffold a file, run it inside a sandbox, install any
+That's it – Codex will scaffold a file, run it inside a sandbox, install any
 missing dependencies, and show you the live result. Approve the changes and
-they’ll be committed to your working directory.
+they'll be committed to your working directory.
 
 ---
 
@@ -104,7 +104,7 @@ they’ll be committed to your working directory.
 
 Codex CLI is built for developers who already **live in the terminal** and want
 ChatGPT‑level reasoning **plus** the power to actually run code, manipulate
-files, and iterate – all under version control. In short, it’s _chat‑driven
+files, and iterate – all under version control. In short, it's _chat‑driven
 development_ that understands and executes your repo.
 
 - **Zero setup** — bring your OpenAI API key and it just works!
@@ -132,8 +132,8 @@ will also show a warning/confirmation if you start in **auto‑edit** or
 **full‑auto** while the directory is _not_ tracked by Git, so you always have a
 safety net.
 
-Coming soon: you’ll be able to whitelist specific commands to auto‑execute with
-the network enabled, once we’re confident in additional safeguards.
+Coming soon: you'll be able to whitelist specific commands to auto‑execute with
+the network enabled, once we're confident in additional safeguards.
 
 ### Platform sandboxing details
 
@@ -312,7 +312,26 @@ You can also define custom instructions:
 - Only use git commands if I explicitly mention you should
 ```
 
----
+### Environment Variables
+
+Codex supports the following environment variables:
+
+```bash
+# OpenAI API Configuration
+OPENAI_API_KEY=sk-... # Your OpenAI API key
+
+# Azure OpenAI Configuration
+# Option 1: Entra ID (Azure AD) Authentication (recommended)
+AZURE_OPENAI_ENDPOINT=    # Azure OpenAI endpoint URL (e.g., https://your-resource.openai.azure.com)
+AZURE_OPENAI_API_VERSION= # API version (defaults to "2025-03-01-preview")
+AZURE_OPENAI_DEPLOYMENT=  # Optional deployment name for your model deployment
+# (Then authenticate using `az login` command line tool)
+
+# Option 2: API Key Authentication (fallback)
+# Use above Azure OpenAI environment variables plus:
+AZURE_OPENAI_API_KEY=     # Your Azure OpenAI API key
+
+> **Note:** For Entra ID auth with `az login`, you'll need Azure CLI ([install guide](https://learn.microsoft.com/cli/azure/install-azure-cli))
 
 ## FAQ
 
@@ -354,12 +373,17 @@ Not directly. It requires [Windows Subsystem for Linux (WSL2)](https://learn.mic
 ## Zero Data Retention (ZDR) Organization Limitation
 
 > **Note:** Codex CLI does **not** currently support OpenAI organizations with [Zero Data Retention (ZDR)](https://platform.openai.com/docs/guides/your-data#zero-data-retention) enabled.
+> If you are affected by this limitation, you can use Azure OpenAI models instead. Configure your Azure OpenAI credentials using the environment variables listed in the [Configuration](#configuration) section.
+
+</details>
 
 If your OpenAI organization has Zero Data Retention enabled, you may encounter errors such as:
 
 ```
+
 OpenAI rejected the request. Error details: Status: 400, Code: unsupported_parameter, Type: invalid_request_error, Message: 400 Previous response cannot be used for this organization due to Zero Data Retention.
-```
+
+````
 
 **Why?**
 
@@ -389,7 +413,7 @@ We’re excited to launch a **$1 million initiative** supporting open source pr
 
 This project is under active development and the code will likely change pretty significantly. We'll update this message once that's complete!
 
-More broadly we welcome contributions – whether you are opening your very first pull request or you’re a seasoned maintainer. At the same time we care about reliability and long‑term maintainability, so the bar for merging code is intentionally **high**. The guidelines below spell out what “high‑quality” means in practice and should make the whole process transparent and friendly.
+More broadly we welcome contributions – whether you are opening your very first pull request or you're a seasoned maintainer. At the same time we care about reliability and long‑term maintainability, so the bar for merging code is intentionally **high**. The guidelines below spell out what "high‑quality" means in practice and should make the whole process transparent and friendly.
 
 ### Development workflow
 
@@ -410,7 +434,7 @@ These hooks help maintain code quality and prevent pushing code with failing tes
 
 ```bash
 npm test && npm run lint && npm run typecheck
-```
+````
 
 - If you have **not** yet signed the Contributor License Agreement (CLA), add a PR comment containing the exact text
 
@@ -494,7 +518,7 @@ Together we can make Codex CLI an incredible tool. **Happy hacking!** :rocket:
 All contributors **must** accept the CLA. The process is lightweight:
 
 1. Open your pull request.
-2. Paste the following comment (or reply `recheck` if you’ve signed before):
+2. Paste the following comment (or reply `recheck` if you've signed before):
 
    ```text
    I have read the CLA Document and I hereby sign the CLA

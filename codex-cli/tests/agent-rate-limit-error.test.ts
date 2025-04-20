@@ -21,6 +21,8 @@ vi.mock("openai", () => {
     };
   }
 
+  class FakeAzureOpenAI extends FakeOpenAI {}
+
   // The real SDK exports this constructor – include it for typings even
   // though it is not used in this spec.
   class APIConnectionTimeoutError extends Error {}
@@ -28,9 +30,17 @@ vi.mock("openai", () => {
   return {
     __esModule: true,
     default: FakeOpenAI,
+    AzureOpenAI: FakeAzureOpenAI,
     APIConnectionTimeoutError,
   };
 });
+
+// Mock Azure Identity package
+vi.mock("@azure/identity", () => ({
+  __esModule: true,
+  DefaultAzureCredential: class {},
+  getBearerTokenProvider: () => ({}),
+}));
 
 // Stub helpers that the agent indirectly imports so it does not attempt any
 // file‑system access or real approvals logic during the test.

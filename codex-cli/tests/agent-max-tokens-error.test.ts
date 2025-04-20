@@ -9,16 +9,23 @@ const openAiState: { createSpy?: ReturnType<typeof vi.fn> } = {};
 vi.mock("openai", () => {
   class FakeOpenAI {
     public responses = {
-      create: (...args: Array<any>) => openAiState.createSpy!(...args),
+      create: async () => {
+        const err: any = new Error("max_tokens is too large: 167888. This model supports at most 100000 completion tokens, whereas you provided 167888.");
+        err.type = "invalid_request_error";
+        err.param = "max_tokens";
+        err.status = 400;
+        err.message = "max_tokens is too large: 167888. This model supports at most 100000 completion tokens, whereas you provided 167888.";
+        throw err;
+      },
     };
   }
-
   class APIConnectionTimeoutError extends Error {}
-
-  return {
-    __esModule: true,
-    default: FakeOpenAI,
-    APIConnectionTimeoutError,
+  class AzureOpenAI extends FakeOpenAI {}
+  return { 
+    __esModule: true, 
+    default: FakeOpenAI, 
+    AzureOpenAI,
+    APIConnectionTimeoutError 
   };
 });
 

@@ -9,16 +9,23 @@ const openAiState: { createSpy?: ReturnType<typeof vi.fn> } = {};
 vi.mock("openai", () => {
   class FakeOpenAI {
     public responses = {
-      create: (...args: Array<any>) => openAiState.createSpy!(...args),
+      create: async () => {
+        const err: any = new Error("Invalid request: model not found");
+        err.code = "invalid_request_error";
+        err.status = 400;
+        err.type = "invalid_request_error";
+        err.message = "Model not found";
+        throw err;
+      },
     };
   }
-
   class APIConnectionTimeoutError extends Error {}
-
-  return {
-    __esModule: true,
-    default: FakeOpenAI,
-    APIConnectionTimeoutError,
+  class AzureOpenAI extends FakeOpenAI {}
+  return { 
+    __esModule: true, 
+    default: FakeOpenAI, 
+    AzureOpenAI,
+    APIConnectionTimeoutError 
   };
 });
 

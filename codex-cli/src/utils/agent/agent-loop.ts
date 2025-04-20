@@ -1,6 +1,6 @@
-import type { ReviewDecision } from "./review.js";
 import type { ApplyPatchCommand, ApprovalPolicy } from "../../approvals.js";
 import type { AppConfig } from "../config.js";
+import type { ReviewDecision } from "./review.js";
 import type {
   ResponseFunctionToolCall,
   ResponseInputItem,
@@ -8,8 +8,14 @@ import type {
 } from "openai/resources/responses/responses.mjs";
 import type { Reasoning } from "openai/resources.mjs";
 
-import { log } from "./log.js";
-import { OPENAI_BASE_URL, OPENAI_TIMEOUT_MS } from "../config.js";
+import {
+  AZURE_OPENAI_API_KEY,
+  AZURE_OPENAI_API_VERSION,
+  AZURE_OPENAI_DEPLOYMENT,
+  AZURE_OPENAI_ENDPOINT,
+  OPENAI_BASE_URL,
+  OPENAI_TIMEOUT_MS,
+} from "../config.js";
 import { parseToolCallArguments } from "../parsers.js";
 import {
   ORIGIN,
@@ -19,8 +25,10 @@ import {
   setSessionId,
 } from "../session.js";
 import { handleExecCommand } from "./handle-exec-command.js";
+import { log } from "./log.js";
+import { DefaultAzureCredential, getBearerTokenProvider } from "@azure/identity";
 import { randomUUID } from "node:crypto";
-import OpenAI, { APIConnectionTimeoutError } from "openai";
+import OpenAI, { APIConnectionTimeoutError, AzureOpenAI } from "openai";
 
 // Wait time before retrying after rate limit errors (ms).
 const RATE_LIMIT_RETRY_WAIT_MS = parseInt(
@@ -237,22 +245,60 @@ export class AgentLoop {
     // Configure OpenAI client with optional timeout (ms) from environment
     const timeoutMs = OPENAI_TIMEOUT_MS;
     const apiKey = this.config.apiKey ?? process.env["OPENAI_API_KEY"] ?? "";
-    this.oai = new OpenAI({
-      // The OpenAI JS SDK only requires `apiKey` when making requests against
-      // the official API.  When running unit‑tests we stub out all network
-      // calls so an undefined key is perfectly fine.  We therefore only set
-      // the property if we actually have a value to avoid triggering runtime
-      // errors inside the SDK (it validates that `apiKey` is a non‑empty
-      // string when the field is present).
-      ...(apiKey ? { apiKey } : {}),
-      baseURL: OPENAI_BASE_URL,
-      defaultHeaders: {
-        originator: ORIGIN,
-        version: CLI_VERSION,
-        session_id: this.sessionId,
-      },
-      ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
-    });
+    const azureEndpoint = AZURE_OPENAI_ENDPOINT;
+
+    if (azureEndpoint) {
+      log("Using Azure OpenAI authentication path");
+      try {
+        // Try Entra ID (Azure AD) authentication first
+        try {
+          log("Attempting Azure OpenAI Entra ID authentication");
+          const credential = new DefaultAzureCredential();
+          const scope = "https://cognitiveservices.azure.com/.default";
+          const azureADTokenProvider = getBearerTokenProvider(credential, scope);
+
+          this.oai = new AzureOpenAI({
+            azureADTokenProvider,
+            apiVersion: AZURE_OPENAI_API_VERSION!,
+            deployment: AZURE_OPENAI_DEPLOYMENT!,
+            ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
+          });
+          log("Successfully created Azure OpenAI client with Entra ID authentication");
+        } catch (entraidError) {
+          // Fall back to API key if Entra ID fails
+          if (AZURE_OPENAI_API_KEY) {
+            log("Entra ID authentication failed, falling back to API key authentication");
+            this.oai = new AzureOpenAI({
+              apiKey: AZURE_OPENAI_API_KEY,
+              apiVersion: AZURE_OPENAI_API_VERSION!,
+              deployment: AZURE_OPENAI_DEPLOYMENT!,
+              ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
+            });
+            log("Successfully created Azure OpenAI client with API key authentication");
+          } else {
+            // If we have no API key to fall back to, rethrow the original error
+            log("No API key available as fallback");
+            throw entraidError;
+          }
+        }
+        log("Successfully created Azure OpenAI client in Agent Loop");
+      } catch (error) {
+        log(`Error creating Azure OpenAI client: ${error}`);
+        throw error;
+      }
+    } else {
+      log("Using standard OpenAI authentication path");
+      this.oai = new OpenAI({
+        ...(apiKey ? { apiKey } : {}),
+        baseURL: OPENAI_BASE_URL,
+        defaultHeaders: {
+          originator: ORIGIN,
+          version: CLI_VERSION,
+          session_id: this.sessionId,
+        },
+        ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
+      });
+    }
 
     setSessionId(this.sessionId);
     setCurrentModel(this.model);
@@ -485,7 +531,7 @@ export class AgentLoop {
             let reasoning: Reasoning | undefined;
             if (this.model.startsWith("o")) {
               reasoning = { effort: "high" };
-              if (this.model === "o3" || this.model === "o4-mini") {
+              if ((this.model === "o3" || this.model === "o4-mini") && !AZURE_OPENAI_ENDPOINT) {
                 reasoning.summary = "auto";
               }
             }

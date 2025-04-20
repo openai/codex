@@ -228,18 +228,33 @@ if (cli.flags.config) {
 // ---------------------------------------------------------------------------
 
 const apiKey = process.env["OPENAI_API_KEY"];
+const azureEndpoint = process.env["AZURE_OPENAI_ENDPOINT"];
 
-if (!apiKey) {
+function showErrorAndExit(message: string): never {
   // eslint-disable-next-line no-console
-  console.error(
-    `\n${chalk.red("Missing OpenAI API key.")}\n\n` +
+  console.error(`\n${chalk.red(message)}\n`);
+  process.exit(1);
+}
+
+if (!apiKey && !azureEndpoint) {
+  showErrorAndExit(
+    "Missing OpenAI API key.\n\n" +
       `Set the environment variable ${chalk.bold("OPENAI_API_KEY")} ` +
       `and re-run this command.\n` +
       `You can create a key here: ${chalk.bold(
         chalk.underline("https://platform.openai.com/account/api-keys"),
-      )}\n`,
+      )}\n\n` +
+      `Alternatively, you can use Azure OpenAI with either of these authentication methods:\n\n` +
+      `1. Entra ID (Azure AD) authentication (recommended): \n` +
+      `   Install the Azure CLI and run ${chalk.bold("az login")}\n` +
+      `   ${chalk.bold("AZURE_OPENAI_ENDPOINT")}=https://your-resource.openai.azure.com\n` +
+      `   ${chalk.bold("AZURE_OPENAI_DEPLOYMENT")}=your-deployment-name (optional)\n\n` +
+      `2. API Key authentication (fallback): \n` +
+      `   ${chalk.bold("AZURE_OPENAI_ENDPOINT")}=https://your-resource.openai.azure.com\n` +
+      `   ${chalk.bold("AZURE_OPENAI_API_KEY")}=your-api-key\n` +
+      `   ${chalk.bold("AZURE_OPENAI_DEPLOYMENT")}=your-deployment-name (optional)\n\n` +
+      `See the README for more details on Azure OpenAI authentication.`,
   );
-  process.exit(1);
 }
 
 const fullContextMode = Boolean(cli.flags.fullContext);

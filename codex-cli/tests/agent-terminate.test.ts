@@ -43,9 +43,25 @@ vi.mock("openai", () => {
       create: async () => new FakeStream(),
     };
   }
+
+  class FakeAzureOpenAI extends FakeOpenAI {}
+
   class APIConnectionTimeoutError extends Error {}
-  return { __esModule: true, default: FakeOpenAI, APIConnectionTimeoutError };
+
+  return {
+    __esModule: true,
+    default: FakeOpenAI,
+    AzureOpenAI: FakeAzureOpenAI,
+    APIConnectionTimeoutError,
+  };
 });
+
+// Mock Azure Identity package
+vi.mock("@azure/identity", () => ({
+  __esModule: true,
+  DefaultAzureCredential: class {},
+  getBearerTokenProvider: () => ({}),
+}));
 
 // --- Helpers referenced by handle‑exec‑command -----------------------------
 

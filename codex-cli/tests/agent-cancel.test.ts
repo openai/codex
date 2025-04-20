@@ -43,7 +43,13 @@ vi.mock("openai", () => {
     };
   }
   class APIConnectionTimeoutError extends Error {}
-  return { __esModule: true, default: FakeOpenAI, APIConnectionTimeoutError };
+  class AzureOpenAI extends FakeOpenAI {}
+  return { 
+    __esModule: true, 
+    default: FakeOpenAI, 
+    AzureOpenAI,
+    APIConnectionTimeoutError 
+  };
 });
 
 // Mock the approvals and formatCommand helpers referenced by handle‑exec‑command.
