@@ -16,7 +16,6 @@ vi.mock("fs", () => ({
 }));
 
 // Type for mocked functions - simplified for testing purposes
-// @ts-expect-error - Using a simplified mock type to avoid complex type issues
 type MockedFunction<T> = {
   mockImplementation: (fn: unknown) => MockedFunction<T>;
   mockReturnValue: (value: unknown) => MockedFunction<T>;
@@ -37,7 +36,7 @@ describe("gitignore handling", () => {
   describe("findGitignoreFile", () => {
     it("should find .gitignore in the current directory", () => {
       (
-        fs.existsSync as MockedFunction<typeof fs.existsSync>
+        fs.existsSync as unknown as MockedFunction<typeof fs.existsSync>
       ).mockImplementation((p: string) => {
         return p === mockGitignorePath;
       });
@@ -52,7 +51,7 @@ describe("gitignore handling", () => {
 
       // Mock existsSync to return true only for the root .gitignore
       (
-        fs.existsSync as MockedFunction<typeof fs.existsSync>
+        fs.existsSync as unknown as MockedFunction<typeof fs.existsSync>
       ).mockImplementation((p: string) => {
         // Return false for child directories' .gitignore and true for root .gitignore
         if (p.includes("components") || p.includes("src")) {
@@ -76,9 +75,9 @@ describe("gitignore handling", () => {
     });
 
     it("should return null if no .gitignore is found", () => {
-      (fs.existsSync as MockedFunction<typeof fs.existsSync>).mockReturnValue(
-        false,
-      );
+      (
+        fs.existsSync as unknown as MockedFunction<typeof fs.existsSync>
+      ).mockReturnValue(false);
 
       const result = findGitignoreFile(mockRootPath);
       expect(result).toBeNull();
@@ -97,13 +96,13 @@ node_modules/
 `;
 
       (
-        fs.existsSync as MockedFunction<typeof fs.existsSync>
+        fs.existsSync as unknown as MockedFunction<typeof fs.existsSync>
       ).mockImplementation((p: string) => {
         return p === mockGitignorePath;
       });
 
       (
-        fs.readFileSync as MockedFunction<typeof fs.readFileSync>
+        fs.readFileSync as unknown as MockedFunction<typeof fs.readFileSync>
       ).mockImplementation((p: string) => {
         if (p === mockGitignorePath) {
           return gitignoreContent;
@@ -116,20 +115,20 @@ node_modules/
     });
 
     it("should return empty array if .gitignore file is not found", () => {
-      (fs.existsSync as MockedFunction<typeof fs.existsSync>).mockReturnValue(
-        false,
-      );
+      (
+        fs.existsSync as unknown as MockedFunction<typeof fs.existsSync>
+      ).mockReturnValue(false);
 
       const patterns = readGitignorePatterns(mockRootPath);
       expect(patterns).toEqual([]);
     });
 
     it("should return empty array if reading .gitignore file fails", () => {
-      (fs.existsSync as MockedFunction<typeof fs.existsSync>).mockReturnValue(
-        true,
-      );
       (
-        fs.readFileSync as MockedFunction<typeof fs.readFileSync>
+        fs.existsSync as unknown as MockedFunction<typeof fs.existsSync>
+      ).mockReturnValue(true);
+      (
+        fs.readFileSync as unknown as MockedFunction<typeof fs.readFileSync>
       ).mockImplementation(() => {
         throw new Error("Failed to read file");
       });
@@ -187,14 +186,14 @@ node_modules/
     it("should load patterns from .gitignore file", () => {
       // Mock the existence of a .gitignore file
       (
-        fs.existsSync as MockedFunction<typeof fs.existsSync>
+        fs.existsSync as unknown as MockedFunction<typeof fs.existsSync>
       ).mockImplementation((p: string) => {
         return p === mockGitignorePath;
       });
 
       // Mock the content of the .gitignore file
       (
-        fs.readFileSync as MockedFunction<typeof fs.readFileSync>
+        fs.readFileSync as unknown as MockedFunction<typeof fs.readFileSync>
       ).mockImplementation((p: string) => {
         if (p === mockGitignorePath) {
           return `
@@ -244,14 +243,14 @@ node_modules/
     it("should combine default patterns with gitignore patterns", () => {
       // Mock the existence of a .gitignore file with custom patterns
       (
-        fs.existsSync as MockedFunction<typeof fs.existsSync>
+        fs.existsSync as unknown as MockedFunction<typeof fs.existsSync>
       ).mockImplementation((p: string) => {
         return p === mockGitignorePath;
       });
 
       // Mock the content of the .gitignore file with custom patterns
       (
-        fs.readFileSync as MockedFunction<typeof fs.readFileSync>
+        fs.readFileSync as unknown as MockedFunction<typeof fs.readFileSync>
       ).mockImplementation((p: string) => {
         if (p === mockGitignorePath) {
           return `
@@ -278,14 +277,14 @@ custom-dir/
     it("should handle empty .gitignore file", () => {
       // Mock the existence of an empty .gitignore file
       (
-        fs.existsSync as MockedFunction<typeof fs.existsSync>
+        fs.existsSync as unknown as MockedFunction<typeof fs.existsSync>
       ).mockImplementation((p: string) => {
         return p === mockGitignorePath;
       });
 
       // Mock the content of the empty .gitignore file
       (
-        fs.readFileSync as MockedFunction<typeof fs.readFileSync>
+        fs.readFileSync as unknown as MockedFunction<typeof fs.readFileSync>
       ).mockImplementation((p: string) => {
         if (p === mockGitignorePath) {
           return ``;
@@ -307,14 +306,14 @@ custom-dir/
     it("should handle .gitignore file with only comments", () => {
       // Mock the existence of a .gitignore file with only comments
       (
-        fs.existsSync as MockedFunction<typeof fs.existsSync>
+        fs.existsSync as unknown as MockedFunction<typeof fs.existsSync>
       ).mockImplementation((p: string) => {
         return p === mockGitignorePath;
       });
 
       // Mock the content of the .gitignore file with only comments
       (
-        fs.readFileSync as MockedFunction<typeof fs.readFileSync>
+        fs.readFileSync as unknown as MockedFunction<typeof fs.readFileSync>
       ).mockImplementation((p: string) => {
         if (p === mockGitignorePath) {
           return `
@@ -342,7 +341,7 @@ custom-dir/
 
       // Mock the content of the custom ignore file
       (
-        fs.readFileSync as MockedFunction<typeof fs.readFileSync>
+        fs.readFileSync as unknown as MockedFunction<typeof fs.readFileSync>
       ).mockImplementation((p: string) => {
         if (p === customIgnoreFile) {
           return `
@@ -370,14 +369,14 @@ custom-ignore/
     it("should handle directory-specific patterns correctly", () => {
       // Mock the existence of a .gitignore file with directory-specific patterns
       (
-        fs.existsSync as MockedFunction<typeof fs.existsSync>
+        fs.existsSync as unknown as MockedFunction<typeof fs.existsSync>
       ).mockImplementation((p: string) => {
         return p === mockGitignorePath;
       });
 
       // Mock the content of the .gitignore file with directory-specific patterns
       (
-        fs.readFileSync as MockedFunction<typeof fs.readFileSync>
+        fs.readFileSync as unknown as MockedFunction<typeof fs.readFileSync>
       ).mockImplementation((p: string) => {
         if (p === mockGitignorePath) {
           return `
@@ -432,13 +431,13 @@ custom-ignore/
 
     it("should handle absolute paths correctly", () => {
       (
-        fs.existsSync as MockedFunction<typeof fs.existsSync>
+        fs.existsSync as unknown as MockedFunction<typeof fs.existsSync>
       ).mockImplementation((p: string) => {
         return p === mockGitignorePath;
       });
 
       (
-        fs.readFileSync as MockedFunction<typeof fs.readFileSync>
+        fs.readFileSync as unknown as MockedFunction<typeof fs.readFileSync>
       ).mockImplementation((p: string) => {
         if (p === mockGitignorePath) {
           return `
@@ -463,13 +462,13 @@ custom-ignore/
 
     it("should handle relative paths correctly", () => {
       (
-        fs.existsSync as MockedFunction<typeof fs.existsSync>
+        fs.existsSync as unknown as MockedFunction<typeof fs.existsSync>
       ).mockImplementation((p: string) => {
         return p === mockGitignorePath;
       });
 
       (
-        fs.readFileSync as MockedFunction<typeof fs.readFileSync>
+        fs.readFileSync as unknown as MockedFunction<typeof fs.readFileSync>
       ).mockImplementation((p: string) => {
         if (p === mockGitignorePath) {
           return `
@@ -492,13 +491,13 @@ custom-ignore/
 
     it("should handle file extensions correctly", () => {
       (
-        fs.existsSync as MockedFunction<typeof fs.existsSync>
+        fs.existsSync as unknown as MockedFunction<typeof fs.existsSync>
       ).mockImplementation((p: string) => {
         return p === mockGitignorePath;
       });
 
       (
-        fs.readFileSync as MockedFunction<typeof fs.readFileSync>
+        fs.readFileSync as unknown as MockedFunction<typeof fs.readFileSync>
       ).mockImplementation((p: string) => {
         if (p === mockGitignorePath) {
           return `
@@ -520,13 +519,13 @@ custom-ignore/
 
     it("should handle complex patterns with multiple wildcards", () => {
       (
-        fs.existsSync as MockedFunction<typeof fs.existsSync>
+        fs.existsSync as unknown as MockedFunction<typeof fs.existsSync>
       ).mockImplementation((p: string) => {
         return p === mockGitignorePath;
       });
 
       (
-        fs.readFileSync as MockedFunction<typeof fs.readFileSync>
+        fs.readFileSync as unknown as MockedFunction<typeof fs.readFileSync>
       ).mockImplementation((p: string) => {
         if (p === mockGitignorePath) {
           return `
@@ -555,13 +554,13 @@ custom-ignore/
 
     it("should normalize paths correctly", () => {
       (
-        fs.existsSync as MockedFunction<typeof fs.existsSync>
+        fs.existsSync as unknown as MockedFunction<typeof fs.existsSync>
       ).mockImplementation((p: string) => {
         return p === mockGitignorePath;
       });
 
       (
-        fs.readFileSync as MockedFunction<typeof fs.readFileSync>
+        fs.readFileSync as unknown as MockedFunction<typeof fs.readFileSync>
       ).mockImplementation((p: string) => {
         if (p === mockGitignorePath) {
           return `
@@ -589,9 +588,9 @@ custom-ignore/
 
   it("should fall back to default patterns when no .gitignore exists", () => {
     // Mock that no .gitignore file exists
-    (fs.existsSync as MockedFunction<typeof fs.existsSync>).mockReturnValue(
-      false,
-    );
+    (
+      fs.existsSync as unknown as MockedFunction<typeof fs.existsSync>
+    ).mockReturnValue(false);
 
     const patterns = loadIgnorePatterns(undefined, mockRootPath);
 
