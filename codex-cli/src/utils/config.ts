@@ -8,7 +8,7 @@
 
 import type { FullAutoErrorMode } from "./auto-approval-mode.js";
 
-import { log, isLoggingEnabled } from "./agent/log.js";
+import { log } from "./agent/log.js";
 import { AutoApprovalMode } from "./auto-approval-mode.js";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { load as loadYaml, dump as dumpYaml } from "js-yaml";
@@ -245,15 +245,11 @@ export const loadConfig = (
       ? resolvePath(cwd, options.projectDocPath)
       : discoverProjectDocPath(cwd);
     if (projectDocPath) {
-      if (isLoggingEnabled()) {
-        log(
-          `[codex] Loaded project doc from ${projectDocPath} (${projectDoc.length} bytes)`,
-        );
-      }
+      log(
+        `[codex] Loaded project doc from ${projectDocPath} (${projectDoc.length} bytes)`,
+      );
     } else {
-      if (isLoggingEnabled()) {
-        log(`[codex] No project doc found in ${cwd}`);
-      }
+      log(`[codex] No project doc found in ${cwd}`);
     }
   }
 
