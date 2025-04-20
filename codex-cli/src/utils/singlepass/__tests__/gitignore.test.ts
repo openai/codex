@@ -16,10 +16,10 @@ vi.mock("fs", () => ({
 }));
 
 // Type for mocked functions - simplified for testing purposes
-// @ts-ignore - Using a simplified mock type to avoid complex type issues
+// @ts-expect-error - Using a simplified mock type to avoid complex type issues
 type MockedFunction<T> = {
-  mockImplementation: (fn: any) => MockedFunction<T>;
-  mockReturnValue: (value: any) => MockedFunction<T>;
+  mockImplementation: (fn: unknown) => MockedFunction<T>;
+  mockReturnValue: (value: unknown) => MockedFunction<T>;
 };
 
 describe("gitignore handling", () => {
