@@ -19,6 +19,10 @@ export function approximateTokensUsed(items: Array<ResponseItem>): number {
   for (const item of items) {
     switch (item.type) {
       case "message": {
+        if (item.role !== "user" && item.role !== "assistant") {
+          continue;
+        }
+
         for (const c of item.content) {
           if (c.type === "input_text" || c.type === "output_text") {
             charCount += c.text.length;
