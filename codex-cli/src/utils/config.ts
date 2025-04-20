@@ -49,6 +49,15 @@ export type StoredConfig = {
   approvalMode?: AutoApprovalMode;
   fullAutoErrorMode?: FullAutoErrorMode;
   memory?: MemoryConfig;
+  /** Whether to enable desktop notifications for responses */
+  notify?: boolean;
+  history?: {
+    maxSize?: number;
+    saveHistory?: boolean;
+    sensitivePatterns?: Array<string>;
+  };
+  /** User-defined safe commands */
+  safeCommands?: Array<string>;
 };
 
 // Minimal config written on first run.  An *empty* model string ensures that
@@ -68,8 +77,21 @@ export type AppConfig = {
   apiKey?: string;
   model: string;
   instructions: string;
+  approvalMode?: AutoApprovalMode;
   fullAutoErrorMode?: FullAutoErrorMode;
   memory?: MemoryConfig;
+  /** Whether to enable desktop notifications for responses */
+  notify: boolean;
+
+  /** Enable the "flex-mode" processing mode for supported models (o3, o4-mini) */
+  flexMode?: boolean;
+  history?: {
+    maxSize: number;
+    saveHistory: boolean;
+    sensitivePatterns: Array<string>;
+  };
+  /** User-defined safe commands */
+  safeCommands?: Array<string>;
 };
 
 // ---------------------------------------------------------------------------
@@ -253,6 +275,9 @@ export const loadConfig = (
         ? DEFAULT_FULL_CONTEXT_MODEL
         : DEFAULT_AGENTIC_MODEL),
     instructions: combinedInstructions,
+    notify: storedConfig.notify === true,
+    approvalMode: storedConfig.approvalMode,
+    safeCommands: storedConfig.safeCommands ?? [],
   };
 
   // -----------------------------------------------------------------------
@@ -312,6 +337,30 @@ export const loadConfig = (
   if (storedConfig.fullAutoErrorMode) {
     config.fullAutoErrorMode = storedConfig.fullAutoErrorMode;
   }
+  // Notification setting: enable desktop notifications when set in config
+  config.notify = storedConfig.notify === true;
+
+  // Add default history config if not provided
+  if (storedConfig.history !== undefined) {
+    config.history = {
+      maxSize: storedConfig.history.maxSize ?? 1000,
+      saveHistory: storedConfig.history.saveHistory ?? true,
+      sensitivePatterns: storedConfig.history.sensitivePatterns ?? [],
+    };
+  } else {
+    config.history = {
+      maxSize: 1000,
+      saveHistory: true,
+      sensitivePatterns: [],
+    };
+  }
+
+  // Load user-defined safe commands
+  if (Array.isArray(storedConfig.safeCommands)) {
+    config.safeCommands = storedConfig.safeCommands.map(String);
+  } else {
+    config.safeCommands = [];
+  }
 
   return config;
 };
@@ -341,14 +390,29 @@ export const saveConfig = (
   }
 
   const ext = extname(targetPath).toLowerCase();
+  // Create the config object to save
+  const configToSave: StoredConfig = {
+    model: config.model,
+    approvalMode: config.approvalMode,
+  };
+
+  // Add history settings if they exist
+  if (config.history) {
+    configToSave.history = {
+      maxSize: config.history.maxSize,
+      saveHistory: config.history.saveHistory,
+      sensitivePatterns: config.history.sensitivePatterns,
+    };
+  }
+  // Save: User-defined safe commands
+  if (config.safeCommands && config.safeCommands.length > 0) {
+    configToSave.safeCommands = config.safeCommands;
+  }
+
   if (ext === ".yaml" || ext === ".yml") {
-    writeFileSync(targetPath, dumpYaml({ model: config.model }), "utf-8");
+    writeFileSync(targetPath, dumpYaml(configToSave), "utf-8");
   } else {
-    writeFileSync(
-      targetPath,
-      JSON.stringify({ model: config.model }, null, 2),
-      "utf-8",
-    );
+    writeFileSync(targetPath, JSON.stringify(configToSave, null, 2), "utf-8");
   }
 
   writeFileSync(instructionsPath, config.instructions, "utf-8");

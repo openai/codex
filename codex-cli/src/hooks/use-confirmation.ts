@@ -12,12 +12,17 @@ type ConfirmationResult = {
 type ConfirmationItem = {
   prompt: React.ReactNode;
   resolve: (result: ConfirmationResult) => void;
+  explanation?: string;
 };
 
 export function useConfirmation(): {
   submitConfirmation: (result: ConfirmationResult) => void;
-  requestConfirmation: (prompt: React.ReactNode) => Promise<ConfirmationResult>;
+  requestConfirmation: (
+    prompt: React.ReactNode,
+    explanation?: string,
+  ) => Promise<ConfirmationResult>;
   confirmationPrompt: React.ReactNode | null;
+  explanation?: string;
 } {
   // The current prompt is just the head of the queue
   const [current, setCurrent] = useState<ConfirmationItem | null>(null);
@@ -32,10 +37,10 @@ export function useConfirmation(): {
 
   // Called whenever someone wants a confirmation
   const requestConfirmation = useCallback(
-    (prompt: React.ReactNode) => {
+    (prompt: React.ReactNode, explanation?: string) => {
       return new Promise<ConfirmationResult>((resolve) => {
         const wasEmpty = queueRef.current.length === 0;
-        queueRef.current.push({ prompt, resolve });
+        queueRef.current.push({ prompt, resolve, explanation });
 
         // If the queue was empty, we need to kick off the first prompt
         if (wasEmpty) {
@@ -56,6 +61,7 @@ export function useConfirmation(): {
 
   return {
     confirmationPrompt: current?.prompt, // the prompt to render now
+    explanation: current?.explanation, // the explanation to render if available
     requestConfirmation,
     submitConfirmation,
   };

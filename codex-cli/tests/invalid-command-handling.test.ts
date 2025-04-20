@@ -53,10 +53,12 @@ describe("handleExecCommand – invalid executable", () => {
     const policy = { mode: "auto" } as any;
     const getConfirmation = async () => ({ review: "yes" } as any);
 
+    const additionalWritableRoots: Array<string> = [];
     const { outputText, metadata } = await handleExecCommand(
       execInput,
       config,
       policy,
+      additionalWritableRoots,
       getConfirmation,
     );
 

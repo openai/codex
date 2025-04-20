@@ -1,5 +1,11 @@
 # deps
+# Node.js dependencies
 node_modules
+.pnpm-store
+.pnpm-debug.log
+
+# Keep pnpm-lock.yaml
+!pnpm-lock.yaml
 
 # build
 dist/
@@ -10,12 +16,19 @@ storybook-static/
 # ignore README for publishing
 codex-cli/README.md
 
+# ignore Nix derivation results
+result
+
 # editor
 .vscode/
 .idea/
 .history/
 *.swp
 *~
+
+# cli tools
+CLAUDE.md
+.claude/
 
 # caches
 .cache/
@@ -55,3 +68,11 @@ Thumbs.db
 Icon?
 .Spotlight-V100/
 
+# Unwanted package managers
+.yarn/
+yarn.lock
+
+# release
+package.json-e
+session.ts-e
+CHANGELOG.ignore.md
