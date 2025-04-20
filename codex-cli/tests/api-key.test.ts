@@ -7,29 +7,29 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 const ORIGINAL_ENV_KEY = process.env.OPENAI_API_KEY;
 
 beforeEach(() => {
-  process.env.OPENAI_API_KEY = undefined;
+	process.env.OPENAI_API_KEY = undefined;
 });
 
 afterEach(() => {
-  if (ORIGINAL_ENV_KEY !== undefined) {
-    process.env.OPENAI_API_KEY = ORIGINAL_ENV_KEY;
-  } else {
-    process.env.OPENAI_API_KEY = undefined;
-  }
+	if (ORIGINAL_ENV_KEY !== undefined) {
+		process.env.OPENAI_API_KEY = ORIGINAL_ENV_KEY;
+	} else {
+		process.env.OPENAI_API_KEY = undefined;
+	}
 });
 
 describe("config.setApiKey", () => {
-  it("overrides the exported OPENAI_API_KEY at runtime", async () => {
-    const { setApiKey, OPENAI_API_KEY } = await import(
-      "../src/utils/config.js"
-    );
+	it("overrides the exported OPENAI_API_KEY at runtime", async () => {
+		const { setApiKey, OPENAI_API_KEY } = await import(
+			"../src/utils/config.js"
+		);
 
-    expect(OPENAI_API_KEY).toBe("");
+		expect(OPENAI_API_KEY).toBe("");
 
-    setApiKey("my‑key");
+		setApiKey("my‑key");
 
-    const { OPENAI_API_KEY: liveRef } = await import("../src/utils/config.js");
+		const { OPENAI_API_KEY: liveRef } = await import("../src/utils/config.js");
 
-    expect(liveRef).toBe("my‑key");
-  });
+		expect(liveRef).toBe("my‑key");
+	});
 });

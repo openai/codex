@@ -14,38 +14,38 @@ import type { ResponseItem } from "openai/resources/responses/responses.mjs";
  * and rounding up.
  */
 export function approximateTokensUsed(items: Array<ResponseItem>): number {
-  let charCount = 0;
+	let charCount = 0;
 
-  for (const item of items) {
-    switch (item.type) {
-      case "message": {
-        for (const c of item.content) {
-          if (c.type === "input_text" || c.type === "output_text") {
-            charCount += c.text.length;
-          } else if (c.type === "refusal") {
-            charCount += c.refusal.length;
-          } else if (c.type === "input_file") {
-            charCount += c.filename?.length ?? 0;
-          }
-          // images and other content types are ignored (0 chars)
-        }
-        break;
-      }
+	for (const item of items) {
+		switch (item.type) {
+			case "message": {
+				for (const c of item.content) {
+					if (c.type === "input_text" || c.type === "output_text") {
+						charCount += c.text.length;
+					} else if (c.type === "refusal") {
+						charCount += c.refusal.length;
+					} else if (c.type === "input_file") {
+						charCount += c.filename?.length ?? 0;
+					}
+					// images and other content types are ignored (0 chars)
+				}
+				break;
+			}
 
-      case "function_call": {
-        charCount += (item.name?.length || 0) + (item.arguments?.length || 0);
-        break;
-      }
+			case "function_call": {
+				charCount += (item.name?.length || 0) + (item.arguments?.length || 0);
+				break;
+			}
 
-      case "function_call_output": {
-        charCount += item.output.length;
-        break;
-      }
+			case "function_call_output": {
+				charCount += item.output.length;
+				break;
+			}
 
-      default:
-        break;
-    }
-  }
+			default:
+				break;
+		}
+	}
 
-  return Math.ceil(charCount / 4);
+	return Math.ceil(charCount / 4);
 }

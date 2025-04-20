@@ -1,7 +1,7 @@
 /** Represents file contents with a path and its full text. */
 export interface FileContent {
-  path: string;
-  content: string;
+	path: string;
+	content: string;
 }
 
 /**
@@ -12,10 +12,10 @@ export interface FileContent {
  * - A collection of file contents
  */
 export interface TaskContext {
-  prompt: string;
-  input_paths: Array<string>;
-  input_paths_structure: string;
-  files: Array<FileContent>;
+	prompt: string;
+	input_paths: Array<string>;
+	input_paths_structure: string;
+	files: Array<FileContent>;
 }
 
 /**
@@ -26,8 +26,8 @@ export interface TaskContext {
  * and provide full file contents in any modifications.
  */
 export function renderTaskContext(taskContext: TaskContext): string {
-  const inputPathsJoined = taskContext.input_paths.join(", ");
-  return `
+	const inputPathsJoined = taskContext.input_paths.join(", ");
+	return `
   Complete the following task: ${taskContext.prompt}
   
   # IMPORTANT OUTPUT REQUIREMENTS
@@ -51,15 +51,15 @@ export function renderTaskContext(taskContext: TaskContext): string {
  * For each file, we embed the content in a CDATA section.
  */
 function renderFilesToXml(files: Array<FileContent>): string {
-  const fileContents = files
-    .map(
-      (fc) => `
+	const fileContents = files
+		.map(
+			(fc) => `
       <file>
         <path>${fc.path}</path>
         <content><![CDATA[${fc.content}]]></content>
       </file>`,
-    )
-    .join("");
+		)
+		.join("");
 
-  return `<files>\n${fileContents}\n</files>`;
+	return `<files>\n${fileContents}\n</files>`;
 }

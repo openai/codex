@@ -23,35 +23,35 @@ import { AgentLoop } from "../src/utils/agent/agent-loop.js";
  * requests while using Vitest's fake timers.
  */
 class FakeStream {
-  public controller = { abort: vi.fn() };
-  private delay: number;
+	public controller = { abort: vi.fn() };
+	private delay: number;
 
-  constructor(delay: number) {
-    this.delay = delay; // milliseconds
-  }
+	constructor(delay: number) {
+		this.delay = delay; // milliseconds
+	}
 
-  async *[Symbol.asyncIterator]() {
-    if (this.delay > 0) {
-      // Wait the configured delay – fake timers will fast‑forward.
-      await new Promise((r) => setTimeout(r, this.delay));
-    }
+	async *[Symbol.asyncIterator]() {
+		if (this.delay > 0) {
+			// Wait the configured delay – fake timers will fast‑forward.
+			await new Promise((r) => setTimeout(r, this.delay));
+		}
 
-    yield {
-      type: "response.completed",
-      response: {
-        id: `resp-${Date.now()}`,
-        status: "completed",
-        output: [
-          {
-            type: "message",
-            role: "assistant",
-            id: "m1",
-            content: [{ type: "text", text: "done" }],
-          },
-        ],
-      },
-    } as any;
-  }
+		yield {
+			type: "response.completed",
+			response: {
+				id: `resp-${Date.now()}`,
+				status: "completed",
+				output: [
+					{
+						type: "message",
+						role: "assistant",
+						id: "m1",
+						content: [{ type: "text", text: "done" }],
+					},
+				],
+			},
+		} as any;
+	}
 }
 
 /**
@@ -60,115 +60,115 @@ class FakeStream {
  * the global counter accumulates.
  */
 vi.mock("openai", () => {
-  let callCount = 0;
-  class FakeOpenAI {
-    public responses = {
-      create: async () => {
-        callCount += 1;
-        return new FakeStream(callCount === 1 ? 10_000 : 500); // 10s vs 0.5s
-      },
-    };
-  }
-  class APIConnectionTimeoutError extends Error {}
-  return { __esModule: true, default: FakeOpenAI, APIConnectionTimeoutError };
+	let callCount = 0;
+	class FakeOpenAI {
+		public responses = {
+			create: async () => {
+				callCount += 1;
+				return new FakeStream(callCount === 1 ? 10_000 : 500); // 10s vs 0.5s
+			},
+		};
+	}
+	class APIConnectionTimeoutError extends Error {}
+	return { __esModule: true, default: FakeOpenAI, APIConnectionTimeoutError };
 });
 
 // Stub helpers referenced indirectly so we do not pull in real FS/network
 vi.mock("../src/approvals.js", () => ({
-  __esModule: true,
-  isSafeCommand: () => null,
+	__esModule: true,
+	isSafeCommand: () => null,
 }));
 
 vi.mock("../src/format-command.js", () => ({
-  __esModule: true,
-  formatCommandForDisplay: (c: Array<string>) => c.join(" "),
+	__esModule: true,
+	formatCommandForDisplay: (c: Array<string>) => c.join(" "),
 }));
 
 // Suppress file‑system logging in tests.
 vi.mock("../src/utils/agent/log.js", () => ({
-  __esModule: true,
-  log: () => {},
-  isLoggingEnabled: () => false,
+	__esModule: true,
+	log: () => {},
+	isLoggingEnabled: () => false,
 }));
 
 describe("thinking time counter", () => {
-  // Use fake timers for *all* tests in this suite
-  vi.useFakeTimers();
+	// Use fake timers for *all* tests in this suite
+	vi.useFakeTimers();
 
-  // Re‐use this array to collect all onItem callbacks
-  let items: Array<any>;
+	// Re‐use this array to collect all onItem callbacks
+	let items: Array<any>;
 
-  // Helper that runs two agent turns (10s + 0.5s) and populates `items`
-  async function runScenario() {
-    items = [];
+	// Helper that runs two agent turns (10s + 0.5s) and populates `items`
+	async function runScenario() {
+		items = [];
 
-    const agent = new AgentLoop({
-      config: {} as any,
-      model: "any",
-      instructions: "",
-      approvalPolicy: { mode: "auto" } as any,
-      additionalWritableRoots: [],
-      onItem: (i) => items.push(i),
-      onLoading: () => {},
-      getCommandConfirmation: async () => ({ review: "yes" }) as any,
-      onLastResponseId: () => {},
-    });
+		const agent = new AgentLoop({
+			config: {} as any,
+			model: "any",
+			instructions: "",
+			approvalPolicy: { mode: "auto" } as any,
+			additionalWritableRoots: [],
+			onItem: (i) => items.push(i),
+			onLoading: () => {},
+			getCommandConfirmation: async () => ({ review: "yes" }) as any,
+			onLastResponseId: () => {},
+		});
 
-    const userMsg = {
-      type: "message",
-      role: "user",
-      content: [{ type: "input_text", text: "do it" }],
-    } as any;
+		const userMsg = {
+			type: "message",
+			role: "user",
+			content: [{ type: "input_text", text: "do it" }],
+		} as any;
 
-    // 1️⃣ First request – simulated 10s thinking time
-    agent.run([userMsg]);
-    await vi.advanceTimersByTimeAsync(11_000); // 10s + flush margin
+		// 1️⃣ First request – simulated 10s thinking time
+		agent.run([userMsg]);
+		await vi.advanceTimersByTimeAsync(11_000); // 10s + flush margin
 
-    // 2️⃣ Second request – simulated 0.5s thinking time
-    agent.run([userMsg]);
-    await vi.advanceTimersByTimeAsync(1_000); // 0.5s + flush margin
-  }
+		// 2️⃣ Second request – simulated 0.5s thinking time
+		agent.run([userMsg]);
+		await vi.advanceTimersByTimeAsync(1_000); // 0.5s + flush margin
+	}
 
-  // TODO: this is disabled
-  it.fails("reports correct per-task thinking time per command", async () => {
-    await runScenario();
+	// TODO: this is disabled
+	it.fails("reports correct per-task thinking time per command", async () => {
+		await runScenario();
 
-    const perTaskMsgs = items.filter(
-      (i) =>
-        i.role === "system" &&
-        i.content?.[0]?.text?.startsWith("🤔  Thinking time:"),
-    );
+		const perTaskMsgs = items.filter(
+			(i) =>
+				i.role === "system" &&
+				i.content?.[0]?.text?.startsWith("🤔  Thinking time:"),
+		);
 
-    expect(perTaskMsgs.length).toBe(2);
+		expect(perTaskMsgs.length).toBe(2);
 
-    const perTaskDurations = perTaskMsgs.map((m) => {
-      const match = m.content[0].text.match(/Thinking time: (\d+) s/);
-      return match ? Number.parseInt(match[1]!, 10) : Number.NaN;
-    });
+		const perTaskDurations = perTaskMsgs.map((m) => {
+			const match = m.content[0].text.match(/Thinking time: (\d+) s/);
+			return match ? Number.parseInt(match[1]!, 10) : Number.NaN;
+		});
 
-    // First run ~10s, second run ~0.5s
-    expect(perTaskDurations[0]).toBeGreaterThanOrEqual(9);
-    expect(perTaskDurations[1]).toBeLessThan(3);
-  });
+		// First run ~10s, second run ~0.5s
+		expect(perTaskDurations[0]).toBeGreaterThanOrEqual(9);
+		expect(perTaskDurations[1]).toBeLessThan(3);
+	});
 
-  // TODO: this is disabled
-  it.fails("reports correct global thinking time accumulation", async () => {
-    await runScenario();
+	// TODO: this is disabled
+	it.fails("reports correct global thinking time accumulation", async () => {
+		await runScenario();
 
-    const globalMsgs = items.filter(
-      (i) =>
-        i.role === "system" &&
-        i.content?.[0]?.text?.startsWith("⏱  Total thinking time:"),
-    );
+		const globalMsgs = items.filter(
+			(i) =>
+				i.role === "system" &&
+				i.content?.[0]?.text?.startsWith("⏱  Total thinking time:"),
+		);
 
-    expect(globalMsgs.length).toBe(2);
+		expect(globalMsgs.length).toBe(2);
 
-    const globalDurations = globalMsgs.map((m) => {
-      const match = m.content[0].text.match(/Total thinking time: (\d+) s/);
-      return match ? Number.parseInt(match[1]!, 10) : Number.NaN;
-    });
+		const globalDurations = globalMsgs.map((m) => {
+			const match = m.content[0].text.match(/Total thinking time: (\d+) s/);
+			return match ? Number.parseInt(match[1]!, 10) : Number.NaN;
+		});
 
-    // Total after second run should exceed total after first
-    expect(globalDurations[1]! as number).toBeGreaterThan(globalDurations[0]!);
-  });
+		// Total after second run should exceed total after first
+		expect(globalDurations[1]! as number).toBeGreaterThan(globalDurations[0]!);
+	});
 });

@@ -16,12 +16,12 @@ const cliUrl = pathToFileURL(cliPath).href;
 
 // Load and execute the CLI
 (async () => {
-  try {
-    await import(cliUrl);
-  } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error(err);
-    // eslint-disable-next-line no-undef
-    process.exit(1);
-  }
+	try {
+		await import(cliUrl);
+	} catch (err) {
+		// eslint-disable-next-line no-console
+		console.error(err);
+		// eslint-disable-next-line no-undef
+		process.exit(1);
+	}
 })();

@@ -11,18 +11,18 @@ import stripAnsi from "strip-ansi";
  * assertions can be colour‑agnostic.
  */
 export function renderTui(ui: React.ReactElement): any {
-  const utils = render(ui);
+	const utils = render(ui);
 
-  const lastFrameStripped = () => stripAnsi(utils.lastFrame() || "");
+	const lastFrameStripped = () => stripAnsi(utils.lastFrame() || "");
 
-  // A tiny helper that waits for Ink's internal promises / timers to settle
-  // so the next `lastFrame()` call reflects the latest UI state.
-  const flush = async () =>
-    new Promise<void>((resolve) => setTimeout(resolve, 0));
+	// A tiny helper that waits for Ink's internal promises / timers to settle
+	// so the next `lastFrame()` call reflects the latest UI state.
+	const flush = async () =>
+		new Promise<void>((resolve) => setTimeout(resolve, 0));
 
-  return {
-    ...utils,
-    lastFrameStripped,
-    flush,
-  };
+	return {
+		...utils,
+		lastFrameStripped,
+		flush,
+	};
 }

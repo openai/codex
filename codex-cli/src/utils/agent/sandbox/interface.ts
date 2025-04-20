@@ -1,13 +1,13 @@
 export enum SandboxType {
-  NONE = "none",
-  MACOS_SEATBELT = "macos.seatbelt",
-  LINUX_LANDLOCK = "linux.landlock",
+	NONE = "none",
+	MACOS_SEATBELT = "macos.seatbelt",
+	LINUX_LANDLOCK = "linux.landlock",
 }
 
 export type ExecInput = {
-  cmd: Array<string>;
-  workdir: string | undefined;
-  timeoutInMillis: number | undefined;
+	cmd: Array<string>;
+	workdir: string | undefined;
+	timeoutInMillis: number | undefined;
 };
 
 /**
@@ -15,9 +15,9 @@ export type ExecInput = {
  * determine whether the command was successful.
  */
 export type ExecResult = {
-  stdout: string;
-  stderr: string;
-  exitCode: number;
+	stdout: string;
+	stderr: string;
+	exitCode: number;
 };
 
 /**
@@ -25,6 +25,6 @@ export type ExecResult = {
  * `function_call_output`.
  */
 export type ExecOutputMetadata = {
-  exit_code: number;
-  duration_seconds: number;
+	exit_code: number;
+	duration_seconds: number;
 };

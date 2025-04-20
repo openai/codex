@@ -15,17 +15,17 @@ import { execSync } from "node:child_process";
  * fast (~1ms) so blocking the event‑loop briefly is acceptable.
  */
 export function checkInGit(workdir: string): boolean {
-  try {
-    // "git rev-parse --is-inside-work-tree" prints either "true" or "false" to
-    // stdout. We don't care about the output — only the exit status — so we
-    // discard stdio for maximum performance and to avoid leaking noise if the
-    // caller happens to inherit stdio.
-    execSync("git rev-parse --is-inside-work-tree", {
-      cwd: workdir,
-      stdio: "ignore",
-    });
-    return true;
-  } catch {
-    return false;
-  }
+	try {
+		// "git rev-parse --is-inside-work-tree" prints either "true" or "false" to
+		// stdout. We don't care about the output — only the exit status — so we
+		// discard stdio for maximum performance and to avoid leaking noise if the
+		// caller happens to inherit stdio.
+		execSync("git rev-parse --is-inside-work-tree", {
+			cwd: workdir,
+			stdio: "ignore",
+		});
+		return true;
+	} catch {
+		return false;
+	}
 }

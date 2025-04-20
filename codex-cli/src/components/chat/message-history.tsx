@@ -12,69 +12,69 @@ import TerminalHeader from "./terminal-header.js";
 // together.
 type BatchEntry = { item?: ResponseItem; group?: GroupedResponseItem };
 type MessageHistoryProps = {
-  batch: Array<BatchEntry>;
-  groupCounts: Record<string, number>;
-  items: Array<ResponseItem>;
-  userMsgCount: number;
-  confirmationPrompt: React.ReactNode;
-  loading: boolean;
-  headerProps: TerminalHeaderProps;
+	batch: Array<BatchEntry>;
+	groupCounts: Record<string, number>;
+	items: Array<ResponseItem>;
+	userMsgCount: number;
+	confirmationPrompt: React.ReactNode;
+	loading: boolean;
+	headerProps: TerminalHeaderProps;
 };
 
 const MessageHistory: React.FC<MessageHistoryProps> = ({
-  batch,
-  headerProps,
+	batch,
+	headerProps,
 }) => {
-  const messages = batch.map(({ item }) => item!);
+	const messages = batch.map(({ item }) => item!);
 
-  return (
-    <Box flexDirection="column">
-      {/*
-       * The Static component receives a mixed array of the literal string
-       * "header" plus the streamed ResponseItem objects.  After filtering out
-       * the header entry we can safely treat the remaining values as
-       * ResponseItem, however TypeScript cannot infer the refined type from
-       * the runtime check and therefore reports property‑access errors.
-       *
-       * A short cast after the refinement keeps the implementation tidy while
-       * preserving type‑safety.
-       */}
-      <Static items={["header", ...messages]}>
-        {(item, index) => {
-          if (item === "header") {
-            return <TerminalHeader key="header" {...headerProps} />;
-          }
+	return (
+		<Box flexDirection="column">
+			{/*
+			 * The Static component receives a mixed array of the literal string
+			 * "header" plus the streamed ResponseItem objects.  After filtering out
+			 * the header entry we can safely treat the remaining values as
+			 * ResponseItem, however TypeScript cannot infer the refined type from
+			 * the runtime check and therefore reports property‑access errors.
+			 *
+			 * A short cast after the refinement keeps the implementation tidy while
+			 * preserving type‑safety.
+			 */}
+			<Static items={["header", ...messages]}>
+				{(item, index) => {
+					if (item === "header") {
+						return <TerminalHeader key="header" {...headerProps} />;
+					}
 
-          // After the guard above `item` can only be a ResponseItem.
-          const message = item as ResponseItem;
-          return (
-            <Box
-              key={`${message.id}-${index}`}
-              flexDirection="column"
-              borderStyle={
-                message.type === "message" && message.role === "user"
-                  ? "round"
-                  : undefined
-              }
-              borderColor={
-                message.type === "message" && message.role === "user"
-                  ? "gray"
-                  : undefined
-              }
-              marginLeft={
-                message.type === "message" && message.role === "user" ? 0 : 4
-              }
-              marginTop={
-                message.type === "message" && message.role === "user" ? 0 : 1
-              }
-            >
-              <TerminalChatResponseItem item={message} />
-            </Box>
-          );
-        }}
-      </Static>
-    </Box>
-  );
+					// After the guard above `item` can only be a ResponseItem.
+					const message = item as ResponseItem;
+					return (
+						<Box
+							key={`${message.id}-${index}`}
+							flexDirection="column"
+							borderStyle={
+								message.type === "message" && message.role === "user"
+									? "round"
+									: undefined
+							}
+							borderColor={
+								message.type === "message" && message.role === "user"
+									? "gray"
+									: undefined
+							}
+							marginLeft={
+								message.type === "message" && message.role === "user" ? 0 : 4
+							}
+							marginTop={
+								message.type === "message" && message.role === "user" ? 0 : 1
+							}
+						>
+							<TerminalChatResponseItem item={message} />
+						</Box>
+					);
+				}}
+			</Static>
+		</Box>
+	);
 };
 
 export default React.memo(MessageHistory);

@@ -9,17 +9,17 @@ import * as esbuild from "esbuild";
  * to make this work, we have to strip the import out of the build.
  */
 const ignoreReactDevToolsPlugin = {
-  name: "ignore-react-devtools",
-  setup(build) {
-    // When an import for 'react-devtools-core' is encountered,
-    // return an empty module.
-    build.onResolve({ filter: /^react-devtools-core$/ }, (args) => {
-      return { path: args.path, namespace: "ignore-devtools" };
-    });
-    build.onLoad({ filter: /.*/, namespace: "ignore-devtools" }, () => {
-      return { contents: "", loader: "js" };
-    });
-  },
+	name: "ignore-react-devtools",
+	setup(build) {
+		// When an import for 'react-devtools-core' is encountered,
+		// return an empty module.
+		build.onResolve({ filter: /^react-devtools-core$/ }, (args) => {
+			return { path: args.path, namespace: "ignore-devtools" };
+		});
+		build.onLoad({ filter: /.*/, namespace: "ignore-devtools" }, () => {
+			return { contents: "", loader: "js" };
+		});
+	},
 };
 
 // ----------------------------------------------------------------------------
@@ -33,9 +33,9 @@ const ignoreReactDevToolsPlugin = {
 // ----------------------------------------------------------------------------
 
 const isDevBuild =
-  process.argv.includes("--dev") ||
-  process.env.CODEX_DEV === "1" ||
-  process.env.NODE_ENV === "development";
+	process.argv.includes("--dev") ||
+	process.env.CODEX_DEV === "1" ||
+	process.env.NODE_ENV === "development";
 
 const plugins = [ignoreReactDevToolsPlugin];
 
@@ -43,37 +43,37 @@ const plugins = [ignoreReactDevToolsPlugin];
 // traces point to the original TypeScript lines without requiring callers to
 // remember to set NODE_OPTIONS manually.
 if (isDevBuild) {
-  const devShebangLine =
-    "#!/usr/bin/env -S NODE_OPTIONS=--enable-source-maps node\n";
-  const devShebangPlugin = {
-    name: "dev-shebang",
-    setup(build) {
-      build.onEnd(async () => {
-        const outFile = path.resolve(
-          isDevBuild ? "dist/cli-dev.js" : "dist/cli.js",
-        );
-        let code = await fs.promises.readFile(outFile, "utf8");
-        if (code.startsWith("#!")) {
-          code = code.replace(/^#!.*\n/, devShebangLine);
-          await fs.promises.writeFile(outFile, code, "utf8");
-        }
-      });
-    },
-  };
-  plugins.push(devShebangPlugin);
+	const devShebangLine =
+		"#!/usr/bin/env -S NODE_OPTIONS=--enable-source-maps node\n";
+	const devShebangPlugin = {
+		name: "dev-shebang",
+		setup(build) {
+			build.onEnd(async () => {
+				const outFile = path.resolve(
+					isDevBuild ? "dist/cli-dev.js" : "dist/cli.js",
+				);
+				let code = await fs.promises.readFile(outFile, "utf8");
+				if (code.startsWith("#!")) {
+					code = code.replace(/^#!.*\n/, devShebangLine);
+					await fs.promises.writeFile(outFile, code, "utf8");
+				}
+			});
+		},
+	};
+	plugins.push(devShebangPlugin);
 }
 
 esbuild
-  .build({
-    entryPoints: ["src/cli.tsx"],
-    bundle: true,
-    format: "esm",
-    platform: "node",
-    tsconfig: "tsconfig.json",
-    outfile: isDevBuild ? "dist/cli-dev.js" : "dist/cli.js",
-    minify: !isDevBuild,
-    sourcemap: isDevBuild ? "inline" : true,
-    plugins,
-    inject: ["./require-shim.js"],
-  })
-  .catch(() => process.exit(1));
+	.build({
+		entryPoints: ["src/cli.tsx"],
+		bundle: true,
+		format: "esm",
+		platform: "node",
+		tsconfig: "tsconfig.json",
+		outfile: isDevBuild ? "dist/cli-dev.js" : "dist/cli.js",
+		minify: !isDevBuild,
+		sourcemap: isDevBuild ? "inline" : true,
+		plugins,
+		inject: ["./require-shim.js"],
+	})
+	.catch(() => process.exit(1));

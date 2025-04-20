@@ -4,9 +4,9 @@ import { AutoApprovalMode } from "../utils/auto-approval-mode.js";
 import TypeaheadOverlay from "./typeahead-overlay.js";
 
 type Props = {
-  currentMode: string;
-  onSelect: (mode: string) => void;
-  onExit: () => void;
+	currentMode: string;
+	onSelect: (mode: string) => void;
+	onExit: () => void;
 };
 
 /**
@@ -17,31 +17,31 @@ type Props = {
  * TypeaheadOverlay component for the actual UI/UX.
  */
 export default function ApprovalModeOverlay({
-  currentMode,
-  onSelect,
-  onExit,
+	currentMode,
+	onSelect,
+	onExit,
 }: Props): JSX.Element {
-  const items = React.useMemo(
-    () =>
-      Object.values(AutoApprovalMode).map((m) => ({
-        label: m,
-        value: m,
-      })),
-    [],
-  );
+	const items = React.useMemo(
+		() =>
+			Object.values(AutoApprovalMode).map((m) => ({
+				label: m,
+				value: m,
+			})),
+		[],
+	);
 
-  return (
-    <TypeaheadOverlay
-      title="Switch approval mode"
-      description={
-        <Text>
-          Current mode: <Text color="greenBright">{currentMode}</Text>
-        </Text>
-      }
-      initialItems={items}
-      currentValue={currentMode}
-      onSelect={onSelect}
-      onExit={onExit}
-    />
-  );
+	return (
+		<TypeaheadOverlay
+			title="Switch approval mode"
+			description={
+				<Text>
+					Current mode: <Text color="greenBright">{currentMode}</Text>
+				</Text>
+			}
+			initialItems={items}
+			currentValue={currentMode}
+			onSelect={onSelect}
+			onExit={onExit}
+		/>
+	);
 }

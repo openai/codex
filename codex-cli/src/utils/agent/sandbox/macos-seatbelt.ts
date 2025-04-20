@@ -6,66 +6,66 @@ import { log } from "../log.js";
 import { exec } from "./raw-exec.js";
 
 function getCommonRoots() {
-  return [
-    CONFIG_DIR,
-    // Without this root, it'll cause:
-    // pyenv: cannot rehash: $HOME/.pyenv/shims isn't writable
-    `${process.env.HOME}/.pyenv`,
-  ];
+	return [
+		CONFIG_DIR,
+		// Without this root, it'll cause:
+		// pyenv: cannot rehash: $HOME/.pyenv/shims isn't writable
+		`${process.env.HOME}/.pyenv`,
+	];
 }
 
 export function execWithSeatbelt(
-  cmd: Array<string>,
-  opts: SpawnOptions,
-  writableRoots: Array<string>,
-  abortSignal?: AbortSignal,
+	cmd: Array<string>,
+	opts: SpawnOptions,
+	writableRoots: Array<string>,
+	abortSignal?: AbortSignal,
 ): Promise<ExecResult> {
-  let scopedWritePolicy: string;
-  let policyTemplateParams: Array<string>;
-  if (writableRoots.length > 0) {
-    // Add `~/.codex` to the list of writable roots
-    // (if there's any already, not in read-only mode)
-    getCommonRoots().map((root) => writableRoots.push(root));
-    const { policies, params } = writableRoots
-      .map((root, index) => ({
-        policy: `(subpath (param "WRITABLE_ROOT_${index}"))`,
-        param: `-DWRITABLE_ROOT_${index}=${root}`,
-      }))
-      .reduce(
-        (
-          acc: { policies: Array<string>; params: Array<string> },
-          { policy, param },
-        ) => {
-          acc.policies.push(policy);
-          acc.params.push(param);
-          return acc;
-        },
-        { policies: [], params: [] },
-      );
+	let scopedWritePolicy: string;
+	let policyTemplateParams: Array<string>;
+	if (writableRoots.length > 0) {
+		// Add `~/.codex` to the list of writable roots
+		// (if there's any already, not in read-only mode)
+		getCommonRoots().map((root) => writableRoots.push(root));
+		const { policies, params } = writableRoots
+			.map((root, index) => ({
+				policy: `(subpath (param "WRITABLE_ROOT_${index}"))`,
+				param: `-DWRITABLE_ROOT_${index}=${root}`,
+			}))
+			.reduce(
+				(
+					acc: { policies: Array<string>; params: Array<string> },
+					{ policy, param },
+				) => {
+					acc.policies.push(policy);
+					acc.params.push(param);
+					return acc;
+				},
+				{ policies: [], params: [] },
+			);
 
-    scopedWritePolicy = `\n(allow file-write*\n${policies.join(" ")}\n)`;
-    policyTemplateParams = params;
-  } else {
-    scopedWritePolicy = "";
-    policyTemplateParams = [];
-  }
+		scopedWritePolicy = `\n(allow file-write*\n${policies.join(" ")}\n)`;
+		policyTemplateParams = params;
+	} else {
+		scopedWritePolicy = "";
+		policyTemplateParams = [];
+	}
 
-  const fullPolicy = READ_ONLY_SEATBELT_POLICY + scopedWritePolicy;
-  log(
-    `Running seatbelt with policy: ${fullPolicy} and ${
-      policyTemplateParams.length
-    } template params: ${policyTemplateParams.join(", ")}`,
-  );
+	const fullPolicy = READ_ONLY_SEATBELT_POLICY + scopedWritePolicy;
+	log(
+		`Running seatbelt with policy: ${fullPolicy} and ${
+			policyTemplateParams.length
+		} template params: ${policyTemplateParams.join(", ")}`,
+	);
 
-  const fullCommand = [
-    "sandbox-exec",
-    "-p",
-    fullPolicy,
-    ...policyTemplateParams,
-    "--",
-    ...cmd,
-  ];
-  return exec(fullCommand, opts, writableRoots, abortSignal);
+	const fullCommand = [
+		"sandbox-exec",
+		"-p",
+		fullPolicy,
+		...policyTemplateParams,
+		"--",
+		...cmd,
+	];
+	return exec(fullCommand, opts, writableRoots, abortSignal);
 }
 
 const READ_ONLY_SEATBELT_POLICY = `

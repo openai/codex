@@ -14,117 +14,117 @@ const openAiState: { createSpy?: ReturnType<typeof vi.fn> } = {};
  * so we expose a minimal stub.
  */
 vi.mock("openai", () => {
-  class FakeOpenAI {
-    public responses = {
-      // Will be replaced per‑test via `openAiState.createSpy`.
-      create: (...args: Array<any>) => openAiState.createSpy?.(...args),
-    };
-  }
+	class FakeOpenAI {
+		public responses = {
+			// Will be replaced per‑test via `openAiState.createSpy`.
+			create: (...args: Array<any>) => openAiState.createSpy?.(...args),
+		};
+	}
 
-  // The real SDK exports this constructor – include it for typings even
-  // though it is not used in this spec.
-  class APIConnectionTimeoutError extends Error {}
+	// The real SDK exports this constructor – include it for typings even
+	// though it is not used in this spec.
+	class APIConnectionTimeoutError extends Error {}
 
-  return {
-    __esModule: true,
-    default: FakeOpenAI,
-    APIConnectionTimeoutError,
-  };
+	return {
+		__esModule: true,
+		default: FakeOpenAI,
+		APIConnectionTimeoutError,
+	};
 });
 
 // Stub helpers that the agent indirectly imports so it does not attempt any
 // file‑system access or real approvals logic during the test.
 vi.mock("../src/approvals.js", () => ({
-  __esModule: true,
-  alwaysApprovedCommands: new Set<string>(),
-  canAutoApprove: () => ({ type: "auto-approve", runInSandbox: false }) as any,
-  isSafeCommand: () => null,
+	__esModule: true,
+	alwaysApprovedCommands: new Set<string>(),
+	canAutoApprove: () => ({ type: "auto-approve", runInSandbox: false }) as any,
+	isSafeCommand: () => null,
 }));
 
 vi.mock("../src/format-command.js", () => ({
-  __esModule: true,
-  formatCommandForDisplay: (c: Array<string>) => c.join(" "),
+	__esModule: true,
+	formatCommandForDisplay: (c: Array<string>) => c.join(" "),
 }));
 
 // Silence agent‑loop debug logging so test output stays clean.
 vi.mock("../src/utils/agent/log.js", () => ({
-  __esModule: true,
-  log: () => {},
-  isLoggingEnabled: () => false,
+	__esModule: true,
+	log: () => {},
+	isLoggingEnabled: () => false,
 }));
 
 import { AgentLoop } from "../src/utils/agent/agent-loop.js";
 
 describe("AgentLoop – rate‑limit handling", () => {
-  it("retries up to the maximum and then surfaces a system message", async () => {
-    // Enable fake timers for this test only – we restore real timers at the end
-    // so other tests are unaffected.
-    vi.useFakeTimers();
+	it("retries up to the maximum and then surfaces a system message", async () => {
+		// Enable fake timers for this test only – we restore real timers at the end
+		// so other tests are unaffected.
+		vi.useFakeTimers();
 
-    try {
-      // Construct a dummy rate‑limit error that matches the implementation's
-      // detection logic (`status === 429`).
-      const rateLimitErr: any = new Error("Rate limit exceeded");
-      rateLimitErr.status = 429;
+		try {
+			// Construct a dummy rate‑limit error that matches the implementation's
+			// detection logic (`status === 429`).
+			const rateLimitErr: any = new Error("Rate limit exceeded");
+			rateLimitErr.status = 429;
 
-      // Always throw the rate‑limit error to force the loop to exhaust all
-      // retries (5 attempts in total).
-      openAiState.createSpy = vi.fn(async () => {
-        throw rateLimitErr;
-      });
+			// Always throw the rate‑limit error to force the loop to exhaust all
+			// retries (5 attempts in total).
+			openAiState.createSpy = vi.fn(async () => {
+				throw rateLimitErr;
+			});
 
-      const received: Array<any> = [];
+			const received: Array<any> = [];
 
-      const agent = new AgentLoop({
-        model: "any",
-        instructions: "",
-        approvalPolicy: { mode: "auto" } as any,
-        additionalWritableRoots: [],
-        onItem: (i) => received.push(i),
-        onLoading: () => {},
-        getCommandConfirmation: async () => ({ review: "yes" }) as any,
-        onLastResponseId: () => {},
-      });
+			const agent = new AgentLoop({
+				model: "any",
+				instructions: "",
+				approvalPolicy: { mode: "auto" } as any,
+				additionalWritableRoots: [],
+				onItem: (i) => received.push(i),
+				onLoading: () => {},
+				getCommandConfirmation: async () => ({ review: "yes" }) as any,
+				onLastResponseId: () => {},
+			});
 
-      const userMsg = [
-        {
-          type: "message",
-          role: "user",
-          content: [{ type: "input_text", text: "hello" }],
-        },
-      ];
+			const userMsg = [
+				{
+					type: "message",
+					role: "user",
+					content: [{ type: "input_text", text: "hello" }],
+				},
+			];
 
-      // Start the run but don't await yet so we can advance fake timers while it
-      // is in progress.
-      const runPromise = agent.run(userMsg as any);
+			// Start the run but don't await yet so we can advance fake timers while it
+			// is in progress.
+			const runPromise = agent.run(userMsg as any);
 
-      // The agent waits 15 000 ms between retries (rate‑limit back‑off) and does
-      // this four times (after attempts 1‑4). Fast‑forward a bit more to cover
-      // any additional small `setTimeout` calls inside the implementation.
-      await vi.advanceTimersByTimeAsync(61_000); // 4 * 15s + 1s safety margin
+			// The agent waits 15 000 ms between retries (rate‑limit back‑off) and does
+			// this four times (after attempts 1‑4). Fast‑forward a bit more to cover
+			// any additional small `setTimeout` calls inside the implementation.
+			await vi.advanceTimersByTimeAsync(61_000); // 4 * 15s + 1s safety margin
 
-      // Ensure the promise settles without throwing.
-      await expect(runPromise).resolves.not.toThrow();
+			// Ensure the promise settles without throwing.
+			await expect(runPromise).resolves.not.toThrow();
 
-      // Flush the 10 ms staging delay used when emitting items.
-      await vi.advanceTimersByTimeAsync(20);
+			// Flush the 10 ms staging delay used when emitting items.
+			await vi.advanceTimersByTimeAsync(20);
 
-      // The OpenAI client should have been called the maximum number of retry
-      // attempts (5).
-      expect(openAiState.createSpy).toHaveBeenCalledTimes(5);
+			// The OpenAI client should have been called the maximum number of retry
+			// attempts (5).
+			expect(openAiState.createSpy).toHaveBeenCalledTimes(5);
 
-      // Finally, verify that the user sees a helpful system message.
-      const sysMsg = received.find(
-        (i) =>
-          i.role === "system" &&
-          typeof i.content?.[0]?.text === "string" &&
-          i.content[0].text.includes("Rate limit reached"),
-      );
+			// Finally, verify that the user sees a helpful system message.
+			const sysMsg = received.find(
+				(i) =>
+					i.role === "system" &&
+					typeof i.content?.[0]?.text === "string" &&
+					i.content[0].text.includes("Rate limit reached"),
+			);
 
-      expect(sysMsg).toBeTruthy();
-    } finally {
-      // Ensure global timer state is restored for subsequent tests.
-      vi.useRealTimers();
-    }
-  });
+			expect(sysMsg).toBeTruthy();
+		} finally {
+			// Ensure global timer state is restored for subsequent tests.
+			vi.useRealTimers();
+		}
+	});
 });

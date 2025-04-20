@@ -12,66 +12,66 @@ import TerminalHeader from "./terminal-header.js";
 // together.
 type BatchEntry = { item?: ResponseItem; group?: GroupedResponseItem };
 type MessageHistoryProps = {
-  batch: Array<BatchEntry>;
-  groupCounts: Record<string, number>;
-  items: Array<ResponseItem>;
-  userMsgCount: number;
-  confirmationPrompt: React.ReactNode;
-  loading: boolean;
-  thinkingSeconds: number;
-  headerProps: TerminalHeaderProps;
-  fullStdout: boolean;
+	batch: Array<BatchEntry>;
+	groupCounts: Record<string, number>;
+	items: Array<ResponseItem>;
+	userMsgCount: number;
+	confirmationPrompt: React.ReactNode;
+	loading: boolean;
+	thinkingSeconds: number;
+	headerProps: TerminalHeaderProps;
+	fullStdout: boolean;
 };
 
 const MessageHistory: React.FC<MessageHistoryProps> = ({
-  batch,
-  headerProps,
-  // `loading` and `thinkingSeconds` handled by input component now.
-  loading: _loading,
-  thinkingSeconds: _thinkingSeconds,
-  fullStdout,
+	batch,
+	headerProps,
+	// `loading` and `thinkingSeconds` handled by input component now.
+	loading: _loading,
+	thinkingSeconds: _thinkingSeconds,
+	fullStdout,
 }) => {
-  // Flatten batch entries to response items.
-  const messages = useMemo(() => batch.map(({ item }) => item!), [batch]);
+	// Flatten batch entries to response items.
+	const messages = useMemo(() => batch.map(({ item }) => item!), [batch]);
 
-  return (
-    <Box flexDirection="column">
-      {/* The dedicated thinking indicator in the input area now displays the
+	return (
+		<Box flexDirection="column">
+			{/* The dedicated thinking indicator in the input area now displays the
           elapsed time, so we no longer render a separate counter here. */}
-      <Static items={["header", ...messages]}>
-        {(item, index) => {
-          if (item === "header") {
-            return <TerminalHeader key="header" {...headerProps} />;
-          }
+			<Static items={["header", ...messages]}>
+				{(item, index) => {
+					if (item === "header") {
+						return <TerminalHeader key="header" {...headerProps} />;
+					}
 
-          // After the guard above, item is a ResponseItem
-          const message = item as ResponseItem;
-          // Suppress empty reasoning updates (i.e. items with an empty summary).
-          const msg = message as unknown as { summary?: Array<unknown> };
-          if (msg.summary?.length === 0) {
-            return null;
-          }
-          return (
-            <Box
-              key={`${message.id}-${index}`}
-              flexDirection="column"
-              marginLeft={
-                message.type === "message" && message.role === "user" ? 0 : 4
-              }
-              marginTop={
-                message.type === "message" && message.role === "user" ? 0 : 1
-              }
-            >
-              <TerminalChatResponseItem
-                item={message}
-                fullStdout={fullStdout}
-              />
-            </Box>
-          );
-        }}
-      </Static>
-    </Box>
-  );
+					// After the guard above, item is a ResponseItem
+					const message = item as ResponseItem;
+					// Suppress empty reasoning updates (i.e. items with an empty summary).
+					const msg = message as unknown as { summary?: Array<unknown> };
+					if (msg.summary?.length === 0) {
+						return null;
+					}
+					return (
+						<Box
+							key={`${message.id}-${index}`}
+							flexDirection="column"
+							marginLeft={
+								message.type === "message" && message.role === "user" ? 0 : 4
+							}
+							marginTop={
+								message.type === "message" && message.role === "user" ? 0 : 1
+							}
+						>
+							<TerminalChatResponseItem
+								item={message}
+								fullStdout={fullStdout}
+							/>
+						</Box>
+					);
+				}}
+			</Static>
+		</Box>
+	);
 };
 
 export default React.memo(MessageHistory);
