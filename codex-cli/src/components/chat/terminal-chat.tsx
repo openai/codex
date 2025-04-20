@@ -46,6 +46,14 @@ export type OverlayModeType =
   | "help"
   | "diff";
 
+export type OverlayModeType =
+  | "none"
+  | "history"
+  | "model"
+  | "approval"
+  | "help"
+  | "diff";
+
 type Props = {
   config: AppConfig;
   prompt?: string;
@@ -190,7 +198,7 @@ export default function TerminalChat({
   } = useConfirmation();
   const [overlayMode, setOverlayMode] = useState<OverlayModeType>("none");
 
-  // Store the diff text when opening the diff overlay so the view isn’t
+  // Store the diff text when opening the diff overlay so the view isn't
   // recomputed on every re‑render while it is open.
   // diffText is passed down to the DiffOverlay component. The setter is
   // currently unused but retained for potential future updates. Prefix with
@@ -306,7 +314,7 @@ export default function TerminalChat({
       forceUpdate(); // re‑render after teardown too
     };
     // We intentionally omit 'approvalPolicy' and 'confirmationPrompt' from the deps
-    // so switching modes or showing confirmation dialogs doesn’t tear down the loop.
+    // so switching modes or showing confirmation dialogs doesn't tear down the loop.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model, config, requestConfirmation, additionalWritableRoots]);
 
@@ -504,7 +512,6 @@ export default function TerminalChat({
             openModelOverlay={() => setOverlayMode("model")}
             openApprovalOverlay={() => setOverlayMode("approval")}
             openHelpOverlay={() => setOverlayMode("help")}
-            // Handler for the /diff command input action
             openDiffOverlay={() => {
               const { isGitRepo, diff } = getGitDiff(); // Uses the function from the missing file
               let text: string;
@@ -696,11 +703,9 @@ export default function TerminalChat({
           <HelpOverlay onExit={() => setOverlayMode("none")} />
         )}
 
-        {/* DiffOverlay is rendered here */}
         {overlayMode === "diff" && (
-          // Pass necessary props like diffText and onExit
           <DiffOverlay
-            diffText={diffText} // Pass the stored diff text
+            diffText={diffText}
             onExit={() => setOverlayMode("none")}
           />
         )}
