@@ -168,6 +168,9 @@ export default function TerminalChatInput({
                 case "/approval":
                   openApprovalOverlay();
                   break;
+                case "/diff":
+                  openDiffOverlay();
+                  break;
                 case "/bug":
                   onSubmit(cmd);
                   break;
