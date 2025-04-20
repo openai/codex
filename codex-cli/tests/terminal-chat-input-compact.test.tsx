@@ -17,6 +17,7 @@ describe("TerminalChatInput compact command", () => {
       setItems: () => {},
       contextLeftPercent: 10,
       openOverlay: () => {},
+      openDiffOverlay: () => {},
       openModelOverlay: () => {},
       openApprovalOverlay: () => {},
       openHelpOverlay: () => {},

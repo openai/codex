@@ -52,6 +52,7 @@ export default function TerminalChatInput({
   openModelOverlay,
   openApprovalOverlay,
   openHelpOverlay,
+  openDiffOverlay,
   interruptAgent,
   active,
   thinkingSeconds,
@@ -72,6 +73,7 @@ export default function TerminalChatInput({
   openModelOverlay: () => void;
   openApprovalOverlay: () => void;
   openHelpOverlay: () => void;
+  openDiffOverlay: () => void;
   interruptAgent: () => void;
   active: boolean;
   thinkingSeconds: number;
@@ -230,6 +232,12 @@ export default function TerminalChatInput({
         return;
       }
 
+      if (inputValue === "/diff") {
+        setInput("");
+        openDiffOverlay();
+        return;
+      }
+
       if (inputValue.startsWith("/model")) {
         setInput("");
         openModelOverlay();
@@ -337,6 +345,7 @@ export default function TerminalChatInput({
       openApprovalOverlay,
       openModelOverlay,
       openHelpOverlay,
+      openDiffOverlay,
       history, // Add history to the dependency array
     ],
   );
@@ -346,7 +355,11 @@ export default function TerminalChatInput({
       <TerminalChatCommandReview
         confirmationPrompt={confirmationPrompt}
         onReviewCommand={submitConfirmation}
+        // allow switching approval mode via 'v'
+        onSwitchApprovalMode={openApprovalOverlay}
         explanation={explanation}
+        // disable when input is inactive (e.g., overlay open)
+        isActive={active}
       />
     );
   }
