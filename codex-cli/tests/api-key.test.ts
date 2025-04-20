@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 const ORIGINAL_ENV_KEY = process.env.OPENAI_API_KEY;
 
 beforeEach(() => {
-	process.env.OPENAI_API_KEY = undefined;
+	process.env.OPENAI_API_KEY = "";
 });
 
 afterEach(() => {
