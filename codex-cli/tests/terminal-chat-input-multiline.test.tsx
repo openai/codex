@@ -78,7 +78,7 @@ describe("TerminalChatInput multiline functionality", () => {
     };
 
     const { stdin, lastFrameStripped, flush, cleanup } = renderTui(
-      <TerminalChatInput {...props} />
+      <TerminalChatInput {...props} />,
     );
 
     // Type some text
@@ -129,7 +129,7 @@ describe("TerminalChatInput multiline functionality", () => {
     };
 
     const { stdin, lastFrameStripped, flush, cleanup } = renderTui(
-      <TerminalChatInput {...props} />
+      <TerminalChatInput {...props} />,
     );
 
     // Type some text
@@ -183,7 +183,7 @@ describe("TerminalChatInput multiline functionality", () => {
     };
 
     const { stdin, flush, cleanup } = renderTui(
-      <TerminalChatInput {...props} />
+      <TerminalChatInput {...props} />,
     );
 
     // Wait for initial render
