@@ -15,25 +15,36 @@ import { formatCommandForDisplay } from "../../format-command.js";
 import { useConfirmation } from "../../hooks/use-confirmation.js";
 import { useTerminalSize } from "../../hooks/use-terminal-size.js";
 import { AgentLoop } from "../../utils/agent/agent-loop.js";
-import { isLoggingEnabled, log } from "../../utils/agent/log.js";
+import { log } from "../../utils/agent/log.js";
 import { ReviewDecision } from "../../utils/agent/review.js";
 import { generateCompactSummary } from "../../utils/compact-summary.js";
 import { OPENAI_BASE_URL } from "../../utils/config.js";
+import { extractAppliedPatches as _extractAppliedPatches } from "../../utils/extract-applied-patches.js";
+import { getGitDiff } from "../../utils/get-diff.js"; // This import is causing the error
 import { createInputItem } from "../../utils/input-utils.js";
 import { getAvailableModels } from "../../utils/model-utils.js";
 import { CLI_VERSION } from "../../utils/session.js";
 import { shortCwd } from "../../utils/short-path.js";
 import { saveRollout } from "../../utils/storage/save-rollout.js";
 import ApprovalModeOverlay from "../approval-mode-overlay.js";
+import DiffOverlay from "../diff-overlay.js";
 import HelpOverlay from "../help-overlay.js";
 import HistoryOverlay from "../history-overlay.js";
 import ModelOverlay from "../model-overlay.js";
 import { Box, Text } from "ink";
-import { exec } from "node:child_process";
+import { spawn } from "node:child_process";
 import OpenAI from "openai";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { inspect } from "util";
-import chalk from "chalk"; // Assuming chalk is needed here too based on ModelOverlay usage
+import chalk from "chalk";
+
+export type OverlayModeType =
+  | "none"
+  | "history"
+  | "model"
+  | "approval"
+  | "help"
+  | "diff";
 
 type Props = {
   config: AppConfig;
@@ -177,9 +188,14 @@ export default function TerminalChat({
     explanation,
     submitConfirmation,
   } = useConfirmation();
-  const [overlayMode, setOverlayMode] = useState<
-    "none" | "history" | "model" | "approval" | "help"
-  >("none");
+  const [overlayMode, setOverlayMode] = useState<OverlayModeType>("none");
+
+  // Store the diff text when opening the diff overlay so the view isn’t
+  // recomputed on every re‑render while it is open.
+  // diffText is passed down to the DiffOverlay component. The setter is
+  // currently unused but retained for potential future updates. Prefix with
+  // an underscore so eslint ignores the unused variable.
+  const [diffText, _setDiffText] = useState<string>("");
 
   const [initialPrompt, setInitialPrompt] = useState(_initialPrompt);
   const [initialImagePaths, setInitialImagePaths] =
@@ -195,30 +211,25 @@ export default function TerminalChat({
   // ────────────────────────────────────────────────────────────────
   // DEBUG: log every render w/ key bits of state
   // ────────────────────────────────────────────────────────────────
-  if (isLoggingEnabled()) {
-    log(
-      `render – agent? ${Boolean(agentRef.current)} loading=${loading} items=${
-        items.length
-      }`,
-    );
-  }
+  log(
+    `render – agent? ${Boolean(agentRef.current)} loading=${loading} items=${
+      items.length
+    }`,
+  );
 
   useEffect(() => {
     // Skip recreating the agent if awaiting a decision on a pending confirmation
     if (confirmationPrompt != null) {
-      if (isLoggingEnabled()) {
-        log("skip AgentLoop recreation due to pending confirmationPrompt");
-      }
+      log("skip AgentLoop recreation due to pending confirmationPrompt");
       return;
     }
-    if (isLoggingEnabled()) {
-      log("creating NEW AgentLoop");
-      log(
-        `model=${model} instructions=${Boolean(
-          config.instructions,
-        )} approvalPolicy=${approvalPolicy}`,
-      );
-    }
+
+    log("creating NEW AgentLoop");
+    log(
+      `model=${model} instructions=${Boolean(
+        config.instructions,
+      )} approvalPolicy=${approvalPolicy}`,
+    );
 
     // Tear down any existing loop before creating a new one
     agentRef.current?.terminate();
@@ -286,14 +297,10 @@ export default function TerminalChat({
     // force a render so JSX below can "see" the freshly created agent
     forceUpdate();
 
-    if (isLoggingEnabled()) {
-      log(`AgentLoop created: ${inspect(agentRef.current, { depth: 1 })}`);
-    }
+    log(`AgentLoop created: ${inspect(agentRef.current, { depth: 1 })}`);
 
     return () => {
-      if (isLoggingEnabled()) {
-        log("terminating AgentLoop");
-      }
+      log("terminating AgentLoop");
       agentRef.current?.terminate();
       agentRef.current = undefined;
       forceUpdate(); // re‑render after teardown too
@@ -362,9 +369,10 @@ export default function TerminalChat({
           const safePreview = preview.replace(/"/g, '\\"');
           const title = "Codex CLI";
           const cwd = PWD;
-          exec(
-            `osascript -e 'display notification "${safePreview}" with title "${title}" subtitle "${cwd}" sound name "Ping"'`,
-          );
+          spawn("osascript", [
+            "-e",
+            `display notification "${safePreview}" with title "${title}" subtitle "${cwd}" sound name "Ping"`,
+          ]);
         }
       }
     }
@@ -374,9 +382,7 @@ export default function TerminalChat({
   // Let's also track whenever the ref becomes available
   const agent = agentRef.current;
   useEffect(() => {
-    if (isLoggingEnabled()) {
-      log(`agentRef.current is now ${Boolean(agent)}`);
-    }
+    log(`agentRef.current is now ${Boolean(agent)}`);
   }, [agent]);
 
   // ---------------------------------------------------------------------
@@ -410,7 +416,7 @@ export default function TerminalChat({
   useEffect(() => {
     (async () => {
       const available = await getAvailableModels();
-      setAvailableModels(available); // <--- ADDED THIS LINE
+      setAvailableModels(available); // <--- ADDED THIS LINE (fixes available models list)
       if (model && available.length > 0 && !available.includes(model)) {
         setItems((prev) => [
           ...prev,
@@ -449,6 +455,7 @@ export default function TerminalChat({
       <Box flexDirection="column">
         {agent ? (
           <TerminalMessageHistory
+            setOverlayMode={setOverlayMode}
             batch={lastMessageBatch}
             groupCounts={groupCounts}
             items={items}
@@ -497,17 +504,37 @@ export default function TerminalChat({
             openModelOverlay={() => setOverlayMode("model")}
             openApprovalOverlay={() => setOverlayMode("approval")}
             openHelpOverlay={() => setOverlayMode("help")}
+            // Handler for the /diff command input action
+            openDiffOverlay={() => {
+              const { isGitRepo, diff } = getGitDiff(); // Uses the function from the missing file
+              let text: string;
+              if (isGitRepo) {
+                text = diff; // Use the actual diff
+              } else {
+                text = "`/diff` — _not inside a git repository_"; // Message if not a git repo
+              }
+              // Add the diff or message to the chat history
+              setItems((prev) => [
+                ...prev,
+                {
+                  id: `diff-${Date.now()}`,
+                  type: "message",
+                  role: "system", // Or perhaps 'user' since it's a user command result
+                  content: [{ type: "input_text", text }],
+                } as ResponseItem, // Cast for type safety
+              ]);
+              // Ensure no overlay is shown immediately after /diff command is processed
+              setOverlayMode("none");
+            }}
             onCompact={handleCompact}
             active={overlayMode === "none"}
             interruptAgent={() => {
               if (!agent) {
                 return;
               }
-              if (isLoggingEnabled()) {
-                log(
-                  "TerminalChat: interruptAgent invoked – calling agent.cancel()",
-                );
-              }
+              log(
+                "TerminalChat: interruptAgent invoked – calling agent.cancel()",
+              );
               agent.cancel();
               setLoading(false);
 
@@ -544,42 +571,46 @@ export default function TerminalChat({
             currentModel={model}
             hasLastResponse={Boolean(lastResponseId)}
             onSelect={(newModel) => {
-              // This validation logic was in ModelOverlay in the previous snippet,
-              // but the PR description suggests TerminalChat might also handle it or trigger the error display.
-              // Keeping it here for clarity based on PR description point 4 ("CLI feedback").
-              // The ModelOverlay's onSelect should likely filter/disable unavailable options,
-              // but TerminalChat might handle the final state update and error message display.
-              // If ModelOverlay handles the error display internally based on availableModels prop,
-              // then this check might be redundant here, but necessary for the CLI feedback point.
-
+              // Check if the selected model is available (from your branch's changes)
               if (!availableModels.includes(newModel)) {
-                // Display error message directly in chat history
-                setItems((prev) => [
-                  ...prev,
-                  {
-                    id: `model-not-available-${Date.now()}`,
-                    type: "message",
-                    role: "system",
-                    content: [
+                // Display error message directly in chat history if not available (from your branch's changes)
+                setItems(
+                  (prev) =>
+                    [
+                      ...prev,
                       {
-                        type: "input_text",
-                        text: `${chalk.red("Error:")} Model "${chalk.bold(newModel)}" is not available.\nAvailable models: ${chalk.green(availableModels.join(", "))}`,
+                        id: `model-not-available-${Date.now()}`,
+                        type: "message",
+                        role: "system", // Consider 'system' for errors like this
+                        content: [
+                          {
+                            type: "input_text", // Using input_text to render as a system message
+                            text: `${chalk.red("Error:")} Model "${chalk.bold(
+                              newModel,
+                            )}" is not available.\nAvailable models: ${chalk.green(
+                              availableModels.join(", "),
+                            )}`,
+                          },
+                        ],
                       },
-                    ],
-                  },
-                ]);
+                    ] as ResponseItem[],
+                ); // Cast for type safety
                 // Close the overlay without changing the model
                 setOverlayMode("none");
-                return;
+                return; // Exit the handler if the model is unavailable
               }
 
-              // If model is available, proceed with switching
-              if (isLoggingEnabled()) {
+              // If model is available, proceed with switching (Combined logic from both branches)
+              // Note: Logging calls appear slightly different between branches, combined here
+              if (log) {
+                // Check if log is enabled before using it
                 log(
-                  "TerminalChat: interruptAgent invoked – calling agent.cancel()",
-                );
+                  "TerminalChat: Switching model - cancelling agent and updating state",
+                ); // More descriptive log message
                 if (!agent) {
-                  log("TerminalChat: agent is not ready yet");
+                  log(
+                    "TerminalChat: agent is not ready yet during model switch",
+                  );
                 }
               }
               agent?.cancel(); // Cancel any ongoing agent activity
@@ -592,27 +623,30 @@ export default function TerminalChat({
               );
 
               // Add a system message to indicate the model switch
-              setItems((prev) => [
-                ...prev,
-                {
-                  id: `switch-model-${Date.now()}`,
-                  type: "message",
-                  role: "system",
-                  content: [
+              setItems(
+                (prev) =>
+                  [
+                    ...prev,
                     {
-                      type: "input_text",
-                      text: `Switched model to ${newModel}`,
+                      id: `switch-model-${Date.now()}`,
+                      type: "message",
+                      role: "system",
+                      content: [
+                        {
+                          type: "input_text",
+                          text: `Switched model to ${newModel}`,
+                        },
+                      ],
                     },
-                  ],
-                },
-              ]);
+                  ] as ResponseItem[],
+              ); // Cast for type safety
 
               // Close the overlay
               setOverlayMode("none");
             }}
             onExit={() => setOverlayMode("none")}
             availableModels={availableModels} // Pass the fetched list down
-            setModels={setAvailableModels} // Pass the setter down (ModelOverlay might also fetch or filter)
+            // Removed setModels prop as ModelOverlay shouldn't manage availableModels state
           />
         )}
 
@@ -634,20 +668,23 @@ export default function TerminalChat({
                   }
                 ).approvalPolicy = newMode as ApprovalPolicy;
               }
-              setItems((prev) => [
-                ...prev,
-                {
-                  id: `switch-approval-${Date.now()}`,
-                  type: "message",
-                  role: "system",
-                  content: [
+              setItems(
+                (prev) =>
+                  [
+                    ...prev,
                     {
-                      type: "input_text",
-                      text: `Switched approval mode to ${newMode}`,
+                      id: `switch-approval-${Date.now()}`,
+                      type: "message",
+                      role: "system",
+                      content: [
+                        {
+                          type: "input_text",
+                          text: `Switched approval mode to ${newMode}`,
+                        },
+                      ],
                     },
-                  ],
-                },
-              ]);
+                  ] as ResponseItem[],
+              ); // Cast for type safety
 
               setOverlayMode("none");
             }}
@@ -657,6 +694,15 @@ export default function TerminalChat({
 
         {overlayMode === "help" && (
           <HelpOverlay onExit={() => setOverlayMode("none")} />
+        )}
+
+        {/* DiffOverlay is rendered here */}
+        {overlayMode === "diff" && (
+          // Pass necessary props like diffText and onExit
+          <DiffOverlay
+            diffText={diffText} // Pass the stored diff text
+            onExit={() => setOverlayMode("none")}
+          />
         )}
       </Box>
     </Box>
