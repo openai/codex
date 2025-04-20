@@ -9,7 +9,10 @@ import { TerminalChatCommandReview } from "./terminal-chat-command-review.js";
 import { log, isLoggingEnabled } from "../../utils/agent/log.js";
 import { loadConfig } from "../../utils/config.js";
 import { createInputItem } from "../../utils/input-utils.js";
-import { getSeasonalFrames, defaultSpinnerFrames } from "../../utils/seasonal.js";
+import {
+  getSeasonalFrames,
+  defaultSpinnerFrames,
+} from "../../utils/seasonal.js";
 import { setSessionId } from "../../utils/session.js";
 import { SLASH_COMMANDS, type SlashCommand } from "../../utils/slash-commands";
 import {

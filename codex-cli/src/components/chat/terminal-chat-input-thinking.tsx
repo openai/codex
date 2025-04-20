@@ -1,5 +1,8 @@
 import { log, isLoggingEnabled } from "../../utils/agent/log.js";
-import { getSeasonalFrames, defaultSpinnerFrames } from "../../utils/seasonal.js";
+import {
+  getSeasonalFrames,
+  defaultSpinnerFrames,
+} from "../../utils/seasonal.js";
 import { Box, Text, useInput, useStdin } from "ink";
 import React, { useState } from "react";
 import { useInterval } from "use-interval";

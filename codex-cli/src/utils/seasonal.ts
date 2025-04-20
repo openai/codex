@@ -20,10 +20,10 @@ export function getSeasonalFrames(
   defaultFrames: Array<string> = defaultSpinnerFrames,
 ): Array<string> {
   // Check for FAKE_DATE environment variable
-  const now = process.env['FAKE_DATE']
-    ? new Date(process.env['FAKE_DATE'])
+  const now = process.env["FAKE_DATE"]
+    ? new Date(process.env["FAKE_DATE"])
     : new Date();
-    
+
   const year = now.getFullYear();
   const msPerDay = 1000 * 60 * 60 * 24;
 
@@ -36,7 +36,7 @@ export function getSeasonalFrames(
   // Halloween: October 31
   const halloween = new Date(year, 9, 31);
   if (isWithinDays(now, halloween, 7)) {
-    return defaultFrames.map((f) => f.replace('●', '🎃'));
+    return defaultFrames.map((f) => f.replace("●", "🎃"));
   }
 
   // Christmas: December 25 (check current and previous year)
@@ -46,7 +46,7 @@ export function getSeasonalFrames(
     isWithinDays(now, christmasCurrent, 7) ||
     isWithinDays(now, christmasPrev, 7)
   ) {
-    return defaultFrames.map((f) => f.replace('●', '🎄'));
+    return defaultFrames.map((f) => f.replace("●", "🎄"));
   }
 
   // Easter: calculate date -- Yes this is extreme... but its fun. - Crazywolf132
@@ -70,7 +70,7 @@ export function getSeasonalFrames(
   const easter = calcEaster(year);
   if (isWithinDays(now, easter, 7)) {
     // Easter: use rabbit emoji
-    return defaultFrames.map((f) => f.replace('●', '🐰'));
+    return defaultFrames.map((f) => f.replace("●", "🐰"));
   }
 
   return defaultFrames;
