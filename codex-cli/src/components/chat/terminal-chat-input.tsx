@@ -21,6 +21,7 @@ import { Box, Text, useApp, useInput, useStdin } from "ink";
 import { fileURLToPath } from "node:url";
 import React, { useCallback, useState, Fragment, useEffect } from "react";
 import { useInterval } from "use-interval";
+import { getSeasonalFrames, defaultSpinnerFrames } from "../../utils/seasonal.js";
 
 const suggestions = [
   "explain this codebase to me",
@@ -643,19 +644,8 @@ function TerminalChatInputThinking({
     setDots((prev) => (prev.length < 3 ? prev + "." : ""));
   }, 500);
 
-  // Spinner frames with embedded seconds
-  const ballFrames = [
-    "( ●    )",
-    "(  ●   )",
-    "(   ●  )",
-    "(    ● )",
-    "(     ●)",
-    "(    ● )",
-    "(   ●  )",
-    "(  ●   )",
-    "( ●    )",
-    "(●     )",
-  ];
+  // Seasonal spinner frames (bouncing ball, with holiday emoji substitutions)
+  const ballFrames = getSeasonalFrames(defaultSpinnerFrames);
   const [frame, setFrame] = useState(0);
 
   useInterval(() => {

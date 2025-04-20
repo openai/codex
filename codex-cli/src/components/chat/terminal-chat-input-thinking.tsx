@@ -2,6 +2,7 @@ import { log, isLoggingEnabled } from "../../utils/agent/log.js";
 import { Box, Text, useInput, useStdin } from "ink";
 import React, { useState } from "react";
 import { useInterval } from "use-interval";
+import { getSeasonalFrames, defaultSpinnerFrames } from "../../utils/seasonal.js";
 
 // Retaining a single static placeholder text for potential future use.  The
 // more elaborate randomised thinking prompts were removed to streamline the
@@ -81,19 +82,8 @@ export default function TerminalChatInputThinking({
     { isActive: active },
   );
 
-  // Custom ball animation including the elapsed seconds
-  const ballFrames = [
-    "( ●    )",
-    "(  ●   )",
-    "(   ●  )",
-    "(    ● )",
-    "(     ●)",
-    "(    ● )",
-    "(   ●  )",
-    "(  ●   )",
-    "( ●    )",
-    "(●     )",
-  ];
+  // Seasonal spinner frames (bouncing ball, with holiday emoji substitutions)
+  const ballFrames = getSeasonalFrames(defaultSpinnerFrames);
 
   const [frame, setFrame] = useState(0);
 
