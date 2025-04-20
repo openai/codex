@@ -21,7 +21,7 @@ const MAX_BUFFER = 1024 * 100; // 100 KB
 export function exec(
   command: Array<string>,
   options: SpawnOptions,
-  _writableRoots: Array<string>,
+  _writableRoots: ReadonlyArray<string>,
   abortSignal?: AbortSignal,
 ): Promise<ExecResult> {
   // Adapt command for the current platform (e.g., convert 'ls' to 'dir' on Windows)

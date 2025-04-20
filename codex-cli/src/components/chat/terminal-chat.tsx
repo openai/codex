@@ -37,6 +37,14 @@ import OpenAI from "openai";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { inspect } from "util";
 
+export type OverlayModeType =
+  | "none"
+  | "history"
+  | "model"
+  | "approval"
+  | "help"
+  | "diff";
+
 type Props = {
   config: AppConfig;
   prompt?: string;
@@ -182,9 +190,7 @@ export default function TerminalChat({
     explanation,
     submitConfirmation,
   } = useConfirmation();
-  const [overlayMode, setOverlayMode] = useState<
-    "none" | "history" | "model" | "approval" | "help" | "diff"
-  >("none");
+  const [overlayMode, setOverlayMode] = useState<OverlayModeType>("none");
 
   // Store the diff text when opening the diff overlay so the view isn’t
   // recomputed on every re‑render while it is open.
@@ -461,6 +467,7 @@ export default function TerminalChat({
       <Box flexDirection="column">
         {agent ? (
           <TerminalMessageHistory
+            setOverlayMode={setOverlayMode}
             batch={lastMessageBatch}
             groupCounts={groupCounts}
             items={items}
