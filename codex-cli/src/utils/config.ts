@@ -78,8 +78,6 @@ export type StoredConfig = {
     saveHistory?: boolean;
     sensitivePatterns?: Array<string>;
   };
-  /** User-defined safe commands */
-  safeCommands?: Array<string>;
 };
 
 // Minimal config written on first run.  An *empty* model string ensures that
@@ -113,8 +111,6 @@ export type AppConfig = {
     saveHistory: boolean;
     sensitivePatterns: Array<string>;
   };
-  /** User-defined safe commands */
-  safeCommands?: Array<string>;
 };
 
 // ---------------------------------------------------------------------------
@@ -297,7 +293,6 @@ export const loadConfig = (
     instructions: combinedInstructions,
     notify: storedConfig.notify === true,
     approvalMode: storedConfig.approvalMode,
-    safeCommands: storedConfig.safeCommands ?? [],
   };
 
   // -----------------------------------------------------------------------
@@ -375,13 +370,6 @@ export const loadConfig = (
     };
   }
 
-  // Load user-defined safe commands
-  if (Array.isArray(storedConfig.safeCommands)) {
-    config.safeCommands = storedConfig.safeCommands.map(String);
-  } else {
-    config.safeCommands = [];
-  }
-
   return config;
 };
 
@@ -424,10 +412,6 @@ export const saveConfig = (
       saveHistory: config.history.saveHistory,
       sensitivePatterns: config.history.sensitivePatterns,
     };
-  }
-  // Save: User-defined safe commands
-  if (config.safeCommands && config.safeCommands.length > 0) {
-    configToSave.safeCommands = config.safeCommands;
   }
 
   if (ext === ".yaml" || ext === ".yml") {
