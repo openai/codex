@@ -50,6 +50,7 @@ export default function TerminalChatInput({
   openApprovalOverlay,
   openHelpOverlay,
   openDiffOverlay,
+  toggleFlexMode,
   onCompact,
   interruptAgent,
   active,
@@ -73,6 +74,8 @@ export default function TerminalChatInput({
   openApprovalOverlay: () => void;
   openHelpOverlay: () => void;
   openDiffOverlay: () => void;
+  /** Toggle flex-mode on/off in the current session */
+  toggleFlexMode: () => void;
   onCompact: () => void;
   interruptAgent: () => void;
   active: boolean;
@@ -186,6 +189,13 @@ export default function TerminalChatInput({
                   break;
                 case "/bug":
                   onSubmit(cmd);
+                  break;
+                case "/flex-mode":
+                  // Toggle flex-mode mid-session
+                  setInput("");
+                  setDraftInput("");
+                  setSelectedSlashSuggestion(0);
+                  toggleFlexMode();
                   break;
                 default:
                   break;
@@ -325,6 +335,12 @@ export default function TerminalChatInput({
       if (inputValue.startsWith("/approval")) {
         setInput("");
         openApprovalOverlay();
+        return;
+      }
+      if (inputValue === "/flex-mode") {
+        // Toggle flex-mode mid-session
+        setInput("");
+        toggleFlexMode();
         return;
       }
 

@@ -152,13 +152,40 @@ export default function TerminalChat({
     initialApprovalPolicy,
   );
   const [thinkingSeconds, setThinkingSeconds] = useState(0);
+  // Allow toggling flex-mode at runtime
+  const [flexMode, setFlexMode] = useState<boolean>(Boolean(config.flexMode));
+  /**
+   * Toggle flex-mode mid-session, updating config and AgentLoop, and notify user.
+   */
+  const handleToggleFlexMode = (): void => {
+    const newFlex = !flexMode;
+    // Update config for future API calls
+    config.flexMode = newFlex;
+    // Update existing AgentLoop instance if present
+    if (agentRef.current) {
+      (agentRef.current as any).config.flexMode = newFlex;
+    }
+    setFlexMode(newFlex);
+    // Append system message to inform user
+    setItems((prev) => [
+      ...prev,
+      {
+        id: `flexmode-${Date.now()}`,
+        type: "message",
+        role: "system",
+        content: [
+          { type: "input_text", text: newFlex ? "Flex mode enabled" : "Flex mode disabled" },
+        ],
+      } as ResponseItem,
+    ]);
+  };
   const handleCompact = async () => {
     setLoading(true);
     try {
       const summary = await generateCompactSummary(
         items,
         model,
-        Boolean(config.flexMode),
+        flexMode,
       );
       setItems([
         {
@@ -272,7 +299,7 @@ export default function TerminalChat({
           const explanation = await generateCommandExplanation(
             command,
             model,
-            Boolean(config.flexMode),
+            flexMode,
           );
           log(`Generated explanation: ${explanation}`);
 
@@ -474,7 +501,7 @@ export default function TerminalChat({
               colorsByPolicy,
               agent,
               initialImagePaths,
-              flexModeEnabled: Boolean(config.flexMode),
+              flexModeEnabled: flexMode,
             }}
           />
         ) : (
@@ -525,6 +552,7 @@ export default function TerminalChat({
               setOverlayMode("none");
             }}
             onCompact={handleCompact}
+            toggleFlexMode={handleToggleFlexMode}
             active={overlayMode === "none"}
             interruptAgent={() => {
               if (!agent) {
