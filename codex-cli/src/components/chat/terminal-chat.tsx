@@ -2,7 +2,7 @@ import type { ApplyPatchCommand, ApprovalPolicy } from "../../approvals.js";
 import type { CommandConfirmation } from "../../utils/agent/agent-loop.js";
 import type { AppConfig } from "../../utils/config.js";
 import type { ColorName } from "chalk";
-import type { ResponseItem } from "openai/resources/responses/responses.mjs";
+import type { ResponseItem, ResponseInputItem } from "openai/resources/responses/responses.mjs";
 
 import TerminalChatInput from "./terminal-chat-input.js";
 import { TerminalChatToolCallCommand } from "./terminal-chat-tool-call-item.js";
@@ -379,13 +379,24 @@ export default function TerminalChat({
       ) {
         return;
       }
-      const inputItems = [
-        await createInputItem(initialPrompt || "", initialImagePaths || []),
-      ];
-      // Clear them to prevent subsequent runs
+      // Create input item for the initial prompt
+      const inputItem = await createInputItem(initialPrompt || "", initialImagePaths || []);
+      
+      // Transform history of ResponseItem into input items (same as in submitInput)
+      const historyInputs: ResponseInputItem[] = items
+        .filter(it => it.type === 'message')
+        .map(it => ({
+          type: 'message',
+          role: it.role,
+          content: it.content,
+        }));
+      
+      // Clear initial prompt/images to prevent subsequent runs
       setInitialPrompt("");
       setInitialImagePaths([]);
-      agent?.run(inputItems);
+      
+      // Pass the complete history with the initial prompt
+      agent?.run([...historyInputs, inputItem]);
     };
     processInitialInputItems();
   }, [agent, initialPrompt, initialImagePaths]);
@@ -511,7 +522,17 @@ export default function TerminalChat({
               ]);
             }}
             submitInput={(inputs) => {
-              agent.run(inputs, lastResponseId || "");
+              // Transform history of ResponseItem into input items
+              const historyInputs: ResponseInputItem[] = items
+                .filter(it => it.type === 'message')
+                .map(it => ({
+                  type: 'message',
+                  role: it.role,
+                  content: it.content,
+                }));
+              
+              // Pass the complete history with each request
+              agent.run([...historyInputs, ...inputs], lastResponseId || "");
               return {};
             }}
           />
