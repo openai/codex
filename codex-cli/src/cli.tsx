@@ -14,7 +14,6 @@ import type { ResponseItem } from "openai/resources/responses/responses";
 import App from "./app";
 import { runSinglePass } from "./cli-singlepass";
 import { AgentLoop } from "./utils/agent/agent-loop";
-import { initLogger } from "./utils/agent/log";
 import { ReviewDecision } from "./utils/agent/review";
 import { AutoApprovalMode } from "./utils/auto-approval-mode";
 import { checkForUpdates } from "./utils/check-updates";
@@ -25,6 +24,7 @@ import {
   INSTRUCTIONS_FILEPATH,
 } from "./utils/config";
 import { createInputItem } from "./utils/input-utils";
+import { initLogger } from "./utils/logger/log";
 import { isModelSupportedForResponses } from "./utils/model-utils.js";
 import { parseToolCall } from "./utils/parsers";
 import { onExit, setInkRenderer } from "./utils/terminal";

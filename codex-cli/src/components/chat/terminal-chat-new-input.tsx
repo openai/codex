@@ -8,9 +8,9 @@ import type {
 
 import MultilineTextEditor from "./multiline-editor";
 import { TerminalChatCommandReview } from "./terminal-chat-command-review.js";
-import { log } from "../../utils/agent/log.js";
 import { loadConfig } from "../../utils/config.js";
 import { createInputItem } from "../../utils/input-utils.js";
+import { log } from "../../utils/logger/log.js";
 import { setSessionId } from "../../utils/session.js";
 import {
   loadCommandHistory,

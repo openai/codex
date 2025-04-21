@@ -15,13 +15,13 @@ import { formatCommandForDisplay } from "../../format-command.js";
 import { useConfirmation } from "../../hooks/use-confirmation.js";
 import { useTerminalSize } from "../../hooks/use-terminal-size.js";
 import { AgentLoop } from "../../utils/agent/agent-loop.js";
-import { log } from "../../utils/agent/log.js";
 import { ReviewDecision } from "../../utils/agent/review.js";
 import { generateCompactSummary } from "../../utils/compact-summary.js";
 import { OPENAI_BASE_URL, saveConfig } from "../../utils/config.js";
 import { extractAppliedPatches as _extractAppliedPatches } from "../../utils/extract-applied-patches.js";
 import { getGitDiff } from "../../utils/get-diff.js";
 import { createInputItem } from "../../utils/input-utils.js";
+import { log } from "../../utils/logger/log.js";
 import { getAvailableModels } from "../../utils/model-utils.js";
 import { CLI_VERSION } from "../../utils/session.js";
 import { shortCwd } from "../../utils/short-path.js";
@@ -237,6 +237,7 @@ export default function TerminalChat({
     // Tear down any existing loop before creating a new one
     agentRef.current?.terminate();
 
+    const sessionId = crypto.randomUUID();
     agentRef.current = new AgentLoop({
       model,
       provider,
@@ -249,7 +250,7 @@ export default function TerminalChat({
         log(`onItem: ${JSON.stringify(item)}`);
         setItems((prev) => {
           const updated = uniqueById([...prev, item as ResponseItem]);
-          saveRollout(updated);
+          saveRollout(sessionId, updated);
           return updated;
         });
       },
