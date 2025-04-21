@@ -18,83 +18,8 @@ import type { ParsedToolCall } from "./provider-interface.js";
  * @returns A properly formatted command array
  */
 export function normalizeShellCommand(command: any): string[] {
-  // Handle empty or undefined command
-  if (!command) {
-    console.log(`Claude tools: Empty command detected, using default ls command`);
-    return ["ls", "-la"];
-  }
-  
-  // If command is a string
-  if (typeof command === 'string') {
-    // Handle empty string
-    if (command.trim() === '') {
-      console.log(`Claude tools: Empty string command, using default ls command`);
-      return ["ls", "-la"];
-    }
-    
-    // Check if the command string is actually a JSON string of an array
-    if (command.startsWith('[') && command.endsWith(']')) {
-      try {
-        const parsedCommand = JSON.parse(command);
-        if (Array.isArray(parsedCommand)) {
-          console.log(`Claude tools: Detected JSON string containing an array, parsing it: ${command}`);
-          
-          // Now check if the parsed array needs bash -c wrapping
-          if (!(parsedCommand[0] === "bash" && parsedCommand[1] === "-c")) {
-            const cmdStr = parsedCommand.join(' ');
-            console.log(`Claude tools: Wrapping parsed array in bash -c: ${cmdStr}`);
-            return ["bash", "-c", cmdStr];
-          }
-          
-          return parsedCommand;
-        }
-      } catch (parseError) {
-        // Not valid JSON, treat as regular string
-        console.log(`Claude tools: Failed to parse command as JSON, using bash -c: ${command}`);
-      }
-    }
-    
-    // For all other strings, wrap in bash -c
-    console.log(`Claude tools: Converting command string to bash -c: ${command}`);
-    return ["bash", "-c", command];
-  }
-  
-  // If command is an array
-  if (Array.isArray(command)) {
-    // Handle empty array
-    if (command.length === 0) {
-      console.log(`Claude tools: Empty command array, using default ls command`);
-      return ["ls", "-la"];
-    }
-    
-    // If not already in bash -c format and contains shell special characters
-    // or seems to need shell features, wrap it
-    if (!(command[0] === "bash" && command[1] === "-c")) {
-      const cmdStr = command.join(' ');
-      
-      // Check if command contains shell special characters
-      const needsBashC = cmdStr.includes('|') || 
-                         cmdStr.includes('>') || 
-                         cmdStr.includes('<') || 
-                         cmdStr.includes('*') || 
-                         cmdStr.includes('?') || 
-                         cmdStr.includes('$') ||
-                         cmdStr.includes('&&') ||
-                         cmdStr.includes('||');
-      
-      if (needsBashC) {
-        console.log(`Claude tools: Converting command array to bash -c: ${cmdStr}`);
-        return ["bash", "-c", cmdStr];
-      }
-    }
-    
-    // Return the array as is
-    return command;
-  }
-  
-  // For any other type, return default command
-  console.log(`Claude tools: Unknown command type (${typeof command}), using default ls command`);
-  return ["ls", "-la"];
+  console.log(`Claude tools: Shell commands are not implemented in claude provider. Command received:`, command);
+  return ["echo", "Shell commands are not implemented in claude provider"];
 }
 
 /**
@@ -104,71 +29,10 @@ export function normalizeShellCommand(command: any): string[] {
  * @returns Properly formatted tool arguments
  */
 export function processShellToolInput(toolInput: any): { command: string[], workdir?: string } {
-  // If input is a JSON string or raw string, attempt to parse or treat as direct command
-  if (typeof toolInput === 'string') {
-    try {
-      const parsed = JSON.parse(toolInput);
-      // If parsed is an array, treat as command array
-      if (Array.isArray(parsed)) {
-        console.log(`Claude tools: Parsed JSON array for shell command: ${toolInput}`);
-        return { command: normalizeShellCommand(parsed), workdir: process.cwd() };
-      }
-      // If parsed is an object, use it as the new input
-      if (parsed && typeof parsed === 'object') {
-        toolInput = parsed;
-      } else {
-        // Fallback: treat string as shell command
-        console.log(`Claude tools: Using raw string for shell command: ${toolInput}`);
-        return { command: normalizeShellCommand(toolInput), workdir: process.cwd() };
-      }
-    } catch (e) {
-      // Not JSON: treat as raw shell command string
-      console.log(`Claude tools: Treating tool input string as shell command: ${toolInput}`);
-      return { command: normalizeShellCommand(toolInput), workdir: process.cwd() };
-    }
-  }
-  // Handle arrays of content blocks (e.g., text blocks)
-  if (Array.isArray(toolInput)) {
-    try {
-      const text = toolInput
-        .map((item: any) => (typeof item?.text === 'string' ? item.text : ''))
-        .join('');
-      console.log(`Claude tools: Extracted text from toolInput blocks: ${text}`);
-      return processShellToolInput(text);
-    } catch {
-      // Fallback to default on error
-      console.log(`Claude tools: Failed to extract text from array input, using default command`);
-      return { command: ["ls", "-la"], workdir: process.cwd() };
-    }
-  }
-  // Handle a single text block (from Claude) with .text property
-  if (
-    toolInput &&
-    typeof toolInput === 'object' &&
-    typeof (toolInput as any).text === 'string'
-  ) {
-    const txt = (toolInput as any).text;
-    console.log(`Claude tools: Detected single text block for shell command: ${txt}`);
-    return processShellToolInput(txt);
-  }
-  // Handle completely empty or missing or non-object input
-  if (!toolInput || typeof toolInput !== 'object') {
-    console.log(`Claude tools: Empty or invalid tool input, using default command`);
-    return {
-      command: ["ls", "-la"],
-      workdir: process.cwd()
-    };
-  }
-  
-  // Extract command from input
-  const command = normalizeShellCommand(toolInput.command);
-  
-  // Ensure workdir is present
-  const workdir = toolInput.workdir || process.cwd();
-  
+  console.log(`Claude tools: Shell commands are not implemented in claude provider. Tool input received:`, toolInput);
   return {
-    command,
-    workdir
+    command: ["echo", "Shell commands are not implemented in claude provider"],
+    workdir: process.cwd()
   };
 }
 
@@ -193,7 +57,11 @@ export function claudeToolToOpenAIFunction(toolUse: any): any {
   
   // Special handling for shell tool
   if (toolName === "shell") {
-    toolArgs = processShellToolInput(toolArgs);
+    console.log(`Claude tools: Shell commands are not implemented in claude provider. Tool use object:`, toolUse);
+    toolArgs = {
+      command: ["echo", "Shell commands are not implemented in claude provider"],
+      workdir: process.cwd()
+    };
   }
   
   // Convert to OpenAI format
@@ -224,7 +92,11 @@ export function parseClaudeToolCall(toolCall: any): ParsedToolCall {
   
   // Special handling for shell commands
   if (toolName === "shell") {
-    toolArgs = processShellToolInput(rawInput);
+    console.log(`Claude tools: Shell commands are not implemented in claude provider. Tool call received:`, toolCall);
+    toolArgs = {
+      command: ["echo", "Shell commands are not implemented in claude provider"],
+      workdir: process.cwd()
+    };
   } else {
     // For other tools, just use the input as is
     toolArgs = rawInput;
@@ -415,7 +287,17 @@ export function processClaudeStreamEvent(event: any): any {
     console.log(`Claude tools: Tool use detected:`, toolUse);
     
     // Process the tool input
-    let toolArgs = processShellToolInput(toolUse.input);
+    console.log(`Claude tools: Tool use detected in stream event, name: ${toolUse.name}`);
+    let toolArgs = toolUse.input;
+    
+    // Special handling for shell tool
+    if (toolUse.name === "shell") {
+      console.log(`Claude tools: Shell commands are not implemented in claude provider. Tool input received in stream:`, toolUse.input);
+      toolArgs = {
+        command: ["echo", "Shell commands are not implemented in claude provider"],
+        workdir: process.cwd()
+      };
+    }
     
     // Create function call in OpenAI format
     const functionCall = claudeToolToOpenAIFunction(toolUse);
@@ -452,27 +334,8 @@ export function processClaudeStreamEvent(event: any): any {
  * @returns Array of tools in Claude format
  */
 export function createDefaultClaudeTools(): any[] {
-  return [
-    {
-      name: "shell",
-      description: "Runs a shell command, and returns its output.",
-      input_schema: {
-        type: "object",
-        properties: {
-          command: { 
-            type: "array", 
-            items: { type: "string" },
-            description: "The command to execute as an array of strings."
-          },
-          workdir: {
-            type: "string",
-            description: "The working directory for the command."
-          }
-        },
-        required: ["command"]
-      }
-    }
-  ];
+  console.log('Claude tools: Default tools requested, but shell commands are not implemented in claude provider');
+  return [];
 }
 
 /**
@@ -481,45 +344,10 @@ export function createDefaultClaudeTools(): any[] {
  * @returns String containing detailed shell command instructions
  */
 export function createShellCommandInstructions(): string {
+  console.log('Claude tools: Shell command instructions requested, but shell commands are not implemented in claude provider');
   return `
-CRITICAL INSTRUCTIONS FOR SHELL COMMANDS:
+NOTICE: Shell commands are not implemented in the Claude provider.
 
-I want you to use the shell tool directly in your responses. When you need to run a command, DO NOT describe what you want to do - just USE the shell tool.
-
-To use the shell tool, DO NOT write any text like "I'll use the shell tool to...". Instead, DIRECTLY call the tool with appropriate parameters.
-
-ALWAYS format shell commands as follows:
-
-1. For ANY command with pipes, redirects, wildcards, or shell features:
-   { "command": ["bash", "-c", "your command here with pipes or redirects"] }
-
-2. For simple commands:
-   { "command": ["command", "arg1", "arg2"] }
-
-EXAMPLES OF CORRECT USAGE:
-- Calculator: { "command": ["bash", "-c", "echo '1+1' | bc"] }
-- File search: { "command": ["bash", "-c", "find . -name '*.js' | grep 'test'"] }
-- Directory listing: { "command": ["ls", "-la"] }
-- Echo: { "command": ["echo", "hello world"] }
-
-IMPORTANT: 
-- The command MUST ALWAYS be an ARRAY, never a string
-- For complex commands, ALWAYS use ["bash", "-c", "command"] format
-- Command is required - never send an empty command
-- NEVER explain what you're going to do - just use the tool directly
-
-EXAMPLE OF TOOL INVOCATION SEQUENCE:
-1. User asks: "What files are in the current directory?"
-2. You DIRECTLY call the tool: { "command": ["ls", "-la"] }
-3. Wait for the command output to be returned
-4. Then explain the results to the user
-
-DO NOT format commands like this:
-- ❌ "Let me run the ls command to show you the files: ls -la"
-- ❌ "I'll use the shell tool to list files"
-- ❌ { "command": "ls -la" }  // Command as string is wrong!
-
-ONLY format commands like this:
-- ✅ { "command": ["ls", "-la"] }
-- ✅ { "command": ["bash", "-c", "find . -name '*.js' | wc -l"] }`;
+Any attempt to use the shell tool will result in a message stating that shell commands are not supported.
+`;
 }

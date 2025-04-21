@@ -455,10 +455,11 @@ export class ClaudeProvider extends BaseProvider {
       // Convert parameters.properties to Claude's expected format
       const properties = tool.parameters?.properties || {};
       
-      // For shell tool, enhance the description to help Claude understand how to use it
+      // For shell tool, provide a notice that it's not implemented
       let description = tool.description || "";
       if (tool.name === "shell") {
-        description = `${description}\n\nTo use this tool, provide a command array with the commands to run.\n\nEXAMPLES:\n\n1. To run a simple command:\n   { "command": ["ls", "-la"] }\n\n2. To use shell operators (pipes, redirects):\n   { "command": ["bash", "-c", "echo hello | grep hello"] }\n\n3. For calculator operations:\n   { "command": ["bash", "-c", "echo '2+2' | bc"] }\n\nIMPORTANT: The 'command' value must be an ARRAY of strings, with each argument as a separate element.`;
+        console.log(`Claude provider: Shell commands are not implemented in claude provider. Tool request:`, tool);
+        description = "NOTICE: Shell commands are not implemented in the Claude provider. Any attempt to use the shell tool will result in a message stating that shell commands are not supported.";
       }
       
       return {
