@@ -127,6 +127,20 @@ export function processShellToolInput(toolInput: any): { command: string[], work
       return { command: normalizeShellCommand(toolInput), workdir: process.cwd() };
     }
   }
+  // Handle arrays of content blocks (e.g., text blocks)
+  if (Array.isArray(toolInput)) {
+    try {
+      const text = toolInput
+        .map((item: any) => (typeof item?.text === 'string' ? item.text : ''))
+        .join('');
+      console.log(`Claude tools: Extracted text from toolInput blocks: ${text}`);
+      return processShellToolInput(text);
+    } catch {
+      // Fallback to default on error
+      console.log(`Claude tools: Failed to extract text from array input, using default command`);
+      return { command: ["ls", "-la"], workdir: process.cwd() };
+    }
+  }
   // Handle completely empty or missing or non-object input
   if (!toolInput || typeof toolInput !== 'object') {
     console.log(`Claude tools: Empty or invalid tool input, using default command`);
