@@ -13,6 +13,7 @@ import type { ResponseItem } from "openai/resources/responses/responses";
 
 import App from "./app";
 import { runSinglePass } from "./cli-singlepass";
+import { version } from "../package.json";
 import { AgentLoop } from "./utils/agent/agent-loop";
 import { ReviewDecision } from "./utils/agent/review";
 import { AutoApprovalMode } from "./utils/auto-approval-mode";
@@ -35,7 +36,6 @@ import { render } from "ink";
 import meow from "meow";
 import path from "path";
 import React from "react";
-import { version } from "../package.json";
 
 // Call this early so `tail -F "$TMPDIR/oai-codex/codex-cli-latest.log"` works
 // immediately. This must be run with DEBUG=1 for logging to work.
@@ -208,6 +208,7 @@ complete -c codex -a '(__fish_complete_path)' -d 'file path'`,
 
 // Handle --version flag
 if (cli.flags.version) {
+  // eslint-disable-next-line no-console
   console.log(version);
   process.exit(0);
 }
