@@ -1,6 +1,6 @@
 import type { ResponseItem } from "openai/resources/responses/responses.mjs";
+import type { ProviderConfig } from "./provider-config.js";
 
-import { OPENAI_BASE_URL } from "./config.js";
 import OpenAI from "openai";
 
 /**
@@ -15,7 +15,6 @@ export async function generateCompactSummary(
 ): Promise<string> {
   const oai = new OpenAI({
     apiKey: process.env["OPENAI_API_KEY"],
-    baseURL: OPENAI_BASE_URL,
   });
 
   const conversationText = items

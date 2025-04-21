@@ -18,7 +18,6 @@ import { AgentLoop } from "../../utils/agent/agent-loop.js";
 import { isLoggingEnabled, log } from "../../utils/agent/log.js";
 import { ReviewDecision } from "../../utils/agent/review.js";
 import { generateCompactSummary } from "../../utils/compact-summary.js";
-import { OPENAI_BASE_URL } from "../../utils/config.js";
 import { createInputItem } from "../../utils/input-utils.js";
 import { getAvailableModels } from "../../utils/model-utils.js";
 import { CLI_VERSION } from "../../utils/session.js";
@@ -64,7 +63,6 @@ async function generateCommandExplanation(
     // Create a temporary OpenAI client
     const oai = new OpenAI({
       apiKey: process.env["OPENAI_API_KEY"],
-      baseURL: OPENAI_BASE_URL,
     });
 
     // Format the command for display

@@ -30,10 +30,7 @@ import type {
   AppConfig 
 } from "../config.js";
 
-import { 
-  OPENAI_BASE_URL, 
-  OPENAI_TIMEOUT_MS 
-} from "../config.js";
+import type { ProviderConfig } from "../provider-config.js";
 
 import { 
   ORIGIN, 
@@ -59,7 +56,12 @@ export class OpenAIProvider extends BaseProvider {
     }
     
     try {
-      const openai = this.createClient({ apiKey });
+      const openai = this.createClient({
+        providers: {
+          openai: { apiKey }
+        }
+      } as AppConfig);
+      
       const list = await openai.models.list();
       
       const models: Array<string> = [];
@@ -89,15 +91,18 @@ export class OpenAIProvider extends BaseProvider {
    * @returns OpenAI client instance
    */
   createClient(config: AppConfig): OpenAI {
-    // Get API key from config or environment
-    const apiKey = this.getApiKey(config);
+    // Get provider config from AppConfig
+    const providerConfig = config.providers?.openai || {};
+    
+    // Get API key from provider config or environment
+    const apiKey = providerConfig.apiKey || process.env.OPENAI_API_KEY;
     if (!apiKey) {
       throw new Error("OpenAI API key not found. Please set OPENAI_API_KEY environment variable or configure it in the Codex config.");
     }
     
-    // Get base URL and timeout from config or environment
-    const baseURL = config.openaiBaseUrl || OPENAI_BASE_URL || undefined;
-    const timeout = config.openaiTimeoutMs || OPENAI_TIMEOUT_MS;
+    // Get base URL and timeout from provider config
+    const baseURL = providerConfig.baseUrl || undefined;
+    const timeout = providerConfig.timeoutMs;
     
     // Get session information
     const sessionId = config.sessionId;
@@ -111,7 +116,7 @@ export class OpenAIProvider extends BaseProvider {
         version: CLI_VERSION,
         session_id: sessionId,
       },
-      ...(timeout ? { timeout } : {}),
+      ...(timeout !== undefined ? { timeout } : {}),
     });
   }
   
@@ -521,6 +526,9 @@ export class OpenAIProvider extends BaseProvider {
    * @returns API key or undefined
    */
   private getApiKey(config?: AppConfig): string | undefined {
-    return config?.apiKey || process.env["OPENAI_API_KEY"];
+    if (config?.providers?.openai?.apiKey) {
+      return config.providers.openai.apiKey;
+    }
+    return process.env["OPENAI_API_KEY"];
   }
 }
