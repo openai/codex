@@ -104,7 +104,30 @@ export function normalizeShellCommand(command: any): string[] {
  * @returns Properly formatted tool arguments
  */
 export function processShellToolInput(toolInput: any): { command: string[], workdir?: string } {
-  // Handle completely empty or missing input
+  // If input is a JSON string or raw string, attempt to parse or treat as direct command
+  if (typeof toolInput === 'string') {
+    try {
+      const parsed = JSON.parse(toolInput);
+      // If parsed is an array, treat as command array
+      if (Array.isArray(parsed)) {
+        console.log(`Claude tools: Parsed JSON array for shell command: ${toolInput}`);
+        return { command: normalizeShellCommand(parsed), workdir: process.cwd() };
+      }
+      // If parsed is an object, use it as the new input
+      if (parsed && typeof parsed === 'object') {
+        toolInput = parsed;
+      } else {
+        // Fallback: treat string as shell command
+        console.log(`Claude tools: Using raw string for shell command: ${toolInput}`);
+        return { command: normalizeShellCommand(toolInput), workdir: process.cwd() };
+      }
+    } catch (e) {
+      // Not JSON: treat as raw shell command string
+      console.log(`Claude tools: Treating tool input string as shell command: ${toolInput}`);
+      return { command: normalizeShellCommand(toolInput), workdir: process.cwd() };
+    }
+  }
+  // Handle completely empty or missing or non-object input
   if (!toolInput || typeof toolInput !== 'object') {
     console.log(`Claude tools: Empty or invalid tool input, using default command`);
     return {
