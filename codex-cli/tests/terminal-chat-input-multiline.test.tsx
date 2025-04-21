@@ -40,7 +40,6 @@ describe("TerminalChatInput multiline functionality", () => {
       openModelOverlay: () => {},
       openApprovalOverlay: () => {},
       openHelpOverlay: () => {},
-      // toggle flex-mode mid-session
       toggleFlexMode: () => {},
       onCompact: () => {},
       interruptAgent: () => {},
@@ -73,7 +72,6 @@ describe("TerminalChatInput multiline functionality", () => {
       openModelOverlay: () => {},
       openApprovalOverlay: () => {},
       openHelpOverlay: () => {},
-      // toggle flex-mode mid-session
       toggleFlexMode: () => {},
       onCompact: () => {},
       interruptAgent: () => {},
@@ -126,7 +124,6 @@ describe("TerminalChatInput multiline functionality", () => {
       openModelOverlay: () => {},
       openApprovalOverlay: () => {},
       openHelpOverlay: () => {},
-      // toggle flex-mode mid-session
       toggleFlexMode: () => {},
       onCompact: () => {},
       interruptAgent: () => {},
