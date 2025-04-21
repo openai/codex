@@ -155,11 +155,10 @@ export default function TerminalChat({
   const [contextSummary, setContextSummary] = useState<string | null>(null);
   const [thinkingSeconds, setThinkingSeconds] = useState(0);
   /** Compact the conversation into a summary and set it as context for future runs */
-  const handleCompact = async (): Promise<string> => {
+  const handleCompact = async (): Promise<void> => {
     setLoading(true);
-    let summary = "";
     try {
-      summary = await generateCompactSummary(
+      const summary = await generateCompactSummary(
         items,
         model,
         Boolean(config.flexMode),
@@ -190,7 +189,7 @@ export default function TerminalChat({
     } finally {
       setLoading(false);
     }
-    return summary;
+    return;
   };
   const {
     requestConfirmation,
