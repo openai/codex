@@ -375,6 +375,9 @@ export default function TerminalChat({
             `display notification "${safePreview}" with title "${title}" subtitle "${cwd}" sound name "Ping"`,
           ]);
         }
+      } else {
+        // Non-macOS: ring terminal bell twice before prompt
+        process.stdout.write('\u0007\u0007'); // ... two here
       }
     }
     prevLoadingRef.current = loading;
