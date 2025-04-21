@@ -1104,11 +1104,13 @@ export class AgentLoop {
           continue;
         }
         alreadyProcessedResponses.add(item.id);
+        // Handle tool call and collect next inputs
         // eslint-disable-next-line no-await-in-loop
         const result = await this.handleFunctionCall(item);
         turnInput.push(...result);
       }
-      emitItem(item as ResponseItem);
+      // Note: response.completed items were already emitted in streaming mode.
+      // Do not re-emit here to avoid duplicate messages.
     }
     return turnInput;
   }
