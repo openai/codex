@@ -263,17 +263,16 @@ export default function TerminalChatInput({
         setInput("");
         setSessionId("");
         setLastResponseId("");
+        // Clear the terminal screen (including scrollback) before resetting context
         clearTerminal();
 
-        // Emit a system message to confirm the clear action.  We *append*
-        // it so Ink's <Static> treats it as new output and actually renders it.
-        setItems((prev) => [
-          ...prev,
+        // Print a clear confirmation and reset conversation items.
+        setItems([
           {
             id: `clear-${Date.now()}`,
             type: "message",
             role: "system",
-            content: [{ type: "input_text", text: "Context cleared" }],
+            content: [{ type: "input_text", text: "Terminal cleared" }],
           },
         ]);
 
