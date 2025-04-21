@@ -50,7 +50,7 @@ vi.mock("openai", () => {
 
 // The AgentLoop pulls these helpers in order to decide whether a command can
 // be auto‑approved. None of that matters for this test, so we stub the module
-// with minimal no‑op implementations.
+// with minimal no-op implementations.
 vi.mock("../src/approvals.js", () => {
   return {
     __esModule: true,

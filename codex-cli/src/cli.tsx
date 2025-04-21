@@ -136,7 +136,7 @@ const cli = meow(
       },
       noProjectDoc: {
         type: "boolean",
-        description: "Disable automatic inclusion of project‑level codex.md",
+        description: "Disable automatic inclusion of project-level codex.md",
       },
       projectDoc: {
         type: "string",
@@ -202,19 +202,20 @@ complete -c codex -a '(_fish_complete_path)' -d 'file path'`,
   console.log(script);
   process.exit(0);
 }
-// Show help if requested
+
+// For --help, show help and exit.
 if (cli.flags.help) {
   cli.showHelp();
 }
 
-// Handle config flag: open instructions file in editor and exit
+// For --config, open custom instructions file in editor and exit.
 if (cli.flags.config) {
-  // Ensure configuration and instructions file exist
   try {
-    loadConfig();
+    loadConfig(); // Ensures the file is created if it doesn't already exit.
   } catch {
     // ignore errors
   }
+
   const filePath = INSTRUCTIONS_FILEPATH;
   const editor =
     process.env["EDITOR"] || (process.platform === "win32" ? "notepad" : "vi");
@@ -237,13 +238,13 @@ let config = loadConfig(undefined, undefined, {
 const prompt = cli.input[0];
 const model = cli.flags.model ?? config.model;
 const imagePaths = cli.flags.image;
-const provider = cli.flags.provider ?? config.provider;
+const provider = cli.flags.provider ?? config.provider ?? "openai";
 const apiKey = getApiKey(provider);
 
 if (!apiKey) {
   // eslint-disable-next-line no-console
   console.error(
-    `\n${chalk.red("Missing OpenAI API key.")}\n\n` +
+    `\n${chalk.red(`Missing ${provider} API key.`)}\n\n` +
       `Set the environment variable ${chalk.bold("OPENAI_API_KEY")} ` +
       `and re-run this command.\n` +
       `You can create a key here: ${chalk.bold(
@@ -262,13 +263,11 @@ config = {
   provider,
 };
 
-// Check for updates after loading config
-// This is important because we write state file in the config dir
+// Check for updates after loading config. This is important because we write state file in
+// the config dir.
 await checkForUpdates().catch();
-// ---------------------------------------------------------------------------
-// --flex-mode validation (only allowed for o3 and o4-mini)
-// ---------------------------------------------------------------------------
 
+// For --flex-mode, validate and exit if incorrect.
 if (cli.flags.flexMode) {
   const allowedFlexModels = new Set(["o3", "o4-mini"]);
   if (!allowedFlexModels.has(config.model)) {
@@ -282,13 +281,13 @@ if (cli.flags.flexMode) {
 }
 
 if (
-  !(await isModelSupportedForResponses(config.model)) &&
+  !(await isModelSupportedForResponses(provider, config.model)) &&
   (!provider || provider.toLowerCase() === "openai")
 ) {
   // eslint-disable-next-line no-console
   console.error(
     `The model "${config.model}" does not appear in the list of models ` +
-      `available to your account. Double‑check the spelling (use\n` +
+      `available to your account. Double-check the spelling (use\n` +
       `  openai models list\n` +
       `to see the full list) or choose another model with the --model flag.`,
   );
@@ -297,6 +296,7 @@ if (
 
 let rollout: AppRollout | undefined;
 
+// For --view, optionally load an existing rollout from disk, display it and exit.
 if (cli.flags.view) {
   const viewPath = cli.flags.view;
   const absolutePath = path.isAbsolute(viewPath)
@@ -312,7 +312,7 @@ if (cli.flags.view) {
   }
 }
 
-// If we are running in --fullcontext mode, do that and exit.
+// For --fullcontext, run the separate cli entrypoint and exit.
 if (fullContextMode) {
   await runSinglePass({
     originalPrompt: prompt,
@@ -328,11 +328,8 @@ const additionalWritableRoots: ReadonlyArray<string> = (
   cli.flags.writableRoot ?? []
 ).map((p) => path.resolve(p));
 
-// If we are running in --quiet mode, do that and exit.
-const quietMode = Boolean(cli.flags.quiet);
-const fullStdout = Boolean(cli.flags.fullStdout);
-
-if (quietMode) {
+// For --quiet, run the cli without user interactions and exit.
+if (cli.flags.quiet) {
   process.env["CODEX_QUIET_MODE"] = "1";
   if (!prompt || prompt.trim() === "") {
     // eslint-disable-next-line no-console
@@ -389,7 +386,7 @@ const instance = render(
     imagePaths={imagePaths}
     approvalPolicy={approvalPolicy}
     additionalWritableRoots={additionalWritableRoots}
-    fullStdout={fullStdout}
+    fullStdout={Boolean(cli.flags.fullStdout)}
   />,
   {
     patchConsole: process.env["DEBUG"] ? false : true,
@@ -501,13 +498,13 @@ process.on("SIGQUIT", exit);
 process.on("SIGTERM", exit);
 
 // ---------------------------------------------------------------------------
-// Fallback for Ctrl‑C when stdin is in raw‑mode
+// Fallback for Ctrl-C when stdin is in raw-mode
 // ---------------------------------------------------------------------------
 
 if (process.stdin.isTTY) {
   // Ensure we do not leave the terminal in raw mode if the user presses
-  // Ctrl‑C while some other component has focus and Ink is intercepting
-  // input. Node does *not* emit a SIGINT in raw‑mode, so we listen for the
+  // Ctrl-C while some other component has focus and Ink is intercepting
+  // input. Node does *not* emit a SIGINT in raw-mode, so we listen for the
   // corresponding byte (0x03) ourselves and trigger a graceful shutdown.
   const onRawData = (data: Buffer | string): void => {
     const str = Buffer.isBuffer(data) ? data.toString("utf8") : data;
@@ -518,6 +515,6 @@ if (process.stdin.isTTY) {
   process.stdin.on("data", onRawData);
 }
 
-// Ensure terminal clean‑up always runs, even when other code calls
+// Ensure terminal clean-up always runs, even when other code calls
 // `process.exit()` directly.
 process.once("exit", onExit);

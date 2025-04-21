@@ -41,7 +41,7 @@ export function setApiKey(apiKey: string): void {
   OPENAI_API_KEY = apiKey;
 }
 
-export function getBaseUrl(provider: string = "openai"): string | undefined {
+export function getBaseUrl(provider: string): string | undefined {
   const providerInfo = providers[provider.toLowerCase()];
   if (providerInfo) {
     return providerInfo.baseURL;
@@ -49,7 +49,7 @@ export function getBaseUrl(provider: string = "openai"): string | undefined {
   return undefined;
 }
 
-export function getApiKey(provider: string = "openai"): string | undefined {
+export function getApiKey(provider: string): string | undefined {
   const providerInfo = providers[provider.toLowerCase()];
   if (providerInfo) {
     if (providerInfo.name === "Ollama") {
