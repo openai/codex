@@ -2,7 +2,7 @@ import type { ExecResult } from "./interface.js";
 import type { SpawnOptions } from "child_process";
 
 import { exec } from "./raw-exec.js";
-import { log } from "../log.js";
+import { log } from "../../logger/log.js";
 
 function getCommonRoots() {
   return [
