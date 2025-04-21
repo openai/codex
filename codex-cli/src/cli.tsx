@@ -146,7 +146,7 @@ const cli = meow(
           "Disable truncation of command stdout/stderr messages (show everything)",
         aliases: ["no-truncate"],
       },
-      reasoning:{
+      reasoning: {
         type: "string",
         description: "Set the reasoning effort level (low, medium, high)",
         choices: ["low", "medium", "high"],
@@ -257,7 +257,8 @@ config = {
   ...config,
   model: model ?? config.model,
   notify: Boolean(cli.flags.notify),
-  reasoningEffort: (cli.flags.reasoning as ReasoningEffort | undefined) ?? "high",
+  reasoningEffort:
+    (cli.flags.reasoning as ReasoningEffort | undefined) ?? "high",
 };
 
 if (!(await isModelSupportedForResponses(config.model))) {
