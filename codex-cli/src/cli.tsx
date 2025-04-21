@@ -14,7 +14,6 @@ import type { ResponseItem } from "openai/resources/responses/responses";
 import App from "./app";
 import { runSinglePass } from "./cli-singlepass";
 import { AgentLoop } from "./utils/agent/agent-loop";
-import { initLogger } from "./utils/agent/log";
 import { ReviewDecision } from "./utils/agent/review";
 import { AutoApprovalMode } from "./utils/auto-approval-mode";
 import { checkForUpdates } from "./utils/check-updates";
@@ -25,6 +24,7 @@ import {
   INSTRUCTIONS_FILEPATH,
 } from "./utils/config";
 import { createInputItem } from "./utils/input-utils";
+import { initLogger } from "./utils/logger/log";
 import { isModelSupportedForResponses } from "./utils/model-utils.js";
 import { parseToolCall } from "./utils/parsers";
 import { onExit, setInkRenderer } from "./utils/terminal";
@@ -237,13 +237,13 @@ const fullContextMode = Boolean(cli.flags.fullContext);
 let config = loadConfig(undefined, undefined, {
   cwd: process.cwd(),
   disableProjectDoc: Boolean(cli.flags.noProjectDoc),
-  projectDocPath: cli.flags.projectDoc as string | undefined,
+  projectDocPath: cli.flags.projectDoc,
   isFullContext: fullContextMode,
 });
 
 const prompt = cli.input[0];
 const model = cli.flags.model ?? config.model;
-const imagePaths = cli.flags.image as Array<string> | undefined;
+const imagePaths = cli.flags.image;
 const provider = cli.flags.provider ?? config.provider;
 const apiKey = getApiKey(provider);
 
@@ -336,7 +336,7 @@ if (quietMode) {
       : config.approvalMode || AutoApprovalMode.SUGGEST;
 
   await runQuietMode({
-    prompt: prompt as string,
+    prompt,
     imagePaths: imagePaths || [],
     approvalPolicy: quietApprovalPolicy,
     additionalWritableRoots,

@@ -10,8 +10,8 @@ import type {
 } from "openai/resources/responses/responses.mjs";
 import type { Reasoning } from "openai/resources.mjs";
 
-import { log } from "./log.js";
 import { OPENAI_TIMEOUT_MS, getApiKey, getBaseUrl } from "../config.js";
+import { log } from "../logger/log.js";
 import { parseToolCallArguments } from "../parsers.js";
 import { responsesCreateViaChatCompletions } from "../responses.js";
 import {

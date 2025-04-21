@@ -8,8 +8,8 @@
 
 import type { FullAutoErrorMode } from "./auto-approval-mode.js";
 
-import { log } from "./agent/log.js";
 import { AutoApprovalMode } from "./auto-approval-mode.js";
+import { log } from "./logger/log.js";
 import { providers } from "./providers.js";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { load as loadYaml, dump as dumpYaml } from "js-yaml";
