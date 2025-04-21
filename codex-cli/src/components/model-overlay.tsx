@@ -3,7 +3,7 @@ import {
   getAvailableModels,
   RECOMMENDED_MODELS,
 } from "../utils/model-utils.js";
-import { Box, Text, useInput } from "ink";
+import { Text, useInput } from "ink";
 import React, { useEffect, useState } from "react";
 
 /**
@@ -23,7 +23,6 @@ type Props = {
 
 export default function ModelOverlay({
   currentModel,
-  hasLastResponse,
   onSelect,
   onExit,
 }: Props): JSX.Element {
