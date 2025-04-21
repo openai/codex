@@ -53,7 +53,7 @@ type AgentLoopParams = {
    * will instead send the *full* conversation context as the `input` payload
    * on every request and omit the `previous_response_id` parameter.
    */
-  storeResponses?: boolean;
+  disableResponseStorage?: boolean;
   onItem: (item: ResponseItem) => void;
   onLoading: (loading: boolean) => void;
 
@@ -76,7 +76,7 @@ export class AgentLoop {
   private config: AppConfig;
   private additionalWritableRoots: ReadonlyArray<string>;
   /** Whether we ask the API to persist conversation state on the server */
-  private readonly storeResponses: boolean;
+  private readonly disableResponseStorage: boolean;
 
   // Using `InstanceType<typeof OpenAI>` sidesteps typing issues with the OpenAI package under
   // the TS 5+ `moduleResolution=bundler` setup. OpenAI client instance. We keep the concrete
@@ -109,7 +109,7 @@ export class AgentLoop {
   private canceled = false;
 
   /**
-   * Local conversation transcript used when `storeResponses === false`. Holds
+   * Local conversation transcript used when `disableResponseStorage === false`. Holds
    * all non‑system items exchanged so far so we can provide full context on
    * every request.
    */
@@ -223,7 +223,7 @@ export class AgentLoop {
     provider = "openai",
     instructions,
     approvalPolicy,
-    storeResponses,
+    disableResponseStorage,
     // `config` used to be required.  Some unit‑tests (and potentially other
     // callers) instantiate `AgentLoop` without passing it, so we make it
     // optional and fall back to sensible defaults.  This keeps the public
@@ -259,9 +259,7 @@ export class AgentLoop {
     this.getCommandConfirmation = getCommandConfirmation;
     this.onLastResponseId = onLastResponseId;
 
-    // Default to `true` when the caller does not specify the setting so
-    // existing behaviour remains unchanged.
-    this.storeResponses = storeResponses ?? true;
+    this.disableResponseStorage = disableResponseStorage ?? false;
     this.sessionId = getSessionId() || randomUUID().replaceAll("-", "");
     // Configure OpenAI client with optional timeout (ms) from environment
     const timeoutMs = OPENAI_TIMEOUT_MS;
@@ -441,10 +439,10 @@ export class AgentLoop {
       // `MaxListenersExceededWarning` after ten invocations.
 
       // Track the response ID from the last *stored* response so we can use
-      // `previous_response_id` when `storeResponses` is enabled.  When storage
+      // `previous_response_id` when `disableResponseStorage` is enabled.  When storage
       // is disabled we deliberately ignore the caller‑supplied value because
       // the backend will not retain any state that could be referenced.
-      let lastResponseId: string = this.storeResponses
+      let lastResponseId: string = this.disableResponseStorage
         ? previousResponseId
         : "";
 
@@ -477,21 +475,38 @@ export class AgentLoop {
 
       let turnInput: Array<ResponseInputItem>;
 
-      if (this.storeResponses) {
-        turnInput = [...abortOutputs, ...input];
-      } else {
+      const stripInternalFields = (
+        item: ResponseInputItem,
+      ): ResponseInputItem => {
+        // Clone shallowly and remove fields that are not part of the public
+        // schema expected by the OpenAI Responses API.
+        // We shallow‑clone the item so that subsequent mutations (deleting
+        // internal fields) do not affect the original object which may still
+        // be referenced elsewhere (e.g. UI components).
+        const clean = { ...item } as Record<string, unknown>;
+        delete clean["duration_ms"];
+        return clean as unknown as ResponseInputItem;
+      };
+
+      if (this.disableResponseStorage) {
         // Ensure the transcript is up‑to‑date with the latest user input so
         // that subsequent iterations see a complete history.
         const newUserItems: Array<ResponseInputItem> = input.filter((it) => {
-          // Only user/developer/assistant messages or tool interactions –
-          // system messages are excluded from the transcript.
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const role = (it as any).role;
-          return role !== "system";
+          if (
+            (it.type === "message" && it.role !== "system") ||
+            it.type === "reasoning"
+          ) {
+            return false;
+          }
+          return true;
         });
         this.transcript.push(...newUserItems);
 
-        turnInput = [...this.transcript, ...abortOutputs];
+        turnInput = [...this.transcript, ...abortOutputs].map(
+          stripInternalFields,
+        );
+      } else {
+        turnInput = [...abortOutputs, ...input].map(stripInternalFields);
       }
 
       this.onLoading(true);
@@ -526,13 +541,28 @@ export class AgentLoop {
 
             // When we operate without server‑side storage we keep our own
             // transcript so we can provide full context on subsequent calls.
-            if (!this.storeResponses) {
+            if (this.disableResponseStorage) {
               // Exclude system messages from transcript as they do not form
               // part of the assistant/user dialogue that the model needs.
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               const role = (item as any).role;
               if (role !== "system") {
-                this.transcript.push(item as unknown as ResponseInputItem);
+                // Clone the item to avoid mutating the object that is also
+                // rendered in the UI. We need to strip auxiliary metadata
+                // such as `duration_ms` which is not part of the Responses
+                // API schema and therefore causes a 400 error when included
+                // in subsequent requests whose context is sent verbatim.
+
+                const clone: ResponseInputItem = {
+                  ...(item as unknown as ResponseInputItem),
+                } as ResponseInputItem;
+                // The `duration_ms` field is only added to reasoning items to
+                // show elapsed time in the UI. It must not be forwarded back
+                // to the server.
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                delete (clone as any).duration_ms;
+
+                this.transcript.push(clone);
               }
             }
           }
@@ -588,21 +618,23 @@ export class AgentLoop {
             stream = await responseCall({
               model: this.model,
               instructions: mergedInstructions,
-              ...(this.storeResponses
-                ? { previous_response_id: lastResponseId || undefined }
-                : {}),
               input: turnInput,
               stream: true,
               parallel_tool_calls: false,
               reasoning,
               ...(this.config.flexMode ? { service_tier: "flex" } : {}),
-              ...(!this.storeResponses ? { store: false } : {}),
+              ...(this.disableResponseStorage
+                ? { store: false }
+                : {
+                    store: true,
+                    previous_response_id: lastResponseId || undefined,
+                  }),
               tools: [
                 {
                   type: "function",
                   name: "shell",
                   description: "Runs a shell command, and returns its output.",
-                  strict: false,
+                  strict: true,
                   parameters: {
                     type: "object",
                     properties: {

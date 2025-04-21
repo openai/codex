@@ -69,6 +69,9 @@ const cli = meow(
     --full-stdout              Do not truncate stdout/stderr from command outputs
     --notify                   Enable desktop notifications for responses
 
+    --disable-response-storage Disable server‑side response storage (sends the
+                               full conversation context with every request)
+
     --flex-mode               Use "flex-mode" processing mode for the request (only supported
                               with models o3 and o4-mini)
 
@@ -472,7 +475,7 @@ async function runQuietMode({
     instructions: config.instructions,
     approvalPolicy,
     additionalWritableRoots,
-    storeResponses: !config.disableResponseStorage,
+    disableResponseStorage: config.disableResponseStorage,
     onItem: (item: ResponseItem) => {
       // eslint-disable-next-line no-console
       console.log(formatResponseItemForQuietMode(item));
