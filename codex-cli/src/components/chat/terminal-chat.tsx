@@ -153,11 +153,8 @@ export default function TerminalChat({
     initialApprovalPolicy,
   );
   const [thinkingSeconds, setThinkingSeconds] = useState(0);
-  // Allow toggling flex-mode at runtime
+  // Allow toggling flex-mode mid-session
   const [flexMode, setFlexMode] = useState<boolean>(Boolean(config.flexMode));
-  /**
-   * Toggle flex-mode mid-session, updating config and AgentLoop, and notify user.
-   */
   const handleToggleFlexMode = (): void => {
     const newFlex = !flexMode;
     // Update config for future API calls
