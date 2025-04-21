@@ -24,7 +24,8 @@ import {
   DEFAULT_PROVIDER_MODELS
 } from './provider-config.js';
 
-export const DEFAULT_AGENTIC_MODEL = DEFAULT_PROVIDER_MODELS.openai; // "o4-mini"
+// Get the default model based on the selected provider
+export const DEFAULT_AGENTIC_MODEL = DEFAULT_PROVIDER_MODELS[DEFAULT_PROVIDER_ID] || DEFAULT_PROVIDER_MODELS.openai;
 export const DEFAULT_FULL_CONTEXT_MODEL = "gpt-4.1";
 export const DEFAULT_APPROVAL_MODE = AutoApprovalMode.SUGGEST;
 export const DEFAULT_INSTRUCTIONS = "";

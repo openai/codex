@@ -36,6 +36,8 @@ import fs from "fs";
 import { render } from "ink";
 import meow from "meow";
 import path from "path";
+import { DEFAULT_AGENTIC_MODEL } from "./utils/config";
+import { DEFAULT_PROVIDER_ID } from "./utils/provider-config.js";
 import React from "react";
 
 // Call this early so `tail -F "$TMPDIR/oai-codex/codex-cli-latest.log"` works
@@ -215,8 +217,9 @@ if (cli.flags.help) {
 // Initialize provider registry
 initializeProviderRegistry();
 
-// Log provider info for debugging
-console.log("Default provider:", process.env.CODEX_DEFAULT_PROVIDER);
+// Log provider and model info for debugging
+console.log("Default provider:", DEFAULT_PROVIDER_ID);
+console.log("Default model:", DEFAULT_AGENTIC_MODEL);
 
 // Handle config flag: open instructions file in editor and exit
 if (cli.flags.config) {
