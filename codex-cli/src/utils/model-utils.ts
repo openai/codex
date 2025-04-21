@@ -20,9 +20,11 @@ async function fetchModels(provider: string): Promise<Array<string>> {
     throw new Error("No API key configured for provider: " + provider);
   }
 
-  const baseURL = getBaseUrl(provider);
   try {
-    const openai = new OpenAI({ apiKey: getApiKey(provider), baseURL });
+    const openai = new OpenAI({
+      apiKey: getApiKey(provider ?? "openai"),
+      baseURL: getBaseUrl(provider ?? "openai"),
+    });
     const list = await openai.models.list();
     const models: Array<string> = [];
     for await (const model of list as AsyncIterable<{ id?: string }>) {
