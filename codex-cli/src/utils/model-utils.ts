@@ -2,7 +2,7 @@ import { OPENAI_API_KEY } from "./config";
 import OpenAI from "openai";
 
 const MODEL_LIST_TIMEOUT_MS = 2_000; // 2 seconds
-export const RECOMMENDED_MODELS: Array<string> = ["o4-mini", "o3"];
+export const RECOMMENDED_MODELS: Array<string> = ["o4-mini", "o3", "gpt-4.1"];
 
 /**
  * Background model loader / cache.
