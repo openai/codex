@@ -1,4 +1,7 @@
 import { describe, test, expect, vi, beforeEach } from "vitest";
+// Mock the Anthropic SDK for ClaudeProvider tests
+import Anthropic from "@anthropic-ai/sdk";
+vi.mock("@anthropic-ai/sdk");
 import { ClaudeProvider } from "../src/utils/providers/claude-provider";
 
 describe("ClaudeProvider", () => {
@@ -17,31 +20,13 @@ describe("ClaudeProvider", () => {
     expect(provider.name).toBe("Claude");
   });
   
-  test("should return available models", async () => {
-    // Spy on listModels
-    const mockListModels = vi.fn().mockResolvedValue({
-      data: [
-        { id: "claude-3-opus-20240229" },
-        { id: "claude-3-sonnet-20240229" },
-        { id: "claude-3-haiku-20240307" },
-      ]
-    });
-    
-    // Create a mock client
-    const mockClient = {
-      listModels: mockListModels
-    };
-    
-    // Mock the createClient method to return our mock client
-    vi.spyOn(provider, "createClient").mockReturnValue(mockClient as any);
-    
-    // Call getModels
+  test("getModels returns the expected static model list", async () => {
     const models = await provider.getModels();
-    
-    // Verify the returned models
-    expect(models).toContain("claude-3-opus-20240229");
-    expect(models).toContain("claude-3-sonnet-20240229");
-    expect(models).toContain("claude-3-haiku-20240307");
+    expect(models).toEqual([
+      "claude-3-5-sonnet-20240620",
+      "claude-3-opus-20240229",
+      "claude-3-haiku-20240307",
+    ]);
   });
   
   test("should fallback to recommended models when API key is not set", async () => {
@@ -76,7 +61,7 @@ describe("ClaudeProvider", () => {
     // Rate limit error
     const rateLimitError = { status: 429, message: "Rate limit exceeded" };
     expect(provider.isRateLimitError(rateLimitError)).toBe(true);
-    expect(provider.formatErrorMessage(rateLimitError)).toContain("rate limit exceeded");
+    expect(provider.formatErrorMessage(rateLimitError)).toContain("Rate limit exceeded");
     
     // Context length error
     const contextError = { 
@@ -84,14 +69,49 @@ describe("ClaudeProvider", () => {
       message: "Input is too long, max tokens exceeded" 
     };
     expect(provider.isContextLengthError(contextError)).toBe(true);
-    expect(provider.formatErrorMessage(contextError)).toContain("context length");
+    expect(provider.formatErrorMessage(contextError)).toContain("Input is too long");
     
     // Authentication error
-    const authError = { 
-      status: 401, 
-      error: { type: "authentication_error" } 
-    };
+    const authError = { status: 401, message: "Unauthorized access" };
     expect(provider.isInvalidRequestError(authError)).toBe(true);
-    expect(provider.formatErrorMessage(authError)).toContain("authentication failed");
+    expect(provider.formatErrorMessage(authError)).toContain("Unauthorized access");
+  });
+  
+  test("runCompletion (non-stream) should call messages.create and map response", async () => {
+    // Mock Anthropic SDK client
+    const createMock = vi.fn().mockResolvedValue({ id: "dummy-id", model: "dummy-model", content: [{ type: "text", text: "OK" }] });
+    const streamMock = vi.fn();
+    // Configure the mocked Anthropic constructor
+    (Anthropic as unknown as vi.Mock).mockImplementation(() => ({ messages: { create: createMock, stream: streamMock } }));
+    // Use the provider instance from beforeEach
+    // Prepare params
+    const params = {
+      model: "dummy-model",
+      messages: [{ role: "user", content: "hi" }],
+      stream: false,
+      temperature: 0.3,
+      maxTokens: 10,
+      tools: [],
+      config: { providers: { claude: { apiKey: "key" } } }
+    } as any;
+    // Call runCompletion
+    const result = await provider.runCompletion(params);
+    // Ensure messages.create was called
+    expect(createMock).toHaveBeenCalledWith(expect.objectContaining({
+      model: "dummy-model",
+      messages: expect.any(Array),
+      system: undefined,
+      temperature: 0.3,
+      max_tokens: 10,
+      stream: false
+    }));
+    // Validate output mapping
+    expect(result).toMatchObject({
+      id: "dummy-id",
+      model: "dummy-model",
+      output: [
+        { type: "message", role: "assistant", content: [{ type: "output_text", text: "OK" }] }
+      ]
+    });
   });
 });

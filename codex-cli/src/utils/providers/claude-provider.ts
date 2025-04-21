@@ -85,75 +85,8 @@ export class ClaudeProvider extends BaseProvider {
       timeout: providerConfig.timeoutMs || 180000,
     });
     
-    // Create a wrapper that implements the expected interface for agent-loop.ts
-    const clientWrapper = {
-      // Pass through the original Anthropic client
-      ...anthropicClient,
-      
-      // Add the responses property expected by agent-loop.ts
-      responses: {
-        create: async (params: any) => {
-          console.log("Claude provider: translating request to Claude format");
-          
-          // Process the new input items and update conversation history
-          if (params.input && params.input.length > 0) {
-            console.log(`Claude provider: Processing request with ${params.input.length} input items`);
-          }
-          
-          // Use the input directly - application now sends complete history
-          console.log(`Claude provider: Converting messages to Claude format`);
-          
-          // Convert from agent-loop's OpenAI format to Claude format
-          const claudeParams = {
-            model: params.model,
-            messages: this.convertMessagesToClaudeFormat(params.input || []),
-            system: params.instructions,
-            max_tokens: 4096,
-            stream: params.stream === true,
-          };
-          
-          // Add tools if available
-          if (params.tools && params.tools.length > 0) {
-            console.log("Claude provider: adding tools to request");
-            const claudeTools = this.formatTools(params.tools);
-            console.log(`Claude tools: ${JSON.stringify(claudeTools.map(t => t.name))}`);
-            
-            // Add detailed example for shell commands to system prompt
-            if (claudeTools.some(t => t.name === "shell")) {
-              console.log("Claude provider: Adding detailed shell command examples to system prompt");
-              
-              // Enhance the system prompt with detailed instructions for shell commands
-              if (!claudeParams.system) {
-                claudeParams.system = "";
-              }
-              
-              // Add specific instructions for using the shell tool
-              claudeParams.system += createShellCommandInstructions();
-            }
-            
-            // @ts-ignore - Type safety for tools
-            claudeParams.tools = claudeTools;
-          }
-          
-          try {
-            // Call Claude API
-            if (params.stream) {
-              // For streaming, return a suitable async iterator
-              return await this.createStreamingResponse(anthropicClient, claudeParams);
-            } else {
-              // For non-streaming, get the response and convert to expected format
-              const claudeResponse = await anthropicClient.messages.create(claudeParams);
-              return this.createOpenAICompatibleResponse(claudeResponse);
-            }
-          } catch (error) {
-            console.error("Claude API error:", error);
-            throw error;
-          }
-        }
-      }
-    };
-    
-    return clientWrapper;
+    // Return the raw Anthropic client; request/response conversions are handled in runCompletion
+    return anthropicClient;
   }
   
   /**

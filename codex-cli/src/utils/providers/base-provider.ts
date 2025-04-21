@@ -131,6 +131,7 @@ export abstract class BaseProvider implements LLMProvider {
       error?.code === "context_length_exceeded" ||
       /maximum context length/i.test(error?.message || "") ||
       /too many tokens/i.test(error?.message || "") ||
+      /max tokens/i.test(error?.message || "") ||
       /context window is full/i.test(error?.message || "")
     );
   }
