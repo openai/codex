@@ -42,4 +42,9 @@ export const providers: Record<
     baseURL: "https://api.groq.com/openai/v1",
     envKey: "GROQ_API_KEY",
   },
+  tensorzero: {
+    name: "TensorZero",
+    baseURL: "http://localhost:3000/openai/v1",
+    envKey: "TENSORZERO_API_KEY",
+  },
 };
