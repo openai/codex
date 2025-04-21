@@ -119,8 +119,6 @@ export class AgentLoop {
       return;
     }
 
-    // Reset the current stream to allow new requests
-    this.currentStream = null;
     log(
       `AgentLoop.cancel() invoked – currentStream=${Boolean(
         this.currentStream,
@@ -131,6 +129,9 @@ export class AgentLoop {
     (
       this.currentStream as { controller?: { abort?: () => void } } | null
     )?.controller?.abort?.();
+
+    // Reset the current stream to allow new requests
+    this.currentStream = null;
 
     this.canceled = true;
 
