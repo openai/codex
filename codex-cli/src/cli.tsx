@@ -260,7 +260,6 @@ config = {
   notify: Boolean(cli.flags.notify),
   flexMode: Boolean(cli.flags.flexMode),
   provider,
-  model,
 };
 
 // Check for updates after loading config

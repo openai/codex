@@ -616,13 +616,11 @@ export default function TerminalChat({
               setOverlayMode("none");
             }}
             onSelectProvider={(newProvider) => {
-              if (isLoggingEnabled()) {
-                log(
-                  "TerminalChat: interruptAgent invoked – calling agent.cancel()",
-                );
-                if (!agent) {
-                  log("TerminalChat: agent is not ready yet");
-                }
+              log(
+                "TerminalChat: interruptAgent invoked – calling agent.cancel()",
+              );
+              if (!agent) {
+                log("TerminalChat: agent is not ready yet");
               }
               agent?.cancel();
               setLoading(false);
