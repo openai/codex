@@ -167,17 +167,27 @@ export default function TerminalChat({
     }
     setFlexMode(newFlex);
     // Append system message to inform user
-    setItems((prev) => [
-      ...prev,
-      {
-        id: `flexmode-${Date.now()}`,
-        type: "message",
-        role: "system",
-        content: [
-          { type: "input_text", text: newFlex ? "Flex mode enabled" : "Flex mode disabled" },
-        ],
-      } as ResponseItem,
-    ]);
+    setItems((prev) => {
+      const msgText = newFlex ? "Flex mode enabled" : "Flex mode disabled";
+      // Avoid repeating the same toggle message consecutively
+      const last = prev[prev.length - 1];
+      if (
+        last?.type === "message" &&
+        last.content?.[0]?.type === "input_text" &&
+        last.content[0].text === msgText
+      ) {
+        return prev;
+      }
+      return [
+        ...prev,
+        {
+          id: `flexmode-${Date.now()}`,
+          type: "message",
+          role: "system",
+          content: [{ type: "input_text", text: msgText }],
+        } as ResponseItem,
+      ];
+    });
   };
   const handleCompact = async () => {
     setLoading(true);
