@@ -35,6 +35,7 @@ import { render } from "ink";
 import meow from "meow";
 import path from "path";
 import React from "react";
+import { version } from "../package.json";
 
 // Call this early so `tail -F "$TMPDIR/oai-codex/codex-cli-latest.log"` works
 // immediately. This must be run with DEBUG=1 for logging to work.
@@ -53,6 +54,7 @@ const cli = meow(
 
   Options
     -h, --help                      Show usage and exit
+    --version                       Print version and exit
     -m, --model <model>             Model to use for completions (default: o4-mini)
     -i, --image <path>              Path(s) to image files to include as input
     -v, --view <rollout>            Inspect a previously saved rollout instead of starting a session
@@ -93,6 +95,7 @@ const cli = meow(
     flags: {
       // misc
       help: { type: "boolean", aliases: ["h"] },
+      version: { type: "boolean", description: "Print version and exit" },
       view: { type: "string" },
       model: { type: "string", aliases: ["m"] },
       provider: { type: "string", aliases: ["p"] },
@@ -200,6 +203,12 @@ complete -c codex -a '(__fish_complete_path)' -d 'file path'`,
   }
   // eslint-disable-next-line no-console
   console.log(script);
+  process.exit(0);
+}
+
+// Handle --version flag
+if (cli.flags.version) {
+  console.log(version);
   process.exit(0);
 }
 
