@@ -815,7 +815,7 @@ export class AgentLoop {
           for await (const event of stream as AsyncIterable<ResponseEvent>) {
             log(`AgentLoop.run(): response event ${event.type}`);
 
-            // process and surface each item (no‑op until we can depend on streaming events)
+            // process and surface each item (no-op until we can depend on streaming events)
             if (event.type === "response.output_item.done") {
               const item = event.item;
               // 1) if it's a reasoning item, annotate it
@@ -1007,7 +1007,7 @@ export class AgentLoop {
             ],
           });
         } catch {
-          /* no‑op – emitting the error message is best‑effort */
+          /* no-op – emitting the error message is best‑effort */
         }
         this.onLoading(false);
         return;
