@@ -5,7 +5,7 @@ import type { ColorName } from "chalk";
 import type { ResponseItem } from "openai/resources/responses/responses.mjs";
 
 import TerminalChatInput from "./terminal-chat-input.js";
-import { TerminalChatToolCallCommand } from "./terminal-chat-tool-call-item.js";
+import { TerminalChatToolCallCommand } from "./terminal-chat-tool-call-command.js";
 import {
   calculateContextPercentRemaining,
   uniqueById,
@@ -15,24 +15,35 @@ import { formatCommandForDisplay } from "../../format-command.js";
 import { useConfirmation } from "../../hooks/use-confirmation.js";
 import { useTerminalSize } from "../../hooks/use-terminal-size.js";
 import { AgentLoop } from "../../utils/agent/agent-loop.js";
-import { isLoggingEnabled, log } from "../../utils/agent/log.js";
+import { log } from "../../utils/agent/log.js";
 import { ReviewDecision } from "../../utils/agent/review.js";
 import { generateCompactSummary } from "../../utils/compact-summary.js";
-import { OPENAI_BASE_URL } from "../../utils/config.js";
+import { OPENAI_BASE_URL, saveConfig } from "../../utils/config.js";
+import { extractAppliedPatches as _extractAppliedPatches } from "../../utils/extract-applied-patches.js";
+import { getGitDiff } from "../../utils/get-diff.js";
 import { createInputItem } from "../../utils/input-utils.js";
 import { getAvailableModels } from "../../utils/model-utils.js";
 import { CLI_VERSION } from "../../utils/session.js";
 import { shortCwd } from "../../utils/short-path.js";
 import { saveRollout } from "../../utils/storage/save-rollout.js";
 import ApprovalModeOverlay from "../approval-mode-overlay.js";
+import DiffOverlay from "../diff-overlay.js";
 import HelpOverlay from "../help-overlay.js";
 import HistoryOverlay from "../history-overlay.js";
 import ModelOverlay from "../model-overlay.js";
 import { Box, Text } from "ink";
-import { exec } from "node:child_process";
+import { spawn } from "node:child_process";
 import OpenAI from "openai";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { inspect } from "util";
+
+export type OverlayModeType =
+  | "none"
+  | "history"
+  | "model"
+  | "approval"
+  | "help"
+  | "diff";
 
 type Props = {
   config: AppConfig;
@@ -59,6 +70,7 @@ const colorsByPolicy: Record<ApprovalPolicy, ColorName | undefined> = {
 async function generateCommandExplanation(
   command: Array<string>,
   model: string,
+  flexMode: boolean,
 ): Promise<string> {
   try {
     // Create a temporary OpenAI client
@@ -73,6 +85,7 @@ async function generateCommandExplanation(
     // Create a prompt that asks for an explanation with a more detailed system prompt
     const response = await oai.chat.completions.create({
       model,
+      ...(flexMode ? { service_tier: "flex" } : {}),
       messages: [
         {
           role: "system",
@@ -131,6 +144,7 @@ export default function TerminalChat({
   // Desktop notification setting
   const notify = config.notify;
   const [model, setModel] = useState<string>(config.model);
+  const [provider, setProvider] = useState<string>(config.provider || "openai");
   const [lastResponseId, setLastResponseId] = useState<string | null>(null);
   const [items, setItems] = useState<Array<ResponseItem>>([]);
   const [loading, setLoading] = useState<boolean>(false);
@@ -142,7 +156,11 @@ export default function TerminalChat({
   const handleCompact = async () => {
     setLoading(true);
     try {
-      const summary = await generateCompactSummary(items, model);
+      const summary = await generateCompactSummary(
+        items,
+        model,
+        Boolean(config.flexMode),
+      );
       setItems([
         {
           id: `compact-${Date.now()}`,
@@ -173,9 +191,14 @@ export default function TerminalChat({
     explanation,
     submitConfirmation,
   } = useConfirmation();
-  const [overlayMode, setOverlayMode] = useState<
-    "none" | "history" | "model" | "approval" | "help"
-  >("none");
+  const [overlayMode, setOverlayMode] = useState<OverlayModeType>("none");
+
+  // Store the diff text when opening the diff overlay so the view isn’t
+  // recomputed on every re‑render while it is open.
+  // diffText is passed down to the DiffOverlay component. The setter is
+  // currently unused but retained for potential future updates. Prefix with
+  // an underscore so eslint ignores the unused variable.
+  const [diffText, _setDiffText] = useState<string>("");
 
   const [initialPrompt, setInitialPrompt] = useState(_initialPrompt);
   const [initialImagePaths, setInitialImagePaths] =
@@ -191,29 +214,32 @@ export default function TerminalChat({
   // ────────────────────────────────────────────────────────────────
   // DEBUG: log every render w/ key bits of state
   // ────────────────────────────────────────────────────────────────
-  if (isLoggingEnabled()) {
-    log(
-      `render – agent? ${Boolean(agentRef.current)} loading=${loading} items=${
-        items.length
-      }`,
-    );
-  }
+  log(
+    `render – agent? ${Boolean(agentRef.current)} loading=${loading} items=${
+      items.length
+    }`,
+  );
 
   useEffect(() => {
-    if (isLoggingEnabled()) {
-      log("creating NEW AgentLoop");
-      log(
-        `model=${model} instructions=${Boolean(
-          config.instructions,
-        )} approvalPolicy=${approvalPolicy}`,
-      );
+    // Skip recreating the agent if awaiting a decision on a pending confirmation
+    if (confirmationPrompt != null) {
+      log("skip AgentLoop recreation due to pending confirmationPrompt");
+      return;
     }
+
+    log("creating NEW AgentLoop");
+    log(
+      `model=${model} provider=${provider} instructions=${Boolean(
+        config.instructions,
+      )} approvalPolicy=${approvalPolicy}`,
+    );
 
     // Tear down any existing loop before creating a new one
     agentRef.current?.terminate();
 
     agentRef.current = new AgentLoop({
       model,
+      provider,
       config,
       instructions: config.instructions,
       approvalPolicy,
@@ -245,7 +271,11 @@ export default function TerminalChat({
           log(`Generating explanation for command: ${commandForDisplay}`);
 
           // Generate an explanation using the same model
-          const explanation = await generateCommandExplanation(command, model);
+          const explanation = await generateCommandExplanation(
+            command,
+            model,
+            Boolean(config.flexMode),
+          );
           log(`Generated explanation: ${explanation}`);
 
           // Ask for confirmation again, but with the explanation
@@ -271,22 +301,20 @@ export default function TerminalChat({
     // force a render so JSX below can "see" the freshly created agent
     forceUpdate();
 
-    if (isLoggingEnabled()) {
-      log(`AgentLoop created: ${inspect(agentRef.current, { depth: 1 })}`);
-    }
+    log(`AgentLoop created: ${inspect(agentRef.current, { depth: 1 })}`);
 
     return () => {
-      if (isLoggingEnabled()) {
-        log("terminating AgentLoop");
-      }
+      log("terminating AgentLoop");
       agentRef.current?.terminate();
       agentRef.current = undefined;
       forceUpdate(); // re‑render after teardown too
     };
   }, [
     model,
+    provider,
     config,
     approvalPolicy,
+    confirmationPrompt,
     requestConfirmation,
     additionalWritableRoots,
   ]);
@@ -350,9 +378,10 @@ export default function TerminalChat({
           const safePreview = preview.replace(/"/g, '\\"');
           const title = "Codex CLI";
           const cwd = PWD;
-          exec(
-            `osascript -e 'display notification "${safePreview}" with title "${title}" subtitle "${cwd}" sound name "Ping"'`,
-          );
+          spawn("osascript", [
+            "-e",
+            `display notification "${safePreview}" with title "${title}" subtitle "${cwd}" sound name "Ping"`,
+          ]);
         }
       }
     }
@@ -362,9 +391,7 @@ export default function TerminalChat({
   // Let's also track whenever the ref becomes available
   const agent = agentRef.current;
   useEffect(() => {
-    if (isLoggingEnabled()) {
-      log(`agentRef.current is now ${Boolean(agent)}`);
-    }
+    log(`agentRef.current is now ${Boolean(agent)}`);
   }, [agent]);
 
   // ---------------------------------------------------------------------
@@ -397,7 +424,7 @@ export default function TerminalChat({
   // ────────────────────────────────────────────────────────────────
   useEffect(() => {
     (async () => {
-      const available = await getAvailableModels();
+      const available = await getAvailableModels(provider);
       if (model && available.length > 0 && !available.includes(model)) {
         setItems((prev) => [
           ...prev,
@@ -408,7 +435,7 @@ export default function TerminalChat({
             content: [
               {
                 type: "input_text",
-                text: `Warning: model "${model}" is not in the list of available models returned by OpenAI.`,
+                text: `Warning: model "${model}" is not in the list of available models for provider "${provider}".`,
               },
             ],
           },
@@ -436,6 +463,7 @@ export default function TerminalChat({
       <Box flexDirection="column">
         {agent ? (
           <TerminalMessageHistory
+            setOverlayMode={setOverlayMode}
             batch={lastMessageBatch}
             groupCounts={groupCounts}
             items={items}
@@ -449,10 +477,12 @@ export default function TerminalChat({
               version: CLI_VERSION,
               PWD,
               model,
+              provider,
               approvalPolicy,
               colorsByPolicy,
               agent,
               initialImagePaths,
+              flexModeEnabled: Boolean(config.flexMode),
             }}
           />
         ) : (
@@ -482,17 +512,35 @@ export default function TerminalChat({
             openModelOverlay={() => setOverlayMode("model")}
             openApprovalOverlay={() => setOverlayMode("approval")}
             openHelpOverlay={() => setOverlayMode("help")}
+            openDiffOverlay={() => {
+              const { isGitRepo, diff } = getGitDiff();
+              let text: string;
+              if (isGitRepo) {
+                text = diff;
+              } else {
+                text = "`/diff` — _not inside a git repository_";
+              }
+              setItems((prev) => [
+                ...prev,
+                {
+                  id: `diff-${Date.now()}`,
+                  type: "message",
+                  role: "system",
+                  content: [{ type: "input_text", text }],
+                },
+              ]);
+              // Ensure no overlay is shown.
+              setOverlayMode("none");
+            }}
             onCompact={handleCompact}
             active={overlayMode === "none"}
             interruptAgent={() => {
               if (!agent) {
                 return;
               }
-              if (isLoggingEnabled()) {
-                log(
-                  "TerminalChat: interruptAgent invoked – calling agent.cancel()",
-                );
-              }
+              log(
+                "TerminalChat: interruptAgent invoked – calling agent.cancel()",
+              );
               agent.cancel();
               setLoading(false);
 
@@ -516,6 +564,8 @@ export default function TerminalChat({
               agent.run(inputs, lastResponseId || "");
               return {};
             }}
+            items={items}
+            thinkingSeconds={thinkingSeconds}
           />
         )}
         {overlayMode === "history" && (
@@ -524,15 +574,14 @@ export default function TerminalChat({
         {overlayMode === "model" && (
           <ModelOverlay
             currentModel={model}
+            currentProvider={provider}
             hasLastResponse={Boolean(lastResponseId)}
             onSelect={(newModel) => {
-              if (isLoggingEnabled()) {
-                log(
-                  "TerminalChat: interruptAgent invoked – calling agent.cancel()",
-                );
-                if (!agent) {
-                  log("TerminalChat: agent is not ready yet");
-                }
+              log(
+                "TerminalChat: interruptAgent invoked – calling agent.cancel()",
+              );
+              if (!agent) {
+                log("TerminalChat: agent is not ready yet");
               }
               agent?.cancel();
               setLoading(false);
@@ -541,6 +590,13 @@ export default function TerminalChat({
               setLastResponseId((prev) =>
                 prev && newModel !== model ? null : prev,
               );
+
+              // Save model to config
+              saveConfig({
+                ...config,
+                model: newModel,
+                provider: provider,
+              });
 
               setItems((prev) => [
                 ...prev,
@@ -559,6 +615,51 @@ export default function TerminalChat({
 
               setOverlayMode("none");
             }}
+            onSelectProvider={(newProvider) => {
+              log(
+                "TerminalChat: interruptAgent invoked – calling agent.cancel()",
+              );
+              if (!agent) {
+                log("TerminalChat: agent is not ready yet");
+              }
+              agent?.cancel();
+              setLoading(false);
+
+              // Select default model for the new provider
+              const defaultModel = model;
+
+              // Save provider to config
+              const updatedConfig = {
+                ...config,
+                provider: newProvider,
+                model: defaultModel,
+              };
+              saveConfig(updatedConfig);
+
+              setProvider(newProvider);
+              setModel(defaultModel);
+              setLastResponseId((prev) =>
+                prev && newProvider !== provider ? null : prev,
+              );
+
+              setItems((prev) => [
+                ...prev,
+                {
+                  id: `switch-provider-${Date.now()}`,
+                  type: "message",
+                  role: "system",
+                  content: [
+                    {
+                      type: "input_text",
+                      text: `Switched provider to ${newProvider} with model ${defaultModel}`,
+                    },
+                  ],
+                },
+              ]);
+
+              // Don't close the overlay so user can select a model for the new provider
+              // setOverlayMode("none");
+            }}
             onExit={() => setOverlayMode("none")}
           />
         )}
@@ -567,12 +668,20 @@ export default function TerminalChat({
           <ApprovalModeOverlay
             currentMode={approvalPolicy}
             onSelect={(newMode) => {
-              agent?.cancel();
-              setLoading(false);
+              // update approval policy without cancelling an in-progress session
               if (newMode === approvalPolicy) {
                 return;
               }
+              // update state
               setApprovalPolicy(newMode as ApprovalPolicy);
+              // update existing AgentLoop instance
+              if (agentRef.current) {
+                (
+                  agentRef.current as unknown as {
+                    approvalPolicy: ApprovalPolicy;
+                  }
+                ).approvalPolicy = newMode as ApprovalPolicy;
+              }
               setItems((prev) => [
                 ...prev,
                 {
@@ -596,6 +705,13 @@ export default function TerminalChat({
 
         {overlayMode === "help" && (
           <HelpOverlay onExit={() => setOverlayMode("none")} />
+        )}
+
+        {overlayMode === "diff" && (
+          <DiffOverlay
+            diffText={diffText}
+            onExit={() => setOverlayMode("none")}
+          />
         )}
       </Box>
     </Box>
