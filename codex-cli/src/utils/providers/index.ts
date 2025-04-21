@@ -36,6 +36,11 @@ export function initializeProviderRegistry(): void {
 export { ProviderRegistry } from "./provider-registry.js";
 
 /**
+ * Export provider constructors
+ */
+export { OpenAIProvider } from "./openai-provider.js";
+export { ClaudeProvider } from "./claude-provider.js";
+/**
  * Export provider types
  */
 export type { LLMProvider, CompletionParams } from "./provider-interface.js";
