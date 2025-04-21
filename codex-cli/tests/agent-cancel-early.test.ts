@@ -1,4 +1,5 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { setupMockProviders } from './provider-mock';
 
 // Fake stream that waits a bit before yielding the function_call so the test
 // can cancel first.
@@ -84,6 +85,11 @@ vi.mock("../src/utils/agent/log.js", () => ({
 import { AgentLoop } from "../src/utils/agent/agent-loop.js";
 
 describe("cancel before first function_call", () => {
+  beforeEach(() => {
+    // Set up mock providers
+    setupMockProviders();
+  });
+  
   it("clears previous_response_id if no call ids captured", async () => {
     const { _test } = (await import("openai")) as any;
 

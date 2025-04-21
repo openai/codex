@@ -34,6 +34,7 @@
     "src"
   ],
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
     "@inkjs/ui": "^2.0.0",
     "chalk": "^5.2.0",
     "diff": "^7.0.0",

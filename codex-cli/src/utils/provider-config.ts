@@ -15,6 +15,8 @@ export interface ProviderConfig {
   baseUrl?: string;
   timeoutMs?: number;
   defaultModel?: string;
+  // Claude-specific configuration
+  enableToolCalls?: boolean;
   // Allow additional provider-specific settings
   [key: string]: any;
 }
@@ -51,7 +53,7 @@ export const PROVIDER_ENV_MAPPINGS: Record<string, ProviderEnvMapping> = {
  */
 export const DEFAULT_PROVIDER_MODELS: Record<string, string> = {
   openai: "o4-mini",
-  claude: "claude-3-sonnet-20240229",
+  claude: "claude-3-5-sonnet-20240620", // Using the most capable non-deprecated Claude model
 };
 
 /**
