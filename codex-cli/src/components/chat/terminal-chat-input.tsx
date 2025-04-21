@@ -14,6 +14,7 @@ import { loadConfig } from "../../utils/config.js";
 import { getFileSystemSuggestions } from "../../utils/file-system-suggestions.js";
 import { createInputItem } from "../../utils/input-utils.js";
 import { setSessionId } from "../../utils/session.js";
+import { handleSlashCommand } from "../../utils/slash-command-handlers";
 import { SLASH_COMMANDS, type SlashCommand } from "../../utils/slash-commands";
 import {
   loadCommandHistory,
@@ -357,47 +358,22 @@ export default function TerminalChatInput({
         return;
       }
 
-      if (inputValue === "/history") {
-        setInput("");
-        openOverlay();
+      // Handle built-in slash commands
+      if (
+        handleSlashCommand(inputValue, {
+          setInput,
+          openOverlay,
+          openHelpOverlay,
+          openDiffOverlay,
+          onCompact,
+          openModelOverlay,
+          openApprovalOverlay,
+          toggleFlexMode,
+        })
+      ) {
         return;
       }
 
-      if (inputValue === "/help") {
-        setInput("");
-        openHelpOverlay();
-        return;
-      }
-
-      if (inputValue === "/diff") {
-        setInput("");
-        openDiffOverlay();
-        return;
-      }
-
-      if (inputValue === "/compact") {
-        setInput("");
-        onCompact();
-        return;
-      }
-
-      if (inputValue.startsWith("/model")) {
-        setInput("");
-        openModelOverlay();
-        return;
-      }
-
-      if (inputValue.startsWith("/approval")) {
-        setInput("");
-        openApprovalOverlay();
-        return;
-      }
-      if (inputValue === "/flex-mode") {
-        // Toggle flex-mode mid-session
-        setInput("");
-        toggleFlexMode();
-        return;
-      }
 
       if (inputValue === "q" || inputValue === ":q" || inputValue === "exit") {
         setInput("");
