@@ -144,7 +144,7 @@ export async function handleExecCommand(
     abortSignal,
   );
   // If the operation was aborted in the meantime, propagate the cancellation
-  // upward by returning an empty (no‑op) result so that the agent loop will
+  // upward by returning an empty (no-op) result so that the agent loop will
   // exit cleanly without emitting spurious output.
   if (abortSignal?.aborted) {
     return {
