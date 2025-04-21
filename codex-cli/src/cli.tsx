@@ -190,7 +190,7 @@ _codex() {
 }
 _codex`,
     fish: `# fish completion for codex
-complete -c codex -a '(_fish_complete_path)' -d 'file path'`,
+complete -c codex -a '(__fish_complete_path)' -d 'file path'`,
   };
   const script = scripts[shell];
   if (!script) {
