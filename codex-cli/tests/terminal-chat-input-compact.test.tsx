@@ -21,6 +21,8 @@ describe("TerminalChatInput compact command", () => {
       openModelOverlay: () => {},
       openApprovalOverlay: () => {},
       openHelpOverlay: () => {},
+      // toggle flex-mode mid-session
+      toggleFlexMode: () => {},
       onCompact: () => {},
       interruptAgent: () => {},
       active: true,
