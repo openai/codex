@@ -8,9 +8,11 @@ import type {
 
 import MultilineTextEditor from "./multiline-editor";
 import { TerminalChatCommandReview } from "./terminal-chat-command-review.js";
-import { log } from "../../utils/agent/log.js";
+import TextCompletions from "./terminal-chat-completions.js";
 import { loadConfig } from "../../utils/config.js";
+import { getFileSystemSuggestions } from "../../utils/file-system-suggestions.js";
 import { createInputItem } from "../../utils/input-utils.js";
+import { log } from "../../utils/logger/log.js";
 import { setSessionId } from "../../utils/session.js";
 import { SLASH_COMMANDS, type SlashCommand } from "../../utils/slash-commands";
 import {
@@ -90,6 +92,8 @@ export default function TerminalChatInput({
   const [historyIndex, setHistoryIndex] = useState<number | null>(null);
   const [draftInput, setDraftInput] = useState<string>("");
   const [skipNextSubmit, setSkipNextSubmit] = useState<boolean>(false);
+  const [fsSuggestions, setFsSuggestions] = useState<Array<string>>([]);
+  const [selectedCompletion, setSelectedCompletion] = useState<number>(-1);
   // Multiline text editor key to force remount after submission
   const [editorKey, setEditorKey] = useState(0);
   // Imperative handle from the multiline editor so we can query caret position
@@ -187,6 +191,12 @@ export default function TerminalChatInput({
                 case "/bug":
                   onSubmit(cmd);
                   break;
+                case "/clear":
+                  onSubmit(cmd);
+                  break;
+                case "/clearhistory":
+                  onSubmit(cmd);
+                  break;
                 default:
                   break;
               }
@@ -196,6 +206,44 @@ export default function TerminalChatInput({
         }
       }
       if (!confirmationPrompt && !loading) {
+        if (fsSuggestions.length > 0) {
+          if (_key.upArrow) {
+            setSelectedCompletion((prev) =>
+              prev <= 0 ? fsSuggestions.length - 1 : prev - 1,
+            );
+            return;
+          }
+
+          if (_key.downArrow) {
+            setSelectedCompletion((prev) =>
+              prev >= fsSuggestions.length - 1 ? 0 : prev + 1,
+            );
+            return;
+          }
+
+          if (_key.tab && selectedCompletion >= 0) {
+            const words = input.trim().split(/\s+/);
+            const selected = fsSuggestions[selectedCompletion];
+
+            if (words.length > 0 && selected) {
+              words[words.length - 1] = selected;
+              const newText = words.join(" ");
+              setInput(newText);
+              // Force remount of the editor with the new text
+              setEditorKey((k) => k + 1);
+
+              // We need to move the cursor to the end after editor remounts
+              setTimeout(() => {
+                editorRef.current?.moveCursorToEnd?.();
+              }, 0);
+
+              setFsSuggestions([]);
+              setSelectedCompletion(-1);
+            }
+            return;
+          }
+        }
+
         if (_key.upArrow) {
           // Only recall history when the caret was *already* on the very first
           // row *before* this key-press.
@@ -240,6 +288,19 @@ export default function TerminalChatInput({
             return; // handled
           }
           // Otherwise let it propagate
+        }
+
+        if (_key.tab) {
+          const words = input.split(/\s+/);
+          const mostRecentWord = words[words.length - 1];
+          if (mostRecentWord === undefined || mostRecentWord === "") {
+            return;
+          }
+          const completions = getFileSystemSuggestions(mostRecentWord);
+          setFsSuggestions(completions);
+          if (completions.length > 0) {
+            setSelectedCompletion(0);
+          }
         }
       }
 
@@ -341,19 +402,29 @@ export default function TerminalChatInput({
         setInput("");
         setSessionId("");
         setLastResponseId("");
+        // Clear the terminal screen (including scrollback) before resetting context
         clearTerminal();
+
+        // Emit a system notice in the chat; no raw console writes so Ink keeps control.
 
         // Emit a system message to confirm the clear action.  We *append*
         // it so Ink's <Static> treats it as new output and actually renders it.
         setItems((prev) => {
           const filteredOldItems = prev.filter((item) => {
+            // Remove any token‑heavy entries (user/assistant turns and function calls)
             if (
               item.type === "message" &&
               (item.role === "user" || item.role === "assistant")
             ) {
               return false;
             }
-            return true;
+            if (
+              item.type === "function_call" ||
+              item.type === "function_call_output"
+            ) {
+              return false;
+            }
+            return true; // keep developer/system and other meta entries
           });
 
           return [
@@ -533,6 +604,8 @@ export default function TerminalChatInput({
       setDraftInput("");
       setSelectedSuggestion(0);
       setInput("");
+      setFsSuggestions([]);
+      setSelectedCompletion(-1);
     },
     [
       setInput,
@@ -578,7 +651,7 @@ export default function TerminalChatInput({
             thinkingSeconds={thinkingSeconds}
           />
         ) : (
-          <Box>
+          <Box paddingX={1}>
             <MultilineTextEditor
               ref={editorRef}
               onChange={(txt: string) => {
@@ -587,6 +660,20 @@ export default function TerminalChatInput({
                   setHistoryIndex(null);
                 }
                 setInput(txt);
+
+                // Clear tab completions if a space is typed
+                if (txt.endsWith(" ")) {
+                  setFsSuggestions([]);
+                  setSelectedCompletion(-1);
+                } else if (fsSuggestions.length > 0) {
+                  // Update file suggestions as user types
+                  const words = txt.trim().split(/\s+/);
+                  const mostRecentWord =
+                    words.length > 0 ? words[words.length - 1] : "";
+                  if (mostRecentWord !== undefined) {
+                    setFsSuggestions(getFileSystemSuggestions(mostRecentWord));
+                  }
+                }
               }}
               key={editorKey}
               initialText={input}
@@ -623,47 +710,51 @@ export default function TerminalChatInput({
         </Box>
       )}
       <Box paddingX={2} marginBottom={1}>
-        <Text dimColor>
-          {isNew && !input ? (
-            <>
-              try:{" "}
-              {suggestions.map((m, key) => (
-                <Fragment key={key}>
-                  {key !== 0 ? " | " : ""}
-                  <Text
-                    backgroundColor={
-                      key + 1 === selectedSuggestion ? "blackBright" : ""
-                    }
-                  >
-                    {m}
-                  </Text>
-                </Fragment>
-              ))}
-            </>
-          ) : (
-            <>
-              send q or ctrl+c to exit | send "/clear" to reset | send "/help"
-              for commands | press enter to send | shift+enter for new line
-              {contextLeftPercent > 25 && (
-                <>
-                  {" — "}
-                  <Text color={contextLeftPercent > 40 ? "green" : "yellow"}>
-                    {Math.round(contextLeftPercent)}% context left
-                  </Text>
-                </>
-              )}
-              {contextLeftPercent <= 25 && (
-                <>
-                  {" — "}
-                  <Text color="red">
-                    {Math.round(contextLeftPercent)}% context left — send
-                    "/compact" to condense context
-                  </Text>
-                </>
-              )}
-            </>
-          )}
-        </Text>
+        {isNew && !input ? (
+          <Text dimColor>
+            try:{" "}
+            {suggestions.map((m, key) => (
+              <Fragment key={key}>
+                {key !== 0 ? " | " : ""}
+                <Text
+                  backgroundColor={
+                    key + 1 === selectedSuggestion ? "blackBright" : ""
+                  }
+                >
+                  {m}
+                </Text>
+              </Fragment>
+            ))}
+          </Text>
+        ) : fsSuggestions.length > 0 ? (
+          <TextCompletions
+            completions={fsSuggestions}
+            selectedCompletion={selectedCompletion}
+            displayLimit={5}
+          />
+        ) : (
+          <Text dimColor>
+            send q or ctrl+c to exit | send "/clear" to reset | send "/help" for
+            commands | press enter to send | shift+enter for new line
+            {contextLeftPercent > 25 && (
+              <>
+                {" — "}
+                <Text color={contextLeftPercent > 40 ? "green" : "yellow"}>
+                  {Math.round(contextLeftPercent)}% context left
+                </Text>
+              </>
+            )}
+            {contextLeftPercent <= 25 && (
+              <>
+                {" — "}
+                <Text color="red">
+                  {Math.round(contextLeftPercent)}% context left — send
+                  "/compact" to condense context
+                </Text>
+              </>
+            )}
+          </Text>
+        )}
       </Box>
     </Box>
   );

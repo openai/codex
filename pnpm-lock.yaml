@@ -43,6 +43,9 @@ importers:
       fast-deep-equal:
         specifier: ^3.1.3
         version: 3.1.3
+      fast-npm-meta:
+        specifier: ^0.4.2
+        version: 0.4.2
       figures:
         specifier: ^6.1.0
         version: 6.1.0
@@ -70,6 +73,9 @@ importers:
       openai:
         specifier: ^4.95.1
         version: 4.95.1(ws@8.18.1)(zod@3.24.3)
+      package-manager-detector:
+        specifier: ^1.2.0
+        version: 1.2.0
       react:
         specifier: ^18.2.0
         version: 18.3.1
@@ -104,6 +110,9 @@ importers:
       '@types/react':
         specifier: ^18.0.32
         version: 18.3.20
+      '@types/semver':
+        specifier: ^7.7.0
+        version: 7.7.0
       '@types/shell-quote':
         specifier: ^1.7.5
         version: 1.7.5
@@ -146,6 +155,9 @@ importers:
       punycode:
         specifier: ^2.3.1
         version: 2.3.1
+      semver:
+        specifier: ^7.7.1
+        version: 7.7.1
       ts-node:
         specifier: ^10.9.1
         version: 10.9.2(@types/node@22.14.1)(typescript@5.8.3)
@@ -547,6 +559,9 @@ packages:
 
   '@types/react@18.3.20':
     resolution: {integrity: sha512-IPaCZN7PShZK/3t6Q87pfTkRm6oLTd4vztyoj+cbHUF1g3FfVb2tFIL79uCRKEfv16AhqDMBywP2VW3KIZUvcg==}
+
+  '@types/semver@7.7.0':
+    resolution: {integrity: sha512-k107IF4+Xr7UHjwDc7Cfd6PRQfbdkiRabXGRjo07b4WyPahFBZCZ1sE+BNxYIJPPg73UkfOsVOLwqVc/6ETrIA==}
 
   '@types/shell-quote@1.7.5':
     resolution: {integrity: sha512-+UE8GAGRPbJVQDdxi16dgadcBfQ+KG2vgZhV1+3A1XmHbmwcdwhCUwIdy+d3pAGrbvgRoVSjeI9vOWyq376Yzw==}
@@ -1167,6 +1182,9 @@ packages:
 
   fast-levenshtein@2.0.6:
     resolution: {integrity: sha512-DCXu6Ifhqcks7TZKY3Hxp3y6qphY5SJZmrWMDrKcERSOXWQdMhU9Ig/PYrzyw/ul9jOIyh0N4M0tbC5hodg8dw==}
+
+  fast-npm-meta@0.4.2:
+    resolution: {integrity: sha512-BDN/yv8MN3fjh504wa7/niZojPtf/brWBsLKlw7Fv+Xh8Df+6ZEAFpp3zaal4etgDxxav1CuzKX5H0YVM9urEQ==}
 
   fastq@1.19.1:
     resolution: {integrity: sha512-GwLTyxkCXjXbxqIhTsMI2Nui8huMPtnxg7krajPJAjnEG/iiOS7i+zCtWGZR9G0NBKbXKh6X9m9UIsYX/N6vvQ==}
@@ -1825,6 +1843,9 @@ packages:
   p-locate@5.0.0:
     resolution: {integrity: sha512-LaNjtRWUBY++zB5nE/NwcaoMylSPk+S+ZHNB1TzdbMJMny6dynpAGt7X/tl/QYq3TIeE6nxHppbo2LGymrG5Pw==}
     engines: {node: '>=10'}
+
+  package-manager-detector@1.2.0:
+    resolution: {integrity: sha512-PutJepsOtsqVfUsxCzgTTpyXmiAgvKptIgY4th5eq5UXXFhj5PxfQ9hnGkypMeovpAvVshFRItoFHYO18TCOqA==}
 
   parent-module@1.0.1:
     resolution: {integrity: sha512-GQ2EWRpQV8/o+Aw8YqtfZZPfNRWZYkbidE9k5rpl/hC3vtHHBfGm2Ifi6qWV+coDGkrUKZAxE3Lot5kcsRlh+g==}
@@ -2757,6 +2778,8 @@ snapshots:
       '@types/prop-types': 15.7.14
       csstype: 3.1.3
 
+  '@types/semver@7.7.0': {}
+
   '@types/shell-quote@1.7.5': {}
 
   '@types/which@3.0.4': {}
@@ -3558,6 +3581,8 @@ snapshots:
 
   fast-levenshtein@2.0.6: {}
 
+  fast-npm-meta@0.4.2: {}
+
   fastq@1.19.1:
     dependencies:
       reusify: 1.1.0
@@ -4242,6 +4267,8 @@ snapshots:
   p-locate@5.0.0:
     dependencies:
       p-limit: 3.1.0
+
+  package-manager-detector@1.2.0: {}
 
   parent-module@1.0.1:
     dependencies:

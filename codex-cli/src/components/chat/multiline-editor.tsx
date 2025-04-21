@@ -14,7 +14,7 @@ import React, { useRef, useState } from "react";
  * The real `process.stdin` object exposed by Node.js inherits these methods
  * from `Socket`, but the lightweight stub used in tests only extends
  * `EventEmitter`.  Ink calls the two methods when enabling/disabling raw
- * mode, so make them harmless no‑ops when they're absent to avoid runtime
+ * mode, so make them harmless no-ops when they're absent to avoid runtime
  * failures during unit tests.
  * ----------------------------------------------------------------------- */
 
@@ -155,6 +155,8 @@ export interface MultilineTextEditorHandle {
   isCursorAtLastRow(): boolean;
   /** Full text contents */
   getText(): string;
+  /** Move the cursor to the end of the text */
+  moveCursorToEnd(): void;
 }
 
 const MultilineTextEditorInner = (
@@ -372,6 +374,16 @@ const MultilineTextEditorInner = (
         return row === lineCount - 1;
       },
       getText: () => buffer.current.getText(),
+      moveCursorToEnd: () => {
+        buffer.current.move("home");
+        const lines = buffer.current.getText().split("\n");
+        for (let i = 0; i < lines.length - 1; i++) {
+          buffer.current.move("down");
+        }
+        buffer.current.move("end");
+        // Force a re-render
+        setVersion((v) => v + 1);
+      },
     }),
     [],
   );

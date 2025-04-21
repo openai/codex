@@ -8,8 +8,9 @@
 
 import type { FullAutoErrorMode } from "./auto-approval-mode.js";
 
-import { log } from "./agent/log.js";
 import { AutoApprovalMode } from "./auto-approval-mode.js";
+import { log } from "./logger/log.js";
+import { providers } from "./providers.js";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { load as loadYaml, dump as dumpYaml } from "js-yaml";
 import { homedir } from "os";
@@ -40,12 +41,33 @@ export function setApiKey(apiKey: string): void {
   OPENAI_API_KEY = apiKey;
 }
 
+export function getBaseUrl(provider: string): string | undefined {
+  const providerInfo = providers[provider.toLowerCase()];
+  if (providerInfo) {
+    return providerInfo.baseURL;
+  }
+  return undefined;
+}
+
+export function getApiKey(provider: string): string | undefined {
+  const providerInfo = providers[provider.toLowerCase()];
+  if (providerInfo) {
+    if (providerInfo.name === "Ollama") {
+      return process.env[providerInfo.envKey] ?? "dummy";
+    }
+    return process.env[providerInfo.envKey];
+  }
+
+  return undefined;
+}
+
 // Formatting (quiet mode-only).
 export const PRETTY_PRINT = Boolean(process.env["PRETTY_PRINT"] || "");
 
 // Represents config as persisted in config.json.
 export type StoredConfig = {
   model?: string;
+  provider?: string;
   approvalMode?: AutoApprovalMode;
   fullAutoErrorMode?: FullAutoErrorMode;
   memory?: MemoryConfig;
@@ -56,8 +78,6 @@ export type StoredConfig = {
     saveHistory?: boolean;
     sensitivePatterns?: Array<string>;
   };
-  /** User-defined safe commands */
-  safeCommands?: Array<string>;
 };
 
 // Minimal config written on first run.  An *empty* model string ensures that
@@ -76,6 +96,7 @@ export type MemoryConfig = {
 export type AppConfig = {
   apiKey?: string;
   model: string;
+  provider?: string;
   instructions: string;
   approvalMode?: AutoApprovalMode;
   fullAutoErrorMode?: FullAutoErrorMode;
@@ -90,8 +111,6 @@ export type AppConfig = {
     saveHistory: boolean;
     sensitivePatterns: Array<string>;
   };
-  /** User-defined safe commands */
-  safeCommands?: Array<string>;
 };
 
 // ---------------------------------------------------------------------------
@@ -270,10 +289,10 @@ export const loadConfig = (
       (options.isFullContext
         ? DEFAULT_FULL_CONTEXT_MODEL
         : DEFAULT_AGENTIC_MODEL),
+    provider: storedConfig.provider,
     instructions: combinedInstructions,
     notify: storedConfig.notify === true,
     approvalMode: storedConfig.approvalMode,
-    safeCommands: storedConfig.safeCommands ?? [],
   };
 
   // -----------------------------------------------------------------------
@@ -351,13 +370,6 @@ export const loadConfig = (
     };
   }
 
-  // Load user-defined safe commands
-  if (Array.isArray(storedConfig.safeCommands)) {
-    config.safeCommands = storedConfig.safeCommands.map(String);
-  } else {
-    config.safeCommands = [];
-  }
-
   return config;
 };
 
@@ -389,6 +401,7 @@ export const saveConfig = (
   // Create the config object to save
   const configToSave: StoredConfig = {
     model: config.model,
+    provider: config.provider,
     approvalMode: config.approvalMode,
   };
 
@@ -399,10 +412,6 @@ export const saveConfig = (
       saveHistory: config.history.saveHistory,
       sensitivePatterns: config.history.sensitivePatterns,
     };
-  }
-  // Save: User-defined safe commands
-  if (config.safeCommands && config.safeCommands.length > 0) {
-    configToSave.safeCommands = config.safeCommands;
   }
 
   if (ext === ".yaml" || ext === ".yml") {
