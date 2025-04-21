@@ -86,8 +86,57 @@ export class ClaudeProvider extends BaseProvider {
       timeout: providerConfig.timeoutMs || 180000,
     });
     
-    // Return the raw Anthropic client; request/response conversions are handled in runCompletion
-    return anthropicClient;
+    // Wrap the Anthropic client to present an OpenAI-compatible responses.create interface
+    const clientWrapper: any = {
+      // Preserve all original methods
+      ...anthropicClient,
+      messages: anthropicClient.messages,
+      // Provide a unified responses.create method for agent-loop
+      responses: {
+        create: async (params: any) => {
+          // Build messages array: include system prompt then converted input items
+          const msgs: Array<{ role: string; content: any; name?: string }> = [];
+          if (params.instructions) {
+            msgs.push({ role: 'system', content: params.instructions });
+          }
+          if (Array.isArray(params.input)) {
+            for (const item of params.input) {
+              // If already a message with role and content
+              if (item.role && item.content !== undefined) {
+                msgs.push({ role: item.role, content: item.content, name: item.name });
+              }
+              // Input text items
+              else if (item.type === 'input_text' && item.text !== undefined) {
+                msgs.push({ role: 'user', content: item.text });
+              }
+              // Function/tool outputs (e.g., after running a tool)
+              else if (item.output !== undefined) {
+                // Treat as tool message
+                msgs.push({ role: 'tool', content: item.output, name: item.call_id });
+              }
+              // Fallback: stringify unknown input
+              else {
+                msgs.push({ role: 'user', content: JSON.stringify(item) });
+              }
+            }
+          }
+          // Construct completion params
+          const cpParams = {
+            model: params.model,
+            messages: msgs,
+            stream: params.stream === true,
+            temperature: params.temperature,
+            maxTokens: params.max_tokens,
+            tools: params.tools,
+            previousResponseId: params.previous_response_id,
+            config,
+          };
+          // Delegate to runCompletion
+          return this.runCompletion(cpParams as any);
+        }
+      }
+    };
+    return clientWrapper;
   }
   
   /**
@@ -320,10 +369,12 @@ export class ClaudeProvider extends BaseProvider {
     }
     
     try {
-      // Stream the response
+      // Handle streaming response
       if (params.stream) {
-        // Delegate streaming through the adapter (client + params)
-        return this.createStreamingResponse(client, requestParams);
+        // Initiate Claude streaming via SDK
+        const claudeStream = await client.messages.stream(requestParams);
+        // Adapt Claude stream to OpenAI-compatible format
+        return this.createStreamingResponse(claudeStream);
       } else {
         const response = await client.messages.create(requestParams);
         return this.createOpenAICompatibleResponse(response);
