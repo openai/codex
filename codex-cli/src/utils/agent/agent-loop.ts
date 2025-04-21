@@ -8,7 +8,7 @@ import type {
 } from "openai/resources/responses/responses.mjs";
 import type { Reasoning } from "openai/resources.mjs";
 
-import { log, isLoggingEnabled } from "./log.js";
+import { log } from "./log.js";
 import {
   OPENAI_BASE_URL,
   OPENAI_TIMEOUT_MS,

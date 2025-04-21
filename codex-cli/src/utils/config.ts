@@ -8,7 +8,7 @@
 
 import type { FullAutoErrorMode } from "./auto-approval-mode.js";
 
-import { log } from "./agent/log.js";
+import { log, isLoggingEnabled } from "./agent/log.js";
 import { AutoApprovalMode } from "./auto-approval-mode.js";
 import {
   getConfigDir,
