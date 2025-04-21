@@ -211,7 +211,7 @@ if (cli.flags.help) {
 // For --config, open custom instructions file in editor and exit.
 if (cli.flags.config) {
   try {
-    loadConfig();  // Ensures the file is created if it doesn't already exit.
+    loadConfig(); // Ensures the file is created if it doesn't already exit.
   } catch {
     // ignore errors
   }
@@ -263,7 +263,7 @@ config = {
   provider,
 };
 
-// Check for updates after loading config. This is important because we write state file in 
+// Check for updates after loading config. This is important because we write state file in
 // the config dir.
 await checkForUpdates().catch();
 
@@ -329,7 +329,7 @@ const additionalWritableRoots: ReadonlyArray<string> = (
 ).map((p) => path.resolve(p));
 
 // For --quiet, run the cli without user interactions and exit.
-if ( cli.flags.quiet) {
+if (cli.flags.quiet) {
   process.env["CODEX_QUIET_MODE"] = "1";
   if (!prompt || prompt.trim() === "") {
     // eslint-disable-next-line no-console
