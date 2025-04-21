@@ -1,7 +1,7 @@
 <h1 align="center">OpenAI Codex CLI</h1>
 <p align="center">Lightweight coding agent that runs in your terminal</p>
 
-<p align="center"><code>pnpm add -g @openai/codex</code></p>
+<p align="center"><code>npm i -g @openai/codex</code> or <code>pnpm add -g @openai/codex</code></p>
 
 ![Codex demo GIF using: codex "explain this codebase to me"](./.github/demo.gif)
 
