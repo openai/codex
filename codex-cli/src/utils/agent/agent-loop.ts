@@ -53,7 +53,7 @@ type AgentLoopParams = {
    * will instead send the *full* conversation context as the `input` payload
    * on every request and omit the `previous_response_id` parameter.
    */
-  store?: boolean;
+  storeResponses?: boolean;
   onItem: (item: ResponseItem) => void;
   onLoading: (loading: boolean) => void;
 
@@ -223,7 +223,7 @@ export class AgentLoop {
     provider = "openai",
     instructions,
     approvalPolicy,
-    store = true,
+    storeResponses,
     // `config` used to be required.  Some unit‑tests (and potentially other
     // callers) instantiate `AgentLoop` without passing it, so we make it
     // optional and fall back to sensible defaults.  This keeps the public
@@ -259,9 +259,9 @@ export class AgentLoop {
     this.getCommandConfirmation = getCommandConfirmation;
     this.onLastResponseId = onLastResponseId;
 
-    // Default to true when the caller does not specify the setting so existing
-    // behaviour remains unchanged.
-    this.storeResponses = store !== false;
+    // Default to `true` when the caller does not specify the setting so
+    // existing behaviour remains unchanged.
+    this.storeResponses = storeResponses ?? true;
     this.sessionId = getSessionId() || randomUUID().replaceAll("-", "");
     // Configure OpenAI client with optional timeout (ms) from environment
     const timeoutMs = OPENAI_TIMEOUT_MS;
@@ -444,7 +444,9 @@ export class AgentLoop {
       // `previous_response_id` when `storeResponses` is enabled.  When storage
       // is disabled we deliberately ignore the caller‑supplied value because
       // the backend will not retain any state that could be referenced.
-      let lastResponseId: string = this.storeResponses ? previousResponseId : "";
+      let lastResponseId: string = this.storeResponses
+        ? previousResponseId
+        : "";
 
       // If there are unresolved function calls from a previously cancelled run
       // we have to emit dummy tool outputs so that the API no longer expects
@@ -480,15 +482,13 @@ export class AgentLoop {
       } else {
         // Ensure the transcript is up‑to‑date with the latest user input so
         // that subsequent iterations see a complete history.
-        const newUserItems: Array<ResponseInputItem> = input.filter(
-          (it) => {
-            // Only user/developer/assistant messages or tool interactions –
-            // system messages are excluded from the transcript.
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const role = (it as any).role;
-            return role !== "system";
-          },
-        );
+        const newUserItems: Array<ResponseInputItem> = input.filter((it) => {
+          // Only user/developer/assistant messages or tool interactions –
+          // system messages are excluded from the transcript.
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const role = (it as any).role;
+          return role !== "system";
+        });
         this.transcript.push(...newUserItems);
 
         turnInput = [...this.transcript, ...abortOutputs];

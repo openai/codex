@@ -73,6 +73,8 @@ export type StoredConfig = {
   memory?: MemoryConfig;
   /** Whether to enable desktop notifications for responses */
   notify?: boolean;
+  /** Disable server-side response storage (send full transcript each request) */
+  disableResponseStorage?: boolean;
   history?: {
     maxSize?: number;
     saveHistory?: boolean;
@@ -105,6 +107,9 @@ export type AppConfig = {
   memory?: MemoryConfig;
   /** Whether to enable desktop notifications for responses */
   notify: boolean;
+
+  /** Disable server-side response storage (send full transcript each request) */
+  disableResponseStorage?: boolean;
 
   /** Enable the "flex-mode" processing mode for supported models (o3, o4-mini) */
   flexMode?: boolean;
@@ -298,6 +303,7 @@ export const loadConfig = (
     notify: storedConfig.notify === true,
     approvalMode: storedConfig.approvalMode,
     safeCommands: storedConfig.safeCommands ?? [],
+    disableResponseStorage: storedConfig.disableResponseStorage === true,
   };
 
   // -----------------------------------------------------------------------

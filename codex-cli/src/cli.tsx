@@ -159,6 +159,12 @@ const cli = meow(
         description: "Enable desktop notifications for responses",
       },
 
+      disableResponseStorage: {
+        type: "boolean",
+        description:
+          "Disable server-side response storage (sends full conversation context with every request)",
+      },
+
       // Experimental mode where whole directory is loaded in context and model is requested
       // to make code edits in a single pass.
       fullContext: {
@@ -260,6 +266,10 @@ config = {
   notify: Boolean(cli.flags.notify),
   flexMode: Boolean(cli.flags.flexMode),
   provider,
+  disableResponseStorage:
+    cli.flags.disableResponseStorage !== undefined
+      ? Boolean(cli.flags.disableResponseStorage)
+      : config.disableResponseStorage,
 };
 
 // Check for updates after loading config
@@ -465,6 +475,7 @@ async function runQuietMode({
     instructions: config.instructions,
     approvalPolicy,
     additionalWritableRoots,
+    storeResponses: !config.disableResponseStorage,
     onItem: (item: ResponseItem) => {
       // eslint-disable-next-line no-console
       console.log(formatResponseItemForQuietMode(item));
