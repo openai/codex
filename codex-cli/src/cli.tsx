@@ -13,7 +13,6 @@ import type { ResponseItem } from "openai/resources/responses/responses";
 
 import App from "./app";
 import { runSinglePass } from "./cli-singlepass";
-import { version } from "../package.json";
 import { AgentLoop } from "./utils/agent/agent-loop";
 import { ReviewDecision } from "./utils/agent/review";
 import { AutoApprovalMode } from "./utils/auto-approval-mode";
@@ -203,13 +202,6 @@ complete -c codex -a '(__fish_complete_path)' -d 'file path'`,
   }
   // eslint-disable-next-line no-console
   console.log(script);
-  process.exit(0);
-}
-
-// Handle --version flag
-if (cli.flags.version) {
-  // eslint-disable-next-line no-console
-  console.log(version);
   process.exit(0);
 }
 
