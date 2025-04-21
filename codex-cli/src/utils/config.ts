@@ -8,8 +8,9 @@
 
 import type { FullAutoErrorMode } from "./auto-approval-mode.js";
 
-import { log, isLoggingEnabled } from "./agent/log.js";
+import { log } from "./agent/log.js";
 import { AutoApprovalMode } from "./auto-approval-mode.js";
+import { providers } from "./providers.js";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { load as loadYaml, dump as dumpYaml } from "js-yaml";
 import { homedir } from "os";
@@ -46,6 +47,26 @@ export function setApiKey(apiKey: string): void {
   OPENAI_API_KEY = apiKey;
 }
 
+export function getBaseUrl(provider: string = "openai"): string | undefined {
+  const providerInfo = providers[provider.toLowerCase()];
+  if (providerInfo) {
+    return providerInfo.baseURL;
+  }
+  return undefined;
+}
+
+export function getApiKey(provider: string = "openai"): string | undefined {
+  const providerInfo = providers[provider.toLowerCase()];
+  if (providerInfo) {
+    if (providerInfo.name === "Ollama") {
+      return process.env[providerInfo.envKey] ?? "dummy";
+    }
+    return process.env[providerInfo.envKey];
+  }
+
+  return undefined;
+}
+
 // Formatting (quiet mode-only).
 export const PRETTY_PRINT = Boolean(process.env["PRETTY_PRINT"] || "");
 
@@ -59,6 +80,7 @@ export type RateLimitConfig = {
 
 export type StoredConfig = {
   model?: string;
+  provider?: string;
   approvalMode?: AutoApprovalMode;
   fullAutoErrorMode?: FullAutoErrorMode;
   memory?: MemoryConfig;
@@ -90,6 +112,7 @@ export type MemoryConfig = {
 export type AppConfig = {
   apiKey?: string;
   model: string;
+  provider?: string;
   instructions: string;
   approvalMode?: AutoApprovalMode;
   fullAutoErrorMode?: FullAutoErrorMode;
@@ -260,15 +283,11 @@ export const loadConfig = (
       ? resolvePath(cwd, options.projectDocPath)
       : discoverProjectDocPath(cwd);
     if (projectDocPath) {
-      if (isLoggingEnabled()) {
-        log(
-          `[codex] Loaded project doc from ${projectDocPath} (${projectDoc.length} bytes)`,
-        );
-      }
+      log(
+        `[codex] Loaded project doc from ${projectDocPath} (${projectDoc.length} bytes)`,
+      );
     } else {
-      if (isLoggingEnabled()) {
-        log(`[codex] No project doc found in ${cwd}`);
-      }
+      log(`[codex] No project doc found in ${cwd}`);
     }
   }
 
@@ -289,6 +308,7 @@ export const loadConfig = (
       (options.isFullContext
         ? DEFAULT_FULL_CONTEXT_MODEL
         : DEFAULT_AGENTIC_MODEL),
+    provider: storedConfig.provider,
     instructions: combinedInstructions,
     notify: storedConfig.notify === true,
     approvalMode: storedConfig.approvalMode,
@@ -420,6 +440,7 @@ export const saveConfig = (
   // Create the config object to save
   const configToSave: StoredConfig = {
     model: config.model,
+    provider: config.provider,
     approvalMode: config.approvalMode,
   };
 
