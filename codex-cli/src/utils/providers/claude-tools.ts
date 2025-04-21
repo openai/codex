@@ -141,6 +141,16 @@ export function processShellToolInput(toolInput: any): { command: string[], work
       return { command: ["ls", "-la"], workdir: process.cwd() };
     }
   }
+  // Handle a single text block (from Claude) with .text property
+  if (
+    toolInput &&
+    typeof toolInput === 'object' &&
+    typeof (toolInput as any).text === 'string'
+  ) {
+    const txt = (toolInput as any).text;
+    console.log(`Claude tools: Detected single text block for shell command: ${txt}`);
+    return processShellToolInput(txt);
+  }
   // Handle completely empty or missing or non-object input
   if (!toolInput || typeof toolInput !== 'object') {
     console.log(`Claude tools: Empty or invalid tool input, using default command`);
