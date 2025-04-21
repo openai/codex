@@ -1,16 +1,19 @@
 import type { ReviewDecision } from "./review.js";
 import type { ApplyPatchCommand, ApprovalPolicy } from "../../approvals.js";
 import type { AppConfig } from "../config.js";
+import type { ResponseEvent } from "../responses.js";
 import type {
   ResponseFunctionToolCall,
   ResponseInputItem,
   ResponseItem,
+  ResponseCreateParams,
 } from "openai/resources/responses/responses.mjs";
 import type { Reasoning } from "openai/resources.mjs";
 
-import { log, isLoggingEnabled } from "./log.js";
-import { OPENAI_BASE_URL, OPENAI_TIMEOUT_MS } from "../config.js";
+import { log } from "./log.js";
+import { OPENAI_TIMEOUT_MS, getApiKey, getBaseUrl } from "../config.js";
 import { parseToolCallArguments } from "../parsers.js";
+import { responsesCreateViaChatCompletions } from "../responses.js";
 import {
   ORIGIN,
   CLI_VERSION,
@@ -39,6 +42,7 @@ const alreadyProcessedResponses = new Set();
 
 type AgentLoopParams = {
   model: string;
+  provider?: string;
   config?: AppConfig;
   instructions?: string;
   approvalPolicy: ApprovalPolicy;
@@ -58,6 +62,7 @@ type AgentLoopParams = {
 
 export class AgentLoop {
   private model: string;
+  private provider: string;
   private instructions?: string;
   private approvalPolicy: ApprovalPolicy;
   private config: AppConfig;
@@ -116,15 +121,13 @@ export class AgentLoop {
 
     // Reset the current stream to allow new requests
     this.currentStream = null;
-    if (isLoggingEnabled()) {
-      log(
-        `AgentLoop.cancel() invoked – currentStream=${Boolean(
-          this.currentStream,
-        )} execAbortController=${Boolean(
-          this.execAbortController,
-        )} generation=${this.generation}`,
-      );
-    }
+    log(
+      `AgentLoop.cancel() invoked – currentStream=${Boolean(
+        this.currentStream,
+      )} execAbortController=${Boolean(this.execAbortController)} generation=${
+        this.generation
+      }`,
+    );
     (
       this.currentStream as { controller?: { abort?: () => void } } | null
     )?.controller?.abort?.();
@@ -136,9 +139,7 @@ export class AgentLoop {
 
     // Create a new abort controller for future tool calls
     this.execAbortController = new AbortController();
-    if (isLoggingEnabled()) {
-      log("AgentLoop.cancel(): execAbortController.abort() called");
-    }
+    log("AgentLoop.cancel(): execAbortController.abort() called");
 
     // NOTE: We intentionally do *not* clear `lastResponseId` here.  If the
     // stream produced a `function_call` before the user cancelled, OpenAI now
@@ -174,9 +175,7 @@ export class AgentLoop {
     // this.onItem(cancelNotice);
 
     this.generation += 1;
-    if (isLoggingEnabled()) {
-      log(`AgentLoop.cancel(): generation bumped to ${this.generation}`);
-    }
+    log(`AgentLoop.cancel(): generation bumped to ${this.generation}`);
   }
 
   /**
@@ -204,6 +203,7 @@ export class AgentLoop {
   // private cumulativeThinkingMs = 0;
   constructor({
     model,
+    provider = "openai",
     instructions,
     approvalPolicy,
     // `config` used to be required.  Some unit‑tests (and potentially other
@@ -220,6 +220,7 @@ export class AgentLoop {
     additionalWritableRoots,
   }: AgentLoopParams & { config?: AppConfig }) {
     this.model = model;
+    this.provider = provider;
     this.instructions = instructions;
     this.approvalPolicy = approvalPolicy;
 
@@ -242,7 +243,9 @@ export class AgentLoop {
     this.sessionId = getSessionId() || randomUUID().replaceAll("-", "");
     // Configure OpenAI client with optional timeout (ms) from environment
     const timeoutMs = OPENAI_TIMEOUT_MS;
-    const apiKey = this.config.apiKey ?? process.env["OPENAI_API_KEY"] ?? "";
+    const apiKey = getApiKey(this.provider);
+    const baseURL = getBaseUrl(this.provider);
+
     this.oai = new OpenAI({
       // The OpenAI JS SDK only requires `apiKey` when making requests against
       // the official API.  When running unit‑tests we stub out all network
@@ -251,7 +254,7 @@ export class AgentLoop {
       // errors inside the SDK (it validates that `apiKey` is a non‑empty
       // string when the field is present).
       ...(apiKey ? { apiKey } : {}),
-      baseURL: OPENAI_BASE_URL,
+      baseURL,
       defaultHeaders: {
         originator: ORIGIN,
         version: CLI_VERSION,
@@ -315,13 +318,11 @@ export class AgentLoop {
     const callId: string = (item as any).call_id ?? (item as any).id;
 
     const args = parseToolCallArguments(rawArguments ?? "{}");
-    if (isLoggingEnabled()) {
-      log(
-        `handleFunctionCall(): name=${
-          name ?? "undefined"
-        } callId=${callId} args=${rawArguments}`,
-      );
-    }
+    log(
+      `handleFunctionCall(): name=${
+        name ?? "undefined"
+      } callId=${callId} args=${rawArguments}`,
+    );
 
     if (args == null) {
       const outputItem: ResponseInputItem.FunctionCallOutput = {
@@ -407,11 +408,9 @@ export class AgentLoop {
       // Create a fresh AbortController for this run so that tool calls from a
       // previous run do not accidentally get signalled.
       this.execAbortController = new AbortController();
-      if (isLoggingEnabled()) {
-        log(
-          `AgentLoop.run(): new execAbortController created (${this.execAbortController.signal}) for generation ${this.generation}`,
-        );
-      }
+      log(
+        `AgentLoop.run(): new execAbortController created (${this.execAbortController.signal}) for generation ${this.generation}`,
+      );
       // NOTE: We no longer (re‑)attach an `abort` listener to `hardAbort` here.
       // A single listener that forwards the `abort` to the current
       // `execAbortController` is installed once in the constructor. Re‑adding a
@@ -502,13 +501,23 @@ export class AgentLoop {
             const mergedInstructions = [prefix, this.instructions]
               .filter(Boolean)
               .join("\n");
-            if (isLoggingEnabled()) {
-              log(
-                `instructions (length ${mergedInstructions.length}): ${mergedInstructions}`,
-              );
-            }
+
+            const responseCall =
+              !this.config.provider ||
+              this.config.provider?.toLowerCase() === "openai"
+                ? (params: ResponseCreateParams) =>
+                    this.oai.responses.create(params)
+                : (params: ResponseCreateParams) =>
+                    responsesCreateViaChatCompletions(
+                      this.oai,
+                      params as ResponseCreateParams & { stream: true },
+                    );
+            log(
+              `instructions (length ${mergedInstructions.length}): ${mergedInstructions}`,
+            );
+
             // eslint-disable-next-line no-await-in-loop
-            stream = await this.oai.responses.create({
+            stream = await responseCall({
               model: this.model,
               instructions: mergedInstructions,
               previous_response_id: lastResponseId || undefined,
@@ -732,10 +741,8 @@ export class AgentLoop {
 
         try {
           // eslint-disable-next-line no-await-in-loop
-          for await (const event of stream) {
-            if (isLoggingEnabled()) {
-              log(`AgentLoop.run(): response event ${event.type}`);
-            }
+          for await (const event of stream as AsyncIterable<ResponseEvent>) {
+            log(`AgentLoop.run(): response event ${event.type}`);
 
             // process and surface each item (no‑op until we can depend on streaming events)
             if (event.type === "response.output_item.done") {

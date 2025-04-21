@@ -10,6 +10,7 @@ test("SLASH_COMMANDS includes expected commands", () => {
   expect(commands).toContain("/model");
   expect(commands).toContain("/approval");
   expect(commands).toContain("/clearhistory");
+  expect(commands).toContain("/diff");
 });
 
 test("filters slash commands by prefix", () => {

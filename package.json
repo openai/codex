@@ -37,8 +37,8 @@
     "*.md": "prettier --write",
     ".github/workflows/*.yml": "prettier --write",
     "**/*.{js,ts,tsx}": [
-      "pnpm --filter @openai/codex run lint",
-      "pnpm --filter @openai/codex run typecheck"
+      "cd codex-cli && pnpm run lint",
+      "cd codex-cli && pnpm run typecheck"
     ]
   },
   "packageManager": "pnpm@10.8.1"

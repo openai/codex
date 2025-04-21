@@ -1,4 +1,4 @@
-import { log, isLoggingEnabled } from "../../utils/agent/log.js";
+import { log } from "../../utils/agent/log.js";
 import { Box, Text, useInput, useStdin } from "ink";
 import React, { useState } from "react";
 import { useInterval } from "use-interval";
@@ -40,11 +40,9 @@ export default function TerminalChatInputThinking({
 
       const str = Buffer.isBuffer(data) ? data.toString("utf8") : data;
       if (str === "\x1b\x1b") {
-        if (isLoggingEnabled()) {
-          log(
-            "raw stdin: received collapsed ESC ESC – starting confirmation timer",
-          );
-        }
+        log(
+          "raw stdin: received collapsed ESC ESC – starting confirmation timer",
+        );
         setAwaitingConfirm(true);
         setTimeout(() => setAwaitingConfirm(false), 1500);
       }
@@ -65,15 +63,11 @@ export default function TerminalChatInputThinking({
       }
 
       if (awaitingConfirm) {
-        if (isLoggingEnabled()) {
-          log("useInput: second ESC detected – triggering onInterrupt()");
-        }
+        log("useInput: second ESC detected – triggering onInterrupt()");
         onInterrupt();
         setAwaitingConfirm(false);
       } else {
-        if (isLoggingEnabled()) {
-          log("useInput: first ESC detected – waiting for confirmation");
-        }
+        log("useInput: first ESC detected – waiting for confirmation");
         setAwaitingConfirm(true);
         setTimeout(() => setAwaitingConfirm(false), 1500);
       }
