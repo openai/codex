@@ -230,13 +230,13 @@ const fullContextMode = Boolean(cli.flags.fullContext);
 let config = loadConfig(undefined, undefined, {
   cwd: process.cwd(),
   disableProjectDoc: Boolean(cli.flags.noProjectDoc),
-  projectDocPath: cli.flags.projectDoc as string | undefined,
+  projectDocPath: cli.flags.projectDoc,
   isFullContext: fullContextMode,
 });
 
 const prompt = cli.input[0];
 const model = cli.flags.model ?? config.model;
-const imagePaths = cli.flags.image as Array<string> | undefined;
+const imagePaths = cli.flags.image;
 const provider = cli.flags.provider ?? config.provider;
 const apiKey = getApiKey(provider);
 
@@ -351,7 +351,7 @@ if (quietMode) {
       : config.approvalMode || AutoApprovalMode.SUGGEST;
 
   await runQuietMode({
-    prompt: prompt as string,
+    prompt,
     imagePaths: imagePaths || [],
     approvalPolicy: quietApprovalPolicy,
     additionalWritableRoots,
