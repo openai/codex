@@ -10,12 +10,13 @@ import type { Reasoning } from "openai/resources.mjs";
 
 import { log } from "./log.js";
 import {
-  OPENAI_BASE_URL,
   OPENAI_TIMEOUT_MS,
   DEFAULT_RATE_LIMIT_MAX_RETRIES,
   DEFAULT_RATE_LIMIT_INITIAL_RETRY_DELAY_MS,
   DEFAULT_RATE_LIMIT_MAX_RETRY_DELAY_MS,
   DEFAULT_RATE_LIMIT_JITTER_FACTOR,
+  getBaseUrl,
+  getApiKey,
 } from "../config.js";
 import { parseToolCallArguments } from "../parsers.js";
 import {
@@ -85,6 +86,8 @@ type AgentLoopParams = {
   approvalPolicy: ApprovalPolicy;
   onItem: (item: ResponseItem) => void;
   onLoading: (loading: boolean) => void;
+  /** Provider for API calls */
+  provider?: string;
 
   /** Extra writable roots to use with sandbox execution. */
   additionalWritableRoots: ReadonlyArray<string>;
@@ -277,7 +280,7 @@ export class AgentLoop {
     this.sessionId = getSessionId() || randomUUID().replaceAll("-", "");
     // Configure OpenAI client with optional timeout (ms) from environment
     const timeoutMs = OPENAI_TIMEOUT_MS;
-    const apiKey = this.config.apiKey ?? process.env["OPENAI_API_KEY"] ?? "";
+    const apiKey = this.config.apiKey ?? getApiKey() ?? "";
     this.oai = new OpenAI({
       // The OpenAI JS SDK only requires `apiKey` when making requests against
       // the official API.  When running unit‑tests we stub out all network
@@ -286,7 +289,7 @@ export class AgentLoop {
       // errors inside the SDK (it validates that `apiKey` is a non‑empty
       // string when the field is present).
       ...(apiKey ? { apiKey } : {}),
-      baseURL: OPENAI_BASE_URL,
+      baseURL: getBaseUrl(),
       defaultHeaders: {
         originator: ORIGIN,
         version: CLI_VERSION,

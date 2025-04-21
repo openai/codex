@@ -79,6 +79,14 @@ export const OPENAI_TIMEOUT_MS =
 export const OPENAI_BASE_URL = process.env["OPENAI_BASE_URL"] || "";
 export let OPENAI_API_KEY = process.env["OPENAI_API_KEY"] || "";
 
+export function getBaseUrl(_provider?: string): string {
+  return OPENAI_BASE_URL;
+}
+
+export function getApiKey(_provider?: string): string {
+  return OPENAI_API_KEY;
+}
+
 export function setApiKey(apiKey: string): void {
   OPENAI_API_KEY = apiKey;
 }
@@ -102,6 +110,8 @@ export type StoredConfig = {
   rateLimits?: RateLimitConfig;
   /** Whether to enable desktop notifications for responses */
   notify?: boolean;
+  /** Provider for API calls */
+  provider?: string;
   history?: {
     maxSize?: number;
     saveHistory?: boolean;
@@ -134,6 +144,8 @@ export type AppConfig = {
   rateLimits?: RateLimitConfig;
   /** Whether to enable desktop notifications for responses */
   notify: boolean;
+  /** Provider for API calls */
+  provider?: string;
 
   /** Enable the "flex-mode" processing mode for supported models (o3, o4-mini) */
   flexMode?: boolean;
@@ -569,6 +581,7 @@ export const saveConfig = (
   const configToSave: StoredConfig = {
     model: config.model,
     approvalMode: config.approvalMode,
+    provider: config.provider,
   };
 
   // Add history settings if they exist
