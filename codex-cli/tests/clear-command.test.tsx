@@ -55,6 +55,7 @@ describe("/clear command", () => {
       openModelOverlay: () => {},
       openApprovalOverlay: () => {},
       openHelpOverlay: () => {},
+      openDiffOverlay: () => {},
       onCompact: () => {},
       interruptAgent: () => {},
       active: true,
@@ -74,16 +75,18 @@ describe("/clear command", () => {
     // Allow any asynchronous state updates to propagate
     await flush();
 
-    expect(clearSpy).toHaveBeenCalledTimes(1);
-    expect(setItems).toHaveBeenCalledTimes(1);
+    expect(clearSpy).toHaveBeenCalledTimes(2);
+    expect(setItems).toHaveBeenCalledTimes(2);
 
-    const firstArg = setItems.mock.calls[0]![0];
-    expect(Array.isArray(firstArg)).toBe(true);
-    expect(firstArg).toHaveLength(1);
-    expect(firstArg[0]).toMatchObject({
+    const stateUpdater = setItems.mock.calls[0]![0];
+    expect(typeof stateUpdater).toBe("function");
+    const newItems = stateUpdater(existingItems);
+    expect(Array.isArray(newItems)).toBe(true);
+    expect(newItems).toHaveLength(2);
+    expect(newItems.at(-1)).toMatchObject({
       role: "system",
       type: "message",
-      content: [{ type: "input_text", text: "Context cleared" }],
+      content: [{ type: "input_text", text: "Terminal cleared" }],
     });
 
     cleanup();
@@ -111,6 +114,7 @@ describe("/clear command", () => {
       openModelOverlay: () => {},
       openApprovalOverlay: () => {},
       openHelpOverlay: () => {},
+      openDiffOverlay: () => {},
       interruptAgent: () => {},
       active: true,
       thinkingSeconds: 0,
@@ -136,7 +140,7 @@ describe("/clear command", () => {
     expect(firstArg[0]).toMatchObject({
       role: "system",
       type: "message",
-      content: [{ type: "input_text", text: "Context cleared" }],
+      content: [{ type: "input_text", text: "Terminal cleared" }],
     });
 
     cleanup();
@@ -148,6 +152,8 @@ describe("clearTerminal", () => {
   it("writes escape sequence to stdout", () => {
     const originalQuiet = process.env["CODEX_QUIET_MODE"];
     delete process.env["CODEX_QUIET_MODE"];
+
+    process.env["CODEX_QUIET_MODE"] = "0";
 
     const writeSpy = vi
       .spyOn(process.stdout, "write")
