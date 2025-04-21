@@ -68,9 +68,7 @@ Next, set your OpenAI API key as an environment variable:
 export OPENAI_API_KEY="your-api-key-here"
 ```
 
-> **Note:** This command sets the key only for your current terminal session. To make it permanent, add the `export` line to your shell's configuration file (e.g., `~/.zshrc`).
->
-> **Tip:** You can also place your API key into a `.env` file at the root of your project:
+> **Note:** This command sets the key only for your current terminal session. You can add the `export` line to your shell's configuration file (e.g., `~/.zshrc`) but we recommend setting for the session. **Tip:** You can also place your API key into a `.env` file at the root of your project:
 >
 > ```env
 > OPENAI_API_KEY=your-api-key-here
@@ -78,9 +76,10 @@ export OPENAI_API_KEY="your-api-key-here"
 >
 > The CLI will automatically load variables from `.env` (via `dotenv/config`).
 
-> **Note:** Codex also allows you to use other providers that support the OpenAI Chat Completions API. You can set the provider in the config file or use the `--provider` flag.
->
-> The possible options for `--provider` are:
+<details>
+<summary><strong>Use <code>--provider</code> to use other models</strong></summary>
+
+> Codex also allows you to use other providers that support the OpenAI Chat Completions API. You can set the provider in the config file or use the `--provider` flag. The possible options for `--provider` are:
 >
 > - openai (default)
 > - openrouter
@@ -96,6 +95,9 @@ export OPENAI_API_KEY="your-api-key-here"
 > ```shell
 > export <provider>_API_KEY="your-api-key-here"
 > ```
+
+</details>
+<br />
 
 Run interactively:
 
@@ -386,7 +388,7 @@ OpenAI rejected the request. Error details: Status: 400, Code: unsupported_param
 **What can I do?**
 
 - If you are part of a ZDR organization, Codex CLI will not work until support is added.
-- We are tracking this limitation and will update the documentation if support becomes available.
+- We are tracking this limitation and will update the documentation once support becomes available.
 
 ---
 
