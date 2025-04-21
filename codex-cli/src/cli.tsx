@@ -175,7 +175,7 @@ const cli = meow(
           directory as context and performs changes in one go without acting.`,
       },
     },
-  }
+  },
 );
 
 // Handle 'completion' subcommand before any prompting or API calls
@@ -254,8 +254,8 @@ if (!apiKey) {
       `Set the environment variable ${chalk.bold("OPENAI_API_KEY")} ` +
       `and re-run this command.\n` +
       `You can create a key here: ${chalk.bold(
-        chalk.underline("https://platform.openai.com/account/api-keys")
-      )}\n`
+        chalk.underline("https://platform.openai.com/account/api-keys"),
+      )}\n`,
   );
   process.exit(1);
 }
@@ -275,7 +275,7 @@ if (!(await isModelSupportedForResponses(config.model))) {
     `The model "${config.model}" does not appear in the list of models ` +
       `available to your account. Double‑check the spelling (use\n` +
       `  openai models list\n` +
-      `to see the full list) or choose another model with the --model flag.`
+      `to see the full list) or choose another model with the --model flag.`,
   );
   process.exit(1);
 }
@@ -322,7 +322,7 @@ if (quietMode) {
   if (!prompt || prompt.trim() === "") {
     // eslint-disable-next-line no-console
     console.error(
-      'Quiet mode requires a prompt string, e.g.,: codex -q "Fix bug #123 in the foobar project"'
+      'Quiet mode requires a prompt string, e.g.,: codex -q "Fix bug #123 in the foobar project"',
     );
     process.exit(1);
   }
@@ -378,7 +378,7 @@ const instance = render(
   />,
   {
     patchConsole: process.env["DEBUG"] ? false : true,
-  }
+  },
 );
 setInkRenderer(instance);
 
@@ -458,7 +458,7 @@ async function runQuietMode({
       /* intentionally ignored in quiet mode */
     },
     getCommandConfirmation: (
-      _command: Array<string>
+      _command: Array<string>,
     ): Promise<CommandConfirmation> => {
       // In quiet mode, default to NO_CONTINUE, except when in full-auto mode
       const reviewDecision =
