@@ -385,11 +385,27 @@ export default function TerminalChat({
       // Transform history of ResponseItem into input items (same as in submitInput)
       const historyInputs: ResponseInputItem[] = items
         .filter(it => it.type === 'message')
-        .map(it => ({
-          type: 'message',
-          role: it.role,
-          content: it.content,
-        }));
+        .map(it => {
+          // Ensure content is properly formatted
+          const content = Array.isArray(it.content) 
+            ? it.content.map(c => {
+                // Make sure each content item has required fields for Claude
+                if (c.type === 'input_text' || c.type === 'output_text') {
+                  return {
+                    type: c.type,
+                    text: c.text || '' // Make sure text is never undefined
+                  };
+                }
+                return c;
+              })
+            : [];
+            
+          return {
+            type: 'message',
+            role: it.role,
+            content: content,
+          };
+        });
       
       // Clear initial prompt/images to prevent subsequent runs
       setInitialPrompt("");
@@ -525,11 +541,27 @@ export default function TerminalChat({
               // Transform history of ResponseItem into input items
               const historyInputs: ResponseInputItem[] = items
                 .filter(it => it.type === 'message')
-                .map(it => ({
-                  type: 'message',
-                  role: it.role,
-                  content: it.content,
-                }));
+                .map(it => {
+                  // Ensure content is properly formatted
+                  const content = Array.isArray(it.content) 
+                    ? it.content.map(c => {
+                        // Make sure each content item has required fields for Claude
+                        if (c.type === 'input_text' || c.type === 'output_text') {
+                          return {
+                            type: c.type,
+                            text: c.text || '' // Make sure text is never undefined
+                          };
+                        }
+                        return c;
+                      })
+                    : [];
+                    
+                  return {
+                    type: 'message',
+                    role: it.role,
+                    content: content,
+                  };
+                });
               
               // Pass the complete history with each request
               agent.run([...historyInputs, ...inputs], lastResponseId || "");
