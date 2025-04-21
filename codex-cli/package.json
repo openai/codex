@@ -26,8 +26,6 @@
     "release": "pnpm run release:readme && pnpm run release:version && pnpm install && pnpm run release:build-and-publish"
   },
   "files": [
-    "README.md",
-    "bin",
     "dist",
     "src"
   ],
