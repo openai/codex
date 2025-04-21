@@ -298,7 +298,6 @@ export const loadConfig = (
     instructions: combinedInstructions,
     notify: storedConfig.notify === true,
     approvalMode: storedConfig.approvalMode,
-    safeCommands: storedConfig.safeCommands ?? [],
     disableResponseStorage: storedConfig.disableResponseStorage ?? false,
   };
 
