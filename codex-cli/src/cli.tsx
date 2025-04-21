@@ -22,6 +22,7 @@ import {
   PRETTY_PRINT,
   INSTRUCTIONS_FILEPATH,
 } from "./utils/config";
+import { initializeProviderRegistry } from "./utils/providers/index.js";
 import { createInputItem } from "./utils/input-utils";
 import {
   isModelSupportedForResponses,
@@ -211,6 +212,12 @@ if (cli.flags.help) {
   cli.showHelp();
 }
 
+// Initialize provider registry
+initializeProviderRegistry();
+
+// Log provider info for debugging
+console.log("Default provider:", process.env.CODEX_DEFAULT_PROVIDER);
+
 // Handle config flag: open instructions file in editor and exit
 if (cli.flags.config) {
   // Ensure configuration and instructions file exist
@@ -227,23 +234,8 @@ if (cli.flags.config) {
 }
 
 // ---------------------------------------------------------------------------
-// API key handling
+// API key handling will be done by provider implementation
 // ---------------------------------------------------------------------------
-
-const apiKey = process.env["OPENAI_API_KEY"];
-
-if (!apiKey) {
-  // eslint-disable-next-line no-console
-  console.error(
-    `\n${chalk.red("Missing OpenAI API key.")}\n\n` +
-      `Set the environment variable ${chalk.bold("OPENAI_API_KEY")} ` +
-      `and re-run this command.\n` +
-      `You can create a key here: ${chalk.bold(
-        chalk.underline("https://platform.openai.com/account/api-keys"),
-      )}\n`,
-  );
-  process.exit(1);
-}
 
 const fullContextMode = Boolean(cli.flags.fullContext);
 let config = loadConfig(undefined, undefined, {
@@ -292,19 +284,22 @@ if (cli.flags.githubApproval) {
 }
 
 config = {
-  apiKey,
   ...config,
   model: model ?? config.model,
   notify: Boolean(cli.flags.notify),
 };
 
 if (!(await isModelSupportedForResponses(config.model))) {
+  // Determine the provider for the model
+  const providerId = process.env.CODEX_DEFAULT_PROVIDER || 
+    (config.model?.startsWith("claude") ? "claude" : "openai");
+  
   // eslint-disable-next-line no-console
   console.error(
     `The model "${config.model}" does not appear in the list of models ` +
-      `available to your account. Double‑check the spelling (use\n` +
-      `  openai models list\n` +
-      `to see the full list) or choose another model with the --model flag.`,
+      `available to your account. Double‑check the spelling or choose ` +
+      `another model with the --model flag.\n` +
+      `\nProvider: ${providerId}\n`,
   );
   process.exit(1);
 }

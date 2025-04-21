@@ -15,7 +15,16 @@ import { load as loadYaml, dump as dumpYaml } from "js-yaml";
 import { homedir } from "os";
 import { dirname, join, extname, resolve as resolvePath } from "path";
 
-export const DEFAULT_AGENTIC_MODEL = "o4-mini";
+import {
+  loadProviderConfig,
+  loadAllProviderConfigs,
+  getProviderIdForModel,
+  getDefaultModelForProvider,
+  DEFAULT_PROVIDER_ID,
+  DEFAULT_PROVIDER_MODELS
+} from './provider-config.js';
+
+export const DEFAULT_AGENTIC_MODEL = DEFAULT_PROVIDER_MODELS.openai; // "o4-mini"
 export const DEFAULT_FULL_CONTEXT_MODEL = "gpt-4.1";
 export const DEFAULT_APPROVAL_MODE = AutoApprovalMode.SUGGEST;
 export const DEFAULT_INSTRUCTIONS = "";
@@ -31,21 +40,40 @@ export const CONFIG_YML_FILEPATH = join(CONFIG_DIR, "config.yml");
 export const CONFIG_FILEPATH = CONFIG_JSON_FILEPATH;
 export const INSTRUCTIONS_FILEPATH = join(CONFIG_DIR, "instructions.md");
 
-export const OPENAI_TIMEOUT_MS =
-  parseInt(process.env["OPENAI_TIMEOUT_MS"] || "0", 10) || undefined;
-export const OPENAI_BASE_URL = process.env["OPENAI_BASE_URL"] || "";
-export let OPENAI_API_KEY = process.env["OPENAI_API_KEY"] || "";
 
+// Provider API key management
+export const providerApiKeys: Record<string, string> = {};
+
+// Function for setting provider-specific API keys
+export function setProviderApiKey(provider: string, apiKey: string): void {
+  providerApiKeys[provider] = apiKey;
+}
+
+// For backward compatibility to fix tests
+export let OPENAI_API_KEY = providerApiKeys.openai || "";
 export function setApiKey(apiKey: string): void {
+  providerApiKeys.openai = apiKey;
   OPENAI_API_KEY = apiKey;
 }
 
 // Formatting (quiet mode-only).
 export const PRETTY_PRINT = Boolean(process.env["PRETTY_PRINT"] || "");
 
+// Provider-specific configuration
+// Use the ProviderConfig interface from provider-config.ts instead
+// This re-export is just for backward compatibility with existing imports
+export type { ProviderConfig } from './provider-config.js';
+
 // Represents config as persisted in config.json.
 export type StoredConfig = {
+  // Model selection and provider preferences
   model?: string;
+  defaultProvider?: string;
+  
+  // Provider-specific configurations
+  providers?: Record<string, ProviderConfig>;
+  
+  // General config settings
   approvalMode?: AutoApprovalMode;
   fullAutoErrorMode?: FullAutoErrorMode;
   memory?: MemoryConfig;
@@ -75,7 +103,11 @@ export type StoredConfig = {
 // Minimal config written on first run.  An *empty* model string ensures that
 // we always fall back to DEFAULT_MODEL on load, so updates to the default keep
 // propagating to existing users until they explicitly set a model.
-export const EMPTY_STORED_CONFIG: StoredConfig = { model: "" };
+export const EMPTY_STORED_CONFIG: StoredConfig = { 
+  model: "",
+  defaultProvider: DEFAULT_PROVIDER_ID,
+  providers: {}
+};
 
 // Pre‑stringified JSON variant so we don’t stringify repeatedly.
 const EMPTY_CONFIG_JSON = JSON.stringify(EMPTY_STORED_CONFIG, null, 2) + "\n";
@@ -86,8 +118,15 @@ export type MemoryConfig = {
 
 // Represents full runtime config, including loaded instructions.
 export type AppConfig = {
-  apiKey?: string;
+  // Model and provider selection
   model: string;
+  defaultProvider: string;
+  sessionId?: string;
+  
+  // Provider configurations (combined from stored config and env vars)
+  providers: Record<string, ProviderConfig>;
+  
+  // General settings
   instructions: string;
   fullAutoErrorMode?: FullAutoErrorMode;
   memory?: MemoryConfig;
@@ -288,12 +327,29 @@ export const loadConfig = (
       ? storedConfig.model.trim()
       : undefined;
 
+  // Determine the model to use
+  const model = storedModel ??
+    (options.isFullContext
+      ? DEFAULT_FULL_CONTEXT_MODEL
+      : DEFAULT_AGENTIC_MODEL);
+
+  // Determine the default provider to use
+  const defaultProvider = storedConfig.defaultProvider || DEFAULT_PROVIDER_ID;
+
+  // Load all provider configurations
+  const providers = loadAllProviderConfigs(storedConfig.providers || {});
+
+  // Update provider API keys cache for easy access
+  for (const [providerId, config] of Object.entries(providers)) {
+    if (config.apiKey) {
+      providerApiKeys[providerId] = config.apiKey;
+    }
+  }
+
   const config: AppConfig = {
-    model:
-      storedModel ??
-      (options.isFullContext
-        ? DEFAULT_FULL_CONTEXT_MODEL
-        : DEFAULT_AGENTIC_MODEL),
+    model,
+    defaultProvider,
+    providers,
     instructions: combinedInstructions,
     notify: storedConfig.notify === true,
   };
@@ -440,6 +496,8 @@ export const saveConfig = (
   // Create the config object to save
   const configToSave: StoredConfig = {
     model: config.model,
+    defaultProvider: config.defaultProvider,
+    providers: config.providers,
   };
 
   // Add history settings if they exist
