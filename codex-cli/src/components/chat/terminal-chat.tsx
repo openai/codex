@@ -490,7 +490,7 @@ export default function TerminalChat({
             <Text color="gray">Initializing agent…</Text>
           </Box>
         )}
-        {agent && (
+        {overlayMode === "none" && agent && (
           <TerminalChatInput
             loading={loading}
             setItems={setItems}
