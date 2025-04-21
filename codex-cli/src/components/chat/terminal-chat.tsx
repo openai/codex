@@ -164,7 +164,8 @@ export default function TerminalChat({
     config.flexMode = newFlex;
     // Update existing AgentLoop instance if present
     if (agentRef.current) {
-      (agentRef.current as any).config.flexMode = newFlex;
+      // Use public API to update flexMode
+      agentRef.current.setFlexMode(newFlex);
     }
     setFlexMode(newFlex);
     // Append system message to inform user
@@ -193,7 +194,7 @@ export default function TerminalChat({
   const handleCompact = async () => {
     setLoading(true);
     try {
-      const summary = await generateCompactSummary(items, model, flexMode);
+      const summary = await generateCompactSummary(items, model, Boolean(config.flexMode));
       setItems([
         {
           id: `compact-${Date.now()}`,
@@ -307,7 +308,7 @@ export default function TerminalChat({
           const explanation = await generateCommandExplanation(
             command,
             model,
-            flexMode,
+            Boolean(config.flexMode),
           );
           log(`Generated explanation: ${explanation}`);
 

@@ -193,6 +193,12 @@ export class AgentLoop {
 
     this.cancel();
   }
+  /**
+   * Update the flex-mode flag for this AgentLoop instance.
+   */
+  public setFlexMode(enabled: boolean): void {
+    this.config.flexMode = enabled;
+  }
 
   public sessionId: string;
   /*

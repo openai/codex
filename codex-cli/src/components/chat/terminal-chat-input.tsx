@@ -567,6 +567,7 @@ export default function TerminalChatInput({
       onCompact,
       skipNextSubmit,
       items,
+      toggleFlexMode,
     ],
   );
 
