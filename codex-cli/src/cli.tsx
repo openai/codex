@@ -17,16 +17,15 @@ import { AgentLoop } from "./utils/agent/agent-loop";
 import { initLogger } from "./utils/agent/log";
 import { ReviewDecision } from "./utils/agent/review";
 import { AutoApprovalMode } from "./utils/auto-approval-mode";
+import { checkForUpdates } from "./utils/check-updates";
 import {
+  getApiKey,
   loadConfig,
   PRETTY_PRINT,
   INSTRUCTIONS_FILEPATH,
 } from "./utils/config";
 import { createInputItem } from "./utils/input-utils";
-import {
-  isModelSupportedForResponses,
-  preloadModels,
-} from "./utils/model-utils.js";
+import { isModelSupportedForResponses } from "./utils/model-utils.js";
 import { parseToolCall } from "./utils/parsers";
 import { onExit, setInkRenderer } from "./utils/terminal";
 import chalk from "chalk";
@@ -71,6 +70,9 @@ const cli = meow(
     --full-stdout              Do not truncate stdout/stderr from command outputs
     --notify                   Enable desktop notifications for responses
 
+    --flex-mode               Use "flex-mode" processing mode for the request (only supported
+                              with models o3 and o4-mini)
+
   Dangerous options
     --dangerously-auto-approve-everything
                                Skip all confirmation prompts and execute commands without
@@ -94,6 +96,7 @@ const cli = meow(
       help: { type: "boolean", aliases: ["h"] },
       view: { type: "string" },
       model: { type: "string", aliases: ["m"] },
+      provider: { type: "string", aliases: ["p"] },
       image: { type: "string", isMultiple: true, aliases: ["i"] },
       quiet: {
         type: "boolean",
@@ -140,13 +143,18 @@ const cli = meow(
         type: "string",
         description: "Path to a markdown file to include as project doc",
       },
+      flexMode: {
+        type: "boolean",
+        description:
+          "Enable the flex-mode service tier (only supported by models o3 and o4-mini)",
+      },
       fullStdout: {
         type: "boolean",
         description:
           "Disable truncation of command stdout/stderr messages (show everything)",
         aliases: ["no-truncate"],
       },
-      reasoning:{
+      reasoning: {
         type: "string",
         description: "Set the reasoning effort level (low, medium, high)",
         choices: ["low", "medium", "high"],
@@ -167,7 +175,7 @@ const cli = meow(
           directory as context and performs changes in one go without acting.`,
       },
     },
-  },
+  }
 );
 
 // Handle 'completion' subcommand before any prompting or API calls
@@ -225,21 +233,6 @@ if (cli.flags.config) {
 // API key handling
 // ---------------------------------------------------------------------------
 
-const apiKey = process.env["OPENAI_API_KEY"];
-
-if (!apiKey) {
-  // eslint-disable-next-line no-console
-  console.error(
-    `\n${chalk.red("Missing OpenAI API key.")}\n\n` +
-      `Set the environment variable ${chalk.bold("OPENAI_API_KEY")} ` +
-      `and re-run this command.\n` +
-      `You can create a key here: ${chalk.bold(
-        chalk.underline("https://platform.openai.com/account/api-keys"),
-      )}\n`,
-  );
-  process.exit(1);
-}
-
 const fullContextMode = Boolean(cli.flags.fullContext);
 let config = loadConfig(undefined, undefined, {
   cwd: process.cwd(),
@@ -249,24 +242,64 @@ let config = loadConfig(undefined, undefined, {
 });
 
 const prompt = cli.input[0];
-const model = cli.flags.model;
+const model = cli.flags.model ?? config.model;
 const imagePaths = cli.flags.image as Array<string> | undefined;
+const provider = cli.flags.provider ?? config.provider;
+const apiKey = getApiKey(provider);
+
+if (!apiKey) {
+  // eslint-disable-next-line no-console
+  console.error(
+    `\n${chalk.red("Missing OpenAI API key.")}\n\n` +
+      `Set the environment variable ${chalk.bold("OPENAI_API_KEY")} ` +
+      `and re-run this command.\n` +
+      `You can create a key here: ${chalk.bold(
+        chalk.underline("https://platform.openai.com/account/api-keys")
+      )}\n`
+  );
+  process.exit(1);
+}
 
 config = {
   apiKey,
   ...config,
   model: model ?? config.model,
   notify: Boolean(cli.flags.notify),
-  reasoningEffort: (cli.flags.reasoning as ReasoningEffort | undefined) ?? "high",
+  reasoningEffort:
+    (cli.flags.reasoning as ReasoningEffort | undefined) ?? "high",
+  flexMode: Boolean(cli.flags.flexMode),
+  provider,
 };
 
-if (!(await isModelSupportedForResponses(config.model))) {
+// Check for updates after loading config
+// This is important because we write state file in the config dir
+await checkForUpdates().catch();
+// ---------------------------------------------------------------------------
+// --flex-mode validation (only allowed for o3 and o4-mini)
+// ---------------------------------------------------------------------------
+
+if (cli.flags.flexMode) {
+  const allowedFlexModels = new Set(["o3", "o4-mini"]);
+  if (!allowedFlexModels.has(config.model)) {
+    // eslint-disable-next-line no-console
+    console.error(
+      `The --flex-mode option is only supported when using the 'o3' or 'o4-mini' models. ` +
+        `Current model: '${config.model}'.`
+    );
+    process.exit(1);
+  }
+}
+
+if (
+  !(await isModelSupportedForResponses(config.model)) &&
+  (!provider || provider.toLowerCase() === "openai")
+) {
   // eslint-disable-next-line no-console
   console.error(
     `The model "${config.model}" does not appear in the list of models ` +
       `available to your account. Double‑check the spelling (use\n` +
       `  openai models list\n` +
-      `to see the full list) or choose another model with the --model flag.`,
+      `to see the full list) or choose another model with the --model flag.`
   );
   process.exit(1);
 }
@@ -306,9 +339,6 @@ const additionalWritableRoots: ReadonlyArray<string> = (
 
 // If we are running in --quiet mode, do that and exit.
 const quietMode = Boolean(cli.flags.quiet);
-const autoApproveEverything = Boolean(
-  cli.flags.dangerouslyAutoApproveEverything,
-);
 const fullStdout = Boolean(cli.flags.fullStdout);
 
 if (quietMode) {
@@ -316,16 +346,23 @@ if (quietMode) {
   if (!prompt || prompt.trim() === "") {
     // eslint-disable-next-line no-console
     console.error(
-      'Quiet mode requires a prompt string, e.g.,: codex -q "Fix bug #123 in the foobar project"',
+      'Quiet mode requires a prompt string, e.g.,: codex -q "Fix bug #123 in the foobar project"'
     );
     process.exit(1);
   }
+
+  // Determine approval policy for quiet mode based on flags
+  const quietApprovalPolicy: ApprovalPolicy =
+    cli.flags.fullAuto || cli.flags.approvalMode === "full-auto"
+      ? AutoApprovalMode.FULL_AUTO
+      : cli.flags.autoEdit || cli.flags.approvalMode === "auto-edit"
+      ? AutoApprovalMode.AUTO_EDIT
+      : config.approvalMode || AutoApprovalMode.SUGGEST;
+
   await runQuietMode({
     prompt: prompt as string,
     imagePaths: imagePaths || [],
-    approvalPolicy: autoApproveEverything
-      ? AutoApprovalMode.FULL_AUTO
-      : AutoApprovalMode.SUGGEST,
+    approvalPolicy: quietApprovalPolicy,
     additionalWritableRoots,
     config,
   });
@@ -343,16 +380,15 @@ if (quietMode) {
 //    it is more dangerous than --fullAuto we deliberately give it lower
 //    priority so a user specifying both flags still gets the safer behaviour.
 // 3. --autoEdit – automatically approve edits, but prompt for commands.
-// 4. Default – suggest mode (prompt for everything).
+// 4. config.approvalMode - use the approvalMode setting from ~/.codex/config.json.
+// 5. Default – suggest mode (prompt for everything).
 
 const approvalPolicy: ApprovalPolicy =
   cli.flags.fullAuto || cli.flags.approvalMode === "full-auto"
     ? AutoApprovalMode.FULL_AUTO
     : cli.flags.autoEdit || cli.flags.approvalMode === "auto-edit"
     ? AutoApprovalMode.AUTO_EDIT
-    : AutoApprovalMode.SUGGEST;
-
-preloadModels();
+    : config.approvalMode || AutoApprovalMode.SUGGEST;
 
 const instance = render(
   <App
@@ -366,7 +402,7 @@ const instance = render(
   />,
   {
     patchConsole: process.env["DEBUG"] ? false : true,
-  },
+  }
 );
 setInkRenderer(instance);
 
@@ -446,9 +482,14 @@ async function runQuietMode({
       /* intentionally ignored in quiet mode */
     },
     getCommandConfirmation: (
-      _command: Array<string>,
+      _command: Array<string>
     ): Promise<CommandConfirmation> => {
-      return Promise.resolve({ review: ReviewDecision.NO_CONTINUE });
+      // In quiet mode, default to NO_CONTINUE, except when in full-auto mode
+      const reviewDecision =
+        approvalPolicy === AutoApprovalMode.FULL_AUTO
+          ? ReviewDecision.YES
+          : ReviewDecision.NO_CONTINUE;
+      return Promise.resolve({ review: reviewDecision });
     },
     onLastResponseId: () => {
       /* intentionally ignored in quiet mode */
