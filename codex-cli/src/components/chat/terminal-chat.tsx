@@ -151,10 +151,12 @@ export default function TerminalChat({
   const [approvalPolicy, setApprovalPolicy] = useState<ApprovalPolicy>(
     initialApprovalPolicy,
   );
-  // Context summary for compact operation, used as instructions on new AgentLoop
+
+  // Context summary for compact operation, used as instructions on new AgentLoop.
   const [contextSummary, setContextSummary] = useState<string | null>(null);
   const [thinkingSeconds, setThinkingSeconds] = useState(0);
-  /** Compact the conversation into a summary and set it as context for future runs */
+
+  /** Compacts the conversation into a summary and sets it as context for future runs. */
   const handleCompact = async (): Promise<void> => {
     setLoading(true);
     try {
@@ -191,6 +193,7 @@ export default function TerminalChat({
     }
     return;
   };
+
   const {
     requestConfirmation,
     confirmationPrompt,
