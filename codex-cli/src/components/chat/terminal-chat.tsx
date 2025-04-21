@@ -192,11 +192,7 @@ export default function TerminalChat({
   const handleCompact = async () => {
     setLoading(true);
     try {
-      const summary = await generateCompactSummary(
-        items,
-        model,
-        flexMode,
-      );
+      const summary = await generateCompactSummary(items, model, flexMode);
       setItems([
         {
           id: `compact-${Date.now()}`,

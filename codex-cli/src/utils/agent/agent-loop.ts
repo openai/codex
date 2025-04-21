@@ -498,7 +498,7 @@ export class AgentLoop {
             // Log flex-mode usage on each OpenAI request
             log(
               `OpenAI request parameters: model=${this.model}, service_tier=${
-                this.config.flexMode ? 'flex' : 'default'
+                this.config.flexMode ? "flex" : "default"
               }`,
             );
             // eslint-disable-next-line no-await-in-loop
