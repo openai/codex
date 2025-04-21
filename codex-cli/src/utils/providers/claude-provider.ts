@@ -45,8 +45,7 @@ export class ClaudeProvider extends BaseProvider {
   id = "claude";
   name = "Claude";
   
-  // Store conversation history to maintain context between calls
-  private conversationHistory: Array<any> = [];
+  // No longer using provider-level history management
   
   /**
    * Get available models from Claude/Anthropic
@@ -99,21 +98,15 @@ export class ClaudeProvider extends BaseProvider {
           // Process the new input items and update conversation history
           if (params.input && params.input.length > 0) {
             console.log(`Claude provider: Processing request with ${params.input.length} input items`);
-            
-            // Add new messages to conversation history
-            for (const item of params.input) {
-              this.addToConversationHistory(item);
-            }
           }
           
-          // Get full conversation history
-          const fullHistory = this.getConversationHistory();
-          console.log(`Claude provider: Using ${fullHistory.length} messages in conversation history`);
+          // Use the input directly - application now sends complete history
+          console.log(`Claude provider: Converting messages to Claude format`);
           
           // Convert from agent-loop's OpenAI format to Claude format
           const claudeParams = {
             model: params.model,
-            messages: this.convertMessagesToClaudeFormat(fullHistory),
+            messages: this.convertMessagesToClaudeFormat(params.input || []),
             system: params.instructions,
             max_tokens: 4096,
             stream: params.stream === true,
@@ -264,7 +257,7 @@ export class ClaudeProvider extends BaseProvider {
                 };
                 
                 // Add to conversation history
-                self.addToConversationHistory(assistantMessage);
+                // Assistant message is now managed at the application level
                 
                 // Convert tool calls to function calls for final output
                 const functionCalls = toolCalls.map(tool => claudeToolToOpenAIFunction(tool)).filter(Boolean);
@@ -344,12 +337,7 @@ export class ClaudeProvider extends BaseProvider {
       return null;
     }).filter(Boolean);
     
-    // Add to conversation history
-    output.forEach(item => {
-      if (item.type === "message") {
-        this.addToConversationHistory(item);
-      }
-    });
+    // Messages are now managed at the application level
     
     // Map Claude response to OpenAI format
     const response = {
@@ -580,55 +568,11 @@ export class ClaudeProvider extends BaseProvider {
    * Add a message to the conversation history
    * @param message Message to add
    */
-  private addToConversationHistory(message: any): void {
-    console.log(`Claude provider: Adding message to history, type=${typeof message}`);
-    
-    // Skip non-message items like function_call_output with no call_id
-    if (message.type === "function_call_output" && !message.call_id) {
-      console.log(`Claude provider: Skipping function_call_output with no call_id`);
-      return;
-    }
-    
-    // Convert function call outputs to text messages with tool results
-    if (message.type === "function_call_output") {
-      console.log(`Claude provider: Processing function_call_output, call_id: ${message.call_id}`);
-      
-      try {
-        // For Claude, we format function outputs as simple text messages
-        const outputText = `Tool call result: ${message.output}`;
-        
-        // Create the message to add to history
-        const historyMessage = {
-          role: "user",
-          content: outputText
-        };
-        
-        // Add as a user message with plain text
-        this.conversationHistory.push(historyMessage);
-        
-        console.log(`Claude provider: Added function output to history: ${message.call_id}`);
-      } catch (err) {
-        // Safe fallback for severe errors
-        console.error("Claude provider: Error processing function output:", err);
-        
-        // Add a basic message as fallback
-        this.conversationHistory.push({
-          role: "user",
-          content: "Tool call completed but result could not be processed."
-        });
-      }
-      return;
-    }
-    
-    // Add normal message to history
-    this.conversationHistory.push(message);
-  }
+  // History management is now handled at the application level in terminal-chat.tsx
   
   /**
    * Get the full conversation history
    * @returns Full conversation history
    */
-  private getConversationHistory(): Array<any> {
-    return this.conversationHistory;
-  }
+  // History is now managed at the application level
 }
