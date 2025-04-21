@@ -6,8 +6,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as modelUtils from "../src/utils/model-utils";
 
 // --- Mock the get-diff utility to prevent loading errors in this test ---
-// The test runner was failing to load the actual src/utils/get-diff.ts file.
-// This mock provides a dummy implementation specifically for this test file.
 vi.mock("../../utils/get-diff.js", () => ({
   getGitDiff: vi.fn(() => ({
     // Mock the getGitDiff function to return dummy values
@@ -18,32 +16,23 @@ vi.mock("../../utils/get-diff.js", () => ({
 // --- End mock ---
 
 // --- Mock the DiffOverlay component to prevent loading errors in this test ---
-// Your current error message points to the test runner failing to load this component.
-// Since this test suite doesn't rely on the actual DiffOverlay rendering,
-// we provide a simple mock component that renders null.
 vi.mock("../diff-overlay.js", () => ({
   default: vi.fn(() => null), // Mock the component to return null
 }));
 // --- End mock ---
 
-// Mock getAvailableModels (from previous steps)
+// Mock getAvailableModels
 vi.mock("../src/utils/model-utils", () => ({
   getAvailableModels: vi.fn(),
   RECOMMENDED_MODELS: [], // Mock recommended models if needed
 }));
 
-// Mock the TerminalChatInput component (from previous steps)
-// This is needed because TerminalChatInput might rely on features (like Ink's useInput)
-// that cause issues in the test environment, as seen by the stderr messages.
+// Mock the TerminalChatInput component
 vi.mock("../src/components/chat/terminal-chat-input.js", () => ({
-  // Assuming the default export is the TerminalChatInput component
   default: vi.fn(() => null), // Mock the component to render null
 }));
 
 describe("TerminalChat model validation", () => {
-  // Note: Ensure you have also resolved any merge conflicts in TerminalChat.tsx itself
-  // and that src/utils/get-diff.ts exists with the correct casing.
-
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -71,14 +60,13 @@ describe("TerminalChat model validation", () => {
     );
 
     // Assert: Wait for effects to run and check the output
-    // The effect that fetches models and displays the warning needs time to complete.
-    // Increasing timeout slightly for stability in test environments.
     await new Promise((resolve) => setTimeout(resolve, 100));
     rerender?.(); // Force a re-render to ensure Ink captures the latest state
 
     const frame = lastFrameStripped();
 
     // Check that the warning message is present in the rendered output.
+    // Updated to match the new message format with provider information
     expect(frame).toContain(
       'Warning: model "gpt-unicorn" is not in the list of available models for provider "openai".',
     );
@@ -108,6 +96,7 @@ describe("TerminalChat model validation", () => {
     const frame = lastFrameStripped();
 
     // Check that the warning message is NOT present in the rendered output.
+    // Updated to match the new message format with provider information
     expect(frame).not.toContain(
       'Warning: model "gpt-3.5" is not in the list of available models for provider "openai".',
     );

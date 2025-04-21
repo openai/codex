@@ -66,6 +66,7 @@ const colorsByPolicy: Record<ApprovalPolicy, ColorName | undefined> = {
  *
  * @param command The command to explain
  * @param model The model to use for generating the explanation
+ * @param flexMode Whether to use flex mode for the API call
  * @returns A human-readable explanation of what the command does
  */
 async function generateCommandExplanation(
@@ -139,17 +140,22 @@ export default function TerminalChat({
 }: Props): React.ReactElement {
   // Desktop notification setting
   const notify = config.notify;
+
+  // Combined state variables from both branches
   const [model, setModel] = useState<string>(config.model);
   const [provider, setProvider] = useState<string>(config.provider || "openai");
   const [availableModels, setAvailableModels] = useState<Array<string>>([]);
+
   const [lastResponseId, setLastResponseId] = useState<string | null>(null);
   const [items, setItems] = useState<Array<ResponseItem>>([]);
   const [loading, setLoading] = useState<boolean>(false);
+
   // Allow switching approval modes at runtime via an overlay.
   const [approvalPolicy, setApprovalPolicy] = useState<ApprovalPolicy>(
     initialApprovalPolicy,
   );
   const [thinkingSeconds, setThinkingSeconds] = useState(0);
+
   const handleCompact = async () => {
     setLoading(true);
     try {
@@ -182,6 +188,7 @@ export default function TerminalChat({
       setLoading(false);
     }
   };
+
   const {
     requestConfirmation,
     confirmationPrompt,
@@ -192,9 +199,6 @@ export default function TerminalChat({
 
   // Store the diff text when opening the diff overlay so the view isn't
   // recomputed on every re‑render while it is open.
-  // diffText is passed down to the DiffOverlay component. The setter is
-  // currently unused but retained for potential future updates. Prefix with
-  // an underscore so eslint ignores the unused variable.
   const [diffText, _setDiffText] = useState<string>("");
 
   const [initialPrompt, setInitialPrompt] = useState(_initialPrompt);
@@ -208,9 +212,7 @@ export default function TerminalChat({
   const agentRef = React.useRef<AgentLoop>();
   const [, forceUpdate] = React.useReducer((c) => c + 1, 0); // trigger re‑render
 
-  // ────────────────────────────────────────────────────────────────
   // DEBUG: log every render w/ key bits of state
-  // ────────────────────────────────────────────────────────────────
   log(
     `render – agent? ${Boolean(agentRef.current)} loading=${loading} items=${
       items.length
@@ -306,6 +308,7 @@ export default function TerminalChat({
       agentRef.current = undefined;
       forceUpdate(); // re‑render after teardown too
     };
+
     // We intentionally omit 'approvalPolicy' and 'confirmationPrompt' from the deps
     // so switching modes or showing confirmation dialogs doesn't tear down the loop.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -386,10 +389,7 @@ export default function TerminalChat({
     log(`agentRef.current is now ${Boolean(agent)}`);
   }, [agent]);
 
-  // ---------------------------------------------------------------------
   // Dynamic layout constraints – keep total rendered rows <= terminal rows
-  // ---------------------------------------------------------------------
-
   const { rows: terminalRows } = useTerminalSize();
 
   useEffect(() => {
@@ -411,9 +411,7 @@ export default function TerminalChat({
     processInitialInputItems();
   }, [agent, initialPrompt, initialImagePaths]);
 
-  // ────────────────────────────────────────────────────────────────
   // In-app warning if CLI --model isn't in fetched list
-  // ────────────────────────────────────────────────────────────────
   useEffect(() => {
     (async () => {
       const available = await getAvailableModels(provider);
@@ -435,7 +433,7 @@ export default function TerminalChat({
         ]);
       }
     })();
-    // run once on mount
+    // Run this effect when provider changes
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [provider]);
 
@@ -610,10 +608,6 @@ export default function TerminalChat({
               setLoading(false); // Stop loading indicator
 
               setModel(newModel); // Update the model state
-              // Reset lastResponseId if the model actually changed
-              setLastResponseId((prev) =>
-                prev && newModel !== model ? null : prev,
-              );
 
               // Save model to config
               saveConfig({
@@ -622,20 +616,29 @@ export default function TerminalChat({
                 provider: provider,
               });
 
-              setItems((prev) => [
-                ...prev,
-                {
-                  id: `switch-model-${Date.now()}`,
-                  type: "message",
-                  role: "system",
-                  content: [
+              // Reset lastResponseId if the model actually changed
+              setLastResponseId((prev) =>
+                prev && newModel !== model ? null : prev,
+              );
+
+              // Add a system message to indicate the model switch
+              setItems(
+                (prev) =>
+                  [
+                    ...prev,
                     {
-                      type: "input_text",
-                      text: `Switched model to ${newModel}`,
+                      id: `switch-model-${Date.now()}`,
+                      type: "message",
+                      role: "system",
+                      content: [
+                        {
+                          type: "input_text",
+                          text: `Switched model to ${newModel}`,
+                        },
+                      ],
                     },
-                  ],
-                },
-              ]);
+                  ] as ResponseItem[],
+              );
 
               // Close the overlay
               setOverlayMode("none");
@@ -683,7 +686,6 @@ export default function TerminalChat({
               ]);
 
               // Don't close the overlay so user can select a model for the new provider
-              // setOverlayMode("none");
             }}
             onExit={() => setOverlayMode("none")}
             availableModels={availableModels}
