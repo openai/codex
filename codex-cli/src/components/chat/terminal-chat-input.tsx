@@ -77,7 +77,6 @@ export default function TerminalChatInput({
   openApprovalOverlay: () => void;
   openHelpOverlay: () => void;
   openDiffOverlay: () => void;
-  /** Toggle flex-mode on/off in the current session */
   toggleFlexMode: () => void;
   onCompact: () => void;
   interruptAgent: () => void;
