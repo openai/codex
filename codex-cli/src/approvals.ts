@@ -329,11 +329,20 @@ export function isSafeCommand(
         reason: "Ripgrep search",
         group: "Searching",
       };
-    case "find":
-      return {
-        reason: "Find files or directories",
-        group: "Searching",
-      };
+    case "find": {
+      // Certain options to `find` allow executing arbitrary processes, so we
+      // cannot auto-approve them.
+      if (
+        command.some((arg: string) => UNSAFE_OPTIONS_FOR_FIND_COMMAND.has(arg))
+      ) {
+        break;
+      } else {
+        return {
+          reason: "Find files or directories",
+          group: "Searching",
+        };
+      }
+    }
     case "grep":
       return {
         reason: "Text search (grep)",
@@ -420,6 +429,21 @@ export function isSafeCommand(
 function isValidSedNArg(arg: string | undefined): boolean {
   return arg != null && /^(\d+,)?\d+p$/.test(arg);
 }
+
+const UNSAFE_OPTIONS_FOR_FIND_COMMAND: ReadonlySet<string> = new Set([
+  // Options that can execute arbitrary commands.
+  "-exec",
+  "-execdir",
+  "-ok",
+  "-okdir",
+  // Option that deletes matching files.
+  "-delete",
+  // Options that write pathnames to a file.
+  "-fls",
+  "-fprint",
+  "-fprint0",
+  "-fprintf",
+]);
 
 // ---------------- Helper utilities for complex shell expressions -----------------
 
