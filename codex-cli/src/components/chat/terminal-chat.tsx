@@ -18,7 +18,7 @@ import { AgentLoop } from "../../utils/agent/agent-loop.js";
 import { log } from "../../utils/agent/log.js";
 import { ReviewDecision } from "../../utils/agent/review.js";
 import { generateCompactSummary } from "../../utils/compact-summary.js";
-import { OPENAI_BASE_URL } from "../../utils/config.js";
+import { OPENAI_BASE_URL, saveConfig } from "../../utils/config.js";
 import { extractAppliedPatches as _extractAppliedPatches } from "../../utils/extract-applied-patches.js";
 import { getGitDiff } from "../../utils/get-diff.js";
 import { createInputItem } from "../../utils/input-utils.js";
@@ -144,6 +144,7 @@ export default function TerminalChat({
   // Desktop notification setting
   const notify = config.notify;
   const [model, setModel] = useState<string>(config.model);
+  const [provider, setProvider] = useState<string>(config.provider || "openai");
   const [lastResponseId, setLastResponseId] = useState<string | null>(null);
   const [items, setItems] = useState<Array<ResponseItem>>([]);
   const [loading, setLoading] = useState<boolean>(false);
@@ -228,7 +229,7 @@ export default function TerminalChat({
 
     log("creating NEW AgentLoop");
     log(
-      `model=${model} instructions=${Boolean(
+      `model=${model} provider=${provider} instructions=${Boolean(
         config.instructions,
       )} approvalPolicy=${approvalPolicy}`,
     );
@@ -238,6 +239,7 @@ export default function TerminalChat({
 
     agentRef.current = new AgentLoop({
       model,
+      provider,
       config,
       instructions: config.instructions,
       approvalPolicy,
@@ -307,10 +309,15 @@ export default function TerminalChat({
       agentRef.current = undefined;
       forceUpdate(); // re‑render after teardown too
     };
-    // We intentionally omit 'approvalPolicy' and 'confirmationPrompt' from the deps
-    // so switching modes or showing confirmation dialogs doesn’t tear down the loop.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [model, config, requestConfirmation, additionalWritableRoots]);
+  }, [
+    model,
+    provider,
+    config,
+    approvalPolicy,
+    confirmationPrompt,
+    requestConfirmation,
+    additionalWritableRoots,
+  ]);
 
   // whenever loading starts/stops, reset or start a timer — but pause the
   // timer while a confirmation overlay is displayed so we don't trigger a
@@ -417,7 +424,7 @@ export default function TerminalChat({
   // ────────────────────────────────────────────────────────────────
   useEffect(() => {
     (async () => {
-      const available = await getAvailableModels();
+      const available = await getAvailableModels(provider);
       if (model && available.length > 0 && !available.includes(model)) {
         setItems((prev) => [
           ...prev,
@@ -428,7 +435,7 @@ export default function TerminalChat({
             content: [
               {
                 type: "input_text",
-                text: `Warning: model "${model}" is not in the list of available models returned by OpenAI.`,
+                text: `Warning: model "${model}" is not in the list of available models for provider "${provider}".`,
               },
             ],
           },
@@ -470,6 +477,7 @@ export default function TerminalChat({
               version: CLI_VERSION,
               PWD,
               model,
+              provider,
               approvalPolicy,
               colorsByPolicy,
               agent,
@@ -566,6 +574,7 @@ export default function TerminalChat({
         {overlayMode === "model" && (
           <ModelOverlay
             currentModel={model}
+            currentProvider={provider}
             hasLastResponse={Boolean(lastResponseId)}
             onSelect={(newModel) => {
               log(
@@ -581,6 +590,13 @@ export default function TerminalChat({
               setLastResponseId((prev) =>
                 prev && newModel !== model ? null : prev,
               );
+
+              // Save model to config
+              saveConfig({
+                ...config,
+                model: newModel,
+                provider: provider,
+              });
 
               setItems((prev) => [
                 ...prev,
@@ -598,6 +614,51 @@ export default function TerminalChat({
               ]);
 
               setOverlayMode("none");
+            }}
+            onSelectProvider={(newProvider) => {
+              log(
+                "TerminalChat: interruptAgent invoked – calling agent.cancel()",
+              );
+              if (!agent) {
+                log("TerminalChat: agent is not ready yet");
+              }
+              agent?.cancel();
+              setLoading(false);
+
+              // Select default model for the new provider
+              const defaultModel = model;
+
+              // Save provider to config
+              const updatedConfig = {
+                ...config,
+                provider: newProvider,
+                model: defaultModel,
+              };
+              saveConfig(updatedConfig);
+
+              setProvider(newProvider);
+              setModel(defaultModel);
+              setLastResponseId((prev) =>
+                prev && newProvider !== provider ? null : prev,
+              );
+
+              setItems((prev) => [
+                ...prev,
+                {
+                  id: `switch-provider-${Date.now()}`,
+                  type: "message",
+                  role: "system",
+                  content: [
+                    {
+                      type: "input_text",
+                      text: `Switched provider to ${newProvider} with model ${defaultModel}`,
+                    },
+                  ],
+                },
+              ]);
+
+              // Don't close the overlay so user can select a model for the new provider
+              // setOverlayMode("none");
             }}
             onExit={() => setOverlayMode("none")}
           />
