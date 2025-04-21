@@ -19,15 +19,13 @@ import { ReviewDecision } from "./utils/agent/review";
 import { AutoApprovalMode } from "./utils/auto-approval-mode";
 import { checkForUpdates } from "./utils/check-updates";
 import {
+  getApiKey,
   loadConfig,
   PRETTY_PRINT,
   INSTRUCTIONS_FILEPATH,
 } from "./utils/config";
 import { createInputItem } from "./utils/input-utils";
-import {
-  isModelSupportedForResponses,
-  preloadModels,
-} from "./utils/model-utils.js";
+import { isModelSupportedForResponses } from "./utils/model-utils.js";
 import { parseToolCall } from "./utils/parsers";
 import { onExit, setInkRenderer } from "./utils/terminal";
 import chalk from "chalk";
@@ -97,6 +95,7 @@ const cli = meow(
       help: { type: "boolean", aliases: ["h"] },
       view: { type: "string" },
       model: { type: "string", aliases: ["m"] },
+      provider: { type: "string", aliases: ["p"] },
       image: { type: "string", isMultiple: true, aliases: ["i"] },
       quiet: {
         type: "boolean",
@@ -227,7 +226,19 @@ if (cli.flags.config) {
 // API key handling
 // ---------------------------------------------------------------------------
 
-const apiKey = process.env["OPENAI_API_KEY"];
+const fullContextMode = Boolean(cli.flags.fullContext);
+let config = loadConfig(undefined, undefined, {
+  cwd: process.cwd(),
+  disableProjectDoc: Boolean(cli.flags.noProjectDoc),
+  projectDocPath: cli.flags.projectDoc as string | undefined,
+  isFullContext: fullContextMode,
+});
+
+const prompt = cli.input[0];
+const model = cli.flags.model ?? config.model;
+const imagePaths = cli.flags.image as Array<string> | undefined;
+const provider = cli.flags.provider ?? config.provider;
+const apiKey = getApiKey(provider);
 
 if (!apiKey) {
   // eslint-disable-next-line no-console
@@ -242,24 +253,13 @@ if (!apiKey) {
   process.exit(1);
 }
 
-const fullContextMode = Boolean(cli.flags.fullContext);
-let config = loadConfig(undefined, undefined, {
-  cwd: process.cwd(),
-  disableProjectDoc: Boolean(cli.flags.noProjectDoc),
-  projectDocPath: cli.flags.projectDoc as string | undefined,
-  isFullContext: fullContextMode,
-});
-
-const prompt = cli.input[0];
-const model = cli.flags.model;
-const imagePaths = cli.flags.image as Array<string> | undefined;
-
 config = {
   apiKey,
   ...config,
   model: model ?? config.model,
-  flexMode: Boolean(cli.flags.flexMode),
   notify: Boolean(cli.flags.notify),
+  flexMode: Boolean(cli.flags.flexMode),
+  provider,
 };
 
 // Check for updates after loading config
@@ -281,7 +281,10 @@ if (cli.flags.flexMode) {
   }
 }
 
-if (!(await isModelSupportedForResponses(config.model))) {
+if (
+  !(await isModelSupportedForResponses(config.model)) &&
+  (!provider || provider.toLowerCase() === "openai")
+) {
   // eslint-disable-next-line no-console
   console.error(
     `The model "${config.model}" does not appear in the list of models ` +
@@ -377,8 +380,6 @@ const approvalPolicy: ApprovalPolicy =
     : cli.flags.autoEdit || cli.flags.approvalMode === "auto-edit"
     ? AutoApprovalMode.AUTO_EDIT
     : config.approvalMode || AutoApprovalMode.SUGGEST;
-
-preloadModels();
 
 const instance = render(
   <App

@@ -1,5 +1,3 @@
-// tests/terminal-chat.test.tsx
-
 import React from "react";
 import { renderTui } from "./ui-test-helpers.js";
 import TerminalChat from "../src/components/chat/terminal-chat";
@@ -82,7 +80,7 @@ describe("TerminalChat model validation", () => {
 
     // Check that the warning message is present in the rendered output.
     expect(frame).toContain(
-      'Warning: model "gpt-unicorn" is not in the list of available models returned by OpenAI.',
+      'Warning: model "gpt-unicorn" is not in the list of available models for provider "openai".',
     );
   });
 
@@ -111,7 +109,7 @@ describe("TerminalChat model validation", () => {
 
     // Check that the warning message is NOT present in the rendered output.
     expect(frame).not.toContain(
-      'Warning: model "gpt-3.5" is not in the list of available models returned by OpenAI.',
+      'Warning: model "gpt-3.5" is not in the list of available models for provider "openai".',
     );
   });
 });
