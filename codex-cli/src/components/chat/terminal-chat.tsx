@@ -305,15 +305,10 @@ export default function TerminalChat({
       agentRef.current = undefined;
       forceUpdate(); // re‑render after teardown too
     };
-  }, [
-    model,
-    provider,
-    config,
-    approvalPolicy,
-    confirmationPrompt,
-    requestConfirmation,
-    additionalWritableRoots,
-  ]);
+    // We intentionally omit 'approvalPolicy' and 'confirmationPrompt' from the deps
+    // so switching modes or showing confirmation dialogs doesn’t tear down the loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [model, provider, config, requestConfirmation, additionalWritableRoots]);
 
   // Whenever loading starts/stops, reset or start a timer — but pause the
   // timer while a confirmation overlay is displayed so we don't trigger a
