@@ -474,6 +474,48 @@ export class ClaudeProvider extends BaseProvider {
   }
   
   /**
+   * Normalize a streaming event from Claude format to common stream event
+   * @param event Raw streaming event
+   * @returns Normalized stream event
+   */
+  normalizeStreamEvent(event: any): NormalizedStreamEvent {
+    // Handle finished output items
+    if (event.type === "response.output_item.done") {
+      const item = event.item;
+      if ((item as any).type === "function_call") {
+        return {
+          type: "tool_call",
+          content: item,
+          responseId: (event as any).response_id,
+          originalEvent: event,
+        };
+      }
+      return {
+        type: "text",
+        content: item,
+        responseId: (event as any).response_id,
+        originalEvent: event,
+      };
+    }
+    // Handle completed response
+    if (event.type === "response.completed") {
+      return {
+        type: "completion",
+        content: event.response,
+        responseId: event.response.id,
+        originalEvent: event,
+      };
+    }
+    // Default: treat as text
+    return {
+      type: "text",
+      content: event,
+      responseId: (event as any).response_id,
+      originalEvent: event,
+    };
+  }
+  
+  /**
    * Extract system message content from messages array
    * @param messages Array of messages
    * @returns System message content or undefined
