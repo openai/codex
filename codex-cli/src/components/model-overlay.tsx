@@ -59,38 +59,14 @@ export default function ModelOverlay({
   // ---------------------------------------------------------------------------
 
   // Always register input handling so hooks are called consistently.
+  // Dismiss overlay on escape/enter
   useInput((_input, key) => {
-    if (hasLastResponse && (key.escape || key.return)) {
+    if (key.escape || key.return) {
       onExit();
     }
   });
 
-  if (hasLastResponse) {
-    return (
-      <Box
-        flexDirection="column"
-        borderStyle="round"
-        borderColor="gray"
-        width={80}
-      >
-        <Box paddingX={1}>
-          <Text bold color="red">
-            Unable to switch model
-          </Text>
-        </Box>
-        <Box paddingX={1}>
-          <Text>
-            You can only pick a model before the assistant sends its first
-            response. To use a different model please start a new chat.
-          </Text>
-        </Box>
-        <Box paddingX={1}>
-          <Text dimColor>press esc or enter to close</Text>
-        </Box>
-      </Box>
-    );
-  }
-
+  // Always allow switching models in-session
   return (
     <TypeaheadOverlay
       title="Switch model"

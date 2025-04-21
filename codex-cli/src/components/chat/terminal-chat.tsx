@@ -151,15 +151,20 @@ export default function TerminalChat({
   const [approvalPolicy, setApprovalPolicy] = useState<ApprovalPolicy>(
     initialApprovalPolicy,
   );
+  // Context summary for compact operation, used as instructions on new AgentLoop
+  const [contextSummary, setContextSummary] = useState<string | null>(null);
   const [thinkingSeconds, setThinkingSeconds] = useState(0);
-  const handleCompact = async () => {
+  /** Compact the conversation into a summary and set it as context for future runs */
+  const handleCompact = async (): Promise<string> => {
     setLoading(true);
+    let summary = "";
     try {
-      const summary = await generateCompactSummary(
+      summary = await generateCompactSummary(
         items,
         model,
         Boolean(config.flexMode),
       );
+      // Display only the summary in the UI
       setItems([
         {
           id: `compact-${Date.now()}`,
@@ -168,6 +173,8 @@ export default function TerminalChat({
           content: [{ type: "output_text", text: summary }],
         } as ResponseItem,
       ]);
+      // Store summary for new AgentLoop instructions
+      setContextSummary(summary);
     } catch (err) {
       setItems((prev) => [
         ...prev,
@@ -183,6 +190,7 @@ export default function TerminalChat({
     } finally {
       setLoading(false);
     }
+    return summary;
   };
   const {
     requestConfirmation,
@@ -239,7 +247,11 @@ export default function TerminalChat({
     agentRef.current = new AgentLoop({
       model,
       config,
-      instructions: config.instructions,
+      // Use compacted summary as instructions if available
+      instructions:
+        contextSummary != null
+          ? `${config.instructions}\n---\nThe session so far: ${contextSummary}`
+          : config.instructions,
       approvalPolicy,
       additionalWritableRoots,
       onLastResponseId: setLastResponseId,
@@ -310,7 +322,13 @@ export default function TerminalChat({
     // We intentionally omit 'approvalPolicy' and 'confirmationPrompt' from the deps
     // so switching modes or showing confirmation dialogs doesn’t tear down the loop.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [model, config, requestConfirmation, additionalWritableRoots]);
+  }, [
+    model,
+    config,
+    requestConfirmation,
+    additionalWritableRoots,
+    contextSummary,
+  ]);
 
   // whenever loading starts/stops, reset or start a timer — but pause the
   // timer while a confirmation overlay is displayed so we don't trigger a
@@ -567,21 +585,19 @@ export default function TerminalChat({
           <ModelOverlay
             currentModel={model}
             hasLastResponse={Boolean(lastResponseId)}
-            onSelect={(newModel) => {
-              log(
-                "TerminalChat: interruptAgent invoked – calling agent.cancel()",
-              );
-              if (!agent) {
-                log("TerminalChat: agent is not ready yet");
-              }
+            onSelect={async (newModel) => {
+              log("TerminalChat: interrupting agent and compacting context");
               agent?.cancel();
               setLoading(false);
 
-              setModel(newModel);
-              setLastResponseId((prev) =>
-                prev && newModel !== model ? null : prev,
-              );
+              // Compact existing conversation before switching models
+              await handleCompact();
 
+              // Switch to the new model
+              setModel(newModel);
+              setLastResponseId(null);
+
+              // Notify about model switch
               setItems((prev) => [
                 ...prev,
                 {
