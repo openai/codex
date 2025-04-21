@@ -101,7 +101,7 @@ export default function ModelOverlay({
         onSelect={(provider) => {
           if (onSelectProvider) {
             onSelectProvider(provider);
-            // Immediately switch to model selection so user can pick a model for 
+            // Immediately switch to model selection so user can pick a model for
             // the new provider.
             setMode("model");
           }
