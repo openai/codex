@@ -200,6 +200,7 @@ export default function TerminalChatInput({
                   setDraftInput("");
                   setSelectedSlashSuggestion(0);
                   toggleFlexMode();
+                  break;
                 case "/clear":
                   onSubmit(cmd);
                   break;
