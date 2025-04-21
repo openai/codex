@@ -7,7 +7,7 @@ import path from "path";
 const HISTORY_FILE = path.join(os.homedir(), ".codex", "history.json");
 const DEFAULT_HISTORY_SIZE = 10_000;
 
-// Regex patterns for sensitive commands that should not be saved
+// Regex patterns for sensitive commands that should not be saved.
 const SENSITIVE_PATTERNS = [
   /\b[A-Za-z0-9-_]{20,}\b/, // API keys and tokens
   /\bpassword\b/i,
@@ -19,7 +19,7 @@ const SENSITIVE_PATTERNS = [
 export interface HistoryConfig {
   maxSize: number;
   saveHistory: boolean;
-  sensitivePatterns: Array<string>; // Array of regex patterns as strings
+  sensitivePatterns: Array<string>; // Regex patterns.
 }
 
 export interface HistoryEntry {
@@ -121,7 +121,7 @@ function commandHasSensitiveInfo(
         return true;
       }
     } catch (error) {
-      // Invalid regex pattern, skip it
+      // Invalid regex pattern, skip it.
     }
   }
 

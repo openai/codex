@@ -8,10 +8,12 @@ import path from "path";
 
 const SESSIONS_ROOT = path.join(os.homedir(), ".codex", "sessions");
 
-async function saveRolloutAsync(items: Array<ResponseItem>): Promise<void> {
+async function saveRolloutAsync(
+  sessionId: string,
+  items: Array<ResponseItem>,
+): Promise<void> {
   await fs.mkdir(SESSIONS_ROOT, { recursive: true });
 
-  const sessionId = crypto.randomUUID();
   const timestamp = new Date().toISOString();
   const ts = timestamp.replace(/[:.]/g, "-").slice(0, 10);
   const filename = `rollout-${ts}-${sessionId}.json`;
@@ -40,8 +42,11 @@ async function saveRolloutAsync(items: Array<ResponseItem>): Promise<void> {
   }
 }
 
-export function saveRollout(items: Array<ResponseItem>): void {
+export function saveRollout(
+  sessionId: string,
+  items: Array<ResponseItem>,
+): void {
   // Best-effort. We also do not log here in case of failure as that should be taken care of
   // by `saveRolloutAsync` already.
-  saveRolloutAsync(items).catch(() => {});
+  saveRolloutAsync(sessionId, items).catch(() => {});
 }

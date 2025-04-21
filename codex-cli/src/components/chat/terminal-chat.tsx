@@ -237,6 +237,7 @@ export default function TerminalChat({
     // Tear down any existing loop before creating a new one
     agentRef.current?.terminate();
 
+    const sessionId = crypto.randomUUID();
     agentRef.current = new AgentLoop({
       model,
       provider,
@@ -249,7 +250,7 @@ export default function TerminalChat({
         log(`onItem: ${JSON.stringify(item)}`);
         setItems((prev) => {
           const updated = uniqueById([...prev, item as ResponseItem]);
-          saveRollout(updated);
+          saveRollout(sessionId, updated);
           return updated;
         });
       },
