@@ -17,142 +17,17 @@ import type { ProviderConfig } from "../provider-config.js";
 import { ORIGIN, CLI_VERSION } from "../session.js";
 
 // Import Anthropic's SDK
-// Note: A real implementation would need the actual Anthropic SDK
-//       For this PR, we'll create a placeholder implementation
+import Anthropic from "@anthropic-ai/sdk";
+import { LLMMock } from "./llm-mock.js";
 
-// Placeholder for Anthropic's SDK - in production code, this would be the real SDK import
-class Anthropic {
-  apiKey: string;
-  baseURL?: string;
-  timeout?: number;
-  defaultHeaders?: Record<string, string>;
-  
-  // Add responses property to mirror OpenAI's API structure
-  responses: {
-    create: (params: any) => Promise<any>;
-  };
-  
-  // Add messages property for Claude's native API
-  messages: {
-    create: (params: any) => Promise<any>;
-    stream: (params: any) => any;
-  };
-
-  constructor(options: { 
-    apiKey: string, 
-    baseURL?: string, 
-    timeout?: number,
-    defaultHeaders?: Record<string, string>
-  }) {
-    this.apiKey = options.apiKey;
-    this.baseURL = options.baseURL;
-    this.timeout = options.timeout;
-    this.defaultHeaders = options.defaultHeaders;
-    
-    // Initialize the messages API
-    this.messages = {
-      create: async (params: any) => {
-        // This would be a real API call in production code
-        return { id: "msg_123", content: [] };
-      },
-      stream: async (params: any) => {
-        // Mock streaming interface
-        return {
-          [Symbol.asyncIterator]: async function* () {
-            yield { type: "content_block_start", content_block: { type: "text" } };
-            yield { type: "content_block_delta", delta: { text: "Response from Claude" } };
-            yield { type: "content_block_stop" };
-            yield { type: "message_stop" };
-          }
-        };
-      }
-    };
-    
-    // Create a responses property that maps to messages to be compatible with OpenAI
-    this.responses = {
-      create: (params: any) => {
-        console.log("Claude provider: mapping responses.create to messages.create");
-        
-        // For streaming requests, we need to return an async iterable
-        if (params.stream) {
-          console.log("Claude provider: creating streaming response");
-          
-          // Return an object that implements the AsyncIterable interface
-          return {
-            [Symbol.asyncIterator]: async function* () {
-              // Mock response events that match what OpenAI's client expects
-              // These are specific to OpenAI's client and would need to be adapted 
-              // from Anthropic's actual streaming response format in a real implementation
-              
-              // First yield response item with text
-              // Print to console directly so we can see it works
-              console.log("assistant: Hello! This is a response from the Claude provider mock implementation. In a real implementation, this would come from the Anthropic API.");
-              
-              yield { 
-                type: "response.output_item.done", 
-                item: {
-                  type: "message",
-                  role: "assistant",
-                  content: [
-                    {
-                      type: "output_text",
-                      text: "Hello! This is a response from the Claude provider mock implementation. In a real implementation, this would come from the Anthropic API."
-                    }
-                  ]
-                }
-              };
-              
-              // Then yield completion event
-              yield { 
-                type: "response.completed", 
-                response: {
-                  id: "resp_" + Date.now(),
-                  status: "completed",
-                  output: [
-                    {
-                      type: "message",
-                      role: "assistant",
-                      content: [
-                        {
-                          type: "output_text",
-                          text: "Hello! This is a response from the Claude provider mock implementation. In a real implementation, this would come from the Anthropic API."
-                        }
-                      ]
-                    }
-                  ]
-                }
-              };
-            },
-            controller: {
-              abort: () => console.log("Claude provider: aborting stream")
-            }
-          };
-        }
-        
-        // For non-streaming requests
-        return this.messages.create({
-          model: params.model,
-          messages: params.input || [],
-          system: params.instructions,
-          stream: false,
-          tools: params.tools,
-        });
-      }
-    };
-  }
-
-  // Mock API for demonstration purposes
-  // In a real implementation, these would interact with Anthropic's API
-  async listModels() {
-    return {
-      data: [
-        { id: "claude-3-opus-20240229" },
-        { id: "claude-3-sonnet-20240229" },
-        { id: "claude-3-haiku-20240307" },
-      ]
-    };
-  }
-}
+// Import anthropic types
+import type {
+  Message,
+  MessageParam,
+  ToolUseBlock,
+  ToolResultBlock,
+  TextBlock
+} from "@anthropic-ai/sdk";
 
 /**
  * Claude provider implementation
@@ -204,7 +79,7 @@ export class ClaudeProvider extends BaseProvider {
    * @param config Application configuration
    * @returns Anthropic client instance
    */
-  createClient(config: AppConfig): Anthropic {
+  createClient(config: AppConfig): any {
     // Get provider config from AppConfig
     const providerConfig = config.providers?.claude || {};
     
@@ -219,22 +94,186 @@ export class ClaudeProvider extends BaseProvider {
     
     // Get base URL and timeout from provider config
     const baseURL = providerConfig.baseUrl || undefined;
-    const timeout = providerConfig.timeoutMs;
+    const timeout = providerConfig.timeoutMs || 180000; // 3 minute default for Claude
     
     // Get session information
     const sessionId = config.sessionId;
     
-    // Create Claude client
-    return new Anthropic({
+    // Create the real Anthropic client instance
+    const anthropicClient = new Anthropic({
       apiKey,
-      baseURL,
-      timeout,
-      defaultHeaders: {
-        originator: ORIGIN,
-        version: CLI_VERSION,
-        session_id: sessionId || "",
-      }
+      baseURL: baseURL,
+      maxRetries: 3,
+      timeout: timeout,
     });
+    
+    // Create a wrapper that implements the expected interface for agent-loop.ts
+    // This adds the 'responses' property that matches what OpenAI client provides
+    const clientWrapper = {
+      // Pass through the original Anthropic client
+      ...anthropicClient,
+      
+      // Add the responses property expected by agent-loop.ts
+      responses: {
+        create: async (params: any) => {
+          console.log("Claude provider: translating request to Claude format");
+          
+          // Convert from agent-loop's OpenAI format to Claude format
+          const claudeParams = {
+            model: params.model,
+            messages: this.convertMessagesToClaudeFormat(params.input || []),
+            system: params.instructions,
+            max_tokens: 4096,
+            stream: params.stream === true,
+          };
+          
+          // Add tools if available
+          if (params.tools && params.tools.length > 0) {
+            console.log("Claude provider: adding tools to request");
+            const claudeTools = this.formatTools(params.tools);
+            console.log(`Claude tools: ${JSON.stringify(claudeTools.map(t => t.name))}`);
+            // @ts-ignore - Type safety for tools
+            claudeParams.tools = claudeTools;
+          }
+          
+          try {
+            // Call Claude API
+            if (params.stream) {
+              // For streaming, return a suitable async iterator
+              return await this.createStreamingResponse(anthropicClient, claudeParams);
+            } else {
+              // For non-streaming, get the response and convert to expected format
+              const claudeResponse = await anthropicClient.messages.create(claudeParams);
+              return this.createOpenAICompatibleResponse(claudeResponse);
+            }
+          } catch (error) {
+            console.error("Claude API error:", error);
+            throw this.formatClaudeError(error);
+          }
+        }
+      }
+    };
+    
+    return clientWrapper;
+  }
+  
+  /**
+   * Create a streaming response compatible with OpenAI's interface
+   * @param client Anthropic client
+   * @param params Claude API parameters
+   * @returns Stream response compatible with OpenAI format
+   */
+  private async createStreamingResponse(client: Anthropic, params: any): Promise<any> {
+    try {
+      // Get the Claude streaming response
+      const claudeStream = await client.messages.stream(params);
+      
+      // Build up the complete text as we go for the final event
+      let completeText = "";
+      
+      // Keep track of tool uses (function calls)
+      const toolCalls: any[] = [];
+      let currentToolCall: any = null;
+      
+      // Create an iterable that adapts Claude's streaming format to OpenAI's
+      const adaptedStream = {
+        [Symbol.asyncIterator]: async function* () {
+          try {
+            // Process Claude streaming events
+            for await (const event of claudeStream) {
+              // Handle content block start - check for tool use
+              if (event.type === "content_block_start") {
+                // Tool use detection
+                if (event.content_block?.type === "tool_use") {
+                  currentToolCall = {
+                    id: event.content_block.id,
+                    name: event.content_block.name,
+                    input: event.content_block.input || {}
+                  };
+                }
+              }
+              // Process content deltas (text content)
+              else if (event.type === "content_block_delta" && event.delta?.text) {
+                completeText += event.delta.text;
+                
+                // Emit in OpenAI format
+                yield {
+                  type: "response.output_item.delta",
+                  delta: { 
+                    content: [{ type: "output_text", text: event.delta.text }] 
+                  },
+                  item: {
+                    type: "message",
+                    role: "assistant",
+                    content: [{ type: "output_text", text: event.delta.text }]
+                  }
+                };
+              }
+              // Process content block stop - finalize tool call if needed
+              else if (event.type === "content_block_stop") {
+                if (currentToolCall) {
+                  toolCalls.push(currentToolCall);
+                  
+                  // Emit function call in OpenAI format
+                  yield {
+                    type: "response.output_item.done",
+                    item: {
+                      type: "function_call",
+                      id: currentToolCall.id,
+                      name: currentToolCall.name,
+                      args: currentToolCall.input
+                    }
+                  };
+                  
+                  currentToolCall = null;
+                }
+              }
+              // When message is complete, emit final events
+              else if (event.type === "message_stop") {
+                // Final message event
+                yield {
+                  type: "response.completed",
+                  response: {
+                    id: `claude_${Date.now()}`,
+                    status: "completed",
+                    output: [
+                      // Include text output if any
+                      ...(completeText ? [{
+                        type: "message",
+                        role: "assistant",
+                        content: [{ 
+                          type: "output_text", 
+                          text: completeText 
+                        }]
+                      }] : []),
+                      // Include function calls if any (though these would already have been emitted)
+                      ...toolCalls.map(tool => ({
+                        type: "function_call",
+                        id: tool.id,
+                        name: tool.name,
+                        args: tool.input
+                      }))
+                    ].filter(Boolean)
+                  }
+                };
+              }
+            }
+          } catch (err) {
+            console.error("Error in Claude stream adapter:", err);
+            throw err;
+          }
+        },
+        // Add controller for OpenAI compatibility
+        controller: {
+          abort: () => claudeStream.controller?.abort?.()
+        }
+      };
+      
+      return adaptedStream;
+    } catch (error) {
+      console.error("Error creating Claude streaming response:", error);
+      throw error;
+    }
   }
   
   /**
@@ -245,29 +284,191 @@ export class ClaudeProvider extends BaseProvider {
   async runCompletion(params: CompletionParams): Promise<any> {
     const client = this.createClient(params.config);
     
+    console.log(`Claude provider: Running completion with model "${params.model}"`);
+    
     // Convert generic messages to Claude format
-    const messages = this.convertMessagesToClaudeFormat(params.messages);
+    const claudeMessages = this.convertMessagesToClaudeFormat(params.messages);
     
     // Convert tools to Claude format
-    const tools = this.formatTools(params.tools || []);
+    const claudeTools = this.formatTools(params.tools || []);
     
-    // Create request parameters
-    const requestParams = {
+    // Extract system message
+    const systemPrompt = this.extractSystemMessage(params.messages);
+    
+    // Create Anthropic-specific request parameters
+    const requestParams: any = {
       model: params.model,
-      messages,
-      system: this.extractSystemMessage(params.messages),
+      messages: claudeMessages,
+      system: systemPrompt,
       temperature: params.temperature || 0.7,
-      max_tokens: params.maxTokens,
+      max_tokens: params.maxTokens || 4096,
       stream: params.stream !== false, // Default to true
-      tools: tools.length > 0 ? tools : undefined,
     };
     
-    // Stream the response
-    if (params.stream) {
-      return client.messages.stream(requestParams);
-    } else {
-      return client.messages.create(requestParams);
+    // Add tools if available
+    if (claudeTools.length > 0) {
+      requestParams.tools = claudeTools;
     }
+    
+    try {
+      // Stream the response
+      if (params.stream) {
+        const stream = await client.messages.stream(requestParams);
+        
+        // Create an adapter that makes Claude's streaming API compatible with OpenAI's format
+        return this.createOpenAICompatibleStream(stream);
+      } else {
+        const response = await client.messages.create(requestParams);
+        return this.createOpenAICompatibleResponse(response);
+      }
+    } catch (error) {
+      // Handle Claude-specific errors
+      console.error("Claude API error:", error);
+      throw this.formatClaudeError(error);
+    }
+  }
+  
+  /**
+   * Create an OpenAI-compatible stream from Claude's streaming API
+   * @param claudeStream Claude stream
+   * @returns OpenAI-compatible stream
+   */
+  private createOpenAICompatibleStream(claudeStream: any): any {
+    // Create an async iterable that maps Claude's events to OpenAI's format
+    return {
+      [Symbol.asyncIterator]: async function* () {
+        try {
+          // Iterate through Claude's stream events
+          for await (const event of claudeStream) {
+            if (event.type === "content_block_start" && event.content_block?.type === "text") {
+              // Content block start - nothing to emit for OpenAI compatibility
+            } 
+            else if (event.type === "content_block_delta" && event.delta?.text) {
+              // Content block delta - emit as a text delta
+              // This is similar to how OpenAI streams tokens
+              yield {
+                type: "response.output_item.delta",
+                delta: { content: [{ type: "output_text", text: event.delta.text }] },
+                item: { 
+                  type: "message", 
+                  role: "assistant",
+                  content: [{ type: "output_text", text: event.delta.text }]
+                }
+              };
+            }
+            else if (event.type === "content_block_stop") {
+              // Content block complete - emit the completed message
+              yield {
+                type: "response.output_item.done",
+                item: {
+                  type: "message",
+                  role: "assistant",
+                  content: [{ type: "output_text", text: "" }]
+                }
+              };
+            }
+            else if (event.type === "message_stop") {
+              // Message complete - emit completion event
+              yield {
+                type: "response.completed",
+                response: {
+                  id: `claude_${Date.now()}`,
+                  status: "completed",
+                  output: [
+                    {
+                      type: "message",
+                      role: "assistant",
+                      content: [{ type: "output_text", text: "" }]
+                    }
+                  ]
+                }
+              };
+            }
+            // Handle tool calls if present
+            else if (event.type === "content_block_start" && event.content_block?.type === "tool_use") {
+              // Tool use - equivalent to function call in OpenAI
+              const toolUse = event.content_block as ToolUseBlock;
+              yield {
+                type: "response.output_item.done",
+                item: {
+                  type: "function_call",
+                  id: toolUse.id,
+                  name: toolUse.name,
+                  args: toolUse.input
+                }
+              };
+            }
+          }
+        } catch (error) {
+          console.error("Error in Claude stream adapter:", error);
+          throw error;
+        }
+      },
+      // Add controller for aborting the stream
+      controller: {
+        abort: () => {
+          console.log("Aborting Claude stream");
+          claudeStream.controller?.abort?.();
+        }
+      }
+    };
+  }
+  
+  /**
+   * Create an OpenAI-compatible response from Claude's response
+   * @param claudeResponse Claude response
+   * @returns OpenAI-compatible response
+   */
+  private createOpenAICompatibleResponse(claudeResponse: Message): any {
+    // Map Claude response to OpenAI format
+    return {
+      id: claudeResponse.id,
+      model: claudeResponse.model,
+      created: Date.now(),
+      object: "response",
+      output: claudeResponse.content.map(block => {
+        if (block.type === "text") {
+          return {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: (block as TextBlock).text }]
+          };
+        }
+        else if (block.type === "tool_use") {
+          // Tool use block (function call in OpenAI terms)
+          const toolUse = block as ToolUseBlock;
+          return {
+            type: "function_call",
+            id: toolUse.id,
+            name: toolUse.name,
+            args: toolUse.input
+          };
+        }
+        return null;
+      }).filter(Boolean)
+    };
+  }
+  
+  /**
+   * Format Claude API errors to a common format
+   * @param error The error from Claude API
+   * @returns Formatted error
+   */
+  private formatClaudeError(error: any): Error {
+    // Extract relevant error information
+    const status = error.status || error.statusCode;
+    const message = error.message || "Unknown Claude API error";
+    const type = error.type || "unknown_error";
+    
+    // Create a formatted error with Claude-specific information
+    const formattedError = new Error(`Claude API error (${status}): ${message} (${type})`);
+    
+    // Add original error properties
+    (formattedError as any).originalError = error;
+    (formattedError as any).statusCode = status;
+    (formattedError as any).errorType = type;
+    
+    return formattedError;
   }
   
   /**
@@ -289,18 +490,52 @@ export class ClaudeProvider extends BaseProvider {
    * @param messages Generic message array
    * @returns Claude-formatted messages
    */
-  private convertMessagesToClaudeFormat(messages: any[]): any[] {
+  private convertMessagesToClaudeFormat(messages: any[]): MessageParam[] {
     // Filter out system messages (handled separately in Claude)
     const nonSystemMessages = messages.filter(msg => msg.role !== "system");
     
-    // Convert to Claude format
+    // Convert to Claude format - Claude only accepts 'user' and 'assistant' roles
     return nonSystemMessages.map(message => {
-      // Simple conversion - in a real implementation, this would be more
-      // sophisticated to handle different content types and formats
-      return {
-        role: message.role === "assistant" ? "assistant" : "user",
-        content: message.content
-      };
+      // Determine role - Claude only supports 'user' and 'assistant'
+      const role = message.role === "assistant" ? "assistant" : "user";
+      
+      // Handle different content types
+      let content;
+      
+      // If content is an array (e.g., OpenAI format with multiple content parts)
+      if (Array.isArray(message.content)) {
+        content = message.content.map(item => {
+          // Handle text content
+          if (item.type === "input_text" || item.type === "output_text") {
+            return { type: "text", text: item.text };
+          }
+          
+          // Handle image content (if supported)
+          if (item.type === "input_image") {
+            return {
+              type: "image",
+              source: {
+                type: "base64",
+                media_type: item.media_type || "image/jpeg",
+                data: item.image_url?.replace(/^data:image\/[a-z]+;base64,/, "") || item.data
+              }
+            };
+          }
+          
+          // Default to text for unknown types
+          return { type: "text", text: JSON.stringify(item) };
+        });
+      } 
+      // If content is a string (simpler format)
+      else if (typeof message.content === "string") {
+        content = [{ type: "text", text: message.content }];
+      }
+      // For other formats, try to convert to string
+      else {
+        content = [{ type: "text", text: JSON.stringify(message.content) }];
+      }
+      
+      return { role, content };
     });
   }
   
@@ -362,17 +597,28 @@ export class ClaudeProvider extends BaseProvider {
    * @returns Tools in Claude format
    */
   formatTools(tools: Tool[]): any[] {
+    if (!tools || tools.length === 0) {
+      return [];
+    }
+    
     // Convert generic tools to Claude format
-    // This is a simplified implementation
-    return tools.map(tool => ({
-      name: tool.name,
-      description: tool.description || "",
-      input_schema: {
-        type: "object",
-        properties: tool.parameters,
-        required: [],
-      }
-    }));
+    return tools.map(tool => {
+      // Get required properties from parameters schema
+      const requiredProps = tool.parameters?.required || [];
+      
+      // Convert parameters.properties to Claude's expected format
+      const properties = tool.parameters?.properties || {};
+      
+      return {
+        name: tool.name,
+        description: tool.description || "",
+        input_schema: {
+          type: "object",
+          properties: properties,
+          required: requiredProps,
+        }
+      };
+    });
   }
   
   /**
@@ -411,10 +657,19 @@ export class ClaudeProvider extends BaseProvider {
    * @returns True if it's a rate limit error
    */
   isRateLimitError(error: any): boolean {
-    return (
-      error?.status === 429 ||
-      /rate limit/i.test(error?.message || "")
-    );
+    // Claude specific rate limit checks
+    if (error?.status === 429) {
+      return true;
+    }
+    
+    // Check error type and status
+    if (error?.error?.type === "rate_limit_error") {
+      return true;
+    }
+    
+    // Check error message
+    const errorMsg = error?.message || error?.error?.message || "";
+    return /rate limit/i.test(errorMsg) || /too many requests/i.test(errorMsg);
   }
   
   /**
@@ -423,11 +678,15 @@ export class ClaudeProvider extends BaseProvider {
    * @returns True if it's a timeout error
    */
   isTimeoutError(error: any): boolean {
-    return (
-      error?.code === "ETIMEDOUT" ||
-      error?.code === "ESOCKETTIMEDOUT" ||
-      /timeout/i.test(error?.message || "")
-    );
+    // Common timeout error codes
+    const timeoutCodes = ["ETIMEDOUT", "ESOCKETTIMEDOUT", "ECONNABORTED"];
+    if (timeoutCodes.includes(error?.code)) {
+      return true;
+    }
+    
+    // Check error message
+    const errorMsg = error?.message || error?.error?.message || "";
+    return /timeout/i.test(errorMsg) || /timed out/i.test(errorMsg);
   }
   
   /**
@@ -436,18 +695,24 @@ export class ClaudeProvider extends BaseProvider {
    * @returns True if it's a connection error
    */
   isConnectionError(error: any): boolean {
+    // Common network error codes
+    const networkCodes = [
+      "ECONNRESET", "ECONNREFUSED", "ENOTFOUND", "EPIPE", 
+      "ENETUNREACH", "ENETRESET", "ECONNABORTED"
+    ];
+    
+    // Check if error code is a network error
+    if (networkCodes.includes(error?.code) || networkCodes.includes(error?.cause?.code)) {
+      return true;
+    }
+    
+    // Check for network-related terms in message
+    const errorMsg = error?.message || error?.error?.message || "";
     return (
-      error?.code === "ECONNRESET" ||
-      error?.code === "ECONNREFUSED" ||
-      error?.code === "ENOTFOUND" ||
-      error?.code === "EPIPE" ||
-      error?.cause?.code === "ECONNRESET" ||
-      error?.cause?.code === "ECONNREFUSED" ||
-      error?.cause?.code === "ENOTFOUND" ||
-      error?.cause?.code === "EPIPE" ||
-      /network/i.test(error?.message || "") ||
-      /socket/i.test(error?.message || "") ||
-      /connection/i.test(error?.message || "")
+      /network/i.test(errorMsg) || 
+      /socket/i.test(errorMsg) || 
+      /connection/i.test(errorMsg) ||
+      /dns/i.test(errorMsg)
     );
   }
   
@@ -457,11 +722,23 @@ export class ClaudeProvider extends BaseProvider {
    * @returns True if it's a context length error
    */
   isContextLengthError(error: any): boolean {
-    return (
-      error?.type === "context_length_exceeded" ||
-      /context length exceeded/i.test(error?.message || "") ||
-      /token limit/i.test(error?.message || "")
-    );
+    // Claude specific error type
+    if (error?.error?.type === "context_length_exceeded") {
+      return true;
+    }
+    
+    // Check error status and message patterns specific to Claude
+    if (error?.status === 400) {
+      const errorMsg = error?.message || error?.error?.message || "";
+      return (
+        /context length exceeded/i.test(errorMsg) ||
+        /token limit/i.test(errorMsg) ||
+        /input is too long/i.test(errorMsg) ||
+        /exceeds the max tokens/i.test(errorMsg)
+      );
+    }
+    
+    return false;
   }
   
   /**
@@ -470,13 +747,21 @@ export class ClaudeProvider extends BaseProvider {
    * @returns True if it's an invalid request error
    */
   isInvalidRequestError(error: any): boolean {
-    return (
-      (typeof error?.status === "number" &&
-        error.status >= 400 &&
-        error.status < 500 &&
-        error.status !== 429) ||
-      error?.type === "invalid_request"
-    );
+    // 4xx errors except rate limit (429) are generally invalid requests
+    if (typeof error?.status === "number" && 
+        error.status >= 400 && 
+        error.status < 500 && 
+        error.status !== 429) {
+      return true;
+    }
+    
+    // Claude-specific error types
+    const invalidTypes = ["invalid_request_error", "authentication_error", "permission_error"];
+    if (invalidTypes.includes(error?.error?.type)) {
+      return true;
+    }
+    
+    return false;
   }
   
   /**
@@ -485,29 +770,33 @@ export class ClaudeProvider extends BaseProvider {
    * @returns User-friendly error message
    */
   formatErrorMessage(error: any): string {
-    // Handle known error types
+    // Handle known error types with Claude-specific messages
     if (this.isRateLimitError(error)) {
-      return `Claude rate limit exceeded. Please try again later.`;
+      return `Claude rate limit exceeded. Please try again in a few minutes.`;
     }
     
     if (this.isTimeoutError(error)) {
-      return `Request to Claude timed out. Please try again.`;
+      return `Request to Claude timed out. Claude models may take longer to process complex requests. Please try again or consider using a faster model.`;
     }
     
     if (this.isContextLengthError(error)) {
-      return `The current request exceeds the maximum context length supported by the chosen Claude model. Please shorten the conversation or switch to a model with a larger context window.`;
+      return `The current request exceeds the maximum context length for Claude. Please shorten your prompt or conversation history, or switch to a Claude model with a larger context window.`;
     }
     
     if (this.isConnectionError(error)) {
-      return `Network error while contacting Claude. Please check your connection and try again.`;
+      return `Network error while contacting Claude API. Please check your internet connection and Anthropic service status.`;
     }
     
-    // Extract status and message for detailed error info
-    const status = error?.status || "unknown";
-    const message = error?.message || "unknown";
+    if (error?.status === 401 || error?.error?.type === "authentication_error") {
+      return `Claude API authentication failed. Please check your API key and ensure it has the correct permissions.`;
+    }
     
-    // Format detailed error message
-    return `Claude error: Status ${status}, Message: ${message}`;
+    // Format generic errors with Claude-specific information
+    const status = error?.status || error?.error?.status || "unknown";
+    const type = error?.error?.type || "unknown_error";
+    const message = error?.message || error?.error?.message || "Unknown Claude API error";
+    
+    return `Claude API error: [${status}] ${type} - ${message}`;
   }
   
   /**
@@ -516,13 +805,20 @@ export class ClaudeProvider extends BaseProvider {
    * @returns Recommended wait time in milliseconds
    */
   getRetryAfterMs(error: any): number {
-    // Default retry time
+    // Default retry time for Claude
     const DEFAULT_RETRY_MS = 5000;
     
-    // Parse retry-after from headers
-    const retryAfter = error?.headers?.["retry-after"];
+    // Try to parse retry-after header from Claude response
+    const retryAfter = error?.headers?.["retry-after"] || error?.error?.headers?.["retry-after"];
     if (retryAfter && !isNaN(parseInt(retryAfter, 10))) {
       return parseInt(retryAfter, 10) * 1000;
+    }
+    
+    // Check if there's a specific retry duration in the error message
+    const errorMsg = error?.message || error?.error?.message || "";
+    const retryMatch = /retry after (\d+) seconds/i.exec(errorMsg);
+    if (retryMatch && retryMatch[1] && !isNaN(parseInt(retryMatch[1], 10))) {
+      return parseInt(retryMatch[1], 10) * 1000;
     }
     
     return DEFAULT_RETRY_MS;
