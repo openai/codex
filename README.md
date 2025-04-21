@@ -78,6 +78,25 @@ export OPENAI_API_KEY="your-api-key-here"
 >
 > The CLI will automatically load variables from `.env` (via `dotenv/config`).
 
+> **Note:** Codex also allows you to use other providers that support the OpenAI Chat Completions API. You can set the provider in the config file or use the `--provider` flag.
+>
+> The possible options for `--provider` are:
+>
+> - openai (default)
+> - openrouter
+> - gemini
+> - ollama
+> - mistral
+> - deepseek
+> - xai
+> - groq
+>
+> If you use a provider other than OpenAI, you will need to set the API key for the provider in the config file or in the environment variable as:
+>
+> ```shell
+> export <provider>_API_KEY="your-api-key-here"
+> ```
+
 Run interactively:
 
 ```shell
