@@ -175,8 +175,8 @@ export function exec(
         return buf.toString(encoding);
       };
 
-      const stdout = stdoutCollector.getString();
-      const stderr = stderrCollector.getString();
+      const stdout = decode(stdoutBuf);
+      const stderr = decode(stderrBuf);
 
       // Map (code, signal) to an exit code. We expect exactly one of the two
       // values to be non-null, but we code defensively to handle the case where
