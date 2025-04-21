@@ -289,9 +289,6 @@ model: o4-mini # Default model
 approvalMode: suggest # or auto-edit, full-auto
 fullAutoErrorMode: ask-user # or ignore-and-continue
 notify: true # Enable desktop notifications for responses
-safeCommands:
-  - npm test # Automatically approve npm test
-  - yarn lint # Automatically approve yarn lint
 ```
 
 ```json
