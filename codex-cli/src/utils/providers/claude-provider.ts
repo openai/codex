@@ -26,6 +26,7 @@ import type {
 
 import type { AppConfig } from "../config.js";
 import { ORIGIN, CLI_VERSION } from "../session.js";
+import { isLoggingEnabled, log } from "../agent/log.js";
 
 // Import primitives for tool processing
 import {
@@ -91,15 +92,13 @@ export class ClaudeProvider extends BaseProvider {
   
   /**
    * Create a streaming response compatible with OpenAI's interface
-   * @param client Anthropic client
-   * @param params Claude API parameters
+   * @param claudeStream Anthropic streaming response
    * @returns Stream response compatible with OpenAI format
    */
-  private async createStreamingResponse(client: Anthropic, params: any): Promise<any> {
+  private async createStreamingResponse(claudeStream: any): Promise<any> {
     try {
-      // Get the Claude streaming response
-      console.log("Claude provider: Creating streaming response");
-      const claudeStream = await client.messages.stream(params);
+      // Process the Claude streaming response
+      log("Claude provider: Creating streaming response");
       
       // Build up the complete text as we go for the final event
       let completeText = "";
@@ -117,16 +116,16 @@ export class ClaudeProvider extends BaseProvider {
           try {
             // Process Claude streaming events
             for await (const event of claudeStream) {
-              console.log(`Claude provider: STREAM EVENT: ${event.type}`);
+              log(`Claude provider: STREAM EVENT: ${event.type}`);
               if (event.content_block) {
-                console.log(`Claude provider: Content block type: ${event.content_block.type}`);
+                log(`Claude provider: Content block type: ${event.content_block.type}`);
               }
               
               // Handle content block start - check for tool use
               if (event.type === "content_block_start") {
                 // Tool use detection
                 if (event.content_block?.type === "tool_use") {
-                  console.log(`Claude provider: Tool use detected:`, event.content_block);
+                  log(`Claude provider: Tool use detected: ${JSON.stringify(event.content_block)}`);
                   
                   currentToolCall = {
                     id: event.content_block.id,
@@ -134,7 +133,7 @@ export class ClaudeProvider extends BaseProvider {
                     input: event.content_block.input || {}
                   };
                   
-                  console.log(`Claude provider: Current tool call:`, currentToolCall);
+                  log(`Claude provider: Current tool call: ${JSON.stringify(currentToolCall)}`);
                 }
               }
               // Process content deltas (text content)
@@ -156,17 +155,17 @@ export class ClaudeProvider extends BaseProvider {
               }
               // Process content block stop - finalize tool call if needed
               else if (event.type === "content_block_stop") {
-                console.log(`Claude provider: Content block stopped`);
+                log(`Claude provider: Content block stopped`);
                 
                 if (currentToolCall) {
-                  console.log(`Claude provider: Finalizing tool call:`, currentToolCall);
+                  log(`Claude provider: Finalizing tool call: ${JSON.stringify(currentToolCall)}`);
                   toolCalls.push(currentToolCall);
                   
                   // Convert Claude tool call to OpenAI function call format
                   const functionCall = claudeToolToOpenAIFunction(currentToolCall);
                   
                   if (functionCall) {
-                    console.log(`Claude provider: Emitting function call:`, functionCall);
+                    log(`Claude provider: Emitting function call: ${JSON.stringify(functionCall)}`);
                     
                     // Emit function call in OpenAI format
                     yield {
@@ -180,7 +179,7 @@ export class ClaudeProvider extends BaseProvider {
               }
               // When message is complete, emit final events
               else if (event.type === "message_stop") {
-                console.log("Claude provider: Received message_stop event");
+                log("Claude provider: Received message_stop event");
                 
                 // Create the assistant message with the complete text (trim trailing whitespace)
                 const assistantMessage = {
@@ -195,7 +194,7 @@ export class ClaudeProvider extends BaseProvider {
                 // Convert tool calls to function calls for final output
                 const functionCalls = toolCalls.map(tool => claudeToolToOpenAIFunction(tool)).filter(Boolean);
                 
-                console.log(`Claude provider: Final output with ${functionCalls.length} function calls`);
+                log(`Claude provider: Final output with ${functionCalls.length} function calls`);
                 
                 // For streaming responses, emit completion event
                 yield {
@@ -218,7 +217,7 @@ export class ClaudeProvider extends BaseProvider {
               }
             }
           } catch (err) {
-            console.error("Error in Claude stream adapter:", err);
+            log(`Error in Claude stream adapter: ${err}`);
             throw err;
           }
         },
@@ -230,7 +229,7 @@ export class ClaudeProvider extends BaseProvider {
       
       return adaptedStream;
     } catch (error) {
-      console.error("Error creating Claude streaming response:", error);
+      log(`Error creating Claude streaming response: ${error}`);
       throw error;
     }
   }
@@ -241,11 +240,11 @@ export class ClaudeProvider extends BaseProvider {
    * @returns OpenAI-compatible response
    */
   private createOpenAICompatibleResponse(claudeResponse: Message): any {
-    console.log(`Claude provider: Creating OpenAI-compatible response from Claude response`);
+    log(`Claude provider: Creating OpenAI-compatible response from Claude response`);
     
     // Convert Claude response to OpenAI format
     const output = claudeResponse.content.map(block => {
-      console.log(`Claude provider: Processing content block type: ${block.type}`);
+      log(`Claude provider: Processing content block type: ${block.type}`);
       
       if (block.type === "text") {
         const textBlock = block as TextBlock;
@@ -258,11 +257,11 @@ export class ClaudeProvider extends BaseProvider {
       else if (block.type === "tool_use") {
         // Tool use block (function call in OpenAI terms)
         const toolUse = block as ToolUseBlock;
-        console.log(`Claude provider: Tool use block detected, name: ${toolUse.name}`);
+        log(`Claude provider: Tool use block detected, name: ${toolUse.name}`);
         
         // Convert to function call format
         const functionCall = claudeToolToOpenAIFunction(toolUse);
-        console.log(`Claude provider: Converted to function call:`, functionCall);
+        log(`Claude provider: Converted to function call: ${JSON.stringify(functionCall)}`);
         
         return functionCall;
       }
@@ -323,15 +322,15 @@ export class ClaudeProvider extends BaseProvider {
     try {
       // Stream the response
       if (params.stream) {
-        const stream = await client.messages.stream(requestParams);
-        return this.createStreamingResponse(stream, requestParams);
+        // Delegate streaming through the adapter (client + params)
+        return this.createStreamingResponse(client, requestParams);
       } else {
         const response = await client.messages.create(requestParams);
         return this.createOpenAICompatibleResponse(response);
       }
     } catch (error) {
       // Handle Claude-specific errors
-      console.error("Claude API error:", error);
+      log(`Claude API error: ${error}`);
       throw error;
     }
   }
@@ -446,7 +445,7 @@ export class ClaudeProvider extends BaseProvider {
     // Filter out system messages (handled separately in Claude)
     const nonSystemMessages = messages.filter(msg => msg.role !== "system");
     
-    console.log(`Claude provider: Converting ${nonSystemMessages.length} messages to Claude format`);
+    log(`Claude provider: Converting ${nonSystemMessages.length} messages to Claude format`);
     
     // Convert to Claude format
     return nonSystemMessages.map(message => {
