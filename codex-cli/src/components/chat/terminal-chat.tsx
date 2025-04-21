@@ -193,7 +193,7 @@ export default function TerminalChat({
   } = useConfirmation();
   const [overlayMode, setOverlayMode] = useState<OverlayModeType>("none");
 
-  // Store the diff text when opening the diff overlay so the view isn’t
+  // Store the diff text when opening the diff overlay so the view isn't
   // recomputed on every re‑render while it is open.
   // diffText is passed down to the DiffOverlay component. The setter is
   // currently unused but retained for potential future updates. Prefix with
@@ -211,12 +211,15 @@ export default function TerminalChat({
   const agentRef = React.useRef<AgentLoop>();
   const [, forceUpdate] = React.useReducer((c) => c + 1, 0); // trigger re‑render
 
+  // Add an initialization timeout state around line 160
+  const [initTimeout, setInitTimeout] = useState<NodeJS.Timeout | null>(null);
+  const [initTimeoutExpired, setInitTimeoutExpired] = useState<boolean>(false);
+
   // ────────────────────────────────────────────────────────────────
   // DEBUG: log every render w/ key bits of state
   // ────────────────────────────────────────────────────────────────
   log(
-    `render – agent? ${Boolean(agentRef.current)} loading=${loading} items=${
-      items.length
+    `render – agent? ${Boolean(agentRef.current)} loading=${loading} items=${items.length
     }`,
   );
 
@@ -394,6 +397,53 @@ export default function TerminalChat({
     log(`agentRef.current is now ${Boolean(agent)}`);
   }, [agent]);
 
+  // Add cleanup for the timeout
+  useEffect(() => {
+    return () => {
+      if (initTimeout) {
+        clearTimeout(initTimeout);
+      }
+    };
+  }, [initTimeout]);
+
+  // Around line 400, in the useEffect where the agent is created
+  useEffect(() => {
+    if (!agent && !initTimeoutExpired) {
+      // Set a timeout to detect agent initialization failures
+      const timeout = setTimeout(() => {
+        if (!agentRef.current) {
+          log("Agent initialization timeout expired");
+          setInitTimeoutExpired(true);
+          setLoading(false);
+
+          // Add a system message to indicate the issue
+          setItems((prev) => [
+            ...prev,
+            {
+              id: `init-timeout-${Date.now()}`,
+              type: "message",
+              role: "system",
+              content: [
+                {
+                  type: "input_text",
+                  text: "⚠️ Agent initialization timed out. Please try again or restart Codex.",
+                },
+              ],
+            },
+          ]);
+        }
+      }, 15000); // 15 seconds timeout
+
+      setInitTimeout(timeout);
+    }
+
+    return () => {
+      if (initTimeout) {
+        clearTimeout(initTimeout);
+      }
+    };
+  }, [agent, initTimeout, initTimeoutExpired]);
+
   // ---------------------------------------------------------------------
   // Dynamic layout constraints – keep total rendered rows <= terminal rows
   // ---------------------------------------------------------------------
@@ -458,6 +508,28 @@ export default function TerminalChat({
     [items, model],
   );
 
+  // Modify the agent recovery UI section
+  {
+    !agent && loading && !initTimeoutExpired && (
+      <Box marginTop={1}>
+        <Text color="yellow">
+          If this message persists for more than 10 seconds, press Esc to cancel and try again.
+        </Text>
+      </Box>
+    )
+  }
+
+  // Update the initialization timeout UI
+  {
+    initTimeoutExpired && (
+      <Box marginTop={1} marginBottom={1} flexDirection="column">
+        <Text color="red">
+          Agent initialization timed out. Please restart Codex or try again with a different command.
+        </Text>
+      </Box>
+    )
+  }
+
   return (
     <Box flexDirection="column">
       <Box flexDirection="column">
@@ -490,6 +562,7 @@ export default function TerminalChat({
             <Text color="gray">Initializing agent…</Text>
           </Box>
         )}
+
         {overlayMode === "none" && agent && (
           <TerminalChatInput
             loading={loading}

@@ -31,6 +31,12 @@ const RATE_LIMIT_RETRY_WAIT_MS = parseInt(
   10,
 );
 
+// Add a constant for stream processing timeout
+const STREAM_PROCESSING_TIMEOUT_MS = parseInt(
+  process.env["STREAM_PROCESSING_TIMEOUT_MS"] || "60000", // 60 seconds default
+  10,
+);
+
 export type CommandConfirmation = {
   review: ReviewDecision;
   applyPatch?: ApplyPatchCommand | undefined;
@@ -740,54 +746,92 @@ export class AgentLoop {
         }
 
         try {
+          // Use Promise.race to either process the stream or timeout
           // eslint-disable-next-line no-await-in-loop
-          for await (const event of stream as AsyncIterable<ResponseEvent>) {
-            log(`AgentLoop.run(): response event ${event.type}`);
+          await Promise.race([
+            (async () => {
+              // eslint-disable-next-line no-await-in-loop
+              for await (const event of stream as AsyncIterable<ResponseEvent>) {
+                log(`AgentLoop.run(): response event ${event.type}`);
 
-            // process and surface each item (no‑op until we can depend on streaming events)
-            if (event.type === "response.output_item.done") {
-              const item = event.item;
-              // 1) if it's a reasoning item, annotate it
-              type ReasoningItem = { type?: string; duration_ms?: number };
-              const maybeReasoning = item as ReasoningItem;
-              if (maybeReasoning.type === "reasoning") {
-                maybeReasoning.duration_ms = Date.now() - thinkingStart;
-              }
-              if (item.type === "function_call") {
-                // Track outstanding tool call so we can abort later if needed.
-                // The item comes from the streaming response, therefore it has
-                // either `id` (chat) or `call_id` (responses) – we normalise
-                // by reading both.
-                const callId =
-                  (item as { call_id?: string; id?: string }).call_id ??
-                  (item as { id?: string }).id;
-                if (callId) {
-                  this.pendingAborts.add(callId);
+                // process and surface each item (no‑op until we can depend on streaming events)
+                if (event.type === "response.output_item.done") {
+                  const item = event.item;
+                  // 1) if it's a reasoning item, annotate it
+                  type ReasoningItem = { type?: string; duration_ms?: number };
+                  const maybeReasoning = item as ReasoningItem;
+                  if (maybeReasoning.type === "reasoning") {
+                    maybeReasoning.duration_ms = Date.now() - thinkingStart;
+                  }
+                  if (item.type === "function_call") {
+                    // Track outstanding tool call so we can abort later if needed.
+                    // The item comes from the streaming response, therefore it has
+                    // either `id` (chat) or `call_id` (responses) – we normalise
+                    // by reading both.
+                    const callId =
+                      (item as { call_id?: string; id?: string }).call_id ??
+                      (item as { id?: string }).id;
+                    if (callId) {
+                      this.pendingAborts.add(callId);
+                    }
+                  } else {
+                    stageItem(item as ResponseItem);
+                  }
                 }
-              } else {
-                stageItem(item as ResponseItem);
-              }
-            }
 
-            if (event.type === "response.completed") {
-              if (thisGeneration === this.generation && !this.canceled) {
-                for (const item of event.response.output) {
-                  stageItem(item as ResponseItem);
+                if (event.type === "response.completed") {
+                  if (thisGeneration === this.generation && !this.canceled) {
+                    for (const item of event.response.output) {
+                      stageItem(item as ResponseItem);
+                    }
+                  }
+                  if (event.response.status === "completed") {
+                    // TODO: remove this once we can depend on streaming events
+                    const newTurnInput = await this.processEventsWithoutStreaming(
+                      event.response.output,
+                      stageItem,
+                    );
+                    turnInput = newTurnInput;
+                  }
+                  lastResponseId = event.response.id;
+                  this.onLastResponseId(event.response.id);
                 }
               }
-              if (event.response.status === "completed") {
-                // TODO: remove this once we can depend on streaming events
-                const newTurnInput = await this.processEventsWithoutStreaming(
-                  event.response.output,
-                  stageItem,
-                );
-                turnInput = newTurnInput;
-              }
-              lastResponseId = event.response.id;
-              this.onLastResponseId(event.response.id);
-            }
-          }
+            })(),
+            // Stream processing timeout - using setTimeout instead of a loop with await
+            new Promise<never>((_, reject) => {
+              const timeoutId = setTimeout(() => {
+                log("AgentLoop.run(): stream processing timed out");
+                // If the agent has been cancelled or aborted, don't reject
+                if (!this.canceled && !this.hardAbort.signal.aborted) {
+                  reject(new Error("Stream processing timed out"));
+                }
+              }, STREAM_PROCESSING_TIMEOUT_MS);
+
+              // Clean up the timeout if the agent is canceled
+              this.hardAbort.signal.addEventListener("abort", () => {
+                clearTimeout(timeoutId);
+              }, { once: true });
+            }),
+          ]);
         } catch (err: unknown) {
+          // Check if it's our timeout error
+          if (err instanceof Error && err.message === "Stream processing timed out") {
+            this.onItem({
+              id: `stream-timeout-${Date.now()}`,
+              type: "message",
+              role: "system",
+              content: [
+                {
+                  type: "input_text",
+                  text: "⚠️ Stream processing timed out. Please try again or restart Codex.",
+                },
+              ],
+            });
+            this.onLoading(false);
+            return;
+          }
+
           // Gracefully handle an abort triggered via `cancel()` so that the
           // consumer does not see an unhandled exception.
           if (err instanceof Error && err.name === "AbortError") {
