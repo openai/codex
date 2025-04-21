@@ -37,17 +37,14 @@ describe("handleSlashCommand", () => {
     ["/help", "openHelpOverlay"],
     ["/diff", "openDiffOverlay"],
     ["/compact", "onCompact"],
-  ])(
-    "%s invokes %s and clears input",
-    (cmd, handlerName) => {
-      const mocks = createMocks();
-      const result = handleSlashCommand(cmd, mocks);
-      expect(result).toBe(true);
-      expect(mocks.setInput).toHaveBeenCalledWith("");
-      // @ts-ignore
-      expect(mocks[handlerName]).toHaveBeenCalledTimes(1);
-    },
-  );
+  ])("%s invokes %s and clears input", (cmd, handlerName) => {
+    const mocks = createMocks();
+    const result = handleSlashCommand(cmd, mocks);
+    expect(result).toBe(true);
+    expect(mocks.setInput).toHaveBeenCalledWith("");
+    // @ts-ignore
+    expect(mocks[handlerName]).toHaveBeenCalledTimes(1);
+  });
 
   it("handles /model and /model xyz by opening model overlay and clearing input", () => {
     const mocks = createMocks();

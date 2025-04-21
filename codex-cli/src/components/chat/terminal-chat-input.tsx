@@ -374,7 +374,6 @@ export default function TerminalChatInput({
         return;
       }
 
-
       if (inputValue === "q" || inputValue === ":q" || inputValue === "exit") {
         setInput("");
         // wait one 60ms frame
