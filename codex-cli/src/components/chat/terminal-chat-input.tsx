@@ -1,3 +1,4 @@
+import type { MultilineTextEditorHandle } from "./multiline-editor";
 import type { ReviewDecision } from "../../utils/agent/review.js";
 import type { HistoryEntry } from "../../utils/storage/command-history.js";
 import type {
@@ -5,20 +6,29 @@ import type {
   ResponseItem,
 } from "openai/resources/responses/responses.mjs";
 
+import MultilineTextEditor from "./multiline-editor";
 import { TerminalChatCommandReview } from "./terminal-chat-command-review.js";
-import { log, isLoggingEnabled } from "../../utils/agent/log.js";
+import TextCompletions from "./terminal-chat-completions.js";
+import { log } from "../../utils/agent/log.js";
 import { loadConfig } from "../../utils/config.js";
+import { getFileSystemSuggestions } from "../../utils/file-system-suggestions.js";
 import { createInputItem } from "../../utils/input-utils.js";
 import { setSessionId } from "../../utils/session.js";
+import { SLASH_COMMANDS, type SlashCommand } from "../../utils/slash-commands";
 import {
   loadCommandHistory,
   addToHistory,
 } from "../../utils/storage/command-history.js";
 import { clearTerminal, onExit } from "../../utils/terminal.js";
-import TextInput from "../vendor/ink-text-input.js";
 import { Box, Text, useApp, useInput, useStdin } from "ink";
 import { fileURLToPath } from "node:url";
-import React, { useCallback, useState, Fragment, useEffect } from "react";
+import React, {
+  useCallback,
+  useState,
+  Fragment,
+  useEffect,
+  useRef,
+} from "react";
 import { useInterval } from "use-interval";
 
 const suggestions = [
@@ -41,6 +51,7 @@ export default function TerminalChatInput({
   openModelOverlay,
   openApprovalOverlay,
   openHelpOverlay,
+  openDiffOverlay,
   onCompact,
   interruptAgent,
   active,
@@ -63,6 +74,7 @@ export default function TerminalChatInput({
   openModelOverlay: () => void;
   openApprovalOverlay: () => void;
   openHelpOverlay: () => void;
+  openDiffOverlay: () => void;
   onCompact: () => void;
   interruptAgent: () => void;
   active: boolean;
@@ -70,12 +82,24 @@ export default function TerminalChatInput({
   // New: current conversation items so we can include them in bug reports
   items?: Array<ResponseItem>;
 }): React.ReactElement {
+  // Slash command suggestion index
+  const [selectedSlashSuggestion, setSelectedSlashSuggestion] =
+    useState<number>(0);
   const app = useApp();
   const [selectedSuggestion, setSelectedSuggestion] = useState<number>(0);
   const [input, setInput] = useState("");
   const [history, setHistory] = useState<Array<HistoryEntry>>([]);
   const [historyIndex, setHistoryIndex] = useState<number | null>(null);
   const [draftInput, setDraftInput] = useState<string>("");
+  const [skipNextSubmit, setSkipNextSubmit] = useState<boolean>(false);
+  const [fsSuggestions, setFsSuggestions] = useState<Array<string>>([]);
+  const [selectedCompletion, setSelectedCompletion] = useState<number>(-1);
+  // Multiline text editor key to force remount after submission
+  const [editorKey, setEditorKey] = useState(0);
+  // Imperative handle from the multiline editor so we can query caret position
+  const editorRef = useRef<MultilineTextEditorHandle | null>(null);
+  // Track the caret row across keystrokes
+  const prevCursorRow = useRef<number | null>(null);
 
   // Load command history on component mount
   useEffect(() => {
@@ -86,14 +110,144 @@ export default function TerminalChatInput({
 
     loadHistory();
   }, []);
+  // Reset slash suggestion index when input prefix changes
+  useEffect(() => {
+    if (input.trim().startsWith("/")) {
+      setSelectedSlashSuggestion(0);
+    }
+  }, [input]);
 
   useInput(
     (_input, _key) => {
+      // Slash command navigation: up/down to select, enter to fill
+      if (!confirmationPrompt && !loading && input.trim().startsWith("/")) {
+        const prefix = input.trim();
+        const matches = SLASH_COMMANDS.filter((cmd: SlashCommand) =>
+          cmd.command.startsWith(prefix),
+        );
+        if (matches.length > 0) {
+          if (_key.tab) {
+            // Cycle and fill slash command suggestions on Tab
+            const len = matches.length;
+            // Determine new index based on shift state
+            const nextIdx = _key.shift
+              ? selectedSlashSuggestion <= 0
+                ? len - 1
+                : selectedSlashSuggestion - 1
+              : selectedSlashSuggestion >= len - 1
+              ? 0
+              : selectedSlashSuggestion + 1;
+            setSelectedSlashSuggestion(nextIdx);
+            // Autocomplete the command in the input
+            const match = matches[nextIdx];
+            if (!match) {
+              return;
+            }
+            const cmd = match.command;
+            setInput(cmd);
+            setDraftInput(cmd);
+            return;
+          }
+          if (_key.upArrow) {
+            setSelectedSlashSuggestion((prev) =>
+              prev <= 0 ? matches.length - 1 : prev - 1,
+            );
+            return;
+          }
+          if (_key.downArrow) {
+            setSelectedSlashSuggestion((prev) =>
+              prev < 0 || prev >= matches.length - 1 ? 0 : prev + 1,
+            );
+            return;
+          }
+          if (_key.return) {
+            // Execute the currently selected slash command
+            const selIdx = selectedSlashSuggestion;
+            const cmdObj = matches[selIdx];
+            if (cmdObj) {
+              const cmd = cmdObj.command;
+              setInput("");
+              setDraftInput("");
+              setSelectedSlashSuggestion(0);
+              switch (cmd) {
+                case "/history":
+                  openOverlay();
+                  break;
+                case "/help":
+                  openHelpOverlay();
+                  break;
+                case "/compact":
+                  onCompact();
+                  break;
+                case "/model":
+                  openModelOverlay();
+                  break;
+                case "/approval":
+                  openApprovalOverlay();
+                  break;
+                case "/diff":
+                  openDiffOverlay();
+                  break;
+                case "/bug":
+                  onSubmit(cmd);
+                  break;
+                default:
+                  break;
+              }
+            }
+            return;
+          }
+        }
+      }
       if (!confirmationPrompt && !loading) {
+        if (fsSuggestions.length > 0) {
+          if (_key.upArrow) {
+            setSelectedCompletion((prev) =>
+              prev <= 0 ? fsSuggestions.length - 1 : prev - 1,
+            );
+            return;
+          }
+
+          if (_key.downArrow) {
+            setSelectedCompletion((prev) =>
+              prev >= fsSuggestions.length - 1 ? 0 : prev + 1,
+            );
+            return;
+          }
+
+          if (_key.tab && selectedCompletion >= 0) {
+            const words = input.trim().split(/\s+/);
+            const selected = fsSuggestions[selectedCompletion];
+
+            if (words.length > 0 && selected) {
+              words[words.length - 1] = selected;
+              const newText = words.join(" ");
+              setInput(newText);
+              // Force remount of the editor with the new text
+              setEditorKey((k) => k + 1);
+
+              // We need to move the cursor to the end after editor remounts
+              setTimeout(() => {
+                editorRef.current?.moveCursorToEnd?.();
+              }, 0);
+
+              setFsSuggestions([]);
+              setSelectedCompletion(-1);
+            }
+            return;
+          }
+        }
+
         if (_key.upArrow) {
-          if (history.length > 0) {
+          // Only recall history when the caret was *already* on the very first
+          // row *before* this key-press.
+          const cursorRow = editorRef.current?.getRow?.() ?? 0;
+          const wasAtFirstRow = (prevCursorRow.current ?? cursorRow) === 0;
+
+          if (history.length > 0 && cursorRow === 0 && wasAtFirstRow) {
             if (historyIndex == null) {
-              setDraftInput(input);
+              const currentDraft = editorRef.current?.getText?.() ?? input;
+              setDraftInput(currentDraft);
             }
 
             let newIndex: number;
@@ -104,26 +258,49 @@ export default function TerminalChatInput({
             }
             setHistoryIndex(newIndex);
             setInput(history[newIndex]?.command ?? "");
+            // Re-mount the editor so it picks up the new initialText
+            setEditorKey((k) => k + 1);
+            return; // we handled the key
           }
-          return;
+          // Otherwise let the event propagate so the editor moves the caret
         }
 
         if (_key.downArrow) {
-          if (historyIndex == null) {
+          // Only move forward in history when we're already *in* history mode
+          // AND the caret sits on the last line of the buffer
+          if (historyIndex != null && editorRef.current?.isCursorAtLastRow()) {
+            const newIndex = historyIndex + 1;
+            if (newIndex >= history.length) {
+              setHistoryIndex(null);
+              setInput(draftInput);
+              setEditorKey((k) => k + 1);
+            } else {
+              setHistoryIndex(newIndex);
+              setInput(history[newIndex]?.command ?? "");
+              setEditorKey((k) => k + 1);
+            }
+            return; // handled
+          }
+          // Otherwise let it propagate
+        }
+
+        if (_key.tab) {
+          const words = input.split(/\s+/);
+          const mostRecentWord = words[words.length - 1];
+          if (mostRecentWord === undefined || mostRecentWord === "") {
             return;
           }
-
-          const newIndex = historyIndex + 1;
-          if (newIndex >= history.length) {
-            setHistoryIndex(null);
-            setInput(draftInput);
-          } else {
-            setHistoryIndex(newIndex);
-            setInput(history[newIndex]?.command ?? "");
+          const completions = getFileSystemSuggestions(mostRecentWord);
+          setFsSuggestions(completions);
+          if (completions.length > 0) {
+            setSelectedCompletion(0);
           }
-          return;
         }
       }
+
+      // Update the cached cursor position *after* we've potentially handled
+      // the key so that the next event has the correct "previous" reference.
+      prevCursorRow.current = editorRef.current?.getRow?.() ?? null;
 
       if (input.trim() === "" && isNew) {
         if (_key.tab) {
@@ -156,6 +333,16 @@ export default function TerminalChatInput({
   const onSubmit = useCallback(
     async (value: string) => {
       const inputValue = value.trim();
+      // If the user only entered a slash, do not send a chat message
+      if (inputValue === "/") {
+        setInput("");
+        return;
+      }
+      // Skip this submit if we just autocompleted a slash command
+      if (skipNextSubmit) {
+        setSkipNextSubmit(false);
+        return;
+      }
       if (!inputValue) {
         return;
       }
@@ -169,6 +356,12 @@ export default function TerminalChatInput({
       if (inputValue === "/help") {
         setInput("");
         openHelpOverlay();
+        return;
+      }
+
+      if (inputValue === "/diff") {
+        setInput("");
+        openDiffOverlay();
         return;
       }
 
@@ -207,15 +400,27 @@ export default function TerminalChatInput({
 
         // Emit a system message to confirm the clear action.  We *append*
         // it so Ink's <Static> treats it as new output and actually renders it.
-        setItems((prev) => [
-          ...prev,
-          {
-            id: `clear-${Date.now()}`,
-            type: "message",
-            role: "system",
-            content: [{ type: "input_text", text: "Context cleared" }],
-          },
-        ]);
+        setItems((prev) => {
+          const filteredOldItems = prev.filter((item) => {
+            if (
+              item.type === "message" &&
+              (item.role === "user" || item.role === "assistant")
+            ) {
+              return false;
+            }
+            return true;
+          });
+
+          return [
+            ...filteredOldItems,
+            {
+              id: `clear-${Date.now()}`,
+              type: "message",
+              role: "system",
+              content: [{ type: "input_text", text: "Terminal cleared" }],
+            },
+          ];
+        });
 
         return;
       } else if (inputValue === "/clearhistory") {
@@ -383,6 +588,8 @@ export default function TerminalChatInput({
       setDraftInput("");
       setSelectedSuggestion(0);
       setInput("");
+      setFsSuggestions([]);
+      setSelectedCompletion(-1);
     },
     [
       setInput,
@@ -396,8 +603,10 @@ export default function TerminalChatInput({
       openApprovalOverlay,
       openModelOverlay,
       openHelpOverlay,
-      history, // Add history to the dependency array
+      openDiffOverlay,
+      history,
       onCompact,
+      skipNextSubmit,
       items,
     ],
   );
@@ -407,7 +616,11 @@ export default function TerminalChatInput({
       <TerminalChatCommandReview
         confirmationPrompt={confirmationPrompt}
         onReviewCommand={submitConfirmation}
+        // allow switching approval mode via 'v'
+        onSwitchApprovalMode={openApprovalOverlay}
         explanation={explanation}
+        // disable when input is inactive (e.g., overlay open)
+        isActive={active}
       />
     );
   }
@@ -423,70 +636,109 @@ export default function TerminalChatInput({
           />
         ) : (
           <Box paddingX={1}>
-            <TextInput
-              focus={active}
-              placeholder={
-                selectedSuggestion
-                  ? `"${suggestions[selectedSuggestion - 1]}"`
-                  : "send a message" +
-                    (isNew ? " or press tab to select a suggestion" : "")
-              }
-              showCursor
-              value={input}
-              onChange={(value) => {
-                setDraftInput(value);
+            <MultilineTextEditor
+              ref={editorRef}
+              onChange={(txt: string) => {
+                setDraftInput(txt);
                 if (historyIndex != null) {
                   setHistoryIndex(null);
                 }
-                setInput(value);
+                setInput(txt);
+
+                // Clear tab completions if a space is typed
+                if (txt.endsWith(" ")) {
+                  setFsSuggestions([]);
+                  setSelectedCompletion(-1);
+                } else if (fsSuggestions.length > 0) {
+                  // Update file suggestions as user types
+                  const words = txt.trim().split(/\s+/);
+                  const mostRecentWord =
+                    words.length > 0 ? words[words.length - 1] : "";
+                  if (mostRecentWord !== undefined) {
+                    setFsSuggestions(getFileSystemSuggestions(mostRecentWord));
+                  }
+                }
               }}
-              onSubmit={onSubmit}
+              key={editorKey}
+              initialText={input}
+              height={6}
+              focus={active}
+              onSubmit={(txt) => {
+                onSubmit(txt);
+                setEditorKey((k) => k + 1);
+                setInput("");
+                setHistoryIndex(null);
+                setDraftInput("");
+              }}
             />
           </Box>
         )}
       </Box>
+      {/* Slash command autocomplete suggestions */}
+      {input.trim().startsWith("/") && (
+        <Box flexDirection="column" paddingX={2} marginBottom={1}>
+          {SLASH_COMMANDS.filter((cmd: SlashCommand) =>
+            cmd.command.startsWith(input.trim()),
+          ).map((cmd: SlashCommand, idx: number) => (
+            <Box key={cmd.command}>
+              <Text
+                backgroundColor={
+                  idx === selectedSlashSuggestion ? "blackBright" : undefined
+                }
+              >
+                <Text color="blueBright">{cmd.command}</Text>
+                <Text> {cmd.description}</Text>
+              </Text>
+            </Box>
+          ))}
+        </Box>
+      )}
       <Box paddingX={2} marginBottom={1}>
-        <Text dimColor>
-          {isNew && !input ? (
-            <>
-              try:{" "}
-              {suggestions.map((m, key) => (
-                <Fragment key={key}>
-                  {key !== 0 ? " | " : ""}
-                  <Text
-                    backgroundColor={
-                      key + 1 === selectedSuggestion ? "blackBright" : ""
-                    }
-                  >
-                    {m}
-                  </Text>
-                </Fragment>
-              ))}
-            </>
-          ) : (
-            <>
-              send q or ctrl+c to exit | send "/clear" to reset | send "/help"
-              for commands | press enter to send
-              {contextLeftPercent > 25 && (
-                <>
-                  {" — "}
-                  <Text color={contextLeftPercent > 40 ? "green" : "yellow"}>
-                    {Math.round(contextLeftPercent)}% context left
-                  </Text>
-                </>
-              )}
-              {contextLeftPercent <= 25 && (
-                <>
-                  {" — "}
-                  <Text color="red">
-                    {Math.round(contextLeftPercent)}% context left — send
-                    "/compact" to condense context
-                  </Text>
-                </>
-              )}
-            </>
-          )}
-        </Text>
+        {isNew && !input ? (
+          <Text dimColor>
+            try:{" "}
+            {suggestions.map((m, key) => (
+              <Fragment key={key}>
+                {key !== 0 ? " | " : ""}
+                <Text
+                  backgroundColor={
+                    key + 1 === selectedSuggestion ? "blackBright" : ""
+                  }
+                >
+                  {m}
+                </Text>
+              </Fragment>
+            ))}
+          </Text>
+        ) : fsSuggestions.length > 0 ? (
+          <TextCompletions
+            completions={fsSuggestions}
+            selectedCompletion={selectedCompletion}
+            displayLimit={5}
+          />
+        ) : (
+          <Text dimColor>
+            send q or ctrl+c to exit | send "/clear" to reset | send "/help" for
+            commands | press enter to send | shift+enter for new line
+            {contextLeftPercent > 25 && (
+              <>
+                {" — "}
+                <Text color={contextLeftPercent > 40 ? "green" : "yellow"}>
+                  {Math.round(contextLeftPercent)}% context left
+                </Text>
+              </>
+            )}
+            {contextLeftPercent <= 25 && (
+              <>
+                {" — "}
+                <Text color="red">
+                  {Math.round(contextLeftPercent)}% context left — send
+                  "/compact" to condense context
+                </Text>
+              </>
+            )}
+          </Text>
+        )}
       </Box>
     </Box>
   );
@@ -561,11 +813,9 @@ function TerminalChatInputThinking({
       const str = Buffer.isBuffer(data) ? data.toString("utf8") : data;
       if (str === "\x1b\x1b") {
         // Treat as the first Escape press – prompt the user for confirmation.
-        if (isLoggingEnabled()) {
-          log(
-            "raw stdin: received collapsed ESC ESC – starting confirmation timer",
-          );
-        }
+        log(
+          "raw stdin: received collapsed ESC ESC – starting confirmation timer",
+        );
         setAwaitingConfirm(true);
         setTimeout(() => setAwaitingConfirm(false), 1500);
       }
@@ -590,15 +840,11 @@ function TerminalChatInputThinking({
       }
 
       if (awaitingConfirm) {
-        if (isLoggingEnabled()) {
-          log("useInput: second ESC detected – triggering onInterrupt()");
-        }
+        log("useInput: second ESC detected – triggering onInterrupt()");
         onInterrupt();
         setAwaitingConfirm(false);
       } else {
-        if (isLoggingEnabled()) {
-          log("useInput: first ESC detected – waiting for confirmation");
-        }
+        log("useInput: first ESC detected – waiting for confirmation");
         setAwaitingConfirm(true);
         setTimeout(() => setAwaitingConfirm(false), 1500);
       }
