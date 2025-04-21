@@ -46,6 +46,14 @@ type AgentLoopParams = {
   config?: AppConfig;
   instructions?: string;
   approvalPolicy: ApprovalPolicy;
+  /**
+   * Whether the model responses should be stored on the server side (allows
+   * using `previous_response_id` to provide conversational context). Defaults
+   * to `true` to preserve the current behaviour. When set to `false` the agent
+   * will instead send the *full* conversation context as the `input` payload
+   * on every request and omit the `previous_response_id` parameter.
+   */
+  store?: boolean;
   onItem: (item: ResponseItem) => void;
   onLoading: (loading: boolean) => void;
 
@@ -67,6 +75,8 @@ export class AgentLoop {
   private approvalPolicy: ApprovalPolicy;
   private config: AppConfig;
   private additionalWritableRoots: ReadonlyArray<string>;
+  /** Whether we ask the API to persist conversation state on the server */
+  private readonly storeResponses: boolean;
 
   // Using `InstanceType<typeof OpenAI>` sidesteps typing issues with the OpenAI package under
   // the TS 5+ `moduleResolution=bundler` setup. OpenAI client instance. We keep the concrete
@@ -97,6 +107,13 @@ export class AgentLoop {
   private execAbortController: AbortController | null = null;
   /** Set to true when `cancel()` is called so `run()` can exit early. */
   private canceled = false;
+
+  /**
+   * Local conversation transcript used when `storeResponses === false`. Holds
+   * all non‑system items exchanged so far so we can provide full context on
+   * every request.
+   */
+  private transcript: Array<ResponseInputItem> = [];
   /** Function calls that were emitted by the model but never answered because
    *  the user cancelled the run.  We keep the `call_id`s around so the *next*
    *  request can send a dummy `function_call_output` that satisfies the
@@ -206,6 +223,7 @@ export class AgentLoop {
     provider = "openai",
     instructions,
     approvalPolicy,
+    store = true,
     // `config` used to be required.  Some unit‑tests (and potentially other
     // callers) instantiate `AgentLoop` without passing it, so we make it
     // optional and fall back to sensible defaults.  This keeps the public
@@ -240,6 +258,10 @@ export class AgentLoop {
     this.onLoading = onLoading;
     this.getCommandConfirmation = getCommandConfirmation;
     this.onLastResponseId = onLastResponseId;
+
+    // Default to true when the caller does not specify the setting so existing
+    // behaviour remains unchanged.
+    this.storeResponses = store !== false;
     this.sessionId = getSessionId() || randomUUID().replaceAll("-", "");
     // Configure OpenAI client with optional timeout (ms) from environment
     const timeoutMs = OPENAI_TIMEOUT_MS;
@@ -418,7 +440,11 @@ export class AgentLoop {
       // accumulate listeners which in turn triggered Node's
       // `MaxListenersExceededWarning` after ten invocations.
 
-      let lastResponseId: string = previousResponseId;
+      // Track the response ID from the last *stored* response so we can use
+      // `previous_response_id` when `storeResponses` is enabled.  When storage
+      // is disabled we deliberately ignore the caller‑supplied value because
+      // the backend will not retain any state that could be referenced.
+      let lastResponseId: string = this.storeResponses ? previousResponseId : "";
 
       // If there are unresolved function calls from a previously cancelled run
       // we have to emit dummy tool outputs so that the API no longer expects
@@ -440,7 +466,33 @@ export class AgentLoop {
         this.pendingAborts.clear();
       }
 
-      let turnInput = [...abortOutputs, ...input];
+      // Build the input list for this turn. When responses are stored on the
+      // server we can simply send the *delta* (the new user input as well as
+      // any pending abort outputs) and rely on `previous_response_id` for
+      // context.  When storage is disabled the server has no memory of the
+      // conversation, so we must include the *entire* transcript (minus system
+      // messages) on every call.
+
+      let turnInput: Array<ResponseInputItem>;
+
+      if (this.storeResponses) {
+        turnInput = [...abortOutputs, ...input];
+      } else {
+        // Ensure the transcript is up‑to‑date with the latest user input so
+        // that subsequent iterations see a complete history.
+        const newUserItems: Array<ResponseInputItem> = input.filter(
+          (it) => {
+            // Only user/developer/assistant messages or tool interactions –
+            // system messages are excluded from the transcript.
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const role = (it as any).role;
+            return role !== "system";
+          },
+        );
+        this.transcript.push(...newUserItems);
+
+        turnInput = [...this.transcript, ...abortOutputs];
+      }
 
       this.onLoading(true);
 
@@ -471,6 +523,18 @@ export class AgentLoop {
             this.onItem(item);
             // Mark as delivered so flush won't re-emit it
             staged[idx] = undefined;
+
+            // When we operate without server‑side storage we keep our own
+            // transcript so we can provide full context on subsequent calls.
+            if (!this.storeResponses) {
+              // Exclude system messages from transcript as they do not form
+              // part of the assistant/user dialogue that the model needs.
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const role = (item as any).role;
+              if (role !== "system") {
+                this.transcript.push(item as unknown as ResponseInputItem);
+              }
+            }
           }
         }, 10);
       };
@@ -481,7 +545,11 @@ export class AgentLoop {
           return;
         }
         // send request to openAI
-        for (const item of turnInput) {
+        // Only surface the *new* input items to the UI – replaying the entire
+        // transcript would duplicate messages that have already been shown in
+        // earlier turns.
+        const deltaInput = [...abortOutputs, ...input];
+        for (const item of deltaInput) {
           stageItem(item as ResponseItem);
         }
         // Send request to OpenAI with retry on timeout
@@ -520,12 +588,15 @@ export class AgentLoop {
             stream = await responseCall({
               model: this.model,
               instructions: mergedInstructions,
-              previous_response_id: lastResponseId || undefined,
+              ...(this.storeResponses
+                ? { previous_response_id: lastResponseId || undefined }
+                : {}),
               input: turnInput,
               stream: true,
               parallel_tool_calls: false,
               reasoning,
               ...(this.config.flexMode ? { service_tier: "flex" } : {}),
+              ...(!this.storeResponses ? { store: false } : {}),
               tools: [
                 {
                   type: "function",
