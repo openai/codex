@@ -79,7 +79,7 @@ describe("canAutoApprove()", () => {
   test("true command is considered safe", () => {
     expect(check(["true"])).toEqual({
       type: "auto-approve",
-      reason: "No‑op (true)",
+      reason: "No-op (true)",
       group: "Utility",
       runInSandbox: false,
     });

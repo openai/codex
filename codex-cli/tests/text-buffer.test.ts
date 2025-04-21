@@ -127,7 +127,7 @@ describe("TextBuffer – basic editing parity with Rust suite", () => {
       expect(buf.getCursor()).toEqual([0, 2]); // after 'b'
     });
 
-    it("is a no‑op at the very beginning of the buffer", () => {
+    it("is a no-op at the very beginning of the buffer", () => {
       const buf = new TextBuffer("ab");
       buf.backspace(); // caret starts at (0,0)
 

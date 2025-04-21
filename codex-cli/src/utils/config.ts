@@ -8,8 +8,8 @@
 
 import type { FullAutoErrorMode } from "./auto-approval-mode.js";
 
-import { log } from "./agent/log.js";
 import { AutoApprovalMode } from "./auto-approval-mode.js";
+import { log } from "./logger/log.js";
 import { providers } from "./providers.js";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { load as loadYaml, dump as dumpYaml } from "js-yaml";
@@ -41,7 +41,7 @@ export function setApiKey(apiKey: string): void {
   OPENAI_API_KEY = apiKey;
 }
 
-export function getBaseUrl(provider: string = "openai"): string | undefined {
+export function getBaseUrl(provider: string): string | undefined {
   const providerInfo = providers[provider.toLowerCase()];
   if (providerInfo) {
     return providerInfo.baseURL;
@@ -49,7 +49,7 @@ export function getBaseUrl(provider: string = "openai"): string | undefined {
   return undefined;
 }
 
-export function getApiKey(provider: string = "openai"): string | undefined {
+export function getApiKey(provider: string): string | undefined {
   const providerInfo = providers[provider.toLowerCase()];
   if (providerInfo) {
     if (providerInfo.name === "Ollama") {
