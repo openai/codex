@@ -423,7 +423,7 @@ export default class TextBuffer {
   /** Delete the word to the *left* of the caret, mirroring common
    *  Ctrl/Alt+Backspace behaviour in editors & terminals.  Both the adjacent
    *  whitespace *and* the word characters immediately preceding the caret are
-   *  removed.  If the caret is already at column‑0 this becomes a no‑op. */
+   *  removed.  If the caret is already at column‑0 this becomes a no-op. */
   deleteWordLeft(): void {
     dbg("deleteWordLeft", { beforeCursor: this.getCursor() });
 
@@ -710,7 +710,7 @@ export default class TextBuffer {
   }
 
   endSelection(): void {
-    // no‑op for now, kept for API symmetry
+    // no-op for now, kept for API symmetry
     // we rely on anchor + current cursor to compute selection
   }
 
