@@ -9,7 +9,6 @@ import type {
 import type { Reasoning } from "openai/resources.mjs";
 
 import { log, isLoggingEnabled } from "./log.js";
-import { OPENAI_BASE_URL, OPENAI_TIMEOUT_MS } from "../config.js";
 import { parseToolCallArguments } from "../parsers.js";
 import {
   ORIGIN,
@@ -18,6 +17,7 @@ import {
   setCurrentModel,
   setSessionId,
 } from "../session.js";
+import { ProviderRegistry, initializeProviderRegistry } from "../providers/index.js";
 import { handleExecCommand } from "./handle-exec-command.js";
 import { randomUUID } from "node:crypto";
 import OpenAI, { APIConnectionTimeoutError } from "openai";
@@ -233,6 +233,7 @@ export class AgentLoop {
       ({
         model,
         instructions: instructions ?? "",
+        providers: {},
       } as AppConfig);
     this.additionalWritableRoots = additionalWritableRoots;
     this.onItem = onItem;
@@ -240,25 +241,43 @@ export class AgentLoop {
     this.getCommandConfirmation = getCommandConfirmation;
     this.onLastResponseId = onLastResponseId;
     this.sessionId = getSessionId() || randomUUID().replaceAll("-", "");
-    // Configure OpenAI client with optional timeout (ms) from environment
-    const timeoutMs = OPENAI_TIMEOUT_MS;
-    const apiKey = this.config.apiKey ?? process.env["OPENAI_API_KEY"] ?? "";
-    this.oai = new OpenAI({
-      // The OpenAI JS SDK only requires `apiKey` when making requests against
-      // the official API.  When running unit‑tests we stub out all network
-      // calls so an undefined key is perfectly fine.  We therefore only set
-      // the property if we actually have a value to avoid triggering runtime
-      // errors inside the SDK (it validates that `apiKey` is a non‑empty
-      // string when the field is present).
-      ...(apiKey ? { apiKey } : {}),
-      baseURL: OPENAI_BASE_URL,
-      defaultHeaders: {
-        originator: ORIGIN,
-        version: CLI_VERSION,
-        session_id: this.sessionId,
-      },
-      ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
-    });
+    
+    // Initialize the provider registry if not already done
+    initializeProviderRegistry();
+    
+    // Log available providers
+    const availableProviders = ProviderRegistry.getAllProviders();
+    console.log(`Available providers: ${availableProviders.map(p => p.id).join(', ')}`);
+    
+    // Get the default provider ID
+    const defaultProviderId = ProviderRegistry.getDefaultProviderId();
+    console.log(`Default provider: ${defaultProviderId}`);
+    
+    // Determine the provider for the model
+    const modelProvider = ProviderRegistry.getProviderForModel(model);
+    const providerId = modelProvider.id;
+    console.log(`Selected provider for model "${model}": ${providerId}`);
+    
+    // Get the appropriate provider
+    const provider = ProviderRegistry.getProviderById(providerId);
+    
+    if (!provider) {
+      throw new Error(`No provider found for model "${model}"`);
+    }
+    
+    // Log provider config
+    const providerConfig = this.config.providers?.[providerId] || {};
+    console.log(`Provider config for "${providerId}": has API key: ${Boolean(providerConfig.apiKey)}`);
+    
+    // Check for environment variables
+    if (providerId === 'claude') {
+      console.log(`Claude API key: ${Boolean(process.env.CLAUDE_API_KEY || process.env.ANTHROPIC_API_KEY)}`);
+    } else if (providerId === 'openai') {
+      console.log(`OpenAI API key: ${Boolean(process.env.OPENAI_API_KEY)}`);
+    }
+    
+    // Create the provider's client
+    this.oai = provider.createClient(this.config);
 
     setSessionId(this.sessionId);
     setCurrentModel(this.model);

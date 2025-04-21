@@ -1,28 +1,41 @@
 /**
- * Provider exports for multi-provider support
+ * Provider registry initialization and management
  */
 
-// Export interfaces and types
-export * from "./provider-interface.js";
-
-// Export base provider
-export * from "./base-provider.js";
-
-// Export provider registry
-export * from "./provider-registry.js";
-
-// Export OpenAI provider
-export * from "./openai-provider.js";
-
-// Import providers
-import { ProviderRegistry } from "./provider-registry.js";
+import { ClaudeProvider } from "./claude-provider.js";
 import { OpenAIProvider } from "./openai-provider.js";
+import { ProviderRegistry } from "./provider-registry.js";
+import { DEFAULT_PROVIDER_ID } from "../provider-config.js";
 
-// Register providers
-ProviderRegistry.register(new OpenAIProvider());
+/**
+ * Initialize the provider registry
+ */
+export function initializeProviderRegistry(): void {
+  // Clear any existing providers
+  ProviderRegistry.clearProviders();
+  
+  // Register providers
+  ProviderRegistry.register(new OpenAIProvider());
+  ProviderRegistry.register(new ClaudeProvider());
+  
+  // Set default provider from environment or config
+  const envDefault = process.env.CODEX_DEFAULT_PROVIDER;
+  
+  // If environment variable is set and provider exists, use it
+  if (envDefault && ProviderRegistry.hasProvider(envDefault)) {
+    ProviderRegistry.setDefaultProviderId(envDefault);
+  } else {
+    // Otherwise use the default from provider-config
+    ProviderRegistry.setDefaultProviderId(DEFAULT_PROVIDER_ID);
+  }
+}
 
-// Convenience method to get provider for a model
-export const getProviderForModel = ProviderRegistry.getProviderForModel.bind(ProviderRegistry);
+/**
+ * Expose the provider registry
+ */
+export { ProviderRegistry } from "./provider-registry.js";
 
-// Convenience method to get the default provider
-export const getDefaultProvider = ProviderRegistry.getDefaultProvider.bind(ProviderRegistry);
+/**
+ * Export provider types
+ */
+export type { LLMProvider, CompletionParams } from "./provider-interface.js";
