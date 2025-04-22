@@ -7,6 +7,11 @@ export const providers: Record<
     baseURL: "https://api.openai.com/v1",
     envKey: "OPENAI_API_KEY",
   },
+  local: {
+    name: "Local",
+    baseURL: "http://localmodel:65534/v1",
+    envKey: "LLM_API_KEY",
+  },
   openrouter: {
     name: "OpenRouter",
     baseURL: "https://openrouter.ai/api/v1",
