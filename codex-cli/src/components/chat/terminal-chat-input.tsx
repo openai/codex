@@ -9,10 +9,10 @@ import type {
 import MultilineTextEditor from "./multiline-editor";
 import { TerminalChatCommandReview } from "./terminal-chat-command-review.js";
 import TextCompletions from "./terminal-chat-completions.js";
-import { log } from "../../utils/agent/log.js";
 import { loadConfig } from "../../utils/config.js";
 import { getFileSystemSuggestions } from "../../utils/file-system-suggestions.js";
 import { createInputItem } from "../../utils/input-utils.js";
+import { log } from "../../utils/logger/log.js";
 import { setSessionId } from "../../utils/session.js";
 import { SLASH_COMMANDS, type SlashCommand } from "../../utils/slash-commands";
 import {
@@ -189,6 +189,12 @@ export default function TerminalChatInput({
                   openDiffOverlay();
                   break;
                 case "/bug":
+                  onSubmit(cmd);
+                  break;
+                case "/clear":
+                  onSubmit(cmd);
+                  break;
+                case "/clearhistory":
                   onSubmit(cmd);
                   break;
                 default:
@@ -396,19 +402,29 @@ export default function TerminalChatInput({
         setInput("");
         setSessionId("");
         setLastResponseId("");
+        // Clear the terminal screen (including scrollback) before resetting context
         clearTerminal();
+
+        // Emit a system notice in the chat; no raw console writes so Ink keeps control.
 
         // Emit a system message to confirm the clear action.  We *append*
         // it so Ink's <Static> treats it as new output and actually renders it.
         setItems((prev) => {
           const filteredOldItems = prev.filter((item) => {
+            // Remove any token‑heavy entries (user/assistant turns and function calls)
             if (
               item.type === "message" &&
               (item.role === "user" || item.role === "assistant")
             ) {
               return false;
             }
-            return true;
+            if (
+              item.type === "function_call" ||
+              item.type === "function_call_output"
+            ) {
+              return false;
+            }
+            return true; // keep developer/system and other meta entries
           });
 
           return [

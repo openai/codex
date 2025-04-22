@@ -10,9 +10,7 @@ import type {
 } from "openai/resources/responses/responses.mjs";
 import type { Reasoning } from "openai/resources.mjs";
 
-import { log } from "./log.js";
 import {
-  OPENAI_BASE_URL,
   OPENAI_TIMEOUT_MS,
   DEFAULT_RATE_LIMIT_MAX_RETRIES,
   DEFAULT_RATE_LIMIT_INITIAL_RETRY_DELAY_MS,
@@ -21,6 +19,7 @@ import {
   getApiKey,
   getBaseUrl,
 } from "../config.js";
+import { log } from "../logger/log.js";
 import { parseToolCallArguments } from "../parsers.js";
 import { responsesCreateViaChatCompletions } from "../responses.js";
 import {
@@ -803,7 +802,7 @@ export class AgentLoop {
           for await (const event of stream as AsyncIterable<ResponseEvent>) {
             log(`AgentLoop.run(): response event ${event.type}`);
 
-            // process and surface each item (no‑op until we can depend on streaming events)
+            // process and surface each item (no-op until we can depend on streaming events)
             if (event.type === "response.output_item.done") {
               const item = event.item;
               // 1) if it's a reasoning item, annotate it
@@ -995,7 +994,7 @@ export class AgentLoop {
             ],
           });
         } catch {
-          /* no‑op – emitting the error message is best‑effort */
+          /* no-op – emitting the error message is best‑effort */
         }
         this.onLoading(false);
         return;

@@ -5,12 +5,12 @@ import type { ApplyPatchCommand, ApprovalPolicy } from "../../approvals.js";
 import type { ResponseInputItem } from "openai/resources/responses/responses.mjs";
 
 import { exec, execApplyPatch } from "./exec.js";
-import { isLoggingEnabled, log } from "./log.js";
 import { ReviewDecision } from "./review.js";
 import { FullAutoErrorMode } from "../auto-approval-mode.js";
 import { SandboxType } from "./sandbox/interface.js";
 import { canAutoApprove } from "../../approvals.js";
 import { formatCommandForDisplay } from "../../format-command.js";
+import { isLoggingEnabled, log } from "../logger/log.js";
 import { access } from "fs/promises";
 
 // ---------------------------------------------------------------------------
@@ -144,7 +144,7 @@ export async function handleExecCommand(
     abortSignal,
   );
   // If the operation was aborted in the meantime, propagate the cancellation
-  // upward by returning an empty (no‑op) result so that the agent loop will
+  // upward by returning an empty (no-op) result so that the agent loop will
   // exit cleanly without emitting spurious output.
   if (abortSignal?.aborted) {
     return {

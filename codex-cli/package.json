@@ -1,6 +1,6 @@
 {
   "name": "@openai/codex",
-  "version": "0.1.2504181820",
+  "version": "0.1.2504211509",
   "license": "Apache-2.0",
   "bin": {
     "codex": "bin/codex.js"
@@ -26,8 +26,7 @@
     "release": "pnpm run release:readme && pnpm run release:version && pnpm install && pnpm run release:build-and-publish"
   },
   "files": [
-    "dist",
-    "src"
+    "dist"
   ],
   "dependencies": {
     "@inkjs/ui": "^2.0.0",
