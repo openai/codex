@@ -52,6 +52,8 @@ const cli = meow(
     $ codex completion <bash|zsh|fish>
 
   Options
+    --version                       Print version and exit
+
     -h, --help                      Show usage and exit
     -m, --model <model>             Model to use for completions (default: o4-mini)
     -p, --provider <provider>       Provider to use for completions (default: openai)
@@ -97,6 +99,7 @@ const cli = meow(
     flags: {
       // misc
       help: { type: "boolean", aliases: ["h"] },
+      version: { type: "boolean", description: "Print version and exit" },
       view: { type: "string" },
       model: { type: "string", aliases: ["m"] },
       provider: { type: "string", aliases: ["p"] },
