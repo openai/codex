@@ -9,6 +9,7 @@ import { exec as rawExec } from "./sandbox/raw-exec.js";
 import { formatCommandForDisplay } from "../../format-command.js";
 import fs from "fs";
 import os from "os";
+import path from "path";
 import { parse } from "shell-quote";
 import { resolvePathAgainstWorkdir } from "src/approvals.js";
 
@@ -63,7 +64,7 @@ export function exec(
 
 export function execApplyPatch(
   patchText: string,
-  workdir: string | undefined,
+  workdir: string | undefined = undefined,
 ): ExecResult {
   // This is a temporary measure to understand what are the common base commands
   // until we start persisting and uploading rollouts
@@ -72,8 +73,20 @@ export function execApplyPatch(
     const result = process_patch(
       patchText,
       (p) => fs.readFileSync(resolvePathAgainstWorkdir(p, workdir), "utf8"),
-      (p, c) =>
-        fs.writeFileSync(resolvePathAgainstWorkdir(p, workdir), c, "utf8"),
+      (p, c) => {
+        const resolvedPath = resolvePathAgainstWorkdir(p, workdir);
+
+        // Ensure the parent directory exists before writing the file. This
+        // mirrors the behaviour of the standalone apply_patch CLI (see
+        // write_file() in apply-patch.ts) and prevents errors when adding a
+        // new file in a not‑yet‑created sub‑directory.
+        const dir = path.dirname(resolvedPath);
+        if (dir !== ".") {
+          fs.mkdirSync(dir, { recursive: true });
+        }
+
+        fs.writeFileSync(resolvedPath, c, "utf8");
+      },
       (p) => fs.unlinkSync(resolvePathAgainstWorkdir(p, workdir)),
     );
     return {
