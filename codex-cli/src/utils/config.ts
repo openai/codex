@@ -47,6 +47,13 @@ export function getBaseUrl(provider: string = "openai"): string | undefined {
     return OPENAI_BASE_URL;
   }
 
+  // Check for a PROVIDER-specific override: e.g. OLLAMA_BASE_URL
+  const envKey = `${provider.toUpperCase()}_BASE_URL`;
+  if (process.env[envKey]) {
+    return process.env[envKey];
+  }
+
+  // Use the default URL from providers if available
   const providerInfo = providers[provider.toLowerCase()];
   if (providerInfo) {
     return providerInfo.baseURL;
