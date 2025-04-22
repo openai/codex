@@ -739,14 +739,6 @@ export class AgentLoop {
           return;
         }
 
-        // --- Stream consumption ------------------------------------------------
-        // The OpenAI SDK may raise a 429 (rate‑limit) *after* the stream has
-        // started.  Prior logic already retries the initial `responses.create`
-        // call, but we need to add equivalent resilience for mid‑stream
-        // failures.  We keep the implementation minimal by wrapping the
-        // existing `for‑await` loop in a small retry‑for‑loop that re‑creates
-        // the stream with exponential back‑off.
-
         const MAX_STREAM_RETRIES = 5;
         let streamRetryAttempt = 0;
 
