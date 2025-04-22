@@ -22,6 +22,7 @@ export const DEFAULT_APPROVAL_MODE = AutoApprovalMode.SUGGEST;
 export const DEFAULT_INSTRUCTIONS = "";
 
 export const CONFIG_DIR = join(homedir(), ".codex");
+export const PROVIDERS_CONFIG_PATH = join(CONFIG_DIR, "providers.json");
 export const CONFIG_JSON_FILEPATH = join(CONFIG_DIR, "config.json");
 export const CONFIG_YAML_FILEPATH = join(CONFIG_DIR, "config.yaml");
 export const CONFIG_YML_FILEPATH = join(CONFIG_DIR, "config.yml");
@@ -41,8 +42,45 @@ export function setApiKey(apiKey: string): void {
   OPENAI_API_KEY = apiKey;
 }
 
+// Load provider configurations from local providers.json file
+export function loadProvidersFromFile(): Record<
+  string,
+  { name: string; baseURL: string; envKey: string }
+> {
+  try {
+    // Attempt to read local config file
+    if (existsSync(PROVIDERS_CONFIG_PATH)) {
+      const fileContent = readFileSync(PROVIDERS_CONFIG_PATH, "utf-8");
+      const localProviders = JSON.parse(fileContent);
+      return localProviders;
+    }
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `Error: Failed to load local providers configuration: ${error}`,
+    );
+    return {};
+  }
+
+  // If local config doesn't exist or fails to load, return default providers
+  return providers;
+}
+
+// Get merged providers configuration
+export function getMergedProviders(): Record<
+  string,
+  { name: string; baseURL: string; envKey: string }
+> {
+  const defaultProviders = providers;
+  const localProviders = loadProvidersFromFile();
+  // Merge default and local providers, local overrides default
+  return { ...defaultProviders, ...localProviders };
+}
+
 export function getBaseUrl(provider: string): string | undefined {
-  const providerInfo = providers[provider.toLowerCase()];
+  // Use merged providers configuration
+  const mergedProviders = getMergedProviders();
+  const providerInfo = mergedProviders[provider.toLowerCase()];
   if (providerInfo) {
     return providerInfo.baseURL;
   }
@@ -50,14 +88,14 @@ export function getBaseUrl(provider: string): string | undefined {
 }
 
 export function getApiKey(provider: string): string | undefined {
-  const providerInfo = providers[provider.toLowerCase()];
+  const providerInfo = getMergedProviders()[provider.toLowerCase()];
+
   if (providerInfo) {
     if (providerInfo.name === "Ollama") {
       return process.env[providerInfo.envKey] ?? "dummy";
     }
     return process.env[providerInfo.envKey];
   }
-
   return undefined;
 }
 

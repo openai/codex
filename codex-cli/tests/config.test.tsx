@@ -1,6 +1,12 @@
 import type * as fsType from "fs";
 
-import { loadConfig, saveConfig } from "../src/utils/config.js"; // parent import first
+import {
+  loadConfig,
+  saveConfig,
+  loadProvidersFromFile,
+  getMergedProviders,
+  PROVIDERS_CONFIG_PATH,
+} from "../src/utils/config.js"; // parent import first
 import { AutoApprovalMode } from "../src/utils/auto-approval-mode.js";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -36,6 +42,24 @@ vi.mock("fs", async () => {
           delete memfs[key];
         }
       }
+    },
+  };
+});
+
+// Mock the providers import to control the default providers
+vi.mock("../src/utils/providers.js", () => {
+  return {
+    providers: {
+      openai: {
+        name: "OpenAI",
+        baseURL: "https://api.openai.com/v1",
+        envKey: "OPENAI_API_KEY",
+      },
+      mistral: {
+        name: "Mistral",
+        baseURL: "https://api.mistral.ai/v1",
+        envKey: "MISTRAL_API_KEY",
+      },
     },
   };
 });
@@ -147,4 +171,102 @@ test("loads and saves approvalMode correctly", () => {
     disableProjectDoc: true,
   });
   expect(reloadedConfig.approvalMode).toBe(AutoApprovalMode.FULL_AUTO);
+});
+
+// Test for custom providers loading from providers.json
+test("loads providers from providers.json when file exists", () => {
+  // Setup providers.json file
+  const customProviders = {
+    openai: {
+      name: "Custom OpenAI",
+      baseURL: "https://custom-api.openai.com/v1",
+      envKey: "CUSTOM_OPENAI_API_KEY",
+    },
+    groq: {
+      name: "Groq",
+      baseURL: "https://api.groq.com/v1",
+      envKey: "GROQ_API_KEY",
+    },
+  };
+
+  // Add providers.json to memory filesystem
+  memfs[PROVIDERS_CONFIG_PATH] = JSON.stringify(customProviders, null, 2);
+
+  // Test loadProvidersFromFile function
+  const loadedProviders = loadProvidersFromFile();
+
+  // Verify loaded providers match our custom configuration
+  expect(loadedProviders["openai"]?.name).toBe("Custom OpenAI");
+  expect(loadedProviders["openai"]?.baseURL).toBe(
+    "https://custom-api.openai.com/v1",
+  );
+  expect(loadedProviders["openai"]?.envKey).toBe("CUSTOM_OPENAI_API_KEY");
+  expect(loadedProviders["groq"]?.name).toBe("Groq");
+});
+
+// Test for merging default and custom providers
+test("merges default and custom providers properly", () => {
+  // Setup providers.json with only one provider that overrides a default
+  const customProviders = {
+    openai: {
+      name: "Custom OpenAI",
+      baseURL: "https://custom-api.openai.com/v1",
+      envKey: "CUSTOM_OPENAI_API_KEY",
+    },
+  };
+
+  // Add providers.json to memory filesystem
+  memfs[PROVIDERS_CONFIG_PATH] = JSON.stringify(customProviders, null, 2);
+
+  // Get merged providers
+  const mergedProviders = getMergedProviders();
+
+  // Verify the custom provider overrides the default
+  expect(mergedProviders["openai"]?.name).toBe("Custom OpenAI");
+  expect(mergedProviders["openai"]?.baseURL).toBe(
+    "https://custom-api.openai.com/v1",
+  );
+
+  // Verify default providers are still available
+  expect(mergedProviders["mistral"]).toBeDefined();
+  expect(mergedProviders["mistral"]?.name).toBe("Mistral");
+});
+
+// Test when providers.json doesn't exist
+test("uses default providers when providers.json doesn't exist", () => {
+  // Ensure providers.json doesn't exist
+  expect(memfs[PROVIDERS_CONFIG_PATH]).toBeUndefined();
+
+  // Get merged providers
+  const mergedProviders = getMergedProviders();
+
+  // Verify default providers are used
+  expect(mergedProviders["openai"]?.name).toBe("OpenAI");
+  expect(mergedProviders["openai"]?.baseURL).toBe("https://api.openai.com/v1");
+  expect(mergedProviders["mistral"]?.name).toBe("Mistral");
+});
+
+// Test error handling when providers.json is invalid
+test("handles invalid providers.json gracefully", () => {
+  // Setup invalid JSON in providers.json
+  memfs[PROVIDERS_CONFIG_PATH] = "{invalid-json}";
+
+  // Mock console.error to prevent test output pollution
+  const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+  // Should return empty object when JSON parsing fails
+  const loadedProviders = loadProvidersFromFile();
+
+  // Verify error was logged
+  expect(consoleSpy).toHaveBeenCalled();
+  expect(loadedProviders).toEqual({});
+
+  // Get merged providers - should fall back to defaults
+  const mergedProviders = getMergedProviders();
+
+  // Verify default providers are used
+  expect(mergedProviders["openai"]?.name).toBe("OpenAI");
+
+  // Restore console.error
+  consoleSpy.mockRestore();
 });

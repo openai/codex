@@ -330,6 +330,62 @@ You can also define custom instructions:
 - Only use git commands if I explicitly mention you should
 ```
 
+### Provider Overrides
+
+Codex also supports customizing API providers via a `providers.json` file located at `~/.codex/providers.json`. This file should define a JSON object mapping provider keys to objects with `name`, `baseURL`, and `envKey`.
+
+<details>
+<summary><strong>For example:</strong></summary>
+
+```json
+{
+  "openai": {
+    "name": "OpenAI",
+    "baseURL": "https://api.openai.com/v1",
+    "envKey": "OPENAI_API_KEY"
+  },
+  "openrouter": {
+    "name": "OpenRouter",
+    "baseURL": "https://openrouter.ai/api/v1",
+    "envKey": "OPENROUTER_API_KEY"
+  },
+  "gemini": {
+    "name": "Gemini",
+    "baseURL": "https://generativelanguage.googleapis.com/v1beta/openai",
+    "envKey": "GEMINI_API_KEY"
+  },
+  "ollama": {
+    "name": "Ollama",
+    "baseURL": "http://localhost:11434/v1",
+    "envKey": "OLLAMA_API_KEY"
+  },
+  "mistral": {
+    "name": "Mistral",
+    "baseURL": "https://api.mistral.ai/v1",
+    "envKey": "MISTRAL_API_KEY"
+  },
+  "deepseek": {
+    "name": "DeepSeek",
+    "baseURL": "https://api.deepseek.com",
+    "envKey": "DEEPSEEK_API_KEY"
+  },
+  "xai": {
+    "name": "xAI",
+    "baseURL": "https://api.x.ai/v1",
+    "envKey": "XAI_API_KEY"
+  },
+  "groq": {
+    "name": "Groq",
+    "baseURL": "https://api.groq.com/openai/v1",
+    "envKey": "GROQ_API_KEY"
+  }
+}
+```
+
+</details>
+
+Entries in this file will override the built-in provider definitions. After editing, use `--provider <key>` to select your custom provider.
+
 ---
 
 ## FAQ
