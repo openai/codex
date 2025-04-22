@@ -42,45 +42,12 @@ export function setApiKey(apiKey: string): void {
   OPENAI_API_KEY = apiKey;
 }
 
-// Load provider configurations from local providers.json file
-export function loadProvidersFromFile(): Record<
-  string,
-  { name: string; baseURL: string; envKey: string }
-> {
-  try {
-    // Attempt to read local config file
-    if (existsSync(PROVIDERS_CONFIG_PATH)) {
-      const fileContent = readFileSync(PROVIDERS_CONFIG_PATH, "utf-8");
-      const localProviders = JSON.parse(fileContent);
-      return localProviders;
-    }
-  } catch (error) {
-    // eslint-disable-next-line no-console
-    console.warn(
-      `Error: Failed to load local providers configuration: ${error}`,
-    );
-    return {};
-  }
+export function getBaseUrl(provider: string = "openai"): string | undefined {
+  // Get providers config from config file
+  const config = loadConfig();
+  const providersConfig = config.providers;
+  const providerInfo = providersConfig?.[provider.toLowerCase()];
 
-  // If local config doesn't exist or fails to load, return default providers
-  return providers;
-}
-
-// Get merged providers configuration
-export function getMergedProviders(): Record<
-  string,
-  { name: string; baseURL: string; envKey: string }
-> {
-  const defaultProviders = providers;
-  const localProviders = loadProvidersFromFile();
-  // Merge default and local providers, local overrides default
-  return { ...defaultProviders, ...localProviders };
-}
-
-export function getBaseUrl(provider: string): string | undefined {
-  // Use merged providers configuration
-  const mergedProviders = getMergedProviders();
-  const providerInfo = mergedProviders[provider.toLowerCase()];
   // If the provider is `openai` and `OPENAI_BASE_URL` is set, use it
   if (provider === "openai" && OPENAI_BASE_URL !== "") {
     return OPENAI_BASE_URL;
@@ -98,9 +65,11 @@ export function getBaseUrl(provider: string): string | undefined {
   return undefined;
 }
 
-
 export function getApiKey(provider: string = "openai"): string | undefined {
-  const providerInfo = getMergedProviders()[provider.toLowerCase()];
+  const config = loadConfig();
+  const providersConfig = config.providers;
+  const providerInfo = providersConfig?.[provider.toLowerCase()];
+
   if (providerInfo) {
     if (providerInfo.name === "Ollama") {
       return process.env[providerInfo.envKey] ?? "dummy";
@@ -116,9 +85,6 @@ export function getApiKey(provider: string = "openai"): string | undefined {
   return undefined;
 }
 
-// Formatting (quiet mode-only).
-export const PRETTY_PRINT = Boolean(process.env["PRETTY_PRINT"] || "");
-
 // Represents config as persisted in config.json.
 export type StoredConfig = {
   model?: string;
@@ -130,6 +96,7 @@ export type StoredConfig = {
   notify?: boolean;
   /** Disable server-side response storage (send full transcript each request) */
   disableResponseStorage?: boolean;
+  providers?: Record<string, { name: string; baseURL: string; envKey: string }>;
   history?: {
     maxSize?: number;
     saveHistory?: boolean;
@@ -166,12 +133,16 @@ export type AppConfig = {
 
   /** Enable the "flex-mode" processing mode for supported models (o3, o4-mini) */
   flexMode?: boolean;
+  providers?: Record<string, { name: string; baseURL: string; envKey: string }>;
   history?: {
     maxSize: number;
     saveHistory: boolean;
     sensitivePatterns: Array<string>;
   };
 };
+
+// Formatting (quiet mode-only).
+export const PRETTY_PRINT = Boolean(process.env["PRETTY_PRINT"] || "");
 
 // ---------------------------------------------------------------------------
 // Project doc support (codex.md)
@@ -430,6 +401,7 @@ export const loadConfig = (
       sensitivePatterns: [],
     };
   }
+  config.providers = { ...providers, ...storedConfig.providers };
 
   return config;
 };
@@ -463,6 +435,7 @@ export const saveConfig = (
   const configToSave: StoredConfig = {
     model: config.model,
     provider: config.provider,
+    providers: config.providers,
     approvalMode: config.approvalMode,
   };
 

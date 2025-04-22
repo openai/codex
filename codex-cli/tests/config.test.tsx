@@ -1,12 +1,6 @@
 import type * as fsType from "fs";
 
-import {
-  loadConfig,
-  saveConfig,
-  loadProvidersFromFile,
-  getMergedProviders,
-  PROVIDERS_CONFIG_PATH,
-} from "../src/utils/config.js"; // parent import first
+import { loadConfig, saveConfig } from "../src/utils/config.js"; // parent import first
 import { AutoApprovalMode } from "../src/utils/auto-approval-mode.js";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -42,24 +36,6 @@ vi.mock("fs", async () => {
           delete memfs[key];
         }
       }
-    },
-  };
-});
-
-// Mock the providers import to control the default providers
-vi.mock("../src/utils/providers.js", () => {
-  return {
-    providers: {
-      openai: {
-        name: "OpenAI",
-        baseURL: "https://api.openai.com/v1",
-        envKey: "OPENAI_API_KEY",
-      },
-      mistral: {
-        name: "Mistral",
-        baseURL: "https://api.mistral.ai/v1",
-        envKey: "MISTRAL_API_KEY",
-      },
     },
   };
 });
@@ -173,76 +149,84 @@ test("loads and saves approvalMode correctly", () => {
   expect(reloadedConfig.approvalMode).toBe(AutoApprovalMode.FULL_AUTO);
 });
 
-// Test for custom providers loading from providers.json
-test("loads providers from providers.json when file exists", () => {
-  // Setup providers.json file
+test("loads and saves providers correctly", () => {
+  // Setup custom providers configuration
   const customProviders = {
     openai: {
       name: "Custom OpenAI",
       baseURL: "https://custom-api.openai.com/v1",
       envKey: "CUSTOM_OPENAI_API_KEY",
     },
-    groq: {
-      name: "Groq",
-      baseURL: "https://api.groq.com/v1",
-      envKey: "GROQ_API_KEY",
+    anthropic: {
+      name: "Anthropic",
+      baseURL: "https://api.anthropic.com",
+      envKey: "ANTHROPIC_API_KEY",
     },
   };
 
-  // Add providers.json to memory filesystem
-  memfs[PROVIDERS_CONFIG_PATH] = JSON.stringify(customProviders, null, 2);
+  // Create config with providers
+  const testConfig = {
+    model: "test-model",
+    provider: "anthropic",
+    providers: customProviders,
+    instructions: "test instructions",
+    notify: false,
+  };
 
-  // Test loadProvidersFromFile function
-  const loadedProviders = loadProvidersFromFile();
+  // Save the config
+  saveConfig(testConfig, testConfigPath, testInstructionsPath);
 
-  // Verify loaded providers match our custom configuration
-  expect(loadedProviders["openai"]?.name).toBe("Custom OpenAI");
-  expect(loadedProviders["openai"]?.baseURL).toBe(
-    "https://custom-api.openai.com/v1",
-  );
-  expect(loadedProviders["openai"]?.envKey).toBe("CUSTOM_OPENAI_API_KEY");
-  expect(loadedProviders["groq"]?.name).toBe("Groq");
-});
+  // Verify saved config contains providers
+  expect(memfs[testConfigPath]).toContain(`"providers"`);
+  expect(memfs[testConfigPath]).toContain(`"Custom OpenAI"`);
+  expect(memfs[testConfigPath]).toContain(`"Anthropic"`);
+  expect(memfs[testConfigPath]).toContain(`"provider": "anthropic"`);
 
-// Test for merging default and custom providers
-test("merges default and custom providers properly", () => {
-  // Setup providers.json with only one provider that overrides a default
-  const customProviders = {
-    openai: {
-      name: "Custom OpenAI",
-      baseURL: "https://custom-api.openai.com/v1",
-      envKey: "CUSTOM_OPENAI_API_KEY",
+  // Load config and verify providers were loaded correctly
+  const loadedConfig = loadConfig(testConfigPath, testInstructionsPath, {
+    disableProjectDoc: true,
+  });
+
+  // Check providers were loaded correctly
+  expect(loadedConfig.provider).toBe("anthropic");
+  expect(loadedConfig.providers).toEqual(customProviders);
+
+  // Test merging with built-in providers
+  // Create a config with only one custom provider
+  const partialProviders = {
+    customProvider: {
+      name: "Custom Provider",
+      baseURL: "https://custom-api.example.com",
+      envKey: "CUSTOM_API_KEY",
     },
   };
 
-  // Add providers.json to memory filesystem
-  memfs[PROVIDERS_CONFIG_PATH] = JSON.stringify(customProviders, null, 2);
+  const partialConfig = {
+    model: "test-model",
+    provider: "customProvider",
+    providers: partialProviders,
+    instructions: "test instructions",
+    notify: false,
+  };
 
-  // Get merged providers
-  const mergedProviders = getMergedProviders();
+  // Save the partial config
+  saveConfig(partialConfig, testConfigPath, testInstructionsPath);
 
-  // Verify the custom provider overrides the default
-  expect(mergedProviders["openai"]?.name).toBe("Custom OpenAI");
-  expect(mergedProviders["openai"]?.baseURL).toBe(
-    "https://custom-api.openai.com/v1",
-  );
+  // Load config and verify providers were merged with built-in providers
+  const mergedConfig = loadConfig(testConfigPath, testInstructionsPath, {
+    disableProjectDoc: true,
+  });
 
-  // Verify default providers are still available
-  expect(mergedProviders["mistral"]).toBeDefined();
-  expect(mergedProviders["mistral"]?.name).toBe("Mistral");
+  // Check providers is defined
+  expect(mergedConfig.providers).toBeDefined();
+
+  // Use bracket notation to access properties
+  if (mergedConfig.providers) {
+    expect(mergedConfig.providers["customProvider"]).toBeDefined();
+    expect(mergedConfig.providers["customProvider"]).toEqual(
+      partialProviders.customProvider,
+    );
+    // Built-in providers should still be there (like openai)
+    expect(mergedConfig.providers["openai"]).toBeDefined();
+  }
 });
-
-// Test when providers.json doesn't exist
-test("uses default providers when providers.json doesn't exist", () => {
-  // Ensure providers.json doesn't exist
-  expect(memfs[PROVIDERS_CONFIG_PATH]).toBeUndefined();
-
-  // Get merged providers
-  const mergedProviders = getMergedProviders();
-
-  // Verify default providers are used
-  expect(mergedProviders["openai"]?.name).toBe("OpenAI");
-  expect(mergedProviders["openai"]?.baseURL).toBe("https://api.openai.com/v1");
-  expect(mergedProviders["mistral"]?.name).toBe("Mistral");
-});
-
