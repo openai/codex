@@ -25,7 +25,6 @@
 - [Recipes](#recipes)
 - [Installation](#installation)
 - [Configuration](#configuration)
-  - [Provider Overrides](#provider-overrides)
 - [FAQ](#faq)
 - [Zero Data Retention (ZDR) Organization Limitation](#zero-data-retention-zdr-organization-limitation)
 - [Funding Opportunity](#funding-opportunity)
@@ -319,6 +318,20 @@ model: o4-mini # Default model
 approvalMode: suggest # or auto-edit, full-auto
 fullAutoErrorMode: ask-user # or ignore-and-continue
 notify: true # Enable desktop notifications for responses
+provider: openai # Default provider
+providers:
+  openai:
+    name: OpenAI
+    baseURL: https://api.openai.com/v1
+    envKey: OPENAI_API_KEY
+  openrouter:
+    name: OpenRouter
+    baseURL: https://openrouter.ai/api/v1
+    envKey: OPENROUTER_API_KEY
+  ollama:
+    name: Ollama
+    baseURL: http://localhost:11434/v1
+    envKey: OLLAMA_API_KEY
 ```
 
 ```json
@@ -327,7 +340,25 @@ notify: true # Enable desktop notifications for responses
   "model": "o4-mini",
   "approvalMode": "suggest",
   "fullAutoErrorMode": "ask-user",
-  "notify": true
+  "notify": true,
+  "provider": "openai",
+  "providers": {
+    "openai": {
+      "name": "OpenAI",
+      "baseURL": "https://api.openai.com/v1",
+      "envKey": "OPENAI_API_KEY"
+    },
+    "openrouter": {
+      "name": "OpenRouter",
+      "baseURL": "https://openrouter.ai/api/v1",
+      "envKey": "OPENROUTER_API_KEY"
+    },
+    "ollama": {
+      "name": "Ollama",
+      "baseURL": "http://localhost:11434/v1",
+      "envKey": "OLLAMA_API_KEY"
+    }
+  }
 }
 ```
 
@@ -338,37 +369,6 @@ You can also define custom instructions:
 - Always respond with emojis
 - Only use git commands if I explicitly mention you should
 ```
-
-### Provider Overrides
-
-Codex also supports customizing API providers via a `providers.json` file located at `~/.codex/providers.json`. This file should define a JSON object mapping provider keys to objects with `name`, `baseURL`, and `envKey`.
-
-<details>
-<summary><strong>For example:</strong></summary>
-
-```json
-{
-  "openai": {
-    "name": "OpenAI",
-    "baseURL": "https://api.openai.com/v1",
-    "envKey": "OPENAI_API_KEY"
-  },
-  "openrouter": {
-    "name": "OpenRouter",
-    "baseURL": "https://openrouter.ai/api/v1",
-    "envKey": "OPENROUTER_API_KEY"
-  },
-  "ollama": {
-    "name": "Ollama",
-    "baseURL": "http://localhost:11434/v1",
-    "envKey": "OLLAMA_API_KEY"
-  }
-}
-```
-
-</details>
-
-Entries in this file will **override** the built-in provider definitions. After editing, use `--provider <key>` to select your custom provider.
 
 ---
 
