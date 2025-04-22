@@ -43,6 +43,12 @@ export function setApiKey(apiKey: string): void {
 }
 
 export function getBaseUrl(provider: string = "openai"): string | undefined {
+  // Check for a PROVIDER-specific override: e.g. OLLAMA_BASE_URL
+  const envKey = `${provider.toUpperCase()}_BASE_URL`;
+  if (process.env[envKey]) {
+    return process.env[envKey];
+  }
+
   // Get providers config from config file
   const config = loadConfig();
   const providersConfig = config.providers;
