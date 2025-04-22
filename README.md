@@ -15,11 +15,11 @@
 - [Experimental Technology Disclaimer](#experimental-technology-disclaimer)
 - [Quickstart](#quickstart)
 - [Why Codex?](#why-codex)
-- [Security Model \& Permissions](#security-model--permissions)
+- [Security Model & Permissions](#security-model--permissions)
   - [Platform sandboxing details](#platform-sandboxing-details)
 - [System Requirements](#system-requirements)
 - [CLI Reference](#cli-reference)
-- [Memory \& Project Docs](#memory--project-docs)
+- [Memory & Project Docs](#memory--project-docs)
 - [Non-interactive / CI mode](#non-interactive--ci-mode)
 - [Tracing / Verbose Logging](#tracing--verbose-logging)
 - [Recipes](#recipes)
@@ -42,7 +42,7 @@
   - [Releasing `codex`](#releasing-codex)
   - [Alternative Build Options](#alternative-build-options)
     - [Nix Flake Development](#nix-flake-development)
-- [Security \& Responsible AI](#security--responsible-ai)
+- [Security & Responsible AI](#security--responsible-ai)
 - [License](#license)
 
 <!-- End ToC -->
