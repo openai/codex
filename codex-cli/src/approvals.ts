@@ -4,7 +4,7 @@ import {
   identify_files_added,
   identify_files_needed,
 } from "./utils/agent/apply-patch";
-import {loadConfig} from "./utils/config";
+import { loadConfig } from "./utils/config";
 import * as path from "path";
 import { parse } from "shell-quote";
 
@@ -457,7 +457,7 @@ const UNSAFE_OPTIONS_FOR_FIND_COMMAND: ReadonlySet<string> = new Set([
 ]);
 
 function isCommandWhitelisted(
-  command: ReadonlyArray<string>
+  command: ReadonlyArray<string>,
 ): SafetyAssessment | null {
   const whitelist = loadConfig()?.commandWhitelist;
   if (!whitelist?.length) {

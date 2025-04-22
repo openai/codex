@@ -117,7 +117,7 @@ describe("canAutoApprove()", () => {
       group: "Whitelisted",
       runInSandbox: false,
     });
-    
+
     // Non-whitelisted commands should still require approval
     expect(check(["cargo", "install"])).toEqual({
       type: "ask-user",
