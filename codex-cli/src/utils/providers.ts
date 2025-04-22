@@ -23,7 +23,7 @@ export const providers: Record<
   },
   gemini: {
     name: "Gemini",
-    baseURL: "https://generativelanguage.googleapis.com/v1beta",
+    baseURL: "https://generativelanguage.googleapis.com/v1beta/openai",
     envKey: "GEMINI_API_KEY",
     envBaseURLKey: "GEMINI_BASE_URL",
   },
@@ -41,7 +41,7 @@ export const providers: Record<
   },
   deepseek: {
     name: "DeepSeek",
-    baseURL: "https://api.deepseek.com/v1",
+    baseURL: "https://api.deepseek.com",
     envKey: "DEEPSEEK_API_KEY",
     envBaseURLKey: "DEEPSEEK_BASE_URL",
   },
