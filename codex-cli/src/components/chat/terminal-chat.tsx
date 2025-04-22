@@ -241,6 +241,7 @@ export default function TerminalChat({
       config,
       instructions: config.instructions,
       approvalPolicy,
+      disableResponseStorage: config.disableResponseStorage,
       additionalWritableRoots,
       onLastResponseId: setLastResponseId,
       onItem: (item) => {

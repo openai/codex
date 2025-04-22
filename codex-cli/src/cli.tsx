@@ -70,6 +70,9 @@ const cli = meow(
     --full-stdout              Do not truncate stdout/stderr from command outputs
     --notify                   Enable desktop notifications for responses
 
+    --disable-response-storage Disable server‑side response storage (sends the
+                               full conversation context with every request)
+
     --flex-mode               Use "flex-mode" processing mode for the request (only supported
                               with models o3 and o4-mini)
 
@@ -158,6 +161,12 @@ const cli = meow(
       notify: {
         type: "boolean",
         description: "Enable desktop notifications for responses",
+      },
+
+      disableResponseStorage: {
+        type: "boolean",
+        description:
+          "Disable server-side response storage (sends full conversation context with every request)",
       },
 
       // Experimental mode where whole directory is loaded in context and model is requested
@@ -262,6 +271,10 @@ config = {
   notify: Boolean(cli.flags.notify),
   flexMode: Boolean(cli.flags.flexMode),
   provider,
+  disableResponseStorage:
+    cli.flags.disableResponseStorage !== undefined
+      ? Boolean(cli.flags.disableResponseStorage)
+      : config.disableResponseStorage,
 };
 
 // Check for updates after loading config. This is important because we write state file in
@@ -463,6 +476,7 @@ async function runQuietMode({
     instructions: config.instructions,
     approvalPolicy,
     additionalWritableRoots,
+    disableResponseStorage: config.disableResponseStorage,
     onItem: (item: ResponseItem) => {
       // eslint-disable-next-line no-console
       console.log(formatResponseItemForQuietMode(item));
