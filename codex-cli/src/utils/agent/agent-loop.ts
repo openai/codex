@@ -134,7 +134,7 @@ export class AgentLoop {
   private canceled = false;
 
   /**
-   * Local conversation transcript used when `disableResponseStorage === false`. Holds
+   * Local conversation transcript used when `disableResponseStorage === true`. Holds
    * all non‑system items exchanged so far so we can provide full context on
    * every request.
    */
@@ -503,6 +503,10 @@ export class AgentLoop {
       // messages) on every call.
 
       let turnInput: Array<ResponseInputItem> = [];
+      // Keeps track of how many items in `turnInput` stem from the existing
+      // transcript so we can avoid re‑emitting them to the UI. Only used when
+      // `disableResponseStorage === true`.
+      let transcriptPrefixLen = 0;
 
       const stripInternalFields = (
         item: ResponseInputItem,
@@ -514,29 +518,25 @@ export class AgentLoop {
         // be referenced elsewhere (e.g. UI components).
         const clean = { ...item } as Record<string, unknown>;
         delete clean["duration_ms"];
+        // Remove OpenAI-assigned identifiers and transient status so the
+        // backend does not reject items that were never persisted because we
+        // use `store: false`.
+        delete clean["id"];
+        delete clean["status"];
         return clean as unknown as ResponseInputItem;
       };
 
       if (this.disableResponseStorage) {
+        // Remember where the existing transcript ends – everything after this
+        // index in the upcoming `turnInput` list will be *new* for this turn
+        // and therefore needs to be surfaced to the UI.
+        transcriptPrefixLen = this.transcript.length;
+
         // Ensure the transcript is up‑to‑date with the latest user input so
         // that subsequent iterations see a complete history.
         // `turnInput` is still empty at this point (it will be filled later).
         // We need to look at the *input* items the user just supplied.
-        const newUserItems: Array<ResponseInputItem> = input.filter(
-          (it) => {
-            // Exclude system messages (they are added separately as
-            // `instructions`) and exclude internal reasoning items. Keep all
-            // regular user / assistant / tool messages.
-            if (it.type === "message" && it.role === "system") {
-              return false;
-            }
-            if (it.type === "reasoning") {
-              return false;
-            }
-            return true;
-          },
-        );
-        this.transcript.push(...newUserItems);
+        this.transcript.push(...filterToApiMessages(input));
 
         turnInput = [...this.transcript, ...abortOutputs].map(
           stripInternalFields,
@@ -552,8 +552,7 @@ export class AgentLoop {
           const newUserItems: Array<ResponseInputItem> = input.filter((it) => {
             if (it.type === "message" && it.role === "system") {
               return false;
-            }
-            if (it.type === "reasoning") {
+            } else if (it.type === "reasoning") {
               return false;
             }
             return true;
@@ -606,6 +605,24 @@ export class AgentLoop {
                 // API schema and therefore causes a 400 error when included
                 // in subsequent requests whose context is sent verbatim.
 
+                // Skip items that we have already inserted earlier or that the
+                // model does not need to see again in the next turn.
+                //   • function_call   – superseded by the forthcoming
+                //     function_call_output.
+                //   • reasoning       – internal only, never sent back.
+                //   • user messages   – we added these to the transcript when
+                //     building the first turnInput; stageItem would add a
+                //     duplicate.
+                if (
+                  (item as ResponseInputItem).type === "function_call" ||
+                  (item as ResponseInputItem).type === "reasoning" ||
+                  ((item as ResponseInputItem).type === "message" &&
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    (item as any).role === "user")
+                ) {
+                  return;
+                }
+
                 const clone: ResponseInputItem = {
                   ...(item as unknown as ResponseInputItem),
                 } as ResponseInputItem;
@@ -636,7 +653,13 @@ export class AgentLoop {
         // re‑emit messages from previous turns (which would duplicate user
         // prompts) and so that freshly generated `function_call_output`s are
         // shown immediately.
-        const deltaInput = [...turnInput];
+        // Figure out what subset of `turnInput` constitutes *new* information
+        // for the UI so that we don’t spam the interface with repeats of the
+        // entire transcript on every iteration when response storage is
+        // disabled.
+        const deltaInput = this.disableResponseStorage
+          ? turnInput.slice(transcriptPrefixLen)
+          : [...turnInput];
         for (const item of deltaInput) {
           stageItem(item as ResponseItem);
         }
@@ -672,6 +695,13 @@ export class AgentLoop {
               `instructions (length ${mergedInstructions.length}): ${mergedInstructions}`,
             );
 
+            // For debugging – remove or comment out in production once stable
+            // eslint-disable-next-line no-console
+            // console.log(
+            //   "\n=====\nagentLoop.run(): responseCall(1): turnInput: " +
+            //     JSON.stringify(turnInput) +
+            //     "\n=====\n",
+            // );
             // eslint-disable-next-line no-await-in-loop
             stream = await responseCall({
               model: this.model,
@@ -922,13 +952,60 @@ export class AgentLoop {
                     stageItem(item as ResponseItem);
                   }
                 }
-                if (event.response.status === "completed") {
+                if (
+                  event.response.status === "completed" ||
+                  (event.response.status as unknown as string) ===
+                    "requires_action"
+                ) {
                   // TODO: remove this once we can depend on streaming events
                   const newTurnInput = await this.processEventsWithoutStreaming(
                     event.response.output,
                     stageItem,
                   );
-                  turnInput = newTurnInput;
+
+                    // When we do not use server‑side storage we maintain our
+                    // own transcript so that *future* turns still contain full
+                    // conversational context. However, whether we advance to
+                    // another loop iteration should depend solely on the
+                    // presence of *new* input items (i.e. items that were not
+                    // part of the previous request). Re‑sending the transcript
+                    // by itself would create an infinite request loop because
+                    // `turnInput.length` would never reach zero.
+
+                    if (this.disableResponseStorage) {
+                      // 1) Append the freshly emitted output to our local
+                      //    transcript (minus non‑message items the model does
+                      //    not need to see again).
+                      const cleaned = filterToApiMessages(
+                        event.response.output.map(stripInternalFields),
+                      );
+                      this.transcript.push(...cleaned);
+
+                      // 2) Determine the *delta* (newTurnInput) that must be
+                      //    sent in the next iteration. If there is none we can
+                      //    safely terminate the loop – the transcript alone
+                      //    does not constitute new information for the
+                      //    assistant to act upon.
+
+                      const delta = filterToApiMessages(
+                        newTurnInput.map(stripInternalFields),
+                      );
+
+                      if (delta.length === 0) {
+                        // No new input => end conversation.
+                        turnInput = [];
+                      } else {
+                        // Re‑send full transcript *plus* the new delta so the
+                        // stateless backend receives complete context.
+                        turnInput = [...this.transcript, ...delta];
+                        // The prefix ends at the current transcript length –
+                        // everything after this index is new for the next
+                        // iteration.
+                        transcriptPrefixLen = this.transcript.length;
+                      }
+                    } else {
+                      turnInput = newTurnInput;
+                    }
                 }
                 lastResponseId = event.response.id;
                 this.onLastResponseId(event.response.id);
@@ -990,6 +1067,10 @@ export class AgentLoop {
                         params as ResponseCreateParams & { stream: true },
                       );
 
+              log(
+                "agentLoop.run(): responseCall(1): turnInput: " +
+                  JSON.stringify(turnInput),
+              );
               // eslint-disable-next-line no-await-in-loop
               stream = await responseCall({
                 model: this.model,
@@ -1410,3 +1491,17 @@ You MUST adhere to the following criteria when executing the task:
 - When your task involves writing or modifying files:
     - Do NOT tell the user to "save the file" or "copy the code into a file" if you already created or modified the file using \`apply_patch\`. Instead, reference the file as already saved.
     - Do NOT show the full contents of large files you have already written, unless the user explicitly asks for them.`;
+
+function filterToApiMessages(
+  items: Array<ResponseInputItem>,
+): Array<ResponseInputItem> {
+  return items.filter((it) => {
+    if (it.type === "message" && it.role === "system") {
+      return false;
+    }
+    if (it.type === "reasoning") {
+      return false;
+    }
+    return true;
+  });
+}
