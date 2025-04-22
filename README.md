@@ -161,7 +161,7 @@ editors (`vim`, `code`) or common Git operations. **Note**: The whitelist only t
 when running in modes that would normally require approval (like `suggest` mode), not in
 `full-auto` mode where all commands are already auto-approved.
 
-> **⚠️ Security Warning**: Whitelisted commands run WITHOUT sandbox restrictions and have
+> **⚠️ Security Warning**: Whitelisted commands run WITHOUT sandbox restrictions and may have
 > full network access. Only whitelist commands that you fully trust.
 
 ### Platform sandboxing details
