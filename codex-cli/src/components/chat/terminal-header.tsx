@@ -34,9 +34,9 @@ const TerminalHeader: React.FC<TerminalHeaderProps> = ({
       {terminalRows < 10 ? (
         // Compact header for small terminal windows
         <Text>
-          ● Codex v{version} – {PWD} – {model} ({provider}) –{" "}
+          ● Codex v{version} - {PWD} - {model} ({provider}) -{" "}
           <Text color={colorsByPolicy[approvalPolicy]}>{approvalPolicy}</Text>
-          {flexModeEnabled ? " – flex-mode" : ""}
+          {flexModeEnabled ? " - flex-mode" : ""}
         </Text>
       ) : (
         <>
