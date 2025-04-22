@@ -985,7 +985,7 @@ export class AgentLoop {
                             "The maximum time to wait for the command to complete in milliseconds.",
                         },
                       },
-                      required: ["command"],
+                      required: ["command", "workdir", "timeout"],
                       additionalProperties: false,
                     },
                   },
