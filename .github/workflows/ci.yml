@@ -74,6 +74,9 @@ jobs:
       - name: Ensure README.md contains only ASCII and certain Unicode code points
         run: ./scripts/asciicheck.py README.md      
         
+      - name: Check README ToC
+        run: python3 scripts/readme_toc.py README.md
+
   update-nix-hash:
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'

@@ -254,15 +254,27 @@ const imagePaths = cli.flags.image;
 const provider = cli.flags.provider ?? config.provider ?? "openai";
 const apiKey = getApiKey(provider);
 
-if (!apiKey) {
+// Set of providers that don't require API keys
+const NO_API_KEY_REQUIRED = new Set(["ollama"]);
+
+// Skip API key validation for providers that don't require an API key
+if (!apiKey && !NO_API_KEY_REQUIRED.has(provider.toLowerCase())) {
   // eslint-disable-next-line no-console
   console.error(
     `\n${chalk.red(`Missing ${provider} API key.`)}\n\n` +
-      `Set the environment variable ${chalk.bold("OPENAI_API_KEY")} ` +
+      `Set the environment variable ${chalk.bold(
+        `${provider.toUpperCase()}_API_KEY`,
+      )} ` +
       `and re-run this command.\n` +
-      `You can create a key here: ${chalk.bold(
-        chalk.underline("https://platform.openai.com/account/api-keys"),
-      )}\n`,
+      `${
+        provider.toLowerCase() === "openai"
+          ? `You can create a key here: ${chalk.bold(
+              chalk.underline("https://platform.openai.com/account/api-keys"),
+            )}\n`
+          : `You can create a ${chalk.bold(
+              `${provider.toUpperCase()}_API_KEY`,
+            )} ` + `in the ${chalk.bold(`${provider}`)} dashboard.\n`
+      }`,
   );
   process.exit(1);
 }
