@@ -73,6 +73,8 @@ export type StoredConfig = {
   memory?: MemoryConfig;
   /** Whether to enable desktop notifications for responses */
   notify?: boolean;
+  /** List of commands that can be auto-approved without prompting */
+  commandWhitelist?: Array<string>;
   history?: {
     maxSize?: number;
     saveHistory?: boolean;
@@ -103,6 +105,8 @@ export type AppConfig = {
   memory?: MemoryConfig;
   /** Whether to enable desktop notifications for responses */
   notify: boolean;
+  /** List of commands that can be auto-approved without prompting */
+  commandWhitelist?: Array<string>;
 
   /** Enable the "flex-mode" processing mode for supported models (o3, o4-mini) */
   flexMode?: boolean;
@@ -293,6 +297,7 @@ export const loadConfig = (
     instructions: combinedInstructions,
     notify: storedConfig.notify === true,
     approvalMode: storedConfig.approvalMode,
+    commandWhitelist: storedConfig.commandWhitelist ?? [],
   };
 
   // -----------------------------------------------------------------------
@@ -403,6 +408,7 @@ export const saveConfig = (
     model: config.model,
     provider: config.provider,
     approvalMode: config.approvalMode,
+    commandWhitelist: config.commandWhitelist,
   };
 
   // Add history settings if they exist

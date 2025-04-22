@@ -6,6 +6,7 @@ import {
 } from "./utils/agent/apply-patch";
 import * as path from "path";
 import { parse } from "shell-quote";
+import { AppConfig } from "./utils/config";
 
 export type SafetyAssessment = {
   /**
@@ -74,6 +75,7 @@ export function canAutoApprove(
   policy: ApprovalPolicy,
   writableRoots: ReadonlyArray<string>,
   env: NodeJS.ProcessEnv = process.env,
+  config?: AppConfig,
 ): SafetyAssessment {
   if (command[0] === "apply_patch") {
     return command.length === 2 && typeof command[1] === "string"
@@ -150,14 +152,24 @@ export function canAutoApprove(
     }
   }
 
-  return policy === "full-auto"
-    ? {
-        type: "auto-approve",
-        reason: "Full auto mode",
-        group: "Running commands",
-        runInSandbox: true,
-      }
-    : { type: "ask-user" };
+  // If we're in full-auto mode, approve everything
+  if (policy === "full-auto") {
+    return {
+      type: "auto-approve",
+      reason: "Full auto mode",
+      group: "Running commands",
+      runInSandbox: true,
+    };
+  }
+
+  // Check to see if command is whitelisted
+  const whitelistAssessment = isCommandWhitelisted(command, config);
+  if (whitelistAssessment != null) {
+    return whitelistAssessment;
+  }
+
+  // If not whitelisted, ask the user
+  return { type: "ask-user" };
 }
 
 function canAutoApproveApplyPatch(
@@ -444,6 +456,27 @@ const UNSAFE_OPTIONS_FOR_FIND_COMMAND: ReadonlySet<string> = new Set([
   "-fprint0",
   "-fprintf",
 ]);
+
+function isCommandWhitelisted(
+  command: ReadonlyArray<string>,
+  config?: AppConfig,
+): SafetyAssessment | null {
+  const whitelist = config?.commandWhitelist;
+  if (!whitelist?.length) return null;
+
+  const cmdString = command.join(" ");
+  for (const pattern of whitelist) {
+    if (cmdString.startsWith(pattern)) {
+      return {
+        type: "auto-approve",
+        reason: "Command whitelisted by user",
+        group: "Whitelisted",
+        runInSandbox: true, // Still run in sandbox for safety
+      };
+    }
+  }
+  return null;
+}
 
 // ---------------- Helper utilities for complex shell expressions -----------------
 
