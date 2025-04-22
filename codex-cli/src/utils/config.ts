@@ -78,6 +78,12 @@ export function getMergedProviders(): Record<
 }
 
 export function getBaseUrl(provider: string = "openai"): string | undefined {
+  // Check for a PROVIDER-specific override: e.g. OLLAMA_BASE_URL
+  const envKey = `${provider.toUpperCase()}_BASE_URL`;
+  if (process.env[envKey]) {
+    return process.env[envKey];
+  }
+
   // Use merged providers configuration
   const mergedProviders = getMergedProviders();
   const providerInfo = mergedProviders[provider.toLowerCase()];
