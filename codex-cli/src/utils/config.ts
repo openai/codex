@@ -44,7 +44,7 @@ export function setApiKey(apiKey: string): void {
 export function getBaseUrl(provider: string): string | undefined {
   const providerInfo = providers[provider.toLowerCase()];
   if (providerInfo) {
-    return providerInfo.baseURL;
+    return process.env[providerInfo.envBaseURLKey] ?? providerInfo.baseURL;
   }
   return undefined;
 }
