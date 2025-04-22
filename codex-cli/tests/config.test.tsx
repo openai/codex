@@ -65,7 +65,7 @@ test("loads default config if files don't exist", () => {
   expect(config.instructions).toBe("");
 });
 
-test("saves and loads config with whitelist correctly", () => {
+test("saves and loads config correctly", () => {
   const testConfig = {
     model: "test-model",
     instructions: "test instructions",
