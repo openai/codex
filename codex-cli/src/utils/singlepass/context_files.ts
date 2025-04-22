@@ -179,7 +179,7 @@ export function loadIgnorePatterns(filePath?: string): Array<RegExp> {
   try {
     const content = _read_default_patterns_file(filePath);
     const lines = content.split("\n");
-    
+
     // Filter comments and empty lines, then clean up
     const cleaned = lines
       .filter((line) => line.trim() !== "" && !line.startsWith("#"))
@@ -189,21 +189,21 @@ export function loadIgnorePatterns(filePath?: string): Array<RegExp> {
     const regs = cleaned.map((origPattern: string) => {
       let isNegated = false;
       let modPattern = origPattern;
-      
+
       // Handle negation
-      if (modPattern.startsWith('!')) {
+      if (modPattern.startsWith("!")) {
         isNegated = true;
         modPattern = modPattern.substring(1);
       }
-      
+
       // Handle directory-specific patterns (ending with slash)
-      const isDirectory = modPattern.endsWith('/');
+      const isDirectory = modPattern.endsWith("/");
       if (isDirectory) {
         modPattern = modPattern.slice(0, -1);
       }
-      
+
       // Handle non-recursive patterns (starting with slash)
-      const isNonRecursive = modPattern.startsWith('/');
+      const isNonRecursive = modPattern.startsWith("/");
       if (isNonRecursive) {
         modPattern = modPattern.substring(1);
       }
@@ -213,29 +213,28 @@ export function loadIgnorePatterns(filePath?: string): Array<RegExp> {
         .replace(/[.+^${}()|[\]\\]/g, "\\$&")
         .replace(/\*\*/g, ".*")
         .replace(/\*/g, "[^/]*")
-        .replace(/\?/g, "[^/]"); 
-      
+        .replace(/\?/g, "[^/]");
+
       // Build the final regex pattern
       let finalRe: string;
       if (isNonRecursive) {
-
-        finalRe = isDirectory 
-          ? `^${regexPattern}(?:/.*)?$` 
-          : `^${regexPattern}$`;      
+        finalRe = isDirectory
+          ? `^${regexPattern}(?:/.*)?$`
+          : `^${regexPattern}$`;
       } else {
         // Recursive pattern (can match at any level)
         finalRe = isDirectory
-          ? `^(?:.*?/)?${regexPattern}(?:/.*)?$` 
-          : `^(?:.*?/)?${regexPattern}$`;      
+          ? `^(?:.*?/)?${regexPattern}(?:/.*)?$`
+          : `^(?:.*?/)?${regexPattern}$`;
       }
-      
+
       // Store negation information in the regex object
       const regex = new RegExp(finalRe, "i");
       (regex as ExtendedRegExp).negated = isNegated;
-      
+
       return regex;
     });
-    
+
     return regs;
   } catch {
     return [];
@@ -244,7 +243,7 @@ export function loadIgnorePatterns(filePath?: string): Array<RegExp> {
 
 export function loadAgentIgnorePatterns(workspacePath: string): Array<RegExp> {
   const patternsFile = path.join(workspacePath, ".agentignore");
-  
+
   if (fsSync.existsSync(patternsFile)) {
     const patterns = loadIgnorePatterns(patternsFile);
     return patterns;
@@ -258,24 +257,24 @@ export function shouldIgnorePath(
   compiledPatterns: Array<RegExp>,
 ): boolean {
   const normalized = path.resolve(p);
-  
+
   // Track whether the file should be included due to a negated pattern
   let excluded = false;
-  
+
   for (const regex of compiledPatterns) {
     const isNegated = (regex as ExtendedRegExp).negated === true;
-    
+
     if (regex.test(normalized)) {
       if (isNegated) {
         // Negated pattern explicitly includes this file
         return false;
       }
-      
+
       // Non-negated pattern excludes this file
       excluded = true;
     }
   }
-  
+
   return excluded;
 }
 
@@ -482,10 +481,10 @@ export async function getFileContents(
 export function getMergedIgnorePatterns(workspacePath: string): Array<RegExp> {
   // Load default patterns
   const defaultPatterns = loadIgnorePatterns();
-  
+
   // Load user-specific patterns from .agentignore
   const agentPatterns = loadAgentIgnorePatterns(workspacePath);
-  
+
   // Combine both sets of patterns
   return [...defaultPatterns, ...agentPatterns];
 }
@@ -499,7 +498,7 @@ export async function getSafeFileContents(
 ): Promise<Array<FileContent>> {
   // Get combined patterns from default and user .agentignore
   const mergedPatterns = getMergedIgnorePatterns(workspacePath);
-  
+
   // Use existing function with combined patterns
   return getFileContents(workspacePath, mergedPatterns);
 }
@@ -514,7 +513,7 @@ export function isExplicitlyIgnored(
 ): boolean {
   const agentPatterns = loadAgentIgnorePatterns(workspacePath);
   const normalized = path.resolve(filePath);
-  
+
   return shouldIgnorePath(normalized, agentPatterns);
 }
 
