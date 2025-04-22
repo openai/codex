@@ -22,7 +22,7 @@ describe('Model Utils', () => {
         });
 
         test('calculates percentage correctly for non-empty items', () => {
-            const mockItems: ResponseItem[] = [
+            const mockItems: Array<ResponseItem> = [
                 {
                     id: 'test-id',
                     type: 'message',
@@ -42,7 +42,7 @@ describe('Model Utils', () => {
         });
 
         test('handles unknown models gracefully', () => {
-            const mockItems: ResponseItem[] = [];
+            const mockItems: Array<ResponseItem> = [];
 
             expect(() => calculateContextPercentRemaining(mockItems, 'unknown-model' as any)).toThrow();
         });

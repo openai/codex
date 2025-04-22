@@ -1,8 +1,8 @@
 import type { ResponseItem } from "openai/resources/responses/responses.mjs";
 
-import { type SupportedModelId, openAiModelInfo } from "./model-info.js";
 import { approximateTokensUsed } from "./approximate-tokens-used.js";
 import { getBaseUrl, getApiKey } from "./config";
+import { type SupportedModelId, openAiModelInfo } from "./model-info.js";
 import OpenAI from "openai";
 
 const MODEL_LIST_TIMEOUT_MS = 2_000; // 2 seconds
