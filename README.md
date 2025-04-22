@@ -95,6 +95,8 @@ export OPENAI_API_KEY="your-api-key-here"
 > ```shell
 > export <provider>_API_KEY="your-api-key-here"
 > ```
+>
+> Note that Ollama (for local LLM usage) does not require an API key.
 
 </details>
 <br />
