@@ -64,7 +64,7 @@ export function exec(
 
 export function execApplyPatch(
   patchText: string,
-  workdir: string | undefined,
+  workdir: string | undefined = undefined,
 ): ExecResult {
   // This is a temporary measure to understand what are the common base commands
   // until we start persisting and uploading rollouts
