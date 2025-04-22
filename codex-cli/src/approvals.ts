@@ -1,4 +1,6 @@
+import type { AppConfig } from "./utils/config";
 import type { ParseEntry, ControlOperator } from "shell-quote";
+
 
 import {
   identify_files_added,
@@ -6,7 +8,6 @@ import {
 } from "./utils/agent/apply-patch";
 import * as path from "path";
 import { parse } from "shell-quote";
-import { AppConfig } from "./utils/config";
 
 export type SafetyAssessment = {
   /**
@@ -462,7 +463,9 @@ function isCommandWhitelisted(
   config?: AppConfig,
 ): SafetyAssessment | null {
   const whitelist = config?.commandWhitelist;
-  if (!whitelist?.length) return null;
+  if (!whitelist?.length) {
+    return null;
+  }
 
   const cmdString = command.join(" ");
   for (const pattern of whitelist) {
