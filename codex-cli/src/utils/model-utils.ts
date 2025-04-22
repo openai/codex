@@ -90,8 +90,26 @@ export async function isModelSupportedForResponses(
 }
 
 /** Returns the maximum context length (in tokens) for a given model. */
-function maxTokensForModel(model: SupportedModelId): number {
-  return openAiModelInfo[model].maxContextLength;
+export function maxTokensForModel(model: string): number {
+  if (model in openAiModelInfo) {
+    return openAiModelInfo[model as SupportedModelId].maxContextLength;
+  }
+
+  // fallback to heuristics for models not in the registry
+  const lower = model.toLowerCase();
+  if (lower.includes("32k")) {
+    return 32000;
+  }
+  if (lower.includes("16k")) {
+    return 16000;
+  }
+  if (lower.includes("8k")) {
+    return 8000;
+  }
+  if (lower.includes("4k")) {
+    return 4000;
+  }
+  return 128000; // Default to 128k for any other model.
 }
 
 /** Calculates the percentage of tokens remaining in context for a model. */
@@ -100,7 +118,7 @@ export function calculateContextPercentRemaining(
   model: string,
 ): number {
   const used = approximateTokensUsed(items);
-  const max = maxTokensForModel(model as SupportedModelId);
+  const max = maxTokensForModel(model);
   const remaining = Math.max(0, max - used);
   return (remaining / max) * 100;
 }
