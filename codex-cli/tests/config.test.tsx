@@ -93,7 +93,11 @@ test("loads user instructions + project doc when codex.md is present", () => {
   const userInstr = "here are user instructions";
   const projectDoc = "# Project Title\n\nSome project‑specific doc";
   // first, make config so loadConfig will see storedConfig
-  memfs[testConfigPath] = JSON.stringify({ model: "mymodel", approvalMode: "full-auto" }, null, 2);
+  memfs[testConfigPath] = JSON.stringify(
+    { model: "mymodel", approvalMode: "full-auto" },
+    null,
+    2,
+  );
   // then user instructions:
   memfs[testInstructionsPath] = userInstr;
   // and now our fake codex.md in the cwd:
