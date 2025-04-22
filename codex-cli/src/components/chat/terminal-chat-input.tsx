@@ -1,4 +1,5 @@
 import type { ReviewDecision } from "../../utils/agent/review.js";
+import type { HistoryEntry } from "../../utils/storage/command-history.js";
 import type {
   ResponseInputItem,
   ResponseItem,
@@ -6,14 +7,19 @@ import type {
 
 import { TerminalChatCommandReview } from "./terminal-chat-command-review.js";
 import { log, isLoggingEnabled } from "../../utils/agent/log.js";
+import { loadConfig } from "../../utils/config.js";
 import { createInputItem } from "../../utils/input-utils.js";
 import { setSessionId } from "../../utils/session.js";
+import {
+  loadCommandHistory,
+  addToHistory,
+} from "../../utils/storage/command-history.js";
 import { clearTerminal, onExit } from "../../utils/terminal.js";
 import Spinner from "../vendor/ink-spinner.js";
 import TextInput from "../vendor/ink-text-input.js";
 import { Box, Text, useApp, useInput, useStdin } from "ink";
 import { fileURLToPath } from "node:url";
-import React, { useCallback, useState, Fragment } from "react";
+import React, { useCallback, useState, Fragment, useEffect } from "react";
 import { useInterval } from "use-interval";
 
 const suggestions = [
@@ -27,6 +33,7 @@ export default function TerminalChatInput({
   loading,
   submitInput,
   confirmationPrompt,
+  explanation,
   submitConfirmation,
   setLastResponseId,
   setItems,
@@ -35,6 +42,7 @@ export default function TerminalChatInput({
   openModelOverlay,
   openApprovalOverlay,
   openHelpOverlay,
+  onCompact,
   interruptAgent,
   active,
 }: {
@@ -42,6 +50,7 @@ export default function TerminalChatInput({
   loading: boolean;
   submitInput: (input: Array<ResponseInputItem>) => void;
   confirmationPrompt: React.ReactNode | null;
+  explanation?: string;
   submitConfirmation: (
     decision: ReviewDecision,
     customDenyMessage?: string,
@@ -53,15 +62,26 @@ export default function TerminalChatInput({
   openModelOverlay: () => void;
   openApprovalOverlay: () => void;
   openHelpOverlay: () => void;
+  onCompact: () => void;
   interruptAgent: () => void;
   active: boolean;
 }): React.ReactElement {
   const app = useApp();
   const [selectedSuggestion, setSelectedSuggestion] = useState<number>(0);
   const [input, setInput] = useState("");
-  const [history, setHistory] = useState<Array<string>>([]);
+  const [history, setHistory] = useState<Array<HistoryEntry>>([]);
   const [historyIndex, setHistoryIndex] = useState<number | null>(null);
   const [draftInput, setDraftInput] = useState<string>("");
+
+  // Load command history on component mount
+  useEffect(() => {
+    async function loadHistory() {
+      const historyEntries = await loadCommandHistory();
+      setHistory(historyEntries);
+    }
+
+    loadHistory();
+  }, []);
 
   useInput(
     (_input, _key) => {
@@ -79,7 +99,7 @@ export default function TerminalChatInput({
               newIndex = Math.max(0, historyIndex - 1);
             }
             setHistoryIndex(newIndex);
-            setInput(history[newIndex] ?? "");
+            setInput(history[newIndex]?.command ?? "");
           }
           return;
         }
@@ -95,7 +115,7 @@ export default function TerminalChatInput({
             setInput(draftInput);
           } else {
             setHistoryIndex(newIndex);
-            setInput(history[newIndex] ?? "");
+            setInput(history[newIndex]?.command ?? "");
           }
           return;
         }
@@ -148,6 +168,12 @@ export default function TerminalChatInput({
         return;
       }
 
+      if (inputValue === "/compact") {
+        setInput("");
+        onCompact();
+        return;
+      }
+
       if (inputValue.startsWith("/model")) {
         setInput("");
         openModelOverlay();
@@ -188,24 +214,103 @@ export default function TerminalChatInput({
         ]);
 
         return;
+      } else if (inputValue === "/clearhistory") {
+        setInput("");
+
+        // Import clearCommandHistory function to avoid circular dependencies
+        // Using dynamic import to lazy-load the function
+        import("../../utils/storage/command-history.js").then(
+          async ({ clearCommandHistory }) => {
+            await clearCommandHistory();
+            setHistory([]);
+
+            // Emit a system message to confirm the history clear action
+            setItems((prev) => [
+              ...prev,
+              {
+                id: `clearhistory-${Date.now()}`,
+                type: "message",
+                role: "system",
+                content: [
+                  { type: "input_text", text: "Command history cleared" },
+                ],
+              },
+            ]);
+          },
+        );
+
+        return;
+      } else if (inputValue.startsWith("/")) {
+        // Handle invalid/unrecognized commands.
+        // Only single-word inputs starting with '/' (e.g., /command) that are not recognized are caught here.
+        // Any other input, including those starting with '/' but containing spaces
+        // (e.g., "/command arg"), will fall through and be treated as a regular prompt.
+        const trimmed = inputValue.trim();
+
+        if (/^\/\S+$/.test(trimmed)) {
+          setInput("");
+          setItems((prev) => [
+            ...prev,
+            {
+              id: `invalidcommand-${Date.now()}`,
+              type: "message",
+              role: "system",
+              content: [
+                {
+                  type: "input_text",
+                  text: `Invalid command "${trimmed}". Use /help to retrieve the list of commands.`,
+                },
+              ],
+            },
+          ]);
+
+          return;
+        }
       }
 
+      // detect image file paths for dynamic inclusion
       const images: Array<string> = [];
-      const text = inputValue
-        .replace(/!\[[^\]]*?\]\(([^)]+)\)/g, (_m, p1: string) => {
+      let text = inputValue;
+      // markdown-style image syntax: ![alt](path)
+      text = text.replace(/!\[[^\]]*?\]\(([^)]+)\)/g, (_m, p1: string) => {
+        images.push(p1.startsWith("file://") ? fileURLToPath(p1) : p1);
+        return "";
+      });
+      // quoted file paths ending with common image extensions (e.g. '/path/to/img.png')
+      text = text.replace(
+        /['"]([^'"]+?\.(?:png|jpe?g|gif|bmp|webp|svg))['"]/gi,
+        (_m, p1: string) => {
           images.push(p1.startsWith("file://") ? fileURLToPath(p1) : p1);
           return "";
-        })
-        .trim();
+        },
+      );
+      // bare file paths ending with common image extensions
+      text = text.replace(
+        // eslint-disable-next-line no-useless-escape
+        /\b(?:\.[\/\\]|[\/\\]|[A-Za-z]:[\/\\])?[\w-]+(?:[\/\\][\w-]+)*\.(?:png|jpe?g|gif|bmp|webp|svg)\b/gi,
+        (match: string) => {
+          images.push(
+            match.startsWith("file://") ? fileURLToPath(match) : match,
+          );
+          return "";
+        },
+      );
+      text = text.trim();
 
       const inputItem = await createInputItem(text, images);
       submitInput([inputItem]);
-      setHistory((prev) => {
-        if (prev[prev.length - 1] === value) {
-          return prev;
-        }
-        return [...prev, value];
+
+      // Get config for history persistence
+      const config = loadConfig();
+
+      // Add to history and update state
+      const updatedHistory = await addToHistory(value, history, {
+        maxSize: config.history?.maxSize ?? 1000,
+        saveHistory: config.history?.saveHistory ?? true,
+        sensitivePatterns: config.history?.sensitivePatterns ?? [],
       });
+
+      setHistory(updatedHistory);
       setHistoryIndex(null);
       setDraftInput("");
       setSelectedSuggestion(0);
@@ -223,6 +328,8 @@ export default function TerminalChatInput({
       openApprovalOverlay,
       openModelOverlay,
       openHelpOverlay,
+      history, // Add history to the dependency array
+      onCompact,
     ],
   );
 
@@ -231,6 +338,7 @@ export default function TerminalChatInput({
       <TerminalChatCommandReview
         confirmationPrompt={confirmationPrompt}
         onReviewCommand={submitConfirmation}
+        explanation={explanation}
       />
     );
   }
@@ -293,7 +401,8 @@ export default function TerminalChatInput({
                 <>
                   {" — "}
                   <Text color="red">
-                    {Math.round(contextLeftPercent)}% context left
+                    {Math.round(contextLeftPercent)}% context left — send
+                    "/compact" to condense context
                   </Text>
                 </>
               )}

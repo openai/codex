@@ -10,6 +10,9 @@ storybook-static/
 # ignore README for publishing
 codex-cli/README.md
 
+# ignore Nix derivation results
+result
+
 # editor
 .vscode/
 .idea/
@@ -55,3 +58,12 @@ Thumbs.db
 Icon?
 .Spotlight-V100/
 
+# Unwanted package managers
+.yarn/
+yarn.lock
+pnpm-lock.yaml
+
+# release
+package.json-e
+session.ts-e
+CHANGELOG.ignore.md

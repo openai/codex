@@ -22,13 +22,14 @@ export type ApplyPatchOp =
   | ApplyPatchDeleteFileOp
   | ApplyPatchUpdateFileOp;
 
-const PATCH_PREFIX = "*** Begin Patch\n";
-const PATCH_SUFFIX = "\n*** End Patch";
-const ADD_FILE_PREFIX = "*** Add File: ";
-const DELETE_FILE_PREFIX = "*** Delete File: ";
-const UPDATE_FILE_PREFIX = "*** Update File: ";
-const END_OF_FILE_PREFIX = "*** End of File";
-const HUNK_ADD_LINE_PREFIX = "+";
+export const PATCH_PREFIX = "*** Begin Patch\n";
+export const PATCH_SUFFIX = "\n*** End Patch";
+export const ADD_FILE_PREFIX = "*** Add File: ";
+export const DELETE_FILE_PREFIX = "*** Delete File: ";
+export const UPDATE_FILE_PREFIX = "*** Update File: ";
+export const MOVE_FILE_TO_PREFIX = "*** Move to: ";
+export const END_OF_FILE_PREFIX = "*** End of File";
+export const HUNK_ADD_LINE_PREFIX = "+";
 
 /**
  * @returns null when the patch is invalid

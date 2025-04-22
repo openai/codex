@@ -30,16 +30,14 @@ const MessageHistory: React.FC<MessageHistoryProps> = ({
   thinkingSeconds,
   fullStdout,
 }) => {
-  const [messages, debug] = useMemo(
-    () => [batch.map(({ item }) => item!), process.env["DEBUG"]],
-    [batch],
-  );
+  // Flatten batch entries to response items.
+  const messages = useMemo(() => batch.map(({ item }) => item!), [batch]);
 
   return (
     <Box flexDirection="column">
-      {loading && debug && (
+      {loading && (
         <Box marginTop={1}>
-          <Text color="yellow">{`(${thinkingSeconds}s)`}</Text>
+          <Text color="yellow">{`thinking for ${thinkingSeconds}s`}</Text>
         </Box>
       )}
       <Static items={["header", ...messages]}>
@@ -48,8 +46,13 @@ const MessageHistory: React.FC<MessageHistoryProps> = ({
             return <TerminalHeader key="header" {...headerProps} />;
           }
 
-          // After the guard above `item` can only be a ResponseItem.
+          // After the guard above, item is a ResponseItem
           const message = item as ResponseItem;
+          // Suppress empty reasoning updates (i.e. items with an empty summary).
+          const msg = message as unknown as { summary?: Array<unknown> };
+          if (msg.summary?.length === 0) {
+            return null;
+          }
           return (
             <Box
               key={`${message.id}-${index}`}

@@ -32,6 +32,7 @@ export type CommandConfirmation = {
   review: ReviewDecision;
   applyPatch?: ApplyPatchCommand | undefined;
   customDenyMessage?: string;
+  explanation?: string;
 };
 
 const alreadyProcessedResponses = new Set();
@@ -43,6 +44,9 @@ type AgentLoopParams = {
   approvalPolicy: ApprovalPolicy;
   onItem: (item: ResponseItem) => void;
   onLoading: (loading: boolean) => void;
+
+  /** Extra writable roots to use with sandbox execution. */
+  additionalWritableRoots: ReadonlyArray<string>;
 
   /** Called when the command is not auto-approved to request explicit user review. */
   getCommandConfirmation: (
@@ -57,6 +61,7 @@ export class AgentLoop {
   private instructions?: string;
   private approvalPolicy: ApprovalPolicy;
   private config: AppConfig;
+  private additionalWritableRoots: ReadonlyArray<string>;
 
   // Using `InstanceType<typeof OpenAI>` sidesteps typing issues with the OpenAI package under
   // the TS 5+ `moduleResolution=bundler` setup. OpenAI client instance. We keep the concrete
@@ -212,6 +217,7 @@ export class AgentLoop {
     onLoading,
     getCommandConfirmation,
     onLastResponseId,
+    additionalWritableRoots,
   }: AgentLoopParams & { config?: AppConfig }) {
     this.model = model;
     this.instructions = instructions;
@@ -228,6 +234,7 @@ export class AgentLoop {
         model,
         instructions: instructions ?? "",
       } as AppConfig);
+    this.additionalWritableRoots = additionalWritableRoots;
     this.onItem = onItem;
     this.onLoading = onLoading;
     this.getCommandConfirmation = getCommandConfirmation;
@@ -357,6 +364,7 @@ export class AgentLoop {
         args,
         this.config,
         this.approvalPolicy,
+        this.additionalWritableRoots,
         this.getCommandConfirmation,
         this.execAbortController?.signal,
       );
@@ -599,7 +607,7 @@ export class AgentLoop {
 
                 // Parse suggested retry time from error message, e.g., "Please try again in 1.3s"
                 const msg = errCtx?.message ?? "";
-                const m = /retry again in ([\d.]+)s/i.exec(msg);
+                const m = /(?:retry|try) again in ([\d.]+)s/i.exec(msg);
                 if (m && m[1]) {
                   const suggested = parseFloat(m[1]) * 1000;
                   if (!Number.isNaN(suggested)) {
@@ -902,6 +910,7 @@ export class AgentLoop {
       //     (e.g. ECONNRESET, ETIMEDOUT …)
       //   • the OpenAI SDK attached an HTTP `status` >= 500 indicating a
       //     server‑side problem.
+      //   • the error is model specific and detected in stream.
       // If matched we emit a single system message to inform the user and
       // resolve gracefully so callers can choose to retry.
       // -------------------------------------------------------------------
@@ -979,6 +988,74 @@ export class AgentLoop {
           });
         } catch {
           /* best‑effort */
+        }
+        this.onLoading(false);
+        return;
+      }
+
+      const isInvalidRequestError = () => {
+        if (!err || typeof err !== "object") {
+          return false;
+        }
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const e: any = err;
+
+        if (
+          e.type === "invalid_request_error" &&
+          e.code === "model_not_found"
+        ) {
+          return true;
+        }
+
+        if (
+          e.cause &&
+          e.cause.type === "invalid_request_error" &&
+          e.cause.code === "model_not_found"
+        ) {
+          return true;
+        }
+
+        return false;
+      };
+
+      if (isInvalidRequestError()) {
+        try {
+          // Extract request ID and error details from the error object
+
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const e: any = err;
+
+          const reqId =
+            e.request_id ??
+            (e.cause && e.cause.request_id) ??
+            (e.cause && e.cause.requestId);
+
+          const errorDetails = [
+            `Status: ${e.status || (e.cause && e.cause.status) || "unknown"}`,
+            `Code: ${e.code || (e.cause && e.cause.code) || "unknown"}`,
+            `Type: ${e.type || (e.cause && e.cause.type) || "unknown"}`,
+            `Message: ${
+              e.message || (e.cause && e.cause.message) || "unknown"
+            }`,
+          ].join(", ");
+
+          const msgText = `⚠️  OpenAI rejected the request${
+            reqId ? ` (request ID: ${reqId})` : ""
+          }. Error details: ${errorDetails}. Please verify your settings and try again.`;
+
+          this.onItem({
+            id: `error-${Date.now()}`,
+            type: "message",
+            role: "system",
+            content: [
+              {
+                type: "input_text",
+                text: msgText,
+              },
+            ],
+          });
+        } catch {
+          /* best-effort */
         }
         this.onLoading(false);
         return;
