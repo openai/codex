@@ -377,7 +377,7 @@ export default function TerminalChat({
         }
       } else {
         // Non-macOS: ring terminal bell twice before prompt
-        process.stdout.write('\u0007\u0007'); // ... two here
+        process.stdout.write("\u0007\u0007"); // ... two here
       }
     }
     prevLoadingRef.current = loading;
