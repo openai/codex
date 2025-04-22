@@ -81,21 +81,38 @@ export function getBaseUrl(provider: string): string | undefined {
   // Use merged providers configuration
   const mergedProviders = getMergedProviders();
   const providerInfo = mergedProviders[provider.toLowerCase()];
+  // If the provider is `openai` and `OPENAI_BASE_URL` is set, use it
+  if (provider === "openai" && OPENAI_BASE_URL !== "") {
+    return OPENAI_BASE_URL;
+  }
+
   if (providerInfo) {
     return providerInfo.baseURL;
   }
+
+  // If the provider not found in the providers list and `OPENAI_BASE_URL` is set, use it
+  if (OPENAI_BASE_URL !== "") {
+    return OPENAI_BASE_URL;
+  }
+
   return undefined;
 }
 
-export function getApiKey(provider: string): string | undefined {
-  const providerInfo = getMergedProviders()[provider.toLowerCase()];
 
+export function getApiKey(provider: string = "openai"): string | undefined {
+  const providerInfo = getMergedProviders()[provider.toLowerCase()];
   if (providerInfo) {
     if (providerInfo.name === "Ollama") {
       return process.env[providerInfo.envKey] ?? "dummy";
     }
     return process.env[providerInfo.envKey];
   }
+
+  // If the provider not found in the providers list and `OPENAI_API_KEY` is set, use it
+  if (OPENAI_API_KEY !== "") {
+    return OPENAI_API_KEY;
+  }
+
   return undefined;
 }
 
@@ -111,6 +128,8 @@ export type StoredConfig = {
   memory?: MemoryConfig;
   /** Whether to enable desktop notifications for responses */
   notify?: boolean;
+  /** Disable server-side response storage (send full transcript each request) */
+  disableResponseStorage?: boolean;
   history?: {
     maxSize?: number;
     saveHistory?: boolean;
@@ -141,6 +160,9 @@ export type AppConfig = {
   memory?: MemoryConfig;
   /** Whether to enable desktop notifications for responses */
   notify: boolean;
+
+  /** Disable server-side response storage (send full transcript each request) */
+  disableResponseStorage?: boolean;
 
   /** Enable the "flex-mode" processing mode for supported models (o3, o4-mini) */
   flexMode?: boolean;
@@ -331,6 +353,7 @@ export const loadConfig = (
     instructions: combinedInstructions,
     notify: storedConfig.notify === true,
     approvalMode: storedConfig.approvalMode,
+    disableResponseStorage: storedConfig.disableResponseStorage ?? false,
   };
 
   // -----------------------------------------------------------------------
