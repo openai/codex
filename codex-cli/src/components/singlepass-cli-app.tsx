@@ -399,8 +399,8 @@ export function SinglePassApp({
       });
 
       const openai = new OpenAI({
-        apiKey: getApiKey(config.provider),
-        baseURL: getBaseUrl(config.provider),
+        apiKey: getApiKey(config.provider ?? "openai"),
+        baseURL: getBaseUrl(config.provider ?? "openai"),
         timeout: OPENAI_TIMEOUT_MS,
       });
       const chatResp = await openai.beta.chat.completions.parse({
