@@ -2,12 +2,12 @@ import type { ExecResult } from "./interface.js";
 import type { SpawnOptions } from "child_process";
 
 import { exec } from "./raw-exec.js";
-import { log } from "../log.js";
-import { CONFIG_DIR, DATA_DIR } from "src/utils/config.js";
+import { CONFIG_DIR, DATA_DIR } from "../../config.js";
+import { log } from "../../logger/log.js";
 import {
   getLegacyConfigDir,
   legacyConfigDirExists,
-} from "src/utils/platform-dirs.js";
+} from "../../platform-dirs.js";
 
 function getCommonRoots() {
   const roots = [

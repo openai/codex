@@ -1,6 +1,6 @@
 {
   "name": "@openai/codex",
-  "version": "0.1.2504181820",
+  "version": "0.1.2504211509",
   "license": "Apache-2.0",
   "bin": {
     "codex": "bin/codex.js"
@@ -26,10 +26,7 @@
     "release": "pnpm run release:readme && pnpm run release:version && pnpm install && pnpm run release:build-and-publish"
   },
   "files": [
-    "README.md",
-    "bin",
-    "dist",
-    "src"
+    "dist"
   ],
   "dependencies": {
     "@inkjs/ui": "^2.0.0",
@@ -59,6 +56,7 @@
     "@types/js-yaml": "^4.0.9",
     "@types/marked-terminal": "^6.1.1",
     "@types/react": "^18.0.32",
+    "@types/semver": "^7.7.0",
     "@types/shell-quote": "^1.7.5",
     "@types/which": "^3.0.4",
     "@typescript-eslint/eslint-plugin": "^7.18.0",
@@ -69,10 +67,13 @@
     "eslint-plugin-react": "^7.32.2",
     "eslint-plugin-react-hooks": "^4.6.0",
     "eslint-plugin-react-refresh": "^0.4.19",
+    "fast-npm-meta": "^0.4.2",
     "husky": "^9.1.7",
     "ink-testing-library": "^3.0.0",
+    "package-manager-detector": "^1.2.0",
     "prettier": "^2.8.7",
     "punycode": "^2.3.1",
+    "semver": "^7.7.1",
     "ts-node": "^10.9.1",
     "typescript": "^5.0.3",
     "vitest": "^3.0.9",

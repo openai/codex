@@ -8,8 +8,8 @@
 
 import type { FullAutoErrorMode } from "./auto-approval-mode.js";
 
-import { log, isLoggingEnabled } from "./agent/log.js";
 import { AutoApprovalMode } from "./auto-approval-mode.js";
+import { log, isLoggingEnabled } from "./logger/log.js";
 import {
   getConfigDir,
   getDataDir,
@@ -17,6 +17,7 @@ import {
   legacyConfigDirExists,
   ensureDirectoryExists,
 } from "./platform-dirs.js";
+import { providers } from "./providers.js";
 import {
   existsSync,
   mkdirSync,
@@ -79,18 +80,37 @@ export const OPENAI_TIMEOUT_MS =
 export const OPENAI_BASE_URL = process.env["OPENAI_BASE_URL"] || "";
 export let OPENAI_API_KEY = process.env["OPENAI_API_KEY"] || "";
 
-export function getBaseUrl(_provider?: string): string {
-  return OPENAI_BASE_URL;
-}
-
-export function getApiKey(_provider?: string): string {
-  return OPENAI_API_KEY;
-}
-
 export function setApiKey(apiKey: string): void {
   OPENAI_API_KEY = apiKey;
 }
 
+export function getBaseUrl(provider?: string): string | undefined {
+  if (!provider) {
+    return OPENAI_BASE_URL;
+  }
+
+  const providerInfo = providers[provider.toLowerCase()];
+  if (providerInfo) {
+    return providerInfo.baseURL;
+  }
+  return undefined;
+}
+
+export function getApiKey(provider?: string): string | undefined {
+  if (!provider) {
+    return OPENAI_API_KEY;
+  }
+
+  const providerInfo = providers[provider.toLowerCase()];
+  if (providerInfo) {
+    if (providerInfo.name === "Ollama") {
+      return process.env[providerInfo.envKey] ?? "dummy";
+    }
+    return process.env[providerInfo.envKey];
+  }
+
+  return undefined;
+}
 // Formatting (quiet mode-only).
 export const PRETTY_PRINT = Boolean(process.env["PRETTY_PRINT"] || "");
 
@@ -112,13 +132,13 @@ export type StoredConfig = {
   notify?: boolean;
   /** Provider for API calls */
   provider?: string;
+  /** Safe commands that don't require approval */
+  safeCommands?: Array<string>;
   history?: {
     maxSize?: number;
     saveHistory?: boolean;
     sensitivePatterns?: Array<string>;
   };
-  /** User-defined safe commands */
-  safeCommands?: Array<string>;
 };
 
 // Minimal config written on first run.  An *empty* model string ensures that
@@ -146,6 +166,8 @@ export type AppConfig = {
   notify: boolean;
   /** Provider for API calls */
   provider?: string;
+  /** Safe commands that don't require approval */
+  safeCommands?: Array<string>;
 
   /** Enable the "flex-mode" processing mode for supported models (o3, o4-mini) */
   flexMode?: boolean;
@@ -154,8 +176,6 @@ export type AppConfig = {
     saveHistory: boolean;
     sensitivePatterns: Array<string>;
   };
-  /** User-defined safe commands */
-  safeCommands?: Array<string>;
 };
 
 // ---------------------------------------------------------------------------
@@ -360,7 +380,6 @@ export const loadConfig = (
     instructions: combinedInstructions,
     notify: storedConfig.notify === true,
     approvalMode: storedConfig.approvalMode,
-    safeCommands: storedConfig.safeCommands ?? [],
   };
 
   // -----------------------------------------------------------------------
@@ -456,7 +475,6 @@ export const loadConfig = (
       jitterFactor: DEFAULT_RATE_LIMIT_JITTER_FACTOR,
     };
   }
-
   return config;
 };
 
@@ -591,10 +609,6 @@ export const saveConfig = (
       saveHistory: config.history.saveHistory,
       sensitivePatterns: config.history.sensitivePatterns,
     };
-  }
-  // Save: User-defined safe commands
-  if (config.safeCommands && config.safeCommands.length > 0) {
-    configToSave.safeCommands = config.safeCommands;
   }
 
   if (ext === ".yaml" || ext === ".yml") {

@@ -1,4 +1,4 @@
-import { log } from "../../utils/agent/log.js";
+import { log } from "../../utils/logger/log.js";
 import { Box, Text, useInput, useStdin } from "ink";
 import React, { useState } from "react";
 import { useInterval } from "use-interval";
