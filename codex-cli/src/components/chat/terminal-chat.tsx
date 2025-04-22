@@ -13,7 +13,7 @@ import { useTerminalSize } from "../../hooks/use-terminal-size.js";
 import { AgentLoop } from "../../utils/agent/agent-loop.js";
 import { ReviewDecision } from "../../utils/agent/review.js";
 import { generateCompactSummary } from "../../utils/compact-summary.js";
-import { OPENAI_BASE_URL, saveConfig } from "../../utils/config.js";
+import { getApiKey, getBaseUrl, OPENAI_BASE_URL, saveConfig } from "../../utils/config.js";
 import { extractAppliedPatches as _extractAppliedPatches } from "../../utils/extract-applied-patches.js";
 import { getGitDiff } from "../../utils/get-diff.js";
 import { createInputItem } from "../../utils/input-utils.js";
@@ -68,15 +68,19 @@ const colorsByPolicy: Record<ApprovalPolicy, ColorName | undefined> = {
  * @returns A human-readable explanation of what the command does
  */
 async function generateCommandExplanation(
+  provider: string,
   command: Array<string>,
   model: string,
   flexMode: boolean,
 ): Promise<string> {
   try {
     // Create a temporary OpenAI client
+    const apiKey = getApiKey(provider) ?? process.env["OPENAI_API_KEY"];
+    const baseURL = getBaseUrl(provider) ?? OPENAI_BASE_URL;
+    
     const oai = new OpenAI({
-      apiKey: process.env["OPENAI_API_KEY"],
-      baseURL: OPENAI_BASE_URL,
+      apiKey,
+      baseURL
     });
 
     // Format the command for display
@@ -153,6 +157,7 @@ export default function TerminalChat({
     setLoading(true);
     try {
       const summary = await generateCompactSummary(
+        provider,
         items,
         model,
         Boolean(config.flexMode),
@@ -268,6 +273,7 @@ export default function TerminalChat({
         if (review === ReviewDecision.EXPLAIN) {
           log(`Generating explanation for command: ${commandForDisplay}`);
           const explanation = await generateCommandExplanation(
+            provider,
             command,
             model,
             Boolean(config.flexMode),
