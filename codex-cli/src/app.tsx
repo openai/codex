@@ -4,7 +4,7 @@ import type { ResponseItem } from "openai/resources/responses/responses";
 
 import TerminalChat from "./components/chat/terminal-chat";
 import TerminalChatPastRollout from "./components/chat/terminal-chat-past-rollout";
-import { checkInGit } from "./utils/check-in-git";
+import { checkInVcs } from "./utils/check-in-vcs";
 import { CLI_VERSION, type TerminalChatSession } from "./utils/session.js";
 import { onExit } from "./utils/terminal";
 import { ConfirmInput } from "@inkjs/ui";
@@ -37,8 +37,8 @@ export default function App({
 }: Props): JSX.Element {
   const app = useApp();
   const [accepted, setAccepted] = useState(() => false);
-  const [cwd, inGitRepo] = useMemo(
-    () => [process.cwd(), checkInGit(process.cwd())],
+  const [cwd, inVcsRepo] = useMemo(
+    () => [process.cwd(), checkInVcs(process.cwd())],
     [],
   );
   const { internal_eventEmitter } = useStdin();
@@ -53,7 +53,7 @@ export default function App({
     );
   }
 
-  if (!inGitRepo && !accepted) {
+  if (!inVcsRepo && !accepted) {
     return (
       <Box flexDirection="column">
         <Box borderStyle="round" paddingX={1} width={64}>
@@ -72,8 +72,8 @@ export default function App({
         >
           <Text>
             <Text color="yellow">Warning!</Text> It can be dangerous to run a
-            coding agent outside of a git repo in case there are changes that
-            you want to revert. Do you want to continue?
+            coding agent outside of a source control managed folder in case
+            there are changes that you want to revert. Do you want to continue?
           </Text>
           <Text>{cwd}</Text>
           <ConfirmInput
@@ -83,7 +83,7 @@ export default function App({
               onExit();
               // eslint-disable-next-line
               console.error(
-                "Quitting! Run again to accept or from inside a git repo",
+                "Quitting! Run again to accept or from inside a source control managed folder",
               );
             }}
             onConfirm={() => setAccepted(true)}

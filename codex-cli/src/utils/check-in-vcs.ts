@@ -29,3 +29,45 @@ export function checkInGit(workdir: string): boolean {
     return false;
   }
 }
+
+/**
+ * Returns true if the given directory is part of a Mercurial (hg) repository.
+ *
+ * Uses the canonical Mercurial command `hg root` which exits with status 0
+ * when executed anywhere inside a working tree (including the repo root) and
+ * exits with a non-zero status otherwise. We only rely on the exit code.
+ */
+export function checkInHg(workdir: string): boolean {
+  try {
+    execSync("hg root", { cwd: workdir, stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+/**
+ * Returns true if the given directory is part of a Sapling (sl) repository.
+ *
+ * Uses the Sapling command `sl root` which exits with status 0 when executed
+ * anywhere inside a working tree and exits with a non-zero status otherwise.
+ */
+export function checkInSapling(workdir: string): boolean {
+  try {
+    execSync("sl root", { cwd: workdir, stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Returns true if the given directory is part of a supported version control system
+ * (Git, Mercurial, or Sapling).
+ */
+export function checkInVcs(workdir: string): boolean {
+  return (
+    checkInGit(workdir) ||
+    checkInHg(workdir) ||
+    checkInSapling(workdir)
+  );
+}
