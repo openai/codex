@@ -31,7 +31,7 @@
 - [Contributing](#contributing)
   - [Development workflow](#development-workflow)
   - [Git Hooks with Husky](#git-hooks-with-husky)
-    - [Nix Flake Development](#nix-flake-development)
+  - [Debugging](#debugging)
   - [Writing high-impact code changes](#writing-high-impact-code-changes)
   - [Opening a pull request](#opening-a-pull-request)
   - [Review process](#review-process)
@@ -40,6 +40,8 @@
   - [Contributor License Agreement (CLA)](#contributor-license-agreement-cla)
     - [Quick fixes](#quick-fixes)
   - [Releasing `codex`](#releasing-codex)
+  - [Alternative Build Options](#alternative-build-options)
+    - [Nix Flake Development](#nix-flake-development)
 - [Security & Responsible AI](#security--responsible-ai)
 - [License](#license)
 
@@ -433,7 +435,7 @@ This project uses [Husky](https://typicode.github.io/husky/) to enforce code qua
 These hooks help maintain code quality and prevent pushing code with failing tests. For more details, see [HUSKY.md](./codex-cli/HUSKY.md).
 
 ```bash
-npm test && npm run lint && npm run typecheck
+pnpm test && pnpm run lint && pnpm run typecheck
 ```
 
 - If you have **not** yet signed the Contributor License Agreement (CLA), add a PR comment containing the exact text
@@ -456,30 +458,14 @@ pnpm lint:fix
 pnpm format:fix
 ```
 
-#### Nix Flake Development
+### Debugging
 
-Prerequisite: Nix >= 2.4 with flakes enabled (`experimental-features = nix-command flakes` in `~/.config/nix/nix.conf`).
+To debug the CLI with a visual debugger, do the following in the `codex-cli` folder:
 
-Enter a Nix development shell:
-
-```bash
-nix develop
-```
-
-This shell includes Node.js, installs dependencies, builds the CLI, and provides a `codex` command alias.
-
-Build and run the CLI directly:
-
-```bash
-nix build
-./result/bin/codex --help
-```
-
-Run the CLI via the flake app:
-
-```bash
-nix run .#codex
-```
+- Run `pnpm run build` to build the CLI, which will generate `cli.js.map` alongside `cli.js` in the `dist` folder.
+- Run the CLI with `node --inspect-brk ./dist/cli.js` The program then waits until a debugger is attached before proceeding. Options:
+  - In VS Code, choose **Debug: Attach to Node Process** from the command palette and choose the option in the dropdown with debug port `9229` (likely the first option)
+  - Go to <chrome://inspect> in Chrome and find **localhost:9229** and click **trace**
 
 ### Writing high-impact code changes
 
@@ -550,6 +536,33 @@ To publish a new version of the CLI, run the release scripts defined in `codex-c
    ```
 5. Copy README, build, and publish to npm: `pnpm release`
 6. Push to branch: `git push origin HEAD`
+
+### Alternative Build Options
+
+#### Nix Flake Development
+
+Prerequisite: Nix >= 2.4 with flakes enabled (`experimental-features = nix-command flakes` in `~/.config/nix/nix.conf`).
+
+Enter a Nix development shell:
+
+```bash
+nix develop
+```
+
+This shell includes Node.js, installs dependencies, builds the CLI, and provides a `codex` command alias.
+
+Build and run the CLI directly:
+
+```bash
+nix build
+./result/bin/codex --help
+```
+
+Run the CLI via the flake app:
+
+```bash
+nix run .#codex
+```
 
 ---
 
