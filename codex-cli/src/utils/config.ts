@@ -80,6 +80,11 @@ export function getApiKey(provider: string = "openai"): string | undefined {
   if (OPENAI_API_KEY !== "") {
     return OPENAI_API_KEY;
   }
+  // Check for a PROVIDER-specific override: e.g. CEREBRAS_API_KEY
+  const envKey = `${provider.toUpperCase()}_API_KEY`;
+  if (process.env[envKey]) {
+    return process.env[envKey];
+  }
 
   return undefined;
 }

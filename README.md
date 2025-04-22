@@ -103,6 +103,14 @@ export OPENAI_API_KEY="your-api-key-here"
 > ```shell
 > export <provider>_API_KEY="your-api-key-here"
 > ```
+>
+> You can setup custom providers by setting the base url environment variable as:
+>
+> ```shell
+> export <provider>_BASE_URL="provider-base-url-here"
+> ```
+>
+> Example: setting CEREBRAS_API_KEY and CEREBRAS_BASE_URL would allow you to run with --provider cerebras
 
 </details>
 <br />
