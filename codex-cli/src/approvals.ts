@@ -1,11 +1,10 @@
-import type { AppConfig } from "./utils/config";
 import type { ParseEntry, ControlOperator } from "shell-quote";
-
 
 import {
   identify_files_added,
   identify_files_needed,
 } from "./utils/agent/apply-patch";
+import {loadConfig} from "./utils/config";
 import * as path from "path";
 import { parse } from "shell-quote";
 
@@ -75,8 +74,7 @@ export function canAutoApprove(
   command: ReadonlyArray<string>,
   policy: ApprovalPolicy,
   writableRoots: ReadonlyArray<string>,
-  env: NodeJS.ProcessEnv = process.env,
-  config?: AppConfig,
+  env: NodeJS.ProcessEnv = process.env
 ): SafetyAssessment {
   if (command[0] === "apply_patch") {
     return command.length === 2 && typeof command[1] === "string"
@@ -164,7 +162,7 @@ export function canAutoApprove(
   }
 
   // Check to see if command is whitelisted
-  const whitelistAssessment = isCommandWhitelisted(command, config);
+  const whitelistAssessment = isCommandWhitelisted(command);
   if (whitelistAssessment != null) {
     return whitelistAssessment;
   }
@@ -459,10 +457,9 @@ const UNSAFE_OPTIONS_FOR_FIND_COMMAND: ReadonlySet<string> = new Set([
 ]);
 
 function isCommandWhitelisted(
-  command: ReadonlyArray<string>,
-  config?: AppConfig,
+  command: ReadonlyArray<string>
 ): SafetyAssessment | null {
-  const whitelist = config?.commandWhitelist;
+  const whitelist = loadConfig()?.commandWhitelist;
   if (!whitelist?.length) {
     return null;
   }
