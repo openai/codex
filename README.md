@@ -104,7 +104,7 @@ export OPENAI_API_KEY="your-api-key-here"
 > export <provider>_API_KEY="your-api-key-here"
 > ```
 >
-> You can setup custom providers by setting the base url environment variable as:
+> You can set up custom providers by setting the base url environment variable as:
 >
 > ```shell
 > export <provider>_BASE_URL="provider-base-url-here"
