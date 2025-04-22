@@ -10,6 +10,8 @@
 <details>
 <summary><strong>Table&nbsp;of&nbsp;Contents</strong></summary>
 
+<!-- Begin ToC -->
+
 - [Experimental Technology Disclaimer](#experimental-technology-disclaimer)
 - [Quickstart](#quickstart)
 - [Why Codex?](#why-codex)
@@ -19,13 +21,16 @@
 - [CLI Reference](#cli-reference)
 - [Memory & Project Docs](#memory--project-docs)
 - [Non-interactive / CI mode](#non-interactive--ci-mode)
+- [Tracing / Verbose Logging](#tracing--verbose-logging)
 - [Recipes](#recipes)
 - [Installation](#installation)
 - [Configuration](#configuration)
 - [FAQ](#faq)
+- [Zero Data Retention (ZDR) Organization Limitation](#zero-data-retention-zdr-organization-limitation)
 - [Funding Opportunity](#funding-opportunity)
 - [Contributing](#contributing)
   - [Development workflow](#development-workflow)
+  - [Git Hooks with Husky](#git-hooks-with-husky)
     - [Nix Flake Development](#nix-flake-development)
   - [Writing high-impact code changes](#writing-high-impact-code-changes)
   - [Opening a pull request](#opening-a-pull-request)
@@ -37,7 +42,8 @@
   - [Releasing `codex`](#releasing-codex)
 - [Security & Responsible AI](#security--responsible-ai)
 - [License](#license)
-- [Zero Data Retention (ZDR) Organization Limitation](#zero-data-retention-zdr-organization-limitation)
+
+<!-- End ToC -->
 
 </details>
 
