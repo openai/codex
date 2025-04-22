@@ -695,13 +695,6 @@ export class AgentLoop {
               `instructions (length ${mergedInstructions.length}): ${mergedInstructions}`,
             );
 
-            // For debugging – remove or comment out in production once stable
-            // eslint-disable-next-line no-console
-            // console.log(
-            //   "\n=====\nagentLoop.run(): responseCall(1): turnInput: " +
-            //     JSON.stringify(turnInput) +
-            //     "\n=====\n",
-            // );
             // eslint-disable-next-line no-await-in-loop
             stream = await responseCall({
               model: this.model,
@@ -963,49 +956,49 @@ export class AgentLoop {
                     stageItem,
                   );
 
-                    // When we do not use server‑side storage we maintain our
-                    // own transcript so that *future* turns still contain full
-                    // conversational context. However, whether we advance to
-                    // another loop iteration should depend solely on the
-                    // presence of *new* input items (i.e. items that were not
-                    // part of the previous request). Re‑sending the transcript
-                    // by itself would create an infinite request loop because
-                    // `turnInput.length` would never reach zero.
+                  // When we do not use server‑side storage we maintain our
+                  // own transcript so that *future* turns still contain full
+                  // conversational context. However, whether we advance to
+                  // another loop iteration should depend solely on the
+                  // presence of *new* input items (i.e. items that were not
+                  // part of the previous request). Re‑sending the transcript
+                  // by itself would create an infinite request loop because
+                  // `turnInput.length` would never reach zero.
 
-                    if (this.disableResponseStorage) {
-                      // 1) Append the freshly emitted output to our local
-                      //    transcript (minus non‑message items the model does
-                      //    not need to see again).
-                      const cleaned = filterToApiMessages(
-                        event.response.output.map(stripInternalFields),
-                      );
-                      this.transcript.push(...cleaned);
+                  if (this.disableResponseStorage) {
+                    // 1) Append the freshly emitted output to our local
+                    //    transcript (minus non‑message items the model does
+                    //    not need to see again).
+                    const cleaned = filterToApiMessages(
+                      event.response.output.map(stripInternalFields),
+                    );
+                    this.transcript.push(...cleaned);
 
-                      // 2) Determine the *delta* (newTurnInput) that must be
-                      //    sent in the next iteration. If there is none we can
-                      //    safely terminate the loop – the transcript alone
-                      //    does not constitute new information for the
-                      //    assistant to act upon.
+                    // 2) Determine the *delta* (newTurnInput) that must be
+                    //    sent in the next iteration. If there is none we can
+                    //    safely terminate the loop – the transcript alone
+                    //    does not constitute new information for the
+                    //    assistant to act upon.
 
-                      const delta = filterToApiMessages(
-                        newTurnInput.map(stripInternalFields),
-                      );
+                    const delta = filterToApiMessages(
+                      newTurnInput.map(stripInternalFields),
+                    );
 
-                      if (delta.length === 0) {
-                        // No new input => end conversation.
-                        turnInput = [];
-                      } else {
-                        // Re‑send full transcript *plus* the new delta so the
-                        // stateless backend receives complete context.
-                        turnInput = [...this.transcript, ...delta];
-                        // The prefix ends at the current transcript length –
-                        // everything after this index is new for the next
-                        // iteration.
-                        transcriptPrefixLen = this.transcript.length;
-                      }
+                    if (delta.length === 0) {
+                      // No new input => end conversation.
+                      turnInput = [];
                     } else {
-                      turnInput = newTurnInput;
+                      // Re‑send full transcript *plus* the new delta so the
+                      // stateless backend receives complete context.
+                      turnInput = [...this.transcript, ...delta];
+                      // The prefix ends at the current transcript length –
+                      // everything after this index is new for the next
+                      // iteration.
+                      transcriptPrefixLen = this.transcript.length;
                     }
+                  } else {
+                    turnInput = newTurnInput;
+                  }
                 }
                 lastResponseId = event.response.id;
                 this.onLastResponseId(event.response.id);
