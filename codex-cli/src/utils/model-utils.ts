@@ -1,5 +1,6 @@
 import type { ResponseItem } from "openai/resources/responses/responses.mjs";
 
+import { type SupportedModelId, openAiModelInfo } from "./model-info.js";
 import { approximateTokensUsed } from "./approximate-tokens-used.js";
 import { getBaseUrl, getApiKey } from "./config";
 import OpenAI from "openai";
@@ -89,24 +90,8 @@ export async function isModelSupportedForResponses(
 }
 
 /** Returns the maximum context length (in tokens) for a given model. */
-function maxTokensForModel(model: string): number {
-  // TODO: These numbers are best‑effort guesses and provide a basis for UI percentages. They
-  // should be provider & model specific instead of being wild guesses.
-
-  const lower = model.toLowerCase();
-  if (lower.includes("32k")) {
-    return 32000;
-  }
-  if (lower.includes("16k")) {
-    return 16000;
-  }
-  if (lower.includes("8k")) {
-    return 8000;
-  }
-  if (lower.includes("4k")) {
-    return 4000;
-  }
-  return 128000; // Default to 128k for any other model.
+function maxTokensForModel(model: SupportedModelId): number {
+  return openAiModelInfo[model].maxContextLength;
 }
 
 /** Calculates the percentage of tokens remaining in context for a model. */
@@ -115,7 +100,7 @@ export function calculateContextPercentRemaining(
   model: string,
 ): number {
   const used = approximateTokensUsed(items);
-  const max = maxTokensForModel(model);
+  const max = maxTokensForModel(model as SupportedModelId);
   const remaining = Math.max(0, max - used);
   return (remaining / max) * 100;
 }
