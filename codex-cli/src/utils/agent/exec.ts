@@ -10,6 +10,7 @@ import { formatCommandForDisplay } from "../../format-command.js";
 import fs from "fs";
 import os from "os";
 import { parse } from "shell-quote";
+import { resolvePathAgainstWorkdir } from "src/approvals.js";
 
 const DEFAULT_TIMEOUT_MS = 10_000; // 10 seconds
 
@@ -60,16 +61,20 @@ export function exec(
   return execForSandbox(cmd, opts, writableRoots, abortSignal);
 }
 
-export function execApplyPatch(patchText: string): ExecResult {
+export function execApplyPatch(
+  patchText: string,
+  workdir: string | undefined,
+): ExecResult {
   // This is a temporary measure to understand what are the common base commands
   // until we start persisting and uploading rollouts
 
   try {
     const result = process_patch(
       patchText,
-      (p) => fs.readFileSync(p, "utf8"),
-      (p, c) => fs.writeFileSync(p, c, "utf8"),
-      (p) => fs.unlinkSync(p),
+      (p) => fs.readFileSync(resolvePathAgainstWorkdir(p, workdir), "utf8"),
+      (p, c) =>
+        fs.writeFileSync(resolvePathAgainstWorkdir(p, workdir), c, "utf8"),
+      (p) => fs.unlinkSync(resolvePathAgainstWorkdir(p, workdir)),
     );
     return {
       stdout: result,
