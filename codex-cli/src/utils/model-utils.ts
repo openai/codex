@@ -22,8 +22,8 @@ async function fetchModels(provider: string): Promise<Array<string>> {
 
   try {
     const openai = new OpenAI({
-      apiKey: getApiKey(provider ?? "openai"),
-      baseURL: getBaseUrl(provider ?? "openai"),
+      apiKey: getApiKey(provider),
+      baseURL: getBaseUrl(provider),
     });
     const list = await openai.models.list();
     const models: Array<string> = [];
