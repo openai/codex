@@ -16,6 +16,7 @@
 - [Quickstart](#quickstart)
 - [Why Codex?](#why-codex)
 - [Security Model & Permissions](#security-model--permissions)
+  - [Whitelisting Commands](#whitelisting-commands)
   - [Platform sandboxing details](#platform-sandboxing-details)
 - [System Requirements](#system-requirements)
 - [CLI Reference](#cli-reference)
