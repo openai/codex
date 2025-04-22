@@ -2,6 +2,13 @@
 
 You can install any of these versions: `npm install -g codex@version`
 
+## `0.1.2504220136`
+
+### 🚀 Features
+
+- Add support for ZDR orgs (#481)
+- Include fractional portion of chunk that exceeds stdout/stderr limit (#497)
+
 ## `0.1.2504211509`
 
 ### 🚀 Features
