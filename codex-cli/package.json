@@ -29,6 +29,7 @@
   "dependencies": {
     "@inkjs/ui": "^2.0.0",
     "chalk": "^5.2.0",
+    "chokidar": "^4.0.3",
     "diff": "^7.0.0",
     "dotenv": "^16.1.4",
     "fast-deep-equal": "^3.1.3",
