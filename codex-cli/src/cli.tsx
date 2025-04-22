@@ -257,14 +257,15 @@ const apiKey = getApiKey(provider);
 // Set of providers that don't require API keys
 const NO_API_KEY_REQUIRED = new Set(["ollama"]);
 
+// Skip API key validation for providers that don't require an API key
 if (!apiKey && !NO_API_KEY_REQUIRED.has(provider.toLowerCase())) {
   // eslint-disable-next-line no-console
   console.error(
     `\n${chalk.red(`Missing ${provider} API key.`)}\n\n` +
       `Set the environment variable ${chalk.bold("OPENAI_API_KEY")} ` +
       `and re-run this command.\n` +
-        `You can create a key here: ${chalk.bold(
-          chalk.underline("https://platform.openai.com/account/api-keys"),
+      `You can create a key here: ${chalk.bold(
+        chalk.underline("https://platform.openai.com/account/api-keys"),
       )}\n`,
   );
   process.exit(1);
