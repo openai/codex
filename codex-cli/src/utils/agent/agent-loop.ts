@@ -467,9 +467,13 @@ export class AgentLoop {
       // `previous_response_id` when `disableResponseStorage` is enabled.  When storage
       // is disabled we deliberately ignore the caller‑supplied value because
       // the backend will not retain any state that could be referenced.
+      // If the backend stores conversation state (`disableResponseStorage === false`) we
+      // forward the caller‑supplied `previousResponseId` so that the model sees the
+      // full context.  When storage is disabled we *must not* send any ID because the
+      // server no longer retains the referenced response.
       let lastResponseId: string = this.disableResponseStorage
-        ? previousResponseId
-        : "";
+        ? ""
+        : previousResponseId;
 
       // If there are unresolved function calls from a previously cancelled run
       // we have to emit dummy tool outputs so that the API no longer expects
@@ -513,16 +517,20 @@ export class AgentLoop {
         return clean as unknown as ResponseInputItem;
       };
 
-      if (this.disableResponseStorage && turnInput.length > 0) {
+      if (this.disableResponseStorage) {
         // Ensure the transcript is up‑to‑date with the latest user input so
         // that subsequent iterations see a complete history.
-        const newUserItems: Array<ResponseInputItem> = turnInput.filter(
+        // `turnInput` is still empty at this point (it will be filled later).
+        // We need to look at the *input* items the user just supplied.
+        const newUserItems: Array<ResponseInputItem> = input.filter(
           (it) => {
-            if (
-              (it.type === "message" && it.role !== "system") ||
-              it.type === "reasoning" ||
-              it.type === "function_call_output"
-            ) {
+            // Exclude system messages (they are added separately as
+            // `instructions`) and exclude internal reasoning items. Keep all
+            // regular user / assistant / tool messages.
+            if (it.type === "message" && it.role === "system") {
+              return false;
+            }
+            if (it.type === "reasoning") {
               return false;
             }
             return true;
@@ -535,6 +543,23 @@ export class AgentLoop {
         );
       } else {
         turnInput = [...abortOutputs, ...input].map(stripInternalFields);
+
+        // When response storage is disabled we have to maintain our own
+        // running transcript so that the next request still contains the
+        // full conversational history.  We skipped the transcript update in
+        // the branch above – ensure we do it here as well.
+        if (this.disableResponseStorage) {
+          const newUserItems: Array<ResponseInputItem> = input.filter((it) => {
+            if (it.type === "message" && it.role === "system") {
+              return false;
+            }
+            if (it.type === "reasoning") {
+              return false;
+            }
+            return true;
+          });
+          this.transcript.push(...newUserItems.map(stripInternalFields));
+        }
       }
 
       this.onLoading(true);
@@ -663,6 +688,11 @@ export class AgentLoop {
                     previous_response_id: lastResponseId || undefined,
                   }),
               tools: [shellTool],
+              // Explicitly tell the model it is allowed to pick whatever
+              // tool it deems appropriate.  Omitting this sometimes leads to
+              // the model ignoring the available tools and responding with
+              // plain text instead (resulting in a missing tool‑call).
+              tool_choice: "auto",
             });
             break;
           } catch (error) {
@@ -976,6 +1006,7 @@ export class AgentLoop {
                       previous_response_id: lastResponseId || undefined,
                     }),
                 tools: [shellTool],
+                tool_choice: "auto",
               });
 
               this.currentStream = stream;
