@@ -65,6 +65,8 @@ const cli = meow(
     -w, --writable-root <path>      Writable folder for sandbox in full-auto mode (can be specified multiple times)
     -a, --approval-mode <mode>      Override the approval policy: 'suggest', 'auto-edit', or 'full-auto'
 
+    --watch                    Listen for file changes and automatically detect AI comment triggers
+
     --auto-edit                Automatically approve file edits; still prompt for commands
     --full-auto                Automatically approve edits and commands when executed in the sandbox
 
@@ -111,6 +113,11 @@ const cli = meow(
         type: "boolean",
         aliases: ["q"],
         description: "Non-interactive quiet mode",
+      },
+      watch: {
+        type: "boolean",
+        description:
+          "Listen for file changes and automatically detect AI comment triggers",
       },
       config: {
         type: "boolean",
@@ -285,12 +292,12 @@ if (!apiKey && !NO_API_KEY_REQUIRED.has(provider.toLowerCase())) {
               chalk.underline("https://platform.openai.com/account/api-keys"),
             )}\n`
           : provider.toLowerCase() === "gemini"
-            ? `You can create a ${chalk.bold(
-                `${provider.toUpperCase()}_API_KEY`,
-              )} ` + `in the ${chalk.bold(`Google AI Studio`)}.\n`
-            : `You can create a ${chalk.bold(
-                `${provider.toUpperCase()}_API_KEY`,
-              )} ` + `in the ${chalk.bold(`${provider}`)} dashboard.\n`
+          ? `You can create a ${chalk.bold(
+              `${provider.toUpperCase()}_API_KEY`,
+            )} ` + `in the ${chalk.bold(`Google AI Studio`)}.\n`
+          : `You can create a ${chalk.bold(
+              `${provider.toUpperCase()}_API_KEY`,
+            )} ` + `in the ${chalk.bold(`${provider}`)} dashboard.\n`
       }`,
   );
   process.exit(1);
@@ -403,8 +410,8 @@ if (cli.flags.quiet) {
     cli.flags.fullAuto || cli.flags.approvalMode === "full-auto"
       ? AutoApprovalMode.FULL_AUTO
       : cli.flags.autoEdit || cli.flags.approvalMode === "auto-edit"
-        ? AutoApprovalMode.AUTO_EDIT
-        : config.approvalMode || AutoApprovalMode.SUGGEST;
+      ? AutoApprovalMode.AUTO_EDIT
+      : config.approvalMode || AutoApprovalMode.SUGGEST;
 
   await runQuietMode({
     prompt,
@@ -434,8 +441,8 @@ const approvalPolicy: ApprovalPolicy =
   cli.flags.fullAuto || cli.flags.approvalMode === "full-auto"
     ? AutoApprovalMode.FULL_AUTO
     : cli.flags.autoEdit || cli.flags.approvalMode === "auto-edit"
-      ? AutoApprovalMode.AUTO_EDIT
-      : config.approvalMode || AutoApprovalMode.SUGGEST;
+    ? AutoApprovalMode.AUTO_EDIT
+    : config.approvalMode || AutoApprovalMode.SUGGEST;
 
 const instance = render(
   <App
@@ -446,6 +453,7 @@ const instance = render(
     approvalPolicy={approvalPolicy}
     additionalWritableRoots={additionalWritableRoots}
     fullStdout={Boolean(cli.flags.fullStdout)}
+    watchMode={Boolean(cli.flags.watch)}
   />,
   {
     patchConsole: process.env["DEBUG"] ? false : true,
