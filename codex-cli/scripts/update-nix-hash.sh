@@ -1,23 +1,25 @@
 #!/usr/bin/env bash
 
-# Script to update the npmDepsHash in flake.nix when package-lock.json changes
-# This script is meant to be triggered by a GitHub Action or run manually
-
-# Find the repository root (where the .git directory is)
-REPO_ROOT=$(git rev-parse --show-toplevel)
+REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
-# Check if package-lock.json has changed
-if [ -z "$(git diff --name-only HEAD^ HEAD 2>/dev/null | grep 'codex-cli/package-lock.json')" ]; then
-  echo "No changes to package-lock.json detected in the last commit."
-  echo "Running manual hash update..."
+# Run nix build command and capture output
+build_output=$(nix build .\#codex-cli --show-trace 2>&1)
+
+# Extract the "got" hash using grep and awk
+# Look for the line containing "got:" and extract the hash
+NEW_HASH=$(echo "$build_output" | grep "got:" | awk '{print $2}')
+
+# Check if we found a hash
+if [ -n "$NEW_HASH" ]; then
+    echo "Extracted got hash: $NEW_HASH"
+else
+    echo "Could not extract got hash from build output."
+    echo "Full build output:"
+    echo "$build_output"
 fi
-
-# Calculate the new hash
-NEW_HASH=$(nix hash path "$REPO_ROOT/codex-cli" --type sha256)
-
 # Update the hash in flake.nix
-sed -i "s|npmDepsHash = \"sha256-[^\"]*\"|npmDepsHash = \"$NEW_HASH\"|" "$REPO_ROOT/flake.nix"
+sed -i "s|hash = \"[^\"]*\"|hash = \"$NEW_HASH\"|" "$REPO_ROOT/flake.nix"
 
 # Check if the hash was actually changed
 if [ -z "$(git diff "$REPO_ROOT/flake.nix")" ]; then
@@ -32,10 +34,11 @@ if [ -n "${GITHUB_ACTIONS:-}" ]; then
 
   # Commit and push the change
   git add "$REPO_ROOT/flake.nix"
-  git commit -m "chore: Update npmDepsHash in flake.nix
+  git commit -m "chore: Update pnpm deps hash in flake.nix
 
-This automated commit updates the npmDepsHash in flake.nix to match 
-the latest package-lock.json changes."
+This automated commit updates the pnpm deps hash hash in flake.nix to match 
+the latest hash of the workspace's pnpm-lock.yaml file. This ensures that 
+Nix's store is consistent with the latest dependencies."
 
   git push
 else
