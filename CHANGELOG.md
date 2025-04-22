@@ -12,6 +12,7 @@ You can install any of these versions: `npm install -g codex@version`
 ### 🐛 Bug Fixes
 
 - Agent loop for ZDR (`disableResponseStorage`) (#543)
+- Fix relative `workdir` check for `apply_patch` (#556)
 - Minimal mid-stream #429 retry loop using existing back-off (#506)
 - Inconsistent usage of base URL and API key (#507)
 - Remove requirement for api key for ollama (#546)
