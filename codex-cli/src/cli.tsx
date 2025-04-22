@@ -254,7 +254,11 @@ const imagePaths = cli.flags.image;
 const provider = cli.flags.provider ?? config.provider ?? "openai";
 const apiKey = getApiKey(provider);
 
-if (!apiKey) {
+// Set of providers that don't require API keys
+const NO_API_KEY_REQUIRED = new Set(["ollama"]);
+
+// Skip API key validation for providers that don't require an API key
+if (!apiKey && !NO_API_KEY_REQUIRED.has(provider.toLowerCase())) {
   // eslint-disable-next-line no-console
   console.error(
     `\n${chalk.red(`Missing ${provider} API key.`)}\n\n` +
