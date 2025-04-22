@@ -77,7 +77,7 @@ export function getMergedProviders(): Record<
   return { ...defaultProviders, ...localProviders };
 }
 
-export function getBaseUrl(provider: string): string | undefined {
+export function getBaseUrl(provider: string = "openai"): string | undefined {
   // Use merged providers configuration
   const mergedProviders = getMergedProviders();
   const providerInfo = mergedProviders[provider.toLowerCase()];
@@ -97,7 +97,6 @@ export function getBaseUrl(provider: string): string | undefined {
 
   return undefined;
 }
-
 
 export function getApiKey(provider: string = "openai"): string | undefined {
   const providerInfo = getMergedProviders()[provider.toLowerCase()];

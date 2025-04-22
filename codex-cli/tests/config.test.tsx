@@ -245,4 +245,3 @@ test("uses default providers when providers.json doesn't exist", () => {
   expect(mergedProviders["openai"]?.baseURL).toBe("https://api.openai.com/v1");
   expect(mergedProviders["mistral"]?.name).toBe("Mistral");
 });
-
