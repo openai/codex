@@ -22,7 +22,6 @@ export const DEFAULT_APPROVAL_MODE = AutoApprovalMode.SUGGEST;
 export const DEFAULT_INSTRUCTIONS = "";
 
 export const CONFIG_DIR = join(homedir(), ".codex");
-export const PROVIDERS_CONFIG_PATH = join(CONFIG_DIR, "providers.json");
 export const CONFIG_JSON_FILEPATH = join(CONFIG_DIR, "config.json");
 export const CONFIG_YAML_FILEPATH = join(CONFIG_DIR, "config.yaml");
 export const CONFIG_YML_FILEPATH = join(CONFIG_DIR, "config.yml");
