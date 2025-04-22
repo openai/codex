@@ -8,7 +8,7 @@
 ---
 
 <details>
-<summary><strong>Table&nbsp;of&nbsp;Contents</strong></summary>
+<summary><strong>Table of Contents</strong></summary>
 
 <!-- Begin ToC -->
 
@@ -25,6 +25,7 @@
 - [Recipes](#recipes)
 - [Installation](#installation)
 - [Configuration](#configuration)
+  - [Provider Overrides](#provider-overrides)
 - [FAQ](#faq)
 - [Zero Data Retention (ZDR) Organization Limitation](#zero-data-retention-zdr-organization-limitation)
 - [Funding Opportunity](#funding-opportunity)
@@ -138,7 +139,7 @@ development_ that understands and executes your repo.
 
 - **Zero setup** - bring your OpenAI API key and it just works!
 - **Full auto-approval, while safe + secure** by running network-disabled and directory-sandboxed
-- **Multimodal** - pass in screenshots or diagrams to implement features ✨
+- **Multimodal** - pass in screenshots or diagrams to implement features
 
 And it's **fully open-source** so you can see and contribute to how it develops!
 
@@ -199,12 +200,12 @@ The hardening mechanism Codex uses depends on your OS:
 
 ## CLI Reference
 
-| Command                              | Purpose                             | Example                              |
-| ------------------------------------ | ----------------------------------- | ------------------------------------ |
-| `codex`                              | Interactive REPL                    | `codex`                              |
-| `codex "..."`                        | Initial prompt for interactive REPL | `codex "fix lint errors"`            |
-| `codex -q "..."`                     | Non-interactive "quiet mode"        | `codex -q --json "explain utils.ts"` |
-| `codex completion <bash\|zsh\|fish>` | Print shell completion script       | `codex completion bash`              |
+| Command                 | Purpose                             | Example                              |
+| ----------------------- | ----------------------------------- | ------------------------------------ | ----------------------------- | ----------------------- |
+| `codex`                 | Interactive REPL                    | `codex`                              |
+| `codex "..."`           | Initial prompt for interactive REPL | `codex "fix lint errors"`            |
+| `codex -q "..."`        | Non-interactive "quiet mode"        | `codex -q --json "explain utils.ts"` |
+| `codex completion <bash | zsh                                 | fish>`                               | Print shell completion script | `codex completion bash` |
 
 Key flags: `--model/-m`, `--approval-mode/-a`, `--quiet/-q`, and `--notify`.
 
@@ -250,7 +251,7 @@ DEBUG=true codex
 
 Below are a few bite-size examples you can copy-paste. Replace the text in quotes with your own task. See the [prompting guide](https://github.com/openai/codex/blob/main/codex-cli/examples/prompting_guide.md) for more tips and usage patterns.
 
-| ✨  | What you type                                                                   | What happens                                                               |
+|     | What you type                                                                   | What happens                                                               |
 | --- | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
 | 1   | `codex "Refactor the Dashboard component to React Hooks"`                       | Codex rewrites the class component, runs `npm test`, and shows the diff.   |
 | 2   | `codex "Generate SQL migrations for adding a users table"`                      | Infers your ORM, creates migration files, and runs them in a sandboxed DB. |
@@ -337,6 +338,37 @@ You can also define custom instructions:
 - Always respond with emojis
 - Only use git commands if I explicitly mention you should
 ```
+
+### Provider Overrides
+
+Codex also supports customizing API providers via a `providers.json` file located at `~/.codex/providers.json`. This file should define a JSON object mapping provider keys to objects with `name`, `baseURL`, and `envKey`.
+
+<details>
+<summary><strong>For example:</strong></summary>
+
+```json
+{
+  "openai": {
+    "name": "OpenAI",
+    "baseURL": "https://api.openai.com/v1",
+    "envKey": "OPENAI_API_KEY"
+  },
+  "openrouter": {
+    "name": "OpenRouter",
+    "baseURL": "https://openrouter.ai/api/v1",
+    "envKey": "OPENROUTER_API_KEY"
+  },
+  "ollama": {
+    "name": "Ollama",
+    "baseURL": "http://localhost:11434/v1",
+    "envKey": "OLLAMA_API_KEY"
+  }
+}
+```
+
+</details>
+
+Entries in this file will **override** the built-in provider definitions. After editing, use `--provider <key>` to select your custom provider.
 
 ---
 
