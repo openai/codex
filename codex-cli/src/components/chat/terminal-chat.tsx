@@ -13,7 +13,7 @@ import { useTerminalSize } from "../../hooks/use-terminal-size.js";
 import { AgentLoop } from "../../utils/agent/agent-loop.js";
 import { ReviewDecision } from "../../utils/agent/review.js";
 import { generateCompactSummary } from "../../utils/compact-summary.js";
-import { OPENAI_BASE_URL, saveConfig } from "../../utils/config.js";
+import { getBaseUrl, getApiKey, saveConfig } from "../../utils/config.js";
 import { extractAppliedPatches as _extractAppliedPatches } from "../../utils/extract-applied-patches.js";
 import { getGitDiff } from "../../utils/get-diff.js";
 import { createInputItem } from "../../utils/input-utils.js";
@@ -65,18 +65,21 @@ const colorsByPolicy: Record<ApprovalPolicy, ColorName | undefined> = {
  *
  * @param command The command to explain
  * @param model The model to use for generating the explanation
+ * @param flexMode Whether to use the flex-mode service tier
+ * @param config The configuration object
  * @returns A human-readable explanation of what the command does
  */
 async function generateCommandExplanation(
   command: Array<string>,
   model: string,
   flexMode: boolean,
+  config: AppConfig,
 ): Promise<string> {
   try {
     // Create a temporary OpenAI client
     const oai = new OpenAI({
-      apiKey: process.env["OPENAI_API_KEY"],
-      baseURL: OPENAI_BASE_URL,
+      apiKey: getApiKey(config.provider),
+      baseURL: getBaseUrl(config.provider),
     });
 
     // Format the command for display
@@ -156,6 +159,7 @@ export default function TerminalChat({
         items,
         model,
         Boolean(config.flexMode),
+        config,
       );
       setItems([
         {
@@ -272,6 +276,7 @@ export default function TerminalChat({
             command,
             model,
             Boolean(config.flexMode),
+            config,
           );
           log(`Generated explanation: ${explanation}`);
 
