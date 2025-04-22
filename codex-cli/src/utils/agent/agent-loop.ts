@@ -7,6 +7,7 @@ import type {
   ResponseInputItem,
   ResponseItem,
   ResponseCreateParams,
+  FunctionTool,
 } from "openai/resources/responses/responses.mjs";
 import type { Reasoning } from "openai/resources.mjs";
 
@@ -66,6 +67,30 @@ type AgentLoopParams = {
     applyPatch: ApplyPatchCommand | undefined,
   ) => Promise<CommandConfirmation>;
   onLastResponseId: (lastResponseId: string) => void;
+};
+
+const shellTool: FunctionTool = {
+  type: "function",
+  name: "shell",
+  description: "Runs a shell command, and returns its output.",
+  strict: false,
+  parameters: {
+    type: "object",
+    properties: {
+      command: { type: "array", items: { type: "string" } },
+      workdir: {
+        type: "string",
+        description: "The working directory for the command.",
+      },
+      timeout: {
+        type: "number",
+        description:
+          "The maximum time to wait for the command to complete in milliseconds.",
+      },
+    },
+    required: ["command"],
+    additionalProperties: false,
+  },
 };
 
 export class AgentLoop {
@@ -473,7 +498,7 @@ export class AgentLoop {
       // conversation, so we must include the *entire* transcript (minus system
       // messages) on every call.
 
-      let turnInput: Array<ResponseInputItem>;
+      let turnInput: Array<ResponseInputItem> = [];
 
       const stripInternalFields = (
         item: ResponseInputItem,
@@ -488,18 +513,21 @@ export class AgentLoop {
         return clean as unknown as ResponseInputItem;
       };
 
-      if (this.disableResponseStorage) {
+      if (this.disableResponseStorage && turnInput.length > 0) {
         // Ensure the transcript is up‑to‑date with the latest user input so
         // that subsequent iterations see a complete history.
-        const newUserItems: Array<ResponseInputItem> = input.filter((it) => {
-          if (
-            (it.type === "message" && it.role !== "system") ||
-            it.type === "reasoning"
-          ) {
-            return false;
-          }
-          return true;
-        });
+        const newUserItems: Array<ResponseInputItem> = turnInput.filter(
+          (it) => {
+            if (
+              (it.type === "message" && it.role !== "system") ||
+              it.type === "reasoning" ||
+              it.type === "function_call_output"
+            ) {
+              return false;
+            }
+            return true;
+          },
+        );
         this.transcript.push(...newUserItems);
 
         turnInput = [...this.transcript, ...abortOutputs].map(
@@ -578,7 +606,12 @@ export class AgentLoop {
         // Only surface the *new* input items to the UI – replaying the entire
         // transcript would duplicate messages that have already been shown in
         // earlier turns.
-        const deltaInput = [...abortOutputs, ...input];
+        // `turnInput` holds the *new* items that will be sent to the API in
+        // this iteration.  Surface exactly these to the UI so that we do not
+        // re‑emit messages from previous turns (which would duplicate user
+        // prompts) and so that freshly generated `function_call_output`s are
+        // shown immediately.
+        const deltaInput = [...turnInput];
         for (const item of deltaInput) {
           stageItem(item as ResponseItem);
         }
@@ -629,31 +662,7 @@ export class AgentLoop {
                     store: true,
                     previous_response_id: lastResponseId || undefined,
                   }),
-              tools: [
-                {
-                  type: "function",
-                  name: "shell",
-                  description: "Runs a shell command, and returns its output.",
-                  strict: true,
-                  parameters: {
-                    type: "object",
-                    properties: {
-                      command: { type: "array", items: { type: "string" } },
-                      workdir: {
-                        type: "string",
-                        description: "The working directory for the command.",
-                      },
-                      timeout: {
-                        type: "number",
-                        description:
-                          "The maximum time to wait for the command to complete in milliseconds.",
-                      },
-                    },
-                    required: ["command", "workdir", "timeout"],
-                    additionalProperties: false,
-                  },
-                },
-              ],
+              tools: [shellTool],
             });
             break;
           } catch (error) {
@@ -955,41 +964,18 @@ export class AgentLoop {
               stream = await responseCall({
                 model: this.model,
                 instructions: mergedInstructions,
-                previous_response_id: lastResponseId || undefined,
                 input: turnInput,
                 stream: true,
                 parallel_tool_calls: false,
                 reasoning,
                 ...(this.config.flexMode ? { service_tier: "flex" } : {}),
-                tools: [
-                  {
-                    type: "function",
-                    name: "shell",
-                    description:
-                      "Runs a shell command, and returns its output.",
-                    strict: false,
-                    parameters: {
-                      type: "object",
-                      properties: {
-                        command: {
-                          type: "array",
-                          items: { type: "string" },
-                        },
-                        workdir: {
-                          type: "string",
-                          description: "The working directory for the command.",
-                        },
-                        timeout: {
-                          type: "number",
-                          description:
-                            "The maximum time to wait for the command to complete in milliseconds.",
-                        },
-                      },
-                      required: ["command"],
-                      additionalProperties: false,
-                    },
-                  },
-                ],
+                ...(this.disableResponseStorage
+                  ? { store: false }
+                  : {
+                      store: true,
+                      previous_response_id: lastResponseId || undefined,
+                    }),
+                tools: [shellTool],
               });
 
               this.currentStream = stream;
