@@ -1,5 +1,8 @@
 import { describe, test, expect } from "vitest";
-import { calculateContextPercentRemaining } from "../src/utils/model-utils";
+import {
+  calculateContextPercentRemaining,
+  maxTokensForModel,
+} from "../src/utils/model-utils";
 import { openAiModelInfo } from "../src/utils/model-info";
 import type { ResponseItem } from "openai/resources/responses/responses.mjs";
 
@@ -12,6 +15,25 @@ describe("Model Utils", () => {
         expect(typeof info.label).toBe("string");
         expect(typeof info.maxContextLength).toBe("number");
       });
+    });
+  });
+
+  describe("maxTokensForModel", () => {
+    test("returns correct token limit for known models", () => {
+      const knownModel = "gpt-4o";
+      const expectedTokens = openAiModelInfo[knownModel].maxContextLength;
+      expect(maxTokensForModel(knownModel)).toBe(expectedTokens);
+    });
+
+    test("handles models with size indicators in their names", () => {
+      expect(maxTokensForModel("some-model-32k")).toBe(32000);
+      expect(maxTokensForModel("some-model-16k")).toBe(16000);
+      expect(maxTokensForModel("some-model-8k")).toBe(8000);
+      expect(maxTokensForModel("some-model-4k")).toBe(4000);
+    });
+
+    test("defaults to 128k for unknown models not in the registry", () => {
+      expect(maxTokensForModel("completely-unknown-model")).toBe(128000);
     });
   });
 
@@ -43,12 +65,14 @@ describe("Model Utils", () => {
       expect(result).toBeCloseTo(75, 0);
     });
 
-    test("handles unknown models gracefully", () => {
+    test("handles models that are not in the registry", () => {
       const mockItems: Array<ResponseItem> = [];
 
-      expect(() =>
-        calculateContextPercentRemaining(mockItems, "unknown-model" as any),
-      ).toThrow();
+      const result = calculateContextPercentRemaining(
+        mockItems,
+        "unknown-model",
+      );
+      expect(result).toBe(100);
     });
   });
 });
