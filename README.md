@@ -8,18 +8,18 @@
 ---
 
 <details>
-<summary><strong>Table&nbsp;of&nbsp;Contents</strong></summary>
+<summary><strong>Table of Contents</strong></summary>
 
 <!-- Begin ToC -->
 
 - [Experimental Technology Disclaimer](#experimental-technology-disclaimer)
 - [Quickstart](#quickstart)
 - [Why Codex?](#why-codex)
-- [Security Model \& Permissions](#security-model--permissions)
+- [Security Model & Permissions](#security-model--permissions)
   - [Platform sandboxing details](#platform-sandboxing-details)
 - [System Requirements](#system-requirements)
 - [CLI Reference](#cli-reference)
-- [Memory \& Project Docs](#memory--project-docs)
+- [Memory & Project Docs](#memory--project-docs)
 - [Non-interactive / CI mode](#non-interactive--ci-mode)
 - [Tracing / Verbose Logging](#tracing--verbose-logging)
 - [Recipes](#recipes)
@@ -43,7 +43,7 @@
   - [Releasing `codex`](#releasing-codex)
   - [Alternative Build Options](#alternative-build-options)
     - [Nix Flake Development](#nix-flake-development)
-- [Security \& Responsible AI](#security--responsible-ai)
+- [Security & Responsible AI](#security--responsible-ai)
 - [License](#license)
 
 <!-- End ToC -->
@@ -139,7 +139,7 @@ development_ that understands and executes your repo.
 
 - **Zero setup** - bring your OpenAI API key and it just works!
 - **Full auto-approval, while safe + secure** by running network-disabled and directory-sandboxed
-- **Multimodal** - pass in screenshots or diagrams to implement features ✨
+- **Multimodal** - pass in screenshots or diagrams to implement features
 
 And it's **fully open-source** so you can see and contribute to how it develops!
 
@@ -200,12 +200,12 @@ The hardening mechanism Codex uses depends on your OS:
 
 ## CLI Reference
 
-| Command                              | Purpose                             | Example                              |
-| ------------------------------------ | ----------------------------------- | ------------------------------------ |
-| `codex`                              | Interactive REPL                    | `codex`                              |
-| `codex "..."`                        | Initial prompt for interactive REPL | `codex "fix lint errors"`            |
-| `codex -q "..."`                     | Non-interactive "quiet mode"        | `codex -q --json "explain utils.ts"` |
-| `codex completion <bash\|zsh\|fish>` | Print shell completion script       | `codex completion bash`              |
+| Command                 | Purpose                             | Example                              |
+| ----------------------- | ----------------------------------- | ------------------------------------ | ----------------------------- | ----------------------- |
+| `codex`                 | Interactive REPL                    | `codex`                              |
+| `codex "..."`           | Initial prompt for interactive REPL | `codex "fix lint errors"`            |
+| `codex -q "..."`        | Non-interactive "quiet mode"        | `codex -q --json "explain utils.ts"` |
+| `codex completion <bash | zsh                                 | fish>`                               | Print shell completion script | `codex completion bash` |
 
 Key flags: `--model/-m`, `--approval-mode/-a`, `--quiet/-q`, and `--notify`.
 
@@ -251,7 +251,7 @@ DEBUG=true codex
 
 Below are a few bite-size examples you can copy-paste. Replace the text in quotes with your own task. See the [prompting guide](https://github.com/openai/codex/blob/main/codex-cli/examples/prompting_guide.md) for more tips and usage patterns.
 
-| ✨  | What you type                                                                   | What happens                                                               |
+|     | What you type                                                                   | What happens                                                               |
 | --- | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
 | 1   | `codex "Refactor the Dashboard component to React Hooks"`                       | Codex rewrites the class component, runs `npm test`, and shows the diff.   |
 | 2   | `codex "Generate SQL migrations for adding a users table"`                      | Infers your ORM, creates migration files, and runs them in a sandboxed DB. |
