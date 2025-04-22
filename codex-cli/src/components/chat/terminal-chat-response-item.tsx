@@ -117,7 +117,7 @@ function TerminalChatResponseMessage({
       const systemMessage = message.content.find(
         (c) => c.type === "input_text",
       )?.text;
-      if (systemMessage?.includes("has been deprecated")) {
+      if (systemMessage?.includes("model_not_found")) {
         setOverlayMode?.("model");
       }
     }

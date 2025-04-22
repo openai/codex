@@ -26,7 +26,7 @@ vi.mock("../src/components/select-input/select-input.js", () => {
 
 // Ink's <TextInput> toggles raw‑mode which calls .ref() / .unref() on stdin.
 // The test environment's mock streams don't implement those methods, so we
-// polyfill them to no‑ops on the prototype *before* the component tree mounts.
+// polyfill them to no-ops on the prototype *before* the component tree mounts.
 import { EventEmitter } from "node:events";
 if (!(EventEmitter.prototype as any).ref) {
   (EventEmitter.prototype as any).ref = () => {};
