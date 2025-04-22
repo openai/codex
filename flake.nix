@@ -15,8 +15,8 @@
       pkgs = import nixpkgs {inherit system;};
       node = pkgs.nodejs_22;
       pnpm = pkgs.pnpm_10;
-      version = "0.1.0"; # TODO: Version should get updated also by github aciton
-      hash = "";
+      version = "0.1.0";
+      hash = "sha256-ZXX9f/MsqMN8fxTclowDdD8+gSOOhI0i+EduTJ5eM34=";
 
       buildPnpmPackageFn = {
         pkgs,

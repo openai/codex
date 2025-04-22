@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 
-export REPO_ROOT="$(git rev-parse --show-toplevel)"
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
 
 # Run nix build command and capture output
 build_output=$(nix build .\#codex-cli --show-trace 2>&1)
 
 # Extract the "got" hash using grep and awk
 # Look for the line containing "got:" and extract the hash
-NEW_HASH=$(echo "$build_output" | grep -A 1 "hash mismatch" | grep "got:" | awk '{print $2}')
+NEW_HASH=$(echo "$build_output" | grep "got:" | awk '{print $2}')
 
 # Check if we found a hash
 if [ -n "$NEW_HASH" ]; then
@@ -18,7 +19,7 @@ else
     echo "$build_output"
 fi
 # Update the hash in flake.nix
-sed -i "s|hash = \"sha256-[^\"]*\"|hash = \"$NEW_HASH\"|" "$REPO_ROOT/flake.nix"
+sed -i "s|hash = \"[^\"]*\"|hash = \"$NEW_HASH\"|" "$REPO_ROOT/flake.nix"
 
 # Check if the hash was actually changed
 if [ -z "$(git diff "$REPO_ROOT/flake.nix")" ]; then
