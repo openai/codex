@@ -1,4 +1,5 @@
 import type { SafetyAssessment } from "../src/approvals";
+import type { AutoApprovalMode } from "../src/utils/auto-approval-mode";
 
 import { canAutoApprove } from "../src/approvals";
 import { describe, test, expect } from "vitest";
@@ -88,6 +89,53 @@ describe("canAutoApprove()", () => {
     expect(check(["pytest"])).toEqual({ type: "ask-user" });
 
     expect(check(["cargo", "build"])).toEqual({ type: "ask-user" });
+  });
+
+  test("whitelisted commands", () => {
+    const checkWithWhitelist = (command: ReadonlyArray<string>): SafetyAssessment =>
+      canAutoApprove(command, "suggest", writeablePaths, env, {
+        model: "test-model",
+        provider: "openai",
+        instructions: "",
+        notify: false,
+        approvalMode: "suggest" as AutoApprovalMode,
+        commandWhitelist: ["npm run", "yarn test"],
+      });
+
+    // Whitelisted commands should be auto-approved
+    expect(checkWithWhitelist(["npm", "run", "test"])).toEqual({
+      type: "auto-approve",
+      reason: "Command whitelisted by user",
+      group: "Whitelisted",
+      runInSandbox: true,
+    });
+
+    expect(checkWithWhitelist(["yarn", "test", "--coverage"])).toEqual({
+      type: "auto-approve",
+      reason: "Command whitelisted by user",
+      group: "Whitelisted",
+      runInSandbox: true,
+    });
+
+    // Non-whitelisted commands should still require approval
+    expect(checkWithWhitelist(["npm", "install"])).toEqual({
+      type: "ask-user",
+    });
+
+    // Empty whitelist should behave like no whitelist
+    const checkEmptyWhitelist = (command: ReadonlyArray<string>): SafetyAssessment =>
+      canAutoApprove(command, "suggest", writeablePaths, env, {
+        model: "test-model",
+        provider: "openai",
+        instructions: "",
+        notify: false,
+        approvalMode: "suggest" as AutoApprovalMode,
+        commandWhitelist: [],
+      });
+
+    expect(checkEmptyWhitelist(["npm", "run", "test"])).toEqual({
+      type: "ask-user",
+    });
   });
 
   test("find", () => {
