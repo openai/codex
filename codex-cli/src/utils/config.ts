@@ -55,6 +55,9 @@ export function getApiKey(provider: string): string | undefined {
     if (providerInfo.name === "Ollama") {
       return process.env[providerInfo.envKey] ?? "dummy";
     }
+    if (providerInfo.name === "LM Studio") {
+      return process.env[providerInfo.envKey] ?? "dummy";
+    }
     return process.env[providerInfo.envKey];
   }
 

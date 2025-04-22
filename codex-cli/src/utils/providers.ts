@@ -22,6 +22,11 @@ export const providers: Record<
     baseURL: "http://localhost:11434/v1",
     envKey: "OLLAMA_API_KEY",
   },
+  lmstudio: {
+    name: "LM Studio",
+    baseURL: "http://localhost:1234/v1",
+    envKey: "LMSTUDIO_API_KEY",
+  },
   mistral: {
     name: "Mistral",
     baseURL: "https://api.mistral.ai/v1",

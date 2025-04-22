@@ -86,6 +86,7 @@ export OPENAI_API_KEY="your-api-key-here"
 > - openrouter
 > - gemini
 > - ollama
+> - lmstudio
 > - mistral
 > - deepseek
 > - xai
