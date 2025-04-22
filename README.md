@@ -153,10 +153,16 @@ will also show a warning/confirmation if you start in **auto‑edit** or
 **full‑auto** while the directory is _not_ tracked by Git, so you always have a
 safety net.
 
+### Whitelisting Commands
+
 You can whitelist specific commands to auto-approve without prompting by adding them to
 the `commandWhitelist` in your config file. This is useful for trusted commands like
-editors (`vim`, `code`) or common Git operations. Whitelisted commands still respect
-the network and sandbox restrictions of your chosen approval mode.
+editors (`vim`, `code`) or common Git operations. **Note**: The whitelist only takes effect
+when running in modes that would normally require approval (like `suggest` mode), not in
+`full-auto` mode where all commands are already auto-approved.
+
+> **⚠️ Security Warning**: Whitelisted commands run WITHOUT sandbox restrictions and have
+> full network access. Only whitelist commands that you fully trust.
 
 ### Platform sandboxing details
 
