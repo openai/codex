@@ -30,7 +30,7 @@
         # workspace project names required for build (e.g. anything with "workspace:*" verison declaration)
         pnpmWorkspaces ? [],
         hash ? lib.fakeHash,
-        pnpm ? pkgs.pnpm_10,
+        pnpm ? pnpm,
         ...
       }: let
         src = with lib.fileset; (toSource {
