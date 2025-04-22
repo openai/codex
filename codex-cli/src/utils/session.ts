@@ -14,6 +14,10 @@ export type TerminalChatSession = {
   timestamp: string;
   /** Optional custom instructions that were active for the run */
   instructions: string;
+  /** The working directory where the session was saved */
+  cwd: string;
+  /** The content of the first prompt in the session */
+  firstPrompt: string;
 };
 
 let sessionId = "";

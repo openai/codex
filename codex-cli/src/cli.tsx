@@ -27,14 +27,14 @@ import { createInputItem } from "./utils/input-utils";
 import { initLogger } from "./utils/logger/log";
 import { isModelSupportedForResponses } from "./utils/model-utils.js";
 import { parseToolCall } from "./utils/parsers";
-import { onExit, setInkRenderer } from "./utils/terminal";
+import { setSessionId, CLI_VERSION } from "./utils/session";
 import {
   listSessions,
   saveSession,
   loadSession,
   deleteSession,
 } from "./utils/session-manager";
-import { setSessionId, CLI_VERSION } from "./utils/session";
+import { onExit, setInkRenderer } from "./utils/terminal";
 import chalk from "chalk";
 import { spawnSync } from "child_process";
 import fs from "fs";
@@ -267,7 +267,7 @@ if (cli.input[0] === "session") {
       // Create a new session from the current configuration context
       const newSession = {
         id: sessionArg || Date.now().toString(),
-        user: process.env.USER || "unknown",
+        user: process.env["USER"] || "unknown",
         version: CLI_VERSION,
         model: config.model,
         timestamp: new Date().toISOString(),

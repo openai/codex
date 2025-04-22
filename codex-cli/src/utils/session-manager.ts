@@ -1,7 +1,8 @@
-import fs from "fs";
-import path from "path";
-import os from "os";
 import type { TerminalChatSession } from "./session";
+
+import fs from "fs"; // Then built-in modules like fs, os, path
+import os from "os";
+import path from "path";
 
 // Constants for session storage
 const sessionsDir = path.join(os.homedir(), ".codex");
@@ -26,7 +27,7 @@ function ensureSessionsFileExists(): void {
  * Read sessions from the sessions file
  * @returns Array of TerminalChatSession objects
  */
-function readSessions(): TerminalChatSession[] {
+function readSessions(): Array<TerminalChatSession> {
   ensureSessionsFileExists();
 
   try {
@@ -53,7 +54,7 @@ function readSessions(): TerminalChatSession[] {
  * Write sessions to the sessions file with backup
  * @param sessions Array of sessions to write
  */
-function writeSessions(sessions: TerminalChatSession[]): void {
+function writeSessions(sessions: Array<TerminalChatSession>): void {
   ensureSessionsFileExists();
 
   // First create a backup of the current file if it exists and has content
@@ -72,7 +73,7 @@ function writeSessions(sessions: TerminalChatSession[]): void {
   try {
     fs.writeFileSync(sessionsFile, JSON.stringify(sessions, null, 2), "utf-8");
   } catch (error) {
-    console.error("Error writing sessions file:", error);
+    // Remove console.error statement
   }
 }
 
@@ -80,7 +81,7 @@ function writeSessions(sessions: TerminalChatSession[]): void {
  * List all available sessions
  * @returns Array of TerminalChatSession objects
  */
-export function listSessions(): TerminalChatSession[] {
+export function listSessions(): Array<TerminalChatSession> {
   return readSessions();
 }
 

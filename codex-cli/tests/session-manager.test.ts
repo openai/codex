@@ -20,8 +20,8 @@ describe("Session Manager", () => {
     model: "o4-mini",
     timestamp: new Date().toISOString(),
     instructions: "Test instructions",
-    cwd: "/test/path",
-    firstPrompt: "Test prompt",
+    cwd: "/test/path", // This will now match the type after step 1
+    firstPrompt: "Test prompt", // This will now match the type after step 1
   };
 
   // Path to the sessions file
@@ -65,8 +65,8 @@ describe("Session Manager", () => {
     saveSession(testSession);
     const sessions = listSessions();
     expect(sessions.length).toBe(1);
-    expect(sessions[0].id).toBe(testSession.id);
-    expect(sessions[0].user).toBe("tester");
+    expect(sessions[0]!.id).toBe(testSession.id); // Added !
+    expect(sessions[0]!.user).toBe("tester"); // Added !
   });
 
   it("should create a backup when saving a session", () => {
@@ -87,14 +87,14 @@ describe("Session Manager", () => {
     const backupContent = fs.readFileSync(backupFile, "utf-8");
     const backupSessions = JSON.parse(backupContent);
     expect(backupSessions.length).toBe(1);
-    expect(backupSessions[0].id).toBe(testSession.id);
+    expect(backupSessions[0].id).toBe(testSession.id); // No ! needed here as backupSessions is `any` from JSON.parse
   });
 
   it("should load an existing session", () => {
     saveSession(testSession);
     const loaded = loadSession(testSession.id);
     expect(loaded).not.toBeNull();
-    expect(loaded?.user).toBe("tester");
+    expect(loaded?.user).toBe("tester"); // Using optional chaining here is fine
     expect(loaded?.model).toBe("o4-mini");
     expect(loaded?.instructions).toBe("Test instructions");
   });
@@ -127,7 +127,7 @@ describe("Session Manager", () => {
     saveSession(updatedSession);
     const sessions = listSessions();
     expect(sessions.length).toBe(1);
-    expect(sessions[0].model).toBe("updated-model");
+    expect(sessions[0]!.model).toBe("updated-model"); // Added !
   });
 
   it("should recover from corrupt session file", () => {
@@ -144,7 +144,7 @@ describe("Session Manager", () => {
     // Should recover from backup
     const sessions = listSessions();
     expect(sessions.length).toBe(1); // Backup only had the first session
-    expect(sessions[0].id).toBe(testSession.id);
+    expect(sessions[0]!.id).toBe(testSession.id); // Added !
   });
 
   it("should create a named backup with createSessionBackup", () => {
