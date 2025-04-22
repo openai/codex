@@ -8,19 +8,19 @@ export type ModelInfo = {
 export type SupportedModelId = keyof typeof openAiModelInfo;
 export const openAiModelInfo = {
   "o1-pro-2025-03-19": {
-    label: "O1 Pro (2025-03-19)",
+    label: "o1 Pro (2025-03-19)",
     maxContextLength: 200000,
   },
   "o3": {
-    label: "O3",
+    label: "o3",
     maxContextLength: 200000,
   },
   "o3-2025-04-16": {
-    label: "O3 (2025-04-16)",
+    label: "o3 (2025-04-16)",
     maxContextLength: 200000,
   },
   "o4-mini": {
-    label: "O4 Mini",
+    label: "o4 Mini",
     maxContextLength: 200000,
   },
   "gpt-4.1-nano": {
@@ -32,7 +32,7 @@ export const openAiModelInfo = {
     maxContextLength: 1000000,
   },
   "o4-mini-2025-04-16": {
-    label: "O4 Mini (2025-04-16)",
+    label: "o4 Mini (2025-04-16)",
     maxContextLength: 200000,
   },
   "gpt-4": {
@@ -40,7 +40,7 @@ export const openAiModelInfo = {
     maxContextLength: 8192,
   },
   "o1-preview-2024-09-12": {
-    label: "O1 Preview (2024-09-12)",
+    label: "o1 Preview (2024-09-12)",
     maxContextLength: 128000,
   },
   "gpt-4.1-mini": {
@@ -104,7 +104,7 @@ export const openAiModelInfo = {
     maxContextLength: 128000,
   },
   "o3-mini": {
-    label: "O3 Mini",
+    label: "o3 Mini",
     maxContextLength: 200000,
   },
   "gpt-4o-2024-05-13": {
@@ -120,15 +120,15 @@ export const openAiModelInfo = {
     maxContextLength: 16385,
   },
   "o3-mini-2025-01-31": {
-    label: "O3 Mini (2025-01-31)",
+    label: "o3 Mini (2025-01-31)",
     maxContextLength: 200000,
   },
   "o1-preview": {
-    label: "O1 Preview",
+    label: "o1 Preview",
     maxContextLength: 128000,
   },
   "o1-2024-12-17": {
-    label: "O1 (2024-12-17)",
+    label: "o1 (2024-12-17)",
     maxContextLength: 128000,
   },
   "gpt-4-0613": {
@@ -136,11 +136,11 @@ export const openAiModelInfo = {
     maxContextLength: 8192,
   },
   "o1": {
-    label: "O1",
+    label: "o1",
     maxContextLength: 128000,
   },
   "o1-pro": {
-    label: "O1 Pro",
+    label: "o1 Pro",
     maxContextLength: 200000,
   },
   "gpt-4.5-preview": {
@@ -180,11 +180,7 @@ export const openAiModelInfo = {
     maxContextLength: 128000,
   },
   "o1-mini": {
-    label: "O1 Mini",
-    maxContextLength: 128000,
-  },
-  "gpt-4o-mini-audio-preview-2024-12-17": {
-    label: "GPT-4o Mini Audio Preview (2024-12-17)",
+    label: "o1 Mini",
     maxContextLength: 128000,
   },
   "gpt-3.5-turbo-0125": {
@@ -192,7 +188,7 @@ export const openAiModelInfo = {
     maxContextLength: 16385,
   },
   "o1-mini-2024-09-12": {
-    label: "O1 Mini (2024-09-12)",
+    label: "o1 Mini (2024-09-12)",
     maxContextLength: 128000,
   },
   "gpt-4-1106-preview": {
