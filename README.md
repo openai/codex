@@ -147,10 +147,10 @@ Codex lets you decide _how much autonomy_ the agent receives and auto-approval p
 | **Auto Edit**             | <li>Read **and** apply-patch writes to files                                                        | <li>**All** shell commands                                                                      |
 | **Full Auto**             | <li>Read/write files <li> Execute shell commands (network disabled, writes limited to your workdir) | -                                                                                               |
 
-In **Full Auto** every command is run **network‑disabled** and confined to the
-current working directory (plus temporary files) for defense‑in‑depth. Codex
-will also show a warning/confirmation if you start in **auto‑edit** or
-**full‑auto** while the directory is _not_ tracked by Git, so you always have a
+In **Full Auto** every command is run **network-disabled** and confined to the
+current working directory (plus temporary files) for defense-in-depth. Codex
+will also show a warning/confirmation if you start in **auto-edit** or
+**full-auto** while the directory is _not_ tracked by Git, so you always have a
 safety net.
 
 ### Whitelisting Commands
