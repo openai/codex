@@ -44,7 +44,7 @@ describe("model-utils – offline resilience", () => {
       "../src/utils/model-utils.js"
     );
 
-    const supported = await isModelSupportedForResponses("o4-mini");
+    const supported = await isModelSupportedForResponses("openai", "o4-mini");
     expect(supported).toBe(true);
   });
 
@@ -63,8 +63,11 @@ describe("model-utils – offline resilience", () => {
       "../src/utils/model-utils.js"
     );
 
-    // Should resolve true despite the network failure
-    const supported = await isModelSupportedForResponses("some-model");
+    // Should resolve true despite the network failure.
+    const supported = await isModelSupportedForResponses(
+      "openai",
+      "some-model",
+    );
     expect(supported).toBe(true);
   });
 });
