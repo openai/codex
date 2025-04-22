@@ -74,10 +74,6 @@ export function execApplyPatch(patchText: string): ExecResult {
         // mirrors the behaviour of the standalone apply_patch CLI (see
         // write_file() in apply-patch.ts) and prevents errors when adding a
         // new file in a not‑yet‑created sub‑directory.
-        if (path.isAbsolute(p)) {
-          throw new Error("apply_patch does not support absolute paths");
-        }
-
         const dir = path.dirname(p);
         if (dir !== ".") {
           fs.mkdirSync(dir, { recursive: true });
