@@ -10,32 +10,43 @@ export interface FileContent {
  * - A list of input paths being considered editable
  * - A directory structure overview
  * - A collection of file contents
+ * - Information about hidden files
  */
 export interface TaskContext {
   prompt: string;
   input_paths: Array<string>;
   input_paths_structure: string;
   files: Array<FileContent>;
+  hiddenFileInfo?: {
+    count: number;
+    examples: string[];
+    userSpecified: boolean;
+  };
 }
 
 /**
  * Renders a string version of the TaskContext, including a note about important output requirements,
- * summary of the directory structure (unless omitted), and an XML-like listing of the file contents.
- *
- * The user is instructed to produce only changes for files strictly under the specified paths
- * and provide full file contents in any modifications.
+ * summary of the directory structure, and information about hidden files if applicable.
  */
 export function renderTaskContext(taskContext: TaskContext): string {
-  const inputPathsJoined = taskContext.input_paths.join(", ");
+  // Generate hidden files notice if applicable
+  let hiddenFilesNotice = "";
+  if (taskContext.hiddenFileInfo && taskContext.hiddenFileInfo.count > 0) {
+    hiddenFilesNotice = `
+    # IMPORTANT SECURITY RESTRICTIONS
+    - ${taskContext.hiddenFileInfo.count} files are hidden from your view
+    - Examples include: ${taskContext.hiddenFileInfo.examples.join(", ")}
+    - YOU CANNOT ACCESS THESE FILES under any circumstances
+    - DO NOT suggest viewing the contents of these files
+    - DO NOT make recommendations that depend on hidden content
+    - DO NOT ask the user to reveal content from these files
+    `;
+  }
+
   return `
   Complete the following task: ${taskContext.prompt}
   
-  # IMPORTANT OUTPUT REQUIREMENTS
-  - UNDER NO CIRCUMSTANCES PRODUCE PARTIAL OR TRUNCATED FILE CONTENT. You MUST provide the FULL AND FINAL content for every file modified.
-  - ALWAYS INCLUDE THE COMPLETE UPDATED VERSION OF THE FILE, do not omit or only partially include lines.
-  - ONLY produce changes for files located strictly under ${inputPathsJoined}.
-  - ALWAYS produce absolute paths in the output.
-  - Do not delete or change code UNRELATED to the task.
+  ${hiddenFilesNotice}
   
   # **Directory structure**
   ${taskContext.input_paths_structure}
