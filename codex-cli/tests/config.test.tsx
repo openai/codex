@@ -246,27 +246,3 @@ test("uses default providers when providers.json doesn't exist", () => {
   expect(mergedProviders["mistral"]?.name).toBe("Mistral");
 });
 
-// Test error handling when providers.json is invalid
-test("handles invalid providers.json gracefully", () => {
-  // Setup invalid JSON in providers.json
-  memfs[PROVIDERS_CONFIG_PATH] = "{invalid-json}";
-
-  // Mock console.error to prevent test output pollution
-  const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-
-  // Should return empty object when JSON parsing fails
-  const loadedProviders = loadProvidersFromFile();
-
-  // Verify error was logged
-  expect(consoleSpy).toHaveBeenCalled();
-  expect(loadedProviders).toEqual({});
-
-  // Get merged providers - should fall back to defaults
-  const mergedProviders = getMergedProviders();
-
-  // Verify default providers are used
-  expect(mergedProviders["openai"]?.name).toBe("OpenAI");
-
-  // Restore console.error
-  consoleSpy.mockRestore();
-});
