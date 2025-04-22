@@ -12,10 +12,10 @@ import {
 } from "../utils/singlepass/code_diff";
 import { renderTaskContext } from "../utils/singlepass/context";
 import {
-  getFileContents,
-  loadIgnorePatterns,
+  getSafeFileContents,
   makeAsciiDirectoryStructure,
 } from "../utils/singlepass/context_files";
+import { FileFilter } from "src/utils/singlepass/file_filter";
 import { EditedFilesSchema } from "../utils/singlepass/file_ops";
 import * as fsSync from "fs";
 import * as fsPromises from "fs/promises";
@@ -366,8 +366,7 @@ export function SinglePassApp({
   /* ---------------------------- Load file context --------------------------- */
   useEffect(() => {
     (async () => {
-      const ignorePats = loadIgnorePatterns();
-      const fileContents = await getFileContents(rootPath, ignorePats);
+      const fileContents = await getSafeFileContents(rootPath);
       setFiles(fileContents);
     })();
   }, [rootPath]);
@@ -386,11 +385,16 @@ export function SinglePassApp({
     setState("thinking");
 
     try {
+      const file_filter = new FileFilter(rootPath, userPrompt);
+      const filePaths = files.map((f) => f.path);
+      const filterResult = file_filter.filterFiles(filePaths);
+
       const taskContextStr = renderTaskContext({
         prompt: userPrompt,
         input_paths: [rootPath],
         input_paths_structure: "(omitted for brevity in single pass mode)",
-        files,
+        files: files.filter((f) => filterResult.visibleFiles.includes(f.path)),
+        hiddenFileInfo: filterResult.hiddenFileInfo,
       });
 
       const openai = new OpenAI({
