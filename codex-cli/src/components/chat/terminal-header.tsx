@@ -9,6 +9,7 @@ export interface TerminalHeaderProps {
   version: string;
   PWD: string;
   model: string;
+  provider?: string;
   approvalPolicy: string;
   colorsByPolicy: Record<string, string | undefined>;
   agent?: AgentLoop;
@@ -21,6 +22,7 @@ const TerminalHeader: React.FC<TerminalHeaderProps> = ({
   version,
   PWD,
   model,
+  provider = "openai",
   approvalPolicy,
   colorsByPolicy,
   agent,
@@ -32,9 +34,9 @@ const TerminalHeader: React.FC<TerminalHeaderProps> = ({
       {terminalRows < 10 ? (
         // Compact header for small terminal windows
         <Text>
-          ● Codex v{version} – {PWD} – {model} –{" "}
+          ● Codex v{version} - {PWD} - {model} ({provider}) -{" "}
           <Text color={colorsByPolicy[approvalPolicy]}>{approvalPolicy}</Text>
-          {flexModeEnabled ? " – flex-mode" : ""}
+          {flexModeEnabled ? " - flex-mode" : ""}
         </Text>
       ) : (
         <>
@@ -64,6 +66,10 @@ const TerminalHeader: React.FC<TerminalHeaderProps> = ({
             </Text>
             <Text dimColor>
               <Text color="blueBright">↳</Text> model: <Text bold>{model}</Text>
+            </Text>
+            <Text dimColor>
+              <Text color="blueBright">↳</Text> provider:{" "}
+              <Text bold>{provider}</Text>
             </Text>
             <Text dimColor>
               <Text color="blueBright">↳</Text> approval:{" "}

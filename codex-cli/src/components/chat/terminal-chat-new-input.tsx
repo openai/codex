@@ -8,9 +8,9 @@ import type {
 
 import MultilineTextEditor from "./multiline-editor";
 import { TerminalChatCommandReview } from "./terminal-chat-command-review.js";
-import { log, isLoggingEnabled } from "../../utils/agent/log.js";
 import { loadConfig } from "../../utils/config.js";
 import { createInputItem } from "../../utils/input-utils.js";
+import { log } from "../../utils/logger/log.js";
 import { setSessionId } from "../../utils/session.js";
 import {
   loadCommandHistory,
@@ -52,6 +52,7 @@ export default function TerminalChatInput({
   openModelOverlay,
   openApprovalOverlay,
   openHelpOverlay,
+  openDiffOverlay,
   interruptAgent,
   active,
   thinkingSeconds,
@@ -72,6 +73,7 @@ export default function TerminalChatInput({
   openModelOverlay: () => void;
   openApprovalOverlay: () => void;
   openHelpOverlay: () => void;
+  openDiffOverlay: () => void;
   interruptAgent: () => void;
   active: boolean;
   thinkingSeconds: number;
@@ -230,6 +232,12 @@ export default function TerminalChatInput({
         return;
       }
 
+      if (inputValue === "/diff") {
+        setInput("");
+        openDiffOverlay();
+        return;
+      }
+
       if (inputValue.startsWith("/model")) {
         setInput("");
         openModelOverlay();
@@ -255,17 +263,16 @@ export default function TerminalChatInput({
         setInput("");
         setSessionId("");
         setLastResponseId("");
+        // Clear the terminal screen (including scrollback) before resetting context
         clearTerminal();
 
-        // Emit a system message to confirm the clear action.  We *append*
-        // it so Ink's <Static> treats it as new output and actually renders it.
-        setItems((prev) => [
-          ...prev,
+        // Print a clear confirmation and reset conversation items.
+        setItems([
           {
             id: `clear-${Date.now()}`,
             type: "message",
             role: "system",
-            content: [{ type: "input_text", text: "Context cleared" }],
+            content: [{ type: "input_text", text: "Terminal cleared" }],
           },
         ]);
 
@@ -337,6 +344,7 @@ export default function TerminalChatInput({
       openApprovalOverlay,
       openModelOverlay,
       openHelpOverlay,
+      openDiffOverlay,
       history, // Add history to the dependency array
     ],
   );
@@ -346,7 +354,11 @@ export default function TerminalChatInput({
       <TerminalChatCommandReview
         confirmationPrompt={confirmationPrompt}
         onReviewCommand={submitConfirmation}
+        // allow switching approval mode via 'v'
+        onSwitchApprovalMode={openApprovalOverlay}
         explanation={explanation}
+        // disable when input is inactive (e.g., overlay open)
+        isActive={active}
       />
     );
   }
@@ -492,11 +504,9 @@ function TerminalChatInputThinking({
       const str = Buffer.isBuffer(data) ? data.toString("utf8") : data;
       if (str === "\x1b\x1b") {
         // Treat as the first Escape press – prompt the user for confirmation.
-        if (isLoggingEnabled()) {
-          log(
-            "raw stdin: received collapsed ESC ESC – starting confirmation timer",
-          );
-        }
+        log(
+          "raw stdin: received collapsed ESC ESC – starting confirmation timer",
+        );
         setAwaitingConfirm(true);
         setTimeout(() => setAwaitingConfirm(false), 1500);
       }
@@ -518,15 +528,11 @@ function TerminalChatInputThinking({
       }
 
       if (awaitingConfirm) {
-        if (isLoggingEnabled()) {
-          log("useInput: second ESC detected – triggering onInterrupt()");
-        }
+        log("useInput: second ESC detected – triggering onInterrupt()");
         onInterrupt();
         setAwaitingConfirm(false);
       } else {
-        if (isLoggingEnabled()) {
-          log("useInput: first ESC detected – waiting for confirmation");
-        }
+        log("useInput: first ESC detected – waiting for confirmation");
         setAwaitingConfirm(true);
         setTimeout(() => setAwaitingConfirm(false), 1500);
       }

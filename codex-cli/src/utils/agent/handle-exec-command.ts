@@ -5,12 +5,12 @@ import type { ApplyPatchCommand, ApprovalPolicy } from "../../approvals.js";
 import type { ResponseInputItem } from "openai/resources/responses/responses.mjs";
 
 import { exec, execApplyPatch } from "./exec.js";
-import { isLoggingEnabled, log } from "./log.js";
 import { ReviewDecision } from "./review.js";
 import { FullAutoErrorMode } from "../auto-approval-mode.js";
 import { SandboxType } from "./sandbox/interface.js";
 import { canAutoApprove } from "../../approvals.js";
 import { formatCommandForDisplay } from "../../format-command.js";
+import { isLoggingEnabled, log } from "../logger/log.js";
 import { access } from "fs/promises";
 
 // ---------------------------------------------------------------------------
@@ -144,7 +144,7 @@ export async function handleExecCommand(
     abortSignal,
   );
   // If the operation was aborted in the meantime, propagate the cancellation
-  // upward by returning an empty (no‑op) result so that the agent loop will
+  // upward by returning an empty (no-op) result so that the agent loop will
   // exit cleanly without emitting spurious output.
   if (abortSignal?.aborted) {
     return {
@@ -223,23 +223,22 @@ async function execCommand(
       workdir = process.cwd();
     }
   }
-  if (isLoggingEnabled()) {
-    if (applyPatchCommand != null) {
-      log("EXEC running apply_patch command");
-    } else {
-      const { cmd, timeoutInMillis } = execInput;
-      // Seconds are a bit easier to read in log messages and most timeouts
-      // are specified as multiples of 1000, anyway.
-      const timeout =
-        timeoutInMillis != null
-          ? Math.round(timeoutInMillis / 1000).toString()
-          : "undefined";
-      log(
-        `EXEC running \`${formatCommandForDisplay(
-          cmd,
-        )}\` in workdir=${workdir} with timeout=${timeout}s`,
-      );
-    }
+
+  if (applyPatchCommand != null) {
+    log("EXEC running apply_patch command");
+  } else if (isLoggingEnabled()) {
+    const { cmd, timeoutInMillis } = execInput;
+    // Seconds are a bit easier to read in log messages and most timeouts
+    // are specified as multiples of 1000, anyway.
+    const timeout =
+      timeoutInMillis != null
+        ? Math.round(timeoutInMillis / 1000).toString()
+        : "undefined";
+    log(
+      `EXEC running \`${formatCommandForDisplay(
+        cmd,
+      )}\` in workdir=${workdir} with timeout=${timeout}s`,
+    );
   }
 
   // Note execApplyPatch() and exec() are coded defensively and should not
