@@ -9,6 +9,7 @@ import { exec as rawExec } from "./sandbox/raw-exec.js";
 import { formatCommandForDisplay } from "../../format-command.js";
 import fs from "fs";
 import os from "os";
+import path from "path";
 import { parse } from "shell-quote";
 
 const DEFAULT_TIMEOUT_MS = 10_000; // 10 seconds
@@ -68,7 +69,22 @@ export function execApplyPatch(patchText: string): ExecResult {
     const result = process_patch(
       patchText,
       (p) => fs.readFileSync(p, "utf8"),
-      (p, c) => fs.writeFileSync(p, c, "utf8"),
+      (p, c) => {
+        // Ensure the parent directory exists before writing the file. This
+        // mirrors the behaviour of the standalone apply_patch CLI (see
+        // write_file() in apply-patch.ts) and prevents errors when adding a
+        // new file in a not‑yet‑created sub‑directory.
+        if (path.isAbsolute(p)) {
+          throw new Error("apply_patch does not support absolute paths");
+        }
+
+        const dir = path.dirname(p);
+        if (dir !== ".") {
+          fs.mkdirSync(dir, { recursive: true });
+        }
+
+        fs.writeFileSync(p, c, "utf8");
+      },
       (p) => fs.unlinkSync(p),
     );
     return {
