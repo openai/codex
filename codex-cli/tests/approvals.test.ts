@@ -101,21 +101,21 @@ describe("canAutoApprove()", () => {
       type: "auto-approve",
       reason: "Command whitelisted by user",
       group: "Whitelisted",
-      runInSandbox: true,
+      runInSandbox: false,
     });
 
     expect(check(["pip", "install", "requests"])).toEqual({
       type: "auto-approve",
       reason: "Command whitelisted by user",
       group: "Whitelisted",
-      runInSandbox: true,
+      runInSandbox: false,
     });
 
     expect(check(["yarn", "add", "express"])).toEqual({
       type: "auto-approve",
       reason: "Command whitelisted by user",
       group: "Whitelisted",
-      runInSandbox: true,
+      runInSandbox: false,
     });
     
     // Non-whitelisted commands should still require approval

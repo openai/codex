@@ -74,7 +74,7 @@ export function canAutoApprove(
   command: ReadonlyArray<string>,
   policy: ApprovalPolicy,
   writableRoots: ReadonlyArray<string>,
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
 ): SafetyAssessment {
   if (command[0] === "apply_patch") {
     return command.length === 2 && typeof command[1] === "string"
@@ -471,7 +471,7 @@ function isCommandWhitelisted(
         type: "auto-approve",
         reason: "Command whitelisted by user",
         group: "Whitelisted",
-        runInSandbox: true, // Still run in sandbox for safety
+        runInSandbox: false,
       };
     }
   }
