@@ -23,6 +23,7 @@ import {
   PRETTY_PRINT,
   INSTRUCTIONS_FILEPATH,
 } from "./utils/config";
+import { providers } from "./utils/providers.js";
 import { createInputItem } from "./utils/input-utils";
 import { initLogger } from "./utils/logger/log";
 import { isModelSupportedForResponses } from "./utils/model-utils.js";
@@ -57,6 +58,7 @@ const cli = meow(
     -h, --help                      Show usage and exit
     -m, --model <model>             Model to use for completions (default: o4-mini)
     -p, --provider <provider>       Provider to use for completions (default: openai)
+    --base-url <url>                Override the base URL for the provider API
     -i, --image <path>              Path(s) to image files to include as input
     -v, --view <rollout>            Inspect a previously saved rollout instead of starting a session
     -q, --quiet                     Non-interactive mode that only prints the assistant's final output
@@ -103,6 +105,7 @@ const cli = meow(
       view: { type: "string" },
       model: { type: "string", aliases: ["m"] },
       provider: { type: "string", aliases: ["p"] },
+      baseUrl: { type: "string", description: "Override the base URL for the provider API" },
       image: { type: "string", isMultiple: true, aliases: ["i"] },
       quiet: {
         type: "boolean",
@@ -295,6 +298,13 @@ config = {
       ? Boolean(cli.flags.disableResponseStorage)
       : config.disableResponseStorage,
 };
+// Override provider baseURL if specified via CLI flag
+if (cli.flags.baseUrl && config.provider) {
+  const prov = config.provider.toLowerCase();
+  if (providers[prov]) {
+    providers[prov].baseURL = cli.flags.baseUrl;
+  }
+}
 
 // Check for updates after loading config. This is important because we write state file in
 // the config dir.

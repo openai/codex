@@ -53,6 +53,17 @@ export function getBaseUrl(provider: string = "openai"): string | undefined {
   const providersConfig = config.providers ?? providers;
   const providerInfo = providersConfig[provider.toLowerCase()];
   if (providerInfo) {
+    const key = provider.toLowerCase();
+    // Environment variable override for OpenAI
+    if (key === "openai" && OPENAI_BASE_URL) {
+      return OPENAI_BASE_URL;
+    }
+    // Environment variable override for other providers (e.g., OLLAMA_BASE_URL)
+    const prefix = providerInfo.envKey.replace(/_API_KEY$/, "");
+    const envOverride = process.env[`${prefix}_BASE_URL`];
+    if (envOverride && envOverride.trim() !== "") {
+      return envOverride;
+    }
     return providerInfo.baseURL;
   }
 
