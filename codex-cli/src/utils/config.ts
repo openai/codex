@@ -41,21 +41,37 @@ export function setApiKey(apiKey: string): void {
   OPENAI_API_KEY = apiKey;
 }
 
-export function getBaseUrl(provider: string): string | undefined {
+export function getBaseUrl(provider: string = "openai"): string | undefined {
+  // If the provider is `openai` and `OPENAI_BASE_URL` is set, use it
+  if (provider === "openai" && OPENAI_BASE_URL !== "") {
+    return OPENAI_BASE_URL;
+  }
+
   const providerInfo = providers[provider.toLowerCase()];
   if (providerInfo) {
     return providerInfo.baseURL;
   }
+
+  // If the provider not found in the providers list and `OPENAI_BASE_URL` is set, use it
+  if (OPENAI_BASE_URL !== "") {
+    return OPENAI_BASE_URL;
+  }
+
   return undefined;
 }
 
-export function getApiKey(provider: string): string | undefined {
+export function getApiKey(provider: string = "openai"): string | undefined {
   const providerInfo = providers[provider.toLowerCase()];
   if (providerInfo) {
     if (providerInfo.name === "Ollama") {
       return process.env[providerInfo.envKey] ?? "dummy";
     }
     return process.env[providerInfo.envKey];
+  }
+
+  // If the provider not found in the providers list and `OPENAI_API_KEY` is set, use it
+  if (OPENAI_API_KEY !== "") {
+    return OPENAI_API_KEY;
   }
 
   return undefined;
