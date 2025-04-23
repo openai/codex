@@ -71,13 +71,14 @@ export type ApprovalPolicy =
  */
 export function canAutoApprove(
   command: ReadonlyArray<string>,
+  workdir: string | undefined,
   policy: ApprovalPolicy,
   writableRoots: ReadonlyArray<string>,
   env: NodeJS.ProcessEnv = process.env,
 ): SafetyAssessment {
   if (command[0] === "apply_patch") {
     return command.length === 2 && typeof command[1] === "string"
-      ? canAutoApproveApplyPatch(command[1], writableRoots, policy)
+      ? canAutoApproveApplyPatch(command[1], workdir, writableRoots, policy)
       : {
           type: "reject",
           reason: "Invalid apply_patch command",
@@ -103,7 +104,12 @@ export function canAutoApprove(
   ) {
     const applyPatchArg = tryParseApplyPatch(command[2]);
     if (applyPatchArg != null) {
-      return canAutoApproveApplyPatch(applyPatchArg, writableRoots, policy);
+      return canAutoApproveApplyPatch(
+        applyPatchArg,
+        workdir,
+        writableRoots,
+        policy,
+      );
     }
 
     let bashCmd;
@@ -162,6 +168,7 @@ export function canAutoApprove(
 
 function canAutoApproveApplyPatch(
   applyPatchArg: string,
+  workdir: string | undefined,
   writableRoots: ReadonlyArray<string>,
   policy: ApprovalPolicy,
 ): SafetyAssessment {
@@ -179,7 +186,13 @@ function canAutoApproveApplyPatch(
       break;
   }
 
-  if (isWritePatchConstrainedToWritablePaths(applyPatchArg, writableRoots)) {
+  if (
+    isWritePatchConstrainedToWritablePaths(
+      applyPatchArg,
+      workdir,
+      writableRoots,
+    )
+  ) {
     return {
       type: "auto-approve",
       reason: "apply_patch command is constrained to writable paths",
@@ -208,6 +221,7 @@ function canAutoApproveApplyPatch(
  */
 function isWritePatchConstrainedToWritablePaths(
   applyPatchArg: string,
+  workdir: string | undefined,
   writableRoots: ReadonlyArray<string>,
 ): boolean {
   // `identify_files_needed()` returns a list of files that will be modified or
@@ -222,10 +236,12 @@ function isWritePatchConstrainedToWritablePaths(
   return (
     allPathsConstrainedTowritablePaths(
       identify_files_needed(applyPatchArg),
+      workdir,
       writableRoots,
     ) &&
     allPathsConstrainedTowritablePaths(
       identify_files_added(applyPatchArg),
+      workdir,
       writableRoots,
     )
   );
@@ -233,22 +249,45 @@ function isWritePatchConstrainedToWritablePaths(
 
 function allPathsConstrainedTowritablePaths(
   candidatePaths: ReadonlyArray<string>,
+  workdir: string | undefined,
   writableRoots: ReadonlyArray<string>,
 ): boolean {
   return candidatePaths.every((candidatePath) =>
-    isPathConstrainedTowritablePaths(candidatePath, writableRoots),
+    isPathConstrainedTowritablePaths(candidatePath, workdir, writableRoots),
   );
 }
 
 /** If candidatePath is relative, it will be resolved against cwd. */
 function isPathConstrainedTowritablePaths(
   candidatePath: string,
+  workdir: string | undefined,
   writableRoots: ReadonlyArray<string>,
 ): boolean {
-  const candidateAbsolutePath = path.resolve(candidatePath);
+  const candidateAbsolutePath = resolvePathAgainstWorkdir(
+    candidatePath,
+    workdir,
+  );
+
   return writableRoots.some((writablePath) =>
     pathContains(writablePath, candidateAbsolutePath),
   );
+}
+
+/**
+ * If not already an absolute path, resolves `candidatePath` against `workdir`
+ * if specified; otherwise, against `process.cwd()`.
+ */
+export function resolvePathAgainstWorkdir(
+  candidatePath: string,
+  workdir: string | undefined,
+): string {
+  if (path.isAbsolute(candidatePath)) {
+    return candidatePath;
+  } else if (workdir != null) {
+    return path.resolve(workdir, candidatePath);
+  } else {
+    return path.resolve(candidatePath);
+  }
 }
 
 /** Both `parent` and `child` must be absolute paths. */
