@@ -32,4 +32,8 @@ export const SLASH_COMMANDS: Array<SlashCommand> = [
     description:
       "Show git diff of the working directory (or applied patches if not in git)",
   },
+  {
+    command: "/speak",
+    description: "Activate speech-to-text input mode"
+  }
 ];

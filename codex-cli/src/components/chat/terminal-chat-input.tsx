@@ -101,6 +101,8 @@ export default function TerminalChatInput({
   // Track the caret row across keystrokes
   const prevCursorRow = useRef<number | null>(null);
   const prevCursorWasAtLastRow = useRef<boolean>(false);
+  // Track recording state
+  const [isRecording, setIsRecording] = useState(false);
 
   // Load command history on component mount
   useEffect(() => {
@@ -120,6 +122,26 @@ export default function TerminalChatInput({
 
   useInput(
     (_input, _key) => {
+      // Stop recording if any key except enter is pressed while recording
+      if (isRecording && !_key.return) {
+        setIsRecording(false);
+        setItems((prev) => [
+          ...prev,
+          {
+            id: `speak-stop-${Date.now()}`,
+            type: "message",
+            role: "system",
+            content: [
+              {
+                type: "input_text",
+                text: "Recording stopped.",
+              },
+            ],
+          },
+        ]);
+        return;
+      }
+
       // Slash command navigation: up/down to select, enter to fill
       if (!confirmationPrompt && !loading && input.trim().startsWith("/")) {
         const prefix = input.trim();
@@ -188,6 +210,9 @@ export default function TerminalChatInput({
                   break;
                 case "/diff":
                   openDiffOverlay();
+                  break;
+                case "/speak":
+                  onSubmit(cmd);
                   break;
                 case "/bug":
                   onSubmit(cmd);
@@ -539,6 +564,24 @@ export default function TerminalChatInput({
         }
 
         return;
+      } else if (inputValue.startsWith("/speak")) {
+        // Handle /speak command
+        setIsRecording(true);
+        setInput("");
+        setItems((prev) => [
+          ...prev,
+          {
+            id: `speak-start-${Date.now()}`,
+            type: "message",
+            role: "system",
+            content: [
+              {
+                type: "input_text",
+                text: "Recording started. Press any key (except enter) to stop recording.",
+              },
+            ],
+          },
+        ]);
       } else if (inputValue.startsWith("/")) {
         // Handle invalid/unrecognized commands. Only single-word inputs starting with '/'
         // (e.g., /command) that are not recognized are caught here. Any other input, including
@@ -665,6 +708,11 @@ export default function TerminalChatInput({
           />
         ) : (
           <Box paddingX={1}>
+            {isRecording && (
+              <Box paddingRight={1}>
+                <Text color="red">●</Text>
+              </Box>
+            )}
             <MultilineTextEditor
               ref={editorRef}
               onChange={(txt: string) => {
