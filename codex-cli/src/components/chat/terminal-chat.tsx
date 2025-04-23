@@ -4,6 +4,7 @@ import type { AppConfig } from "../../utils/config.js";
 import type { ColorName } from "chalk";
 import type { ResponseItem } from "openai/resources/responses/responses.mjs";
 
+
 import TerminalChatInput from "./terminal-chat-input.js";
 import { TerminalChatToolCallCommand } from "./terminal-chat-tool-call-command.js";
 import TerminalMessageHistory from "./terminal-message-history.js";
@@ -31,12 +32,12 @@ import DiffOverlay from "../diff-overlay.js";
 import HelpOverlay from "../help-overlay.js";
 import HistoryOverlay from "../history-overlay.js";
 import ModelOverlay from "../model-overlay.js";
+import chalk from "chalk";
 import { Box, Text } from "ink";
 import { spawn } from "node:child_process";
 import OpenAI from "openai";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { inspect } from "util";
-import chalk from "chalk";
 
 export type OverlayModeType =
   | "none"
@@ -304,7 +305,7 @@ export default function TerminalChat({
       forceUpdate(); // re‑render after teardown too
     };
     // We intentionally omit 'approvalPolicy' and 'confirmationPrompt' from the deps
-    // so switching modes or showing confirmation dialogs doesn’t tear down the loop.
+    // so switching modes or showing confirmation dialogs doesn't tear down the loop.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model, provider, config, requestConfirmation, additionalWritableRoots]);
 
@@ -455,7 +456,6 @@ export default function TerminalChat({
             items={items}
             userMsgCount={userMsgCount}
             confirmationPrompt={confirmationPrompt}
-            explanation={explanation}
             loading={loading}
             thinkingSeconds={thinkingSeconds}
             fullStdout={fullStdout}
@@ -585,7 +585,7 @@ export default function TerminalChat({
                           },
                         ],
                       },
-                    ] as ResponseItem[],
+                    ] as Array<ResponseItem>,
                 );
                 // Close the overlay without changing the model
                 setOverlayMode("none");
@@ -601,7 +601,6 @@ export default function TerminalChat({
               }
               agent?.cancel(); // Cancel any ongoing agent activity
               setLoading(false); // Stop loading indicator
-
               setModel(newModel); // Update the model state
 
               // Save model to config
@@ -632,7 +631,7 @@ export default function TerminalChat({
                         },
                       ],
                     },
-                  ] as ResponseItem[],
+                  ] as Array<ResponseItem>,
               );
 
               // Close the overlay
@@ -719,7 +718,7 @@ export default function TerminalChat({
                         },
                       ],
                     },
-                  ] as ResponseItem[],
+                  ] as Array<ResponseItem>,
               );
 
               setOverlayMode("none");

@@ -1,7 +1,7 @@
 import React from "react";
 import { renderTui } from "./ui-test-helpers.js";
 import TerminalChat from "../src/components/chat/terminal-chat";
-import { AppConfig } from "../src/utils/config";
+import type { AppConfig } from "../src/utils/config";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as modelUtils from "../src/utils/model-utils";
 
@@ -25,6 +25,7 @@ vi.mock("../diff-overlay.js", () => ({
 vi.mock("../src/utils/model-utils", () => ({
   getAvailableModels: vi.fn(),
   RECOMMENDED_MODELS: [], // Mock recommended models if needed
+  calculateContextPercentRemaining: vi.fn(() => 75), // Add mock implementation
 }));
 
 // Mock the TerminalChatInput component
@@ -47,7 +48,11 @@ describe("TerminalChat model validation", () => {
       "gpt-4",
       "gpt-3.5",
     ]);
-    const config = { model: "gpt-unicorn" } as AppConfig;
+    const config = { 
+      model: "gpt-unicorn",
+      provider: "openai",
+      flexMode: false
+    } as AppConfig;
 
     // Act: Render the TerminalChat component
     const { lastFrameStripped, rerender } = renderTui(
@@ -56,29 +61,33 @@ describe("TerminalChat model validation", () => {
         approvalPolicy="suggest"
         additionalWritableRoots={[]}
         fullStdout={false}
-      />,
+      />
     );
 
-    // Assert: Wait for effects to run and check the output
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    rerender?.(); // Force a re-render to ensure Ink captures the latest state
-
+    // Wait for async operations - using setTimeout instead of waitFor
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    rerender?.();
     const frame = lastFrameStripped();
-
-    // Check that the warning message is present in the rendered output.
-    // Updated to match the new message format with provider information
+    
+    // Assert: Check that the warning message is present
     expect(frame).toContain(
-      'Warning: model "gpt-unicorn" is not in the list of available models for provider "openai".',
+      'Warning: model "gpt-unicorn" is not in the list of available models for provider "openai".'
     );
   });
 
   it("should NOT display a warning if the configured model is available", async () => {
-    // Arrange: Mock getAvailableModels to return a list that *does* include "gpt-3.5"
+    // Arrange: Mock getAvailableModels to return a list that *does* include "gpt-unicorn"
     vi.mocked(modelUtils.getAvailableModels).mockResolvedValue([
       "gpt-4",
       "gpt-3.5",
+      "gpt-unicorn",
     ]);
-    const config = { model: "gpt-3.5" } as AppConfig;
+    
+    const config = { 
+      model: "gpt-unicorn",
+      provider: "openai",
+      flexMode: false
+    } as AppConfig;
 
     // Act: Render the TerminalChat component
     const { lastFrameStripped, rerender } = renderTui(
@@ -87,18 +96,17 @@ describe("TerminalChat model validation", () => {
         approvalPolicy="suggest"
         additionalWritableRoots={[]}
         fullStdout={false}
-      />,
+      />
     );
 
-    // Assert: Wait for effects and check output
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    // Wait for async operations - using setTimeout instead of waitFor
+    await new Promise((resolve) => setTimeout(resolve, 300));
     rerender?.();
     const frame = lastFrameStripped();
-
-    // Check that the warning message is NOT present in the rendered output.
-    // Updated to match the new message format with provider information
+    
+    // Assert: Check that the warning message is NOT present
     expect(frame).not.toContain(
-      'Warning: model "gpt-3.5" is not in the list of available models for provider "openai".',
+      'Warning: model "gpt-unicorn" is not in the list of available models for provider "openai".'
     );
   });
 });
