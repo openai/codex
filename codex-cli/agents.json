@@ -1,0 +1,4 @@
+﻿[
+  { "name": "planner", "model": "o4-mini", "instructions": "You plan tasks, split goals into subtasks and hand them to @coder." },
+  { "name": "coder",   "model": "o4-mini", "instructions": "You write small TypeScript snippets that satisfy the planner’s subtasks." }
+]

@@ -162,26 +162,8 @@ export function exec(
     const stderrCollector = createTruncatingCollector(child.stderr!);
 
     child.on("exit", (code, signal) => {
-      const stdoutBuf = Buffer.concat(stdoutChunks);
-      const stderrBuf = Buffer.concat(stderrChunks);
-
-      const decode = (buf: Buffer): string => {
-        if (process.platform !== "win32") {
-          return buf.toString("utf8");
-        }
-        // Heuristic: treat as UTF‑16LE only when *most* odd bytes are 0x00
-        const sample = buf.subarray(0, 2000); // small sample is enough
-        let nulCount = 0;
-        for (let i = 1; i < sample.length; i += 2) {
-          if (sample[i] === 0) nulCount += 1;
-        }
-        const ratio = sample.length > 0 ? nulCount / (sample.length / 2) : 0;
-        const encoding = ratio > 0.6 ? "utf16le" : "utf8"; // >60% NULs → likely UTF‑16LE
-        return buf.toString(encoding);
-      };
-
-      const stdout = decode(stdoutBuf);
-      const stderr = decode(stderrBuf);
+      const stdout = stdoutCollector.getString();
+      const stderr = stderrCollector.getString();
 
       // Map (code, signal) to an exit code. We expect exactly one of the two
       // values to be non-null, but we code defensively to handle the case where

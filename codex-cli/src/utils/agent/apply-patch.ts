@@ -12,7 +12,7 @@ import {
   UPDATE_FILE_PREFIX,
   HUNK_ADD_LINE_PREFIX,
   PATCH_PREFIX,
-} from "src/parse-apply-patch";
+} from "../../parse-apply-patch";
 
 // -----------------------------------------------------------------------------
 // Types & Models
