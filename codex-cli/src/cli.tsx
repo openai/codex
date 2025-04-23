@@ -419,7 +419,6 @@ const approvalPolicy: ApprovalPolicy = (() => {
   return config.approvalMode ?? AutoApprovalMode.SUGGEST;
 })();
 
-preloadModels();
 
 const instance = render(
   <App
