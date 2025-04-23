@@ -9,15 +9,23 @@ import { exec as rawExec } from "./sandbox/raw-exec.js";
 import { formatCommandForDisplay } from "../../format-command.js";
 import fs from "fs";
 import os from "os";
+import path from "path";
 import { parse } from "shell-quote";
+import { resolvePathAgainstWorkdir } from "src/approvals.js";
 
 const DEFAULT_TIMEOUT_MS = 10_000; // 10 seconds
 
 function requiresShell(cmd: Array<string>): boolean {
-  return cmd.some((arg) => {
-    const tokens = parse(arg) as Array<ParseEntry>;
+  // If the command is a single string that contains shell operators,
+  // it needs to be run with shell: true
+  if (cmd.length === 1 && cmd[0] !== undefined) {
+    const tokens = parse(cmd[0]) as Array<ParseEntry>;
     return tokens.some((token) => typeof token === "object" && "op" in token);
-  });
+  }
+
+  // If the command is split into multiple arguments, we don't need shell: true
+  // even if one of the arguments is a shell operator like '|'
+  return false;
 }
 
 /**
@@ -54,16 +62,32 @@ export function exec(
   return execForSandbox(cmd, opts, writableRoots, abortSignal);
 }
 
-export function execApplyPatch(patchText: string): ExecResult {
+export function execApplyPatch(
+  patchText: string,
+  workdir: string | undefined = undefined,
+): ExecResult {
   // This is a temporary measure to understand what are the common base commands
   // until we start persisting and uploading rollouts
 
   try {
     const result = process_patch(
       patchText,
-      (p) => fs.readFileSync(p, "utf8"),
-      (p, c) => fs.writeFileSync(p, c, "utf8"),
-      (p) => fs.unlinkSync(p),
+      (p) => fs.readFileSync(resolvePathAgainstWorkdir(p, workdir), "utf8"),
+      (p, c) => {
+        const resolvedPath = resolvePathAgainstWorkdir(p, workdir);
+
+        // Ensure the parent directory exists before writing the file. This
+        // mirrors the behaviour of the standalone apply_patch CLI (see
+        // write_file() in apply-patch.ts) and prevents errors when adding a
+        // new file in a not‑yet‑created sub‑directory.
+        const dir = path.dirname(resolvedPath);
+        if (dir !== ".") {
+          fs.mkdirSync(dir, { recursive: true });
+        }
+
+        fs.writeFileSync(resolvedPath, c, "utf8");
+      },
+      (p) => fs.unlinkSync(resolvePathAgainstWorkdir(p, workdir)),
     );
     return {
       stdout: result,

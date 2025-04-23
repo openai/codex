@@ -1,8 +1,8 @@
+import type { AppConfig } from "./config.js";
 import type { ResponseItem } from "openai/resources/responses/responses.mjs";
 
-import { OPENAI_BASE_URL } from "./config.js";
+import { getBaseUrl, getApiKey } from "./config.js";
 import OpenAI from "openai";
-
 /**
  * Generate a condensed summary of the conversation items.
  * @param items The list of conversation items to summarize
@@ -14,16 +14,18 @@ import OpenAI from "openai";
  * @param items The list of conversation items to summarize
  * @param model The model to use for generating the summary
  * @param flexMode Whether to use the flex-mode service tier
+ * @param config The configuration object
  * @returns A concise structured summary string
  */
 export async function generateCompactSummary(
   items: Array<ResponseItem>,
   model: string,
   flexMode = false,
+  config: AppConfig,
 ): Promise<string> {
   const oai = new OpenAI({
-    apiKey: process.env["OPENAI_API_KEY"],
-    baseURL: OPENAI_BASE_URL,
+    apiKey: getApiKey(config.provider),
+    baseURL: getBaseUrl(config.provider),
   });
 
   const conversationText = items

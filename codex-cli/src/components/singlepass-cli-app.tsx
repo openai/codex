@@ -7,9 +7,10 @@ import Spinner from "./vendor/ink-spinner"; // Third‑party / vendor components
 import TextInput from "./vendor/ink-text-input";
 import { 
   OPENAI_TIMEOUT_MS, 
-  OPENAI_BASE_URL,
   OPENAI_ORGANIZATION,
-  OPENAI_PROJECT 
+  OPENAI_PROJECT,
+  getBaseUrl,
+  getApiKey 
 } from "../utils/config";
 import {
   generateDiffSummary,
@@ -407,8 +408,8 @@ export function SinglePassApp({
       }
 
       const openai = new OpenAI({
-        apiKey: config.apiKey ?? "",
-        baseURL: OPENAI_BASE_URL || undefined,
+        apiKey: getApiKey(config.provider),
+        baseURL: getBaseUrl(config.provider),
         timeout: OPENAI_TIMEOUT_MS,
         defaultHeaders: headers,
       });
