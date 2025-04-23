@@ -10,6 +10,7 @@ import type { ApprovalPolicy } from "./approvals";
 import type { CommandConfirmation } from "./utils/agent/agent-loop";
 import type { AppConfig } from "./utils/config";
 import type { ResponseItem } from "openai/resources/responses/responses";
+import type { ReasoningEffort } from "openai/resources.mjs";
 
 import App from "./app";
 import { runSinglePass } from "./cli-singlepass";
@@ -17,7 +18,6 @@ import { AgentLoop } from "./utils/agent/agent-loop";
 import { initLogger } from "./utils/agent/log";
 import { ReviewDecision } from "./utils/agent/review";
 import { AutoApprovalMode } from "./utils/auto-approval-mode";
-import { checkForUpdates } from "./utils/check-updates";
 import {
   getApiKey,
   loadConfig,
@@ -35,7 +35,6 @@ import { render } from "ink";
 import meow from "meow";
 import path from "path";
 import React from "react";
-import { ReasoningEffort } from "openai/resources.mjs";
 
 // Call this early so `tail -F "$TMPDIR/oai-codex/codex-cli-latest.log"` works
 // immediately. This must be run with DEBUG=1 for logging to work.
