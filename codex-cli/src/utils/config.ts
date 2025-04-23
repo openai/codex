@@ -8,8 +8,9 @@
 
 import type { FullAutoErrorMode } from "./auto-approval-mode.js";
 
-import { log, isLoggingEnabled } from "./agent/log.js";
 import { AutoApprovalMode } from "./auto-approval-mode.js";
+import { log } from "./logger/log.js";
+import { providers } from "./providers.js";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { load as loadYaml, dump as dumpYaml } from "js-yaml";
 import { homedir } from "os";
@@ -40,18 +41,62 @@ export function setApiKey(apiKey: string): void {
   OPENAI_API_KEY = apiKey;
 }
 
-// Formatting (quiet mode-only).
-export const PRETTY_PRINT = Boolean(process.env["PRETTY_PRINT"] || "");
+export function getBaseUrl(provider: string = "openai"): string | undefined {
+  // Check for a PROVIDER-specific override: e.g. OPENAI_BASE_URL or OLLAMA_BASE_URL.
+  const envKey = `${provider.toUpperCase()}_BASE_URL`;
+  if (process.env[envKey]) {
+    return process.env[envKey];
+  }
+
+  // Get providers config from config file.
+  const config = loadConfig();
+  const providersConfig = config.providers ?? providers;
+  const providerInfo = providersConfig[provider.toLowerCase()];
+  if (providerInfo) {
+    return providerInfo.baseURL;
+  }
+
+  // If the provider not found in the providers list and `OPENAI_BASE_URL` is set, use it.
+  if (OPENAI_BASE_URL !== "") {
+    return OPENAI_BASE_URL;
+  }
+
+  // We tried.
+  return undefined;
+}
+
+export function getApiKey(provider: string = "openai"): string | undefined {
+  const config = loadConfig();
+  const providersConfig = config.providers ?? providers;
+  const providerInfo = providersConfig[provider.toLowerCase()];
+  if (providerInfo) {
+    if (providerInfo.name === "Ollama") {
+      return process.env[providerInfo.envKey] ?? "dummy";
+    }
+    return process.env[providerInfo.envKey];
+  }
+
+  // If the provider not found in the providers list and `OPENAI_API_KEY` is set, use it
+  if (OPENAI_API_KEY !== "") {
+    return OPENAI_API_KEY;
+  }
+
+  // We tried.
+  return undefined;
+}
 
 // Represents config as persisted in config.json.
 export type StoredConfig = {
   model?: string;
-  /** Default approval mode used when CLI flags are not provided */
+  provider?: string;
   approvalMode?: AutoApprovalMode;
   fullAutoErrorMode?: FullAutoErrorMode;
   memory?: MemoryConfig;
   /** Whether to enable desktop notifications for responses */
   notify?: boolean;
+  /** Disable server-side response storage (send full transcript each request) */
+  disableResponseStorage?: boolean;
+  providers?: Record<string, { name: string; baseURL: string; envKey: string }>;
   history?: {
     maxSize?: number;
     saveHistory?: boolean;
@@ -75,19 +120,29 @@ export type MemoryConfig = {
 export type AppConfig = {
   apiKey?: string;
   model: string;
+  provider?: string;
   instructions: string;
-  /** Default approval mode for the CLI session when flags are absent */
   approvalMode?: AutoApprovalMode;
   fullAutoErrorMode?: FullAutoErrorMode;
   memory?: MemoryConfig;
   /** Whether to enable desktop notifications for responses */
   notify: boolean;
+
+  /** Disable server-side response storage (send full transcript each request) */
+  disableResponseStorage?: boolean;
+
+  /** Enable the "flex-mode" processing mode for supported models (o3, o4-mini) */
+  flexMode?: boolean;
+  providers?: Record<string, { name: string; baseURL: string; envKey: string }>;
   history?: {
     maxSize: number;
     saveHistory: boolean;
     sensitivePatterns: Array<string>;
   };
 };
+
+// Formatting (quiet mode-only).
+export const PRETTY_PRINT = Boolean(process.env["PRETTY_PRINT"] || "");
 
 // ---------------------------------------------------------------------------
 // Project doc support (codex.md)
@@ -240,15 +295,11 @@ export const loadConfig = (
       ? resolvePath(cwd, options.projectDocPath)
       : discoverProjectDocPath(cwd);
     if (projectDocPath) {
-      if (isLoggingEnabled()) {
-        log(
-          `[codex] Loaded project doc from ${projectDocPath} (${projectDoc.length} bytes)`,
-        );
-      }
+      log(
+        `[codex] Loaded project doc from ${projectDocPath} (${projectDoc.length} bytes)`,
+      );
     } else {
-      if (isLoggingEnabled()) {
-        log(`[codex] No project doc found in ${cwd}`);
-      }
+      log(`[codex] No project doc found in ${cwd}`);
     }
   }
 
@@ -269,9 +320,11 @@ export const loadConfig = (
       (options.isFullContext
         ? DEFAULT_FULL_CONTEXT_MODEL
         : DEFAULT_AGENTIC_MODEL),
+    provider: storedConfig.provider,
     instructions: combinedInstructions,
     notify: storedConfig.notify === true,
     approvalMode: storedConfig.approvalMode ?? DEFAULT_APPROVAL_MODE,
+    disableResponseStorage: storedConfig.disableResponseStorage ?? false,
   };
 
   // -----------------------------------------------------------------------
@@ -349,6 +402,9 @@ export const loadConfig = (
     };
   }
 
+  // Merge default providers with user configured providers in the config.
+  config.providers = { ...providers, ...storedConfig.providers };
+
   return config;
 };
 
@@ -380,6 +436,8 @@ export const saveConfig = (
   // Create the config object to save
   const configToSave: StoredConfig = {
     model: config.model,
+    provider: config.provider,
+    providers: config.providers,
     approvalMode: config.approvalMode,
   };
 

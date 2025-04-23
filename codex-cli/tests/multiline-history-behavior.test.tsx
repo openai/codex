@@ -57,7 +57,7 @@ async function type(
   await flush();
 }
 
-/** Build a set of no‑op callbacks so <TerminalChatInput> renders with minimal
+/** Build a set of no-op callbacks so <TerminalChatInput> renders with minimal
  *  scaffolding.
  */
 function stubProps(): any {

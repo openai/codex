@@ -1,0 +1,12 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`checkForUpdates() > renders a box when a newer version exists and no global installer 1`] = `
+"
+   ╭─────────────────────────────────────────────────╮
+   │                                                 │
+   │        Update available! 1.0.0 → 2.0.0.         │
+   │   To update, run bun add -g my-pkg to update.   │
+   │                                                 │
+   ╰─────────────────────────────────────────────────╯
+"
+`;

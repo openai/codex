@@ -2,9 +2,11 @@ import type * as fsType from "fs";
 
 import { AutoApprovalMode } from "../src/utils/auto-approval-mode.js";
 import { loadConfig, saveConfig } from "../src/utils/config.js"; // parent import first
+import { AutoApprovalMode } from "../src/utils/auto-approval-mode.js";
 import { tmpdir } from "os";
 import { join } from "path";
 import { test, expect, beforeEach, afterEach, vi } from "vitest";
+import { providers as defaultProviders } from "../src/utils/providers";
 
 // In‑memory FS store
 let memfs: Record<string, string> = {};
@@ -26,7 +28,7 @@ vi.mock("fs", async () => {
       memfs[path] = data;
     },
     mkdirSync: () => {
-      // no‑op in in‑memory store
+      // no-op in in‑memory store
     },
     rmSync: (path: string) => {
       // recursively delete any key under this prefix
@@ -115,4 +117,129 @@ test("loads user instructions + project doc when codex.md is present", () => {
   expect(cfg.instructions).toBe(
     userInstr + "\n\n--- project-doc ---\n\n" + projectDoc,
   );
+});
+
+test("loads and saves approvalMode correctly", () => {
+  // Setup config with approvalMode
+  memfs[testConfigPath] = JSON.stringify(
+    {
+      model: "mymodel",
+      approvalMode: AutoApprovalMode.AUTO_EDIT,
+    },
+    null,
+    2,
+  );
+  memfs[testInstructionsPath] = "test instructions";
+
+  // Load config and verify approvalMode
+  const loadedConfig = loadConfig(testConfigPath, testInstructionsPath, {
+    disableProjectDoc: true,
+  });
+
+  // Check approvalMode was loaded correctly
+  expect(loadedConfig.approvalMode).toBe(AutoApprovalMode.AUTO_EDIT);
+
+  // Modify approvalMode and save
+  const updatedConfig = {
+    ...loadedConfig,
+    approvalMode: AutoApprovalMode.FULL_AUTO,
+  };
+
+  saveConfig(updatedConfig, testConfigPath, testInstructionsPath);
+
+  // Verify saved config contains updated approvalMode
+  expect(memfs[testConfigPath]).toContain(
+    `"approvalMode": "${AutoApprovalMode.FULL_AUTO}"`,
+  );
+
+  // Load again and verify updated value
+  const reloadedConfig = loadConfig(testConfigPath, testInstructionsPath, {
+    disableProjectDoc: true,
+  });
+  expect(reloadedConfig.approvalMode).toBe(AutoApprovalMode.FULL_AUTO);
+});
+
+test("loads and saves providers correctly", () => {
+  // Setup custom providers configuration
+  const customProviders = {
+    openai: {
+      name: "Custom OpenAI",
+      baseURL: "https://custom-api.openai.com/v1",
+      envKey: "CUSTOM_OPENAI_API_KEY",
+    },
+    anthropic: {
+      name: "Anthropic",
+      baseURL: "https://api.anthropic.com",
+      envKey: "ANTHROPIC_API_KEY",
+    },
+  };
+
+  // Create config with providers
+  const testConfig = {
+    model: "test-model",
+    provider: "anthropic",
+    providers: customProviders,
+    instructions: "test instructions",
+    notify: false,
+  };
+
+  // Save the config
+  saveConfig(testConfig, testConfigPath, testInstructionsPath);
+
+  // Verify saved config contains providers
+  expect(memfs[testConfigPath]).toContain(`"providers"`);
+  expect(memfs[testConfigPath]).toContain(`"Custom OpenAI"`);
+  expect(memfs[testConfigPath]).toContain(`"Anthropic"`);
+  expect(memfs[testConfigPath]).toContain(`"provider": "anthropic"`);
+
+  // Load config and verify providers were loaded correctly
+  const loadedConfig = loadConfig(testConfigPath, testInstructionsPath, {
+    disableProjectDoc: true,
+  });
+
+  // Check providers were loaded correctly
+  expect(loadedConfig.provider).toBe("anthropic");
+  expect(loadedConfig.providers).toEqual({
+    ...defaultProviders,
+    ...customProviders,
+  });
+
+  // Test merging with built-in providers
+  // Create a config with only one custom provider
+  const partialProviders = {
+    customProvider: {
+      name: "Custom Provider",
+      baseURL: "https://custom-api.example.com",
+      envKey: "CUSTOM_API_KEY",
+    },
+  };
+
+  const partialConfig = {
+    model: "test-model",
+    provider: "customProvider",
+    providers: partialProviders,
+    instructions: "test instructions",
+    notify: false,
+  };
+
+  // Save the partial config
+  saveConfig(partialConfig, testConfigPath, testInstructionsPath);
+
+  // Load config and verify providers were merged with built-in providers
+  const mergedConfig = loadConfig(testConfigPath, testInstructionsPath, {
+    disableProjectDoc: true,
+  });
+
+  // Check providers is defined
+  expect(mergedConfig.providers).toBeDefined();
+
+  // Use bracket notation to access properties
+  if (mergedConfig.providers) {
+    expect(mergedConfig.providers["customProvider"]).toBeDefined();
+    expect(mergedConfig.providers["customProvider"]).toEqual(
+      partialProviders.customProvider,
+    );
+    // Built-in providers should still be there (like openai)
+    expect(mergedConfig.providers["openai"]).toBeDefined();
+  }
 });
