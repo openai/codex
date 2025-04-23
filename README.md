@@ -318,20 +318,6 @@ model: o4-mini # Default model
 approvalMode: suggest # or auto-edit, full-auto
 fullAutoErrorMode: ask-user # or ignore-and-continue
 notify: true # Enable desktop notifications for responses
-provider: openai # Default provider
-providers:
-  openai:
-    name: OpenAI
-    baseURL: https://api.openai.com/v1
-    envKey: OPENAI_API_KEY
-  openrouter:
-    name: OpenRouter
-    baseURL: https://openrouter.ai/api/v1
-    envKey: OPENROUTER_API_KEY
-  ollama:
-    name: Ollama
-    baseURL: http://localhost:11434/v1
-    envKey: OLLAMA_API_KEY
 ```
 
 ```json
@@ -340,25 +326,7 @@ providers:
   "model": "o4-mini",
   "approvalMode": "suggest",
   "fullAutoErrorMode": "ask-user",
-  "notify": true,
-  "provider": "openai",
-  "providers": {
-    "openai": {
-      "name": "OpenAI",
-      "baseURL": "https://api.openai.com/v1",
-      "envKey": "OPENAI_API_KEY"
-    },
-    "openrouter": {
-      "name": "OpenRouter",
-      "baseURL": "https://openrouter.ai/api/v1",
-      "envKey": "OPENROUTER_API_KEY"
-    },
-    "ollama": {
-      "name": "Ollama",
-      "baseURL": "http://localhost:11434/v1",
-      "envKey": "OLLAMA_API_KEY"
-    }
-  }
+  "notify": true
 }
 ```
 
