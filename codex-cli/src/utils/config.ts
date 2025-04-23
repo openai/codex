@@ -50,8 +50,8 @@ export function getBaseUrl(provider: string = "openai"): string | undefined {
 
   // Get providers config from config file
   const config = loadConfig();
-  const providersConfig = config.providers;
-  const providerInfo = providersConfig?.[provider.toLowerCase()];
+  const providersConfig = config.providers ?? providers;
+  const providerInfo = providersConfig[provider.toLowerCase()];
 
   // If the provider is `openai` and `OPENAI_BASE_URL` is set, use it
   if (provider === "openai" && OPENAI_BASE_URL !== "") {
@@ -72,8 +72,8 @@ export function getBaseUrl(provider: string = "openai"): string | undefined {
 
 export function getApiKey(provider: string = "openai"): string | undefined {
   const config = loadConfig();
-  const providersConfig = config.providers;
-  const providerInfo = providersConfig?.[provider.toLowerCase()];
+  const providersConfig = config.providers ?? providers;
+  const providerInfo = providersConfig[provider.toLowerCase()];
 
   if (providerInfo) {
     if (providerInfo.name === "Ollama") {
