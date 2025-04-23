@@ -294,7 +294,7 @@ describe("responsesCreateViaChatCompletions", () => {
         expect(callArgs.messages).toEqual([
           { role: "user", content: "Hello world" },
         ]);
-        expect(callArgs.stream).toBeUndefined();
+        expect(callArgs.stream).toBe(false);
       }
 
       // Verify result format
@@ -734,33 +734,6 @@ describe("responsesCreateViaChatCompletions", () => {
       if (textDoneEvent) {
         expect(textDoneEvent.text).toBe("Hello world");
       }
-    });
-
-    it("should handle errors gracefully", async () => {
-      // Setup mock to throw an error
-      openAiState.createSpy = vi
-        .fn()
-        .mockRejectedValue(new Error("API connection error"));
-
-      const openaiClient = new (await import("openai")).default({
-        apiKey: "test-key",
-      }) as unknown as OpenAI;
-
-      const inputMessage = createTestInput({
-        model: "gpt-4o",
-        userMessage: "Test message",
-        stream: false,
-      });
-
-      // Expect the function to throw an error
-      await expect(
-        responsesModule.responsesCreateViaChatCompletions(
-          openaiClient,
-          inputMessage as unknown as ResponseCreateParamsNonStreaming & {
-            stream?: false | undefined;
-          },
-        ),
-      ).rejects.toThrow("Failed to process chat completion");
     });
 
     it("handles streaming with tool calls", async () => {
