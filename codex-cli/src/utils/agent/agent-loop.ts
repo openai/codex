@@ -543,22 +543,6 @@ export class AgentLoop {
         );
       } else {
         turnInput = [...abortOutputs, ...input].map(stripInternalFields);
-
-        // When response storage is disabled we have to maintain our own
-        // running transcript so that the next request still contains the
-        // full conversational history.  We skipped the transcript update in
-        // the branch above – ensure we do it here as well.
-        if (this.disableResponseStorage) {
-          const newUserItems: Array<ResponseInputItem> = input.filter((it) => {
-            if (it.type === "message" && it.role === "system") {
-              return false;
-            } else if (it.type === "reasoning") {
-              return false;
-            }
-            return true;
-          });
-          this.transcript.push(...newUserItems.map(stripInternalFields));
-        }
       }
 
       this.onLoading(true);
