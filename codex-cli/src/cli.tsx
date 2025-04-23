@@ -9,7 +9,10 @@ import type { AppRollout } from "./app";
 import type { ApprovalPolicy } from "./approvals";
 import type { CommandConfirmation } from "./utils/agent/agent-loop";
 import type { AppConfig } from "./utils/config";
-import type { ResponseItem, ResponseOutputMessage } from "openai/resources/responses/responses";
+import type {
+  ResponseItem,
+  ResponseOutputMessage,
+} from "openai/resources/responses/responses";
 
 import App from "./app";
 import { runSinglePass } from "./cli-singlepass";
@@ -424,15 +427,20 @@ const instance = render(
 setInkRenderer(instance);
 
 // Type guard to check if an item is the final completed assistant message
-function isResponseOutputMessage(item: ResponseItem): item is ResponseOutputMessage {
+function isResponseOutputMessage(
+  item: ResponseItem,
+): item is ResponseOutputMessage {
   return (
-    item.type === 'message' &&
-    'role' in item && item.role === 'assistant' &&
-    'status' in item && item.status === 'completed' &&
-    'content' in item && Array.isArray(item.content) &&
+    item.type === "message" &&
+    "role" in item &&
+    item.role === "assistant" &&
+    "status" in item &&
+    item.status === "completed" &&
+    "content" in item &&
+    Array.isArray(item.content) &&
     // Ensure content only contains output_text or refusal types
-    item.content.every(c => 
-      ('type' in c && (c.type === 'output_text' || c.type === 'refusal'))
+    item.content.every(
+      (c) => "type" in c && (c.type === "output_text" || c.type === "refusal"),
     )
   );
 }
