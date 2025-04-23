@@ -41,16 +41,34 @@ export function setApiKey(apiKey: string): void {
   OPENAI_API_KEY = apiKey;
 }
 
-export function getBaseUrl(provider: string): string | undefined {
-  const providerInfo = providers[provider.toLowerCase()];
+export function getBaseUrl(provider: string = "openai"): string | undefined {
+  // Check for a PROVIDER-specific override: e.g. OPENAI_BASE_URL or OLLAMA_BASE_URL.
+  const envKey = `${provider.toUpperCase()}_BASE_URL`;
+  if (process.env[envKey]) {
+    return process.env[envKey];
+  }
+
+  // Get providers config from config file.
+  const config = loadConfig();
+  const providersConfig = config.providers ?? providers;
+  const providerInfo = providersConfig[provider.toLowerCase()];
   if (providerInfo) {
     return providerInfo.baseURL;
   }
+
+  // If the provider not found in the providers list and `OPENAI_BASE_URL` is set, use it.
+  if (OPENAI_BASE_URL !== "") {
+    return OPENAI_BASE_URL;
+  }
+
+  // We tried.
   return undefined;
 }
 
-export function getApiKey(provider: string): string | undefined {
-  const providerInfo = providers[provider.toLowerCase()];
+export function getApiKey(provider: string = "openai"): string | undefined {
+  const config = loadConfig();
+  const providersConfig = config.providers ?? providers;
+  const providerInfo = providersConfig[provider.toLowerCase()];
   if (providerInfo) {
     if (providerInfo.name === "Ollama") {
       return process.env[providerInfo.envKey] ?? "dummy";
@@ -58,11 +76,14 @@ export function getApiKey(provider: string): string | undefined {
     return process.env[providerInfo.envKey];
   }
 
+  // If the provider not found in the providers list and `OPENAI_API_KEY` is set, use it
+  if (OPENAI_API_KEY !== "") {
+    return OPENAI_API_KEY;
+  }
+
+  // We tried.
   return undefined;
 }
-
-// Formatting (quiet mode-only).
-export const PRETTY_PRINT = Boolean(process.env["PRETTY_PRINT"] || "");
 
 // Represents config as persisted in config.json.
 export type StoredConfig = {
@@ -73,6 +94,9 @@ export type StoredConfig = {
   memory?: MemoryConfig;
   /** Whether to enable desktop notifications for responses */
   notify?: boolean;
+  /** Disable server-side response storage (send full transcript each request) */
+  disableResponseStorage?: boolean;
+  providers?: Record<string, { name: string; baseURL: string; envKey: string }>;
   history?: {
     maxSize?: number;
     saveHistory?: boolean;
@@ -104,14 +128,21 @@ export type AppConfig = {
   /** Whether to enable desktop notifications for responses */
   notify: boolean;
 
+  /** Disable server-side response storage (send full transcript each request) */
+  disableResponseStorage?: boolean;
+
   /** Enable the "flex-mode" processing mode for supported models (o3, o4-mini) */
   flexMode?: boolean;
+  providers?: Record<string, { name: string; baseURL: string; envKey: string }>;
   history?: {
     maxSize: number;
     saveHistory: boolean;
     sensitivePatterns: Array<string>;
   };
 };
+
+// Formatting (quiet mode-only).
+export const PRETTY_PRINT = Boolean(process.env["PRETTY_PRINT"] || "");
 
 // ---------------------------------------------------------------------------
 // Project doc support (codex.md)
@@ -293,6 +324,7 @@ export const loadConfig = (
     instructions: combinedInstructions,
     notify: storedConfig.notify === true,
     approvalMode: storedConfig.approvalMode,
+    disableResponseStorage: storedConfig.disableResponseStorage ?? false,
   };
 
   // -----------------------------------------------------------------------
@@ -370,6 +402,9 @@ export const loadConfig = (
     };
   }
 
+  // Merge default providers with user configured providers in the config.
+  config.providers = { ...providers, ...storedConfig.providers };
+
   return config;
 };
 
@@ -402,6 +437,7 @@ export const saveConfig = (
   const configToSave: StoredConfig = {
     model: config.model,
     provider: config.provider,
+    providers: config.providers,
     approvalMode: config.approvalMode,
   };
 

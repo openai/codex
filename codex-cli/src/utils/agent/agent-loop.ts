@@ -7,6 +7,7 @@ import type {
   ResponseInputItem,
   ResponseItem,
   ResponseCreateParams,
+  FunctionTool,
 } from "openai/resources/responses/responses.mjs";
 import type { Reasoning } from "openai/resources.mjs";
 
@@ -46,6 +47,14 @@ type AgentLoopParams = {
   config?: AppConfig;
   instructions?: string;
   approvalPolicy: ApprovalPolicy;
+  /**
+   * Whether the model responses should be stored on the server side (allows
+   * using `previous_response_id` to provide conversational context). Defaults
+   * to `true` to preserve the current behaviour. When set to `false` the agent
+   * will instead send the *full* conversation context as the `input` payload
+   * on every request and omit the `previous_response_id` parameter.
+   */
+  disableResponseStorage?: boolean;
   onItem: (item: ResponseItem) => void;
   onLoading: (loading: boolean) => void;
 
@@ -60,6 +69,30 @@ type AgentLoopParams = {
   onLastResponseId: (lastResponseId: string) => void;
 };
 
+const shellTool: FunctionTool = {
+  type: "function",
+  name: "shell",
+  description: "Runs a shell command, and returns its output.",
+  strict: false,
+  parameters: {
+    type: "object",
+    properties: {
+      command: { type: "array", items: { type: "string" } },
+      workdir: {
+        type: "string",
+        description: "The working directory for the command.",
+      },
+      timeout: {
+        type: "number",
+        description:
+          "The maximum time to wait for the command to complete in milliseconds.",
+      },
+    },
+    required: ["command"],
+    additionalProperties: false,
+  },
+};
+
 export class AgentLoop {
   private model: string;
   private provider: string;
@@ -67,6 +100,8 @@ export class AgentLoop {
   private approvalPolicy: ApprovalPolicy;
   private config: AppConfig;
   private additionalWritableRoots: ReadonlyArray<string>;
+  /** Whether we ask the API to persist conversation state on the server */
+  private readonly disableResponseStorage: boolean;
 
   // Using `InstanceType<typeof OpenAI>` sidesteps typing issues with the OpenAI package under
   // the TS 5+ `moduleResolution=bundler` setup. OpenAI client instance. We keep the concrete
@@ -97,6 +132,13 @@ export class AgentLoop {
   private execAbortController: AbortController | null = null;
   /** Set to true when `cancel()` is called so `run()` can exit early. */
   private canceled = false;
+
+  /**
+   * Local conversation transcript used when `disableResponseStorage === true`. Holds
+   * all non‑system items exchanged so far so we can provide full context on
+   * every request.
+   */
+  private transcript: Array<ResponseInputItem> = [];
   /** Function calls that were emitted by the model but never answered because
    *  the user cancelled the run.  We keep the `call_id`s around so the *next*
    *  request can send a dummy `function_call_output` that satisfies the
@@ -206,6 +248,7 @@ export class AgentLoop {
     provider = "openai",
     instructions,
     approvalPolicy,
+    disableResponseStorage,
     // `config` used to be required.  Some unit‑tests (and potentially other
     // callers) instantiate `AgentLoop` without passing it, so we make it
     // optional and fall back to sensible defaults.  This keeps the public
@@ -240,6 +283,8 @@ export class AgentLoop {
     this.onLoading = onLoading;
     this.getCommandConfirmation = getCommandConfirmation;
     this.onLastResponseId = onLastResponseId;
+
+    this.disableResponseStorage = disableResponseStorage ?? false;
     this.sessionId = getSessionId() || randomUUID().replaceAll("-", "");
     // Configure OpenAI client with optional timeout (ms) from environment
     const timeoutMs = OPENAI_TIMEOUT_MS;
@@ -418,7 +463,17 @@ export class AgentLoop {
       // accumulate listeners which in turn triggered Node's
       // `MaxListenersExceededWarning` after ten invocations.
 
-      let lastResponseId: string = previousResponseId;
+      // Track the response ID from the last *stored* response so we can use
+      // `previous_response_id` when `disableResponseStorage` is enabled.  When storage
+      // is disabled we deliberately ignore the caller‑supplied value because
+      // the backend will not retain any state that could be referenced.
+      // If the backend stores conversation state (`disableResponseStorage === false`) we
+      // forward the caller‑supplied `previousResponseId` so that the model sees the
+      // full context.  When storage is disabled we *must not* send any ID because the
+      // server no longer retains the referenced response.
+      let lastResponseId: string = this.disableResponseStorage
+        ? ""
+        : previousResponseId;
 
       // If there are unresolved function calls from a previously cancelled run
       // we have to emit dummy tool outputs so that the API no longer expects
@@ -440,7 +495,55 @@ export class AgentLoop {
         this.pendingAborts.clear();
       }
 
-      let turnInput = [...abortOutputs, ...input];
+      // Build the input list for this turn. When responses are stored on the
+      // server we can simply send the *delta* (the new user input as well as
+      // any pending abort outputs) and rely on `previous_response_id` for
+      // context.  When storage is disabled the server has no memory of the
+      // conversation, so we must include the *entire* transcript (minus system
+      // messages) on every call.
+
+      let turnInput: Array<ResponseInputItem> = [];
+      // Keeps track of how many items in `turnInput` stem from the existing
+      // transcript so we can avoid re‑emitting them to the UI. Only used when
+      // `disableResponseStorage === true`.
+      let transcriptPrefixLen = 0;
+
+      const stripInternalFields = (
+        item: ResponseInputItem,
+      ): ResponseInputItem => {
+        // Clone shallowly and remove fields that are not part of the public
+        // schema expected by the OpenAI Responses API.
+        // We shallow‑clone the item so that subsequent mutations (deleting
+        // internal fields) do not affect the original object which may still
+        // be referenced elsewhere (e.g. UI components).
+        const clean = { ...item } as Record<string, unknown>;
+        delete clean["duration_ms"];
+        // Remove OpenAI-assigned identifiers and transient status so the
+        // backend does not reject items that were never persisted because we
+        // use `store: false`.
+        delete clean["id"];
+        delete clean["status"];
+        return clean as unknown as ResponseInputItem;
+      };
+
+      if (this.disableResponseStorage) {
+        // Remember where the existing transcript ends – everything after this
+        // index in the upcoming `turnInput` list will be *new* for this turn
+        // and therefore needs to be surfaced to the UI.
+        transcriptPrefixLen = this.transcript.length;
+
+        // Ensure the transcript is up‑to‑date with the latest user input so
+        // that subsequent iterations see a complete history.
+        // `turnInput` is still empty at this point (it will be filled later).
+        // We need to look at the *input* items the user just supplied.
+        this.transcript.push(...filterToApiMessages(input));
+
+        turnInput = [...this.transcript, ...abortOutputs].map(
+          stripInternalFields,
+        );
+      } else {
+        turnInput = [...abortOutputs, ...input].map(stripInternalFields);
+      }
 
       this.onLoading(true);
 
@@ -471,6 +574,51 @@ export class AgentLoop {
             this.onItem(item);
             // Mark as delivered so flush won't re-emit it
             staged[idx] = undefined;
+
+            // When we operate without server‑side storage we keep our own
+            // transcript so we can provide full context on subsequent calls.
+            if (this.disableResponseStorage) {
+              // Exclude system messages from transcript as they do not form
+              // part of the assistant/user dialogue that the model needs.
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const role = (item as any).role;
+              if (role !== "system") {
+                // Clone the item to avoid mutating the object that is also
+                // rendered in the UI. We need to strip auxiliary metadata
+                // such as `duration_ms` which is not part of the Responses
+                // API schema and therefore causes a 400 error when included
+                // in subsequent requests whose context is sent verbatim.
+
+                // Skip items that we have already inserted earlier or that the
+                // model does not need to see again in the next turn.
+                //   • function_call   – superseded by the forthcoming
+                //     function_call_output.
+                //   • reasoning       – internal only, never sent back.
+                //   • user messages   – we added these to the transcript when
+                //     building the first turnInput; stageItem would add a
+                //     duplicate.
+                if (
+                  (item as ResponseInputItem).type === "function_call" ||
+                  (item as ResponseInputItem).type === "reasoning" ||
+                  ((item as ResponseInputItem).type === "message" &&
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    (item as any).role === "user")
+                ) {
+                  return;
+                }
+
+                const clone: ResponseInputItem = {
+                  ...(item as unknown as ResponseInputItem),
+                } as ResponseInputItem;
+                // The `duration_ms` field is only added to reasoning items to
+                // show elapsed time in the UI. It must not be forwarded back
+                // to the server.
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                delete (clone as any).duration_ms;
+
+                this.transcript.push(clone);
+              }
+            }
           }
         }, 10);
       };
@@ -481,7 +629,22 @@ export class AgentLoop {
           return;
         }
         // send request to openAI
-        for (const item of turnInput) {
+        // Only surface the *new* input items to the UI – replaying the entire
+        // transcript would duplicate messages that have already been shown in
+        // earlier turns.
+        // `turnInput` holds the *new* items that will be sent to the API in
+        // this iteration.  Surface exactly these to the UI so that we do not
+        // re‑emit messages from previous turns (which would duplicate user
+        // prompts) and so that freshly generated `function_call_output`s are
+        // shown immediately.
+        // Figure out what subset of `turnInput` constitutes *new* information
+        // for the UI so that we don’t spam the interface with repeats of the
+        // entire transcript on every iteration when response storage is
+        // disabled.
+        const deltaInput = this.disableResponseStorage
+          ? turnInput.slice(transcriptPrefixLen)
+          : [...turnInput];
+        for (const item of deltaInput) {
           stageItem(item as ResponseItem);
         }
         // Send request to OpenAI with retry on timeout
@@ -520,37 +683,23 @@ export class AgentLoop {
             stream = await responseCall({
               model: this.model,
               instructions: mergedInstructions,
-              previous_response_id: lastResponseId || undefined,
               input: turnInput,
               stream: true,
               parallel_tool_calls: false,
               reasoning,
               ...(this.config.flexMode ? { service_tier: "flex" } : {}),
-              tools: [
-                {
-                  type: "function",
-                  name: "shell",
-                  description: "Runs a shell command, and returns its output.",
-                  strict: false,
-                  parameters: {
-                    type: "object",
-                    properties: {
-                      command: { type: "array", items: { type: "string" } },
-                      workdir: {
-                        type: "string",
-                        description: "The working directory for the command.",
-                      },
-                      timeout: {
-                        type: "number",
-                        description:
-                          "The maximum time to wait for the command to complete in milliseconds.",
-                      },
-                    },
-                    required: ["command"],
-                    additionalProperties: false,
-                  },
-                },
-              ],
+              ...(this.disableResponseStorage
+                ? { store: false }
+                : {
+                    store: true,
+                    previous_response_id: lastResponseId || undefined,
+                  }),
+              tools: [shellTool],
+              // Explicitly tell the model it is allowed to pick whatever
+              // tool it deems appropriate.  Omitting this sometimes leads to
+              // the model ignoring the available tools and responding with
+              // plain text instead (resulting in a missing tool‑call).
+              tool_choice: "auto",
             });
             break;
           } catch (error) {
@@ -739,104 +888,240 @@ export class AgentLoop {
           return;
         }
 
-        try {
-          // eslint-disable-next-line no-await-in-loop
-          for await (const event of stream as AsyncIterable<ResponseEvent>) {
-            log(`AgentLoop.run(): response event ${event.type}`);
+        const MAX_STREAM_RETRIES = 5;
+        let streamRetryAttempt = 0;
 
-            // process and surface each item (no-op until we can depend on streaming events)
-            if (event.type === "response.output_item.done") {
-              const item = event.item;
-              // 1) if it's a reasoning item, annotate it
-              type ReasoningItem = { type?: string; duration_ms?: number };
-              const maybeReasoning = item as ReasoningItem;
-              if (maybeReasoning.type === "reasoning") {
-                maybeReasoning.duration_ms = Date.now() - thinkingStart;
-              }
-              if (item.type === "function_call") {
-                // Track outstanding tool call so we can abort later if needed.
-                // The item comes from the streaming response, therefore it has
-                // either `id` (chat) or `call_id` (responses) – we normalise
-                // by reading both.
-                const callId =
-                  (item as { call_id?: string; id?: string }).call_id ??
-                  (item as { id?: string }).id;
-                if (callId) {
-                  this.pendingAborts.add(callId);
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          try {
+            // eslint-disable-next-line no-await-in-loop
+            for await (const event of stream as AsyncIterable<ResponseEvent>) {
+              log(`AgentLoop.run(): response event ${event.type}`);
+
+              // process and surface each item (no-op until we can depend on streaming events)
+              if (event.type === "response.output_item.done") {
+                const item = event.item;
+                // 1) if it's a reasoning item, annotate it
+                type ReasoningItem = { type?: string; duration_ms?: number };
+                const maybeReasoning = item as ReasoningItem;
+                if (maybeReasoning.type === "reasoning") {
+                  maybeReasoning.duration_ms = Date.now() - thinkingStart;
                 }
-              } else {
-                stageItem(item as ResponseItem);
-              }
-            }
-
-            if (event.type === "response.completed") {
-              if (thisGeneration === this.generation && !this.canceled) {
-                for (const item of event.response.output) {
+                if (item.type === "function_call") {
+                  // Track outstanding tool call so we can abort later if needed.
+                  // The item comes from the streaming response, therefore it has
+                  // either `id` (chat) or `call_id` (responses) – we normalise
+                  // by reading both.
+                  const callId =
+                    (item as { call_id?: string; id?: string }).call_id ??
+                    (item as { id?: string }).id;
+                  if (callId) {
+                    this.pendingAborts.add(callId);
+                  }
+                } else {
                   stageItem(item as ResponseItem);
                 }
               }
-              if (event.response.status === "completed") {
-                // TODO: remove this once we can depend on streaming events
-                const newTurnInput = await this.processEventsWithoutStreaming(
-                  event.response.output,
-                  stageItem,
-                );
-                turnInput = newTurnInput;
+
+              if (event.type === "response.completed") {
+                if (thisGeneration === this.generation && !this.canceled) {
+                  for (const item of event.response.output) {
+                    stageItem(item as ResponseItem);
+                  }
+                }
+                if (
+                  event.response.status === "completed" ||
+                  (event.response.status as unknown as string) ===
+                    "requires_action"
+                ) {
+                  // TODO: remove this once we can depend on streaming events
+                  const newTurnInput = await this.processEventsWithoutStreaming(
+                    event.response.output,
+                    stageItem,
+                  );
+
+                  // When we do not use server‑side storage we maintain our
+                  // own transcript so that *future* turns still contain full
+                  // conversational context. However, whether we advance to
+                  // another loop iteration should depend solely on the
+                  // presence of *new* input items (i.e. items that were not
+                  // part of the previous request). Re‑sending the transcript
+                  // by itself would create an infinite request loop because
+                  // `turnInput.length` would never reach zero.
+
+                  if (this.disableResponseStorage) {
+                    // 1) Append the freshly emitted output to our local
+                    //    transcript (minus non‑message items the model does
+                    //    not need to see again).
+                    const cleaned = filterToApiMessages(
+                      event.response.output.map(stripInternalFields),
+                    );
+                    this.transcript.push(...cleaned);
+
+                    // 2) Determine the *delta* (newTurnInput) that must be
+                    //    sent in the next iteration. If there is none we can
+                    //    safely terminate the loop – the transcript alone
+                    //    does not constitute new information for the
+                    //    assistant to act upon.
+
+                    const delta = filterToApiMessages(
+                      newTurnInput.map(stripInternalFields),
+                    );
+
+                    if (delta.length === 0) {
+                      // No new input => end conversation.
+                      turnInput = [];
+                    } else {
+                      // Re‑send full transcript *plus* the new delta so the
+                      // stateless backend receives complete context.
+                      turnInput = [...this.transcript, ...delta];
+                      // The prefix ends at the current transcript length –
+                      // everything after this index is new for the next
+                      // iteration.
+                      transcriptPrefixLen = this.transcript.length;
+                    }
+                  } else {
+                    turnInput = newTurnInput;
+                  }
+                }
+                lastResponseId = event.response.id;
+                this.onLastResponseId(event.response.id);
               }
-              lastResponseId = event.response.id;
-              this.onLastResponseId(event.response.id);
             }
-          }
-        } catch (err: unknown) {
-          // Gracefully handle an abort triggered via `cancel()` so that the
-          // consumer does not see an unhandled exception.
-          if (err instanceof Error && err.name === "AbortError") {
-            if (!this.canceled) {
-              // It was aborted for some other reason; surface the error.
-              throw err;
+            // Stream finished successfully – leave the retry loop.
+            break;
+          } catch (err: unknown) {
+            const isRateLimitError = (e: unknown): boolean => {
+              if (!e || typeof e !== "object") {
+                return false;
+              }
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const ex: any = e;
+              return (
+                ex.status === 429 ||
+                ex.code === "rate_limit_exceeded" ||
+                ex.type === "rate_limit_exceeded"
+              );
+            };
+
+            if (
+              isRateLimitError(err) &&
+              streamRetryAttempt < MAX_STREAM_RETRIES
+            ) {
+              streamRetryAttempt += 1;
+
+              const waitMs =
+                RATE_LIMIT_RETRY_WAIT_MS * 2 ** (streamRetryAttempt - 1);
+              log(
+                `OpenAI stream rate‑limited – retry ${streamRetryAttempt}/${MAX_STREAM_RETRIES} in ${waitMs} ms`,
+              );
+
+              // Give the server a breather before retrying.
+              // eslint-disable-next-line no-await-in-loop
+              await new Promise((res) => setTimeout(res, waitMs));
+
+              // Re‑create the stream with the *same* parameters.
+              let reasoning: Reasoning | undefined;
+              if (this.model.startsWith("o")) {
+                reasoning = { effort: "high" };
+                if (this.model === "o3" || this.model === "o4-mini") {
+                  reasoning.summary = "auto";
+                }
+              }
+
+              const mergedInstructions = [prefix, this.instructions]
+                .filter(Boolean)
+                .join("\n");
+
+              const responseCall =
+                !this.config.provider ||
+                this.config.provider?.toLowerCase() === "openai"
+                  ? (params: ResponseCreateParams) =>
+                      this.oai.responses.create(params)
+                  : (params: ResponseCreateParams) =>
+                      responsesCreateViaChatCompletions(
+                        this.oai,
+                        params as ResponseCreateParams & { stream: true },
+                      );
+
+              log(
+                "agentLoop.run(): responseCall(1): turnInput: " +
+                  JSON.stringify(turnInput),
+              );
+              // eslint-disable-next-line no-await-in-loop
+              stream = await responseCall({
+                model: this.model,
+                instructions: mergedInstructions,
+                input: turnInput,
+                stream: true,
+                parallel_tool_calls: false,
+                reasoning,
+                ...(this.config.flexMode ? { service_tier: "flex" } : {}),
+                ...(this.disableResponseStorage
+                  ? { store: false }
+                  : {
+                      store: true,
+                      previous_response_id: lastResponseId || undefined,
+                    }),
+                tools: [shellTool],
+                tool_choice: "auto",
+              });
+
+              this.currentStream = stream;
+              // Continue to outer while to consume new stream.
+              continue;
             }
-            this.onLoading(false);
-            return;
+
+            // Gracefully handle an abort triggered via `cancel()` so that the
+            // consumer does not see an unhandled exception.
+            if (err instanceof Error && err.name === "AbortError") {
+              if (!this.canceled) {
+                // It was aborted for some other reason; surface the error.
+                throw err;
+              }
+              this.onLoading(false);
+              return;
+            }
+            // Suppress internal stack on JSON parse failures
+            if (err instanceof SyntaxError) {
+              this.onItem({
+                id: `error-${Date.now()}`,
+                type: "message",
+                role: "system",
+                content: [
+                  {
+                    type: "input_text",
+                    text: "⚠️ Failed to parse streaming response (invalid JSON). Please `/clear` to reset.",
+                  },
+                ],
+              });
+              this.onLoading(false);
+              return;
+            }
+            // Handle OpenAI API quota errors
+            if (
+              err instanceof Error &&
+              (err as { code?: string }).code === "insufficient_quota"
+            ) {
+              this.onItem({
+                id: `error-${Date.now()}`,
+                type: "message",
+                role: "system",
+                content: [
+                  {
+                    type: "input_text",
+                    text: "⚠️ Insufficient quota. Please check your billing details and retry.",
+                  },
+                ],
+              });
+              this.onLoading(false);
+              return;
+            }
+            throw err;
+          } finally {
+            this.currentStream = null;
           }
-          // Suppress internal stack on JSON parse failures
-          if (err instanceof SyntaxError) {
-            this.onItem({
-              id: `error-${Date.now()}`,
-              type: "message",
-              role: "system",
-              content: [
-                {
-                  type: "input_text",
-                  text: "⚠️ Failed to parse streaming response (invalid JSON). Please `/clear` to reset.",
-                },
-              ],
-            });
-            this.onLoading(false);
-            return;
-          }
-          // Handle OpenAI API quota errors
-          if (
-            err instanceof Error &&
-            (err as { code?: string }).code === "insufficient_quota"
-          ) {
-            this.onItem({
-              id: `error-${Date.now()}`,
-              type: "message",
-              role: "system",
-              content: [
-                {
-                  type: "input_text",
-                  text: "⚠️ Insufficient quota. Please check your billing details and retry.",
-                },
-              ],
-            });
-            this.onLoading(false);
-            return;
-          }
-          throw err;
-        } finally {
-          this.currentStream = null;
-        }
+        } // end while retry loop
 
         log(
           `Turn inputs (${turnInput.length}) - ${turnInput
@@ -1179,7 +1464,21 @@ You MUST adhere to the following criteria when executing the task:
             - For smaller tasks, describe in brief bullet points
             - For more complex tasks, include brief high-level description, use bullet points, and include details that would be relevant to a code reviewer.
 - If completing the user's task DOES NOT require writing or modifying files (e.g., the user asks a question about the code base):
-    - Respond in a friendly tune as a remote teammate, who is knowledgeable, capable and eager to help with coding.
+    - Respond in a friendly tone as a remote teammate, who is knowledgeable, capable and eager to help with coding.
 - When your task involves writing or modifying files:
     - Do NOT tell the user to "save the file" or "copy the code into a file" if you already created or modified the file using \`apply_patch\`. Instead, reference the file as already saved.
     - Do NOT show the full contents of large files you have already written, unless the user explicitly asks for them.`;
+
+function filterToApiMessages(
+  items: Array<ResponseInputItem>,
+): Array<ResponseInputItem> {
+  return items.filter((it) => {
+    if (it.type === "message" && it.role === "system") {
+      return false;
+    }
+    if (it.type === "reasoning") {
+      return false;
+    }
+    return true;
+  });
+}

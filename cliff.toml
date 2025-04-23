@@ -38,7 +38,7 @@ commit_parsers = [
   { message = "^fix",  group = "<!-- 1 -->🐛 Bug Fixes" },
   { message = "^bump", group = "<!-- 6 -->🛳️ Release" },
   # Fallback – skip anything that didn't match the above rules.
-  { message = ".*",  group = "<!-- 10 -->💼 Other", skip = true },
+  { message = ".*",  group = "<!-- 10 -->💼 Other" },
 ]
 
 filter_unconventional = false
