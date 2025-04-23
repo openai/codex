@@ -11,6 +11,7 @@ import { SandboxType } from "./sandbox/interface.js";
 import { canAutoApprove } from "../../approvals.js";
 import { formatCommandForDisplay } from "../../format-command.js";
 import { isLoggingEnabled, log } from "../logger/log.js";
+import { spawnSync } from "child_process";
 import { access } from "fs/promises";
 
 // ---------------------------------------------------------------------------
@@ -282,7 +283,19 @@ const isInLinux = async (): Promise<boolean> => {
 async function getSandbox(runInSandbox: boolean): Promise<SandboxType> {
   if (runInSandbox) {
     if (process.platform === "darwin") {
-      return SandboxType.MACOS_SEATBELT;
+      // Check if sandbox-exec is available before trying to use it
+      try {
+        const check = spawnSync('which', ['sandbox-exec'], { encoding: 'utf8' });
+        if (check.status !== 0 || !check.stdout.trim()) {
+           log("WARNING: macOS detected but 'sandbox-exec' not found or not executable in PATH. Falling back to no sandbox.");
+           return SandboxType.NONE;
+        }
+        // If found, proceed with seatbelt
+        return SandboxType.MACOS_SEATBELT;
+      } catch (error) {
+         log(`WARNING: Error checking for 'sandbox-exec': ${error}. Falling back to no sandbox.`);
+         return SandboxType.NONE;
+      }
     } else if (await isInLinux()) {
       return SandboxType.NONE;
     } else if (process.platform === "win32") {
