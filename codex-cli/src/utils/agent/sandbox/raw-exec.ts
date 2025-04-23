@@ -7,15 +7,11 @@ import type {
   StdioPipe,
 } from "child_process";
 
-import { log } from "../log.js";
+import { log } from "../../logger/log.js";
 import { adaptCommandForPlatform } from "../platform-commands.js";
+import { createTruncatingCollector } from "./create-truncating-collector";
 import { spawn } from "child_process";
 import * as os from "os";
-
-// Maximum output cap: either MAX_OUTPUT_LINES lines or MAX_OUTPUT_BYTES bytes,
-// whichever limit is reached first.
-const MAX_OUTPUT_BYTES = 1024 * 10; // 10 KB
-const MAX_OUTPUT_LINES = 256;
 
 /**
  * This function should never return a rejected promise: errors should be
@@ -202,49 +198,6 @@ export function exec(
       );
     });
   });
-}
-
-/**
- * Creates a collector that accumulates data Buffers from a stream up to
- * specified byte and line limits. After either limit is exceeded, further
- * data is ignored.
- */
-function createTruncatingCollector(
-  stream: NodeJS.ReadableStream,
-  byteLimit: number = MAX_OUTPUT_BYTES,
-  lineLimit: number = MAX_OUTPUT_LINES,
-) {
-  const chunks: Array<Buffer> = [];
-  let totalBytes = 0;
-  let totalLines = 0;
-  let hitLimit = false;
-
-  stream?.on("data", (data: Buffer) => {
-    if (hitLimit) {
-      return;
-    }
-    totalBytes += data.length;
-    for (let i = 0; i < data.length; i++) {
-      if (data[i] === 0x0a) {
-        totalLines++;
-      }
-    }
-    if (totalBytes <= byteLimit && totalLines <= lineLimit) {
-      chunks.push(data);
-    } else {
-      hitLimit = true;
-    }
-  });
-
-  return {
-    getString() {
-      return Buffer.concat(chunks).toString("utf8");
-    },
-    /** True if either byte or line limit was exceeded */
-    get hit(): boolean {
-      return hitLimit;
-    },
-  };
 }
 
 /**

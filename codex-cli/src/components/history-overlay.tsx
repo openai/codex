@@ -14,7 +14,10 @@ export default function HistoryOverlay({ items, onExit }: Props): JSX.Element {
   const [mode, setMode] = useState<Mode>("commands");
   const [cursor, setCursor] = useState(0);
 
-  const { commands, files } = useMemo(() => buildLists(items), [items]);
+  const { commands, files } = useMemo(
+    () => formatHistoryForDisplay(items),
+    [items],
+  );
 
   const list = mode === "commands" ? commands : files;
 
@@ -95,7 +98,7 @@ export default function HistoryOverlay({ items, onExit }: Props): JSX.Element {
   );
 }
 
-function buildLists(items: Array<ResponseItem>): {
+function formatHistoryForDisplay(items: Array<ResponseItem>): {
   commands: Array<string>;
   files: Array<string>;
 } {
@@ -103,33 +106,9 @@ function buildLists(items: Array<ResponseItem>): {
   const filesSet = new Set<string>();
 
   for (const item of items) {
-    if (
-      item.type === "message" &&
-      (item as unknown as { role?: string }).role === "user"
-    ) {
-      // TODO: We're ignoring images/files here.
-      const parts =
-        (item as unknown as { content?: Array<unknown> }).content ?? [];
-      const texts: Array<string> = [];
-      if (Array.isArray(parts)) {
-        for (const part of parts) {
-          if (part && typeof part === "object" && "text" in part) {
-            const t = (part as unknown as { text?: string }).text;
-            if (typeof t === "string" && t.length > 0) {
-              texts.push(t);
-            }
-          }
-        }
-      }
-
-      if (texts.length > 0) {
-        const fullPrompt = texts.join(" ");
-        // Truncate very long prompts so the history view stays legible.
-        const truncated =
-          fullPrompt.length > 120 ? `${fullPrompt.slice(0, 117)}…` : fullPrompt;
-        commands.push(`> ${truncated}`);
-      }
-
+    const userPrompt = processUserMessage(item);
+    if (userPrompt) {
+      commands.push(userPrompt);
       continue;
     }
 
@@ -173,31 +152,7 @@ function buildLists(items: Array<ResponseItem>): {
       : undefined;
 
     if (cmdArray && cmdArray.length > 0) {
-      commands.push(cmdArray.join(" "));
-
-      // Heuristic for file paths in command args
-      for (const part of cmdArray) {
-        if (!part.startsWith("-") && part.includes("/")) {
-          filesSet.add(part);
-        }
-      }
-
-      // Special‑case apply_patch so we can extract the list of modified files
-      if (cmdArray[0] === "apply_patch" || cmdArray.includes("apply_patch")) {
-        const patchTextMaybe = cmdArray.find((s) =>
-          s.includes("*** Begin Patch"),
-        );
-        if (typeof patchTextMaybe === "string") {
-          const lines = patchTextMaybe.split("\n");
-          for (const line of lines) {
-            const m = line.match(/^[-+]{3} [ab]\/(.+)$/);
-            if (m && m[1]) {
-              filesSet.add(m[1]);
-            }
-          }
-        }
-      }
-
+      commands.push(processCommandArray(cmdArray, filesSet));
       continue; // We processed this as a command; no need to treat as generic tool call.
     }
 
@@ -205,33 +160,96 @@ function buildLists(items: Array<ResponseItem>): {
     //    short argument representation to give users an idea of what
     //    happened.
     if (typeof toolName === "string" && toolName.length > 0) {
-      let summary = toolName;
-
-      if (argsJson && typeof argsJson === "object") {
-        // Extract a few common argument keys to make the summary more useful
-        // without being overly verbose.
-        const interestingKeys = [
-          "path",
-          "file",
-          "filepath",
-          "filename",
-          "pattern",
-        ];
-        for (const key of interestingKeys) {
-          const val = (argsJson as Record<string, unknown>)[key];
-          if (typeof val === "string") {
-            summary += ` ${val}`;
-            if (val.includes("/")) {
-              filesSet.add(val);
-            }
-            break;
-          }
-        }
-      }
-
-      commands.push(summary);
+      commands.push(processNonExecTool(toolName, argsJson, filesSet));
     }
   }
 
   return { commands, files: Array.from(filesSet) };
+}
+
+function processUserMessage(item: ResponseItem): string | null {
+  if (
+    item.type === "message" &&
+    (item as unknown as { role?: string }).role === "user"
+  ) {
+    // TODO: We're ignoring images/files here.
+    const parts =
+      (item as unknown as { content?: Array<unknown> }).content ?? [];
+    const texts: Array<string> = [];
+    if (Array.isArray(parts)) {
+      for (const part of parts) {
+        if (part && typeof part === "object" && "text" in part) {
+          const t = (part as unknown as { text?: string }).text;
+          if (typeof t === "string" && t.length > 0) {
+            texts.push(t);
+          }
+        }
+      }
+    }
+
+    if (texts.length > 0) {
+      const fullPrompt = texts.join(" ");
+      // Truncate very long prompts so the history view stays legible.
+      return fullPrompt.length > 120
+        ? `> ${fullPrompt.slice(0, 117)}…`
+        : `> ${fullPrompt}`;
+    }
+  }
+  return null;
+}
+
+function processCommandArray(
+  cmdArray: Array<string>,
+  filesSet: Set<string>,
+): string {
+  const cmd = cmdArray.join(" ");
+
+  // Heuristic for file paths in command args
+  for (const part of cmdArray) {
+    if (!part.startsWith("-") && part.includes("/")) {
+      filesSet.add(part);
+    }
+  }
+
+  // Special‑case apply_patch so we can extract the list of modified files
+  if (cmdArray[0] === "apply_patch" || cmdArray.includes("apply_patch")) {
+    const patchTextMaybe = cmdArray.find((s) => s.includes("*** Begin Patch"));
+    if (typeof patchTextMaybe === "string") {
+      const lines = patchTextMaybe.split("\n");
+      for (const line of lines) {
+        const m = line.match(/^[-+]{3} [ab]\/(.+)$/);
+        if (m && m[1]) {
+          filesSet.add(m[1]);
+        }
+      }
+    }
+  }
+
+  return cmd;
+}
+
+function processNonExecTool(
+  toolName: string,
+  argsJson: unknown,
+  filesSet: Set<string>,
+): string {
+  let summary = toolName;
+
+  if (argsJson && typeof argsJson === "object") {
+    // Extract a few common argument keys to make the summary more useful
+    // without being overly verbose.
+    const interestingKeys = ["path", "file", "filepath", "filename", "pattern"];
+    for (const key of interestingKeys) {
+      const val = (argsJson as Record<string, unknown>)[key];
+      if (typeof val === "string") {
+        summary += ` ${val}`;
+        if (val.includes("/")) {
+          filesSet.add(val);
+        }
+        break;
+      }
+    }
+  }
+
+  return summary;
 }

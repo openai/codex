@@ -6,23 +6,23 @@ import type { ResponseItem } from "openai/resources/responses/responses.mjs";
 
 import TerminalChatInput from "./terminal-chat-input.js";
 import { TerminalChatToolCallCommand } from "./terminal-chat-tool-call-command.js";
-import {
-  calculateContextPercentRemaining,
-  uniqueById,
-} from "./terminal-chat-utils.js";
 import TerminalMessageHistory from "./terminal-message-history.js";
 import { formatCommandForDisplay } from "../../format-command.js";
 import { useConfirmation } from "../../hooks/use-confirmation.js";
 import { useTerminalSize } from "../../hooks/use-terminal-size.js";
 import { AgentLoop } from "../../utils/agent/agent-loop.js";
-import { log } from "../../utils/agent/log.js";
 import { ReviewDecision } from "../../utils/agent/review.js";
 import { generateCompactSummary } from "../../utils/compact-summary.js";
-import { OPENAI_BASE_URL, saveConfig } from "../../utils/config.js";
+import { getBaseUrl, getApiKey, saveConfig } from "../../utils/config.js";
 import { extractAppliedPatches as _extractAppliedPatches } from "../../utils/extract-applied-patches.js";
 import { getGitDiff } from "../../utils/get-diff.js";
 import { createInputItem } from "../../utils/input-utils.js";
-import { getAvailableModels } from "../../utils/model-utils.js";
+import { log } from "../../utils/logger/log.js";
+import {
+  getAvailableModels,
+  calculateContextPercentRemaining,
+  uniqueById,
+} from "../../utils/model-utils.js";
 import { CLI_VERSION } from "../../utils/session.js";
 import { shortCwd } from "../../utils/short-path.js";
 import { saveRollout } from "../../utils/storage/save-rollout.js";
@@ -65,18 +65,21 @@ const colorsByPolicy: Record<ApprovalPolicy, ColorName | undefined> = {
  *
  * @param command The command to explain
  * @param model The model to use for generating the explanation
+ * @param flexMode Whether to use the flex-mode service tier
+ * @param config The configuration object
  * @returns A human-readable explanation of what the command does
  */
 async function generateCommandExplanation(
   command: Array<string>,
   model: string,
   flexMode: boolean,
+  config: AppConfig,
 ): Promise<string> {
   try {
     // Create a temporary OpenAI client
     const oai = new OpenAI({
-      apiKey: process.env["OPENAI_API_KEY"],
-      baseURL: OPENAI_BASE_URL,
+      apiKey: getApiKey(config.provider),
+      baseURL: getBaseUrl(config.provider),
     });
 
     // Format the command for display
@@ -106,11 +109,8 @@ async function generateCommandExplanation(
   } catch (error) {
     log(`Error generating command explanation: ${error}`);
 
-    // Improved error handling with more specific error information
     let errorMessage = "Unable to generate explanation due to an error.";
-
     if (error instanceof Error) {
-      // Include specific error message for better debugging
       errorMessage = `Unable to generate explanation: ${error.message}`;
 
       // If it's an API error, check for more specific information
@@ -141,18 +141,17 @@ export default function TerminalChat({
   additionalWritableRoots,
   fullStdout,
 }: Props): React.ReactElement {
-  // Desktop notification setting
   const notify = config.notify;
   const [model, setModel] = useState<string>(config.model);
   const [provider, setProvider] = useState<string>(config.provider || "openai");
   const [lastResponseId, setLastResponseId] = useState<string | null>(null);
   const [items, setItems] = useState<Array<ResponseItem>>([]);
   const [loading, setLoading] = useState<boolean>(false);
-  // Allow switching approval modes at runtime via an overlay.
   const [approvalPolicy, setApprovalPolicy] = useState<ApprovalPolicy>(
     initialApprovalPolicy,
   );
   const [thinkingSeconds, setThinkingSeconds] = useState(0);
+
   const handleCompact = async () => {
     setLoading(true);
     try {
@@ -160,6 +159,7 @@ export default function TerminalChat({
         items,
         model,
         Boolean(config.flexMode),
+        config,
       );
       setItems([
         {
@@ -185,6 +185,7 @@ export default function TerminalChat({
       setLoading(false);
     }
   };
+
   const {
     requestConfirmation,
     confirmationPrompt,
@@ -215,13 +216,13 @@ export default function TerminalChat({
   // DEBUG: log every render w/ key bits of state
   // ────────────────────────────────────────────────────────────────
   log(
-    `render – agent? ${Boolean(agentRef.current)} loading=${loading} items=${
+    `render - agent? ${Boolean(agentRef.current)} loading=${loading} items=${
       items.length
     }`,
   );
 
   useEffect(() => {
-    // Skip recreating the agent if awaiting a decision on a pending confirmation
+    // Skip recreating the agent if awaiting a decision on a pending confirmation.
     if (confirmationPrompt != null) {
       log("skip AgentLoop recreation due to pending confirmationPrompt");
       return;
@@ -234,22 +235,24 @@ export default function TerminalChat({
       )} approvalPolicy=${approvalPolicy}`,
     );
 
-    // Tear down any existing loop before creating a new one
+    // Tear down any existing loop before creating a new one.
     agentRef.current?.terminate();
 
+    const sessionId = crypto.randomUUID();
     agentRef.current = new AgentLoop({
       model,
       provider,
       config,
       instructions: config.instructions,
       approvalPolicy,
+      disableResponseStorage: config.disableResponseStorage,
       additionalWritableRoots,
       onLastResponseId: setLastResponseId,
       onItem: (item) => {
         log(`onItem: ${JSON.stringify(item)}`);
         setItems((prev) => {
           const updated = uniqueById([...prev, item as ResponseItem]);
-          saveRollout(updated);
+          saveRollout(sessionId, updated);
           return updated;
         });
       },
@@ -266,19 +269,18 @@ export default function TerminalChat({
           <TerminalChatToolCallCommand commandForDisplay={commandForDisplay} />,
         );
 
-        // If the user wants an explanation, generate one and ask again
+        // If the user wants an explanation, generate one and ask again.
         if (review === ReviewDecision.EXPLAIN) {
           log(`Generating explanation for command: ${commandForDisplay}`);
-
-          // Generate an explanation using the same model
           const explanation = await generateCommandExplanation(
             command,
             model,
             Boolean(config.flexMode),
+            config,
           );
           log(`Generated explanation: ${explanation}`);
 
-          // Ask for confirmation again, but with the explanation
+          // Ask for confirmation again, but with the explanation.
           const confirmResult = await requestConfirmation(
             <TerminalChatToolCallCommand
               commandForDisplay={commandForDisplay}
@@ -286,11 +288,11 @@ export default function TerminalChat({
             />,
           );
 
-          // Update the decision based on the second confirmation
+          // Update the decision based on the second confirmation.
           review = confirmResult.decision;
           customDenyMessage = confirmResult.customDenyMessage;
 
-          // Return the final decision with the explanation
+          // Return the final decision with the explanation.
           return { review, customDenyMessage, applyPatch, explanation };
         }
 
@@ -298,7 +300,7 @@ export default function TerminalChat({
       },
     });
 
-    // force a render so JSX below can "see" the freshly created agent
+    // Force a render so JSX below can "see" the freshly created agent.
     forceUpdate();
 
     log(`AgentLoop created: ${inspect(agentRef.current, { depth: 1 })}`);
@@ -309,17 +311,12 @@ export default function TerminalChat({
       agentRef.current = undefined;
       forceUpdate(); // re‑render after teardown too
     };
-  }, [
-    model,
-    provider,
-    config,
-    approvalPolicy,
-    confirmationPrompt,
-    requestConfirmation,
-    additionalWritableRoots,
-  ]);
+    // We intentionally omit 'approvalPolicy' and 'confirmationPrompt' from the deps
+    // so switching modes or showing confirmation dialogs doesn’t tear down the loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [model, provider, config, requestConfirmation, additionalWritableRoots]);
 
-  // whenever loading starts/stops, reset or start a timer — but pause the
+  // Whenever loading starts/stops, reset or start a timer — but pause the
   // timer while a confirmation overlay is displayed so we don't trigger a
   // re‑render every second during apply_patch reviews.
   useEffect(() => {
@@ -344,14 +341,15 @@ export default function TerminalChat({
     };
   }, [loading, confirmationPrompt]);
 
-  // Notify desktop with a preview when an assistant response arrives
+  // Notify desktop with a preview when an assistant response arrives.
   const prevLoadingRef = useRef<boolean>(false);
   useEffect(() => {
-    // Only notify when notifications are enabled
+    // Only notify when notifications are enabled.
     if (!notify) {
       prevLoadingRef.current = loading;
       return;
     }
+
     if (
       prevLoadingRef.current &&
       !loading &&
@@ -388,7 +386,7 @@ export default function TerminalChat({
     prevLoadingRef.current = loading;
   }, [notify, loading, confirmationPrompt, items, PWD]);
 
-  // Let's also track whenever the ref becomes available
+  // Let's also track whenever the ref becomes available.
   const agent = agentRef.current;
   useEffect(() => {
     log(`agentRef.current is now ${Boolean(agent)}`);
@@ -411,7 +409,7 @@ export default function TerminalChat({
       const inputItems = [
         await createInputItem(initialPrompt || "", initialImagePaths || []),
       ];
-      // Clear them to prevent subsequent runs
+      // Clear them to prevent subsequent runs.
       setInitialPrompt("");
       setInitialImagePaths([]);
       agent?.run(inputItems);
@@ -446,7 +444,7 @@ export default function TerminalChat({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Just render every item in order, no grouping/collapse
+  // Just render every item in order, no grouping/collapse.
   const lastMessageBatch = items.map((item) => ({ item }));
   const groupCounts: Record<string, number> = {};
   const userMsgCount = items.filter(
@@ -490,7 +488,7 @@ export default function TerminalChat({
             <Text color="gray">Initializing agent…</Text>
           </Box>
         )}
-        {agent && (
+        {overlayMode === "none" && agent && (
           <TerminalChatInput
             loading={loading}
             setItems={setItems}
@@ -625,10 +623,10 @@ export default function TerminalChat({
               agent?.cancel();
               setLoading(false);
 
-              // Select default model for the new provider
+              // Select default model for the new provider.
               const defaultModel = model;
 
-              // Save provider to config
+              // Save provider to config.
               const updatedConfig = {
                 ...config,
                 provider: newProvider,
@@ -668,13 +666,12 @@ export default function TerminalChat({
           <ApprovalModeOverlay
             currentMode={approvalPolicy}
             onSelect={(newMode) => {
-              // update approval policy without cancelling an in-progress session
+              // Update approval policy without cancelling an in-progress session.
               if (newMode === approvalPolicy) {
                 return;
               }
-              // update state
+
               setApprovalPolicy(newMode as ApprovalPolicy);
-              // update existing AgentLoop instance
               if (agentRef.current) {
                 (
                   agentRef.current as unknown as {

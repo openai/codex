@@ -26,7 +26,7 @@ vi.mock("fs", async () => {
       memfs[path] = data;
     },
     mkdirSync: () => {
-      // no‑op in in‑memory store
+      // no-op in in‑memory store
     },
     rmSync: (path: string) => {
       // recursively delete any key under this prefix
