@@ -318,6 +318,12 @@ const MultilineTextEditorInner = (
       }
 
       if (input === "\r") {
+        // Shift+Enter (fallback without modifyOtherKeys) → insert newline
+        if (key.shift) {
+          buffer.current.newline();
+          setVersion((v) => v + 1);
+          return;
+        }
         // Plain Enter – submit (works on all basic terminals).
         if (onSubmit) {
           onSubmit(buffer.current.getText());
