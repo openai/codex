@@ -9,7 +9,7 @@ import type { AppRollout } from "./app";
 import type { ApprovalPolicy } from "./approvals";
 import type { CommandConfirmation } from "./utils/agent/agent-loop";
 import type { AppConfig } from "./utils/config";
-import type { ResponseItem } from "openai/resources/responses/responses";
+import type { ResponseItem, ResponseOutputMessage } from "openai/resources/responses/responses";
 
 import App from "./app";
 import { runSinglePass } from "./cli-singlepass";
@@ -423,6 +423,20 @@ const instance = render(
 );
 setInkRenderer(instance);
 
+// Type guard to check if an item is the final completed assistant message
+function isResponseOutputMessage(item: ResponseItem): item is ResponseOutputMessage {
+  return (
+    item.type === 'message' &&
+    'role' in item && item.role === 'assistant' &&
+    'status' in item && item.status === 'completed' &&
+    'content' in item && Array.isArray(item.content) &&
+    // Ensure content only contains output_text or refusal types
+    item.content.every(c => 
+      ('type' in c && (c.type === 'output_text' || c.type === 'refusal'))
+    )
+  );
+}
+
 function formatResponseItemForQuietMode(item: ResponseItem): string {
   if (!PRETTY_PRINT) {
     return JSON.stringify(item);
@@ -494,8 +508,12 @@ async function runQuietMode({
     additionalWritableRoots,
     disableResponseStorage: config.disableResponseStorage,
     onItem: (item: ResponseItem) => {
-      // eslint-disable-next-line no-console
-      console.log(formatResponseItemForQuietMode(item));
+      // In quiet mode, only show the final completed message output
+      // Use the type guard to ensure it's the correct item type
+      if (isResponseOutputMessage(item)) {
+        // eslint-disable-next-line no-console
+        console.log(formatResponseItemForQuietMode(item));
+      }
     },
     onLoading: () => {
       /* intentionally ignored in quiet mode */
