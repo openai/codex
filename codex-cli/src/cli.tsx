@@ -489,6 +489,7 @@ async function runQuietMode({
     model: config.model,
     config: config,
     instructions: config.instructions,
+    provider: config.provider,
     approvalPolicy,
     additionalWritableRoots,
     disableResponseStorage: config.disableResponseStorage,
