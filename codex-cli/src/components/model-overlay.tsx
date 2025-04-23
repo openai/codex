@@ -3,7 +3,6 @@ import {
   getAvailableModels,
   RECOMMENDED_MODELS,
 } from "../utils/model-utils.js";
-import { providers } from "../utils/providers.js";
 import { Box, Text, useInput } from "ink";
 import React, { useEffect, useState } from "react";
 
@@ -19,6 +18,7 @@ type Props = {
   currentModel: string;
   currentProvider?: string;
   hasLastResponse: boolean;
+  providers?: Record<string, { name: string; baseURL: string; envKey: string }>;
   onSelect: (model: string) => void;
   onSelectProvider?: (provider: string) => void;
   onExit: () => void;
@@ -27,6 +27,7 @@ type Props = {
 
 export default function ModelOverlay({
   currentModel,
+  providers = {},
   currentProvider = "openai",
   hasLastResponse,
   onSelect,
