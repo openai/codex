@@ -7,6 +7,7 @@
 // compiled `dist/` output used by the published CLI.
 
 import type { FullAutoErrorMode } from "./auto-approval-mode.js";
+import type { ReasoningEffort } from "openai/resources.mjs";
 
 import { log } from "./agent/log.js";
 import { AutoApprovalMode } from "./auto-approval-mode.js";
@@ -15,7 +16,6 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { load as loadYaml, dump as dumpYaml } from "js-yaml";
 import { homedir } from "os";
 import { dirname, join, extname, resolve as resolvePath } from "path";
-import { ReasoningEffort } from "openai/resources.mjs";
 
 export const DEFAULT_AGENTIC_MODEL = "o4-mini";
 export const DEFAULT_FULL_CONTEXT_MODEL = "gpt-4.1";
@@ -37,6 +37,7 @@ export const OPENAI_TIMEOUT_MS =
   parseInt(process.env["OPENAI_TIMEOUT_MS"] || "0", 10) || undefined;
 export const OPENAI_BASE_URL = process.env["OPENAI_BASE_URL"] || "";
 export let OPENAI_API_KEY = process.env["OPENAI_API_KEY"] || "";
+export const DEFAULT_REASONING_EFFORT = "high";
 
 export function setApiKey(apiKey: string): void {
   OPENAI_API_KEY = apiKey;
@@ -81,6 +82,7 @@ export type StoredConfig = {
   };
   /** User-defined safe commands */
   safeCommands?: Array<string>;
+  reasoningEffort?: ReasoningEffort;
 };
 
 // Minimal config written on first run.  An *empty* model string ensures that
@@ -300,6 +302,7 @@ export const loadConfig = (
     notify: storedConfig.notify === true,
     approvalMode: storedConfig.approvalMode,
     safeCommands: storedConfig.safeCommands ?? [],
+    reasoningEffort: storedConfig.reasoningEffort,
   };
 
   // -----------------------------------------------------------------------
@@ -417,6 +420,7 @@ export const saveConfig = (
     model: config.model,
     provider: config.provider,
     approvalMode: config.approvalMode,
+    reasoningEffort: config.reasoningEffort,
   };
 
   // Add history settings if they exist
