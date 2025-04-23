@@ -104,6 +104,8 @@ export default function TerminalChatInput({
   const prevCursorWasAtLastRow = useRef<boolean>(false);
   // Track recording state
   const [isRecording, setIsRecording] = useState(false);
+  // Track if recording should resume after thinking
+  const [shouldResumeRecording, setShouldResumeRecording] = useState(false);
   const transcriber = useRef<RealtimeTranscriber | null>(null);
 
   // Load command history on component mount
@@ -115,6 +117,26 @@ export default function TerminalChatInput({
 
     loadHistory();
   }, []);
+
+  // Handle pausing/resuming recording when loading state changes
+  useEffect(() => {
+    if (loading && isRecording) {
+      // Pause recording while thinking
+      setIsRecording(false);
+      setShouldResumeRecording(true);
+      
+      if (transcriber.current) {
+        transcriber.current.cleanup();
+        transcriber.current = null;
+        
+      }
+    } else if (!loading && shouldResumeRecording) {
+      // Resume recording when thinking is done
+      setIsRecording(true);
+      setShouldResumeRecording(false);
+    }
+  }, [loading, isRecording, shouldResumeRecording, setItems]);
+  
   // Reset slash suggestion index when input prefix changes
   useEffect(() => {
     if (input.trim().startsWith("/")) {
@@ -153,6 +175,7 @@ export default function TerminalChatInput({
         } catch (error) {
           console.error('Failed to start transcription:', error);
           setIsRecording(false);
+          setShouldResumeRecording(false);
           setItems((prev) => [
             ...prev,
             {
@@ -192,6 +215,7 @@ export default function TerminalChatInput({
       // Stop recording if any key except enter is pressed while recording
       if (isRecording && !_key.return) {
         setIsRecording(false);
+        setShouldResumeRecording(false);
         setItems((prev) => [
           ...prev,
           {
@@ -634,6 +658,7 @@ export default function TerminalChatInput({
       } else if (inputValue.startsWith("/speak")) {
         // Handle /speak command
         setIsRecording(true);
+        setShouldResumeRecording(false);
         setInput("");
         setItems((prev) => [
           ...prev,
