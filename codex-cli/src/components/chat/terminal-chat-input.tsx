@@ -5,6 +5,7 @@ import type {
   ResponseInputItem,
   ResponseItem,
 } from "openai/resources/responses/responses.mjs";
+import { RealtimeTranscriber, TranscriptionEvent } from "../../utils/transcriber.js";
 
 import MultilineTextEditor from "./multiline-editor";
 import { TerminalChatCommandReview } from "./terminal-chat-command-review.js";
@@ -103,6 +104,7 @@ export default function TerminalChatInput({
   const prevCursorWasAtLastRow = useRef<boolean>(false);
   // Track recording state
   const [isRecording, setIsRecording] = useState(false);
+  const transcriber = useRef<RealtimeTranscriber | null>(null);
 
   // Load command history on component mount
   useEffect(() => {
@@ -119,6 +121,71 @@ export default function TerminalChatInput({
       setSelectedSlashSuggestion(0);
     }
   }, [input]);
+
+  // Start/stop speech transcription when isRecording changes
+  useEffect(() => {
+    if (isRecording) {
+      // Initialize and start transcriber
+      const startTranscription = async () => {
+        try {
+          transcriber.current = new RealtimeTranscriber();
+          
+          transcriber.current.on('transcription', (event: TranscriptionEvent) => {
+            if (event.type === 'transcription.delta' && event.delta) {
+              // transcription doesn't start until after the VAD detects the speech has finished
+              setInput(prev => prev + event.delta);
+              // Force re-render of the editor with the latest text
+              setEditorKey(k => k + 1);
+              setTimeout(() => {
+                editorRef.current?.moveCursorToEnd?.();
+              }, 0);
+            } else if (event.type === 'transcription.done' && event.transcript) {
+              // occurs when the speech has finished being transcribed
+              setInput(prev => prev + "\n");  // new line to indicate it's finished transcribing that speech
+              setEditorKey(k => k + 1);
+              setTimeout(() => {
+                editorRef.current?.moveCursorToEnd?.();
+              }, 0);
+            }
+          });
+
+          await transcriber.current.start();
+        } catch (error) {
+          console.error('Failed to start transcription:', error);
+          setIsRecording(false);
+          setItems((prev) => [
+            ...prev,
+            {
+              id: `speak-error-${Date.now()}`,
+              type: "message",
+              role: "system",
+              content: [
+                {
+                  type: "input_text",
+                  text: `Error starting transcription: ${error}`,
+                },
+              ],
+            },
+          ]);
+        }
+      };
+      
+      startTranscription();
+    } else if (transcriber.current) {
+      // Clean up transcriber when recording stops
+      transcriber.current.cleanup();
+      transcriber.current = null;
+      
+      // Input will be submitted by the user manually after reviewing
+    }
+    
+    return () => {
+      if (transcriber.current) {
+        transcriber.current.cleanup();
+        transcriber.current = null;
+      }
+    };
+  }, [isRecording, setItems, setEditorKey]);
 
   useInput(
     (_input, _key) => {
@@ -582,6 +649,7 @@ export default function TerminalChatInput({
             ],
           },
         ]);
+        return;
       } else if (inputValue.startsWith("/")) {
         // Handle invalid/unrecognized commands. Only single-word inputs starting with '/'
         // (e.g., /command) that are not recognized are caught here. Any other input, including

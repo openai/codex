@@ -30,6 +30,7 @@
   ],
   "dependencies": {
     "@inkjs/ui": "^2.0.0",
+    "@picovoice/pvrecorder-node": "^1.2.8",
     "chalk": "^5.2.0",
     "diff": "^7.0.0",
     "dotenv": "^16.1.4",

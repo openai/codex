@@ -31,6 +31,9 @@ importers:
       '@inkjs/ui':
         specifier: ^2.0.0
         version: 2.0.0(ink@5.2.0(@types/react@18.3.20)(react@18.3.1))
+      '@picovoice/pvrecorder-node':
+        specifier: ^1.2.8
+        version: 1.2.8
       chalk:
         specifier: ^5.2.0
         version: 5.4.1
@@ -400,6 +403,10 @@ packages:
   '@nodelib/fs.walk@1.2.8':
     resolution: {integrity: sha512-oGB+UxlgWcgQkgwo8GcEGwemoTFt3FIO9ababBmaGwXIoBKZ+GTy0pP185beGg7Llih/NSHSV2XAs1lnznocSg==}
     engines: {node: '>= 8'}
+
+  '@picovoice/pvrecorder-node@1.2.8':
+    resolution: {integrity: sha512-dbLJlplQQNRkM2ja/hP4sRADGDILuJ54dEf8cU5eULeNrddxXvOtE8IiJ5F2VhhbXmIv3Qmn79DqhttCOxjH8Q==}
+    engines: {node: '>=18.0.0'}
 
   '@rollup/rollup-android-arm-eabi@4.40.0':
     resolution: {integrity: sha512-+Fbls/diZ0RDerhE8kyC6hjADCXA1K4yVNlH0EYfd2XjyH0UGgzaQ8MlT0pCXAThfxv3QUAczHaL+qSv1E4/Cg==}
@@ -2654,6 +2661,8 @@ snapshots:
     dependencies:
       '@nodelib/fs.scandir': 2.1.5
       fastq: 1.19.1
+
+  '@picovoice/pvrecorder-node@1.2.8': {}
 
   '@rollup/rollup-android-arm-eabi@4.40.0':
     optional: true
