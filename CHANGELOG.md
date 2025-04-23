@@ -2,6 +2,22 @@
 
 You can install any of these versions: `npm install -g codex@version`
 
+## `0.1.2504221401`
+
+### 🚀 Features
+
+- Show actionable errors when api keys are missing (#523)
+- Add CLI `--version` flag (#492)
+
+### 🐛 Bug Fixes
+
+- Agent loop for ZDR (`disableResponseStorage`) (#543)
+- Fix relative `workdir` check for `apply_patch` (#556)
+- Minimal mid-stream #429 retry loop using existing back-off (#506)
+- Inconsistent usage of base URL and API key (#507)
+- Remove requirement for api key for ollama (#546)
+- Support `[provider]_BASE_URL` (#542)
+
 ## `0.1.2504220136`
 
 ### 🚀 Features
