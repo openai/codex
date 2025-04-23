@@ -572,6 +572,7 @@ export default function TerminalChat({
         {overlayMode === "model" && (
           <ModelOverlay
             currentModel={model}
+            providers={config.providers}
             currentProvider={provider}
             hasLastResponse={Boolean(lastResponseId)}
             onSelect={(newModel) => {
