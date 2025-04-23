@@ -81,7 +81,7 @@ export async function handleExecCommand(
   ) => Promise<CommandConfirmation>,
   abortSignal?: AbortSignal,
 ): Promise<HandleExecCommandResult> {
-  const { cmd: command } = args;
+  const { cmd: command, workdir } = args;
 
   const key = deriveCommandKey(command);
 
@@ -103,7 +103,7 @@ export async function handleExecCommand(
   // working directory so that edits are constrained to the project root.  If
   // the caller wishes to broaden or restrict the set it can be made
   // configurable in the future.
-  const safety = canAutoApprove(command, policy, [process.cwd()]);
+  const safety = canAutoApprove(command, workdir, policy, [process.cwd()]);
 
   let runInSandbox: boolean;
   switch (safety.type) {
@@ -247,7 +247,7 @@ async function execCommand(
   const start = Date.now();
   const execResult =
     applyPatchCommand != null
-      ? execApplyPatch(applyPatchCommand.patch)
+      ? execApplyPatch(applyPatchCommand.patch, workdir)
       : await exec(
           { ...execInput, additionalWritableRoots },
           await getSandbox(runInSandbox),
