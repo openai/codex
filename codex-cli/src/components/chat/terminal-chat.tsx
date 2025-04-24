@@ -141,7 +141,7 @@ export default function TerminalChat({
   additionalWritableRoots,
   fullStdout,
 }: Props): React.ReactElement {
-  const notify = config.notify;
+  const notify = Boolean(config.notify);
   const [model, setModel] = useState<string>(config.model);
   const [provider, setProvider] = useState<string>(config.provider || "openai");
   const [lastResponseId, setLastResponseId] = useState<string | null>(null);
@@ -572,6 +572,7 @@ export default function TerminalChat({
         {overlayMode === "model" && (
           <ModelOverlay
             currentModel={model}
+            providers={config.providers}
             currentProvider={provider}
             hasLastResponse={Boolean(lastResponseId)}
             onSelect={(newModel) => {
