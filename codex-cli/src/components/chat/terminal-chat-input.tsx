@@ -219,9 +219,9 @@ export default function TerminalChatInput({
   }, [isRecording, setItems, setEditorKey]);
 
   useInput(
-    (_input, _key) => {
+    (char_input, key) => {
       // Stop recording if any key except enter is pressed while recording
-      if (isRecording && !_key.return) {
+      if (isRecording && !key.return) {
         setIsRecording(false);
         setShouldResumeRecording(false);
         setItems((prev) => [
@@ -248,11 +248,11 @@ export default function TerminalChatInput({
           cmd.command.startsWith(prefix),
         );
         if (matches.length > 0) {
-          if (_key.tab) {
+          if (key.tab) {
             // Cycle and fill slash command suggestions on Tab
             const len = matches.length;
             // Determine new index based on shift state
-            const nextIdx = _key.shift
+            const nextIdx = key.shift
               ? selectedSlashSuggestion <= 0
                 ? len - 1
                 : selectedSlashSuggestion - 1
@@ -270,19 +270,19 @@ export default function TerminalChatInput({
             setDraftInput(cmd);
             return;
           }
-          if (_key.upArrow) {
+          if (key.upArrow) {
             setSelectedSlashSuggestion((prev) =>
               prev <= 0 ? matches.length - 1 : prev - 1,
             );
             return;
           }
-          if (_key.downArrow) {
+          if (key.downArrow) {
             setSelectedSlashSuggestion((prev) =>
               prev < 0 || prev >= matches.length - 1 ? 0 : prev + 1,
             );
             return;
           }
-          if (_key.return) {
+          if (key.return) {
             // Execute the currently selected slash command
             const selIdx = selectedSlashSuggestion;
             const cmdObj = matches[selIdx];
@@ -332,21 +332,21 @@ export default function TerminalChatInput({
       }
       if (!confirmationPrompt && !loading) {
         if (fsSuggestions.length > 0) {
-          if (_key.upArrow) {
+          if (key.upArrow) {
             setSelectedCompletion((prev) =>
               prev <= 0 ? fsSuggestions.length - 1 : prev - 1,
             );
             return;
           }
 
-          if (_key.downArrow) {
+          if (key.downArrow) {
             setSelectedCompletion((prev) =>
               prev >= fsSuggestions.length - 1 ? 0 : prev + 1,
             );
             return;
           }
 
-          if (_key.tab && selectedCompletion >= 0) {
+          if (key.tab && selectedCompletion >= 0) {
             const words = input.trim().split(/\s+/);
             const selected = fsSuggestions[selectedCompletion];
 
@@ -369,7 +369,7 @@ export default function TerminalChatInput({
           }
         }
 
-        if (_key.upArrow) {
+        if (key.upArrow) {
           let moveThroughHistory = true;
 
           // Only use history when the caret was *already* on the very first
@@ -408,7 +408,7 @@ export default function TerminalChatInput({
           // Otherwise let it propagate.
         }
 
-        if (_key.downArrow) {
+        if (key.downArrow) {
           // Only move forward in history when we're already *in* history mode
           // AND the caret sits on the last line of the buffer.
           const wasAtLastRow =
@@ -431,7 +431,7 @@ export default function TerminalChatInput({
           // Otherwise let it propagate
         }
 
-        if (_key.tab) {
+        if (key.tab) {
           const words = input.split(/\s+/);
           const mostRecentWord = words[words.length - 1];
           if (mostRecentWord === undefined || mostRecentWord === "") {
@@ -467,11 +467,11 @@ export default function TerminalChatInput({
       }, 1);
 
       if (input.trim() === "" && isNew) {
-        if (_key.tab) {
+        if (key.tab) {
           setSelectedSuggestion(
-            (s) => (s + (_key.shift ? -1 : 1)) % (suggestions.length + 1),
+            (s) => (s + (key.shift ? -1 : 1)) % (suggestions.length + 1),
           );
-        } else if (selectedSuggestion && _key.return) {
+        } else if (selectedSuggestion && key.return) {
           const suggestion = suggestions[selectedSuggestion - 1] || "";
           setInput("");
           setSelectedSuggestion(0);
@@ -483,7 +483,7 @@ export default function TerminalChatInput({
             },
           ]);
         }
-      } else if (_input === "\u0003" || (_input === "c" && _key.ctrl)) {
+      } else if (char_input === "\u0003" || (char_input === "c" && key.ctrl)) {
         setTimeout(() => {
           app.exit();
           onExit();
