@@ -1,0 +1,28 @@
+[package]
+name = "codex-repl"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "codex-repl"
+path = "src/main.rs"
+
+[lib]
+name = "codex_repl"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+codex-core = { path = "../core", features = ["cli"] }
+owo-colors = "4.2.0"
+rand = "0.9"
+tokio = { version = "1", features = [
+    "io-std",
+    "macros",
+    "process",
+    "rt-multi-thread",
+    "signal",
+] }
+tracing = { version = "0.1.41", features = ["log"] }
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
