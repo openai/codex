@@ -1,3 +1,5 @@
+import { getApiKey, getBaseUrl } from "./config";
+import { CLI_VERSION , ORIGIN , getSessionId } from "./session";
 import { EventEmitter } from "events";
 import { createRequire } from "node:module";
 import OpenAI from "openai";
@@ -7,8 +9,6 @@ import { OpenAIRealtimeWS } from "openai/beta/realtime/ws";
 const require = createRequire(import.meta.url);
 const { PvRecorder } = require("@picovoice/pvrecorder-node");
 
-// API configuration
-const API_KEY = process.env["OPENAI_API_KEY"];
 
 export interface TranscriptionEvent {
   type: string;
@@ -44,12 +44,21 @@ export class RealtimeTranscriber extends EventEmitter {
   public async start(): Promise<void> {
     try {
       // Check API key
-      if (!API_KEY) {
+      const apiKey = getApiKey("openai");
+      if (!apiKey) {
         throw new Error("OPENAI_API_KEY not found in environment variables");
       }
 
       // Initialize OpenAI client
-      const client = new OpenAI({ apiKey: API_KEY });
+      const client = new OpenAI({
+        apiKey: apiKey,
+        baseURL: getBaseUrl("openai"),
+        defaultHeaders: {
+          originator: ORIGIN,
+          version: CLI_VERSION,
+          session_id: getSessionId() || "",
+        },
+      });
 
       // Initialize the realtime client
       this.rt = new OpenAIRealtimeWS({ model: this.model }, client);
