@@ -470,16 +470,12 @@ export default function TerminalChatInput({
         setInput("");
 
         try {
-          // Dynamically import dependencies to avoid unnecessary bundle size.
           const os = await import("node:os");
-
-          // Lazy import CLI_VERSION to avoid circular deps.
           const { CLI_VERSION } = await import("../../utils/session.js");
           const { buildBugReportUrl } = await import(
             "../../utils/bug-report.js"
           );
 
-          // Construct the bug report URL.
           const url = buildBugReportUrl({
             items: items ?? [],
             cliVersion: CLI_VERSION,
@@ -489,7 +485,6 @@ export default function TerminalChatInput({
               .join(" | "),
           });
 
-          // Display the URL in the chat history.
           setItems((prev) => [
             ...prev,
             {
