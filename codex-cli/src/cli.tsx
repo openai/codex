@@ -294,7 +294,11 @@ config = {
 
 // Check for updates after loading config. This is important because we write state file in
 // the config dir.
-await checkForUpdates().catch();
+try {
+  await checkForUpdates();
+} catch {
+  // ignore
+}
 
 // For --flex-mode, validate and exit if incorrect.
 if (cli.flags.flexMode) {
