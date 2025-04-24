@@ -34,9 +34,9 @@ function clamp(v: number, min: number, max: number): number {
  * ---------------------------------------------------------------------- */
 
 function toCodePoints(str: string): Array<string> {
-  if (typeof Intl !== 'undefined' && 'Segmenter' in Intl) {
-    const seg = new Intl.Segmenter()
-    return [...seg.segment(str)].map((seg) => seg.segment)
+  if (typeof Intl !== "undefined" && "Segmenter" in Intl) {
+    const seg = new Intl.Segmenter();
+    return [...seg.segment(str)].map((seg) => seg.segment);
   }
   // [...str] or Array.from both iterate by UTF‑32 code point, handling
   // surrogate pairs correctly.
