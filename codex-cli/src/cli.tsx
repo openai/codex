@@ -303,7 +303,11 @@ config = {
 
 // Check for updates after loading config. This is important because we write state file in
 // the config dir.
-await checkForUpdates().catch();
+try {
+  await checkForUpdates();
+} catch {
+  // ignore
+}
 
 // For --flex-mode, validate and exit if incorrect.
 if (cli.flags.flexMode) {
@@ -498,6 +502,7 @@ async function runQuietMode({
     model: config.model,
     config: config,
     instructions: config.instructions,
+    provider: config.provider,
     approvalPolicy,
     additionalWritableRoots,
     disableResponseStorage: config.disableResponseStorage,
