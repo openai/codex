@@ -458,7 +458,9 @@ export const saveConfig = (
   }
 
   if (config.instructions.includes(PROJECT_DOC_SEPARATOR)) {
-    const userInstructions = config.instructions.split(PROJECT_DOC_SEPARATOR)[0];
+    const userInstructions = config.instructions.split(
+      PROJECT_DOC_SEPARATOR,
+    )[0];
     if (userInstructions !== undefined) {
       writeFileSync(instructionsPath, userInstructions, "utf-8");
     }
