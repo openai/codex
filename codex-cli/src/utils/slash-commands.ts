@@ -23,7 +23,7 @@ export const SLASH_COMMANDS: Array<SlashCommand> = [
   { command: "/help", description: "Show list of commands" },
   { command: "/model", description: "Open model selection panel" },
   { command: "/approval", description: "Open approval mode selection panel" },
-  { command: "/bug", description: "Generate a prefilled GitHub issue URL with session log" },
+  { command: "/bug", description: "Generate a prefilled GitHub bug report" },
   {
     command: "/diff",
     description:
