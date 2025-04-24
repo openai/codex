@@ -81,7 +81,7 @@ test.skip("process_patch tolerates smart quotes", () => {
   const fs = createInMemoryFS({ "quotes.js": original });
   process_patch(patch, fs.openFn, fs.writeFn, fs.removeFn);
 
-  expect(fs.files["quotes.js"]).toBe("console.log(\"HELLO\");");
+  expect(fs.files["quotes.js"]).toBe('console.log("HELLO");');
 });
 
 test("process_patch - add file", () => {
