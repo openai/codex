@@ -100,6 +100,27 @@ pub enum SandboxPolicy {
     DangerousNoRestrictions,
 }
 
+impl SandboxPolicy {
+    pub fn is_dangerous(&self) -> bool {
+        matches!(self, SandboxPolicy::DangerousNoRestrictions)
+    }
+
+    pub fn is_network_restricted(&self) -> bool {
+        matches!(
+            self,
+            SandboxPolicy::NetworkRestricted |
+            SandboxPolicy::NetworkAndFileWriteRestricted
+        )
+    }
+
+    pub fn is_file_write_restricted(&self) -> bool {
+        matches!(
+            self,
+            SandboxPolicy::FileWriteRestricted |
+            SandboxPolicy::NetworkAndFileWriteRestricted
+        )
+    }
+}
 /// User input
 #[non_exhaustive]
 #[derive(Debug, Clone, Deserialize, Serialize)]
