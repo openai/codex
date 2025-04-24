@@ -38,7 +38,7 @@ describe("Model Selection Error Handling", () => {
     const currentModel = "gpt-4";
     const unavailableModel = "gpt-invalid";
     const currentProvider = "openai";
-    
+
     renderTui(
       <ModelOverlay
         currentModel={currentModel}
@@ -49,41 +49,45 @@ describe("Model Selection Error Handling", () => {
           if (!models?.includes(newModel)) {
             console.error(
               chalk.bold.red(
-                `Model "${chalk.yellow(newModel)}" is not available for provider "${chalk.yellow(
-                  currentProvider
-                )}".`
-              )
+                `Model "${chalk.yellow(
+                  newModel,
+                )}" is not available for provider "${chalk.yellow(
+                  currentProvider,
+                )}".`,
+              ),
             );
             return;
           }
         }}
         onSelectProvider={() => {}}
         onExit={() => {}}
-      />
+      />,
     );
 
     const onSelectHandler = vi.fn((models, newModel) => {
       if (!models?.includes(newModel)) {
         console.error(
           chalk.bold.red(
-            `Model "${chalk.yellow(newModel)}" is not available for provider "${chalk.yellow(
-              currentProvider
-            )}".`
-          )
+            `Model "${chalk.yellow(
+              newModel,
+            )}" is not available for provider "${chalk.yellow(
+              currentProvider,
+            )}".`,
+          ),
         );
         return;
       }
     });
-    
+
     onSelectHandler(allModels, unavailableModel);
-    
+
     expect(consoleErrorSpy).toHaveBeenCalled();
     expect(chalk.bold.red).toHaveBeenCalled();
     expect(chalk.yellow).toHaveBeenCalledWith(unavailableModel);
     expect(chalk.yellow).toHaveBeenCalledWith(currentProvider);
-    
+
     expect(consoleErrorSpy).toHaveBeenCalledWith(
-      `[bold-red]Model "[yellow]${unavailableModel}[/yellow]" is not available for provider "[yellow]${currentProvider}[/yellow]".[/bold-red]`
+      `[bold-red]Model "[yellow]${unavailableModel}[/yellow]" is not available for provider "[yellow]${currentProvider}[/yellow]".[/bold-red]`,
     );
   });
 
@@ -93,34 +97,34 @@ describe("Model Selection Error Handling", () => {
     const mockSaveConfig = vi.fn();
     const mockSetItems = vi.fn();
     const mockSetOverlayMode = vi.fn();
-    
+
     const onSelectHandler = vi.fn((allModels, newModel) => {
       if (!allModels?.includes(newModel)) {
         console.error(
           chalk.bold.red(
-            `Model "${chalk.yellow(newModel)}" is not available for provider "${chalk.yellow(
-              "openai"
-            )}".`
-          )
+            `Model "${chalk.yellow(
+              newModel,
+            )}" is not available for provider "${chalk.yellow("openai")}".`,
+          ),
         );
         return;
       }
-      
+
       mockSetModel(newModel);
       mockSetLastResponseId(null);
       mockSaveConfig({});
       mockSetItems((prev: Array<unknown>) => [...prev, {}]);
       mockSetOverlayMode("none");
     });
-    
+
     onSelectHandler(["gpt-4", "gpt-3.5-turbo"], "gpt-invalid");
-    
+
     expect(mockSetModel).not.toHaveBeenCalled();
     expect(mockSetLastResponseId).not.toHaveBeenCalled();
     expect(mockSaveConfig).not.toHaveBeenCalled();
     expect(mockSetItems).not.toHaveBeenCalled();
     expect(mockSetOverlayMode).not.toHaveBeenCalled();
-    
+
     expect(consoleErrorSpy).toHaveBeenCalled();
   });
 });

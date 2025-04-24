@@ -217,7 +217,8 @@ export default function TerminalChat({
   // DEBUG: log every render w/ key bits of state
   // ────────────────────────────────────────────────────────────────
   log(
-    `render - agent? ${Boolean(agentRef.current)} loading=${loading} items=${items.length
+    `render - agent? ${Boolean(agentRef.current)} loading=${loading} items=${
+      items.length
     }`,
   );
 
