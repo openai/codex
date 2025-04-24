@@ -457,14 +457,7 @@ export const saveConfig = (
     writeFileSync(targetPath, JSON.stringify(configToSave, null, 2), "utf-8");
   }
 
-  if (config.instructions.includes(PROJECT_DOC_SEPARATOR)) {
-    const userInstructions = config.instructions.split(
-      PROJECT_DOC_SEPARATOR,
-    )[0];
-    if (userInstructions !== undefined) {
-      writeFileSync(instructionsPath, userInstructions, "utf-8");
-    }
-  } else {
-    writeFileSync(instructionsPath, config.instructions, "utf-8");
-  }
+  // Take everything before the first PROJECT_DOC_SEPARATOR (or the whole string if none).
+  const [userInstructions] = config.instructions.split(PROJECT_DOC_SEPARATOR);
+  writeFileSync(instructionsPath, userInstructions, "utf-8");
 };
