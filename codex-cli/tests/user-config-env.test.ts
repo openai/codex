@@ -4,10 +4,10 @@ import { tmpdir } from "os";
 import { join } from "path";
 
 /**
- * Verifies that ~/.codex.config is parsed (lowest‑priority) when present.
+ * Verifies that ~/.codex.env is parsed (lowest‑priority) when present.
  */
 
-describe("user‑wide ~/.codex.config support", () => {
+describe("user‑wide ~/.codex.env support", () => {
   const ORIGINAL_HOME = process.env["HOME"];
   const ORIGINAL_API_KEY = process.env["OPENAI_API_KEY"];
 
@@ -21,9 +21,9 @@ describe("user‑wide ~/.codex.config support", () => {
     // Ensure the env var is unset so that the file value is picked up.
     delete process.env["OPENAI_API_KEY"];
 
-    // Write ~/.codex.config with a dummy key.
+    // Write ~/.codex.env with a dummy key.
     writeFileSync(
-      join(tempHome, ".codex.config"),
+      join(tempHome, ".codex.env"),
       "OPENAI_API_KEY=my-home-key\n",
       {
         encoding: "utf8",
@@ -53,7 +53,7 @@ describe("user‑wide ~/.codex.config support", () => {
     }
   });
 
-  it("loads the API key from ~/.codex.config when not set elsewhere", async () => {
+  it("loads the API key from ~/.codex.env when not set elsewhere", async () => {
     // Import the config module AFTER setting up the fake env.
     const { getApiKey } = await import("../src/utils/config.js");
 
