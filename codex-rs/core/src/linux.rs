@@ -50,11 +50,11 @@ pub async fn exec_linux(
 
         rt.block_on(async {
             if sandbox_policy.is_network_restricted() {
-                install_network_seccomp_filter()?;
+                install_network_seccomp_filter_on_current_thread()?;
             }
 
             if sandbox_policy.is_file_write_restricted() {
-                install_filesystem_landlock_rules(writable_roots_copy)?;
+                install_filesystem_landlock_rules_on_current_thread(writable_roots_copy)?;
             }
 
             exec(params, ctrl_c_copy).await
@@ -72,7 +72,7 @@ pub async fn exec_linux(
     }
 }
 
-fn install_filesystem_landlock_rules(writable_roots: Vec<PathBuf>) -> Result<()> {
+fn install_filesystem_landlock_rules_on_current_thread(writable_roots: Vec<PathBuf>) -> Result<()> {
     let abi = ABI::V5;
     let access_rw = AccessFs::from_all(abi);
     let access_ro = AccessFs::from_read(abi);
@@ -98,7 +98,7 @@ fn install_filesystem_landlock_rules(writable_roots: Vec<PathBuf>) -> Result<()>
     Ok(())
 }
 
-fn install_network_seccomp_filter() -> std::result::Result<(), SandboxErr> {
+fn install_network_seccomp_filter_on_current_thread() -> std::result::Result<(), SandboxErr> {
     // Build rule map.
     let mut rules: BTreeMap<i64, Vec<SeccompRule>> = BTreeMap::new();
 
