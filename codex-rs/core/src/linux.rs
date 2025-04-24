@@ -9,6 +9,7 @@ use crate::error::SandboxErr;
 use crate::exec::exec;
 use crate::exec::ExecParams;
 use crate::exec::RawExecToolCallOutput;
+use crate::protocol::SandboxPolicy;
 
 use landlock::Access;
 use landlock::AccessFs;
@@ -33,6 +34,7 @@ pub async fn exec_linux(
     params: ExecParams,
     writable_roots: &[PathBuf],
     ctrl_c: Arc<Notify>,
+    sandbox_policy: SandboxPolicy,
 ) -> Result<RawExecToolCallOutput> {
     // Allow READ on /
     // Allow WRITE on /dev/null
@@ -47,34 +49,12 @@ pub async fn exec_linux(
             .expect("Failed to create runtime");
 
         rt.block_on(async {
-            let abi = ABI::V5;
-            let access_rw = AccessFs::from_all(abi);
-            let access_ro = AccessFs::from_read(abi);
-
-            let mut ruleset = Ruleset::default()
-                .set_compatibility(CompatLevel::BestEffort)
-                .handle_access(access_rw)?
-                .create()?
-                .add_rules(landlock::path_beneath_rules(&["/"], access_ro))?
-                .add_rules(landlock::path_beneath_rules(&["/dev/null"], access_rw))?
-                .set_no_new_privs(true);
-
-            if !writable_roots_copy.is_empty() {
-                ruleset = ruleset.add_rules(landlock::path_beneath_rules(
-                    &writable_roots_copy,
-                    access_rw,
-                ))?;
+            if sandbox_policy.is_network_restricted() {
+                install_network_seccomp_filter_on_current_thread()?;
             }
 
-            let status = ruleset.restrict_self()?;
-
-            // TODO(wpt): Probably wanna expand this more generically and not warn every time.
-            if status.ruleset == landlock::RulesetStatus::NotEnforced {
-                return Err(CodexErr::Sandbox(SandboxErr::LandlockRestrict));
-            }
-
-            if let Err(e) = install_network_seccomp_filter() {
-                return Err(CodexErr::Sandbox(e));
+            if sandbox_policy.is_file_write_restricted() {
+                install_filesystem_landlock_rules_on_current_thread(writable_roots_copy)?;
             }
 
             exec(params, ctrl_c_copy).await
@@ -92,7 +72,33 @@ pub async fn exec_linux(
     }
 }
 
-fn install_network_seccomp_filter() -> std::result::Result<(), SandboxErr> {
+fn install_filesystem_landlock_rules_on_current_thread(writable_roots: Vec<PathBuf>) -> Result<()> {
+    let abi = ABI::V5;
+    let access_rw = AccessFs::from_all(abi);
+    let access_ro = AccessFs::from_read(abi);
+
+    let mut ruleset = Ruleset::default()
+        .set_compatibility(CompatLevel::BestEffort)
+        .handle_access(access_rw)?
+        .create()?
+        .add_rules(landlock::path_beneath_rules(&["/"], access_ro))?
+        .add_rules(landlock::path_beneath_rules(&["/dev/null"], access_rw))?
+        .set_no_new_privs(true);
+
+    if !writable_roots.is_empty() {
+        ruleset = ruleset.add_rules(landlock::path_beneath_rules(&writable_roots, access_rw))?;
+    }
+
+    let status = ruleset.restrict_self()?;
+
+    if status.ruleset == landlock::RulesetStatus::NotEnforced {
+        return Err(CodexErr::Sandbox(SandboxErr::LandlockRestrict));
+    }
+
+    Ok(())
+}
+
+fn install_network_seccomp_filter_on_current_thread() -> std::result::Result<(), SandboxErr> {
     // Build rule map.
     let mut rules: BTreeMap<i64, Vec<SeccompRule>> = BTreeMap::new();
 
@@ -156,6 +162,7 @@ mod tests_linux {
     use crate::exec::process_exec_tool_call;
     use crate::exec::ExecParams;
     use crate::exec::SandboxType;
+    use crate::protocol::SandboxPolicy;
     use std::sync::Arc;
     use tempfile::NamedTempFile;
     use tokio::sync::Notify;
@@ -172,6 +179,7 @@ mod tests_linux {
             SandboxType::LinuxSeccomp,
             writable_roots,
             Arc::new(Notify::new()),
+            SandboxPolicy::NetworkAndFileWriteRestricted,
         )
         .await
         .unwrap();
@@ -238,6 +246,7 @@ mod tests_linux {
             SandboxType::LinuxSeccomp,
             &[],
             Arc::new(Notify::new()),
+            SandboxPolicy::NetworkRestricted,
         )
         .await;
 
