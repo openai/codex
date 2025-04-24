@@ -23,11 +23,11 @@ import {
   PRETTY_PRINT,
   INSTRUCTIONS_FILEPATH,
 } from "./utils/config";
-import { providers } from "./utils/providers.js";
 import { createInputItem } from "./utils/input-utils";
 import { initLogger } from "./utils/logger/log";
 import { isModelSupportedForResponses } from "./utils/model-utils.js";
 import { parseToolCall } from "./utils/parsers";
+import { providers } from "./utils/providers.js";
 import { onExit, setInkRenderer } from "./utils/terminal";
 import chalk from "chalk";
 import { spawnSync } from "child_process";
@@ -105,7 +105,10 @@ const cli = meow(
       view: { type: "string" },
       model: { type: "string", aliases: ["m"] },
       provider: { type: "string", aliases: ["p"] },
-      baseUrl: { type: "string", description: "Override the base URL for the provider API" },
+      baseUrl: {
+        type: "string",
+        description: "Override the base URL for the provider API",
+      },
       image: { type: "string", isMultiple: true, aliases: ["i"] },
       quiet: {
         type: "boolean",
