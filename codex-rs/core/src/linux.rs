@@ -50,15 +50,11 @@ pub async fn exec_linux(
 
         rt.block_on(async {
             if sandbox_policy.is_network_restricted() {
-                if let Err(e) = install_network_seccomp_filter() {
-                    return Err(CodexErr::Sandbox(e));
-                }
+                install_network_seccomp_filter()?;
             }
 
             if sandbox_policy.is_file_write_restricted() {
-                if let Err(e) = install_filesystem_landlock_rules(&writable_roots_copy) {
-                    return Err(CodexErr::Sandbox(e));
-                }
+                install_filesystem_landlock_rules(writable_roots_copy)?;
             }
 
             exec(params, ctrl_c_copy).await
@@ -76,9 +72,7 @@ pub async fn exec_linux(
     }
 }
 
-fn install_filesystem_landlock_rules(
-    writable_roots: &[PathBuf],
-) -> std::result::Result<(), SandboxErr> {
+fn install_filesystem_landlock_rules(writable_roots: Vec<PathBuf>) -> Result<()> {
     let abi = ABI::V5;
     let access_rw = AccessFs::from_all(abi);
     let access_ro = AccessFs::from_read(abi);
@@ -168,6 +162,7 @@ mod tests_linux {
     use crate::exec::process_exec_tool_call;
     use crate::exec::ExecParams;
     use crate::exec::SandboxType;
+    use crate::protocol::SandboxPolicy;
     use std::sync::Arc;
     use tempfile::NamedTempFile;
     use tokio::sync::Notify;
@@ -184,6 +179,7 @@ mod tests_linux {
             SandboxType::LinuxSeccomp,
             writable_roots,
             Arc::new(Notify::new()),
+            SandboxPolicy::NetworkAndFileWriteRestricted,
         )
         .await
         .unwrap();
@@ -250,6 +246,7 @@ mod tests_linux {
             SandboxType::LinuxSeccomp,
             &[],
             Arc::new(Notify::new()),
+            SandboxPolicy::NetworkRestricted,
         )
         .await;
 
