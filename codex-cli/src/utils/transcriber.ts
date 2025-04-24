@@ -1,8 +1,9 @@
-import { OpenAIRealtimeWS } from "openai/beta/realtime/ws";
 import { EventEmitter } from "events";
+import { createRequire } from "node:module";
 import OpenAI from "openai";
 // workaround since pvrecorder-node is a commonjs module
-import { createRequire } from "node:module";
+import { OpenAIRealtimeWS } from "openai/beta/realtime/ws";
+
 const require = createRequire(import.meta.url);
 const { PvRecorder } = require("@picovoice/pvrecorder-node");
 
@@ -40,7 +41,7 @@ export class RealtimeTranscriber extends EventEmitter {
     process.on("SIGTERM", () => this.cleanup());
   }
 
-  public async start() {
+  public async start(): Promise<void> {
     try {
       // Check API key
       if (!API_KEY) {
@@ -55,7 +56,6 @@ export class RealtimeTranscriber extends EventEmitter {
 
       // Set up event handlers
       this.rt.on("error", (error) => {
-        console.error("OpenAI WebSocket error:", error);
         this.emit("error", error);
       });
 
@@ -113,17 +113,17 @@ export class RealtimeTranscriber extends EventEmitter {
       this.rt.socket.on("close", (code: number, reason: string) => {
         if (code !== 1000) {
           // 1000 is a normal close
-          console.error(`WebSocket closed: code=${code}, reason=${reason}`);
+          this.emit("error", new Error(`WebSocket closed: code=${code}, reason=${reason}`));
         }
         this.isConnected = false;
         this.emit("disconnected");
       });
 
       this.rt.socket.on("error", (error: Error) => {
-        console.error("WebSocket error:", error);
+        this.emit("error", error);
       });
     } catch (error) {
-      console.error("Failed to start transcription:", error);
+      this.emit("error", error);
       this.cleanup();
       throw error;
     }
@@ -148,18 +148,21 @@ export class RealtimeTranscriber extends EventEmitter {
       // Process audio frames
       this.processAudioFrames();
     } catch (error) {
-      console.error("Failed to start audio capture:", error);
+      this.emit("error", error);
       this.stopAudioCapture();
       throw error;
     }
   }
 
   private async processAudioFrames() {
-    if (!this.recorder || !this.isRecording) return;
+    if (!this.recorder || !this.isRecording) {return;}
 
     try {
       while (this.isRecording && this.isConnected) {
         try {
+          // We need to await each audio frame sequentially in the loop
+          // to maintain proper audio stream ordering
+          // eslint-disable-next-line no-await-in-loop
           const frame = await this.recorder.read();
 
           // Convert Int16Array to Buffer and send to OpenAI
@@ -170,11 +173,13 @@ export class RealtimeTranscriber extends EventEmitter {
               audio: buffer.toString("base64"),
             });
           }
-        } catch (error: any) {
+        } catch (error) {
           // Silently break out if it's an InvalidState error (happens when stopping)
           if (
-            error.constructor.name === "PvRecorderStatusInvalidStateError" ||
-            error.message?.includes("failed to read audio data frame")
+            error instanceof Error && 
+            (error.constructor.name === "PvRecorderStatusInvalidStateError" ||
+              // require import doesn't perserve class prototype
+            error.message?.includes("failed to read audio data frame"))
           ) {
             break;
           }
@@ -183,7 +188,7 @@ export class RealtimeTranscriber extends EventEmitter {
         }
       }
     } catch (error) {
-      console.error("Error processing audio frames:", error);
+      this.emit("error", error);
     } finally {
       this.stopAudioCapture();
     }
@@ -195,21 +200,21 @@ export class RealtimeTranscriber extends EventEmitter {
         this.recorder.stop();
         this.recorder.release();
       } catch (error) {
-        console.error("Error while stopping audio recording:", error);
+        this.emit("error", error);
       }
       this.recorder = null;
       this.isRecording = false;
     }
   }
 
-  public cleanup() {
+  public cleanup(): void {
     this.stopAudioCapture();
 
     if (this.rt) {
       try {
         this.rt.close();
       } catch (error) {
-        console.error("Error closing WebSocket connection:", error);
+        this.emit("error", error);
       }
       this.rt = null;
     }
