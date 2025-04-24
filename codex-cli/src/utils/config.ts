@@ -76,6 +76,12 @@ export function getApiKey(provider: string = "openai"): string | undefined {
     return process.env[providerInfo.envKey];
   }
 
+  // Checking `PROVIDER_API_KEY feels more intuitive with a custom provider.
+  const customApiKey = process.env[`${provider.toUpperCase()}_API_KEY`];
+  if (customApiKey) {
+    return customApiKey;
+  }
+
   // If the provider not found in the providers list and `OPENAI_API_KEY` is set, use it
   if (OPENAI_API_KEY !== "") {
     return OPENAI_API_KEY;
