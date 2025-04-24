@@ -5,7 +5,10 @@ import type {
   ResponseInputItem,
   ResponseItem,
 } from "openai/resources/responses/responses.mjs";
-import { RealtimeTranscriber, TranscriptionEvent } from "../../utils/transcriber.js";
+import {
+  RealtimeTranscriber,
+  TranscriptionEvent,
+} from "../../utils/transcriber.js";
 
 import MultilineTextEditor from "./multiline-editor";
 import { TerminalChatCommandReview } from "./terminal-chat-command-review.js";
@@ -124,11 +127,10 @@ export default function TerminalChatInput({
       // Pause recording while thinking
       setIsRecording(false);
       setShouldResumeRecording(true);
-      
+
       if (transcriber.current) {
         transcriber.current.cleanup();
         transcriber.current = null;
-        
       }
     } else if (!loading && shouldResumeRecording) {
       // Resume recording when thinking is done
@@ -136,7 +138,7 @@ export default function TerminalChatInput({
       setShouldResumeRecording(false);
     }
   }, [loading, isRecording, shouldResumeRecording, setItems]);
-  
+
   // Reset slash suggestion index when input prefix changes
   useEffect(() => {
     if (input.trim().startsWith("/")) {
@@ -151,29 +153,35 @@ export default function TerminalChatInput({
       const startTranscription = async () => {
         try {
           transcriber.current = new RealtimeTranscriber();
-          
-          transcriber.current.on('transcription', (event: TranscriptionEvent) => {
-            if (event.type === 'transcription.delta' && event.delta) {
-              // transcription doesn't start until after the VAD detects the speech has finished
-              setInput(prev => prev + event.delta);
-              // Force re-render of the editor with the latest text
-              setEditorKey(k => k + 1);
-              setTimeout(() => {
-                editorRef.current?.moveCursorToEnd?.();
-              }, 0);
-            } else if (event.type === 'transcription.done' && event.transcript) {
-              // occurs when the speech has finished being transcribed
-              setInput(prev => prev + "\n");  // new line to indicate it's finished transcribing that speech
-              setEditorKey(k => k + 1);
-              setTimeout(() => {
-                editorRef.current?.moveCursorToEnd?.();
-              }, 0);
-            }
-          });
+
+          transcriber.current.on(
+            "transcription",
+            (event: TranscriptionEvent) => {
+              if (event.type === "transcription.delta" && event.delta) {
+                // transcription doesn't start until after the VAD detects the speech has finished
+                setInput((prev) => prev + event.delta);
+                // Force re-render of the editor with the latest text
+                setEditorKey((k) => k + 1);
+                setTimeout(() => {
+                  editorRef.current?.moveCursorToEnd?.();
+                }, 0);
+              } else if (
+                event.type === "transcription.done" &&
+                event.transcript
+              ) {
+                // occurs when the speech has finished being transcribed
+                setInput((prev) => prev + "\n"); // new line to indicate it's finished transcribing that speech
+                setEditorKey((k) => k + 1);
+                setTimeout(() => {
+                  editorRef.current?.moveCursorToEnd?.();
+                }, 0);
+              }
+            },
+          );
 
           await transcriber.current.start();
         } catch (error) {
-          console.error('Failed to start transcription:', error);
+          console.error("Failed to start transcription:", error);
           setIsRecording(false);
           setShouldResumeRecording(false);
           setItems((prev) => [
@@ -192,16 +200,16 @@ export default function TerminalChatInput({
           ]);
         }
       };
-      
+
       startTranscription();
     } else if (transcriber.current) {
       // Clean up transcriber when recording stops
       transcriber.current.cleanup();
       transcriber.current = null;
-      
+
       // Input will be submitted by the user manually after reviewing
     }
-    
+
     return () => {
       if (transcriber.current) {
         transcriber.current.cleanup();

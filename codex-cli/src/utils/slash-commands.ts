@@ -34,6 +34,6 @@ export const SLASH_COMMANDS: Array<SlashCommand> = [
   },
   {
     command: "/speak",
-    description: "Activate speech-to-text input mode"
-  }
+    description: "Activate speech-to-text input mode",
+  },
 ];
