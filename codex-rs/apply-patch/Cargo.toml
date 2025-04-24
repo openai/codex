@@ -1,0 +1,21 @@
+[package]
+name = "codex-apply-patch"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "codex_apply_patch"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1"
+regex = "1.11.1"
+serde_json = "1.0.110"
+similar = "2.7.0"
+thiserror = "2.0.12"
+tree-sitter = "0.25.3"
+tree-sitter-bash = "0.23.3"
+
+[dev-dependencies]
+pretty_assertions = "1.4.1"
+tempfile = "3.13.0"
