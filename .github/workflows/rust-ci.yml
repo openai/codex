@@ -1,0 +1,87 @@
+name: rust-ci
+on:
+  pull_request: { branches: [main] }
+  push: { branches: [main] }
+
+# For CI, we build in debug (`--profile dev`) rather than release mode so we
+# get signal faster.
+
+jobs:
+  macos:
+    runs-on: macos-14
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: codex-rs
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Initialize failure flag
+        run: echo "FAILED=" >> $GITHUB_ENV
+
+      - name: cargo fmt
+        run: cargo fmt -- --config imports_granularity=Item --check || echo "FAILED=${FAILED:+$FAILED, }cargo fmt" >> $GITHUB_ENV
+
+      - name: cargo test
+        run: cargo test || echo "FAILED=${FAILED:+$FAILED, }cargo test" >> $GITHUB_ENV
+
+      - name: cargo clippy
+        run: cargo clippy --all-features -- -D warnings || echo "FAILED=${FAILED:+$FAILED, }cargo clippy" >> $GITHUB_ENV
+
+      - name: arm64 build
+        run: cargo build --target aarch64-apple-darwin || echo "FAILED=${FAILED:+$FAILED, }arm64 build" >> $GITHUB_ENV
+
+      - name: x86_64 build
+        run: cargo build --target x86_64-apple-darwin || echo "FAILED=${FAILED:+$FAILED, }x86_64 build" >> $GITHUB_ENV
+
+      - name: Fail if any step failed
+        run: |
+          if [ -n "$FAILED" ]; then
+            echo -e "See logs above, as the following steps failed:\n$FAILED"
+            exit 1
+          fi
+        env:
+          FAILED: ${{ env.FAILED }}
+
+  linux-musl-x86_64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: codex-rs
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - name: Install musl build tools
+        run: |
+          sudo apt update
+          sudo apt install -y musl-tools pkg-config
+
+      - name: Initialize failure flag
+        run: echo "FAILED=" >> $GITHUB_ENV
+
+      - name: cargo fmt
+        run: cargo fmt -- --config imports_granularity=Item --check || echo "FAILED=${FAILED:+$FAILED, }cargo fmt" >> $GITHUB_ENV
+
+      - name: cargo test
+        run: cargo test || echo "FAILED=${FAILED:+$FAILED, }cargo test" >> $GITHUB_ENV
+
+      - name: cargo clippy
+        run: cargo clippy --all-features -- -D warnings || echo "FAILED=${FAILED:+$FAILED, }cargo clippy" >> $GITHUB_ENV
+
+      - name: x86_64 musl build
+        run: cargo build --target x86_64-unknown-linux-musl || echo "FAILED=${FAILED:+$FAILED, }x86_64 musl build" >> $GITHUB_ENV
+
+      - name: Fail if any step failed
+        run: |
+          if [ -n "$FAILED" ]; then
+            echo -e "See logs above, as the following steps failed:\n$FAILED"
+            exit 1
+          fi
+        env:
+          FAILED: ${{ env.FAILED }}
