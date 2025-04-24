@@ -311,7 +311,15 @@ export const loadConfig = (
 
   const combinedInstructions = [userInstructions, projectDoc]
     .filter((s) => s && s.trim() !== "")
-    .join("\n\n--- project-doc ---\n\n");
+    .map((content, index) => {
+      // Add a clear section header for the content type
+      const sectionName = index === 0 ? "## Custom Instructions" : "## Project Documentation";
+      
+      // Ensure the content starts with a proper section header and newlines
+      // This prevents list items from bleeding across sections
+      return `${sectionName}\n\n${content}`;
+    })
+    .join("\n\n<!-- Section Separator -->\n\n");
 
   // Treat empty string ("" or whitespace) as absence so we can fall back to
   // the latest DEFAULT_MODEL.
