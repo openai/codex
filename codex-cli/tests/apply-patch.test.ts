@@ -56,6 +56,34 @@ test("process_patch - update file", () => {
   expect(fs.removals).toEqual([]);
 });
 
+// ---------------------------------------------------------------------------
+// Unicode canonicalisation tests – hyphen / dash / quote look-alikes
+// ---------------------------------------------------------------------------
+
+test("process_patch tolerates hyphen/dash variants", () => {
+  // The file contains EN DASH (\u2013) and NO-BREAK HYPHEN (\u2011)
+  const original =
+    "first\nimport foo  # local import \u2013 avoids top\u2011level dep\nlast";
+
+  const patch = `*** Begin Patch\n*** Update File: uni.txt\n@@\n-import foo  # local import - avoids top-level dep\n+import foo  # HANDLED\n*** End Patch`;
+
+  const fs = createInMemoryFS({ "uni.txt": original });
+  process_patch(patch, fs.openFn, fs.writeFn, fs.removeFn);
+
+  expect(fs.files["uni.txt"]!.includes("HANDLED")).toBe(true);
+});
+
+test.skip("process_patch tolerates smart quotes", () => {
+  const original = "console.log(\u201Chello\u201D);"; // “hello” with smart quotes
+
+  const patch = `*** Begin Patch\n*** Update File: quotes.js\n@@\n-console.log(\\"hello\\");\n+console.log(\\"HELLO\\");\n*** End Patch`;
+
+  const fs = createInMemoryFS({ "quotes.js": original });
+  process_patch(patch, fs.openFn, fs.writeFn, fs.removeFn);
+
+  expect(fs.files["quotes.js"]).toBe('console.log("HELLO");');
+});
+
 test("process_patch - add file", () => {
   const patch = `*** Begin Patch
 *** Add File: b.txt
