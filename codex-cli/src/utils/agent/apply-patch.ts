@@ -216,11 +216,11 @@ class Parser {
         // (We duplicate a minimal version here because the scope is local.)
         // ------------------------------------------------------------------
         const canonLocal = (s: string): string =>
-          s
-            .normalize("NFC")
-            .replace(/./gu, (c) =>
+          s.normalize("NFC").replace(
+            /./gu,
+            (c) =>
               (
-                {
+                ({
                   "-": "-",
                   "\u2010": "-",
                   "\u2011": "-",
@@ -228,21 +228,25 @@ class Parser {
                   "\u2013": "-",
                   "\u2014": "-",
                   "\u2212": "-",
-                  "\u0022": "\"",
-                  "\u201C": "\"",
-                  "\u201D": "\"",
-                  "\u201E": "\"",
-                  "\u00AB": "\"",
-                  "\u00BB": "\"",
+                  "\u0022": '"',
+                  "\u201C": '"',
+                  "\u201D": '"',
+                  "\u201E": '"',
+                  "\u00AB": '"',
+                  "\u00BB": '"',
                   "\u0027": "'",
                   "\u2018": "'",
                   "\u2019": "'",
                   "\u201B": "'",
-                } as Record<string, string>
+                }) as Record<string, string>
               )[c] ?? c,
-            );
+          );
 
-        if (!fileLines.slice(0, index).some((s) => canonLocal(s) === canonLocal(defStr))) {
+        if (
+          !fileLines
+            .slice(0, index)
+            .some((s) => canonLocal(s) === canonLocal(defStr))
+        ) {
           for (let i = index; i < fileLines.length; i++) {
             if (canonLocal(fileLines[i]) === canonLocal(defStr)) {
               index = i + 1;
@@ -258,7 +262,9 @@ class Parser {
             .some((s) => canonLocal(s.trim()) === canonLocal(defStr.trim()))
         ) {
           for (let i = index; i < fileLines.length; i++) {
-            if (canonLocal(fileLines[i]!.trim()) === canonLocal(defStr.trim())) {
+            if (
+              canonLocal(fileLines[i]!.trim()) === canonLocal(defStr.trim())
+            ) {
               index = i + 1;
               this.fuzz += 1;
               found = true;
@@ -355,12 +361,12 @@ function find_context_core(
     /* U+2212 MINUS SIGN */ "\u2212": "-",
 
     // Double quotes -----------------------------------------------------------
-    /* U+0022 QUOTATION MARK */ "\u0022": "\"",
-    /* U+201C LEFT DOUBLE QUOTATION MARK */ "\u201C": "\"",
-    /* U+201D RIGHT DOUBLE QUOTATION MARK */ "\u201D": "\"",
-    /* U+201E DOUBLE LOW-9 QUOTATION MARK */ "\u201E": "\"",
-    /* U+00AB LEFT-POINTING DOUBLE ANGLE QUOTATION MARK */ "\u00AB": "\"",
-    /* U+00BB RIGHT-POINTING DOUBLE ANGLE QUOTATION MARK */ "\u00BB": "\"",
+    /* U+0022 QUOTATION MARK */ "\u0022": '"',
+    /* U+201C LEFT DOUBLE QUOTATION MARK */ "\u201C": '"',
+    /* U+201D RIGHT DOUBLE QUOTATION MARK */ "\u201D": '"',
+    /* U+201E DOUBLE LOW-9 QUOTATION MARK */ "\u201E": '"',
+    /* U+00AB LEFT-POINTING DOUBLE ANGLE QUOTATION MARK */ "\u00AB": '"',
+    /* U+00BB RIGHT-POINTING DOUBLE ANGLE QUOTATION MARK */ "\u00BB": '"',
 
     // Single quotes -----------------------------------------------------------
     /* U+0027 APOSTROPHE */ "\u0027": "'",
