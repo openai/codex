@@ -11,7 +11,13 @@ describe("canAutoApprove()", () => {
 
   const writeablePaths: Array<string> = [];
   const check = (command: ReadonlyArray<string>): SafetyAssessment =>
-    canAutoApprove(command, "suggest", writeablePaths, env);
+    canAutoApprove(
+      command,
+      /* workdir */ undefined,
+      "suggest",
+      writeablePaths,
+      env,
+    );
 
   test("simple safe commands", () => {
     expect(check(["ls"])).toEqual({
