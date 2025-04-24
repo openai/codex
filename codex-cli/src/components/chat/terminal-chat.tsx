@@ -139,9 +139,7 @@ export default function TerminalChat({
   additionalWritableRoots,
   fullStdout,
 }: Props): React.ReactElement {
-  const notify = config.notify;
-
-  // Combined state variables from both branches
+  const notify = Boolean(config.notify);
   const [model, setModel] = useState<string>(config.model);
   const [provider, setProvider] = useState<string>(config.provider || "openai");
   const [availableModels, setAvailableModels] = useState<Array<string>>([]);

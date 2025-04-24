@@ -97,11 +97,18 @@ export OPENAI_API_KEY="your-api-key-here"
 > - deepseek
 > - xai
 > - groq
+> - any other provider that is compatible with the OpenAI API
 >
 > If you use a provider other than OpenAI, you will need to set the API key for the provider in the config file or in the environment variable as:
 >
 > ```shell
 > export <provider>_API_KEY="your-api-key-here"
+> ```
+>
+> If you use a provider not listed above, you must also set the base URL for the provider:
+>
+> ```shell
+> export <provider>_BASE_URL="https://your-provider-api-base-url"
 > ```
 
 </details>
