@@ -248,7 +248,7 @@ class Parser {
             .some((s) => canonLocal(s) === canonLocal(defStr))
         ) {
           for (let i = index; i < fileLines.length; i++) {
-            if (canonLocal(fileLines[i]) === canonLocal(defStr)) {
+            if (canonLocal(fileLines[i]!) === canonLocal(defStr)) {
               index = i + 1;
               found = true;
               break;

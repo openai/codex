@@ -70,7 +70,7 @@ test("process_patch tolerates hyphen/dash variants", () => {
   const fs = createInMemoryFS({ "uni.txt": original });
   process_patch(patch, fs.openFn, fs.writeFn, fs.removeFn);
 
-  expect(fs.files["uni.txt"].includes("HANDLED")).toBe(true);
+  expect(fs.files["uni.txt"]!.includes("HANDLED")).toBe(true);
 });
 
 test.skip("process_patch tolerates smart quotes", () => {
