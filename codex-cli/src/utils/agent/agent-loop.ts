@@ -272,12 +272,10 @@ export class AgentLoop {
     // defined object.  We purposefully copy over the `model` and
     // `instructions` that have already been passed explicitly so that
     // downstream consumers (e.g. telemetry) still observe the correct values.
-    this.config =
-      config ??
-      ({
-        model,
-        instructions: instructions ?? "",
-      } as AppConfig);
+    this.config = config ?? {
+      model,
+      instructions: instructions ?? "",
+    };
     this.additionalWritableRoots = additionalWritableRoots;
     this.onItem = onItem;
     this.onLoading = onLoading;
