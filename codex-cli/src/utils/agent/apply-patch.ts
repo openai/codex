@@ -238,6 +238,7 @@ class Parser {
                   "\u2018": "'",
                   "\u2019": "'",
                   "\u201B": "'",
+                  "\u00A0": " ",
                 } as Record<string, string>
               )[c] ?? c),
           );
@@ -373,6 +374,7 @@ function find_context_core(
     /* U+2018 LEFT SINGLE QUOTATION MARK */ "\u2018": "'",
     /* U+2019 RIGHT SINGLE QUOTATION MARK */ "\u2019": "'",
     /* U+201B SINGLE HIGH-REVERSED-9 QUOTATION MARK */ "\u201B": "'",
+    /* U+00A0 NO-BREAK SPACE */ "\u00A0": " ",
   };
 
   const canon = (s: string): string =>
