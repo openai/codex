@@ -276,8 +276,8 @@ export class AgentLoop {
       config ??
       ({
         model,
-        instructions: instructions ?? "",
-      } as AppConfig);
+        instructions: instructions ?? ""
+      });
     this.additionalWritableRoots = additionalWritableRoots;
     this.onItem = onItem;
     this.onLoading = onLoading;

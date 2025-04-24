@@ -126,7 +126,7 @@ export type AppConfig = {
   fullAutoErrorMode?: FullAutoErrorMode;
   memory?: MemoryConfig;
   /** Whether to enable desktop notifications for responses */
-  notify: boolean;
+  notify?: boolean;
 
   /** Disable server-side response storage (send full transcript each request) */
   disableResponseStorage?: boolean;
