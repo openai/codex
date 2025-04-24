@@ -609,22 +609,46 @@ export function process_patch(
 // -----------------------------------------------------------------------------
 
 function open_file(p: string): string {
-  return fs.readFileSync(p, "utf8");
+  try {
+    return fs.readFileSync(p, "utf8");
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    throw new DiffError(`Failed to open file '${p}': ${errorMessage} Check that the file exists and you have permission to read it.`);
+  }
 }
 
 function write_file(p: string, content: string): void {
-  if (path.isAbsolute(p)) {
-    throw new DiffError("We do not support absolute paths.");
+  try {
+    if (path.isAbsolute(p)) {
+      throw new DiffError("We do not support absolute paths.");
+    }
+    const parent = path.dirname(p);
+    if (parent !== ".") {
+      fs.mkdirSync(parent, { recursive: true });
+    }
+    fs.writeFileSync(p, content, "utf8");
+  } catch (error) {
+    if (error instanceof DiffError) {
+      throw error; // Re-throw DiffError without modification
+    }
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    throw new DiffError(`Failed to write file '${p}': ${errorMessage} Check that the file exists and you have permission to write to it.`);
   }
-  const parent = path.dirname(p);
-  if (parent !== ".") {
-    fs.mkdirSync(parent, { recursive: true });
-  }
-  fs.writeFileSync(p, content, "utf8");
 }
 
 function remove_file(p: string): void {
-  fs.unlinkSync(p);
+  try {
+    if (!fs.existsSync(p)) {
+      throw new DiffError(`Cannot remove file '${p}': File does not exist`);
+    }
+    fs.unlinkSync(p);
+  } catch (error) {
+    if (error instanceof DiffError) {
+      throw error; // Re-throw DiffError without modification
+    }
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    throw new DiffError(`Failed to remove file '${p}': ${errorMessage} Check that the file exists and you have permission to remove it.`);
+  }
 }
 
 // -----------------------------------------------------------------------------
