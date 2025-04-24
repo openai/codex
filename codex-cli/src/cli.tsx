@@ -17,6 +17,7 @@ import { runSinglePass } from "./cli-singlepass";
 import { AgentLoop } from "./utils/agent/agent-loop";
 import { ReviewDecision } from "./utils/agent/review";
 import { AutoApprovalMode } from "./utils/auto-approval-mode";
+import { checkForUpdates } from "./utils/check-updates";
 import {
   getApiKey,
   loadConfig,

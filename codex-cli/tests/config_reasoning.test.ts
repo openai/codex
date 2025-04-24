@@ -102,6 +102,7 @@ describe("Reasoning Effort Configuration", () => {
       model: "test-model",
       instructions: "",
       reasoningEffort: "medium" as ReasoningEffort,
+      notify: false,
     };
 
     // Act
