@@ -76,7 +76,7 @@ test("process_patch tolerates hyphen/dash variants", () => {
 test.skip("process_patch tolerates smart quotes", () => {
   const original = "console.log(\u201Chello\u201D);"; // “hello” with smart quotes
 
-  const patch = `*** Begin Patch\n*** Update File: quotes.js\n@@\n-console.log(\\\"hello\\\");\n+console.log(\\\"HELLO\\\");\n*** End Patch`;
+  const patch = `*** Begin Patch\n*** Update File: quotes.js\n@@\n-console.log(\\"hello\\");\n+console.log(\\"HELLO\\");\n*** End Patch`;
 
   const fs = createInMemoryFS({ "quotes.js": original });
   process_patch(patch, fs.openFn, fs.writeFn, fs.removeFn);
