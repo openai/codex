@@ -868,6 +868,7 @@ async fn handle_function_call(
                 sandbox_type,
                 &roots_snapshot,
                 sess.ctrl_c.clone(),
+                sess.sandbox_policy,
             )
             .await;
 
@@ -952,11 +953,14 @@ async fn handle_function_call(
 
                             let retry_roots = { sess.writable_roots.lock().unwrap().clone() };
 
+                            // This is an escalated retry; the policy will not be
+                            // examined and the sandbox has been set to `None`.
                             let retry_output_result = process_exec_tool_call(
                                 params.clone(),
                                 SandboxType::None,
                                 &retry_roots,
                                 sess.ctrl_c.clone(),
+                                sess.sandbox_policy,
                             )
                             .await;
 
