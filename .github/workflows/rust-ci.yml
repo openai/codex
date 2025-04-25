@@ -9,6 +9,8 @@ on:
     branches:
       - main
 
+  workflow_dispatch:
+
 # For CI, we build in debug (`--profile dev`) rather than release mode so we
 # get signal faster.
 
@@ -19,6 +21,10 @@ jobs:
     defaults:
       run:
         working-directory: codex-rs
+    env:
+      RUST_LOG=debug
+      RUST_BACKTRACE=1
+
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -58,6 +64,10 @@ jobs:
     defaults:
       run:
         working-directory: codex-rs
+    env:
+      RUST_LOG=debug
+      RUST_BACKTRACE=1
+
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

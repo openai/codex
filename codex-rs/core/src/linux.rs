@@ -181,8 +181,14 @@ mod tests_linux {
             Arc::new(Notify::new()),
             SandboxPolicy::NetworkAndFileWriteRestricted,
         )
-        .await
-        .unwrap();
+        .await;
+
+        let res = match res {
+            Ok(out) => out,
+            Err(e) => {
+                panic!("exec_error: {e:?}");
+            }
+        };
 
         if res.exit_code != 0 {
             println!("stdout:\n{}", res.stdout);
