@@ -17,7 +17,6 @@ codex-apply-patch = { path = "../apply-patch" }
 dirs = "6"
 env-flags = "0.1.1"
 eventsource-stream = "0.2.3"
-expanduser = "1.2.2"
 fs-err = "3.1.0"
 futures = "0.3"
 mime_guess = "2.0"
