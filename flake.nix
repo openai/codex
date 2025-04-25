@@ -14,7 +14,7 @@
     flake-utils.lib.eachDefaultSystem (system: let
       pkgs = import nixpkgs {inherit system;};
       node = pkgs.nodejs_22;
-      pnpm = pkgs.pnpm_10;
+      ppnpm = pkgs.pnpm_10;
       version = "0.1.0";
       hash = "sha256-ZXX9f/MsqMN8fxTclowDdD8+gSOOhI0i+EduTJ5eM34=";
 
@@ -30,7 +30,7 @@
         # workspace project names required for build (e.g. anything with "workspace:*" verison declaration)
         pnpmWorkspaces ? [],
         hash ? lib.fakeHash,
-        pnpm ? pnpm,
+        pnpm ? ppnpm,
         ...
       }: let
         src = with lib.fileset; (toSource {
@@ -115,7 +115,7 @@
         name = "codex-cli-dev";
         buildInputs = [
           node
-          pnpm
+          ppnpm
         ];
         shellHook = ''
           cd codex-cli
