@@ -18,6 +18,10 @@ jobs:
   format:
     name: Format
     runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: codex-rs
+
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
