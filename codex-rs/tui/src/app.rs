@@ -2,6 +2,7 @@ use crate::app_event::AppEvent;
 use crate::chatwidget::ChatWidget;
 use crate::git_warning_screen::GitWarningOutcome;
 use crate::git_warning_screen::GitWarningScreen;
+use crate::scroll_event_helper::ScrollEventHelper;
 use crate::tui;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::Event;
@@ -10,6 +11,8 @@ use codex_core::protocol::SandboxPolicy;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
+use crossterm::event::MouseEvent;
+use crossterm::event::MouseEventKind;
 use std::sync::mpsc::channel;
 use std::sync::mpsc::Receiver;
 use std::sync::mpsc::Sender;
@@ -39,6 +42,7 @@ impl App<'_> {
         model: Option<String>,
     ) -> Self {
         let (app_event_tx, app_event_rx) = channel();
+        let scroll_event_helper = ScrollEventHelper::new(app_event_tx.clone());
 
         // Spawn a dedicated thread for reading the crossterm event loop and
         // re-publishing the events as AppEvents, as appropriate.
@@ -49,10 +53,21 @@ impl App<'_> {
                     let app_event = match event {
                         crossterm::event::Event::Key(key_event) => AppEvent::KeyEvent(key_event),
                         crossterm::event::Event::Resize(_, _) => AppEvent::Redraw,
-                        crossterm::event::Event::FocusGained
-                        | crossterm::event::Event::FocusLost
-                        | crossterm::event::Event::Mouse(_)
-                        | crossterm::event::Event::Paste(_) => {
+                        crossterm::event::Event::Mouse(MouseEvent {
+                            kind: MouseEventKind::ScrollUp,
+                            ..
+                        }) => {
+                            scroll_event_helper.scroll_up();
+                            continue;
+                        }
+                        crossterm::event::Event::Mouse(MouseEvent {
+                            kind: MouseEventKind::ScrollDown,
+                            ..
+                        }) => {
+                            scroll_event_helper.scroll_down();
+                            continue;
+                        }
+                        _ => {
                             continue;
                         }
                     };
@@ -125,6 +140,9 @@ impl App<'_> {
                         }
                     };
                 }
+                AppEvent::Scroll(scroll_delta) => {
+                    self.dispatch_scroll_event(scroll_delta);
+                }
                 AppEvent::CodexEvent(event) => {
                     self.dispatch_codex_event(event);
                 }
@@ -181,6 +199,14 @@ impl App<'_> {
                     // do nothing
                 }
             },
+        }
+    }
+
+    fn dispatch_scroll_event(&mut self, scroll_delta: i32) {
+        if matches!(self.app_state, AppState::Chat) {
+            if let Err(e) = self.chat_widget.handle_scroll_delta(scroll_delta) {
+                tracing::error!("SendError: {e}");
+            }
         }
     }
 

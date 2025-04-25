@@ -3,8 +3,15 @@ use crossterm::event::KeyEvent;
 
 pub(crate) enum AppEvent {
     CodexEvent(Event),
+
     Redraw,
+
     KeyEvent(KeyEvent),
+
+    /// Scroll event with a value representing the "scroll delta" as the net
+    /// scroll up/down events within a short time window.
+    Scroll(i32),
+
     /// Request to exit the application gracefully.
     ExitRequest,
 

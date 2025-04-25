@@ -364,6 +364,23 @@ impl ChatWidget<'_> {
         Ok(())
     }
 
+    pub(crate) fn handle_scroll_delta(
+        &mut self,
+        scroll_delta: i32,
+    ) -> std::result::Result<(), std::sync::mpsc::SendError<AppEvent>> {
+        // If the user is trying to scroll exactly one line, we let them, but
+        // otherwise we assume they are trying to scroll in larger increments.
+        let magnified_scroll_delta = if scroll_delta == 1 {
+            1
+        } else {
+            // Play with this: perhaps it should be non-linear?
+            scroll_delta * 2
+        };
+        self.conversation_history.scroll(magnified_scroll_delta);
+        self.request_redraw()?;
+        Ok(())
+    }
+
     /// Forward an `Op` directly to codex.
     pub(crate) fn submit_op(&self, op: Op) {
         if let Err(e) = self.codex_op_tx.send(op) {
