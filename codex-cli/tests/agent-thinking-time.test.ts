@@ -110,7 +110,7 @@ describe("thinking time counter", () => {
       additionalWritableRoots: [],
       onItem: (i) => items.push(i),
       onLoading: () => {},
-      getCommandConfirmation: async () => ({ review: "yes" } as any),
+      getCommandConfirmation: async () => ({ review: "yes" }) as any,
       onLastResponseId: () => {},
     });
 
