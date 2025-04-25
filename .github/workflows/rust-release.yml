@@ -69,13 +69,11 @@ jobs:
           shopt -s nullglob
           cp target/${{ matrix.target }}/release/codex-repl "$dest"
           cp target/${{ matrix.target }}/release/codex-tui "$dest"
-          ls -R dist/
 
       - name: upload
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.target }}
-          path: dist/${{ matrix.target }}
+          path: dist/*
 
   release:
     needs: build
