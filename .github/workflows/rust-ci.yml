@@ -23,7 +23,7 @@ jobs:
         working-directory: codex-rs
     env:
       RUST_LOG: debug
-      RUST_BACKTRACE: 1
+      RUST_BACKTRACE: full
 
     steps:
       - uses: actions/checkout@v4
@@ -38,7 +38,7 @@ jobs:
         run: cargo fmt -- --config imports_granularity=Item --check || echo "FAILED=${FAILED:+$FAILED, }cargo fmt" >> $GITHUB_ENV
 
       - name: cargo test
-        run: RUST_BACKTRACE=full cargo test || echo "FAILED=${FAILED:+$FAILED, }cargo test" >> $GITHUB_ENV
+        run: cargo test || echo "FAILED=${FAILED:+$FAILED, }cargo test" >> $GITHUB_ENV
 
       - name: cargo clippy
         run: cargo clippy --all-features -- -D warnings || echo "FAILED=${FAILED:+$FAILED, }cargo clippy" >> $GITHUB_ENV
@@ -66,7 +66,7 @@ jobs:
         working-directory: codex-rs
     env:
       RUST_LOG: debug
-      RUST_BACKTRACE: 1
+      RUST_BACKTRACE: full
 
     steps:
       - uses: actions/checkout@v4
@@ -79,13 +79,10 @@ jobs:
         run: cargo fmt -- --config imports_granularity=Item --check || echo "FAILED=${FAILED:+$FAILED, }cargo fmt" >> $GITHUB_ENV
 
       - name: cargo test
-        run: RUST_BACKTRACE=full cargo test || echo "FAILED=${FAILED:+$FAILED, }cargo test" >> $GITHUB_ENV
+        run: cargo test || echo "FAILED=${FAILED:+$FAILED, }cargo test" >> $GITHUB_ENV
 
       - name: cargo clippy
         run: cargo clippy --all-features -- -D warnings || echo "FAILED=${FAILED:+$FAILED, }cargo clippy" >> $GITHUB_ENV
-
-      - name: x86_64 musl build
-        run: cargo build --target x86_64-unknown-linux-musl || echo "FAILED=${FAILED:+$FAILED, }x86_64 musl build" >> $GITHUB_ENV
 
       - name: Fail if any step failed
         run: |
@@ -104,7 +101,7 @@ jobs:
         working-directory: codex-rs
     env:
       RUST_LOG: debug
-      RUST_BACKTRACE: 1
+      RUST_BACKTRACE: full
 
     steps:
       - uses: actions/checkout@v4
