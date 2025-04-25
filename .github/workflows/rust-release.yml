@@ -78,6 +78,9 @@ jobs:
     name: release
     runs-on: ubuntu-24.04
 
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -88,6 +91,13 @@ jobs:
 
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.RELEASE_TAG }}
           files: dist/**
           prerelease: true
           draft: true
+
+      - uses: facebook/dotslash-publish-release@v1
+        with:
+          tag: ${{ env.RELEASE_TAG }}
+          config: .github/dotslash-config.json
+
