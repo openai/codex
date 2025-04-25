@@ -138,6 +138,11 @@ jobs:
           sudo apt update
           sudo apt install -y musl-tools pkg-config
 
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.9
+        with:
+          version: "v0.10.0"
+
       - name: Initialize failure flag
         run: echo "FAILED=" >> $GITHUB_ENV
 
