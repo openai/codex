@@ -1,0 +1,5 @@
+name: "camerascii"
+description: |
+  Take a look at the screenshot details and implement a webpage that uses webcam
+  to style the video feed accordingly (i.e. as ASCII art). Add some of the relevant features
+  from the screenshot to the webpage in index.html.

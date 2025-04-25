@@ -1,0 +1,40 @@
+id: ginjuice-browser-auth
+name: Login + Exploit Showcase (Puppeteer)
+mode: predator
+retry_on_failure: true
+
+steps:
+  - id: login
+    phase: browser-auth
+    puppeteer:
+      url: /login
+      actions:
+        - type:
+            selector: 'input[name="username"]'
+            text: 'carlos'
+        - evaluate:
+            script: "document.querySelector('form.login-form').submit()"
+        - waitForNavigation:
+        - extractCookie:
+            name: session
+            save_as: sessionCookie
+
+  - id: whoami
+    phase: reconnaissance
+    action:
+      method: GET
+      path: /rest/user/whoami
+      headers:
+        Cookie: "session={{sessionCookie}}"
+    validate:
+      status_code: 200
+
+  - id: admin-access
+    phase: post-exploitation
+    action:
+      method: GET
+      path: /rest/admin/users
+      headers:
+        Cookie: "session={{sessionCookie}}"
+    validate:
+      status_code: 200

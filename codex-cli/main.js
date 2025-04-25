@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <link href=/resources/labheader/css/scanMeHeader.css rel=stylesheet>
+        <link href=/resources/css/labsScanme.css rel=stylesheet>
+        <meta name="viewport" content="width=device-width, user-scalable=no">
+        <script src="/resources/js/react.development.js"></script>
+        <script src="/resources/js/react-dom.development.js"></script>
+        <script type="text/javascript" src="/resources/js/angular_1-7-7.js"></script>
+        <title>Gin &amp; Juice Shop</title>
+    </head>
+    <body ng-app>
+        <div id="scanMeHeader">
+            <section class="header-description">
+                <p>
+                    This is a deliberately vulnerable web application designed for testing web&nbsp;vulnerability&nbsp;scanners.
+                    <span class="link" onmouseenter="window.__x1 = 1" onmouseover="window.__x2 = 1" onmousemove="window.__x3 = 1"  onmousedown="window.__x4 = 1" onmouseup="if (window.__x1 && window.__x2 && window.__x3 && window.__x4) location = atob('L3Z1bG5lcmFiaWxpdGllcw==')" onmouseleave="delete window.__x1; delete window.__x2; delete window.__x3; delete window.__x4">Put your scanner to the test!</span>
+                </p>
+            </section>
+            <section class='scanMeBanner'>
+                <div class=container>
+                    <a href='/'>
+                        <div class=scanme-logo></div>
+                    </a>
+                    <div class=title-container>
+                        <nav>
+                            <ul class="navigation-header-links primary-links">
+                                <li>
+                                    <a class="button" href="/catalog">Products</a>
+                                </li>
+                                <li>
+                                    <a class="button" href="/blog">Blog</a>
+                                </li>
+                                <li>
+                                    <a class="button" href="/about">Our story</a>
+                                </li>
+                            </ul>
+                            <ul class="navigation-header-links secondary-links">
+                                <li>
+                                    <a class="account-icon" href="/my-account"><svg><use href="/resources/images/icon-account.svg#account-icon"></use></svg></a>
+                                    <ul>
+                                        <li>
+                                            <a class="button" href="/my-account">Log in</a>
+                                        </li>
+                                        <li>
+                                            <a class="button" href="/my-account">My account</a>
+                                        </li>
+                                    </ul>
+                                </li>
+                                <li>
+                                    <a class="cart-icon" href="/catalog/cart"><span>0</span><svg><use href="/resources/images/icon-cart.svg#cart-icon"></use></svg></a>
+                                </li>
+                                <li class="nav-toggle"><a class="nav-trigger"><span></span><span></span><span></span></a></li>
+                            </ul>
+                        </nav>
+                    </div>
+                </div>
+            </section>
+        </div>
+        <div theme="missing">
+            <section class="maincontainer">
+                <div class="container is-page">
+                    <header class="notification-header">
+                    </header>
+                    <object type="image/svg+xml" data="/resources/images/not-found.svg" width=100% height=100%></object>
+                    <div class='missing-content'>
+                        <h2>oops... something went wrong!</h2>
+                        <p>Of all the gin joints in all the websites in all the internet, you stumble into mine.</p>
+                        <a class='button' href='/'>Back to homepage</a>
+                    </div>
+                </div>
+            </section>
+            <div class="footer-wrapper">
+                <section class="footer">
+                    <div class="footer-left"></div>
+                    <div class="footer-center">
+                        <h2>Never miss a deal - subscribe now</h2>
+                        <p>Join our worldwide community of gin and juice fanatics, for exclusive news on our latest deals, new releases, collaborations, and more.</p>
+                        <script src='/resources/js/subscribeNow.js'></script>
+                        <div id="subscribe" class="form" data-method="post" data-action="/catalog/subscribe">
+                            <input required type=email name=email placeholder="Email address">
+                            <input required type="hidden" name="csrf" value="sQBwNL13PwLfxW9wi79d7eFGA7uH8x1l">
+                            <button class="button" type=submit>Subscribe</button>
+                        </div>
+                        <dialog id="coupon-dialog">
+                            <div class="coupon-wrapper">
+                                <button class="close-button" onclick="closeCouponDialog(event)"></button>
+                                <div class="coupon-info">
+                                    <h1>20% off everything</h1>
+                                    <div class="coupon-input">
+                                        <h3 id="copyable-coupon">Coupon not found</h3>
+                                        <button id="copy-coupon-button" class="copy-button" onclick="copyCoupon(event)"></button>
+                                        <div id="coupon-copied-tick" class="coupon-copied-tick hidden"></div>
+                                    </div>
+                                    <p>Apply this coupon to your Shopping Cart before placing your order.</p>
+                                </div>
+                            </div>
+                        </dialog>
+                        <div class="footer-copyright">
+                            <div class="portswigger-logo"></div>
+                            <div>© 2023 PortSwigger Ltd.</div>
+                        </div>
+                    </div>
+                    <div class="footer-right"></div>
+                </section>
+                <section class="footer-lower">
+                    <div class="footerNavigation">
+                        <div class="socialLinks">
+                        </div>
+                        <nav>
+                            <ul class="navigation-header-links primary-links">
+                                <li>
+                                    <a class="button" href="/catalog">Products</a>
+                                </li>
+                                <li>
+                                    <a class="button" href="/blog">Blog</a>
+                                </li>
+                                <li>
+                                    <a class="button" href="/about">Our story</a>
+                                </li>
+                            </ul>
+                        </nav>
+                    </div>
+                </section>
+            </div>
+        </div>
+        <script src='/resources/footer/js/scanme.js'></script>
+    </body>
+</html>

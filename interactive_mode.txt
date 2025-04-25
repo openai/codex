@@ -1,0 +1,58 @@
+# Enhance Adversys Cyber Agent with interactive NL command processing
+
+I need to modify the Adversys Cyber Agent to improve its natural language command processing capabilities. When a user enters a request in natural language like "let's run nmap against the target adversys.ai", I want the system to:
+
+1. Convert the natural language input into a proper security command
+2. Show the interpreted command to the user for confirmation
+3. Execute the command only after user confirmation
+4. Analyze the command output using OpenAI
+5. Suggest next steps with ready-to-execute follow-up commands
+
+## Current issues
+
+The current implementation has several problems:
+- The OpenAI API call is failing with a temperature error
+- There's no command confirmation step
+- The system doesn't analyze command output
+- There's no suggestion for follow-up commands
+
+## Files to modify
+
+The main file to modify is `codex-cli/src/security/terminal.ts` which contains the core logic for the Adversys CLI.
+
+## Requested changes
+
+1. Fix the OpenAI API calls to properly handle temperature parameter
+2. Add a command confirmation prompt before execution
+3. Add command output analysis using OpenAI
+4. Implement follow-up command suggestions
+
+## Example workflow
+
+User input:
+```
+let's run nmap against the target adversys.ai
+```
+
+System response:
+```
+I'll translate this to: nmap -sV -p 1-1000 adversys.ai
+
+This will perform a service version scan on the most common 1000 ports.
+Do you want to execute this command? (y/n): 
+```
+
+After user confirms and command runs:
+```
+Analysis: The scan found 3 open ports (22, 80, 443) with SSH, HTTP, and HTTPS services.
+Port 80 is running Apache 2.4.41.
+
+Recommended next steps:
+1. Run a more comprehensive scan: nmap -A -T4 adversys.ai
+2. Check for web vulnerabilities: nikto -h adversys.ai
+3. Explore the website directories: gobuster dir -u adversys.ai -w /usr/share/wordlists/dirb/common.txt
+
+Enter the number to execute or type a new command:
+```
+
+Please help me implement these changes to make the security mode more interactive and helpful. 

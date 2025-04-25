@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>Pong</title>
+  <style>
+    body {
+      margin: 0;
+      background: #000;
+      color: white;
+      font-family: sans-serif;
+      overflow: hidden;
+    }
+    #controls {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 12px;
+      padding: 10px;
+      background: #111;
+      position: fixed;
+      top: 0;
+      width: 100%;
+      z-index: 2;
+    }
+    canvas {
+      display: block;
+      margin: 60px auto 0 auto;
+      background: #000;
+    }
+    button, select {
+      background: #222;
+      color: white;
+      border: 1px solid #555;
+      padding: 6px 12px;
+      cursor: pointer;
+    }
+    button:hover {
+      background: #333;
+    }
+    #score {
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="controls">
+    <button id="startPauseBtn">Pause</button>
+    <button id="resetBtn">Reset</button>
+    <label>Mode:
+      <select id="modeSelect">
+        <option value="player">Player vs AI</option>
+        <option value="ai">AI vs AI</option>
+      </select>
+    </label>
+    <label>Difficulty:
+      <select id="difficultySelect">
+        <option value="basic">Basic</option>
+        <option value="fast">Gets Fast</option>
+        <option value="insane">Insane</option>
+      </select>
+    </label>
+    <div id="score">Player: 0 | AI: 0</div>
+  </div>
+
+  <canvas id="pong" width="800" height="600"></canvas>
+
+  <script>
+    const canvas = document.getElementById('pong');
+    const ctx = canvas.getContext('2d');
+    const startPauseBtn = document.getElementById('startPauseBtn');
+    const resetBtn = document.getElementById('resetBtn');
+    const modeSelect = document.getElementById('modeSelect');
+    const difficultySelect = document.getElementById('difficultySelect');
+    const scoreDisplay = document.getElementById('score');
+
+    const paddleWidth = 10, paddleHeight = 100;
+    const ballRadius = 8;
+
+    let player = { x: 0, y: canvas.height / 2 - paddleHeight / 2 };
+    let ai = { x: canvas.width - paddleWidth, y: canvas.height / 2 - paddleHeight / 2 };
+    let ball = { x: canvas.width / 2, y: canvas.height / 2, vx: 5, vy: 3 };
+
+    let isPaused = false;
+    let mode = 'player';
+    let difficulty = 'basic';
+
+    const tennisSteps = ['0', '15', '30', '40', 'Adv', 'Win'];
+    let scores = { player: 0, ai: 0 };
+
+    function tennisDisplay() {
+      if (scores.player >= 3 && scores.ai >= 3) {
+        if (scores.player === scores.ai) return 'Deuce';
+        if (scores.player === scores.ai + 1) return 'Advantage Player';
+        if (scores.ai === scores.player + 1) return 'Advantage AI';
+      }
+      return `Player: ${tennisSteps[Math.min(scores.player, 4)]} | AI: ${tennisSteps[Math.min(scores.ai, 4)]}`;
+    }
+
+    function updateScore(winner) {
+      scores[winner]++;
+      const diff = scores[winner] - scores[opponent(winner)];
+      if (scores[winner] >= 4 && diff >= 2) {
+        alert(`${winner === 'player' ? 'Player' : 'AI'} wins the game!`);
+        scores = { player: 0, ai: 0 };
+      }
+    }
+
+    function opponent(winner) {
+      return winner === 'player' ? 'ai' : 'player';
+    }
+
+    function drawRect(x, y, w, h, color = "#fff") {
+      ctx.fillStyle = color;
+      ctx.fillRect(x, y, w, h);
+    }
+
+    function drawCircle(x, y, r, color = "#fff") {
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    function resetBall() {
+      ball.x = canvas.width / 2;
+      ball.y = canvas.height / 2;
+      let baseSpeed = difficulty === 'insane' ? 8 : 5;
+      ball.vx = baseSpeed * (Math.random() > 0.5 ? 1 : -1);
+      ball.vy = 3 * (Math.random() > 0.5 ? 1 : -1);
+    }
+
+    function update() {
+      if (isPaused) return;
+
+      ball.x += ball.vx;
+      ball.y += ball.vy;
+
+      // Wall bounce
+      if (ball.y < 0 || ball.y > canvas.height) ball.vy *= -1;
+
+      // Paddle collision
+      let paddle = ball.x < canvas.width / 2 ? player : ai;
+      if (
+        ball.x - ballRadius < paddle.x + paddleWidth &&
+        ball.x + ballRadius > paddle.x &&
+        ball.y > paddle.y &&
+        ball.y < paddle.y + paddleHeight
+      ) {
+        ball.vx *= -1;
+
+        if (difficulty === 'fast') {
+          ball.vx *= 1.05;
+          ball.vy *= 1.05;
+        } else if (difficulty === 'insane') {
+          ball.vx *= 1.1;
+          ball.vy *= 1.1;
+        }
+      }
+
+      // Scoring
+      if (ball.x < 0) {
+        updateScore('ai');
+        resetBall();
+      } else if (ball.x > canvas.width) {
+        updateScore('player');
+        resetBall();
+      }
+
+      // Paddle AI
+      if (mode === 'ai') {
+        player.y += (ball.y - (player.y + paddleHeight / 2)) * 0.1;
+      }
+
+      ai.y += (ball.y - (ai.y + paddleHeight / 2)) * 0.1;
+
+      // Clamp paddles
+      player.y = Math.max(0, Math.min(canvas.height - paddleHeight, player.y));
+      ai.y = Math.max(0, Math.min(canvas.height - paddleHeight, ai.y));
+    }
+
+    function drawCourtBoundaries() {
+      drawRect(0, 0, canvas.width, 4); // Top
+      drawRect(0, canvas.height - 4, canvas.width, 4); // Bottom
+    }
+
+    function draw() {
+      drawRect(0, 0, canvas.width, canvas.height, "#000");
+      drawCourtBoundaries();
+      drawRect(player.x, player.y, paddleWidth, paddleHeight);
+      drawRect(ai.x, ai.y, paddleWidth, paddleHeight);
+      drawCircle(ball.x, ball.y, ballRadius);
+      scoreDisplay.textContent = tennisDisplay();
+    }
+
+    function loop() {
+      update();
+      draw();
+      requestAnimationFrame(loop);
+    }
+
+    startPauseBtn.onclick = () => {
+      isPaused = !isPaused;
+      startPauseBtn.textContent = isPaused ? "Resume" : "Pause";
+    };
+
+    resetBtn.onclick = () => {
+      scores = { player: 0, ai: 0 };
+      resetBall();
+    };
+
+    modeSelect.onchange = (e) => {
+      mode = e.target.value;
+    };
+
+    difficultySelect.onchange = (e) => {
+      difficulty = e.target.value;
+      resetBall();
+    };
+
+    document.addEventListener("mousemove", (e) => {
+      if (mode === 'player') {
+        const rect = canvas.getBoundingClientRect();
+        player.y = e.clientY - rect.top - paddleHeight / 2;
+      }
+    });
+
+    loop();
+  </script>
+</body>
+</html>

@@ -1,0 +1,57 @@
+# deps
+node_modules
+
+# build
+dist/
+build/
+out/
+storybook-static/
+
+# ignore README for publishing
+codex-cli/README.md
+
+# editor
+.vscode/
+.idea/
+.history/
+*.swp
+*~
+
+# caches
+.cache/
+.turbo/
+.parcel-cache/
+.eslintcache
+.nyc_output/
+.jest/
+*.tsbuildinfo
+
+# logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# env
+.env*
+!.env.example
+
+# package
+*.tgz
+
+# ci
+.vercel/
+.netlify/
+
+# patches
+apply_patch/
+
+# coverage
+coverage/
+
+# os
+.DS_Store
+Thumbs.db
+Icon?
+.Spotlight-V100/
+

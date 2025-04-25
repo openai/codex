@@ -1,0 +1,92 @@
+{
+  "name": "@openai/codex",
+  "version": "0.1.2504161510",
+  "license": "Apache-2.0",
+  "bin": {
+    "codex": "dist/codex.mjs"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test:tools": "vitest tests/toolsYaml.test.ts",
+    "format": "prettier --check src tests",
+    "format:fix": "prettier --write src tests",
+    "dev": "tsc --watch",
+    "lint": "eslint src tests --ext ts --ext tsx --report-unused-disable-directives --max-warnings 0",
+    "lint:fix": "eslint src tests --ext ts --ext tsx --fix",
+    "test": "vitest run",
+    "test:watch": "vitest --watch",
+    "typecheck": "tsc --noEmit",
+    "build": "node build.mjs",
+    "build:dev": "NODE_ENV=development node build.mjs --dev && NODE_OPTIONS=--enable-source-maps node dist/cli-dev.js",
+    "release:readme": "cp ../README.md ./README.md",
+    "release:version": "codex -a full-auto 'update the CLI_VERSION in codex-cli/src/utils/session.ts and the version in package.json to use the current timestamp (YYMMDDHHmm format)'",
+    "release": "npm run release:readme && npm run release:version && npm run build && npm publish"
+  },
+  "files": [
+    "README.md",
+    "dist",
+    "src"
+  ],
+  "dependencies": {
+    "@inkjs/ui": "^2.0.0",
+    "build": "^0.1.4",
+    "chalk": "^5.2.0",
+    "diff": "^7.0.0",
+    "dotenv": "^16.1.4",
+    "file-type": "^20.1.0",
+    "ink": "^5.2.0",
+    "ink-select-input": "^6.0.0",
+    "js-yaml": "^4.1.0",
+    "link": "^2.1.1",
+    "marked": "^15.0.7",
+    "marked-terminal": "^7.3.0",
+    "meow": "^13.2.0",
+    "node-pty": "^1.0.0",
+    "npm": "^11.3.0",
+    "open": "^10.1.0",
+    "openai": "^4.89.0",
+    "puppeteer": "^19.11.1",
+    "react": "^18.2.0",
+    "run": "^1.5.0",
+    "shell-quote": "^1.8.2",
+    "use-interval": "1.4.0",
+    "xml2js": "^0.4.23"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.22.0",
+    "@types/diff": "^7.0.2",
+    "@types/js-yaml": "^4.0.9",
+    "@types/marked-terminal": "^6.1.1",
+    "@types/react": "^18.0.32",
+    "@types/shell-quote": "^1.7.5",
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
+    "esbuild": "^0.25.2",
+    "eslint-plugin-import": "^2.31.0",
+    "eslint-plugin-react": "^7.32.2",
+    "eslint-plugin-react-hooks": "^4.6.0",
+    "eslint-plugin-react-refresh": "^0.4.19",
+    "ink-testing-library": "^3.0.0",
+    "prettier": "^2.8.7",
+    "punycode": "^2.3.1",
+    "ts-node": "^10.9.1",
+    "typescript": "^5.0.3",
+    "vitest": "^3.0.9",
+    "whatwg-url": "^14.2.0"
+  },
+  "resolutions": {
+    "braces": "^3.0.3",
+    "micromatch": "^4.0.8",
+    "semver": "^7.7.1"
+  },
+  "overrides": {
+    "punycode": "^2.3.1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openai/codex"
+  }
+}

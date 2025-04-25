@@ -1,0 +1,47 @@
+id: ginjuice-a07-authentication-failures
+name: "A07 - Identification and Authentication Failures"
+mode: predator
+retry_on_failure: true
+
+steps:
+  - phase: browser-auth
+    description: "Perform valid login via browser to obtain session cookie"
+    puppeteer:
+      url: /login
+      actions:
+        - type:
+            selector: 'input[name="username"]'
+            text: 'carlos'
+        - click:
+            selector: 'button[type="submit"]'
+        - waitForNavigation:
+            waitUntil: "networkidle0"
+        - extractCookie:
+            name: session
+            save_as: session_cookie
+
+  - phase: reconnaissance
+    description: "Access protected page with session cookie"
+    action:
+      method: GET
+      path: "/my-account"
+      headers:
+        Cookie: "{{session_cookie}}"
+    validate:
+      status_code: 200
+
+  - phase: exploitation
+    description: "Attempt login with invalid user to test failed authentication response"
+    puppeteer:
+      url: /login
+      actions:
+        - type:
+            selector: 'input[name="username"]'
+            text: 'invalid_user'
+        - click:
+            selector: 'button[type="submit"]'
+        - waitForNavigation:
+            waitUntil: "networkidle0"
+    validate:
+      status_code: 200
+      body_contains: "Invalid username or password"

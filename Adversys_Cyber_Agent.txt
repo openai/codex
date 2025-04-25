@@ -1,0 +1,187 @@
+Adversys Cyber Agent Implementation Plan
+
+Objective
+
+Create a specialized AI-powered terminal assistant called Adversys, launched via codex --security-mode, that enables AI-guided offensive security workflows. The agent will:
+
+Run commands directly in a local terminal
+
+Read and analyze terminal output
+
+Use OpenAI's GPT-4-turbo for intelligent decision-making
+
+Guide the user through pen-testing tasks with real-time feedback
+
+Phase 1: System Architecture Design
+
+1. Terminal Integration Layer (PTY or TMUX)
+
+Use Python's pty or pexpect to spawn a pseudo-terminal session
+
+Alternatively use tmux to create isolated, named sessions
+
+Stream stdout/stderr to a central handler for Codex to parse
+
+Allow command injection into the active session
+
+2. Codex Chat Integration
+
+Use OpenAI Chat API (GPT-4-turbo) with persistent memory per session
+
+Create structured system prompts:
+
+Define roles: "You are an Offensive Security Agent"
+
+Provide session context: current target, tools installed, last output
+
+Accept user input and feed Codex relevant command history + results
+
+3. Shell Stream Handler
+
+Asynchronous stream reader for real-time output (asyncio + pty)
+
+Output buffer parser with:
+
+Error detection (e.g., "command not found")
+
+Tool-specific pattern matching (e.g., Nmap open port summaries)
+
+Summarize long outputs before sending to Codex to reduce token usage
+
+Phase 2: Feature Implementation
+
+4. Security Mode Activation
+
+codex --security-mode [--target domain.com] [--session name]
+
+Initializes:
+
+PTY session or TMUX window
+
+Codex chat thread
+
+Tool inventory cache
+
+Workspace/session folders in ~/.adversys/
+
+5. Tool Inventory Management
+
+Track installed tools in tools.json
+
+Provide CLI commands:
+
+adversys tool list
+
+adversys tool install <name>
+
+adversys tool update <name>
+
+Auto-detect tool presence with which or command -v
+
+6. AI-Guided Command Generation
+
+Codex interprets prompts like:
+
+"Scan adversys.ai"
+
+"Run SQL injection test on login form"
+
+Codex returns:
+
+Tool selection (e.g., Nmap, sqlmap)
+
+Constructed command (e.g., nmap -sV adversys.ai)
+
+Agent injects command into the PTY and streams output back to Codex
+
+7. Error Handling & Auto-Fix
+
+Detect command errors from stderr (e.g., missing tools, syntax issues)
+
+Codex suggests fixes and injects them:
+
+Install missing tool
+
+Correct command syntax
+
+Retry the operation
+
+Phase 3: UX & Session Management
+
+8. User Interaction & Approvals
+
+Offer multiple execution modes:
+
+suggest – user reviews all Codex commands
+
+auto-edit – Codex edits, user approves
+
+full-auto – Codex runs all commands without approval
+
+Danger zone: --dangerously-auto-approve-everything
+
+9. Session Isolation
+
+Use --session flag to isolate logs, outputs, and tools
+
+Save command history, timestamps, outputs to:
+
+~/.adversys/sessions/<session-id>
+
+10. Workspace Protection
+
+Check for active Git repository and warn if not
+
+Block execution in system-critical folders (/, /etc, /bin, etc.)
+
+Phase 4: Reporting and Documentation
+
+11. Vulnerability Reporting
+
+Capture tool output summaries and map to CVSS/OWASP/MITRE
+
+Codex assists in writing findings based on output
+
+Export to Markdown, PDF, or JSON formats
+
+12. Result Scoping and Compliance
+
+Enforce target scope boundaries via user-defined YAML or JSON config
+
+Auto-check scope adherence before launching tests
+
+Phase 5: Future Enhancements
+
+Multi-agent coordination (scan + report + exploit agents)
+
+API and mobile pen-test modules
+
+Offline LLM mode using local GPTQ model
+
+Integration with Burp Suite, Metasploit, Nessus via plugin adapters
+
+Tech Stack
+
+Component
+
+Tool
+
+Terminal
+
+Python PTY or TMUX
+
+AI Chat
+
+OpenAI GPT-4-turbo
+
+Backend
+
+Python (asyncio, subprocess)
+
+CLI
+
+Node.js or Python argparse/Click
+
+Storage
+
+JSON, SQLite (for sessions, tools)

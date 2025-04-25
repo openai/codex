@@ -1,0 +1,58 @@
+name: ci
+
+on:
+  pull_request: { branches: [main] }
+  push: { branches: [main] }
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Run codex-cli/ tasks first because they are higher signal.
+
+      - name: Install dependencies (codex-cli)
+        working-directory: codex-cli
+        run: npm ci
+
+      - name: Check formatting (codex-cli)
+        working-directory: codex-cli
+        run: npm run format
+
+      - name: Run tests (codex-cli)
+        working-directory: codex-cli
+        run: npm run test
+
+      - name: Lint (codex-cli)
+        working-directory: codex-cli
+        run: |
+          npm run lint -- \
+            --rule "no-console:error" \
+            --rule "no-debugger:error" \
+            --max-warnings=-1
+
+      - name: Type‑check (codex-cli)
+        working-directory: codex-cli
+        run: npm run typecheck
+
+      - name: Build (codex-cli)
+        working-directory: codex-cli
+        run: npm run build
+
+      # Run formatting checks in the root directory last.
+
+      - name: Install dependencies (root)
+        run: npm ci
+
+      - name: Check formatting (root)
+        run: npm run format

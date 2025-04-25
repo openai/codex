@@ -1,0 +1,114 @@
+tools:
+  nmap:
+    description: "Port scanner to detect open services and banner info."
+    install: |
+      if ! command -v nmap &>/dev/null; then
+        [[ "$(uname)" == "Darwin" ]] && brew install nmap || sudo apt-get install -y nmap
+      fi
+    command: "nmap -p80,443 {target} -oX -"
+    parser: xml
+    confidence: high
+    type: recon
+    retries: 1
+    timeout: 15
+    check: "command -v nmap"
+
+  whatweb:
+    description: "Passive fingerprinting of CMS, server tech, plugins."
+    install: |
+      if ! command -v whatweb &>/dev/null; then
+        [[ "$(uname)" == "Darwin" ]] && brew install whatweb || sudo apt-get install -y whatweb
+      fi
+    command: "whatweb {target} --log-json -"
+    parser: json
+    confidence: medium
+    type: recon
+    retries: 1
+    timeout: 15
+    check: "command -v whatweb"
+
+  dirsearch:
+    description: "Recursive directory brute-forcing with extensions."
+    install: |
+      pip3 install --upgrade dirsearch
+    command: "dirsearch -u {target} -e php,html,js --json=stdout"
+    parser: json_lines
+    confidence: medium
+    type: recon
+    retries: 2
+    timeout: 30
+    check: "command -v dirsearch"
+
+  ffuf:
+    description: "Fast directory and file fuzzing tool with wordlists."
+    install: |
+      go install github.com/ffuf/ffuf@latest
+    command: "ffuf -u {target}/FUZZ -w $WORDLIST -of json -o /tmp/ffuf_{timestamp}.json"
+    parser: json
+    confidence: medium
+    type: recon
+    retries: 2
+    timeout: 20
+    check: "command -v ffuf"
+
+  nuclei:
+    description: "Vulnerability scanner using fast custom templates."
+    install: |
+      brew tap projectdiscovery/tap
+      brew install projectdiscovery/tap/nuclei
+    command: "nuclei -u {target} -json"
+    parser: json_lines
+    confidence: "high"
+    type: "exploit"
+    retries: 2
+    timeout: 20
+    check: "command -v nuclei"
+
+  sqlmap:
+    description: "Automated SQLi scanner and database takeover tool."
+    install: |
+      pip3 install sqlmap
+    command: "sqlmap -u {target} --batch --output-dir=/tmp/sqlmap"
+    parser: plain
+    confidence: high
+    type: exploit
+    retries: 2
+    timeout: 60
+    check: "command -v sqlmap"
+    output_schema:
+      required_keys:
+        - payload
+        - dbms
+    followup:
+      when_successful:
+        - session-extractor
+
+  dalfox:
+    description: "Advanced XSS scanner with parameter and DOM analysis."
+    install: |
+      go install github.com/hahwul/dalfox@latest
+    command: "dalfox url {target} -o /tmp/dalfox.json -f json"
+    parser: json
+    confidence: medium
+    type: exploit
+    retries: 2
+    timeout: 20
+    check: "command -v dalfox"
+
+  session-extractor:
+    description: "Tool to extract session cookies or tokens from HTTP responses."
+    install: |
+      echo 'This is a placeholder — replace with real session extractor logic.'
+    command: "grep -Eo 'session=[a-zA-Z0-9]+' /tmp/sqlmap/output/{target}/log"
+    parser: plain
+    confidence: low
+    type: followup
+    retries: 1
+    timeout: 5
+    check: "true"
+
+# Supported parser types:
+# - xml: for XML output (e.g. nmap)
+# - json: full single-block JSON
+# - json_lines: newline-delimited JSON (e.g. nuclei)
+# - plain: stdout blob (manual regex or line-based)

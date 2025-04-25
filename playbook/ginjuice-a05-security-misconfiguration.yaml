@@ -1,0 +1,34 @@
+id: ginjuice-a05-security-misconfiguration
+name: "A05 - Security Misconfiguration"
+mode: predator
+retry_on_failure: true
+
+steps:
+  - phase: reconnaissance
+    description: "Scan homepage for missing HTTP security headers"
+    action:
+      method: GET
+      path: "/"
+    validate:
+      status_code: 200
+      header_not_contains:
+        X-Frame-Options: ""
+        Content-Security-Policy: ""
+        X-Content-Type-Options: ""
+        Strict-Transport-Security: ""
+
+  - phase: reconnaissance
+    description: "Check public access to development JavaScript assets"
+    action:
+      method: GET
+      path: "/resources/js/react.development.js"
+    validate:
+      status_code: 200
+
+  - phase: reconnaissance
+    description: "Check public access to development CSS assets"
+    action:
+      method: GET
+      path: "/resources/css/labsScanme.css"
+    validate:
+      status_code: 200

@@ -1,0 +1,7 @@
+id: test1
+mode: predator
+steps:
+  - phase: test
+    action:
+      method: GET
+      path: /health

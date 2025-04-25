@@ -1,0 +1,44 @@
+===============================================================
+INSTRUCTIONS FOR ADDING SECURITY MODE TO CODEX CLI (cli.tsx)
+===============================================================
+
+1. Add this import at the top of cli.tsx:
+```typescript
+import { handleSecurityMode } from "./security/cli-integration.js";
+```
+
+2. Add these flags to the CLI help text in the meow() configuration:
+```typescript
+  Security options
+    --security-mode            Launch in security mode as Adversys Cyber Agent
+    --target <url/ip>          Target for security testing (with --security-mode)
+    --session <name>           Session name for security testing (with --security-mode)
+```
+
+3. Add these flag definitions to the flags object in the meow() configuration:
+```typescript
+securityMode: {
+  type: "boolean",
+  description: "Launch in security mode as Adversys Cyber Agent",
+},
+target: {
+  type: "string",
+  description: "Target for security testing (with --security-mode)",
+},
+session: {
+  type: "string",
+  description: "Session name for security testing (with --security-mode)",
+},
+```
+
+4. Add this code block before other mode checks (before checking for quietMode or fullContextMode):
+```typescript
+// Check for security mode
+if (await handleSecurityMode(cli, prompt, config)) {
+  process.exit(0);
+}
+```
+
+===============================================================
+END OF INSTRUCTIONS
+=============================================================== 
