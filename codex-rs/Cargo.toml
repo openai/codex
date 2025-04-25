@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = [
+    "ansi-escape",
+    "apply-patch",
+    "cli",
+    "core",
+    "exec",
+    "execpolicy",
+    "interactive",
+    "repl",
+    "tui",
+]

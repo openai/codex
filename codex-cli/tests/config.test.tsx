@@ -234,3 +234,44 @@ test("loads and saves providers correctly", () => {
     expect(mergedConfig.providers["openai"]).toBeDefined();
   }
 });
+
+test("saves and loads instructions with project doc separator correctly", () => {
+  const userInstructions = "user specific instructions";
+  const projectDoc = "project specific documentation";
+  const combinedInstructions = `${userInstructions}\n\n--- project-doc ---\n\n${projectDoc}`;
+
+  const testConfig = {
+    model: "test-model",
+    instructions: combinedInstructions,
+    notify: false,
+  };
+
+  saveConfig(testConfig, testConfigPath, testInstructionsPath);
+
+  expect(memfs[testInstructionsPath]).toBe(userInstructions);
+
+  const loadedConfig = loadConfig(testConfigPath, testInstructionsPath, {
+    disableProjectDoc: true,
+  });
+  expect(loadedConfig.instructions).toBe(userInstructions);
+});
+
+test("handles empty user instructions when saving with project doc separator", () => {
+  const projectDoc = "project specific documentation";
+  const combinedInstructions = `\n\n--- project-doc ---\n\n${projectDoc}`;
+
+  const testConfig = {
+    model: "test-model",
+    instructions: combinedInstructions,
+    notify: false,
+  };
+
+  saveConfig(testConfig, testConfigPath, testInstructionsPath);
+
+  expect(memfs[testInstructionsPath]).toBe("");
+
+  const loadedConfig = loadConfig(testConfigPath, testInstructionsPath, {
+    disableProjectDoc: true,
+  });
+  expect(loadedConfig.instructions).toBe("");
+});
