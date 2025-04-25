@@ -162,10 +162,10 @@ export default function ModelOverlay({
       }
       initialItems={items}
       currentValue={currentModel}
-      onSelect={() =>
+      onSelect={(selectedModel) =>
         onSelect(
           items?.map((m) => m.value),
-          currentModel,
+          selectedModel,
         )
       }
       onExit={onExit}
