@@ -113,7 +113,10 @@ async function generateCommandExplanation(
     let errorMessage = "Unable to generate explanation due to an error.";
     if (error instanceof Error) {
       errorMessage = `Unable to generate explanation: ${error.message}`;
+
+      // If it's an API error, check for more specific information
       if ("status" in error && typeof error.status === "number") {
+        // Handle API-specific errors
         if (error.status === 401) {
           errorMessage =
             "Unable to generate explanation: API key is invalid or expired.";
@@ -193,8 +196,11 @@ export default function TerminalChat({
   } = useConfirmation();
   const [overlayMode, setOverlayMode] = useState<OverlayModeType>("none");
 
-  // Store the diff text when opening the diff overlay so the view isn't
+  // Store the diff text when opening the diff overlay so the view isn’t
   // recomputed on every re‑render while it is open.
+  // diffText is passed down to the DiffOverlay component. The setter is
+  // currently unused but retained for potential future updates. Prefix with
+  // an underscore so eslint ignores the unused variable.
   const [diffText, _setDiffText] = useState<string>("");
 
   const [initialPrompt, setInitialPrompt] = useState(_initialPrompt);
@@ -207,8 +213,11 @@ export default function TerminalChat({
   // recreate only when model/instructions/approvalPolicy change.
   const agentRef = React.useRef<AgentLoop>();
   const [, forceUpdate] = React.useReducer((c) => c + 1, 0); // trigger re‑render
-
-  // DEBUG: log every render w/ key bits of state
+  
+    // ────────────────────────────────────────────────────────────────
+    // DEBUG: log every render w/ key bits of state
+   // ────────────────────────────────────────────────────────────────
+  
   log(
     `render - agent? ${Boolean(agentRef.current)} loading=${loading} items=${
       items.length
@@ -385,8 +394,11 @@ export default function TerminalChat({
   useEffect(() => {
     log(`agentRef.current is now ${Boolean(agent)}`);
   }, [agent]);
-
-  // Dynamic layout constraints – keep total rendered rows <= terminal rows
+  
+  // ---------------------------------------------------------------------
+   // Dynamic layout constraints – keep total rendered rows <= terminal rows
+   // ---------------------------------------------------------------------
+  
   const { rows: terminalRows } = useTerminalSize();
 
   useEffect(() => {
@@ -408,7 +420,10 @@ export default function TerminalChat({
     processInitialInputItems();
   }, [agent, initialPrompt, initialImagePaths]);
 
-  // In-app warning if CLI --model isn't in fetched list
+   // ────────────────────────────────────────────────────────────────
+   // In-app warning if CLI --model isn't in fetched list
+   // ────────────────────────────────────────────────────────────────
+  
   useEffect(() => {
     (async () => {
       const available = await getAvailableModels(provider);
