@@ -1,13 +1,8 @@
 name: rust-ci
 on:
-  pull_request:
-    branches:
-      - main
-    paths:
-      - "codex-rs/**"
   push:
     tags:
-      - "v.*.*.*"
+      - "rust-v.*.*.*"
 
   # remove before landing
   workflow_dispatch:
