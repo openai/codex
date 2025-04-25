@@ -85,4 +85,4 @@ jobs:
           path: dist
 
       - name: List
-        run: ls dist/
+        run: ls -R dist/
