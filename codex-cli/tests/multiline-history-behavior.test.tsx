@@ -44,7 +44,7 @@ vi.mock("../src/approvals.js", () => ({
 }));
 
 // After mocks are in place we can safely import the component under test.
-import TerminalChatInput from "../src/components/chat/terminal-chat-new-input.js";
+import TerminalChatInput from "../src/components/chat/terminal-chat-input.js";
 
 // Tiny helper mirroring the one used in other UI tests so we can await Ink's
 // internal promises between keystrokes.
