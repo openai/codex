@@ -72,15 +72,11 @@ jobs:
           cp target/${{ matrix.target }}/release/codex-tui "$dest"
           ls -lah "$dest"
 
-      - name: upload
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          path: dist/${{ matrix.target }}/codex-repl
+          name: ${{ matrix.target }}
+          path: codex-rs/dist/${{ matrix.target }}/*
 
-      - name: upload
-        uses: actions/upload-artifact@v4
-        with:
-          path: dist/${{ matrix.target }}/codex-tui
 
   release:
     needs: build
