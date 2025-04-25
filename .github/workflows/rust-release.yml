@@ -77,6 +77,9 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      - uses: actions:/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           path: dist
+      
+      - name: list
+        run: ls dist/
