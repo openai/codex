@@ -206,9 +206,17 @@ pub async fn exec(
         if let Some(dir) = &workdir {
             cmd.current_dir(dir);
         }
-        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
-        cmd.kill_on_drop(true);
-        cmd.spawn()?
+
+        // Do not create a file descriptor for stdin because otherwise some
+        // commands may hang forever waiting for input. For example, ripgrep has
+        // a heuristic where it may try to read from stdin as explained here:
+        // https://github.com/BurntSushi/ripgrep/blob/e2362d4d5185d02fa857bf381e7bd52e66fafc73/crates/core/flags/hiargs.rs#L1101-L1103
+        cmd.stdin(Stdio::null());
+
+        cmd.stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()?
     };
 
     let stdout_handle = tokio::spawn(read_capped(
