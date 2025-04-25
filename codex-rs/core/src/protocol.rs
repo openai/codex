@@ -33,6 +33,9 @@ pub enum Op {
         approval_policy: AskForApproval,
         /// How to sandbox commands executed in the system
         sandbox_policy: SandboxPolicy,
+        /// Disable server-side response storage (send full context each request)
+        #[serde(default)]
+        disable_response_storage: bool,
     },
 
     /// Abort current task.
