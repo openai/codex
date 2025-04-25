@@ -1,7 +1,13 @@
 name: rust-ci
 on:
-  pull_request: { branches: [main] }
-  push: { branches: [main] }
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "codex-rs/**"
+  push:
+    branches:
+      - main
 
 # For CI, we build in debug (`--profile dev`) rather than release mode so we
 # get signal faster.
@@ -26,7 +32,7 @@ jobs:
         run: cargo fmt -- --config imports_granularity=Item --check || echo "FAILED=${FAILED:+$FAILED, }cargo fmt" >> $GITHUB_ENV
 
       - name: cargo test
-        run: cargo test || echo "FAILED=${FAILED:+$FAILED, }cargo test" >> $GITHUB_ENV
+        run: RUST_BACKTRACE=full cargo test || echo "FAILED=${FAILED:+$FAILED, }cargo test" >> $GITHUB_ENV
 
       - name: cargo clippy
         run: cargo clippy --all-features -- -D warnings || echo "FAILED=${FAILED:+$FAILED, }cargo clippy" >> $GITHUB_ENV
@@ -69,7 +75,7 @@ jobs:
         run: cargo fmt -- --config imports_granularity=Item --check || echo "FAILED=${FAILED:+$FAILED, }cargo fmt" >> $GITHUB_ENV
 
       - name: cargo test
-        run: cargo test || echo "FAILED=${FAILED:+$FAILED, }cargo test" >> $GITHUB_ENV
+        run: RUST_BACKTRACE=full cargo test || echo "FAILED=${FAILED:+$FAILED, }cargo test" >> $GITHUB_ENV
 
       - name: cargo clippy
         run: cargo clippy --all-features -- -D warnings || echo "FAILED=${FAILED:+$FAILED, }cargo clippy" >> $GITHUB_ENV
