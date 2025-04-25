@@ -1,0 +1,82 @@
+name: rust-ci
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "codex-rs/**"
+  push:
+    tags:
+      - "v.*.*.*"
+
+  # remove before landing
+  workflow_dispatch:
+
+jobs:
+
+  release:
+    name: ${{ matrix.runner }} - ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: codex-rs
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            target: aarch64-apple-darwin
+          - runner: macos-14
+            target: x86_64-apple-darwin
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ${{ github.workspace }}/codex-rs/target/
+          key: cargo-${{ matrix.runner }}-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' }}
+        name: Install musl build tools
+        run: |
+          sudo apt install -y musl-tools pkg-config
+
+      - name: Initialize failure flag
+        run: echo "FAILED=" >> $GITHUB_ENV
+
+      - name: cargo build
+        run: cargo build --target ${{ matrix.target }} --release --all-features -- -D warnings || echo "FAILED=${FAILED:+$FAILED, }cargo clippy" >> $GITHUB_ENV
+    
+      - name: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.runner }}-${{ matrix.target }}
+          path: dist/*
+
+      - name: release
+        uses: softprops/action-gh-release@v2
+        with: { files: dist/* }
+
+      - name: Fail if any step failed
+        run: |
+          if [ -n "$FAILED" ]; then
+            echo -e "See logs above, as the following steps failed:\n$FAILED"
+            exit 1
+          fi
+        env:
+          FAILED: ${{ env.FAILED }}
