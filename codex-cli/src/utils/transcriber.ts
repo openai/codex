@@ -1,5 +1,5 @@
 import { getApiKey, getBaseUrl } from "./config";
-import { CLI_VERSION , ORIGIN , getSessionId } from "./session";
+import { CLI_VERSION, ORIGIN, getSessionId } from "./session";
 import { EventEmitter } from "events";
 import { createRequire } from "node:module";
 import OpenAI from "openai";
@@ -8,7 +8,6 @@ import { OpenAIRealtimeWS } from "openai/beta/realtime/ws";
 
 const require = createRequire(import.meta.url);
 const { PvRecorder } = require("@picovoice/pvrecorder-node");
-
 
 export interface TranscriptionEvent {
   type: string;
@@ -122,7 +121,10 @@ export class RealtimeTranscriber extends EventEmitter {
       this.rt.socket.on("close", (code: number, reason: string) => {
         if (code !== 1000) {
           // 1000 is a normal close
-          this.emit("error", new Error(`WebSocket closed: code=${code}, reason=${reason}`));
+          this.emit(
+            "error",
+            new Error(`WebSocket closed: code=${code}, reason=${reason}`),
+          );
         }
         this.isConnected = false;
         this.emit("disconnected");
@@ -164,7 +166,9 @@ export class RealtimeTranscriber extends EventEmitter {
   }
 
   private async processAudioFrames() {
-    if (!this.recorder || !this.isRecording) {return;}
+    if (!this.recorder || !this.isRecording) {
+      return;
+    }
 
     try {
       while (this.isRecording && this.isConnected) {
@@ -185,10 +189,10 @@ export class RealtimeTranscriber extends EventEmitter {
         } catch (error) {
           // Silently break out if it's an InvalidState error (happens when stopping)
           if (
-            error instanceof Error && 
+            error instanceof Error &&
             (error.constructor.name === "PvRecorderStatusInvalidStateError" ||
               // require import doesn't perserve class prototype
-            error.message?.includes("failed to read audio data frame"))
+              error.message?.includes("failed to read audio data frame"))
           ) {
             break;
           }

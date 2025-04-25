@@ -1,8 +1,7 @@
 import type { MultilineTextEditorHandle } from "./multiline-editor";
 import type { ReviewDecision } from "../../utils/agent/review.js";
 import type { HistoryEntry } from "../../utils/storage/command-history.js";
-import type {
-  TranscriptionEvent} from "../../utils/transcriber.js";
+import type { TranscriptionEvent } from "../../utils/transcriber.js";
 import type {
   ResponseInputItem,
   ResponseItem,
@@ -22,9 +21,7 @@ import {
   addToHistory,
 } from "../../utils/storage/command-history.js";
 import { clearTerminal, onExit } from "../../utils/terminal.js";
-import {
-  RealtimeTranscriber
-} from "../../utils/transcriber.js";
+import { RealtimeTranscriber } from "../../utils/transcriber.js";
 import { Box, Text, useApp, useInput, useStdin } from "ink";
 import { fileURLToPath } from "node:url";
 import React, {
