@@ -22,14 +22,6 @@ pub enum SandboxErr {
     #[error("seccomp backend error")]
     SeccompBackend(#[from] seccompiler::BackendError),
 
-    /// Command timed out
-    #[error("command timed out")]
-    Timeout,
-
-    /// Command was killed by a signal
-    #[error("command was killed by a signal")]
-    Signal(i32),
-
     /// Error from linux landlock
     #[error("Landlock was not able to fully enforce all sandbox rules")]
     LandlockRestrict,
