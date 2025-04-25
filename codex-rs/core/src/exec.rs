@@ -31,6 +31,7 @@ const DEFAULT_TIMEOUT_MS: u64 = 10_000;
 /// Hardcode this since it does not seem worth including the libc craate just
 /// for this.
 const SIGKILL_CODE: i32 = 9;
+const TIMEOUT_CODE: i32 = 64;
 
 const MACOS_SEATBELT_READONLY_POLICY: &str = include_str!("seatbelt_readonly_policy.sbpl");
 
@@ -115,18 +116,19 @@ pub async fn process_exec_tool_call(
     let duration = start.elapsed();
     match raw_output_result {
         Ok(raw_output) => {
-            let exit_code = raw_output.exit_status.code().unwrap_or(-1);
             let stdout = String::from_utf8_lossy(&raw_output.stdout).to_string();
             let stderr = String::from_utf8_lossy(&raw_output.stderr).to_string();
 
             #[cfg(target_family = "unix")]
             match raw_output.exit_status.signal() {
-                Some(SIGKILL_CODE) => return Err(CodexErr::Sandbox(SandboxErr::Timeout)),
+                Some(TIMEOUT_CODE) => return Err(CodexErr::Sandbox(SandboxErr::Timeout)),
                 Some(signal) => {
                     return Err(CodexErr::Sandbox(SandboxErr::Signal(signal)));
                 }
                 None => {}
             }
+
+            let exit_code = raw_output.exit_status.code().unwrap_or(-1);
 
             // NOTE(ragona): This is much less restrictive than the previous check. If we exec
             // a command, and it returns anything other than success, we assume that it may have
@@ -255,7 +257,7 @@ pub async fn exec(
                     // timeout
                     child.start_kill()?;
                     // Debatable whether `child.wait().await` should be called here.
-                    synthetic_exit_status(128 + SIGKILL_CODE)
+                    synthetic_exit_status(128 + TIMEOUT_CODE)
                 }
             }
         }
