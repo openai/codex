@@ -1,13 +1,7 @@
 import type { SafetyAssessment } from "../src/approvals";
 
 import { canAutoApprove } from "../src/approvals";
-import { describe, test, expect, vi } from "vitest";
-
-vi.mock("../src/utils/config", () => ({
-  loadConfig: () => ({
-    safeCommands: ["npm test", "sl"],
-  }),
-}));
+import { describe, test, expect } from "vitest";
 
 describe("canAutoApprove()", () => {
   const env = {
@@ -17,7 +11,13 @@ describe("canAutoApprove()", () => {
 
   const writeablePaths: Array<string> = [];
   const check = (command: ReadonlyArray<string>): SafetyAssessment =>
-    canAutoApprove(command, "suggest", writeablePaths, env);
+    canAutoApprove(
+      command,
+      /* workdir */ undefined,
+      "suggest",
+      writeablePaths,
+      env,
+    );
 
   test("simple safe commands", () => {
     expect(check(["ls"])).toEqual({
@@ -79,7 +79,7 @@ describe("canAutoApprove()", () => {
   test("true command is considered safe", () => {
     expect(check(["true"])).toEqual({
       type: "auto-approve",
-      reason: "No‑op (true)",
+      reason: "No-op (true)",
       group: "Utility",
       runInSandbox: false,
     });
@@ -96,26 +96,55 @@ describe("canAutoApprove()", () => {
     expect(check(["cargo", "build"])).toEqual({ type: "ask-user" });
   });
 
-  test("commands in safeCommands config should be safe", async () => {
-    expect(check(["npm", "test"])).toEqual({
+  test("find", () => {
+    expect(check(["find", ".", "-name", "file.txt"])).toEqual({
       type: "auto-approve",
-      reason: "User-defined safe command",
-      group: "User config",
+      reason: "Find files or directories",
+      group: "Searching",
       runInSandbox: false,
     });
 
-    expect(check(["sl"])).toEqual({
-      type: "auto-approve",
-      reason: "User-defined safe command",
-      group: "User config",
-      runInSandbox: false,
+    // Options that can execute arbitrary commands.
+    expect(
+      check(["find", ".", "-name", "file.txt", "-exec", "rm", "{}", ";"]),
+    ).toEqual({
+      type: "ask-user",
+    });
+    expect(
+      check(["find", ".", "-name", "*.py", "-execdir", "python3", "{}", ";"]),
+    ).toEqual({
+      type: "ask-user",
+    });
+    expect(
+      check(["find", ".", "-name", "file.txt", "-ok", "rm", "{}", ";"]),
+    ).toEqual({
+      type: "ask-user",
+    });
+    expect(
+      check(["find", ".", "-name", "*.py", "-okdir", "python3", "{}", ";"]),
+    ).toEqual({
+      type: "ask-user",
     });
 
-    expect(check(["npm", "test", "--watch"])).toEqual({
-      type: "auto-approve",
-      reason: "User-defined safe command",
-      group: "User config",
-      runInSandbox: false,
+    // Option that deletes matching files.
+    expect(check(["find", ".", "-delete", "-name", "file.txt"])).toEqual({
+      type: "ask-user",
+    });
+
+    // Options that write pathnames to a file.
+    expect(check(["find", ".", "-fls", "/etc/passwd"])).toEqual({
+      type: "ask-user",
+    });
+    expect(check(["find", ".", "-fprint", "/etc/passwd"])).toEqual({
+      type: "ask-user",
+    });
+    expect(check(["find", ".", "-fprint0", "/etc/passwd"])).toEqual({
+      type: "ask-user",
+    });
+    expect(
+      check(["find", ".", "-fprintf", "/root/suid.txt", "%#m %u %p\n"]),
+    ).toEqual({
+      type: "ask-user",
     });
   });
 });

@@ -34,6 +34,10 @@ function clamp(v: number, min: number, max: number): number {
  * ---------------------------------------------------------------------- */
 
 function toCodePoints(str: string): Array<string> {
+  if (typeof Intl !== "undefined" && "Segmenter" in Intl) {
+    const seg = new Intl.Segmenter();
+    return [...seg.segment(str)].map((seg) => seg.segment);
+  }
   // [...str] or Array.from both iterate by UTF‑32 code point, handling
   // surrogate pairs correctly.
   return Array.from(str);
@@ -423,7 +427,7 @@ export default class TextBuffer {
   /** Delete the word to the *left* of the caret, mirroring common
    *  Ctrl/Alt+Backspace behaviour in editors & terminals.  Both the adjacent
    *  whitespace *and* the word characters immediately preceding the caret are
-   *  removed.  If the caret is already at column‑0 this becomes a no‑op. */
+   *  removed.  If the caret is already at column‑0 this becomes a no-op. */
   deleteWordLeft(): void {
     dbg("deleteWordLeft", { beforeCursor: this.getCursor() });
 
@@ -710,7 +714,7 @@ export default class TextBuffer {
   }
 
   endSelection(): void {
-    // no‑op for now, kept for API symmetry
+    // no-op for now, kept for API symmetry
     // we rely on anchor + current cursor to compute selection
   }
 

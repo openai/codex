@@ -5,12 +5,12 @@ import type { ApplyPatchCommand, ApprovalPolicy } from "../../approvals.js";
 import type { ResponseInputItem } from "openai/resources/responses/responses.mjs";
 
 import { exec, execApplyPatch } from "./exec.js";
-import { isLoggingEnabled, log } from "./log.js";
 import { ReviewDecision } from "./review.js";
 import { FullAutoErrorMode } from "../auto-approval-mode.js";
 import { SandboxType } from "./sandbox/interface.js";
 import { canAutoApprove } from "../../approvals.js";
 import { formatCommandForDisplay } from "../../format-command.js";
+import { isLoggingEnabled, log } from "../logger/log.js";
 import { access } from "fs/promises";
 
 // ---------------------------------------------------------------------------
@@ -81,7 +81,7 @@ export async function handleExecCommand(
   ) => Promise<CommandConfirmation>,
   abortSignal?: AbortSignal,
 ): Promise<HandleExecCommandResult> {
-  const { cmd: command } = args;
+  const { cmd: command, workdir } = args;
 
   const key = deriveCommandKey(command);
 
@@ -103,7 +103,7 @@ export async function handleExecCommand(
   // working directory so that edits are constrained to the project root.  If
   // the caller wishes to broaden or restrict the set it can be made
   // configurable in the future.
-  const safety = canAutoApprove(command, policy, [process.cwd()]);
+  const safety = canAutoApprove(command, workdir, policy, [process.cwd()]);
 
   let runInSandbox: boolean;
   switch (safety.type) {
@@ -144,7 +144,7 @@ export async function handleExecCommand(
     abortSignal,
   );
   // If the operation was aborted in the meantime, propagate the cancellation
-  // upward by returning an empty (no‑op) result so that the agent loop will
+  // upward by returning an empty (no-op) result so that the agent loop will
   // exit cleanly without emitting spurious output.
   if (abortSignal?.aborted) {
     return {
@@ -247,7 +247,7 @@ async function execCommand(
   const start = Date.now();
   const execResult =
     applyPatchCommand != null
-      ? execApplyPatch(applyPatchCommand.patch)
+      ? execApplyPatch(applyPatchCommand.patch, workdir)
       : await exec(
           { ...execInput, additionalWritableRoots },
           await getSandbox(runInSandbox),

@@ -9,6 +9,7 @@
     "build": "pnpm --filter @openai/codex run build",
     "test": "pnpm --filter @openai/codex run test",
     "lint": "pnpm --filter @openai/codex run lint",
+    "lint:fix": "pnpm --filter @openai/codex run lint:fix",
     "typecheck": "pnpm --filter @openai/codex run typecheck",
     "changelog": "git-cliff --config cliff.toml --output CHANGELOG.ignore.md $LAST_RELEASE_TAG..HEAD",
     "prepare": "husky",
@@ -37,7 +38,7 @@
     "*.md": "prettier --write",
     ".github/workflows/*.yml": "prettier --write",
     "**/*.{js,ts,tsx}": [
-      "cd codex-cli && pnpm run lint",
+      "pnpm --filter @openai/codex run lint",
       "cd codex-cli && pnpm run typecheck"
     ]
   },

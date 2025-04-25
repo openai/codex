@@ -8,8 +8,8 @@
 
 import type { FullAutoErrorMode } from "./auto-approval-mode.js";
 
-import { log } from "./agent/log.js";
 import { AutoApprovalMode } from "./auto-approval-mode.js";
+import { log } from "./logger/log.js";
 import { providers } from "./providers.js";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { load as loadYaml, dump as dumpYaml } from "js-yaml";
@@ -42,15 +42,33 @@ export function setApiKey(apiKey: string): void {
 }
 
 export function getBaseUrl(provider: string = "openai"): string | undefined {
-  const providerInfo = providers[provider.toLowerCase()];
+  // Check for a PROVIDER-specific override: e.g. OPENAI_BASE_URL or OLLAMA_BASE_URL.
+  const envKey = `${provider.toUpperCase()}_BASE_URL`;
+  if (process.env[envKey]) {
+    return process.env[envKey];
+  }
+
+  // Get providers config from config file.
+  const config = loadConfig();
+  const providersConfig = config.providers ?? providers;
+  const providerInfo = providersConfig[provider.toLowerCase()];
   if (providerInfo) {
     return providerInfo.baseURL;
   }
+
+  // If the provider not found in the providers list and `OPENAI_BASE_URL` is set, use it.
+  if (OPENAI_BASE_URL !== "") {
+    return OPENAI_BASE_URL;
+  }
+
+  // We tried.
   return undefined;
 }
 
 export function getApiKey(provider: string = "openai"): string | undefined {
-  const providerInfo = providers[provider.toLowerCase()];
+  const config = loadConfig();
+  const providersConfig = config.providers ?? providers;
+  const providerInfo = providersConfig[provider.toLowerCase()];
   if (providerInfo) {
     if (providerInfo.name === "Ollama") {
       return process.env[providerInfo.envKey] ?? "dummy";
@@ -58,11 +76,20 @@ export function getApiKey(provider: string = "openai"): string | undefined {
     return process.env[providerInfo.envKey];
   }
 
+  // Checking `PROVIDER_API_KEY feels more intuitive with a custom provider.
+  const customApiKey = process.env[`${provider.toUpperCase()}_API_KEY`];
+  if (customApiKey) {
+    return customApiKey;
+  }
+
+  // If the provider not found in the providers list and `OPENAI_API_KEY` is set, use it
+  if (OPENAI_API_KEY !== "") {
+    return OPENAI_API_KEY;
+  }
+
+  // We tried.
   return undefined;
 }
-
-// Formatting (quiet mode-only).
-export const PRETTY_PRINT = Boolean(process.env["PRETTY_PRINT"] || "");
 
 // Represents config as persisted in config.json.
 export type StoredConfig = {
@@ -73,13 +100,14 @@ export type StoredConfig = {
   memory?: MemoryConfig;
   /** Whether to enable desktop notifications for responses */
   notify?: boolean;
+  /** Disable server-side response storage (send full transcript each request) */
+  disableResponseStorage?: boolean;
+  providers?: Record<string, { name: string; baseURL: string; envKey: string }>;
   history?: {
     maxSize?: number;
     saveHistory?: boolean;
     sensitivePatterns?: Array<string>;
   };
-  /** User-defined safe commands */
-  safeCommands?: Array<string>;
 };
 
 // Minimal config written on first run.  An *empty* model string ensures that
@@ -104,18 +132,23 @@ export type AppConfig = {
   fullAutoErrorMode?: FullAutoErrorMode;
   memory?: MemoryConfig;
   /** Whether to enable desktop notifications for responses */
-  notify: boolean;
+  notify?: boolean;
+
+  /** Disable server-side response storage (send full transcript each request) */
+  disableResponseStorage?: boolean;
 
   /** Enable the "flex-mode" processing mode for supported models (o3, o4-mini) */
   flexMode?: boolean;
+  providers?: Record<string, { name: string; baseURL: string; envKey: string }>;
   history?: {
     maxSize: number;
     saveHistory: boolean;
     sensitivePatterns: Array<string>;
   };
-  /** User-defined safe commands */
-  safeCommands?: Array<string>;
 };
+
+// Formatting (quiet mode-only).
+export const PRETTY_PRINT = Boolean(process.env["PRETTY_PRINT"] || "");
 
 // ---------------------------------------------------------------------------
 // Project doc support (codex.md)
@@ -124,6 +157,7 @@ export type AppConfig = {
 export const PROJECT_DOC_MAX_BYTES = 32 * 1024; // 32 kB
 
 const PROJECT_DOC_FILENAMES = ["codex.md", ".codex.md", "CODEX.md"];
+const PROJECT_DOC_SEPARATOR = "\n\n--- project-doc ---\n\n";
 
 export function discoverProjectDocPath(startDir: string): string | null {
   const cwd = resolvePath(startDir);
@@ -278,7 +312,7 @@ export const loadConfig = (
 
   const combinedInstructions = [userInstructions, projectDoc]
     .filter((s) => s && s.trim() !== "")
-    .join("\n\n--- project-doc ---\n\n");
+    .join(PROJECT_DOC_SEPARATOR);
 
   // Treat empty string ("" or whitespace) as absence so we can fall back to
   // the latest DEFAULT_MODEL.
@@ -297,7 +331,7 @@ export const loadConfig = (
     instructions: combinedInstructions,
     notify: storedConfig.notify === true,
     approvalMode: storedConfig.approvalMode,
-    safeCommands: storedConfig.safeCommands ?? [],
+    disableResponseStorage: storedConfig.disableResponseStorage ?? false,
   };
 
   // -----------------------------------------------------------------------
@@ -375,12 +409,8 @@ export const loadConfig = (
     };
   }
 
-  // Load user-defined safe commands
-  if (Array.isArray(storedConfig.safeCommands)) {
-    config.safeCommands = storedConfig.safeCommands.map(String);
-  } else {
-    config.safeCommands = [];
-  }
+  // Merge default providers with user configured providers in the config.
+  config.providers = { ...providers, ...storedConfig.providers };
 
   return config;
 };
@@ -414,6 +444,7 @@ export const saveConfig = (
   const configToSave: StoredConfig = {
     model: config.model,
     provider: config.provider,
+    providers: config.providers,
     approvalMode: config.approvalMode,
   };
 
@@ -425,10 +456,6 @@ export const saveConfig = (
       sensitivePatterns: config.history.sensitivePatterns,
     };
   }
-  // Save: User-defined safe commands
-  if (config.safeCommands && config.safeCommands.length > 0) {
-    configToSave.safeCommands = config.safeCommands;
-  }
 
   if (ext === ".yaml" || ext === ".yml") {
     writeFileSync(targetPath, dumpYaml(configToSave), "utf-8");
@@ -436,5 +463,9 @@ export const saveConfig = (
     writeFileSync(targetPath, JSON.stringify(configToSave, null, 2), "utf-8");
   }
 
-  writeFileSync(instructionsPath, config.instructions, "utf-8");
+  // Take everything before the first PROJECT_DOC_SEPARATOR (or the whole string if none).
+  const [userInstructions = ""] = config.instructions.split(
+    PROJECT_DOC_SEPARATOR,
+  );
+  writeFileSync(instructionsPath, userInstructions, "utf-8");
 };

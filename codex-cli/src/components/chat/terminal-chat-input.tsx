@@ -9,10 +9,10 @@ import type {
 import MultilineTextEditor from "./multiline-editor";
 import { TerminalChatCommandReview } from "./terminal-chat-command-review.js";
 import TextCompletions from "./terminal-chat-completions.js";
-import { log } from "../../utils/agent/log.js";
 import { loadConfig } from "../../utils/config.js";
 import { getFileSystemSuggestions } from "../../utils/file-system-suggestions.js";
 import { createInputItem } from "../../utils/input-utils.js";
+import { log } from "../../utils/logger/log.js";
 import { setSessionId } from "../../utils/session.js";
 import { SLASH_COMMANDS, type SlashCommand } from "../../utils/slash-commands";
 import {
@@ -189,6 +189,12 @@ export default function TerminalChatInput({
                   openDiffOverlay();
                   break;
                 case "/bug":
+                  onSubmit(cmd);
+                  break;
+                case "/clear":
+                  onSubmit(cmd);
+                  break;
+                case "/clearhistory":
                   onSubmit(cmd);
                   break;
                 default:
@@ -396,19 +402,29 @@ export default function TerminalChatInput({
         setInput("");
         setSessionId("");
         setLastResponseId("");
+        // Clear the terminal screen (including scrollback) before resetting context
         clearTerminal();
+
+        // Emit a system notice in the chat; no raw console writes so Ink keeps control.
 
         // Emit a system message to confirm the clear action.  We *append*
         // it so Ink's <Static> treats it as new output and actually renders it.
         setItems((prev) => {
           const filteredOldItems = prev.filter((item) => {
+            // Remove any token‑heavy entries (user/assistant turns and function calls)
             if (
               item.type === "message" &&
               (item.role === "user" || item.role === "assistant")
             ) {
               return false;
             }
-            return true;
+            if (
+              item.type === "function_call" ||
+              item.type === "function_call_output"
+            ) {
+              return false;
+            }
+            return true; // keep developer/system and other meta entries
           });
 
           return [
@@ -454,15 +470,8 @@ export default function TerminalChatInput({
         setInput("");
 
         try {
-          // Dynamically import dependencies to avoid unnecessary bundle size
-          const [{ default: open }, os] = await Promise.all([
-            import("open"),
-            import("node:os"),
-          ]);
-
-          // Lazy import CLI_VERSION to avoid circular deps
+          const os = await import("node:os");
           const { CLI_VERSION } = await import("../../utils/session.js");
-
           const { buildBugReportUrl } = await import(
             "../../utils/bug-report.js"
           );
@@ -476,10 +485,6 @@ export default function TerminalChatInput({
               .join(" | "),
           });
 
-          // Open the URL in the user's default browser
-          await open(url, { wait: false });
-
-          // Inform the user in the chat history
           setItems((prev) => [
             ...prev,
             {
@@ -489,13 +494,13 @@ export default function TerminalChatInput({
               content: [
                 {
                   type: "input_text",
-                  text: "📋 Opened browser to file a bug report. Please include any context that might help us fix the issue!",
+                  text: `🔗 Bug report URL: ${url}`,
                 },
               ],
             },
           ]);
         } catch (error) {
-          // If anything went wrong, notify the user
+          // If anything went wrong, notify the user.
           setItems((prev) => [
             ...prev,
             {
