@@ -64,7 +64,7 @@ jobs:
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
-            target/
+            ${{ github.workspace }}/target/
           key: cargo-${{ matrix.runner }}-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
 
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' }}
@@ -72,7 +72,7 @@ jobs:
         run: |
           sudo apt install -y musl-tools pkg-config
 
-      - run: ls -l ./
+      - run: ls -l ./ && ls -l ${{ github.workspace }}
 
       - name: Initialize failure flag
         run: echo "FAILED=" >> $GITHUB_ENV
