@@ -21,6 +21,7 @@ use tracing::debug;
 pub async fn init_codex(
     approval_policy: AskForApproval,
     sandbox_policy: SandboxPolicy,
+    disable_response_storage: bool,
     model_override: Option<String>,
 ) -> anyhow::Result<(CodexWrapper, Event, Arc<Notify>)> {
     let ctrl_c = notify_on_sigint();
@@ -33,6 +34,7 @@ pub async fn init_codex(
             instructions: config.instructions,
             approval_policy,
             sandbox_policy,
+            disable_response_storage,
         })
         .await?;
 

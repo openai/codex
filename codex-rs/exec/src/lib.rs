@@ -31,9 +31,10 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
         .try_init();
 
     let Cli {
-        skip_git_repo_check,
-        model,
         images,
+        model,
+        skip_git_repo_check,
+        disable_response_storage,
         prompt,
         ..
     } = cli;
@@ -50,8 +51,13 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
     // likely come from a new --execution-policy arg.
     let approval_policy = AskForApproval::Never;
     let sandbox_policy = SandboxPolicy::NetworkAndFileWriteRestricted;
-    let (codex_wrapper, event, ctrl_c) =
-        codex_wrapper::init_codex(approval_policy, sandbox_policy, model).await?;
+    let (codex_wrapper, event, ctrl_c) = codex_wrapper::init_codex(
+        approval_policy,
+        sandbox_policy,
+        disable_response_storage,
+        model,
+    )
+    .await?;
     let codex = Arc::new(codex_wrapper);
     info!("Codex initialized with event: {event:?}");
 

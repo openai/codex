@@ -16,6 +16,10 @@ pub struct Cli {
     #[arg(long = "skip-git-repo-check", default_value_t = false)]
     pub skip_git_repo_check: bool,
 
+    /// Disable server‑side response storage (sends the full conversation context with every request)
+    #[arg(long = "disable-response-storage", default_value_t = false)]
+    pub disable_response_storage: bool,
+
     /// Initial instructions for the agent.
     pub prompt: Option<String>,
 }
