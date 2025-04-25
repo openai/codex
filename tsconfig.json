@@ -29,5 +29,13 @@
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true
   },
-  "include": ["src", "tests", "bin"]
+  "include": ["src", "bin"],
+  "exclude": [
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "**/*.e2e.test.ts",
+    "**/*.e2e.test.tsx",
+    "tests",
+    "src/cli/commands/templates/*"
+  ]
 }
