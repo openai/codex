@@ -65,11 +65,11 @@ jobs:
         shell: bash
         run: |
           dest="dist/${{ matrix.target }}"
-          ls -R
-          echo $dest
           mkdir -p "$dest"
           shopt -s nullglob
-          cp target/${{ matrix.target }}/release/codex-* "$dest/"
+          cp target/${{ matrix.target }}/release/codex-repl "$dest"
+          cp target/${{ matrix.target }}/release/codex-tui "$dest"
+          ls -R dist/
 
       - name: upload
         uses: actions/upload-artifact@v4
