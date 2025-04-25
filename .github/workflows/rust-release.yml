@@ -8,7 +8,6 @@ on:
   workflow_dispatch:
 
 jobs:
-
   build:
     name: ${{ matrix.runner }} - ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
@@ -53,7 +52,7 @@ jobs:
 
       - name: cargo build
         run: cargo build --target ${{ matrix.target }} --release --all-targets --all-features
-      
+
       - name: stage artifacts
         shell: bash
         run: |
@@ -61,7 +60,7 @@ jobs:
           mkdir -p "$dest"
           shopt -s nullglob
           cp target/${{ matrix.target }}/release/codex-* "$dest/"
-    
+
       - name: upload
         uses: actions/upload-artifact@v4
         with:
@@ -74,6 +73,6 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-        - uses: actions:/download-artifact@v4
-          with:
-            path: dist
+      - uses: actions:/download-artifact@v4
+        with:
+          path: dist
