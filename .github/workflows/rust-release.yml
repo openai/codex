@@ -8,8 +8,8 @@ on:
   workflow_dispatch:
 
 concurrency:
-    group: ${{ github.workflow }}-${{ github.ref }}
-    cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -80,6 +80,6 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: dist
-      
+
       - name: list
         run: ls dist/
