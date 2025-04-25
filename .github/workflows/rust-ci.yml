@@ -15,6 +15,16 @@ on:
 # get signal faster.
 
 jobs:
+  format:
+    name: Format
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo fmt
+        run: cargo fmt -- --config imports_granularity=Item --check
+
+
   lint_build_test:
     name: ${{ matrix.runner }} - ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
@@ -26,9 +36,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [macos-14]
-        target: [aarch64-apple-darwin, x86_64-apple-darwin]
         include:
+          - runner: macos-14
+            target: aarch64-apple-darwin
+          - runner: macos-14
+            target: x86_64-apple-darwin
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
           - runner: ubuntu-24.04
@@ -48,17 +60,11 @@ jobs:
       - name: Initialize failure flag
         run: echo "FAILED=" >> $GITHUB_ENV
 
-      - name: cargo fmt
-        run: cargo fmt -- --config imports_granularity=Item --check || echo "FAILED=${FAILED:+$FAILED, }cargo fmt" >> $GITHUB_ENV
-
       - name: cargo clippy
-        run: cargo clippy --all-features -- -D warnings || echo "FAILED=${FAILED:+$FAILED, }cargo clippy" >> $GITHUB_ENV
-
-      - name: ${{ matrix.target }} build
-        run: cargo build --target ${{ matrix.target }} || echo "FAILED=${FAILED:+$FAILED, }cargo fmt" >> $GITHUB_ENV
+        run: cargo clippy --target ${{ matrix.target }} --all-features -- -D warnings || echo "FAILED=${FAILED:+$FAILED, }cargo clippy" >> $GITHUB_ENV
 
       - name: cargo test
-        run: cargo test || echo "FAILED=${FAILED:+$FAILED, }cargo test" >> $GITHUB_ENV
+        run: cargo test --target ${{ matrix.target }} || echo "FAILED=${FAILED:+$FAILED, }cargo test" >> $GITHUB_ENV
 
       - name: Fail if any step failed
         run: |
