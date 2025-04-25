@@ -52,13 +52,13 @@ jobs:
           sudo apt install -y musl-tools pkg-config
 
       - name: cargo build
-        run: cargo build --target ${{ matrix.target }} --release --all-features
+        run: cargo build --target ${{ matrix.target }} --release --all-targets --all-features
     
       - name: upload
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
-          path: dist/*
+          path: target/release/codex-*
 
   release:
     needs: build
@@ -69,4 +69,4 @@ jobs:
         - name: download
           uses: actions:/download-artifact@v4
           with:
-            path: dist/*
+            path: target/release/*
