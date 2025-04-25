@@ -255,10 +255,18 @@ export default function TerminalChatInput({
             moveThroughHistory = false;
           }
 
-          // Only use history if we are already in history mode or if the input is empty.
-          if (historyIndex == null && input.trim() !== "") {
-            moveThroughHistory = false;
-          }
+          // If we are *not* yet in history-navigation mode we still want to
+          // remember the current draft so we can restore it later when the
+          // user reaches the newest history entry again (↓ past the end).
+          //
+          // Previous behaviour gated history-navigation behind an *empty*
+          // input buffer.  This prevented users from recalling earlier
+          // commands while they were in the middle of composing a multi-line
+          // draft – the very flow covered by the failing regression test.
+          // Removing that restriction aligns the behaviour with common
+          // shells (bash, zsh, etc.): once the caret is on the first line, a
+          // press of ↑ always recalls the previous entry, regardless of the
+          // current buffer contents.
 
           // Move through history.
           if (history.length && moveThroughHistory) {
@@ -314,9 +322,24 @@ export default function TerminalChatInput({
         }
       }
 
-      // Update the cached cursor position *after* we've potentially handled
-      // the key so that the next event has the correct "previous" reference.
-      prevCursorRow.current = editorRef.current?.getRow?.() ?? null;
+      // Update the cached cursor position *after* **all** handlers (including
+      // the internal <MultilineTextEditor>) have processed this key event.
+      //
+      // Ink invokes `useInput` callbacks starting with **parent** components
+      // first, followed by their descendants. As a result the call above
+      // executes *before* the editor has had a chance to react to the key
+      // press and update its internal caret position.  When navigating
+      // through a multi-line draft with the ↑ / ↓ arrow keys this meant we
+      // recorded the *old* cursor row instead of the one that results *after*
+      // the key press.  Consequently, a subsequent ↑ still saw
+      // `prevCursorRow = 1` even though the caret was already on row 0 and
+      // history-navigation never kicked in.
+      //
+      // Defer the sampling by one tick so we read the *final* caret position
+      // for this frame.
+      setTimeout(() => {
+        prevCursorRow.current = editorRef.current?.getRow?.() ?? null;
+      }, 0);
 
       if (input.trim() === "" && isNew) {
         if (_key.tab) {
