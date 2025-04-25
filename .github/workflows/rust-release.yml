@@ -7,6 +7,10 @@ on:
   # remove before landing
   workflow_dispatch:
 
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
+
 jobs:
   build:
     name: ${{ matrix.runner }} - ${{ matrix.target }}
