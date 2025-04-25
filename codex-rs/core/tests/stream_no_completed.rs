@@ -78,6 +78,7 @@ async fn retries_on_early_close() {
                 instructions: None,
                 approval_policy: AskForApproval::OnFailure,
                 sandbox_policy: SandboxPolicy::NetworkAndFileWriteRestricted,
+                disable_response_storage: false,
             },
         })
         .await

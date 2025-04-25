@@ -21,6 +21,7 @@ mod exec_command;
 mod git_warning_screen;
 mod history_cell;
 mod log_layer;
+mod scroll_event_helper;
 mod status_indicator_widget;
 mod tui;
 mod user_approval_widget;
@@ -106,6 +107,7 @@ fn run_ratatui_app(
         approval_policy,
         sandbox_policy: sandbox,
         model,
+        disable_response_storage,
         ..
     } = cli;
 
@@ -119,6 +121,7 @@ fn run_ratatui_app(
         show_git_warning,
         images,
         model,
+        disable_response_storage,
     );
 
     // Bridge log receiver into the AppEvent channel so latest log lines update the UI.

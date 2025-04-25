@@ -7,6 +7,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use serde::Deserialize;
+use tokio::io::AsyncRead;
 use tokio::io::AsyncReadExt;
 use tokio::io::BufReader;
 use tokio::process::Command;
@@ -17,9 +18,11 @@ use crate::error::Result;
 use crate::error::SandboxErr;
 use crate::protocol::SandboxPolicy;
 
-/// Maximum we keep for each stream (100 KiB).
-/// TODO(ragona) this should be reduced
-const MAX_STREAM_OUTPUT: usize = 100 * 1024;
+/// Maximum we send for each stream, which is either:
+/// - 10KiB OR
+/// - 256 lines
+const MAX_STREAM_OUTPUT: usize = 10 * 1024;
+const MAX_STREAM_OUTPUT_LINES: usize = 256;
 
 const DEFAULT_TIMEOUT_MS: u64 = 10_000;
 
@@ -222,10 +225,12 @@ pub async fn exec(
     let stdout_handle = tokio::spawn(read_capped(
         BufReader::new(child.stdout.take().expect("stdout is not piped")),
         MAX_STREAM_OUTPUT,
+        MAX_STREAM_OUTPUT_LINES,
     ));
     let stderr_handle = tokio::spawn(read_capped(
         BufReader::new(child.stderr.take().expect("stderr is not piped")),
         MAX_STREAM_OUTPUT,
+        MAX_STREAM_OUTPUT_LINES,
     ));
 
     let interrupted = ctrl_c.notified();
@@ -259,23 +264,41 @@ pub async fn exec(
     })
 }
 
-async fn read_capped<R: AsyncReadExt + Unpin>(
+async fn read_capped<R: AsyncRead + Unpin>(
     mut reader: R,
     max_output: usize,
+    max_lines: usize,
 ) -> io::Result<Vec<u8>> {
     let mut buf = Vec::with_capacity(max_output.min(8 * 1024));
     let mut tmp = [0u8; 8192];
+
+    let mut remaining_bytes = max_output;
+    let mut remaining_lines = max_lines;
 
     loop {
         let n = reader.read(&mut tmp).await?;
         if n == 0 {
             break;
         }
-        if buf.len() < max_output {
-            let remaining = max_output - buf.len();
-            buf.extend_from_slice(&tmp[..remaining.min(n)]);
+
+        // Copy into the buffer only while we still have byte and line budget.
+        if remaining_bytes > 0 && remaining_lines > 0 {
+            let mut copy_len = 0;
+            for &b in &tmp[..n] {
+                if remaining_bytes == 0 || remaining_lines == 0 {
+                    break;
+                }
+                copy_len += 1;
+                remaining_bytes -= 1;
+                if b == b'\n' {
+                    remaining_lines -= 1;
+                }
+            }
+            buf.extend_from_slice(&tmp[..copy_len]);
         }
+        // Continue reading to EOF to avoid back-pressure, but discard once caps are hit.
     }
+
     Ok(buf)
 }
 
