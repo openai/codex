@@ -1,7 +1,13 @@
 name: rust-ci
 on:
-  pull_request: { branches: [main] }
-  push: { branches: [main] }
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "codex-rs/**"
+  push:
+    branches:
+      - main
 
 # For CI, we build in debug (`--profile dev`) rather than release mode so we
 # get signal faster.
