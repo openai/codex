@@ -74,7 +74,12 @@ jobs:
       - name: upload
         uses: actions/upload-artifact@v4
         with:
-          path: dist/${{ matrix.target }}
+          path: dist/${{ matrix.target }}/codex-repl
+
+      - name: upload
+        uses: actions/upload-artifact@v4
+        with:
+          path: dist/${{ matrix.target }}/codex-tui
 
   release:
     needs: build
