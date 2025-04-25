@@ -219,8 +219,8 @@ class Parser {
           s.normalize("NFC").replace(
             /./gu,
             (c) =>
-              ((
-                {
+              (
+                ({
                   "-": "-",
                   "\u2010": "-",
                   "\u2011": "-",
@@ -240,8 +240,8 @@ class Parser {
                   "\u201B": "'",
                   "\u00A0": " ",
                   "\u202F": " ",
-                } as Record<string, string>
-              )[c] ?? c),
+                }) as Record<string, string>
+              )[c] ?? c,
           );
 
         if (
