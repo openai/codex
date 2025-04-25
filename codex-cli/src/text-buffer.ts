@@ -610,6 +610,24 @@ export default class TextBuffer {
     }
   }
 
+  /* ------------------------------------------------------------------
+   *  Document-level navigation helpers
+   * ---------------------------------------------------------------- */
+
+  /** Move caret to *absolute* beginning of the buffer (row-0, col-0). */
+  private moveToStartOfDocument(): void {
+    this.preferredCol = null;
+    this.cursorRow = 0;
+    this.cursorCol = 0;
+  }
+
+  /** Move caret to *absolute* end of the buffer (last row, last column). */
+  private moveToEndOfDocument(): void {
+    this.preferredCol = null;
+    this.cursorRow = this.lines.length - 1;
+    this.cursorCol = this.lineLen(this.cursorRow);
+  }
+
   /* =====================================================================
    *  Higher‑level helpers
    * =================================================================== */
@@ -780,6 +798,18 @@ export default class TextBuffer {
       key["rightArrow"]
     ) {
       this.move("wordRight");
+    }
+    // Many terminal/OS combinations (e.g. macOS Terminal.app & iTerm2 with
+    // the default key-bindings) translate ⌥← / ⌥→ into the classic readline
+    // shortcuts ESC-b / ESC-f rather than an ANSI arrow sequence that Ink
+    // would tag with `leftArrow` / `rightArrow`.  Ink parses those 2-byte
+    // escape sequences into `input === "b"|"f"` with `key.meta === true`.
+    // Handle this variant explicitly so that Option+Arrow performs word
+    // navigation consistently across environments.
+    else if (key["meta"] && (input === "b" || input === "B")) {
+      this.move("wordLeft");
+    } else if (key["meta"] && (input === "f" || input === "F")) {
+      this.move("wordRight");
     } else if (key["home"]) {
       this.move("home");
     } else if (key["end"]) {
@@ -823,11 +853,11 @@ export default class TextBuffer {
 
     // Emacs/readline-style shortcuts
     else if (key["ctrl"] && (input === "a" || input === "\x01")) {
-      // Ctrl+A or ⌥← → start of line
-      this.move("home");
+      // Ctrl+A → start of input (first row, first column)
+      this.moveToStartOfDocument();
     } else if (key["ctrl"] && (input === "e" || input === "\x05")) {
-      // Ctrl+E or ⌥→ → end of line
-      this.move("end");
+      // Ctrl+E → end of input (last row, last column)
+      this.moveToEndOfDocument();
     } else if (key["ctrl"] && (input === "b" || input === "\x02")) {
       // Ctrl+B → char left
       this.move("left");
