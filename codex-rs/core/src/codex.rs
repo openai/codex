@@ -677,13 +677,15 @@ async fn run_turn(
     let (prev_id, store, is_first_turn) = {
         let state = sess.state.lock().unwrap();
         let is_first_turn = state.previous_response_id.is_none();
-        if state.zdr_transcript.is_some() {
+        let store = state.zdr_transcript.is_none();
+        let prev_id = if store {
+            state.previous_response_id.clone()
+        } else {
             // When using ZDR, the Reponses API may send previous_response_id
             // back, but trying to use it results in a 400.
-            (None, true, is_first_turn)
-        } else {
-            (state.previous_response_id.clone(), false, is_first_turn)
-        }
+            None
+        };
+        (prev_id, store, is_first_turn)
     };
 
     let instructions = if is_first_turn {
