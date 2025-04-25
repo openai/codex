@@ -65,12 +65,14 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: cargo-${{ matrix.runner }}-${{ matrix.target }}-${{ hashFiles('./Cargo.lock') }}
+          key: cargo-${{ matrix.runner }}-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
 
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' }}
         name: Install musl build tools
         run: |
           sudo apt install -y musl-tools pkg-config
+
+      - run: ls -l ./ && ls -l ./target/
 
       - name: Initialize failure flag
         run: echo "FAILED=" >> $GITHUB_ENV
