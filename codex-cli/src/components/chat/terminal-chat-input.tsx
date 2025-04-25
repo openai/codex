@@ -100,6 +100,7 @@ export default function TerminalChatInput({
   const editorRef = useRef<MultilineTextEditorHandle | null>(null);
   // Track the caret row across keystrokes
   const prevCursorRow = useRef<number | null>(null);
+  const prevCursorWasAtLastRow = useRef<boolean>(false);
 
   // Load command history on component mount
   useEffect(() => {
@@ -250,23 +251,17 @@ export default function TerminalChatInput({
           // Only use history when the caret was *already* on the very first
           // row *before* this key-press.
           const cursorRow = editorRef.current?.getRow?.() ?? 0;
+          const cursorCol = editorRef.current?.getCol?.() ?? 0;
           const wasAtFirstRow = (prevCursorRow.current ?? cursorRow) === 0;
           if (!(cursorRow === 0 && wasAtFirstRow)) {
             moveThroughHistory = false;
           }
 
-          // If we are *not* yet in history-navigation mode we still want to
-          // remember the current draft so we can restore it later when the
-          // user reaches the newest history entry again (↓ past the end).
-          //
-          // Previous behaviour gated history-navigation behind an *empty*
-          // input buffer.  This prevented users from recalling earlier
-          // commands while they were in the middle of composing a multi-line
-          // draft – the very flow covered by the failing regression test.
-          // Removing that restriction aligns the behaviour with common
-          // shells (bash, zsh, etc.): once the caret is on the first line, a
-          // press of ↑ always recalls the previous entry, regardless of the
-          // current buffer contents.
+          // If we are not yet in history mode, then also require that the col is zero so that
+          // we only trigger history navigation when the user is at the start of the input.
+          if (historyIndex == null && !(cursorRow === 0 && cursorCol === 0)) {
+            moveThroughHistory = false;
+          }
 
           // Move through history.
           if (history.length && moveThroughHistory) {
@@ -291,8 +286,12 @@ export default function TerminalChatInput({
 
         if (_key.downArrow) {
           // Only move forward in history when we're already *in* history mode
-          // AND the caret sits on the last line of the buffer
-          if (historyIndex != null && editorRef.current?.isCursorAtLastRow()) {
+          // AND the caret sits on the last line of the buffer.
+          const wasAtLastRow =
+            prevCursorWasAtLastRow.current ??
+            editorRef.current?.isCursorAtLastRow() ??
+            true;
+          if (historyIndex != null && wasAtLastRow) {
             const newIndex = historyIndex + 1;
             if (newIndex >= history.length) {
               setHistoryIndex(null);
@@ -339,7 +338,9 @@ export default function TerminalChatInput({
       // for this frame.
       setTimeout(() => {
         prevCursorRow.current = editorRef.current?.getRow?.() ?? null;
-      }, 0);
+        prevCursorWasAtLastRow.current =
+          editorRef.current?.isCursorAtLastRow?.() ?? true;
+      }, 1);
 
       if (input.trim() === "" && isNew) {
         if (_key.tab) {
