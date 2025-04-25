@@ -51,26 +51,14 @@ jobs:
         run: |
           sudo apt install -y musl-tools pkg-config
 
-      - name: Initialize failure flag
-        run: echo "FAILED=" >> $GITHUB_ENV
-
       - name: cargo build
-        run: cargo build --target ${{ matrix.target }} --release --all-features || echo "FAILED=${FAILED:+$FAILED, }cargo build" >> $GITHUB_ENV
+        run: cargo build --target ${{ matrix.target }} --release --all-features
     
       - name: upload
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
           path: dist/*
-
-      - name: Fail if any step failed
-        run: |
-          if [ -n "$FAILED" ]; then
-            echo -e "See logs above, as the following steps failed:\n$FAILED"
-            exit 1
-          fi
-        env:
-          FAILED: ${{ env.FAILED }}
 
   release:
     needs: build
