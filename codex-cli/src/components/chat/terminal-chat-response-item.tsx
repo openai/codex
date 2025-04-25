@@ -135,14 +135,14 @@ function TerminalChatResponseMessage({
               c.type === "output_text"
                 ? c.text
                 : c.type === "refusal"
-                ? c.refusal
-                : c.type === "input_text"
-                ? c.text
-                : c.type === "input_image"
-                ? "<Image>"
-                : c.type === "input_file"
-                ? c.filename
-                : "", // unknown content type
+                  ? c.refusal
+                  : c.type === "input_text"
+                    ? c.text
+                    : c.type === "input_image"
+                      ? "<Image>"
+                      : c.type === "input_file"
+                        ? c.filename
+                        : "", // unknown content type
           )
           .join(" ")}
       </Markdown>

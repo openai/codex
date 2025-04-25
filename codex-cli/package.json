@@ -71,7 +71,7 @@
     "eslint-plugin-react-refresh": "^0.4.19",
     "husky": "^9.1.7",
     "ink-testing-library": "^3.0.0",
-    "prettier": "^2.8.7",
+    "prettier": "^3.5.3",
     "punycode": "^2.3.1",
     "semver": "^7.7.1",
     "ts-node": "^10.9.1",

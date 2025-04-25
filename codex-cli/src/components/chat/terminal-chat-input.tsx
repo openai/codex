@@ -135,8 +135,8 @@ export default function TerminalChatInput({
                 ? len - 1
                 : selectedSlashSuggestion - 1
               : selectedSlashSuggestion >= len - 1
-              ? 0
-              : selectedSlashSuggestion + 1;
+                ? 0
+                : selectedSlashSuggestion + 1;
             setSelectedSlashSuggestion(nextIdx);
             // Autocomplete the command in the input
             const match = matches[nextIdx];
