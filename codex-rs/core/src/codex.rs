@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io::Write;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::process::Stdio;
@@ -15,7 +16,6 @@ use codex_apply_patch::print_summary;
 use codex_apply_patch::AffectedPaths;
 use codex_apply_patch::ApplyPatchFileChange;
 use codex_apply_patch::MaybeApplyPatchVerified;
-use expanduser::expanduser;
 use fs_err as fs;
 use futures::prelude::*;
 use serde::Serialize;
@@ -113,23 +113,15 @@ impl CodexBuilder {
         })
     }
 
-    pub fn record_submissions(mut self, path: impl AsRef<str>) -> Self {
-        let path = match expanduser(path.as_ref()) {
-            Ok(path) => path,
-            Err(_) => PathBuf::from(path.as_ref()),
-        };
-        debug!("Recording submissions to {}", path.display());
-        self.record_submissions = Some(path);
+    pub fn record_submissions(mut self, path: impl AsRef<Path>) -> Self {
+        debug!("Recording submissions to {:?}", path.as_ref());
+        self.record_submissions = Some(path.as_ref().to_path_buf());
         self
     }
 
-    pub fn record_events(mut self, path: impl AsRef<str>) -> Self {
-        let path = match expanduser(path.as_ref()) {
-            Ok(path) => path,
-            Err(_) => PathBuf::from(path.as_ref()),
-        };
-        debug!("Recording events to {}", path.display());
-        self.record_events = Some(path);
+    pub fn record_events(mut self, path: impl AsRef<Path>) -> Self {
+        debug!("Recording events to {:?}", path.as_ref());
+        self.record_events = Some(path.as_ref().to_path_buf());
         self
     }
 }
@@ -677,13 +669,15 @@ async fn run_turn(
     let (prev_id, store, is_first_turn) = {
         let state = sess.state.lock().unwrap();
         let is_first_turn = state.previous_response_id.is_none();
-        if state.zdr_transcript.is_some() {
+        let store = state.zdr_transcript.is_none();
+        let prev_id = if store {
+            state.previous_response_id.clone()
+        } else {
             // When using ZDR, the Reponses API may send previous_response_id
             // back, but trying to use it results in a 400.
-            (None, true, is_first_turn)
-        } else {
-            (state.previous_response_id.clone(), false, is_first_turn)
-        }
+            None
+        };
+        (prev_id, store, is_first_turn)
     };
 
     let instructions = if is_first_turn {
