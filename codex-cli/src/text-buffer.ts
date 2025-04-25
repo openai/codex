@@ -843,7 +843,6 @@ export default class TextBuffer {
       !key["ctrl"] &&
       !key["alt"]
     ) {
-      /* navigation */
       this.move("left");
     } else if (
       key["rightArrow"] &&
@@ -869,7 +868,8 @@ export default class TextBuffer {
       this.move("end");
     }
 
-    /* delete */
+    // Deletions
+    //
     // In raw terminal mode many frameworks (Ink included) surface a physical
     // Backspace key‑press as the single DEL (0x7f) byte placed in `input` with
     // no `key.backspace` flag set.  Treat that byte exactly like an ordinary
@@ -898,9 +898,13 @@ export default class TextBuffer {
       // caret, merging lines when at EOL similar to many editors.
       this.del();
     }
+    // Normal input
+    else if (input && !key["ctrl"] && !key["meta"]) {
+      this.insert(input);
+    }
 
-    /* emacs/readline-style shortcuts */
-    if (key["ctrl"] && (input === "a" || input === "\x01")) {
+    // Emacs/readline-style shortcuts
+    else if (key["ctrl"] && (input === "a" || input === "\x01")) {
       // Ctrl+A or ⌥← → start of line
       this.move("home");
     } else if (key["ctrl"] && (input === "e" || input === "\x05")) {
@@ -924,11 +928,6 @@ export default class TextBuffer {
     } else if (key["ctrl"] && (input === "w" || input === "\x17")) {
       // Ctrl+W → delete word left
       this.deleteWordLeft();
-    }
-
-    /* normal input */
-    if (input && !key["ctrl"] && !key["meta"]) {
-      this.insert(input);
     }
 
     /* printable, clamp + scroll */
