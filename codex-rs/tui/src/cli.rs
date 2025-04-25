@@ -31,6 +31,10 @@ pub struct Cli {
     #[arg(long = "skip-git-repo-check", default_value_t = false)]
     pub skip_git_repo_check: bool,
 
+    /// Disable server‑side response storage (sends the full conversation context with every request)
+    #[arg(long = "disable-response-storage", default_value_t = false)]
+    pub disable_response_storage: bool,
+
     /// Convenience alias for low-friction sandboxed automatic execution (-a on-failure, -s network-and-file-write-restricted)
     #[arg(long = "full-auto", default_value_t = true)]
     pub full_auto: bool,

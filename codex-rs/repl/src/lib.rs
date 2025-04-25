@@ -97,6 +97,7 @@ async fn codex_main(mut cli: Cli, cfg: Config, ctrl_c: Arc<Notify>) -> anyhow::R
             instructions: cfg.instructions,
             approval_policy: cli.approval_policy.into(),
             sandbox_policy: cli.sandbox_policy.into(),
+            disable_response_storage: cli.disable_response_storage,
         },
     };
 
