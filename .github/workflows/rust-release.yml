@@ -65,6 +65,8 @@ jobs:
         shell: bash
         run: |
           dest="dist/${{ matrix.target }}"
+          ls -R
+          echo $dest
           mkdir -p "$dest"
           shopt -s nullglob
           cp target/${{ matrix.target }}/release/codex-* "$dest/"
