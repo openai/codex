@@ -15,21 +15,28 @@ on:
 # get signal faster.
 
 jobs:
-  macos:
-    runs-on: macos-14
+  # Basic tests / lints on each major platform
+  test_lint:
+    name: Tests and Lints on ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     defaults:
       run:
         working-directory: codex-rs
+
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-14, ubuntu-24.04]
+
     env:
       RUST_LOG: debug
       RUST_BACKTRACE: full
 
     steps:
       - uses: actions/checkout@v4
+
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - name: Initialize failure flag
         run: echo "FAILED=" >> $GITHUB_ENV
@@ -37,17 +44,11 @@ jobs:
       - name: cargo fmt
         run: cargo fmt -- --config imports_granularity=Item --check || echo "FAILED=${FAILED:+$FAILED, }cargo fmt" >> $GITHUB_ENV
 
-      - name: cargo test
-        run: cargo test || echo "FAILED=${FAILED:+$FAILED, }cargo test" >> $GITHUB_ENV
-
       - name: cargo clippy
         run: cargo clippy --all-features -- -D warnings || echo "FAILED=${FAILED:+$FAILED, }cargo clippy" >> $GITHUB_ENV
 
-      - name: arm64 build
-        run: cargo build --target aarch64-apple-darwin || echo "FAILED=${FAILED:+$FAILED, }arm64 build" >> $GITHUB_ENV
-
-      - name: x86_64 build
-        run: cargo build --target x86_64-apple-darwin || echo "FAILED=${FAILED:+$FAILED, }x86_64 build" >> $GITHUB_ENV
+      - name: cargo test
+        run: cargo test || echo "FAILED=${FAILED:+$FAILED, }cargo test" >> $GITHUB_ENV
 
       - name: Fail if any step failed
         run: |
@@ -58,73 +59,35 @@ jobs:
         env:
           FAILED: ${{ env.FAILED }}
 
-  linux-x86_64:
-    runs-on: ubuntu-24.04
+  # Validate our builds run on each major target
+  build_tests:
+    name: Build validation on ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     defaults:
       run:
         working-directory: codex-rs
-    env:
-      RUST_LOG: debug
-      RUST_BACKTRACE: full
 
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: Initialize failure flag
-        run: echo "FAILED=" >> $GITHUB_ENV
-
-      - name: cargo fmt
-        run: cargo fmt -- --config imports_granularity=Item --check || echo "FAILED=${FAILED:+$FAILED, }cargo fmt" >> $GITHUB_ENV
-
-      - name: cargo test
-        run: cargo test || echo "FAILED=${FAILED:+$FAILED, }cargo test" >> $GITHUB_ENV
-
-      - name: cargo clippy
-        run: cargo clippy --all-features -- -D warnings || echo "FAILED=${FAILED:+$FAILED, }cargo clippy" >> $GITHUB_ENV
-
-      - name: Fail if any step failed
-        run: |
-          if [ -n "$FAILED" ]; then
-            echo -e "See logs above, as the following steps failed:\n$FAILED"
-            exit 1
-          fi
-        env:
-          FAILED: ${{ env.FAILED }}
-
-  linux-musl-x86_64:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    defaults:
-      run:
-        working-directory: codex-rs
-    env:
-      RUST_LOG: debug
-      RUST_BACKTRACE: full
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-14]
+        target: [aarch64-apple-darwin, x86_64-apple-darwin]
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
 
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-unknown-linux-musl
+          targets: ${{ matrix.target }}
 
-      - name: Install musl build tools
+      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' }}
+        name: Install musl build tools
         run: |
           sudo apt update
           sudo apt install -y musl-tools pkg-config
 
-      - name: Initialize failure flag
-        run: echo "FAILED=" >> $GITHUB_ENV
-
-      - name: x86_64 musl build
-        run: cargo build --target x86_64-unknown-linux-musl || echo "FAILED=${FAILED:+$FAILED, }x86_64 musl build" >> $GITHUB_ENV
-
-      - name: Fail if any step failed
-        run: |
-          if [ -n "$FAILED" ]; then
-            echo -e "See logs above, as the following steps failed:\n$FAILED"
-            exit 1
-          fi
-        env:
-          FAILED: ${{ env.FAILED }}
+      - name: ${{ matrix.target }} build
+        run: cargo build --target ${{ matrix.target }}
