@@ -1,0 +1,17 @@
+use codex_core::protocol::Event;
+use crossterm::event::KeyEvent;
+
+pub(crate) enum AppEvent {
+    CodexEvent(Event),
+    Redraw,
+    KeyEvent(KeyEvent),
+    /// Request to exit the application gracefully.
+    ExitRequest,
+
+    /// Forward an `Op` to the Agent. Using an `AppEvent` for this avoids
+    /// bubbling channels through layers of widgets.
+    CodexOp(codex_core::protocol::Op),
+
+    /// Latest formatted log line emitted by `tracing`.
+    LatestLog(String),
+}
