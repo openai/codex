@@ -78,7 +78,7 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-        - uses: actions:/download-artifact@v4
+        - name: download
+          uses: actions:/download-artifact@v4
           with:
-            name: x86_64-unknown-linux-musl
-            path: dist/
+            path: dist/*
