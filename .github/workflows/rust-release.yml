@@ -55,7 +55,7 @@ jobs:
         run: echo "FAILED=" >> $GITHUB_ENV
 
       - name: cargo build
-        run: cargo build --target ${{ matrix.target }} --release --all-features -- -D warnings || echo "FAILED=${FAILED:+$FAILED, }cargo clippy" >> $GITHUB_ENV
+        run: cargo build --target ${{ matrix.target }} --release --all-features || echo "FAILED=${FAILED:+$FAILED, }cargo clippy" >> $GITHUB_ENV
     
       - name: upload
         uses: actions/upload-artifact@v4
