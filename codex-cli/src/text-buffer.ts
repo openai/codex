@@ -868,6 +868,7 @@ export default class TextBuffer {
     } else if (key["end"]) {
       this.move("end");
     }
+
     /* delete */
     // In raw terminal mode many frameworks (Ink included) surface a physical
     // Backspace key‑press as the single DEL (0x7f) byte placed in `input` with
@@ -891,16 +892,15 @@ export default class TextBuffer {
       // forward deletion so we don't lose that capability on keyboards that
       // expose both behaviours.
       this.backspace();
-    }
-    // Forward deletion (Fn+Delete on macOS, or Delete key with Shift held after
-    // the branch above) – remove the character *under / to the right* of the
-    // caret, merging lines when at EOL similar to many editors.
-    else if (key["delete"]) {
+    } else if (key["delete"]) {
+      // Forward deletion (Fn+Delete on macOS, or Delete key with Shift held after
+      // the branch above) – remove the character *under / to the right* of the
+      // caret, merging lines when at EOL similar to many editors.
       this.del();
-    } else if (key["ctrl"] && (input === "a" || input === "\x01")) {
-    /* ------------------------------------------------------------------
-     *  Emacs/readline-style shortcuts (largely matching ink-text-input)
-     * ---------------------------------------------------------------- */
+    }
+
+    /* emacs/readline-style shortcuts */
+    if (key["ctrl"] && (input === "a" || input === "\x01")) {
       // Ctrl+A or ⌥← → start of line
       this.move("home");
     } else if (key["ctrl"] && (input === "e" || input === "\x05")) {
@@ -924,16 +924,16 @@ export default class TextBuffer {
     } else if (key["ctrl"] && (input === "w" || input === "\x17")) {
       // Ctrl+W → delete word left
       this.deleteWordLeft();
-    } else if (input && !key["ctrl"] && !key["meta"]) {
+    }
+
+    /* normal input */
+    if (input && !key["ctrl"] && !key["meta"]) {
       this.insert(input);
     }
 
-    /* printable */
-
-    /* clamp + scroll */
+    /* printable, clamp + scroll */
     this.ensureCursorInRange();
     this.ensureCursorVisible(vp);
-
     const cursorMoved =
       this.cursorRow !== beforeRow || this.cursorCol !== beforeCol;
 
