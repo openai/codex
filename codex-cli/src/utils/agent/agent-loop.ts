@@ -567,12 +567,16 @@ export class AgentLoop {
         const idx = staged.push(item) - 1;
 
         // Instead of emitting synchronously we schedule a short‑delay delivery.
+        //
         // This accomplishes two things:
         //   1. The UI still sees new messages almost immediately, creating the
         //      perception of real‑time updates.
         //   2. If the user calls `cancel()` in the small window right after the
         //      item was staged we can still abort the delivery because the
         //      generation counter will have been bumped by `cancel()`.
+        //
+        // Use a minimal 3ms delay for terminal rendering to maintain readable
+        // streaming.
         setTimeout(() => {
           if (
             thisGeneration === this.generation &&
@@ -583,8 +587,9 @@ export class AgentLoop {
             // Mark as delivered so flush won't re-emit it
             staged[idx] = undefined;
 
-            // When we operate without server‑side storage we keep our own
-            // transcript so we can provide full context on subsequent calls.
+            // Handle transcript updates to maintain consistency. When we
+            // operate without server‑side storage we keep our own transcript
+            // so we can provide full context on subsequent calls.
             if (this.disableResponseStorage) {
               // Exclude system messages from transcript as they do not form
               // part of the assistant/user dialogue that the model needs.
@@ -628,7 +633,7 @@ export class AgentLoop {
               }
             }
           }
-        }, 10);
+        }, 3); // Small 3ms delay for readable streaming.
       };
 
       while (turnInput.length > 0) {
@@ -655,7 +660,7 @@ export class AgentLoop {
         for (const item of deltaInput) {
           stageItem(item as ResponseItem);
         }
-        // Send request to OpenAI with retry on timeout
+        // Send request to OpenAI with retry on timeout.
         let stream;
 
         // Retry loop for transient errors. Up to MAX_RETRIES attempts.
@@ -888,7 +893,7 @@ export class AgentLoop {
         // Keep track of the active stream so it can be aborted on demand.
         this.currentStream = stream;
 
-        // guard against an undefined stream before iterating
+        // Guard against an undefined stream before iterating.
         if (!stream) {
           this.onLoading(false);
           log("AgentLoop.run(): stream is undefined");
@@ -1206,8 +1211,18 @@ export class AgentLoop {
         this.onLoading(false);
       };
 
-      // Delay flush slightly to allow a near‑simultaneous cancel() to land.
-      setTimeout(flush, 30);
+      // Use a small delay to make sure UI rendering is smooth. Double-check
+      // cancellation state right before flushing to avoid race conditions.
+      setTimeout(() => {
+        if (
+          !this.canceled &&
+          !this.hardAbort.signal.aborted &&
+          thisGeneration === this.generation
+        ) {
+          flush();
+        }
+      }, 3);
+
       // End of main logic. The corresponding catch block for the wrapper at the
       // start of this method follows next.
     } catch (err) {
