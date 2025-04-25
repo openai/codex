@@ -26,6 +26,7 @@ jobs:
       RUST_BACKTRACE: 1
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: "sccache"
+      CARGO_INCREMENTAL: false
 
     steps:
       - uses: actions/checkout@v4
@@ -76,6 +77,7 @@ jobs:
       RUST_BACKTRACE: 1
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: "sccache"
+      CARGO_INCREMENTAL: false
 
     steps:
       - uses: actions/checkout@v4
@@ -127,6 +129,7 @@ jobs:
       RUST_BACKTRACE: 1
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: "sccache"
+      CARGO_INCREMENTAL: false
 
     steps:
       - uses: actions/checkout@v4
