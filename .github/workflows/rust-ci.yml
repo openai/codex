@@ -24,20 +24,12 @@ jobs:
     env:
       RUST_LOG: debug
       RUST_BACKTRACE: 1
-      SCCACHE_GHA_ENABLED: "true"
-      RUSTC_WRAPPER: "sccache"
-      CARGO_INCREMENTAL: false
 
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
-
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.9
-        with:
-          version: "v0.10.0"
 
       - name: Initialize failure flag
         run: echo "FAILED=" >> $GITHUB_ENV
@@ -75,24 +67,10 @@ jobs:
     env:
       RUST_LOG: debug
       RUST_BACKTRACE: 1
-      SCCACHE_GHA_ENABLED: "true"
-      RUSTC_WRAPPER: "sccache"
-      CARGO_INCREMENTAL: false
 
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-unknown-linux-musl
-      - name: Install musl build tools
-        run: |
-          sudo apt update
-          sudo apt install -y musl-tools pkg-config
-
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.9
-        with:
-          version: "v0.10.0"
 
       - name: Initialize failure flag
         run: echo "FAILED=" >> $GITHUB_ENV
@@ -127,24 +105,17 @@ jobs:
     env:
       RUST_LOG: debug
       RUST_BACKTRACE: 1
-      SCCACHE_GHA_ENABLED: "true"
-      RUSTC_WRAPPER: "sccache"
-      CARGO_INCREMENTAL: false
 
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-unknown-linux-musl
+
       - name: Install musl build tools
         run: |
           sudo apt update
           sudo apt install -y musl-tools pkg-config
-
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.9
-        with:
-          version: "v0.10.0"
 
       - name: Initialize failure flag
         run: echo "FAILED=" >> $GITHUB_ENV
