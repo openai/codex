@@ -24,9 +24,14 @@
 - [Tracing / Verbose Logging](#tracing--verbose-logging)
 - [Recipes](#recipes)
 - [Installation](#installation)
-- [Configuration](#configuration)
-  - [Custom Providers Configuration](#custom-providers-configuration)
-  - [Example `config.json`](#example-configjson)
+- [Configuration Guide](#configuration-guide)
+  - [Basic Configuration Parameters](#basic-configuration-parameters)
+  - [Custom AI Provider Configuration](#custom-ai-provider-configuration)
+  - [History Configuration](#history-configuration)
+  - [Configuration Examples](#configuration-examples)
+  - [Full Configuration Example](#full-configuration-example)
+  - [Custom Instructions](#custom-instructions)
+  - [Environment Variables Setup](#environment-variables-setup)
 - [FAQ](#faq)
 - [Zero Data Retention (ZDR) Usage](#zero-data-retention-zdr-usage)
 - [Codex Open Source Fund](#codex-open-source-fund)
@@ -317,20 +322,53 @@ pnpm link
 
 ---
 
-## Configuration
+## Configuration Guide
 
-Codex looks for config files in **`~/.codex/`** (either YAML or JSON format).
+Codex configuration files can be placed in the `~/.codex/` directory, supporting both YAML and JSON formats.
+
+### Basic Configuration Parameters
+
+| Parameter           | Type    | Default    | Description                      | Available Options                                                                              |
+| ------------------- | ------- | ---------- | -------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `model`             | string  | `o4-mini`  | AI model to use                  | Any model name supporting OpenAI API                                                           |
+| `approvalMode`      | string  | `suggest`  | AI assistant's permission mode   | `suggest` (suggestions only)<br>`auto-edit` (automatic edits)<br>`full-auto` (fully automatic) |
+| `fullAutoErrorMode` | string  | `ask-user` | Error handling in full-auto mode | `ask-user` (prompt for user input)<br>`ignore-and-continue` (ignore and proceed)               |
+| `notify`            | boolean | `true`     | Enable desktop notifications     | `true`/`false`                                                                                 |
+
+### Custom AI Provider Configuration
+
+In the `providers` object, you can configure multiple AI service providers. Each provider requires the following parameters:
+
+| Parameter | Type   | Description                             | Example                       |
+| --------- | ------ | --------------------------------------- | ----------------------------- |
+| `name`    | string | Display name of the provider            | `"OpenAI"`                    |
+| `baseURL` | string | API service URL                         | `"https://api.openai.com/v1"` |
+| `envKey`  | string | Environment variable name (for API key) | `"OPENAI_API_KEY"`            |
+
+### History Configuration
+
+In the `history` object, you can configure conversation history settings:
+
+| Parameter           | Type    | Description                                            | Example Value |
+| ------------------- | ------- | ------------------------------------------------------ | ------------- |
+| `maxSize`           | number  | Maximum number of history entries to save              | `1000`        |
+| `saveHistory`       | boolean | Whether to save history                                | `true`        |
+| `sensitivePatterns` | array   | Patterns of sensitive information to filter in history | `[]`          |
+
+### Configuration Examples
+
+1. YAML format (save as `~/.codex/config.yaml`):
 
 ```yaml
-# ~/.codex/config.yaml
-model: o4-mini # Default model
-approvalMode: suggest # or auto-edit, full-auto
-fullAutoErrorMode: ask-user # or ignore-and-continue
-notify: true # Enable desktop notifications for responses
+model: o4-mini
+approvalMode: suggest
+fullAutoErrorMode: ask-user
+notify: true
 ```
 
+2. JSON format (save as `~/.codex/config.json`):
+
 ```json
-// ~/.codex/config.json
 {
   "model": "o4-mini",
   "approvalMode": "suggest",
@@ -339,27 +377,9 @@ notify: true # Enable desktop notifications for responses
 }
 ```
 
-You can also define custom instructions:
+### Full Configuration Example
 
-```yaml
-# ~/.codex/instructions.md
-- Always respond with emojis
-- Only use git commands if I explicitly mention you should
-```
-
-### Custom Providers Configuration
-
-The `providers` object in `config.json` allows you to define custom API providers for the project. Each provider is identified by a unique key and includes the following fields:
-
-- **name**: A human-readable name for the provider (e.g., "OpenAI").
-- **baseURL**: The base URL for the provider's API (e.g., "https://api.openai.com/v1").
-- **envKey**: The environment variable name that stores the API key for authentication (e.g., "OPENAI_API_KEY").
-
-Ensure the corresponding API key is set in your environment variables (e.g., `export MYPROVIDER_API_KEY=your-api-key`).
-
-### Example `config.json`
-
-Below is an example `config.json` file with multiple custom providers:
+Below is a comprehensive example of `config.json` with multiple custom providers:
 
 ```json
 {
@@ -415,7 +435,28 @@ Below is an example `config.json` file with multiple custom providers:
 }
 ```
 
-For further assistance, please open an issue on the GitHub repository.
+### Custom Instructions
+
+You can create a `~/.codex/instructions.md` file to define custom instructions:
+
+```markdown
+- Always respond with emojis
+- Only use git commands when explicitly requested
+```
+
+### Environment Variables Setup
+
+For each AI provider, you need to set the corresponding API key in your environment variables. For example:
+
+```bash
+# OpenAI
+export OPENAI_API_KEY="your-api-key-here"
+
+# Gemini
+export GEMINI_API_KEY="your-gemini-key-here"
+
+# Similarly for other providers
+```
 
 ---
 
