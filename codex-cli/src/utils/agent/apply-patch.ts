@@ -390,9 +390,10 @@ function find_context_core(
     return [start, 0];
   }
   // Pass 1 – exact equality after canonicalisation ---------------------------
+  const canonicalContext = canon(context.join("\n"));
   for (let i = start; i < lines.length; i++) {
     const segment = canon(lines.slice(i, i + context.length).join("\n"));
-    if (segment === canon(context.join("\n"))) {
+    if (segment === canonicalContext) {
       return [i, 0];
     }
   }
