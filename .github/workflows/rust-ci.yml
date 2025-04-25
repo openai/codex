@@ -87,10 +87,8 @@ jobs:
         run: cargo test --target ${{ matrix.target }} || echo "FAILED=${FAILED:+$FAILED, }cargo test" >> $GITHUB_ENV
 
       - name: Fail if any step failed
+        if: env.FAILED != ''
         run: |
-          if [ -n "$FAILED" ]; then
-            echo -e "See logs above, as the following steps failed:\n$FAILED"
-            exit 1
-          fi
-        env:
-          FAILED: ${{ env.FAILED }}
+          echo "See logs above, as the following steps failed:"
+          echo "$FAILED"
+          exit 1
