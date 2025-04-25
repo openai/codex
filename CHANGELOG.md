@@ -2,6 +2,41 @@
 
 You can install any of these versions: `npm install -g codex@version`
 
+## `unreleased`
+
+## [unreleased]
+
+### 🚀 Features
+
+- Add openai model info configuration (#551)
+- Added provider to run quiet mode function (#571)
+- Create parent directories when creating new files (#552)
+- Print bug report URL in terminal instead of opening browser (#510) (#528)
+- Add support for custom provider configuration in the user config (#537)
+- Add support for OpenAI-Organization and OpenAI-Project headers (#626)
+- Add specific instructions for creating API keys in error msg (#581)
+- Enhance toCodePoints to prevent potential unicode 14 errors (#615)
+- More native keyboard navigation in multiline editor (#655)
+- Display error on selection of invalid model (#594)
+
+### 🐛 Bug Fixes
+
+- Model selection (#643)
+- Nits in apply patch (#640)
+- `apply_patch` unicode characters (#625)
+- Don't clear turn input before retries (#611)
+- More loosely match context for apply_patch (#610)
+- Update bug report template - there is no --revision flag (#614)
+- Remove unreachable "disableResponseStorage" logic flow introduced in #543 (#573)
+- Non-openai mode - fix for gemini content: null, fix 429 to throw before stream (#563)
+- Only allow going up in history when not already in history if input is empty (#654)
+- Do not grant "node" user sudo access when using run_in_container.sh (#627)
+- Update scripts/build_container.sh to use pnpm instead of npm (#631)
+- Update lint-staged config to use pnpm --filter (#582)
+- Non-openai mode - don't default temp and top_p (#572)
+- Fix error catching when checking for updates (#597)
+- Close stdin when running an exec tool call (#636)
+
 ## `0.1.2504221401`
 
 ### 🚀 Features
