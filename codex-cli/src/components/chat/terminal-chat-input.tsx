@@ -100,6 +100,7 @@ export default function TerminalChatInput({
   const editorRef = useRef<MultilineTextEditorHandle | null>(null);
   // Track the caret row across keystrokes
   const prevCursorRow = useRef<number | null>(null);
+  const prevCursorWasAtLastRow = useRef<boolean>(false);
 
   // Load command history on component mount
   useEffect(() => {
@@ -250,13 +251,15 @@ export default function TerminalChatInput({
           // Only use history when the caret was *already* on the very first
           // row *before* this key-press.
           const cursorRow = editorRef.current?.getRow?.() ?? 0;
+          const cursorCol = editorRef.current?.getCol?.() ?? 0;
           const wasAtFirstRow = (prevCursorRow.current ?? cursorRow) === 0;
           if (!(cursorRow === 0 && wasAtFirstRow)) {
             moveThroughHistory = false;
           }
 
-          // Only use history if we are already in history mode or if the input is empty.
-          if (historyIndex == null && input.trim() !== "") {
+          // If we are not yet in history mode, then also require that the col is zero so that
+          // we only trigger history navigation when the user is at the start of the input.
+          if (historyIndex == null && !(cursorRow === 0 && cursorCol === 0)) {
             moveThroughHistory = false;
           }
 
@@ -283,8 +286,12 @@ export default function TerminalChatInput({
 
         if (_key.downArrow) {
           // Only move forward in history when we're already *in* history mode
-          // AND the caret sits on the last line of the buffer
-          if (historyIndex != null && editorRef.current?.isCursorAtLastRow()) {
+          // AND the caret sits on the last line of the buffer.
+          const wasAtLastRow =
+            prevCursorWasAtLastRow.current ??
+            editorRef.current?.isCursorAtLastRow() ??
+            true;
+          if (historyIndex != null && wasAtLastRow) {
             const newIndex = historyIndex + 1;
             if (newIndex >= history.length) {
               setHistoryIndex(null);
@@ -314,9 +321,26 @@ export default function TerminalChatInput({
         }
       }
 
-      // Update the cached cursor position *after* we've potentially handled
-      // the key so that the next event has the correct "previous" reference.
-      prevCursorRow.current = editorRef.current?.getRow?.() ?? null;
+      // Update the cached cursor position *after* **all** handlers (including
+      // the internal <MultilineTextEditor>) have processed this key event.
+      //
+      // Ink invokes `useInput` callbacks starting with **parent** components
+      // first, followed by their descendants. As a result the call above
+      // executes *before* the editor has had a chance to react to the key
+      // press and update its internal caret position.  When navigating
+      // through a multi-line draft with the ↑ / ↓ arrow keys this meant we
+      // recorded the *old* cursor row instead of the one that results *after*
+      // the key press.  Consequently, a subsequent ↑ still saw
+      // `prevCursorRow = 1` even though the caret was already on row 0 and
+      // history-navigation never kicked in.
+      //
+      // Defer the sampling by one tick so we read the *final* caret position
+      // for this frame.
+      setTimeout(() => {
+        prevCursorRow.current = editorRef.current?.getRow?.() ?? null;
+        prevCursorWasAtLastRow.current =
+          editorRef.current?.isCursorAtLastRow?.() ?? true;
+      }, 1);
 
       if (input.trim() === "" && isNew) {
         if (_key.tab) {
