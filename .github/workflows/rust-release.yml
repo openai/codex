@@ -60,7 +60,7 @@ jobs:
       - name: upload
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.runner }}-${{ matrix.target }}
+          name: ${{ matrix.target }}
           path: dist/*
 
       - name: Fail if any step failed
@@ -80,5 +80,5 @@ jobs:
     steps:
         - uses: actions:/download-artifact@v4
           with:
-            name: test
+            name: x86_64-unknown-linux-musl
             path: dist/
