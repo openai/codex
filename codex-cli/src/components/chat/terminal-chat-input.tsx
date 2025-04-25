@@ -470,15 +470,8 @@ export default function TerminalChatInput({
         setInput("");
 
         try {
-          // Dynamically import dependencies to avoid unnecessary bundle size
-          const [{ default: open }, os] = await Promise.all([
-            import("open"),
-            import("node:os"),
-          ]);
-
-          // Lazy import CLI_VERSION to avoid circular deps
+          const os = await import("node:os");
           const { CLI_VERSION } = await import("../../utils/session.js");
-
           const { buildBugReportUrl } = await import(
             "../../utils/bug-report.js"
           );
@@ -492,10 +485,6 @@ export default function TerminalChatInput({
               .join(" | "),
           });
 
-          // Open the URL in the user's default browser
-          await open(url, { wait: false });
-
-          // Inform the user in the chat history
           setItems((prev) => [
             ...prev,
             {
@@ -505,13 +494,13 @@ export default function TerminalChatInput({
               content: [
                 {
                   type: "input_text",
-                  text: "📋 Opened browser to file a bug report. Please include any context that might help us fix the issue!",
+                  text: `🔗 Bug report URL: ${url}`,
                 },
               ],
             },
           ]);
         } catch (error) {
-          // If anything went wrong, notify the user
+          // If anything went wrong, notify the user.
           setItems((prev) => [
             ...prev,
             {
