@@ -452,8 +452,8 @@ For each AI provider, you need to set the corresponding API key in your environm
 # OpenAI
 export OPENAI_API_KEY="your-api-key-here"
 
-# Gemini
-export GEMINI_API_KEY="your-gemini-key-here"
+# OpenRouter
+export OPENROUTER_API_KEY="your-openrouter-key-here"
 
 # Similarly for other providers
 ```
