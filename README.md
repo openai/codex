@@ -25,6 +25,8 @@
 - [Recipes](#recipes)
 - [Installation](#installation)
 - [Configuration](#configuration)
+  - [Custom Providers Configuration](#custom-providers-configuration)
+  - [Example `config.json`](#example-configjson)
 - [FAQ](#faq)
 - [Zero Data Retention (ZDR) Usage](#zero-data-retention-zdr-usage)
 - [Codex Open Source Fund](#codex-open-source-fund)
@@ -344,6 +346,76 @@ You can also define custom instructions:
 - Always respond with emojis
 - Only use git commands if I explicitly mention you should
 ```
+
+### Custom Providers Configuration
+
+The `providers` object in `config.json` allows you to define custom API providers for the project. Each provider is identified by a unique key and includes the following fields:
+
+- **name**: A human-readable name for the provider (e.g., "OpenAI").
+- **baseURL**: The base URL for the provider's API (e.g., "https://api.openai.com/v1").
+- **envKey**: The environment variable name that stores the API key for authentication (e.g., "OPENAI_API_KEY").
+
+Ensure the corresponding API key is set in your environment variables (e.g., `export MYPROVIDER_API_KEY=your-api-key`).
+
+### Example `config.json`
+
+Below is an example `config.json` file with multiple custom providers:
+
+```json
+{
+  "model": "o4-mini",
+  "provider": "openai",
+  "providers": {
+    "openai": {
+      "name": "OpenAI",
+      "baseURL": "https://api.openai.com/v1",
+      "envKey": "OPENAI_API_KEY"
+    },
+    "openrouter": {
+      "name": "OpenRouter",
+      "baseURL": "https://openrouter.ai/api/v1",
+      "envKey": "OPENROUTER_API_KEY"
+    },
+    "gemini": {
+      "name": "Gemini",
+      "baseURL": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "envKey": "GEMINI_API_KEY"
+    },
+    "ollama": {
+      "name": "Ollama",
+      "baseURL": "http://localhost:11434/v1",
+      "envKey": "OLLAMA_API_KEY"
+    },
+    "mistral": {
+      "name": "Mistral",
+      "baseURL": "https://api.mistral.ai/v1",
+      "envKey": "MISTRAL_API_KEY"
+    },
+    "deepseek": {
+      "name": "DeepSeek",
+      "baseURL": "https://api.deepseek.com",
+      "envKey": "DEEPSEEK_API_KEY"
+    },
+    "xai": {
+      "name": "xAI",
+      "baseURL": "https://api.x.ai/v1",
+      "envKey": "XAI_API_KEY"
+    },
+    "groq": {
+      "name": "Groq",
+      "baseURL": "https://api.groq.com/openai/v1",
+      "envKey": "GROQ_API_KEY"
+    }
+  },
+  "history": {
+    "maxSize": 1000,
+    "saveHistory": true,
+    "sensitivePatterns": []
+  }
+}
+```
+
+For further assistance, please open an issue on the GitHub repository.
 
 ---
 
