@@ -412,7 +412,7 @@ export default function TerminalChatInput({
         setInput("");
         openApprovalOverlay();
         return;
-      } else if (inputValue === "exit") {
+      } else if (["exit", "q", ":q"].includes(inputValue)) {
         setInput("");
         setTimeout(() => {
           app.exit();
@@ -881,20 +881,30 @@ function TerminalChatInputThinking({
   );
 
   return (
-    <Box flexDirection="column" gap={1}>
-      <Box gap={2}>
-        <Text>{frameWithSeconds}</Text>
+    <Box width="100%" flexDirection="column" gap={1}>
+      <Box
+        flexDirection="row"
+        width="100%"
+        justifyContent="space-between"
+        paddingRight={1}
+      >
+        <Box gap={2}>
+          <Text>{frameWithSeconds}</Text>
+          <Text>
+            Thinking
+            {dots}
+          </Text>
+        </Box>
         <Text>
-          Thinking
-          {dots}
+          <Text dimColor>press</Text> <Text bold>Esc</Text>{" "}
+          {awaitingConfirm ? (
+            <Text bold>again</Text>
+          ) : (
+            <Text dimColor>twice</Text>
+          )}{" "}
+          <Text dimColor>to interrupt</Text>
         </Text>
       </Box>
-      {awaitingConfirm && (
-        <Text dimColor>
-          Press <Text bold>Esc</Text> again to interrupt and enter a new
-          instruction
-        </Text>
-      )}
     </Box>
   );
 }
