@@ -72,8 +72,6 @@ jobs:
         run: |
           sudo apt install -y musl-tools pkg-config
 
-      - run: ls -l ./ && ls -l ${{ github.workspace }}
-
       - name: Initialize failure flag
         run: echo "FAILED=" >> $GITHUB_ENV
 
