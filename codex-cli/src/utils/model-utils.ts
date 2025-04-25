@@ -1,7 +1,12 @@
 import type { ResponseItem } from "openai/resources/responses/responses.mjs";
 
 import { approximateTokensUsed } from "./approximate-tokens-used.js";
-import { getBaseUrl, getApiKey } from "./config";
+import {
+  OPENAI_ORGANIZATION,
+  OPENAI_PROJECT,
+  getBaseUrl,
+  getApiKey,
+} from "./config";
 import { type SupportedModelId, openAiModelInfo } from "./model-info.js";
 import OpenAI from "openai";
 
@@ -22,9 +27,18 @@ async function fetchModels(provider: string): Promise<Array<string>> {
   }
 
   try {
+    const headers: Record<string, string> = {};
+    if (OPENAI_ORGANIZATION) {
+      headers["OpenAI-Organization"] = OPENAI_ORGANIZATION;
+    }
+    if (OPENAI_PROJECT) {
+      headers["OpenAI-Project"] = OPENAI_PROJECT;
+    }
+
     const openai = new OpenAI({
       apiKey: getApiKey(provider),
       baseURL: getBaseUrl(provider),
+      defaultHeaders: headers,
     });
     const list = await openai.models.list();
     const models: Array<string> = [];

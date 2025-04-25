@@ -11,7 +11,13 @@ import type {
 } from "openai/resources/responses/responses.mjs";
 import type { Reasoning } from "openai/resources.mjs";
 
-import { OPENAI_TIMEOUT_MS, getApiKey, getBaseUrl } from "../config.js";
+import {
+  OPENAI_TIMEOUT_MS,
+  OPENAI_ORGANIZATION,
+  OPENAI_PROJECT,
+  getApiKey,
+  getBaseUrl,
+} from "../config.js";
 import { log } from "../logger/log.js";
 import { parseToolCallArguments } from "../parsers.js";
 import { responsesCreateViaChatCompletions } from "../responses.js";
@@ -302,6 +308,10 @@ export class AgentLoop {
         originator: ORIGIN,
         version: CLI_VERSION,
         session_id: this.sessionId,
+        ...(OPENAI_ORGANIZATION
+          ? { "OpenAI-Organization": OPENAI_ORGANIZATION }
+          : {}),
+        ...(OPENAI_PROJECT ? { "OpenAI-Project": OPENAI_PROJECT } : {}),
       },
       ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
     });

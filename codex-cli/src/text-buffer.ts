@@ -419,6 +419,58 @@ export default class TextBuffer {
     });
   }
 
+  /**
+   * Delete everything from the caret to the *end* of the current line. The
+   * caret itself stays in place (column remains unchanged). Mirrors the
+   * common Ctrl+K shortcut in many shells and editors.
+   */
+  deleteToLineEnd(): void {
+    dbg("deleteToLineEnd", { beforeCursor: this.getCursor() });
+
+    const line = this.line(this.cursorRow);
+    if (this.cursorCol >= this.lineLen(this.cursorRow)) {
+      // Nothing to delete – caret already at EOL.
+      return;
+    }
+
+    this.pushUndo();
+
+    // Keep the prefix before the caret, discard the remainder.
+    this.lines[this.cursorRow] = cpSlice(line, 0, this.cursorCol);
+    this.version++;
+
+    dbg("deleteToLineEnd:after", {
+      cursor: this.getCursor(),
+      line: this.line(this.cursorRow),
+    });
+  }
+
+  /**
+   * Delete everything from the *start* of the current line up to (but not
+   * including) the caret.  The caret is moved to column-0, mirroring the
+   * behaviour of the familiar Ctrl+U binding.
+   */
+  deleteToLineStart(): void {
+    dbg("deleteToLineStart", { beforeCursor: this.getCursor() });
+
+    if (this.cursorCol === 0) {
+      // Nothing to delete – caret already at SOL.
+      return;
+    }
+
+    this.pushUndo();
+
+    const line = this.line(this.cursorRow);
+    this.lines[this.cursorRow] = cpSlice(line, this.cursorCol);
+    this.cursorCol = 0;
+    this.version++;
+
+    dbg("deleteToLineStart:after", {
+      cursor: this.getCursor(),
+      line: this.line(this.cursorRow),
+    });
+  }
+
   /* ------------------------------------------------------------------
    *  Word‑wise deletion helpers – exposed publicly so tests (and future
    *  key‑bindings) can invoke them directly.
@@ -791,7 +843,6 @@ export default class TextBuffer {
       !key["ctrl"] &&
       !key["alt"]
     ) {
-      /* navigation */
       this.move("left");
     } else if (
       key["rightArrow"] &&
@@ -816,7 +867,9 @@ export default class TextBuffer {
     } else if (key["end"]) {
       this.move("end");
     }
-    /* delete */
+
+    // Deletions
+    //
     // In raw terminal mode many frameworks (Ink included) surface a physical
     // Backspace key‑press as the single DEL (0x7f) byte placed in `input` with
     // no `key.backspace` flag set.  Treat that byte exactly like an ordinary
@@ -839,22 +892,47 @@ export default class TextBuffer {
       // forward deletion so we don't lose that capability on keyboards that
       // expose both behaviours.
       this.backspace();
-    }
-    // Forward deletion (Fn+Delete on macOS, or Delete key with Shift held after
-    // the branch above) – remove the character *under / to the right* of the
-    // caret, merging lines when at EOL similar to many editors.
-    else if (key["delete"]) {
+    } else if (key["delete"]) {
+      // Forward deletion (Fn+Delete on macOS, or Delete key with Shift held after
+      // the branch above) – remove the character *under / to the right* of the
+      // caret, merging lines when at EOL similar to many editors.
       this.del();
-    } else if (input && !key["ctrl"] && !key["meta"]) {
+    }
+    // Normal input
+    else if (input && !key["ctrl"] && !key["meta"]) {
       this.insert(input);
     }
 
-    /* printable */
+    // Emacs/readline-style shortcuts
+    else if (key["ctrl"] && (input === "a" || input === "\x01")) {
+      // Ctrl+A or ⌥← → start of line
+      this.move("home");
+    } else if (key["ctrl"] && (input === "e" || input === "\x05")) {
+      // Ctrl+E or ⌥→ → end of line
+      this.move("end");
+    } else if (key["ctrl"] && (input === "b" || input === "\x02")) {
+      // Ctrl+B → char left
+      this.move("left");
+    } else if (key["ctrl"] && (input === "f" || input === "\x06")) {
+      // Ctrl+F → char right
+      this.move("right");
+    } else if (key["ctrl"] && (input === "d" || input === "\x04")) {
+      // Ctrl+D → forward delete
+      this.del();
+    } else if (key["ctrl"] && (input === "k" || input === "\x0b")) {
+      // Ctrl+K → kill to EOL
+      this.deleteToLineEnd();
+    } else if (key["ctrl"] && (input === "u" || input === "\x15")) {
+      // Ctrl+U → kill to SOL
+      this.deleteToLineStart();
+    } else if (key["ctrl"] && (input === "w" || input === "\x17")) {
+      // Ctrl+W → delete word left
+      this.deleteWordLeft();
+    }
 
-    /* clamp + scroll */
+    /* printable, clamp + scroll */
     this.ensureCursorInRange();
     this.ensureCursorVisible(vp);
-
     const cursorMoved =
       this.cursorRow !== beforeRow || this.cursorCol !== beforeCol;
 
