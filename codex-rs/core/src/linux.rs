@@ -168,11 +168,11 @@ mod tests_linux {
     use tokio::sync::Notify;
 
     #[allow(clippy::print_stdout)]
-    async fn run_cmd(cmd: &[&str], writable_roots: &[PathBuf]) {
+    async fn run_cmd(cmd: &[&str], writable_roots: &[PathBuf], timeout_ms: u64) {
         let params = ExecParams {
             command: cmd.iter().map(|elm| elm.to_string()).collect(),
             workdir: None,
-            timeout_ms: Some(200),
+            timeout_ms: Some(timeout_ms),
         };
         let res = process_exec_tool_call(
             params,
@@ -193,7 +193,7 @@ mod tests_linux {
 
     #[tokio::test]
     async fn test_root_read() {
-        run_cmd(&["ls", "-l", "/bin"], &[]).await;
+        run_cmd(&["ls", "-l", "/bin"], &[], 200).await;
     }
 
     #[tokio::test]
@@ -204,13 +204,14 @@ mod tests_linux {
         run_cmd(
             &["bash", "-lc", &format!("echo blah > {}", tmpfile_path)],
             &[],
+            200,
         )
         .await;
     }
 
     #[tokio::test]
     async fn test_dev_null_write() {
-        run_cmd(&["echo", "blah", ">", "/dev/null"], &[]).await;
+        run_cmd(&["echo", "blah", ">", "/dev/null"], &[], 200).await;
     }
 
     #[tokio::test]
@@ -224,8 +225,15 @@ mod tests_linux {
                 &format!("echo blah > {}", file_path.to_string_lossy()),
             ],
             &[tmpdir.path().to_path_buf()],
+            500,
         )
         .await;
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "Sandbox(Timeout)")]
+    async fn test_timeout() {
+        run_cmd(&["sleep", "2"], &[], 50).await;
     }
 
     /// Helper that runs `cmd` under the Linux sandbox and asserts that the command
