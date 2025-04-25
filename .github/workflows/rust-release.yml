@@ -61,17 +61,17 @@ jobs:
       - if: matrix.target == 'aarch64-unknown-linux-musl'
         name: Install aarch64-musl toolchain
         run: |
-            sudo apt-get update
-            curl -LO https://musl.cc/aarch64-linux-musl-cross.tgz
-            sudo tar -C /usr/local -xzf aarch64-linux-musl-cross.tgz
-            echo "/usr/local/aarch64-linux-musl-cross/bin" >> "$GITHUB_PATH"
+          sudo apt-get update
+          curl -LO https://musl.cc/aarch64-linux-musl-cross.tgz
+          sudo tar -C /usr/local -xzf aarch64-linux-musl-cross.tgz
+          echo "/usr/local/aarch64-linux-musl-cross/bin" >> "$GITHUB_PATH"
 
-            # tell Cargo which compiler/archiver to use
-            {
-                echo "CC_aarch64_unknown_linux_musl=aarch64-linux-musl-gcc"
-                echo "AR_aarch64_unknown_linux_musl=aarch64-linux-musl-ar"
-                echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-musl-gcc"
-            } >> "$GITHUB_ENV"
+          # tell Cargo which compiler/archiver to use
+          {
+              echo "CC_aarch64_unknown_linux_musl=aarch64-linux-musl-gcc"
+              echo "AR_aarch64_unknown_linux_musl=aarch64-linux-musl-ar"
+              echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-musl-gcc"
+          } >> "$GITHUB_ENV"
 
       - name: Cargo build
         run: cargo build --target ${{ matrix.target }} --release --all-targets --all-features
@@ -90,7 +90,6 @@ jobs:
         with:
           name: ${{ matrix.target }}
           path: codex-rs/dist/${{ matrix.target }}/*
-
 
   release:
     needs: build
