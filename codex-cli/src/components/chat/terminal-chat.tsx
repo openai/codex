@@ -80,8 +80,8 @@ async function generateCommandExplanation(
   try {
     // Create a temporary OpenAI client
     const oai = new OpenAI({
-      apiKey: getApiKey(config.provider),
-      baseURL: getBaseUrl(config.provider),
+      apiKey: getApiKey(config.provider || "openai"),
+      baseURL: getBaseUrl(config.provider || "openai"),
     });
 
     // Format the command for display
@@ -158,8 +158,7 @@ export default function TerminalChat({
       const summary = await generateCompactSummary(
         items,
         model,
-        Boolean(config.flexMode),
-        config,
+        Boolean(config.flexMode)
       );
       setItems([
         {
@@ -562,13 +561,21 @@ export default function TerminalChat({
         {overlayMode === "model" && (
           <ModelOverlay
             currentModel={model}
-            providers={config.providers}
             currentProvider={provider}
             hasLastResponse={Boolean(lastResponseId)}
-            onSelect={(newModel) => {
+            onSelect={(newModel: string) => {
+              log(
+                "TerminalChat: Switching model - cancelling agent and updating state",
+              );
+              if (!agent) {
+                log("TerminalChat: agent is not ready yet during model switch");
+              }
+              agent?.cancel(); // Cancel any ongoing agent activity
+              setLoading(false); // Stop loading indicator
+
               // Check if the selected model is available
               if (!availableModels.includes(newModel)) {
-                // Display error message directly in chat history if not available
+                // Display error message in chat history
                 setItems(
                   (prev) =>
                     [
@@ -582,7 +589,9 @@ export default function TerminalChat({
                             type: "input_text",
                             text: `${chalk.red("Error:")} Model "${chalk.bold(
                               newModel,
-                            )}" is not available.\nAvailable models: ${chalk.green(
+                            )}" is not available for provider "${chalk.yellow(
+                              provider,
+                            )}".\nAvailable models: ${chalk.green(
                               availableModels.join(", "),
                             )}`,
                           },
@@ -590,20 +599,25 @@ export default function TerminalChat({
                       },
                     ] as Array<ResponseItem>,
                 );
+                
+                // Also log to console for CLI feedback
+                // eslint-disable-next-line no-console
+                console.error(
+                  chalk.bold.red(
+                    `Model "${chalk.yellow(
+                      newModel,
+                    )}" is not available for provider "${chalk.yellow(
+                      provider,
+                    )}".`,
+                  ),
+                );
+                
                 // Close the overlay without changing the model
                 setOverlayMode("none");
-                return; // Exit the handler if the model is unavailable
+                return; // Exit the handler
               }
 
               // If model is available, proceed with switching
-              log(
-                "TerminalChat: Switching model - cancelling agent and updating state",
-              );
-              if (!agent) {
-                log("TerminalChat: agent is not ready yet during model switch");
-              }
-              agent?.cancel(); // Cancel any ongoing agent activity
-              setLoading(false); // Stop loading indicator
               setModel(newModel); // Update the model state
 
               // Save model to config
@@ -640,7 +654,7 @@ export default function TerminalChat({
               // Close the overlay
               setOverlayMode("none");
             }}
-            onSelectProvider={(newProvider) => {
+            onSelectProvider={(newProvider: string) => {
               log(
                 "TerminalChat: interruptAgent invoked – calling agent.cancel()",
               );
