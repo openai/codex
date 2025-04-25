@@ -56,9 +56,9 @@ pub struct Cli {
 
     /// Record submissions into file as JSON
     #[arg(short = 'S', long)]
-    pub record_submissions: Option<String>,
+    pub record_submissions: Option<PathBuf>,
 
     /// Record events into file as JSON
     #[arg(short = 'E', long)]
-    pub record_events: Option<String>,
+    pub record_events: Option<PathBuf>,
 }
