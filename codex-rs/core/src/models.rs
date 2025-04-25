@@ -56,6 +56,17 @@ pub enum ResponseItem {
     Other,
 }
 
+impl From<ResponseInputItem> for ResponseItem {
+    fn from(item: ResponseInputItem) -> Self {
+        match item {
+            ResponseInputItem::Message { role, content } => Self::Message { role, content },
+            ResponseInputItem::FunctionCallOutput { call_id, output } => {
+                Self::FunctionCallOutput { call_id, output }
+            }
+        }
+    }
+}
+
 impl From<Vec<InputItem>> for ResponseInputItem {
     fn from(items: Vec<InputItem>) -> Self {
         Self::Message {

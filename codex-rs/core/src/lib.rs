@@ -19,6 +19,7 @@ mod models;
 pub mod protocol;
 mod safety;
 pub mod util;
+mod zdr_transcript;
 
 pub use codex::Codex;
 
