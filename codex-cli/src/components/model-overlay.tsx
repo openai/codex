@@ -19,7 +19,7 @@ type Props = {
   currentProvider?: string;
   hasLastResponse: boolean;
   providers?: Record<string, { name: string; baseURL: string; envKey: string }>;
-  onSelect: (model: string) => void;
+  onSelect: (allModels: Array<string>, model: string) => void;
   onSelectProvider?: (provider: string) => void;
   onExit: () => void;
 };
@@ -153,7 +153,12 @@ export default function ModelOverlay({
       }
       initialItems={items}
       currentValue={currentModel}
-      onSelect={onSelect}
+      onSelect={() =>
+        onSelect(
+          items?.map((m) => m.value),
+          currentModel,
+        )
+      }
       onExit={onExit}
     />
   );
