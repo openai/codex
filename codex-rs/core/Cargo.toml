@@ -49,6 +49,9 @@ seccompiler = "0.5.0"
 [target.x86_64-unknown-linux-musl.dependencies]
 openssl-sys = { version = "*", features = ["vendored"] }
 
+[target.aarch64-unknown-linux-musl.dependencies]
+openssl-sys = { version = "*", features = ["vendored"] }
+
 [dev-dependencies]
 assert_cmd = "2"
 predicates = "3"

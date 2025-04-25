@@ -56,13 +56,12 @@ jobs:
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' }}
         name: Install musl build tools
         run: |
-          sudo apt install -y musl-tools pkg-config libssl-dev
-          echo "OPENSSL_STATIC=1" >> "$GITHUB_ENV"
+          sudo apt install -y musl-tools pkg-config
 
-      - name: cargo build
+      - name: Cargo build
         run: cargo build --target ${{ matrix.target }} --release --all-targets --all-features
 
-      - name: stage artifacts
+      - name: Stage artifacts
         shell: bash
         run: |
           dest="dist/${{ matrix.target }}"
@@ -88,5 +87,5 @@ jobs:
         with:
           path: dist
 
-      - name: list
+      - name: List
         run: ls dist/
