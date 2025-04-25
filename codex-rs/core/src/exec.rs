@@ -322,7 +322,7 @@ fn synthetic_exit_status(code: i32) -> ExitStatus {
 }
 
 #[cfg(windows)]
-fn synthetic_exit_status(code: u32) -> ExitStatus {
+fn synthetic_exit_status(code: i32) -> ExitStatus {
     use std::os::windows::process::ExitStatusExt;
-    std::process::ExitStatus::from_raw(code)
+    std::process::ExitStatus::from_raw(code.try_into().unwrap())
 }
