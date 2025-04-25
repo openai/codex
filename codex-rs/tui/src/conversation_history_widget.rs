@@ -40,11 +40,11 @@ impl ConversationHistoryWidget {
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) -> bool {
         match key_event.code {
             KeyCode::Up | KeyCode::Char('k') => {
-                self.scroll_up();
+                self.scroll_up(1);
                 true
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                self.scroll_down();
+                self.scroll_down(1);
                 true
             }
             KeyCode::PageUp | KeyCode::Char('b') | KeyCode::Char('u') | KeyCode::Char('U') => {
@@ -59,9 +59,18 @@ impl ConversationHistoryWidget {
         }
     }
 
-    fn scroll_up(&mut self) {
-        // If a user is scrolling up from the "stick to bottom" mode, we
-        // need to scroll them back such that they move just one line up.
+    /// Negative delta scrolls up; positive delta scrolls down.
+    pub(crate) fn scroll(&mut self, delta: i32) {
+        match delta.cmp(&0) {
+            std::cmp::Ordering::Less => self.scroll_up(-delta as u32),
+            std::cmp::Ordering::Greater => self.scroll_down(delta as u32),
+            std::cmp::Ordering::Equal => {}
+        }
+    }
+
+    fn scroll_up(&mut self, num_lines: u32) {
+        // If a user is scrolling up from the "stick to bottom" mode, we need to
+        // map this to a specific scroll position so we can caluate the delta.
         // This requires us to care about how tall the screen is.
         if self.scroll_position == usize::MAX {
             self.scroll_position = self
@@ -70,24 +79,26 @@ impl ConversationHistoryWidget {
                 .saturating_sub(self.last_viewport_height.get());
         }
 
-        self.scroll_position = self.scroll_position.saturating_sub(1);
+        self.scroll_position = self.scroll_position.saturating_sub(num_lines as usize);
     }
 
-    fn scroll_down(&mut self) {
+    fn scroll_down(&mut self, num_lines: u32) {
         // If we're already pinned to the bottom there's nothing to do.
         if self.scroll_position == usize::MAX {
             return;
         }
 
         let viewport_height = self.last_viewport_height.get().max(1);
-        let num_lines = self.num_rendered_lines.get();
+        let num_rendered_lines = self.num_rendered_lines.get();
 
         // Compute the maximum explicit scroll offset that still shows a full
         // viewport. This mirrors the calculation in `scroll_page_down()` and
         // in the render path.
-        let max_scroll = num_lines.saturating_sub(viewport_height).saturating_add(1);
+        let max_scroll = num_rendered_lines
+            .saturating_sub(viewport_height)
+            .saturating_add(1);
 
-        let new_pos = self.scroll_position.saturating_add(1);
+        let new_pos = self.scroll_position.saturating_add(num_lines as usize);
 
         if new_pos >= max_scroll {
             // Reached (or passed) the bottom – switch to stick‑to‑bottom mode
