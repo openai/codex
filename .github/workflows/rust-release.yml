@@ -56,7 +56,7 @@ jobs:
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' }}
         name: Install musl build tools
         run: |
-          sudo apt install -y musl-tools pkg-config
+          sudo apt install -y musl-tools pkg-config libssl-dev
 
       - name: cargo build
         run: cargo build --target ${{ matrix.target }} --release --all-targets --all-features
