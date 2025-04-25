@@ -57,6 +57,7 @@ jobs:
         name: Install musl build tools
         run: |
           sudo apt install -y musl-tools pkg-config libssl-dev
+          echo "OPENSSL_STATIC=1" >> "$GITHUB_ENV"
 
       - name: cargo build
         run: cargo build --target ${{ matrix.target }} --release --all-targets --all-features
