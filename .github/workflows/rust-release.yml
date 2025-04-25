@@ -97,6 +97,8 @@ jobs:
           draft: true
 
       - uses: facebook/dotslash-publish-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag: ${{ env.RELEASE_TAG }}
           config: .github/dotslash-config.json
