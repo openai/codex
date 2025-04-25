@@ -24,7 +24,14 @@
 - [Tracing / Verbose Logging](#tracing--verbose-logging)
 - [Recipes](#recipes)
 - [Installation](#installation)
-- [Configuration](#configuration)
+- [Configuration Guide](#configuration-guide)
+  - [Basic Configuration Parameters](#basic-configuration-parameters)
+  - [Custom AI Provider Configuration](#custom-ai-provider-configuration)
+  - [History Configuration](#history-configuration)
+  - [Configuration Examples](#configuration-examples)
+  - [Full Configuration Example](#full-configuration-example)
+  - [Custom Instructions](#custom-instructions)
+  - [Environment Variables Setup](#environment-variables-setup)
 - [FAQ](#faq)
 - [Zero Data Retention (ZDR) Usage](#zero-data-retention-zdr-usage)
 - [Codex Open Source Fund](#codex-open-source-fund)
@@ -315,20 +322,53 @@ pnpm link
 
 ---
 
-## Configuration
+## Configuration Guide
 
-Codex looks for config files in **`~/.codex/`** (either YAML or JSON format).
+Codex configuration files can be placed in the `~/.codex/` directory, supporting both YAML and JSON formats.
+
+### Basic Configuration Parameters
+
+| Parameter           | Type    | Default    | Description                      | Available Options                                                                              |
+| ------------------- | ------- | ---------- | -------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `model`             | string  | `o4-mini`  | AI model to use                  | Any model name supporting OpenAI API                                                           |
+| `approvalMode`      | string  | `suggest`  | AI assistant's permission mode   | `suggest` (suggestions only)<br>`auto-edit` (automatic edits)<br>`full-auto` (fully automatic) |
+| `fullAutoErrorMode` | string  | `ask-user` | Error handling in full-auto mode | `ask-user` (prompt for user input)<br>`ignore-and-continue` (ignore and proceed)               |
+| `notify`            | boolean | `true`     | Enable desktop notifications     | `true`/`false`                                                                                 |
+
+### Custom AI Provider Configuration
+
+In the `providers` object, you can configure multiple AI service providers. Each provider requires the following parameters:
+
+| Parameter | Type   | Description                             | Example                       |
+| --------- | ------ | --------------------------------------- | ----------------------------- |
+| `name`    | string | Display name of the provider            | `"OpenAI"`                    |
+| `baseURL` | string | API service URL                         | `"https://api.openai.com/v1"` |
+| `envKey`  | string | Environment variable name (for API key) | `"OPENAI_API_KEY"`            |
+
+### History Configuration
+
+In the `history` object, you can configure conversation history settings:
+
+| Parameter           | Type    | Description                                            | Example Value |
+| ------------------- | ------- | ------------------------------------------------------ | ------------- |
+| `maxSize`           | number  | Maximum number of history entries to save              | `1000`        |
+| `saveHistory`       | boolean | Whether to save history                                | `true`        |
+| `sensitivePatterns` | array   | Patterns of sensitive information to filter in history | `[]`          |
+
+### Configuration Examples
+
+1. YAML format (save as `~/.codex/config.yaml`):
 
 ```yaml
-# ~/.codex/config.yaml
-model: o4-mini # Default model
-approvalMode: suggest # or auto-edit, full-auto
-fullAutoErrorMode: ask-user # or ignore-and-continue
-notify: true # Enable desktop notifications for responses
+model: o4-mini
+approvalMode: suggest
+fullAutoErrorMode: ask-user
+notify: true
 ```
 
+2. JSON format (save as `~/.codex/config.json`):
+
 ```json
-// ~/.codex/config.json
 {
   "model": "o4-mini",
   "approvalMode": "suggest",
@@ -337,12 +377,85 @@ notify: true # Enable desktop notifications for responses
 }
 ```
 
-You can also define custom instructions:
+### Full Configuration Example
 
-```yaml
-# ~/.codex/instructions.md
+Below is a comprehensive example of `config.json` with multiple custom providers:
+
+```json
+{
+  "model": "o4-mini",
+  "provider": "openai",
+  "providers": {
+    "openai": {
+      "name": "OpenAI",
+      "baseURL": "https://api.openai.com/v1",
+      "envKey": "OPENAI_API_KEY"
+    },
+    "openrouter": {
+      "name": "OpenRouter",
+      "baseURL": "https://openrouter.ai/api/v1",
+      "envKey": "OPENROUTER_API_KEY"
+    },
+    "gemini": {
+      "name": "Gemini",
+      "baseURL": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "envKey": "GEMINI_API_KEY"
+    },
+    "ollama": {
+      "name": "Ollama",
+      "baseURL": "http://localhost:11434/v1",
+      "envKey": "OLLAMA_API_KEY"
+    },
+    "mistral": {
+      "name": "Mistral",
+      "baseURL": "https://api.mistral.ai/v1",
+      "envKey": "MISTRAL_API_KEY"
+    },
+    "deepseek": {
+      "name": "DeepSeek",
+      "baseURL": "https://api.deepseek.com",
+      "envKey": "DEEPSEEK_API_KEY"
+    },
+    "xai": {
+      "name": "xAI",
+      "baseURL": "https://api.x.ai/v1",
+      "envKey": "XAI_API_KEY"
+    },
+    "groq": {
+      "name": "Groq",
+      "baseURL": "https://api.groq.com/openai/v1",
+      "envKey": "GROQ_API_KEY"
+    }
+  },
+  "history": {
+    "maxSize": 1000,
+    "saveHistory": true,
+    "sensitivePatterns": []
+  }
+}
+```
+
+### Custom Instructions
+
+You can create a `~/.codex/instructions.md` file to define custom instructions:
+
+```markdown
 - Always respond with emojis
-- Only use git commands if I explicitly mention you should
+- Only use git commands when explicitly requested
+```
+
+### Environment Variables Setup
+
+For each AI provider, you need to set the corresponding API key in your environment variables. For example:
+
+```bash
+# OpenAI
+export OPENAI_API_KEY="your-api-key-here"
+
+# OpenRouter
+export OPENROUTER_API_KEY="your-openrouter-key-here"
+
+# Similarly for other providers
 ```
 
 ---

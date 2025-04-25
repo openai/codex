@@ -95,6 +95,7 @@ async fn keeps_previous_response_id_between_tasks() {
                 instructions: None,
                 approval_policy: AskForApproval::OnFailure,
                 sandbox_policy: SandboxPolicy::NetworkAndFileWriteRestricted,
+                disable_response_storage: false,
             },
         })
         .await
