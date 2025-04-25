@@ -22,8 +22,8 @@ jobs:
       run:
         working-directory: codex-rs
     env:
-      RUST_LOG=debug
-      RUST_BACKTRACE=1
+      RUST_LOG: debug
+      RUST_BACKTRACE: 1
 
     steps:
       - uses: actions/checkout@v4
@@ -65,8 +65,8 @@ jobs:
       run:
         working-directory: codex-rs
     env:
-      RUST_LOG=debug
-      RUST_BACKTRACE=1
+      RUST_LOG: debug
+      RUST_BACKTRACE: 1
 
     steps:
       - uses: actions/checkout@v4
