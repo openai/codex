@@ -9,7 +9,7 @@ on:
 
 jobs:
 
-  release:
+  build:
     name: ${{ matrix.runner }} - ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
@@ -63,10 +63,6 @@ jobs:
           name: ${{ matrix.runner }}-${{ matrix.target }}
           path: dist/*
 
-      - name: release
-        uses: softprops/action-gh-release@v2
-        with: { files: dist/* }
-
       - name: Fail if any step failed
         run: |
           if [ -n "$FAILED" ]; then
@@ -75,3 +71,14 @@ jobs:
           fi
         env:
           FAILED: ${{ env.FAILED }}
+
+  release:
+    needs: build
+    name: release
+    runs-on: ubuntu-24.04
+
+    steps:
+        - uses: actions:/download-artifact@v4
+          with:
+            name: test
+            path: dist/
