@@ -1,4 +1,4 @@
-name: rust-ci
+name: rust-release
 on:
   push:
     tags:
