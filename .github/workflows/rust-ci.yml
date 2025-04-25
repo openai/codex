@@ -15,53 +15,8 @@ on:
 # get signal faster.
 
 jobs:
-  # Basic tests / lints on each major platform
-  test_lint:
-    name: Tests and Lints on ${{ matrix.runner }}
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
-    defaults:
-      run:
-        working-directory: codex-rs
-
-    strategy:
-      fail-fast: false
-      matrix:
-        runner: [macos-14, ubuntu-24.04]
-
-    env:
-      RUST_LOG: debug
-      RUST_BACKTRACE: full
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: Initialize failure flag
-        run: echo "FAILED=" >> $GITHUB_ENV
-
-      - name: cargo fmt
-        run: cargo fmt -- --config imports_granularity=Item --check || echo "FAILED=${FAILED:+$FAILED, }cargo fmt" >> $GITHUB_ENV
-
-      - name: cargo clippy
-        run: cargo clippy --all-features -- -D warnings || echo "FAILED=${FAILED:+$FAILED, }cargo clippy" >> $GITHUB_ENV
-
-      - name: cargo test
-        run: cargo test || echo "FAILED=${FAILED:+$FAILED, }cargo test" >> $GITHUB_ENV
-
-      - name: Fail if any step failed
-        run: |
-          if [ -n "$FAILED" ]; then
-            echo -e "See logs above, as the following steps failed:\n$FAILED"
-            exit 1
-          fi
-        env:
-          FAILED: ${{ env.FAILED }}
-
-  # Validate our builds run on each major target
-  build_tests:
-    name: Build validation on ${{ matrix.runner }}
+  lint_build_test:
+    name: ${{ matrix.runner }} - ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     defaults:
@@ -76,6 +31,8 @@ jobs:
         include:
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
 
     steps:
       - uses: actions/checkout@v4
@@ -86,8 +43,28 @@ jobs:
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' }}
         name: Install musl build tools
         run: |
-          sudo apt update
           sudo apt install -y musl-tools pkg-config
 
+      - name: Initialize failure flag
+        run: echo "FAILED=" >> $GITHUB_ENV
+
+      - name: cargo fmt
+        run: cargo fmt -- --config imports_granularity=Item --check || echo "FAILED=${FAILED:+$FAILED, }cargo fmt" >> $GITHUB_ENV
+
+      - name: cargo clippy
+        run: cargo clippy --all-features -- -D warnings || echo "FAILED=${FAILED:+$FAILED, }cargo clippy" >> $GITHUB_ENV
+
       - name: ${{ matrix.target }} build
-        run: cargo build --target ${{ matrix.target }}
+        run: cargo build --target ${{ matrix.target }} || echo "FAILED=${FAILED:+$FAILED, }cargo fmt" >> $GITHUB_ENV
+
+      - name: cargo test
+        run: cargo test || echo "FAILED=${FAILED:+$FAILED, }cargo test" >> $GITHUB_ENV
+
+      - name: Fail if any step failed
+        run: |
+          if [ -n "$FAILED" ]; then
+            echo -e "See logs above, as the following steps failed:\n$FAILED"
+            exit 1
+          fi
+        env:
+          FAILED: ${{ env.FAILED }}
