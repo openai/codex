@@ -86,9 +86,9 @@ jobs:
 
       - name: List
         run: ls -R dist/
-    
+
       - uses: softprops/action-gh-release@v2
-        with: 
+        with:
           files: dist/**
           prerelease: true
           draft: true
