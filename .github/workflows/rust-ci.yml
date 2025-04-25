@@ -15,8 +15,9 @@ on:
 # get signal faster.
 
 jobs:
-  format:
-    name: Format
+  # CI that don't need specific targets
+  general:
+    name: Format / etc
     runs-on: ubuntu-24.04
     defaults:
       run:
@@ -28,7 +29,7 @@ jobs:
       - name: cargo fmt
         run: cargo fmt -- --config imports_granularity=Item --check
 
-
+  # CI to validate on different os/targets
   lint_build_test:
     name: ${{ matrix.runner }} - ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
@@ -55,6 +56,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: cargo-${{ matrix.runner }}-${{ matrix.target }}-${{ hashFiles('./Cargo.lock') }}
 
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' }}
         name: Install musl build tools
