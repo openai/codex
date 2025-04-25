@@ -1,0 +1,64 @@
+name: ci
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "pnpm-lock.yaml"
+
+jobs:
+  update-nix-hash:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Needed for push access
+      pull-requests: write # Needed for PR creation
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2 # Need previous commit to check for changes
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run step if doc file(s) change
+        if: steps.changed-files-yaml.outputs.doc_any_changed == 'true'
+        env:
+          DOC_ALL_CHANGED_FILES: ${{ steps.changed-files-yaml.outputs.doc_all_changed_files }}
+        run: |
+          echo "One or more doc file(s) has changed."
+          echo "List all the files that have changed: $DOC_ALL_CHANGED_FILES"
+
+      - name: Setup Nix
+        uses: DeterminateSystems/nix-installer-action@v8
+
+      - name: Update nix npm hash
+        id: update-hash
+        run: |
+          sh ./codex-cli/scripts/update-nix-hash.sh
+        env:
+          GITHUB_ACTIONS: "true"
+
+      - name: Create branch
+        if: steps.update-hash.outputs.changed == 'true'
+        run: |
+          git checkout -b update-npm-hash-$(date +%Y%m%d%H%M%S)
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add flake.nix
+          git commit -m "Update npm hash in flake.nix"
+          git push --set-upstream origin HEAD
+
+      - name: Create Pull Request
+        if: steps.update-hash.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: Update npm hash in flake.nix
+          title: Update npm hash in flake.nix
+          body: |
+            This PR updates the npm hash in flake.nix based on changes to the package-lock.json file.
+
+            Automated PR created by GitHub Actions.
+          branch: update-npm-hash-$(date +%Y%m%d%H%M%S)
+          base: main
+          draft: false
