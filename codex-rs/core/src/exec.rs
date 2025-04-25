@@ -20,16 +20,16 @@ use crate::error::Result;
 use crate::error::SandboxErr;
 use crate::protocol::SandboxPolicy;
 
-/// Maximum we send for each stream, which is either:
-/// - 10KiB OR
-/// - 256 lines
+// Maximum we send for each stream, which is either:
+// - 10KiB OR
+// - 256 lines
 const MAX_STREAM_OUTPUT: usize = 10 * 1024;
 const MAX_STREAM_OUTPUT_LINES: usize = 256;
 
 const DEFAULT_TIMEOUT_MS: u64 = 10_000;
 
-/// Hardcode this since it does not seem worth including the libc craate just
-/// for this.
+// Hardcode these since it does not seem worth including the libc crate just
+// for these.
 const SIGKILL_CODE: i32 = 9;
 const TIMEOUT_CODE: i32 = 64;
 
