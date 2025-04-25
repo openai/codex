@@ -28,7 +28,6 @@ use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::flags::OPENAI_API_BASE;
 use crate::flags::OPENAI_REQUEST_MAX_RETRIES;
 use crate::flags::OPENAI_STREAM_IDLE_TIMEOUT_MS;
-use crate::flags::OPENAI_TIMEOUT_MS;
 use crate::models::ResponseInputItem;
 use crate::models::ResponseItem;
 use crate::util::backoff;
@@ -170,7 +169,6 @@ impl ModelClient {
                 .header("OpenAI-Beta", "responses=experimental")
                 .header(reqwest::header::ACCEPT, "text/event-stream")
                 .json(&payload)
-                .timeout(*OPENAI_TIMEOUT_MS)
                 .send()
                 .await;
             match res {
