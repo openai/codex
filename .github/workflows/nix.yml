@@ -34,7 +34,7 @@ jobs:
       - name: Update nix npm hash
         id: update-hash
         run: |
-          sh ./codex-cli/scripts/update-nix-hash.sh
+          nix run .\#update-nix-hash
         env:
           GITHUB_ACTIONS: "true"
 
@@ -56,7 +56,7 @@ jobs:
           commit-message: Update npm hash in flake.nix
           title: Update npm hash in flake.nix
           body: |
-            This PR updates the npm hash in flake.nix based on changes to the package-lock.json file.
+            This PR updates the npm hash in flake.nix based on changes to the pnpm-lock.yaml file.
 
             Automated PR created by GitHub Actions.
           branch: update-npm-hash-$(date +%Y%m%d%H%M%S)
