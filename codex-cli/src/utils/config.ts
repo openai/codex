@@ -11,10 +11,36 @@ import type { FullAutoErrorMode } from "./auto-approval-mode.js";
 import { AutoApprovalMode } from "./auto-approval-mode.js";
 import { log } from "./logger/log.js";
 import { providers } from "./providers.js";
+import { config as loadDotenv } from "dotenv";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { load as loadYaml, dump as dumpYaml } from "js-yaml";
 import { homedir } from "os";
 import { dirname, join, extname, resolve as resolvePath } from "path";
+
+// ---------------------------------------------------------------------------
+// User‑wide environment config (~/.codex.env)
+// ---------------------------------------------------------------------------
+
+// Load a user‑level dotenv file **after** process.env and any project‑local
+// .env file (loaded via "dotenv/config" in cli.tsx) are in place.  We rely on
+// dotenv's default behaviour of *not* overriding existing variables so that
+// the precedence order becomes:
+//   1. Explicit environment variables
+//   2. Project‑local .env (handled in cli.tsx)
+//   3. User‑wide ~/.codex.env (loaded here)
+// This guarantees that users can still override the global key on a per‑project
+// basis while enjoying the convenience of a persistent default.
+
+// Skip when running inside Vitest to avoid interfering with the FS mocks used
+// by tests that stub out `fs` *after* importing this module.
+const USER_WIDE_CONFIG_PATH = join(homedir(), ".codex.env");
+
+const isVitest =
+  typeof (globalThis as { vitest?: unknown }).vitest !== "undefined";
+
+if (!isVitest) {
+  loadDotenv({ path: USER_WIDE_CONFIG_PATH });
+}
 
 export const DEFAULT_AGENTIC_MODEL = "o4-mini";
 export const DEFAULT_FULL_CONTEXT_MODEL = "gpt-4.1";
@@ -117,7 +143,7 @@ export type StoredConfig = {
 // propagating to existing users until they explicitly set a model.
 export const EMPTY_STORED_CONFIG: StoredConfig = { model: "" };
 
-// Pre‑stringified JSON variant so we don’t stringify repeatedly.
+// Pre‑stringified JSON variant so we don't stringify repeatedly.
 const EMPTY_CONFIG_JSON = JSON.stringify(EMPTY_STORED_CONFIG, null, 2) + "\n";
 
 export type MemoryConfig = {
