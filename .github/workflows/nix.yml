@@ -20,26 +20,27 @@ jobs:
           fetch-depth: 2 # Need previous commit to check for changes
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Run step if doc file(s) change
-        if: steps.changed-files-yaml.outputs.doc_any_changed == 'true'
-        env:
-          DOC_ALL_CHANGED_FILES: ${{ steps.changed-files-yaml.outputs.doc_all_changed_files }}
-        run: |
-          echo "One or more doc file(s) has changed."
-          echo "List all the files that have changed: $DOC_ALL_CHANGED_FILES"
-
       - name: Setup Nix
         uses: DeterminateSystems/nix-installer-action@v8
 
-      - name: Update nix pnpm hash
+      - name: Get if the pnpm-lock.yaml file has changed
+        id: changed-pnpm-lock-yaml
+        uses: tj-actions/changed-files@ed68ef82c095e0d48ec87eccea555d944a631a4c # v46
+        with:
+          # Avoid using single or double quotes for multiline patterns
+          files: |
+            pnpm-lock.yaml
+
+      - name: Update nix pnpm hash on changed pnpm-lock.yaml file
         id: update-hash
+        if: steps.changed-pnpm-lock-yaml.outputs.any_changed == 'true'
+        env:
+          ALL_CHANGED_FILES: ${{ steps.changed-markdown-files.outputs.all_changed_files }}
         run: |
           nix run .\#update-nix-hash
-        env:
-          GITHUB_ACTIONS: "true"
 
       - name: Create branch
-        if: steps.update-hash.outputs.changed == 'true'
+        if: steps.changed-pnpm-lock-yaml.outputs.any_changed == 'true'
         run: |
           git checkout -b update-npm-hash-$(date +%Y%m%d%H%M%S)
           git config user.name "github-actions[bot]"
@@ -49,7 +50,7 @@ jobs:
           git push --set-upstream origin HEAD
 
       - name: Create Pull Request
-        if: steps.update-hash.outputs.changed == 'true'
+        if: steps.changed-pnpm-lock-yaml.outputs.any_changed == 'true'
         uses: peter-evans/create-pull-request@v5
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -65,6 +66,7 @@ jobs:
 
       - name: Comment PR
         uses: thollander/actions-comment-pull-request@v3
+        if: steps.changed-pnpm-lock-yaml.outputs.any_changed == 'true'
         with:
           message: |
             I have read the CLA Document and I hereby sign the CLA
