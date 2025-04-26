@@ -2,60 +2,13 @@
 // used in the useWatchMode hook
 
 import { describe, it, expect } from "vitest";
+import {
+  findAllTriggers,
+  extractContextAroundTrigger,
+} from "../src/utils/watch-mode-utils";
 
-// These functions are private in the hook, so we need to recreate them for testing
-const TRIGGER_PATTERN =
-  /\/\/\s*(.*),?\s*AI[!?]|#\s*(.*),?\s*AI[!?]|\/\*\s*(.*),?\s*AI[!?]\s*\*\//;
-
-function findAllTriggers(content: string): Array<RegExpMatchArray> {
-  const matches: Array<RegExpMatchArray> = [];
-  const regex = new RegExp(TRIGGER_PATTERN, "g");
-
-  let match;
-  while ((match = regex.exec(content)) != null) {
-    matches.push(match);
-  }
-
-  return matches;
-}
-
-function extractContextAroundTrigger(
-  content: string,
-  triggerMatch: RegExpMatchArray,
-): { context: string; instruction: string } {
-  // Default context size (number of lines before and after the trigger)
-  const contextSize = 20;
-
-  // Get the lines of the file
-  const lines = content.split("\n");
-
-  // Find the line number of the trigger
-  const triggerPos =
-    content.substring(0, triggerMatch.index).split("\n").length - 1;
-
-  // Calculate start and end lines for context
-  const startLine = Math.max(0, triggerPos - contextSize);
-  const endLine = Math.min(lines.length - 1, triggerPos + contextSize);
-
-  // Extract the context lines
-  const contextLines = lines.slice(startLine, endLine + 1);
-
-  // Join the context lines back together
-  const context = contextLines.join("\n");
-
-  // Extract the instruction from the capture groups
-  // The regex has 3 capture groups for different comment styles:
-  // Group 1: // instruction AI!
-  // Group 2: # instruction AI!
-  // Group 3: /* instruction AI! */
-  const instruction =
-    triggerMatch[1] ||
-    triggerMatch[2] ||
-    triggerMatch[3] ||
-    "fix or improve this code";
-
-  return { context, instruction };
-}
+// For testing, we'll use a larger context size
+const TEST_CONTEXT_SIZE = 20;
 
 describe("Watch mode trigger pattern matching", () => {
   it("should detect double-slash (JS-style) AI triggers", () => {
@@ -213,6 +166,7 @@ export default Counter;`;
     const { context, instruction } = extractContextAroundTrigger(
       content,
       matches[0]!,
+      TEST_CONTEXT_SIZE,
     );
 
     // Should include appropriate context around the trigger (the entire file in this case)
@@ -235,12 +189,13 @@ export default Counter;`;
     const { context, instruction } = extractContextAroundTrigger(
       content,
       matches[0]!,
+      TEST_CONTEXT_SIZE,
     );
 
-    // Should only include the default number of lines around the trigger (15 before, 15 after)
+    // Should only include the default number of lines around the trigger (20 before, 20 after)
     const contextLines = context.split("\n");
     expect(contextLines.length).toBeLessThan(50); // Less than the full 100 lines
-    expect(contextLines.length).toBeGreaterThanOrEqual(31); // At least the trigger line + 15 before + 15 after
+    expect(contextLines.length).toBeGreaterThanOrEqual(41); // At least the trigger line + 20 before + 20 after
 
     // Should include the trigger line
     expect(context).toContain("// Optimize this code, AI!");
@@ -260,6 +215,7 @@ function complexFunction() {
     const { context, instruction } = extractContextAroundTrigger(
       content,
       matches[0]!,
+      TEST_CONTEXT_SIZE,
     );
 
     // Should include the entire short file
@@ -280,6 +236,7 @@ function complexFunction() {
     const { context, instruction } = extractContextAroundTrigger(
       content,
       matches[0]!,
+      TEST_CONTEXT_SIZE,
     );
 
     // Should include the entire short file
@@ -289,4 +246,3 @@ function complexFunction() {
     expect(instruction).toBe("Explain this code, ");
   });
 });
-
