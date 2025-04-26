@@ -567,9 +567,7 @@ export class AgentLoop {
         if (item.id && alreadyStagedItemIds.has(item.id)) {
           return;
         }
-        if (item.id) {
-          alreadyStagedItemIds.add(item.id);
-        }
+        alreadyStagedItemIds.add(item.id);
 
         // Store the item so the final flush can still operate on a complete list.
         // We'll nil out entries once they're delivered.
