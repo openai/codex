@@ -1,29 +1,78 @@
+import { loadConfig } from "./config";
+
 /**
- * Pattern to match various "AI!" style trigger comments with possible instructions
- * Supports multiple single-line programming language comment styles:
- *   - Double slash comment (C, C++, JavaScript, TypeScript, Java, etc.)
- *   - Hash comment (Python, Ruby, Perl, Shell scripts, YAML, etc.)
- *   - Double dash comment (SQL, Haskell, Lua)
- *   - Semicolon comment (Lisp, Clojure, Assembly)
- *   - Single quote comment (VB, VBA)
- *   - Percent comment (LaTeX, Matlab, Erlang)
- *   - REM comment (Batch files)
- *
+ * Custom trigger patterns for watch mode
+ * 
+ * Users can define their own trigger patterns in config.json:
+ * ```json
+ * {
+ *   "watchMode": {
+ *     "triggerPattern": "/(?:\\/\\/|#)\\s*AI:(TODO|FIXME)\\s+(.*)/i"
+ *   }
+ * }
+ * ```
+ * 
+ * The pattern MUST include at least one capture group that will contain the instruction.
+ * 
  * Examples:
+ * 
+ * Default pattern (single-line comments ending with AI! or AI?):
  * - "// what does this function do, AI?"
  * - "# Fix this code, AI!"
  * - "-- Optimize this query, AI!"
+ * 
+ * Custom pattern for task management:
+ * - "// AI:TODO fix this bug"
+ * - "// AI:FIXME handle error case"
+ * - "# AI:BUG this crashes with null input"
+ * 
+ * Custom pattern with different keyword:
+ * - "// codex! fix this"
+ * - "# codex? what does this function do"
  */
 
-export const TRIGGER_PATTERN =
-  /(?:\/\/|#|--|;|'|%|REM)\s*(.*?)(?:,\s*)?AI[!?]/i;
+// Default trigger pattern
+const DEFAULT_TRIGGER_PATTERN = '/(?:\\/\\/|#|--|;|\'|%|REM)\\s*(.*?)(?:,\\s*)?AI[!?]/i';
 
 /**
- * Function to find all AI trigger matches in a file content
+ * Get the configured trigger pattern from config.json or use the default
+ * @returns A RegExp object for the trigger pattern
+ */
+export function getTriggerPattern(): RegExp {
+  const config = loadConfig();
+  
+  // Get the pattern string from config or use default
+  const patternString = config.watchMode?.triggerPattern || DEFAULT_TRIGGER_PATTERN;
+  
+  try {
+    // Parse the regex from the string - first remove enclosing slashes and extract flags
+    const match = patternString.match(/^\/(.*)\/([gimuy]*)$/);
+    
+    if (match) {
+      const [, pattern, flags] = match;
+      return new RegExp(pattern, flags);
+    } else {
+      // If not in /pattern/flags format, try to use directly as a RegExp
+      return new RegExp(patternString, 'i');
+    }
+  } catch (error) {
+    console.warn(`Invalid trigger pattern in config: ${patternString}. Using default.`);
+    // Parse default pattern
+    const match = DEFAULT_TRIGGER_PATTERN.match(/^\/(.*)\/([gimuy]*)$/);
+    const [, pattern, flags] = match!;
+    return new RegExp(pattern, flags);
+  }
+}
+
+/**
+ * Function to find all trigger matches in a file content
+ * Uses the configured trigger pattern from config.json
  */
 export function findAllTriggers(content: string): Array<RegExpMatchArray> {
   const matches: Array<RegExpMatchArray> = [];
-  const regex = new RegExp(TRIGGER_PATTERN, "g");
+  const pattern = getTriggerPattern();
+  // We need to ensure the global flag is set for .exec() to work properly
+  const regex = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : pattern.flags + 'g');
 
   let match;
   while ((match = regex.exec(content)) != null) {
@@ -58,15 +107,22 @@ export function extractContextAroundTrigger(
   // Join the context lines back together
   const context = contextLines.join("\n");
 
-  // Extract the instruction from the capture groups for different comment styles
-  // There are multiple capture groups for different comment syntaxes
-  // Find the first non-undefined capture group
-  let instruction =
-    Array.from(
-      { length: triggerMatch.length - 1 },
-      (_, i) => triggerMatch[i + 1],
-    ).find((group) => group !== undefined) || "fix or improve this code";
-    
+  // Get instruction from capture groups
+  // For custom patterns, check all capture groups and use the last non-empty one
+  // This allows patterns like /AI:(TODO|FIXME)\s+(.*)/ where we want the second group
+  // For the default pattern, it will be the first capture group
+  const captureGroups = Array.from(
+    { length: triggerMatch.length - 1 },
+    (_, i) => triggerMatch[i + 1]
+  ).filter(group => group !== undefined);
+  
+  // Use the last non-empty capture group as the instruction
+  // For simple patterns with one capture, this will be that capture
+  // For patterns with multiple captures (like task types), this will be the actual instruction
+  let instruction = captureGroups.length > 0 
+    ? captureGroups[captureGroups.length - 1] 
+    : "fix or improve this code";
+  
   // Remove any comment prefixes that might have been captured
   instruction = instruction.replace(/^(?:\/\/|#|--|;|'|%|REM)\s*/, "");
   

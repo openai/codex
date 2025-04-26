@@ -148,6 +148,17 @@ export type StoredConfig = {
   disableResponseStorage?: boolean;
   flexMode?: boolean;
   providers?: Record<string, { name: string; baseURL: string; envKey: string }>;
+  /** Configuration for watch mode */
+  watchMode?: {
+    /**
+     * Custom trigger pattern. Default is '/(?:\/\/|#|--|;|\'|%|REM)\s*(.*?)(?:,\s*)?AI[!?]/i'.
+     * Must be a valid regular expression string, with the first capture group containing the instruction.
+     * Examples:
+     * - '/(?:\/\/|#)\s*AI:(TODO|FIXME)\s+(.*)/i' to match "// AI:TODO fix this" or "# AI:FIXME handle errors"
+     * - '/(?:\/\/|#)\s*codex[!?]\s+(.*)/i' to match "// codex! fix this" or "# codex? what does this do"
+     */
+    triggerPattern?: string;
+  };
   history?: {
     maxSize?: number;
     saveHistory?: boolean;
@@ -195,6 +206,17 @@ export type AppConfig = {
   /** Enable the "flex-mode" processing mode for supported models (o3, o4-mini) */
   flexMode?: boolean;
   providers?: Record<string, { name: string; baseURL: string; envKey: string }>;
+  /** Configuration for watch mode */
+  watchMode?: {
+    /**
+     * Custom trigger pattern. Default is '/(?:\/\/|#|--|;|\'|%|REM)\s*(.*?)(?:,\s*)?AI[!?]/i'.
+     * Must be a valid regular expression string, with the first capture group containing the instruction.
+     * Examples:
+     * - '/(?:\/\/|#)\s*AI:(TODO|FIXME)\s+(.*)/i' to match "// AI:TODO fix this" or "# AI:FIXME handle errors"
+     * - '/(?:\/\/|#)\s*codex[!?]\s+(.*)/i' to match "// codex! fix this" or "# codex? what does this do"
+     */
+    triggerPattern?: string;
+  };
   history?: {
     maxSize: number;
     saveHistory: boolean;
@@ -429,6 +451,7 @@ export const loadConfig = (
     },
     disableResponseStorage: storedConfig.disableResponseStorage === true,
     reasoningEffort: storedConfig.reasoningEffort,
+    watchMode: storedConfig.watchMode,
   };
 
   // -----------------------------------------------------------------------
@@ -550,6 +573,7 @@ export const saveConfig = (
     disableResponseStorage: config.disableResponseStorage,
     flexMode: config.flexMode,
     reasoningEffort: config.reasoningEffort,
+    watchMode: config.watchMode,
   };
 
   // Add history settings if they exist
