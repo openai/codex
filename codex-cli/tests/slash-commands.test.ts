@@ -11,6 +11,7 @@ test("SLASH_COMMANDS includes expected commands", () => {
   expect(commands).toContain("/approval");
   expect(commands).toContain("/clearhistory");
   expect(commands).toContain("/diff");
+  expect(commands).toContain("/speak");
 });
 
 test("filters slash commands by prefix", () => {
@@ -23,7 +24,14 @@ test("filters slash commands by prefix", () => {
     expect.arrayContaining(["/clear", "/clearhistory", "/compact"]),
   );
   expect(names).not.toEqual(
-    expect.arrayContaining(["/history", "/help", "/model", "/approval"]),
+    expect.arrayContaining([
+      "/history",
+      "/help",
+      "/model",
+      "/approval",
+      "/diff",
+      "/speak",
+    ]),
   );
 
   const emptyPrefixFiltered = SLASH_COMMANDS.filter((c: SlashCommand) =>
