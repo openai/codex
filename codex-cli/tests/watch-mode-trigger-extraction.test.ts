@@ -5,6 +5,7 @@ import { describe, it, expect } from "vitest";
 import {
   findAllTriggers,
   extractContextAroundTrigger,
+  getTriggerPattern
 } from "../src/utils/watch-mode-utils";
 
 // For testing, we'll use a larger context size
@@ -127,6 +128,39 @@ describe("Watch mode trigger pattern matching", () => {
     expect(matches[0]![1]).toBe("Optimize this query");
   });
 
+  
+  it("should handle custom trigger patterns", () => {
+    // Create custom patterns for testing
+    const customPatternString = '/(?:\\/\\/|#)\\s*AI:(TODO|FIXME)\\s+(.*)/i';
+    const match = customPatternString.match(/^\/(.*)\/([gimuy]*)$/);
+    const [, pattern, flags] = match!;
+    const customPattern = new RegExp(pattern, flags + 'g');
+    
+    const content = `
+    function testFunction() {
+      // This is a normal comment
+      // AI:TODO Fix this bug
+      return 1 + 1;
+    }
+    
+    function anotherFunction() {
+      # AI:FIXME Handle null input
+      return x * 2;
+    }
+    `;
+
+    const matches: Array<RegExpMatchArray> = [];
+    let matchResult;
+    while ((matchResult = customPattern.exec(content)) != null) {
+      matches.push(matchResult);
+    }
+
+    expect(matches.length).toBe(2);
+    expect(matches[0]![0]).toContain("AI:TODO Fix this bug");
+    expect(matches[0]![2]).toBe("Fix this bug");
+    expect(matches[1]![0]).toContain("AI:FIXME Handle null input");
+    expect(matches[1]![2]).toBe("Handle null input");
+  });
 });
 
 describe("Context extraction around AI triggers", () => {
