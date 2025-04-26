@@ -820,6 +820,51 @@ PATCH"#,
         assert_eq!(contents, "a\nB\nc\nd\nE\nf\ng\n");
     }
 
+    /// Ensure that patches authored with ASCII characters can update lines that
+    /// contain typographic Unicode punctuation (e.g. EN DASH, NON-BREAKING
+    /// HYPHEN). Historically `git apply` succeeds in such scenarios but our
+    /// internal matcher failed requiring an exact byte-for-byte match.  The
+    /// fuzzy-matching pass that normalises common punctuation should now bridge
+    /// the gap.
+    #[test]
+    fn test_update_line_with_unicode_dash() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("unicode.py");
+
+        // Original line contains EN DASH (\u{2013}) and NON-BREAKING HYPHEN (\u{2011}).
+        let original = "import asyncio  # local import \u{2013} avoids top\u{2011}level dep\n";
+        std::fs::write(&path, original).unwrap();
+
+        // Patch uses plain ASCII dash / hyphen.
+        let patch = wrap_patch(&format!(
+            r#"*** Update File: {}
+@@
+-import asyncio  # local import - avoids top-level dep
++import asyncio  # HELLO"#,
+            path.display()
+        ));
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        apply_patch(&patch, &mut stdout, &mut stderr).unwrap();
+
+        // File should now contain the replaced comment.
+        let expected = "import asyncio  # HELLO\n";
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(contents, expected);
+
+        // Ensure success summary lists the file as modified.
+        let stdout_str = String::from_utf8(stdout).unwrap();
+        let expected_out = format!(
+            "Success. Updated the following files:\nM {}\n",
+            path.display()
+        );
+        assert_eq!(stdout_str, expected_out);
+
+        // No stderr expected.
+        assert_eq!(String::from_utf8(stderr).unwrap(), "");
+    }
+
     #[test]
     fn test_unified_diff() {
         // Start with a file containing four lines.

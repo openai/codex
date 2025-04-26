@@ -50,11 +50,15 @@ pub struct Cli {
     #[arg(long, action = ArgAction::SetTrue, default_value_t = false)]
     pub allow_no_git_exec: bool,
 
+    /// Disable server‑side response storage (sends the full conversation context with every request)
+    #[arg(long = "disable-response-storage", default_value_t = false)]
+    pub disable_response_storage: bool,
+
     /// Record submissions into file as JSON
     #[arg(short = 'S', long)]
-    pub record_submissions: Option<String>,
+    pub record_submissions: Option<PathBuf>,
 
     /// Record events into file as JSON
     #[arg(short = 'E', long)]
-    pub record_events: Option<String>,
+    pub record_events: Option<PathBuf>,
 }

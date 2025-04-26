@@ -13,7 +13,6 @@ use crate::Policy;
 use crate::Result;
 use crate::ValidExec;
 use path_absolutize::*;
-use std::os::unix::fs::PermissionsExt;
 
 macro_rules! check_file_in_folders {
     ($file:expr, $folders:expr, $error:ident) => {
@@ -120,9 +119,20 @@ fn is_executable_file(path: &str) -> bool {
     let file_path = Path::new(path);
 
     if let Ok(metadata) = std::fs::metadata(file_path) {
-        let permissions = metadata.permissions();
-        // Check if the file is executable (by checking the executable bit for the owner)
-        return metadata.is_file() && (permissions.mode() & 0o111 != 0);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let permissions = metadata.permissions();
+
+            // Check if the file is executable (by checking the executable bit for the owner)
+            return metadata.is_file() && (permissions.mode() & 0o111 != 0);
+        }
+
+        #[cfg(windows)]
+        {
+            // TODO(mbolin): Check against PATHEXT environment variable.
+            return metadata.is_file();
+        }
     }
 
     false
@@ -157,10 +167,19 @@ system_path=[{fake_cp:?}]
 
         // Create an executable file that can be used with the system_path arg.
         let fake_cp = temp_dir.path().join("cp");
-        let fake_cp_file = std::fs::File::create(&fake_cp).unwrap();
-        let mut permissions = fake_cp_file.metadata().unwrap().permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(&fake_cp, permissions).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let fake_cp_file = std::fs::File::create(&fake_cp).unwrap();
+            let mut permissions = fake_cp_file.metadata().unwrap().permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&fake_cp, permissions).unwrap();
+        }
+        #[cfg(windows)]
+        {
+            std::fs::File::create(&fake_cp).unwrap();
+        }
 
         // Create root_path and reference to files under the root.
         let root_path = temp_dir.path().to_path_buf();

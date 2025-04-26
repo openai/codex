@@ -52,6 +52,7 @@ impl ChatWidget<'_> {
         initial_prompt: Option<String>,
         initial_images: Vec<std::path::PathBuf>,
         model: Option<String>,
+        disable_response_storage: bool,
     ) -> Self {
         let (codex_op_tx, mut codex_op_rx) = unbounded_channel::<Op>();
 
@@ -63,15 +64,22 @@ impl ChatWidget<'_> {
         let app_event_tx_clone = app_event_tx.clone();
         // Create the Codex asynchronously so the UI loads as quickly as possible.
         tokio::spawn(async move {
-            let (codex, session_event, _ctrl_c) =
-                match init_codex(approval_policy, sandbox_policy, model).await {
-                    Ok(vals) => vals,
-                    Err(e) => {
-                        // TODO(mbolin): This error needs to be surfaced to the user.
-                        tracing::error!("failed to initialize codex: {e}");
-                        return;
-                    }
-                };
+            // Initialize session; storage enabled by default
+            let (codex, session_event, _ctrl_c) = match init_codex(
+                approval_policy,
+                sandbox_policy,
+                disable_response_storage,
+                model,
+            )
+            .await
+            {
+                Ok(vals) => vals,
+                Err(e) => {
+                    // TODO(mbolin): This error needs to be surfaced to the user.
+                    tracing::error!("failed to initialize codex: {e}");
+                    return;
+                }
+            };
 
             // Forward the captured `SessionInitialized` event that was consumed
             // inside `init_codex()` so it can be rendered in the UI.
@@ -361,6 +369,23 @@ impl ChatWidget<'_> {
 
     fn request_redraw(&mut self) -> std::result::Result<(), SendError<AppEvent>> {
         self.app_event_tx.send(AppEvent::Redraw)?;
+        Ok(())
+    }
+
+    pub(crate) fn handle_scroll_delta(
+        &mut self,
+        scroll_delta: i32,
+    ) -> std::result::Result<(), std::sync::mpsc::SendError<AppEvent>> {
+        // If the user is trying to scroll exactly one line, we let them, but
+        // otherwise we assume they are trying to scroll in larger increments.
+        let magnified_scroll_delta = if scroll_delta == 1 {
+            1
+        } else {
+            // Play with this: perhaps it should be non-linear?
+            scroll_delta * 2
+        };
+        self.conversation_history.scroll(magnified_scroll_delta);
+        self.request_redraw()?;
         Ok(())
     }
 
