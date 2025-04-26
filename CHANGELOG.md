@@ -2,9 +2,7 @@
 
 You can install any of these versions: `npm install -g codex@version`
 
-## `unreleased`
-
-## [unreleased]
+## `0.1.2504251709`
 
 ### 🚀 Features
 
@@ -19,14 +17,16 @@ You can install any of these versions: `npm install -g codex@version`
 - More native keyboard navigation in multiline editor (#655)
 - Display error on selection of invalid model (#594)
 
-### 🐛 Bug Fixes
+### 🪲 Bug Fixes
 
 - Model selection (#643)
 - Nits in apply patch (#640)
+- Input keyboard shortcuts (#676)
 - `apply_patch` unicode characters (#625)
 - Don't clear turn input before retries (#611)
 - More loosely match context for apply_patch (#610)
 - Update bug report template - there is no --revision flag (#614)
+- Remove outdated copy of text input and external editor feature (#670)
 - Remove unreachable "disableResponseStorage" logic flow introduced in #543 (#573)
 - Non-openai mode - fix for gemini content: null, fix 429 to throw before stream (#563)
 - Only allow going up in history when not already in history if input is empty (#654)
@@ -44,7 +44,7 @@ You can install any of these versions: `npm install -g codex@version`
 - Show actionable errors when api keys are missing (#523)
 - Add CLI `--version` flag (#492)
 
-### 🐛 Bug Fixes
+### 🪲 Bug Fixes
 
 - Agent loop for ZDR (`disableResponseStorage`) (#543)
 - Fix relative `workdir` check for `apply_patch` (#556)
@@ -75,7 +75,7 @@ You can install any of these versions: `npm install -g codex@version`
 - Add /command autocomplete (#317)
 - Allow multi-line input (#438)
 
-### 🐛 Bug Fixes
+### 🪲 Bug Fixes
 
 - `full-auto` support in quiet mode (#374)
 - Enable shell option for child process execution (#391)
@@ -99,7 +99,7 @@ You can install any of these versions: `npm install -g codex@version`
 - Add `/bug` report command (#312)
 - Notify when a newer version is available (#333)
 
-### 🐛 Bug Fixes
+### 🪲 Bug Fixes
 
 - Update context left display logic in TerminalChatInput component (#307)
 - Improper spawn of sh on Windows Powershell (#318)
@@ -112,7 +112,7 @@ You can install any of these versions: `npm install -g codex@version`
 
 - Add Nix flake for reproducible development environments (#225)
 
-### 🐛 Bug Fixes
+### 🪲 Bug Fixes
 
 - Handle invalid commands (#304)
 - Raw-exec-process-group.test improve reliability and error handling (#280)
@@ -131,7 +131,7 @@ You can install any of these versions: `npm install -g codex@version`
 - `--config`/`-c` flag to open global instructions in nvim (#158)
 - Update position of cursor when navigating input history with arrow keys to the end of the text (#255)
 
-### 🐛 Bug Fixes
+### 🪲 Bug Fixes
 
 - Correct word deletion logic for trailing spaces (Ctrl+Backspace) (#131)
 - Improve Windows compatibility for CLI commands and sandbox (#261)
