@@ -107,88 +107,6 @@ export default class TextBuffer {
     }
   }
 
-  /* =====================================================================
-   *  External editor integration (git‑style $EDITOR workflow)
-   * =================================================================== */
-
-  /**
-   * Opens the current buffer contents in the user’s preferred terminal text
-   * editor ($VISUAL or $EDITOR, falling back to "vi").  The method blocks
-   * until the editor exits, then reloads the file and replaces the in‑memory
-   * buffer with whatever the user saved.
-   *
-   * The operation is treated as a single undoable edit – we snapshot the
-   * previous state *once* before launching the editor so one `undo()` will
-   * revert the entire change set.
-   *
-   * Note: We purposefully rely on the *synchronous* spawn API so that the
-   * calling process genuinely waits for the editor to close before
-   * continuing.  This mirrors Git’s behaviour and simplifies downstream
-   * control‑flow (callers can simply `await` the Promise).
-   */
-  async openInExternalEditor(opts: { editor?: string } = {}): Promise<void> {
-    // Deliberately use `require()` so that unit tests can stub the
-    // respective modules with `vi.spyOn(require("node:child_process"), …)`.
-    // Dynamic `import()` would circumvent those CommonJS stubs.
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const pathMod = require("node:path");
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const fs = require("node:fs");
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const os = require("node:os");
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { spawnSync } = require("node:child_process");
-
-    const editor =
-      opts.editor ??
-      process.env["VISUAL"] ??
-      process.env["EDITOR"] ??
-      (process.platform === "win32" ? "notepad" : "vi");
-
-    // Prepare a temporary file with the current contents.  We use mkdtempSync
-    // to obtain an isolated directory and avoid name collisions.
-    const tmpDir = fs.mkdtempSync(pathMod.join(os.tmpdir(), "codex-edit-"));
-    const filePath = pathMod.join(tmpDir, "buffer.txt");
-
-    fs.writeFileSync(filePath, this.getText(), "utf8");
-
-    // One snapshot for undo semantics *before* we mutate anything.
-    this.pushUndo();
-
-    // The child inherits stdio so the user can interact with the editor as if
-    // they had launched it directly.
-    const { status, error } = spawnSync(editor, [filePath], {
-      stdio: "inherit",
-    });
-
-    if (error) {
-      throw error;
-    }
-    if (typeof status === "number" && status !== 0) {
-      throw new Error(`External editor exited with status ${status}`);
-    }
-
-    // Read the edited contents back in – normalise line endings to \n.
-    let newText = fs.readFileSync(filePath, "utf8");
-    newText = newText.replace(/\r\n?/g, "\n");
-
-    // Update buffer.
-    this.lines = newText.split("\n");
-    if (this.lines.length === 0) {
-      this.lines = [""];
-    }
-
-    // Position the caret at EOF.
-    this.cursorRow = this.lines.length - 1;
-    this.cursorCol = cpLen(this.line(this.cursorRow));
-
-    // Reset scroll offsets so the new end is visible.
-    this.scrollRow = Math.max(0, this.cursorRow - 1);
-    this.scrollCol = 0;
-
-    this.version++;
-  }
-
   /* =======================================================================
    *  Geometry helpers
    * ===================================================================== */
@@ -692,6 +610,24 @@ export default class TextBuffer {
     }
   }
 
+  /* ------------------------------------------------------------------
+   *  Document-level navigation helpers
+   * ---------------------------------------------------------------- */
+
+  /** Move caret to *absolute* beginning of the buffer (row-0, col-0). */
+  private moveToStartOfDocument(): void {
+    this.preferredCol = null;
+    this.cursorRow = 0;
+    this.cursorCol = 0;
+  }
+
+  /** Move caret to *absolute* end of the buffer (last row, last column). */
+  private moveToEndOfDocument(): void {
+    this.preferredCol = null;
+    this.cursorRow = this.lines.length - 1;
+    this.cursorCol = this.lineLen(this.cursorRow);
+  }
+
   /* =====================================================================
    *  Higher‑level helpers
    * =================================================================== */
@@ -862,6 +798,18 @@ export default class TextBuffer {
       key["rightArrow"]
     ) {
       this.move("wordRight");
+    }
+    // Many terminal/OS combinations (e.g. macOS Terminal.app & iTerm2 with
+    // the default key-bindings) translate ⌥← / ⌥→ into the classic readline
+    // shortcuts ESC-b / ESC-f rather than an ANSI arrow sequence that Ink
+    // would tag with `leftArrow` / `rightArrow`.  Ink parses those 2-byte
+    // escape sequences into `input === "b"|"f"` with `key.meta === true`.
+    // Handle this variant explicitly so that Option+Arrow performs word
+    // navigation consistently across environments.
+    else if (key["meta"] && (input === "b" || input === "B")) {
+      this.move("wordLeft");
+    } else if (key["meta"] && (input === "f" || input === "F")) {
+      this.move("wordRight");
     } else if (key["home"]) {
       this.move("home");
     } else if (key["end"]) {
@@ -905,11 +853,11 @@ export default class TextBuffer {
 
     // Emacs/readline-style shortcuts
     else if (key["ctrl"] && (input === "a" || input === "\x01")) {
-      // Ctrl+A or ⌥← → start of line
-      this.move("home");
+      // Ctrl+A → start of input (first row, first column)
+      this.moveToStartOfDocument();
     } else if (key["ctrl"] && (input === "e" || input === "\x05")) {
-      // Ctrl+E or ⌥→ → end of line
-      this.move("end");
+      // Ctrl+E → end of input (last row, last column)
+      this.moveToEndOfDocument();
     } else if (key["ctrl"] && (input === "b" || input === "\x02")) {
       // Ctrl+B → char left
       this.move("left");

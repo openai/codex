@@ -5,6 +5,7 @@ on:
       - main
     paths:
       - "codex-rs/**"
+      - ".github/**"
   push:
     branches:
       - main
@@ -41,6 +42,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Note: While Codex CLI does not support Windows today, we include
+        # Windows in CI to ensure the code at least builds there.
         include:
           - runner: macos-14
             target: aarch64-apple-darwin
@@ -50,6 +53,8 @@ jobs:
             target: x86_64-unknown-linux-musl
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
 
     steps:
       - uses: actions/checkout@v4
@@ -82,10 +87,8 @@ jobs:
         run: cargo test --target ${{ matrix.target }} || echo "FAILED=${FAILED:+$FAILED, }cargo test" >> $GITHUB_ENV
 
       - name: Fail if any step failed
+        if: env.FAILED != ''
         run: |
-          if [ -n "$FAILED" ]; then
-            echo -e "See logs above, as the following steps failed:\n$FAILED"
-            exit 1
-          fi
-        env:
-          FAILED: ${{ env.FAILED }}
+          echo "See logs above, as the following steps failed:"
+          echo "$FAILED"
+          exit 1

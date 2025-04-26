@@ -16,7 +16,7 @@ async function type(
   await flush();
 }
 
-describe("MultilineTextEditor – Shift+Enter (\r variant)", () => {
+describe("MultilineTextEditor - Shift+Enter (\r variant)", () => {
   it("inserts a newline and does NOT submit when the terminal sends \r for Shift+Enter", async () => {
     const onSubmit = vi.fn();
 
