@@ -37,7 +37,10 @@ export const OPENAI_TIMEOUT_MS =
   parseInt(process.env["OPENAI_TIMEOUT_MS"] || "0", 10) || undefined;
 export const OPENAI_BASE_URL = process.env["OPENAI_BASE_URL"] || "";
 export let OPENAI_API_KEY = process.env["OPENAI_API_KEY"] || "";
+
 export const DEFAULT_REASONING_EFFORT = "high";
+export const OPENAI_ORGANIZATION = process.env["OPENAI_ORGANIZATION"] || "";
+export const OPENAI_PROJECT = process.env["OPENAI_PROJECT"] || "";
 
 export function setApiKey(apiKey: string): void {
   OPENAI_API_KEY = apiKey;
@@ -76,6 +79,12 @@ export function getApiKey(provider: string = "openai"): string | undefined {
       return process.env[providerInfo.envKey] ?? "dummy";
     }
     return process.env[providerInfo.envKey];
+  }
+
+  // Checking `PROVIDER_API_KEY feels more intuitive with a custom provider.
+  const customApiKey = process.env[`${provider.toUpperCase()}_API_KEY`];
+  if (customApiKey) {
+    return customApiKey;
   }
 
   // If the provider not found in the providers list and `OPENAI_API_KEY` is set, use it
@@ -132,7 +141,7 @@ export type AppConfig = {
   memory?: MemoryConfig;
   reasoningEffort?: ReasoningEffort;
   /** Whether to enable desktop notifications for responses */
-  notify: boolean;
+  notify?: boolean;
 
   /** Disable server-side response storage (send full transcript each request) */
   disableResponseStorage?: boolean;
@@ -157,6 +166,7 @@ export const PRETTY_PRINT = Boolean(process.env["PRETTY_PRINT"] || "");
 export const PROJECT_DOC_MAX_BYTES = 32 * 1024; // 32 kB
 
 const PROJECT_DOC_FILENAMES = ["codex.md", ".codex.md", "CODEX.md"];
+const PROJECT_DOC_SEPARATOR = "\n\n--- project-doc ---\n\n";
 
 export function discoverProjectDocPath(startDir: string): string | null {
   const cwd = resolvePath(startDir);
@@ -311,7 +321,7 @@ export const loadConfig = (
 
   const combinedInstructions = [userInstructions, projectDoc]
     .filter((s) => s && s.trim() !== "")
-    .join("\n\n--- project-doc ---\n\n");
+    .join(PROJECT_DOC_SEPARATOR);
 
   // Treat empty string ("" or whitespace) as absence so we can fall back to
   // the latest DEFAULT_MODEL.
@@ -464,5 +474,9 @@ export const saveConfig = (
     writeFileSync(targetPath, JSON.stringify(configToSave, null, 2), "utf-8");
   }
 
-  writeFileSync(instructionsPath, config.instructions, "utf-8");
+  // Take everything before the first PROJECT_DOC_SEPARATOR (or the whole string if none).
+  const [userInstructions = ""] = config.instructions.split(
+    PROJECT_DOC_SEPARATOR,
+  );
+  writeFileSync(instructionsPath, userInstructions, "utf-8");
 };

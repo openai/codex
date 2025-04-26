@@ -211,9 +211,46 @@ class Parser {
       }
       if (defStr.trim()) {
         let found = false;
-        if (!fileLines.slice(0, index).some((s) => s === defStr)) {
+        // ------------------------------------------------------------------
+        // Equality helpers using the canonicalisation from find_context_core.
+        // (We duplicate a minimal version here because the scope is local.)
+        // ------------------------------------------------------------------
+        const canonLocal = (s: string): string =>
+          s.normalize("NFC").replace(
+            /./gu,
+            (c) =>
+              (
+                ({
+                  "-": "-",
+                  "\u2010": "-",
+                  "\u2011": "-",
+                  "\u2012": "-",
+                  "\u2013": "-",
+                  "\u2014": "-",
+                  "\u2212": "-",
+                  "\u0022": '"',
+                  "\u201C": '"',
+                  "\u201D": '"',
+                  "\u201E": '"',
+                  "\u00AB": '"',
+                  "\u00BB": '"',
+                  "\u0027": "'",
+                  "\u2018": "'",
+                  "\u2019": "'",
+                  "\u201B": "'",
+                  "\u00A0": " ",
+                  "\u202F": " ",
+                }) as Record<string, string>
+              )[c] ?? c,
+          );
+
+        if (
+          !fileLines
+            .slice(0, index)
+            .some((s) => canonLocal(s) === canonLocal(defStr))
+        ) {
           for (let i = index; i < fileLines.length; i++) {
-            if (fileLines[i] === defStr) {
+            if (canonLocal(fileLines[i]!) === canonLocal(defStr)) {
               index = i + 1;
               found = true;
               break;
@@ -222,10 +259,14 @@ class Parser {
         }
         if (
           !found &&
-          !fileLines.slice(0, index).some((s) => s.trim() === defStr.trim())
+          !fileLines
+            .slice(0, index)
+            .some((s) => canonLocal(s.trim()) === canonLocal(defStr.trim()))
         ) {
           for (let i = index; i < fileLines.length; i++) {
-            if (fileLines[i]!.trim() === defStr.trim()) {
+            if (
+              canonLocal(fileLines[i]!.trim()) === canonLocal(defStr.trim())
+            ) {
               index = i + 1;
               this.fuzz += 1;
               found = true;
@@ -293,34 +334,98 @@ function find_context_core(
   context: Array<string>,
   start: number,
 ): [number, number] {
+  // ---------------------------------------------------------------------------
+  // Helpers – Unicode punctuation normalisation
+  // ---------------------------------------------------------------------------
+
+  /*
+   * The patch-matching algorithm originally required **exact** string equality
+   * for non-whitespace characters.  That breaks when the file on disk contains
+   * visually identical but different Unicode code-points (e.g. “EN DASH” vs
+   * ASCII "-"), because models almost always emit the ASCII variant.  To make
+   * apply_patch resilient we canonicalise a handful of common punctuation
+   * look-alikes before doing comparisons.
+   *
+   * We purposefully keep the mapping *small* – only characters that routinely
+   * appear in source files and are highly unlikely to introduce ambiguity are
+   * included.  Each entry is written using the corresponding Unicode escape so
+   * that the file remains ASCII-only even after transpilation.
+   */
+
+  const PUNCT_EQUIV: Record<string, string> = {
+    // Hyphen / dash variants --------------------------------------------------
+    /* U+002D HYPHEN-MINUS */ "-": "-",
+    /* U+2010 HYPHEN */ "\u2010": "-",
+    /* U+2011 NO-BREAK HYPHEN */ "\u2011": "-",
+    /* U+2012 FIGURE DASH */ "\u2012": "-",
+    /* U+2013 EN DASH */ "\u2013": "-",
+    /* U+2014 EM DASH */ "\u2014": "-",
+    /* U+2212 MINUS SIGN */ "\u2212": "-",
+
+    // Double quotes -----------------------------------------------------------
+    /* U+0022 QUOTATION MARK */ "\u0022": '"',
+    /* U+201C LEFT DOUBLE QUOTATION MARK */ "\u201C": '"',
+    /* U+201D RIGHT DOUBLE QUOTATION MARK */ "\u201D": '"',
+    /* U+201E DOUBLE LOW-9 QUOTATION MARK */ "\u201E": '"',
+    /* U+00AB LEFT-POINTING DOUBLE ANGLE QUOTATION MARK */ "\u00AB": '"',
+    /* U+00BB RIGHT-POINTING DOUBLE ANGLE QUOTATION MARK */ "\u00BB": '"',
+
+    // Single quotes -----------------------------------------------------------
+    /* U+0027 APOSTROPHE */ "\u0027": "'",
+    /* U+2018 LEFT SINGLE QUOTATION MARK */ "\u2018": "'",
+    /* U+2019 RIGHT SINGLE QUOTATION MARK */ "\u2019": "'",
+    /* U+201B SINGLE HIGH-REVERSED-9 QUOTATION MARK */ "\u201B": "'",
+    // Spaces ------------------------------------------------------------------
+    /* U+00A0 NO-BREAK SPACE */ "\u00A0": " ",
+    /* U+202F NARROW NO-BREAK SPACE */ "\u202F": " ",
+  };
+
+  const canon = (s: string): string =>
+    s
+      // Canonical Unicode composition first
+      .normalize("NFC")
+      // Replace punctuation look-alikes
+      .replace(/./gu, (c) => PUNCT_EQUIV[c] ?? c);
   if (context.length === 0) {
     return [start, 0];
   }
+  // Pass 1 – exact equality after canonicalisation ---------------------------
+  const canonicalContext = canon(context.join("\n"));
   for (let i = start; i < lines.length; i++) {
-    if (lines.slice(i, i + context.length).join("\n") === context.join("\n")) {
+    const segment = canon(lines.slice(i, i + context.length).join("\n"));
+    if (segment === canonicalContext) {
       return [i, 0];
     }
   }
+
+  // Pass 2 – ignore trailing whitespace -------------------------------------
   for (let i = start; i < lines.length; i++) {
-    if (
+    const segment = canon(
       lines
         .slice(i, i + context.length)
         .map((s) => s.trimEnd())
-        .join("\n") === context.map((s) => s.trimEnd()).join("\n")
-    ) {
+        .join("\n"),
+    );
+    const ctx = canon(context.map((s) => s.trimEnd()).join("\n"));
+    if (segment === ctx) {
       return [i, 1];
     }
   }
+
+  // Pass 3 – ignore all surrounding whitespace ------------------------------
   for (let i = start; i < lines.length; i++) {
-    if (
+    const segment = canon(
       lines
         .slice(i, i + context.length)
         .map((s) => s.trim())
-        .join("\n") === context.map((s) => s.trim()).join("\n")
-    ) {
+        .join("\n"),
+    );
+    const ctx = canon(context.map((s) => s.trim()).join("\n"));
+    if (segment === ctx) {
       return [i, 100];
     }
   }
+
   return [-1, 0];
 }
 
