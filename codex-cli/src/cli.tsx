@@ -489,6 +489,9 @@ async function runQuietMode({
   additionalWritableRoots: ReadonlyArray<string>;
   config: AppConfig;
 }): Promise<void> {
+  // Track message IDs that have already been printed to avoid duplicates
+  const printedMessageIds = new Set<string>();
+
   const agent = new AgentLoop({
     model: config.model,
     config: config,
@@ -498,8 +501,11 @@ async function runQuietMode({
     additionalWritableRoots,
     disableResponseStorage: config.disableResponseStorage,
     onItem: (item: ResponseItem) => {
-      // eslint-disable-next-line no-console
-      console.log(formatResponseItemForQuietMode(item));
+        if (item.id && !printedMessageIds.has(item.id)) {
+          // eslint-disable-next-line no-console
+          console.log(formatResponseItemForQuietMode(item));
+          printedMessageIds.add(item.id);
+        }
     },
     onLoading: () => {
       /* intentionally ignored in quiet mode */
