@@ -275,3 +275,55 @@ test("handles empty user instructions when saving with project doc separator", (
   });
   expect(loadedConfig.instructions).toBe("");
 });
+
+test("loads and saves transcription config correctly", () => {
+  const customTranscriptionConfig = {
+    // Purposely not using the default values
+    input_audio_transcription: {
+      model: "whisper-1" as const,
+      language: "zh",
+    },
+    turn_detection: {
+      type: "server_vad" as const,
+      threshold: 0.9,
+      silence_duration_ms: 500,
+    },
+    input_audio_noise_reduction: {
+      type: "far_field" as const,
+    },
+  };
+
+  const testConfig = {
+    model: "test-model",
+    instructions: "test instructions",
+    notify: false,
+    transcription: customTranscriptionConfig,
+  };
+
+  // Test saving the config
+  saveConfig(testConfig, testConfigPath, testInstructionsPath);
+
+  // Test loading the config
+  const loadedConfig = loadConfig(testConfigPath, testInstructionsPath, {
+    disableProjectDoc: true,
+  });
+
+  // Test that the transcription config was loaded correctly
+  expect(loadedConfig.transcription).toEqual(customTranscriptionConfig);
+  expect(loadedConfig.transcription?.input_audio_transcription?.model).toEqual(
+    "whisper-1",
+  );
+  expect(
+    loadedConfig.transcription?.input_audio_transcription?.language,
+  ).toEqual("zh");
+  expect(loadedConfig.transcription?.turn_detection?.type).toEqual(
+    "server_vad",
+  );
+  expect(loadedConfig.transcription?.turn_detection?.threshold).toEqual(0.9);
+  expect(
+    loadedConfig.transcription?.turn_detection?.silence_duration_ms,
+  ).toEqual(500);
+  expect(loadedConfig.transcription?.input_audio_noise_reduction?.type).toEqual(
+    "far_field",
+  );
+});

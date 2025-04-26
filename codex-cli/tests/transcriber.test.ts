@@ -70,6 +70,21 @@ vi.mock("@picovoice/pvrecorder-node", () => {
 vi.mock("../src/utils/config.js", () => ({
   getApiKey: vi.fn().mockReturnValue("fake-api-key"),
   getBaseUrl: vi.fn().mockReturnValue("https://api.openai.com/v1"),
+  loadConfig: vi.fn().mockReturnValue({
+    transcription: {
+      input_audio_transcription: {
+        model: "whisper-1" as const,
+        prompt: "",
+        language: "fr",
+      },
+      turn_detection: {
+        type: "server_vad" as const,
+        threshold: 0.8,
+        prefix_padding_ms: 300,
+        silence_duration_ms: 500,
+      },
+    },
+  }),
 }));
 
 vi.mock("../src/utils/session.js", () => ({
@@ -168,10 +183,7 @@ describe("RealtimeTranscriber", () => {
   });
 
   it("sends session.update event when WebSocket connection opens", async () => {
-    const transcriber = new RealtimeTranscriber({
-      model: "test-model",
-      language: "fr",
-    });
+    const transcriber = new RealtimeTranscriber();
 
     await transcriber.start();
 
@@ -187,13 +199,13 @@ describe("RealtimeTranscriber", () => {
       session: {
         input_audio_format: "pcm16",
         input_audio_transcription: {
-          model: "test-model",
+          model: "whisper-1",
           prompt: "",
           language: "fr",
         },
         turn_detection: {
           type: "server_vad",
-          threshold: 0.5,
+          threshold: 0.8,
           prefix_padding_ms: 300,
           silence_duration_ms: 500,
         },

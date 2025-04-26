@@ -1,4 +1,6 @@
-import { getApiKey, getBaseUrl } from "./config";
+import type { TranscriptionConfig } from "./config";
+
+import { getApiKey, getBaseUrl, loadConfig } from "./config";
 import { CLI_VERSION, ORIGIN, getSessionId } from "./session";
 import { EventEmitter } from "events";
 import { createRequire } from "node:module";
@@ -15,23 +17,38 @@ export interface TranscriptionEvent {
   transcript?: string;
 }
 
-export interface TranscriberOptions {
-  model?: string;
-  language?: string;
-}
-
 export class RealtimeTranscriber extends EventEmitter {
   private rt: OpenAIRealtimeWS | null = null;
   private recorder: typeof PvRecorder | null = null;
   private isConnected = false;
   private isRecording = false;
-  private model: string;
-  private language: string;
+  private transcriptionConfig: TranscriptionConfig;
 
-  constructor(options: TranscriberOptions = {}) {
+  constructor() {
     super();
-    this.model = options.model || "gpt-4o-mini-transcribe";
-    this.language = options.language || "en";
+    // Load config and use it for defaults
+    const config = loadConfig();
+
+    // Load values from config with sensible defaults
+    this.transcriptionConfig = {
+      input_audio_transcription: config.transcription
+        ?.input_audio_transcription || {
+        model: "gpt-4o-transcribe",
+        prompt: "",
+        language: "en",
+      },
+      turn_detection: config.transcription?.turn_detection || {
+        type: "server_vad",
+        threshold: 0.6,
+        prefix_padding_ms: 400,
+        silence_duration_ms: 500,
+      },
+      input_audio_noise_reduction: config.transcription
+        ?.input_audio_noise_reduction || {
+        type: "near_field",
+      },
+    };
+
     this.setupSignalHandlers();
   }
 
@@ -59,8 +76,12 @@ export class RealtimeTranscriber extends EventEmitter {
         },
       });
 
+      const model =
+        this.transcriptionConfig.input_audio_transcription?.model ||
+        "gpt-4o-transcribe";
+
       // Initialize the realtime client
-      this.rt = new OpenAIRealtimeWS({ model: this.model }, client);
+      this.rt = new OpenAIRealtimeWS({ model }, client);
 
       // Set up event handlers
       this.rt.on("error", (error) => {
@@ -97,20 +118,11 @@ export class RealtimeTranscriber extends EventEmitter {
           type: "session.update",
           session: {
             input_audio_format: "pcm16",
-            input_audio_transcription: {
-              model: this.model,
-              prompt: "",
-              language: this.language,
-            },
-            turn_detection: {
-              type: "server_vad",
-              threshold: 0.5,
-              prefix_padding_ms: 300,
-              silence_duration_ms: 500,
-            },
-            input_audio_noise_reduction: {
-              type: "near_field",
-            },
+            input_audio_transcription:
+              this.transcriptionConfig.input_audio_transcription,
+            turn_detection: this.transcriptionConfig.turn_detection,
+            input_audio_noise_reduction:
+              this.transcriptionConfig.input_audio_noise_reduction,
           },
         });
 
