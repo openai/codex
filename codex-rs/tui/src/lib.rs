@@ -31,19 +31,31 @@ pub use cli::Cli;
 pub fn run_main(cli: Cli) -> std::io::Result<()> {
     assert_env_var_set();
 
+    let log_dir = codex_core::config::log_dir()?;
+    std::fs::create_dir_all(&log_dir)?;
     // Open (or create) your log file, appending to it.
-    let file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/tmp/codex-rs.log")?;
+    let mut log_file_opts = OpenOptions::new();
+    log_file_opts.create(true).append(true);
+
+    // Ensure the file is only readable and writable by the current user.
+    // Doing the equivalent to `chmod 600` on Windows is quite a bit more code
+    // and requires the Windows API crates, so we can reconsider that when
+    // Codex CLI is officially supported on Windows.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        log_file_opts.mode(0o600);
+    }
+
+    let log_file = log_file_opts.open(log_dir.join("codex-tui.log"))?;
 
     // Wrap file in non‑blocking writer.
-    let (non_blocking, _guard) = non_blocking(file);
+    let (non_blocking, _guard) = non_blocking(log_file);
 
-    // use RUST_LOG env var, default to trace for codex crates.
+    // use RUST_LOG env var, default to info for codex crates.
     let env_filter = || {
         EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new("codex=trace,codex_tui=trace"))
+            .unwrap_or_else(|_| EnvFilter::new("codex_core=info,codex_tui=info"))
     };
 
     // Build layered subscriber:

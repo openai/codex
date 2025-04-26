@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use dirs::home_dir;
 use serde::Deserialize;
 
@@ -28,15 +30,36 @@ impl Config {
     }
 
     fn load_from_toml() -> Option<Self> {
-        let mut p = home_dir()?;
-        p.push(".codex/config.toml");
+        let mut p = codex_dir().ok()?;
+        p.push("config.toml");
         let contents = std::fs::read_to_string(&p).ok()?;
         toml::from_str(&contents).ok()
     }
 
     fn load_instructions() -> Option<String> {
-        let mut p = home_dir()?;
-        p.push(".codex/instructions.md");
+        let mut p = codex_dir().ok()?;
+        p.push("instructions.md");
         std::fs::read_to_string(&p).ok()
     }
+}
+
+/// Returns the path to the Codex configuration directory, which is `~/.codex`.
+/// Does not verify that the directory exists.
+pub fn codex_dir() -> std::io::Result<PathBuf> {
+    let mut p = home_dir().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "Could not find home directory",
+        )
+    })?;
+    p.push(".codex");
+    Ok(p)
+}
+
+/// Returns the path to the folder where Codex logs are stored. Does not verify
+/// that the directory exists.
+pub fn log_dir() -> std::io::Result<PathBuf> {
+    let mut p = codex_dir()?;
+    p.push("log");
+    Ok(p)
 }
