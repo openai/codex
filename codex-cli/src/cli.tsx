@@ -271,9 +271,13 @@ if (!apiKey && !NO_API_KEY_REQUIRED.has(provider.toLowerCase())) {
           ? `You can create a key here: ${chalk.bold(
               chalk.underline("https://platform.openai.com/account/api-keys"),
             )}\n`
-          : `You can create a ${chalk.bold(
-              `${provider.toUpperCase()}_API_KEY`,
-            )} ` + `in the ${chalk.bold(`${provider}`)} dashboard.\n`
+          : provider.toLowerCase() === "gemini"
+            ? `You can create a ${chalk.bold(
+                `${provider.toUpperCase()}_API_KEY`,
+              )} ` + `in the ${chalk.bold(`Google AI Studio`)}.\n`
+            : `You can create a ${chalk.bold(
+                `${provider.toUpperCase()}_API_KEY`,
+              )} ` + `in the ${chalk.bold(`${provider}`)} dashboard.\n`
       }`,
   );
   process.exit(1);
@@ -377,8 +381,8 @@ if (cli.flags.quiet) {
     cli.flags.fullAuto || cli.flags.approvalMode === "full-auto"
       ? AutoApprovalMode.FULL_AUTO
       : cli.flags.autoEdit || cli.flags.approvalMode === "auto-edit"
-      ? AutoApprovalMode.AUTO_EDIT
-      : config.approvalMode || AutoApprovalMode.SUGGEST;
+        ? AutoApprovalMode.AUTO_EDIT
+        : config.approvalMode || AutoApprovalMode.SUGGEST;
 
   await runQuietMode({
     prompt,
@@ -408,8 +412,8 @@ const approvalPolicy: ApprovalPolicy =
   cli.flags.fullAuto || cli.flags.approvalMode === "full-auto"
     ? AutoApprovalMode.FULL_AUTO
     : cli.flags.autoEdit || cli.flags.approvalMode === "auto-edit"
-    ? AutoApprovalMode.AUTO_EDIT
-    : config.approvalMode || AutoApprovalMode.SUGGEST;
+      ? AutoApprovalMode.AUTO_EDIT
+      : config.approvalMode || AutoApprovalMode.SUGGEST;
 
 const instance = render(
   <App

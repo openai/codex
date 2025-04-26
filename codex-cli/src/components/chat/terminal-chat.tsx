@@ -31,6 +31,7 @@ import DiffOverlay from "../diff-overlay.js";
 import HelpOverlay from "../help-overlay.js";
 import HistoryOverlay from "../history-overlay.js";
 import ModelOverlay from "../model-overlay.js";
+import chalk from "chalk";
 import { Box, Text } from "ink";
 import { spawn } from "node:child_process";
 import OpenAI from "openai";
@@ -141,7 +142,7 @@ export default function TerminalChat({
   additionalWritableRoots,
   fullStdout,
 }: Props): React.ReactElement {
-  const notify = config.notify;
+  const notify = Boolean(config.notify);
   const [model, setModel] = useState<string>(config.model);
   const [provider, setProvider] = useState<string>(config.provider || "openai");
   const [lastResponseId, setLastResponseId] = useState<string | null>(null);
@@ -575,7 +576,7 @@ export default function TerminalChat({
             providers={config.providers}
             currentProvider={provider}
             hasLastResponse={Boolean(lastResponseId)}
-            onSelect={(newModel) => {
+            onSelect={(allModels, newModel) => {
               log(
                 "TerminalChat: interruptAgent invoked – calling agent.cancel()",
               );
@@ -584,6 +585,20 @@ export default function TerminalChat({
               }
               agent?.cancel();
               setLoading(false);
+
+              if (!allModels?.includes(newModel)) {
+                // eslint-disable-next-line no-console
+                console.error(
+                  chalk.bold.red(
+                    `Model "${chalk.yellow(
+                      newModel,
+                    )}" is not available for provider "${chalk.yellow(
+                      provider,
+                    )}".`,
+                  ),
+                );
+                return;
+              }
 
               setModel(newModel);
               setLastResponseId((prev) =>
