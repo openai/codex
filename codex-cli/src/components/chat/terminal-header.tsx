@@ -15,6 +15,7 @@ export interface TerminalHeaderProps {
   agent?: AgentLoop;
   initialImagePaths?: Array<string>;
   flexModeEnabled?: boolean;
+  environment?: string;
 }
 
 const TerminalHeader: React.FC<TerminalHeaderProps> = ({
@@ -28,7 +29,36 @@ const TerminalHeader: React.FC<TerminalHeaderProps> = ({
   agent,
   initialImagePaths,
   flexModeEnabled = false,
+  environment,
 }) => {
+  const envName =
+    environment ??
+    (() => {
+      // check for Windows
+      if (process.platform === "win32") {
+        const msystem = process.env["MSYSTEM"];
+        // Check git bash
+        if (msystem && msystem.toLowerCase().includes("mingw")) {
+          return "Git Bash";
+        }
+
+        const keys = Object.keys(process.env).map((k) => k.toLowerCase());
+        // Check pwsh vs powershell
+        if (keys.includes("psedition")) {
+          return "PowerShell Core";
+        }
+        // Check for PowerShell
+        if (keys.includes("psmodulepath")) {
+          return "PowerShell";
+        }
+
+        const comspec = process.env["ComSpec"];
+        return comspec ? path.basename(comspec) : "cmd";
+      }
+
+      const shell = process.env["SHELL"];
+      return shell ? path.basename(shell) : "sh";
+    })();
   return (
     <>
       {terminalRows < 10 ? (
@@ -37,6 +67,7 @@ const TerminalHeader: React.FC<TerminalHeaderProps> = ({
           ● Codex v{version} - {PWD} - {model} ({provider}) -{" "}
           <Text color={colorsByPolicy[approvalPolicy]}>{approvalPolicy}</Text>
           {flexModeEnabled ? " - flex-mode" : ""}
+          {` - environment: ${envName}`}
         </Text>
       ) : (
         <>
@@ -70,6 +101,10 @@ const TerminalHeader: React.FC<TerminalHeaderProps> = ({
             <Text dimColor>
               <Text color="blueBright">↳</Text> provider:{" "}
               <Text bold>{provider}</Text>
+            </Text>
+            <Text dimColor>
+              <Text color="blueBright">↳</Text> environment:{" "}
+              <Text bold>{envName}</Text>
             </Text>
             <Text dimColor>
               <Text color="blueBright">↳</Text> approval:{" "}

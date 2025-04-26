@@ -18,6 +18,7 @@ import {
   getApiKey,
   getBaseUrl,
 } from "../config.js";
+import { detectShell } from "../detect-shell.js";
 import { log } from "../logger/log.js";
 import { parseToolCallArguments } from "../parsers.js";
 import { responsesCreateViaChatCompletions } from "../responses.js";
@@ -1459,7 +1460,32 @@ export class AgentLoop {
   }
 }
 
+// Determine shell environment for command formatting guidance
+const shellEnv = detectShell().environment;
+const shellInstruction = /PowerShell/i.test(shellEnv)
+  ? `On Windows PowerShell, to correctly capture the working directory, please choose the one that is most appropriate:
+  - Drop into CMD: "cmd /C cd"
+  - Or stay in PowerShell but pipe through Out-String: "Get-Location | Out-String"
+  - Or use Write-Output (Get-Location).Path`
+  : /cmd/i.test(shellEnv)
+    ? `To determine the current working directory, run "cmd /C cd".`
+    : `To determine the current working directory, run "pwd".`;
+
 const prefix = `You are operating as and within the Codex CLI, a terminal-based agentic coding assistant built by OpenAI. It wraps OpenAI models to enable natural language interaction with a local codebase. You are expected to be precise, safe, and helpful.
+
+All commands should be formatted for: ${shellEnv}.
+${shellInstruction}
+
+When inspecting the filesystem, you MUST adhere to the following procedure:
+- Always begin by printing the current working directory (cwd) with the appropriate shell command:
+  - For PowerShell: Get-Location | Out-String, cmd /C cd, or (Get-Location).Path, whichever is most appropriate.
+  - For CMD: cmd /C cd
+  - For *nix shells: pwd
+- Then, explicitly cd into the repo root if needed, or set the working directory (workdir) in your tool calls to ensure you are operating from the repo root.
+- Normalize on a single listing command to view files:
+  - Use ls -a on *nix
+  - Use dir /a /b on Windows
+- Only proceed with reading or editing files after you have confirmed you are at the correct root location.
 
 You can:
 - Receive user prompts, project context, and files.
