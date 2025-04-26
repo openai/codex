@@ -46,6 +46,7 @@ export type CommandConfirmation = {
 };
 
 const alreadyProcessedResponses = new Set();
+const alreadyStagedItemIds = new Set<string>();
 
 type AgentLoopParams = {
   model: string;
@@ -560,6 +561,14 @@ export class AgentLoop {
         // Ignore any stray events that belong to older generations.
         if (thisGeneration !== this.generation) {
           return;
+        }
+
+        // Skip items we've already processed to avoid staging duplicates
+        if (item.id && alreadyStagedItemIds.has(item.id)) {
+          return;
+        }
+        if (item.id) {
+          alreadyStagedItemIds.add(item.id);
         }
 
         // Store the item so the final flush can still operate on a complete list.
