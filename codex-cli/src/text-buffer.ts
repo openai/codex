@@ -823,12 +823,44 @@ export default class TextBuffer {
     // no `key.backspace` flag set.  Treat that byte exactly like an ordinary
     // Backspace for parity with textarea.rs and to make interactive tests
     // feedable through the simpler `(ch, {}, vp)` path.
+    // ------------------------------------------------------------------
+    //  Word-wise deletions
+    //
+    //  macOS (and many terminals on Linux/BSD) map the physical “Delete” key
+    //  to a *backspace* operation – emitting either the raw DEL (0x7f) byte
+    //  or setting `key.backspace = true` in Ink’s parsed event.  Holding the
+    //  Option/Alt modifier therefore *also* sends backspace semantics even
+    //  though users colloquially refer to the shortcut as “⌥+Delete”.
+    //
+    //  Historically we treated **modifier + Delete** as a *forward* word
+    //  deletion.  This behaviour, however, diverges from the default found
+    //  in shells (zsh, bash, fish, etc.) and native macOS text fields where
+    //  ⌥+Delete removes the word *to the left* of the caret.  Update the
+    //  mapping so that both
+    //
+    //    • ⌥/Alt/Meta + Backspace  and
+    //    • ⌥/Alt/Meta + Delete
+    //
+    //  perform a **backward** word deletion.  We keep the ability to delete
+    //  the *next* word by requiring an additional Shift modifier – a common
+    //  binding on full-size keyboards that expose a dedicated Forward Delete
+    //  key.
+    // ------------------------------------------------------------------
     else if (
       (key["meta"] || key["ctrl"] || key["alt"]) &&
-      (key["backspace"] || input === "\x7f")
+      (
+        key["backspace"] ||
+        input === "\x7f" ||
+        (key["delete"] && !key["shift"]) // treat un-shifted Delete like Backspace
+      )
     ) {
       this.deleteWordLeft();
-    } else if ((key["meta"] || key["ctrl"] || key["alt"]) && key["delete"]) {
+    } else if (
+      (key["meta"] || key["ctrl"] || key["alt"]) &&
+      key["delete"] &&
+      key["shift"]
+    ) {
+      // ⇧+⌥/Alt/Meta+Delete → forward word delete
       this.deleteWordRight();
     } else if (
       key["backspace"] ||
