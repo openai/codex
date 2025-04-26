@@ -64,9 +64,11 @@ jobs:
         run: |
           dest="dist/${{ matrix.target }}"
           mkdir -p "$dest"
-          shopt -s nullglob
+
           cp target/${{ matrix.target }}/release/codex-repl "$dest/codex-repl-${{ matrix.target }}"
           cp target/${{ matrix.target }}/release/codex-tui "$dest/codex-tui-${{ matrix.target }}"
+
+          zstd -T0 -19 --rm "$dest"/*
 
       - uses: actions/upload-artifact@v4
         with:
