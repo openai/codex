@@ -848,11 +848,7 @@ export default class TextBuffer {
     // ------------------------------------------------------------------
     else if (
       (key["meta"] || key["ctrl"] || key["alt"]) &&
-      (
-        key["backspace"] ||
-        input === "\x7f" ||
-        (key["delete"] && !key["shift"]) // treat un-shifted Delete like Backspace
-      )
+      (key["backspace"] || input === "\x7f" || (key["delete"] && !key["shift"])) // treat un-shifted Delete like Backspace
     ) {
       this.deleteWordLeft();
     } else if (
