@@ -1,12 +1,22 @@
 /**
  * Pattern to match various "AI!" style trigger comments with possible instructions
- * This will match patterns like:
+ * Supports multiple single-line programming language comment styles:
+ *   - Double slash comment (C, C++, JavaScript, TypeScript, Java, etc.)
+ *   - Hash comment (Python, Ruby, Perl, Shell scripts, YAML, etc.)
+ *   - Double dash comment (SQL, Haskell, Lua)
+ *   - Semicolon comment (Lisp, Clojure, Assembly)
+ *   - Single quote comment (VB, VBA)
+ *   - Percent comment (LaTeX, Matlab, Erlang)
+ *   - REM comment (Batch files)
+ *
+ * Examples:
  * - "// what does this function do, AI?"
- * - "// change this variable name to something more precise, AI!"
- * - "# fix this code, AI!"
+ * - "# Fix this code, AI!"
+ * - "-- Optimize this query, AI!"
  */
+
 export const TRIGGER_PATTERN =
-  /\/\/\s*(.*),?\s*AI[!?]|#\s*(.*),?\s*AI[!?]|\/\*\s*(.*),?\s*AI[!?]\s*\*\//;
+  /(?:\/\/|#|--|;|'|%|REM)\s*(.*?)(?:,\s*)?AI[!?]/i;
 
 /**
  * Function to find all AI trigger matches in a file content
@@ -29,7 +39,7 @@ export function findAllTriggers(content: string): Array<RegExpMatchArray> {
 export function extractContextAroundTrigger(
   content: string,
   triggerMatch: RegExpMatchArray,
-  contextSize = 15
+  contextSize = 15,
 ): { context: string; instruction: string } {
   // Get the lines of the file
   const lines = content.split("\n");
@@ -48,16 +58,18 @@ export function extractContextAroundTrigger(
   // Join the context lines back together
   const context = contextLines.join("\n");
 
-  // Extract the instruction from the capture groups
-  // The regex has 3 capture groups for different comment styles:
-  // Group 1: // instruction AI!
-  // Group 2: # instruction AI!
-  // Group 3: /* instruction AI! */
-  const instruction =
-    triggerMatch[1] ||
-    triggerMatch[2] ||
-    triggerMatch[3] ||
-    "fix or improve this code";
-
+  // Extract the instruction from the capture groups for different comment styles
+  // There are multiple capture groups for different comment syntaxes
+  // Find the first non-undefined capture group
+  let instruction =
+    Array.from(
+      { length: triggerMatch.length - 1 },
+      (_, i) => triggerMatch[i + 1],
+    ).find((group) => group !== undefined) || "fix or improve this code";
+    
+  // Remove any comment prefixes that might have been captured
+  instruction = instruction.replace(/^(?:\/\/|#|--|;|'|%|REM)\s*/, "");
+  
   return { context, instruction };
 }
+
