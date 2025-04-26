@@ -1,4 +1,4 @@
-name: ci
+name: nix-update-hash
 
 on:
   workflow_dispatch:
