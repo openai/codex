@@ -31,7 +31,7 @@ jobs:
       - name: Setup Nix
         uses: DeterminateSystems/nix-installer-action@v8
 
-      - name: Update nix npm hash
+      - name: Update nix pnpm hash
         id: update-hash
         run: |
           nix run .\#update-nix-hash
