@@ -79,9 +79,8 @@ jobs:
     needs: build
     name: release
     runs-on: ubuntu-24.04
-
     env:
-      RELEASE_TAG: ${{ github.ref_name }}
+      RELEASE_TAG: codex-rs-${{ github.sha }}-${{ github.run_attempt }}-${{ github.ref_name }}
 
     steps:
       - uses: actions/download-artifact@v4
