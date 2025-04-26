@@ -177,6 +177,31 @@ export default function TerminalChatInput({
             },
           );
 
+          transcriber.current.on("error", (error) => {
+            setIsRecording(false);
+            setShouldResumeRecording(false);
+            setItems((prev) => [
+              ...prev,
+              {
+                id: `speak-transcription-error-${Date.now()}`,
+                type: "message",
+                role: "system",
+                content: [
+                  {
+                    type: "input_text",
+                    text: `Transcription ${error}`,
+                  },
+                ],
+              },
+            ]);
+
+            // Clean up the transcriber
+            if (transcriber.current) {
+              transcriber.current.cleanup();
+              transcriber.current = null;
+            }
+          });
+
           await transcriber.current.start();
         } catch (error) {
           setIsRecording(false);
@@ -184,7 +209,7 @@ export default function TerminalChatInput({
           setItems((prev) => [
             ...prev,
             {
-              id: `speak-error-${Date.now()}`,
+              id: `speak-start-error-${Date.now()}`,
               type: "message",
               role: "system",
               content: [
