@@ -502,10 +502,8 @@ async function runQuietMode({
     additionalWritableRoots,
     disableResponseStorage: config.disableResponseStorage,
     onItem: (item: ResponseItem) => {
-      if (item.id) {
-        // eslint-disable-next-line no-console
-        console.log(formatResponseItemForQuietMode(item));
-      }
+      // eslint-disable-next-line no-console
+      console.log(formatResponseItemForQuietMode(item));
     },
     onLoading: () => {
       /* intentionally ignored in quiet mode */
