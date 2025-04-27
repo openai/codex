@@ -57,8 +57,8 @@ docker run --name "$CONTAINER_NAME" -d \
   codex \
   sleep infinity
 
-# Initialize the firewall inside the container.
-docker exec "$CONTAINER_NAME" bash -c "sudo /usr/local/bin/init_firewall.sh"
+# Initialize the firewall inside the container with root privileges.
+docker exec --user root "$CONTAINER_NAME" /usr/local/bin/init_firewall.sh
 
 # Execute the provided command in the container, ensuring it runs in the work directory.
 # We use a parameterized bash command to safely handle the command and directory.

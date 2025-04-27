@@ -1,0 +1,61 @@
+[package]
+name = "codex-core"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "codex_core"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1"
+async-channel = "2.3.1"
+base64 = "0.21"
+bytes = "1.10.1"
+clap = { version = "4", features = ["derive", "wrap_help"], optional = true }
+codex-apply-patch = { path = "../apply-patch" }
+dirs = "6"
+env-flags = "0.1.1"
+eventsource-stream = "0.2.3"
+fs-err = "3.1.0"
+futures = "0.3"
+mime_guess = "2.0"
+patch = "0.7"
+rand = "0.9"
+reqwest = { version = "0.12", features = ["json", "stream"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2.0.12"
+tokio = { version = "1", features = [
+    "io-std",
+    "macros",
+    "process",
+    "rt-multi-thread",
+    "signal",
+] }
+tokio-util = "0.7.14"
+toml = "0.8.20"
+tracing = { version = "0.1.41", features = ["log"] }
+tree-sitter = "0.25.3"
+tree-sitter-bash = "0.23.3"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2.172"
+landlock = "0.4.1"
+seccompiler = "0.5.0"
+
+# Build OpenSSL from source for musl builds.
+[target.x86_64-unknown-linux-musl.dependencies]
+openssl-sys = { version = "*", features = ["vendored"] }
+
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
+tempfile = "3"
+wiremock = "0.6"
+
+[features]
+default = []
+
+# Separate feature so that `clap` is not a mandatory dependency.
+cli = ["clap"]
