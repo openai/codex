@@ -2,41 +2,26 @@
 set -e
 
 # Usage:
-#   ./run_in_container.sh [--work_dir directory] [--allowed_domains "domain1 domain2 ..."] "COMMAND"
+#   ./run_in_container.sh [--work_dir directory] "COMMAND"
 #
 #   Examples:
 #     ./run_in_container.sh --work_dir project/code "ls -la"
-#     ./run_in_container.sh --allowed_domains "api.openai.com api.anthropic.com" "echo Hello, world!"
 #     ./run_in_container.sh "echo Hello, world!"
 
 # Default the work directory to WORKSPACE_ROOT_DIR if not provided.
 WORK_DIR="${WORKSPACE_ROOT_DIR:-$(pwd)}"
-ALLOWED_DOMAINS="${ALLOWED_DOMAINS:-api.openai.com}"
+# Default allowed domains - can be overridden with OPENAI_ALLOWED_DOMAINS env var
+OPENAI_ALLOWED_DOMAINS="${OPENAI_ALLOWED_DOMAINS:-api.openai.com}"
 
-# Parse optional flags.
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --work_dir)
-      if [ -z "$2" ]; then
-        echo "Error: --work_dir flag provided but no directory specified."
-        exit 1
-      fi
-      WORK_DIR="$2"
-      shift 2
-      ;;
-    --allowed_domains)
-      if [ -z "$2" ]; then
-        echo "Error: --allowed_domains flag provided but no domains specified."
-        exit 1
-      fi
-      ALLOWED_DOMAINS="$2"
-      shift 2
-      ;;
-    *)
-      break
-      ;;
-  esac
-done
+# Parse optional flag.
+if [ "$1" = "--work_dir" ]; then
+  if [ -z "$2" ]; then
+    echo "Error: --work_dir flag provided but no directory specified."
+    exit 1
+  fi
+  WORK_DIR="$2"
+  shift 2
+fi
 
 WORK_DIR=$(realpath "$WORK_DIR")
 
@@ -52,7 +37,7 @@ trap cleanup EXIT
 
 # Ensure a command is provided.
 if [ "$#" -eq 0 ]; then
-  echo "Usage: $0 [--work_dir directory] [--allowed_domains \"domain1 domain2 ...\"] \"COMMAND\""
+  echo "Usage: $0 [--work_dir directory] \"COMMAND\""
   exit 1
 fi
 
@@ -62,9 +47,9 @@ if [ -z "$WORK_DIR" ]; then
   exit 1
 fi
 
-# Check if ALLOWED_DOMAINS is empty
-if [ -z "$ALLOWED_DOMAINS" ]; then
-  echo "Error: ALLOWED_DOMAINS is empty."
+# Verify that OPENAI_ALLOWED_DOMAINS is not empty
+if [ -z "$OPENAI_ALLOWED_DOMAINS" ]; then
+  echo "Error: OPENAI_ALLOWED_DOMAINS is empty."
   exit 1
 fi
 
@@ -74,26 +59,31 @@ cleanup
 # Run the container with the specified directory mounted at the same path inside the container.
 docker run --name "$CONTAINER_NAME" -d \
   -e OPENAI_API_KEY \
-  -e ALLOWED_DOMAINS="$ALLOWED_DOMAINS" \
   --cap-add=NET_ADMIN \
   --cap-add=NET_RAW \
   -v "$WORK_DIR:/app$WORK_DIR" \
   codex \
   sleep infinity
 
-# Convert space-separated domains to array for safer passing to the container
-IFS=' ' read -ra domain_array <<< "$ALLOWED_DOMAINS"
-domain_args_escaped=""
-for domain in "${domain_array[@]}"; do
-  if [ -n "$domain_args_escaped" ]; then
-    domain_args_escaped+=" "
+# Write the allowed domains to a file in the container
+docker exec --user root "$CONTAINER_NAME" bash -c "mkdir -p /etc/codex"
+for domain in $OPENAI_ALLOWED_DOMAINS; do
+  # Validate domain format to prevent injection
+  if [[ ! "$domain" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+    echo "Error: Invalid domain format: $domain"
+    exit 1
   fi
-  # Escape the domain to prevent command injection
-  domain_args_escaped+=$(printf "%q" "$domain")
+  echo "$domain" | docker exec --user root -i "$CONTAINER_NAME" bash -c "cat >> /etc/codex/allowed_domains.txt"
 done
 
-# Initialize the firewall inside the container.
-docker exec "$CONTAINER_NAME" bash -c "sudo /usr/local/bin/init_firewall.sh ${domain_args[*]}"
+# Set proper permissions on the domains file
+docker exec --user root "$CONTAINER_NAME" bash -c "chmod 444 /etc/codex/allowed_domains.txt && chown root:root /etc/codex/allowed_domains.txt"
+
+# Initialize the firewall inside the container as root user
+docker exec --user root "$CONTAINER_NAME" bash -c "/usr/local/bin/init_firewall.sh"
+
+# Remove the firewall script after running it
+docker exec --user root "$CONTAINER_NAME" bash -c "rm -f /usr/local/bin/init_firewall.sh"
 
 # Execute the provided command in the container, ensuring it runs in the work directory.
 # We use a parameterized bash command to safely handle the command and directory.

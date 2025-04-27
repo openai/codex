@@ -2,13 +2,24 @@
 set -euo pipefail  # Exit on error, undefined vars, and pipeline failures
 IFS=$'\n\t'       # Stricter word splitting
 
-# Parse allowed domains from arguments or use default
-ALLOWED_DOMAINS=("api.openai.com")
-if [ $# -gt 0 ]; then
-    ALLOWED_DOMAINS=("$@")
-    echo "Using provided domains: ${ALLOWED_DOMAINS[*]}"
+# Read allowed domains from file
+ALLOWED_DOMAINS_FILE="/etc/codex/allowed_domains.txt"
+if [ -f "$ALLOWED_DOMAINS_FILE" ]; then
+    ALLOWED_DOMAINS=()
+    while IFS= read -r domain; do
+        ALLOWED_DOMAINS+=("$domain")
+    done < "$ALLOWED_DOMAINS_FILE"
+    echo "Using domains from file: ${ALLOWED_DOMAINS[*]}"
 else
-    echo "No domains provided, using default: ${ALLOWED_DOMAINS[*]}"
+    # Fallback to default domains
+    ALLOWED_DOMAINS=("api.openai.com")
+    echo "Domains file not found, using default: ${ALLOWED_DOMAINS[*]}"
+fi
+
+# Ensure we have at least one domain
+if [ ${#ALLOWED_DOMAINS[@]} -eq 0 ]; then
+    echo "ERROR: No allowed domains specified"
+    exit 1
 fi
 
 # Flush existing rules and delete existing ipsets
