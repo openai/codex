@@ -228,31 +228,28 @@ export default function TerminalChatInput({
             const selected = fsSuggestions[selectedCompletion];
 
             if (selected) {
-              // Identify the token (with optional leading @) at the cursor end.
-              const tokenMatch = /(?:^|\s)(@?[\w./\-~]*)$/.exec(input);
-              if (tokenMatch) {
-                const token = tokenMatch[1] || "";
-                const tokenStart = input.length - token.length;
+              const words = input.trim().split(/\s+/);
+              if (words.length > 0) {
+                const lastWord = words[words.length - 1] ?? "";
 
-                // Determine replacement path
-                let replacement: string;
                 const isDir = selected.endsWith(path.sep);
                 const relPath = path.relative(
                   process.cwd(),
                   selected.replace(/\/+$/, ""),
                 );
 
-                if (token.startsWith("@")) {
-                  replacement = "@" + relPath + (isDir ? path.sep : "");
-                } else {
-                  replacement = relPath + (isDir ? path.sep : "");
+                let replacement = relPath + (isDir ? path.sep : "");
+                if (lastWord.startsWith("@")) {
+                  replacement = "@" + replacement;
                 }
 
-                const newText = input.slice(0, tokenStart) + replacement;
+                words[words.length - 1] = replacement;
+                const newText = words.join(" ");
 
                 setInput(newText);
                 setEditorKey((k) => k + 1); // remount editor with updated text
 
+                // We need to move the cursor to the end after editor remounts
                 setTimeout(() => {
                   editorRef.current?.moveCursorToEnd?.();
                 }, 0);
