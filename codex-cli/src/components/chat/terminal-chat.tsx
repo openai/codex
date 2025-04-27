@@ -158,6 +158,13 @@ export default function TerminalChat({
 
   /** Compacts the conversation into a summary and sets it as context for future runs. */
   const handleCompact = async (): Promise<void> => {
+    // If there is no user/assistant exchange yet, skip compact
+    const hasChat = items.some(
+      (item) => item.type === "message" && item.role === "user",
+    );
+    if (!hasChat) {
+      return;
+    }
     setLoading(true);
     try {
       const summary = await generateCompactSummary(
