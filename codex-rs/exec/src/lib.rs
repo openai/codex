@@ -16,6 +16,15 @@ use tracing::error;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
+/// Returns `true` if a recognised API key is present in the environment.
+///
+/// At present we only support `OPENAI_API_KEY`, mirroring the behaviour of the
+/// Node-based `codex-cli`.  Additional providers can be added here when the
+/// Rust implementation gains first-class support for them.
+fn has_api_key() -> bool {
+    std::env::var("OPENAI_API_KEY").map(|s| !s.trim().is_empty()).unwrap_or(false)
+}
+
 pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
     // TODO(mbolin): Take a more thoughtful approach to logging.
     let default_level = "error";
@@ -38,6 +47,19 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
         prompt,
         ..
     } = cli;
+
+    // ---------------------------------------------------------------------
+    // API key handling
+    // ---------------------------------------------------------------------
+
+    if !has_api_key() {
+        eprintln!(
+            "\n\x1b[31mMissing OpenAI API key.\x1b[0m\n\n\
+Set the environment variable \x1b[1mOPENAI_API_KEY\x1b[0m and re-run this command.\n\
+You can create a key here: \x1b[1m\x1b[4mhttps://platform.openai.com/account/api-keys\x1b[0m\n"
+        );
+        std::process::exit(1);
+    }
 
     if !skip_git_repo_check && !is_inside_git_repo() {
         eprintln!("Not inside a Git repo and --skip-git-repo-check was not specified.");
