@@ -3,7 +3,6 @@ import type { ComponentProps } from "react";
 import { describe, it, expect, vi } from "vitest";
 import { renderTui } from "./ui-test-helpers.js";
 import TerminalChatInput from "../src/components/chat/terminal-chat-input.js";
-import TerminalChatNewInput from "../src/components/chat/terminal-chat-new-input.js";
 import * as TermUtils from "../src/utils/terminal.js";
 
 // -------------------------------------------------------------------------------------------------
@@ -84,60 +83,6 @@ describe("/clear command", () => {
     expect(Array.isArray(newItems)).toBe(true);
     expect(newItems).toHaveLength(2);
     expect(newItems.at(-1)).toMatchObject({
-      role: "system",
-      type: "message",
-      content: [{ type: "input_text", text: "Terminal cleared" }],
-    });
-
-    cleanup();
-    clearSpy.mockRestore();
-  });
-
-  it("invokes clearTerminal and resets context in TerminalChatNewInput", async () => {
-    const clearSpy = vi
-      .spyOn(TermUtils, "clearTerminal")
-      .mockImplementation(() => {});
-
-    const setItems = vi.fn();
-
-    const props: ComponentProps<typeof TerminalChatNewInput> = {
-      isNew: false,
-      loading: false,
-      submitInput: () => {},
-      confirmationPrompt: null,
-      explanation: undefined,
-      submitConfirmation: () => {},
-      setLastResponseId: () => {},
-      setItems,
-      contextLeftPercent: 100,
-      openOverlay: () => {},
-      openModelOverlay: () => {},
-      openApprovalOverlay: () => {},
-      openHelpOverlay: () => {},
-      openDiffOverlay: () => {},
-      interruptAgent: () => {},
-      active: true,
-      thinkingSeconds: 0,
-    };
-
-    const { stdin, flush, cleanup } = renderTui(
-      <TerminalChatNewInput {...props} />,
-    );
-
-    await flush();
-
-    await type(stdin, "/clear", flush);
-    await type(stdin, "\r", flush); // press Enter
-
-    await flush();
-
-    expect(clearSpy).toHaveBeenCalledTimes(1);
-    expect(setItems).toHaveBeenCalledTimes(1);
-
-    const firstArg = setItems.mock.calls[0]![0];
-    expect(Array.isArray(firstArg)).toBe(true);
-    expect(firstArg).toHaveLength(1);
-    expect(firstArg[0]).toMatchObject({
       role: "system",
       type: "message",
       content: [{ type: "input_text", text: "Terminal cleared" }],

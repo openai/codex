@@ -13,7 +13,7 @@ import { useTerminalSize } from "../../hooks/use-terminal-size.js";
 import { AgentLoop } from "../../utils/agent/agent-loop.js";
 import { ReviewDecision } from "../../utils/agent/review.js";
 import { generateCompactSummary } from "../../utils/compact-summary.js";
-import { OPENAI_BASE_URL, saveConfig } from "../../utils/config.js";
+import { getBaseUrl, getApiKey, saveConfig } from "../../utils/config.js";
 import { extractAppliedPatches as _extractAppliedPatches } from "../../utils/extract-applied-patches.js";
 import { getGitDiff } from "../../utils/get-diff.js";
 import { createInputItem } from "../../utils/input-utils.js";
@@ -31,6 +31,7 @@ import DiffOverlay from "../diff-overlay.js";
 import HelpOverlay from "../help-overlay.js";
 import HistoryOverlay from "../history-overlay.js";
 import ModelOverlay from "../model-overlay.js";
+import chalk from "chalk";
 import { Box, Text } from "ink";
 import { spawn } from "node:child_process";
 import OpenAI from "openai";
@@ -65,18 +66,21 @@ const colorsByPolicy: Record<ApprovalPolicy, ColorName | undefined> = {
  *
  * @param command The command to explain
  * @param model The model to use for generating the explanation
+ * @param flexMode Whether to use the flex-mode service tier
+ * @param config The configuration object
  * @returns A human-readable explanation of what the command does
  */
 async function generateCommandExplanation(
   command: Array<string>,
   model: string,
   flexMode: boolean,
+  config: AppConfig,
 ): Promise<string> {
   try {
     // Create a temporary OpenAI client
     const oai = new OpenAI({
-      apiKey: process.env["OPENAI_API_KEY"],
-      baseURL: OPENAI_BASE_URL,
+      apiKey: getApiKey(config.provider),
+      baseURL: getBaseUrl(config.provider),
     });
 
     // Format the command for display
@@ -138,7 +142,7 @@ export default function TerminalChat({
   additionalWritableRoots,
   fullStdout,
 }: Props): React.ReactElement {
-  const notify = config.notify;
+  const notify = Boolean(config.notify);
   const [model, setModel] = useState<string>(config.model);
   const [provider, setProvider] = useState<string>(config.provider || "openai");
   const [lastResponseId, setLastResponseId] = useState<string | null>(null);
@@ -156,6 +160,7 @@ export default function TerminalChat({
         items,
         model,
         Boolean(config.flexMode),
+        config,
       );
       setItems([
         {
@@ -241,6 +246,7 @@ export default function TerminalChat({
       config,
       instructions: config.instructions,
       approvalPolicy,
+      disableResponseStorage: config.disableResponseStorage,
       additionalWritableRoots,
       onLastResponseId: setLastResponseId,
       onItem: (item) => {
@@ -271,6 +277,7 @@ export default function TerminalChat({
             command,
             model,
             Boolean(config.flexMode),
+            config,
           );
           log(`Generated explanation: ${explanation}`);
 
@@ -566,9 +573,10 @@ export default function TerminalChat({
         {overlayMode === "model" && (
           <ModelOverlay
             currentModel={model}
+            providers={config.providers}
             currentProvider={provider}
             hasLastResponse={Boolean(lastResponseId)}
-            onSelect={(newModel) => {
+            onSelect={(allModels, newModel) => {
               log(
                 "TerminalChat: interruptAgent invoked – calling agent.cancel()",
               );
@@ -577,6 +585,20 @@ export default function TerminalChat({
               }
               agent?.cancel();
               setLoading(false);
+
+              if (!allModels?.includes(newModel)) {
+                // eslint-disable-next-line no-console
+                console.error(
+                  chalk.bold.red(
+                    `Model "${chalk.yellow(
+                      newModel,
+                    )}" is not available for provider "${chalk.yellow(
+                      provider,
+                    )}".`,
+                  ),
+                );
+                return;
+              }
 
               setModel(newModel);
               setLastResponseId((prev) =>

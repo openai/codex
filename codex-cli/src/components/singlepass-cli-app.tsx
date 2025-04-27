@@ -7,7 +7,8 @@ import Spinner from "./vendor/ink-spinner"; // Third‑party / vendor components
 import TextInput from "./vendor/ink-text-input";
 import {
   OPENAI_TIMEOUT_MS,
-  OPENAI_BASE_URL as _OPENAI_BASE_URL,
+  OPENAI_ORGANIZATION,
+  OPENAI_PROJECT,
   getBaseUrl,
   getApiKey,
 } from "../utils/config";
@@ -398,10 +399,19 @@ export function SinglePassApp({
         files,
       });
 
+      const headers: Record<string, string> = {};
+      if (OPENAI_ORGANIZATION) {
+        headers["OpenAI-Organization"] = OPENAI_ORGANIZATION;
+      }
+      if (OPENAI_PROJECT) {
+        headers["OpenAI-Project"] = OPENAI_PROJECT;
+      }
+
       const openai = new OpenAI({
-        apiKey: getApiKey(config.provider ?? "openai"),
-        baseURL: getBaseUrl(config.provider ?? "openai"),
+        apiKey: getApiKey(config.provider),
+        baseURL: getBaseUrl(config.provider),
         timeout: OPENAI_TIMEOUT_MS,
+        defaultHeaders: headers,
       });
       const chatResp = await openai.beta.chat.completions.parse({
         model: config.model,

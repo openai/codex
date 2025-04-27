@@ -52,6 +52,8 @@ const cli = meow(
     $ codex completion <bash|zsh|fish>
 
   Options
+    --version                       Print version and exit
+
     -h, --help                      Show usage and exit
     -m, --model <model>             Model to use for completions (default: o4-mini)
     -p, --provider <provider>       Provider to use for completions (default: openai)
@@ -69,6 +71,9 @@ const cli = meow(
     --project-doc <file>       Include an additional markdown file at <file> as context
     --full-stdout              Do not truncate stdout/stderr from command outputs
     --notify                   Enable desktop notifications for responses
+
+    --disable-response-storage Disable server‑side response storage (sends the
+                               full conversation context with every request)
 
     --flex-mode               Use "flex-mode" processing mode for the request (only supported
                               with models o3 and o4-mini)
@@ -94,6 +99,7 @@ const cli = meow(
     flags: {
       // misc
       help: { type: "boolean", aliases: ["h"] },
+      version: { type: "boolean", description: "Print version and exit" },
       view: { type: "string" },
       model: { type: "string", aliases: ["m"] },
       provider: { type: "string", aliases: ["p"] },
@@ -158,6 +164,12 @@ const cli = meow(
       notify: {
         type: "boolean",
         description: "Enable desktop notifications for responses",
+      },
+
+      disableResponseStorage: {
+        type: "boolean",
+        description:
+          "Disable server-side response storage (sends full conversation context with every request)",
       },
 
       // Experimental mode where whole directory is loaded in context and model is requested
@@ -242,15 +254,31 @@ const imagePaths = cli.flags.image;
 const provider = cli.flags.provider ?? config.provider ?? "openai";
 const apiKey = getApiKey(provider);
 
-if (!apiKey) {
+// Set of providers that don't require API keys
+const NO_API_KEY_REQUIRED = new Set(["ollama"]);
+
+// Skip API key validation for providers that don't require an API key
+if (!apiKey && !NO_API_KEY_REQUIRED.has(provider.toLowerCase())) {
   // eslint-disable-next-line no-console
   console.error(
     `\n${chalk.red(`Missing ${provider} API key.`)}\n\n` +
-      `Set the environment variable ${chalk.bold("OPENAI_API_KEY")} ` +
+      `Set the environment variable ${chalk.bold(
+        `${provider.toUpperCase()}_API_KEY`,
+      )} ` +
       `and re-run this command.\n` +
-      `You can create a key here: ${chalk.bold(
-        chalk.underline("https://platform.openai.com/account/api-keys"),
-      )}\n`,
+      `${
+        provider.toLowerCase() === "openai"
+          ? `You can create a key here: ${chalk.bold(
+              chalk.underline("https://platform.openai.com/account/api-keys"),
+            )}\n`
+          : provider.toLowerCase() === "gemini"
+            ? `You can create a ${chalk.bold(
+                `${provider.toUpperCase()}_API_KEY`,
+              )} ` + `in the ${chalk.bold(`Google AI Studio`)}.\n`
+            : `You can create a ${chalk.bold(
+                `${provider.toUpperCase()}_API_KEY`,
+              )} ` + `in the ${chalk.bold(`${provider}`)} dashboard.\n`
+      }`,
   );
   process.exit(1);
 }
@@ -262,11 +290,19 @@ config = {
   notify: Boolean(cli.flags.notify),
   flexMode: Boolean(cli.flags.flexMode),
   provider,
+  disableResponseStorage:
+    cli.flags.disableResponseStorage !== undefined
+      ? Boolean(cli.flags.disableResponseStorage)
+      : config.disableResponseStorage,
 };
 
 // Check for updates after loading config. This is important because we write state file in
 // the config dir.
-await checkForUpdates().catch();
+try {
+  await checkForUpdates();
+} catch {
+  // ignore
+}
 
 // For --flex-mode, validate and exit if incorrect.
 if (cli.flags.flexMode) {
@@ -345,8 +381,8 @@ if (cli.flags.quiet) {
     cli.flags.fullAuto || cli.flags.approvalMode === "full-auto"
       ? AutoApprovalMode.FULL_AUTO
       : cli.flags.autoEdit || cli.flags.approvalMode === "auto-edit"
-      ? AutoApprovalMode.AUTO_EDIT
-      : config.approvalMode || AutoApprovalMode.SUGGEST;
+        ? AutoApprovalMode.AUTO_EDIT
+        : config.approvalMode || AutoApprovalMode.SUGGEST;
 
   await runQuietMode({
     prompt,
@@ -376,8 +412,8 @@ const approvalPolicy: ApprovalPolicy =
   cli.flags.fullAuto || cli.flags.approvalMode === "full-auto"
     ? AutoApprovalMode.FULL_AUTO
     : cli.flags.autoEdit || cli.flags.approvalMode === "auto-edit"
-    ? AutoApprovalMode.AUTO_EDIT
-    : config.approvalMode || AutoApprovalMode.SUGGEST;
+      ? AutoApprovalMode.AUTO_EDIT
+      : config.approvalMode || AutoApprovalMode.SUGGEST;
 
 const instance = render(
   <App
@@ -461,8 +497,10 @@ async function runQuietMode({
     model: config.model,
     config: config,
     instructions: config.instructions,
+    provider: config.provider,
     approvalPolicy,
     additionalWritableRoots,
+    disableResponseStorage: config.disableResponseStorage,
     onItem: (item: ResponseItem) => {
       // eslint-disable-next-line no-console
       console.log(formatResponseItemForQuietMode(item));

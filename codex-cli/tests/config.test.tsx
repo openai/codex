@@ -5,6 +5,7 @@ import { AutoApprovalMode } from "../src/utils/auto-approval-mode.js";
 import { tmpdir } from "os";
 import { join } from "path";
 import { test, expect, beforeEach, afterEach, vi } from "vitest";
+import { providers as defaultProviders } from "../src/utils/providers";
 
 // In‑memory FS store
 let memfs: Record<string, string> = {};
@@ -147,4 +148,130 @@ test("loads and saves approvalMode correctly", () => {
     disableProjectDoc: true,
   });
   expect(reloadedConfig.approvalMode).toBe(AutoApprovalMode.FULL_AUTO);
+});
+
+test("loads and saves providers correctly", () => {
+  // Setup custom providers configuration
+  const customProviders = {
+    openai: {
+      name: "Custom OpenAI",
+      baseURL: "https://custom-api.openai.com/v1",
+      envKey: "CUSTOM_OPENAI_API_KEY",
+    },
+    anthropic: {
+      name: "Anthropic",
+      baseURL: "https://api.anthropic.com",
+      envKey: "ANTHROPIC_API_KEY",
+    },
+  };
+
+  // Create config with providers
+  const testConfig = {
+    model: "test-model",
+    provider: "anthropic",
+    providers: customProviders,
+    instructions: "test instructions",
+    notify: false,
+  };
+
+  // Save the config
+  saveConfig(testConfig, testConfigPath, testInstructionsPath);
+
+  // Verify saved config contains providers
+  expect(memfs[testConfigPath]).toContain(`"providers"`);
+  expect(memfs[testConfigPath]).toContain(`"Custom OpenAI"`);
+  expect(memfs[testConfigPath]).toContain(`"Anthropic"`);
+  expect(memfs[testConfigPath]).toContain(`"provider": "anthropic"`);
+
+  // Load config and verify providers were loaded correctly
+  const loadedConfig = loadConfig(testConfigPath, testInstructionsPath, {
+    disableProjectDoc: true,
+  });
+
+  // Check providers were loaded correctly
+  expect(loadedConfig.provider).toBe("anthropic");
+  expect(loadedConfig.providers).toEqual({
+    ...defaultProviders,
+    ...customProviders,
+  });
+
+  // Test merging with built-in providers
+  // Create a config with only one custom provider
+  const partialProviders = {
+    customProvider: {
+      name: "Custom Provider",
+      baseURL: "https://custom-api.example.com",
+      envKey: "CUSTOM_API_KEY",
+    },
+  };
+
+  const partialConfig = {
+    model: "test-model",
+    provider: "customProvider",
+    providers: partialProviders,
+    instructions: "test instructions",
+    notify: false,
+  };
+
+  // Save the partial config
+  saveConfig(partialConfig, testConfigPath, testInstructionsPath);
+
+  // Load config and verify providers were merged with built-in providers
+  const mergedConfig = loadConfig(testConfigPath, testInstructionsPath, {
+    disableProjectDoc: true,
+  });
+
+  // Check providers is defined
+  expect(mergedConfig.providers).toBeDefined();
+
+  // Use bracket notation to access properties
+  if (mergedConfig.providers) {
+    expect(mergedConfig.providers["customProvider"]).toBeDefined();
+    expect(mergedConfig.providers["customProvider"]).toEqual(
+      partialProviders.customProvider,
+    );
+    // Built-in providers should still be there (like openai)
+    expect(mergedConfig.providers["openai"]).toBeDefined();
+  }
+});
+
+test("saves and loads instructions with project doc separator correctly", () => {
+  const userInstructions = "user specific instructions";
+  const projectDoc = "project specific documentation";
+  const combinedInstructions = `${userInstructions}\n\n--- project-doc ---\n\n${projectDoc}`;
+
+  const testConfig = {
+    model: "test-model",
+    instructions: combinedInstructions,
+    notify: false,
+  };
+
+  saveConfig(testConfig, testConfigPath, testInstructionsPath);
+
+  expect(memfs[testInstructionsPath]).toBe(userInstructions);
+
+  const loadedConfig = loadConfig(testConfigPath, testInstructionsPath, {
+    disableProjectDoc: true,
+  });
+  expect(loadedConfig.instructions).toBe(userInstructions);
+});
+
+test("handles empty user instructions when saving with project doc separator", () => {
+  const projectDoc = "project specific documentation";
+  const combinedInstructions = `\n\n--- project-doc ---\n\n${projectDoc}`;
+
+  const testConfig = {
+    model: "test-model",
+    instructions: combinedInstructions,
+    notify: false,
+  };
+
+  saveConfig(testConfig, testConfigPath, testInstructionsPath);
+
+  expect(memfs[testInstructionsPath]).toBe("");
+
+  const loadedConfig = loadConfig(testConfigPath, testInstructionsPath, {
+    disableProjectDoc: true,
+  });
+  expect(loadedConfig.instructions).toBe("");
 });

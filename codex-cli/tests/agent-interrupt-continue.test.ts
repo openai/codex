@@ -47,7 +47,7 @@ describe("Agent interrupt and continue", () => {
       onLoading: (loading) => {
         loadingState = loading;
       },
-      getCommandConfirmation: async () => ({ review: "yes" } as any),
+      getCommandConfirmation: async () => ({ review: "yes" }) as any,
       onLastResponseId: () => {},
     });
 
