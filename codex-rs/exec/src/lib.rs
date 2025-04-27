@@ -22,7 +22,9 @@ use tracing_subscriber::EnvFilter;
 /// Node-based `codex-cli`.  Additional providers can be added here when the
 /// Rust implementation gains first-class support for them.
 fn has_api_key() -> bool {
-    std::env::var("OPENAI_API_KEY").map(|s| !s.trim().is_empty()).unwrap_or(false)
+    std::env::var("OPENAI_API_KEY")
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false)
 }
 
 pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
