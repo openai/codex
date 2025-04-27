@@ -244,7 +244,6 @@ export default function TerminalChatInput({
 
               words[words.length - 1] = replacement;
               const newText = words.join(" ");
-
               setInput(newText);
               // Force remount of the editor with the new text
               setEditorKey((k) => k + 1);
