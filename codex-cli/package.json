@@ -1,13 +1,13 @@
 {
-  "name": "@openai/codex",
-  "version": "0.1.2504251709",
+  "name": "codex-lacy",
+  "version": "0.1.2504271719",
   "license": "Apache-2.0",
   "bin": {
     "codex": "bin/codex.js"
   },
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=20"
   },
   "scripts": {
     "format": "prettier --check src tests",
@@ -82,6 +82,6 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/openai/codex"
+    "url": "https://github.com/lacymorrow/codex"
   }
 }
