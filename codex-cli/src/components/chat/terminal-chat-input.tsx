@@ -10,6 +10,7 @@ import MultilineTextEditor from "./multiline-editor";
 import { TerminalChatCommandReview } from "./terminal-chat-command-review.js";
 import TextCompletions from "./terminal-chat-completions.js";
 import { loadConfig } from "../../utils/config.js";
+import { expandFileTags } from "../../utils/expand-file-tags";
 import { getFileSystemSuggestions } from "../../utils/file-system-suggestions.js";
 import { createInputItem } from "../../utils/input-utils.js";
 import { log } from "../../utils/logger/log.js";
@@ -22,6 +23,7 @@ import {
 import { clearTerminal, onExit } from "../../utils/terminal.js";
 import { Box, Text, useApp, useInput, useStdin } from "ink";
 import { fileURLToPath } from "node:url";
+import path from "path";
 import React, {
   useCallback,
   useState,
@@ -228,7 +230,21 @@ export default function TerminalChatInput({
             if (selected) {
               const atIndex = input.lastIndexOf("@");
               if (atIndex !== -1) {
-                const newText = input.slice(0, atIndex + 1) + selected + " ";
+                const beforeAt = input.slice(0, atIndex);
+
+                const isDir = selected.endsWith(path.sep);
+                const relPath = path.relative(
+                  process.cwd(),
+                  selected.replace(/\/+$/, ""),
+                );
+
+                const replacement = "@" + relPath + (isDir ? path.sep : "");
+
+                const afterTokenMatch = input
+                  .slice(atIndex)
+                  .replace(/@[^\s]*\s?/, "");
+                const newText = beforeAt + replacement + afterTokenMatch;
+
                 setInput(newText);
                 // Force remount of the editor with the new text
                 setEditorKey((k) => k + 1);
@@ -290,7 +306,7 @@ export default function TerminalChatInput({
           // AND the caret sits on the last line of the buffer.
           const wasAtLastRow =
             prevCursorWasAtLastRow.current ??
-            editorRef.current?.isCursorAtLastRow() ??
+            editorRef.current?.isCursorAtLastRow?.() ??
             true;
           if (historyIndex != null && wasAtLastRow) {
             const newIndex = historyIndex + 1;
@@ -620,7 +636,10 @@ export default function TerminalChatInput({
       );
       text = text.trim();
 
-      const inputItem = await createInputItem(text, images);
+      // Expand @file tokens into XML blocks for the model
+      const expandedText = await expandFileTags(text);
+
+      const inputItem = await createInputItem(expandedText, images);
       submitInput([inputItem]);
 
       // Get config for history persistence.
@@ -714,7 +733,7 @@ export default function TerminalChatInput({
                       setSelectedCompletion(-1);
                     }
                   } else if (fsSuggestions.length > 0) {
-                    // No longer in @-suggest mode – clear suggestions
+                    // Exited @-suggest context → clear menu
                     setFsSuggestions([]);
                     setSelectedCompletion(-1);
                   }

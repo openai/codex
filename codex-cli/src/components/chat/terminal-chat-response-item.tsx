@@ -15,6 +15,7 @@ import chalk, { type ForegroundColorName } from "chalk";
 import { Box, Text } from "ink";
 import { parse, setOptions } from "marked";
 import TerminalRenderer from "marked-terminal";
+import path from "path";
 import React, { useEffect, useMemo } from "react";
 
 export default function TerminalChatResponseItem({
@@ -130,24 +131,36 @@ function TerminalChatResponseMessage({
       </Text>
       <Markdown>
         {message.content
-          .map(
-            (c) =>
-              c.type === "output_text"
-                ? c.text
-                : c.type === "refusal"
-                  ? c.refusal
-                  : c.type === "input_text"
-                    ? c.text
-                    : c.type === "input_image"
-                      ? "<Image>"
-                      : c.type === "input_file"
-                        ? c.filename
-                        : "", // unknown content type
-          )
+          .map((c) => {
+            if (c.type === "output_text") {
+              return collapseXmlBlocks(c.text);
+            }
+            if (c.type === "refusal") {
+              return c.refusal;
+            }
+            if (c.type === "input_text") {
+              return collapseXmlBlocks(c.text);
+            }
+            if (c.type === "input_image") {
+              return "<Image>";
+            }
+            if (c.type === "input_file") {
+              return c.filename;
+            }
+            return "";
+          })
           .join(" ")}
       </Markdown>
     </Box>
   );
+}
+
+function collapseXmlBlocks(text: string): string {
+  return text.replace(/<([^\n>]+)>[\s\S]*?<\/\1>/g, (_m, p1: string) => {
+    const relPath = p1.trim();
+    const displayPath = path.normalize(relPath);
+    return "@" + displayPath;
+  });
 }
 
 function TerminalChatResponseToolCall({
