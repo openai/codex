@@ -223,23 +223,24 @@ export default function TerminalChatInput({
           }
 
           if (_key.tab && selectedCompletion >= 0) {
-            const words = input.trim().split(/\s+/);
             const selected = fsSuggestions[selectedCompletion];
 
-            if (words.length > 0 && selected) {
-              words[words.length - 1] = selected;
-              const newText = words.join(" ");
-              setInput(newText);
-              // Force remount of the editor with the new text
-              setEditorKey((k) => k + 1);
+            if (selected) {
+              const atIndex = input.lastIndexOf("@");
+              if (atIndex !== -1) {
+                const newText = input.slice(0, atIndex + 1) + selected + " ";
+                setInput(newText);
+                // Force remount of the editor with the new text
+                setEditorKey((k) => k + 1);
 
-              // We need to move the cursor to the end after editor remounts
-              setTimeout(() => {
-                editorRef.current?.moveCursorToEnd?.();
-              }, 0);
+                // Move cursor to end after remount
+                setTimeout(() => {
+                  editorRef.current?.moveCursorToEnd?.();
+                }, 0);
 
-              setFsSuggestions([]);
-              setSelectedCompletion(-1);
+                setFsSuggestions([]);
+                setSelectedCompletion(-1);
+              }
             }
             return;
           }
@@ -308,6 +309,26 @@ export default function TerminalChatInput({
         }
 
         if (_key.tab) {
+          // eslint-disable-next-line no-useless-escape
+          const atMatch = /(?:^|\s)@([\w.\/\-~]*)$/.exec(input);
+          if (atMatch) {
+            const pathPrefix = atMatch[1] ?? "";
+            const completions = getFileSystemSuggestions(pathPrefix);
+            setFsSuggestions(completions);
+            if (completions.length > 0) {
+              // Cycle through suggestions on repeated Tab / Shift+Tab
+              const len = completions.length;
+              const nextIdx = _key.shift
+                ? selectedCompletion <= 0
+                  ? len - 1
+                  : selectedCompletion - 1
+                : selectedCompletion >= len - 1
+                  ? 0
+                  : selectedCompletion + 1;
+              setSelectedCompletion(nextIdx);
+            }
+            return; // handled – do **not** fall through to history/tab logic
+          }
           const words = input.split(/\s+/);
           const mostRecentWord = words[words.length - 1];
           if (mostRecentWord === undefined || mostRecentWord === "") {
@@ -678,13 +699,24 @@ export default function TerminalChatInput({
                 if (txt.endsWith(" ")) {
                   setFsSuggestions([]);
                   setSelectedCompletion(-1);
-                } else if (fsSuggestions.length > 0) {
-                  // Update file suggestions as user types
-                  const words = txt.trim().split(/\s+/);
-                  const mostRecentWord =
-                    words.length > 0 ? words[words.length - 1] : "";
-                  if (mostRecentWord !== undefined) {
-                    setFsSuggestions(getFileSystemSuggestions(mostRecentWord));
+                } else {
+                  // eslint-disable-next-line no-useless-escape
+                  const atMatch = /(?:^|\s)@([\w.\/\-~]*)$/.exec(txt);
+                  if (atMatch) {
+                    const pathPrefix = atMatch[1] ?? "";
+                    const completions = getFileSystemSuggestions(pathPrefix);
+                    setFsSuggestions(completions);
+                    if (completions.length > 0) {
+                      setSelectedCompletion((prev) =>
+                        prev < 0 || prev >= completions.length ? 0 : prev,
+                      );
+                    } else {
+                      setSelectedCompletion(-1);
+                    }
+                  } else if (fsSuggestions.length > 0) {
+                    // No longer in @-suggest mode – clear suggestions
+                    setFsSuggestions([]);
+                    setSelectedCompletion(-1);
                   }
                 }
               }}
