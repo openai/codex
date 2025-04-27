@@ -62,6 +62,12 @@ if [ -z "$WORK_DIR" ]; then
   exit 1
 fi
 
+# Check if ALLOWED_DOMAINS is empty
+if [ -z "$ALLOWED_DOMAINS" ]; then
+  echo "Error: ALLOWED_DOMAINS is empty."
+  exit 1
+fi
+
 # Kill any existing container for the working directory using cleanup(), centralizing removal logic.
 cleanup
 
@@ -75,10 +81,15 @@ docker run --name "$CONTAINER_NAME" -d \
   codex \
   sleep infinity
 
-# Convert space-separated domains to array of arguments for init_firewall.sh
-domain_args=()
-for domain in $ALLOWED_DOMAINS; do
-  domain_args+=("$domain")
+# Convert space-separated domains to array for safer passing to the container
+IFS=' ' read -ra domain_array <<< "$ALLOWED_DOMAINS"
+domain_args_escaped=""
+for domain in "${domain_array[@]}"; do
+  if [ -n "$domain_args_escaped" ]; then
+    domain_args_escaped+=" "
+  fi
+  # Escape the domain to prevent command injection
+  domain_args_escaped+=$(printf "%q" "$domain")
 done
 
 # Initialize the firewall inside the container.
