@@ -104,6 +104,41 @@ export default function TerminalChatInput({
   const prevCursorRow = useRef<number | null>(null);
   const prevCursorWasAtLastRow = useRef<boolean>(false);
 
+  // --- Helper for updating file system suggestions ---
+  function updateFsSuggestions(txt: string) {
+    // Clear tab completions if a space is typed
+    if (txt.endsWith(" ")) {
+      setFsSuggestions([]);
+      setSelectedCompletion(-1);
+    } else {
+      // Determine the current token (last whitespace-separated word)
+      const words = txt.trim().split(/\s+/);
+      const lastWord = words[words.length - 1] ?? "";
+
+      // Strip optional leading '@' for the path prefix
+      const pathPrefix = lastWord.startsWith("@")
+        ? lastWord.slice(1)
+        : lastWord;
+
+      // If there is any prefix to suggest against, query the FS
+      if (pathPrefix.length > 0) {
+        const completions = getFileSystemSuggestions(pathPrefix);
+        setFsSuggestions(completions);
+        if (completions.length > 0) {
+          setSelectedCompletion((prev) =>
+            prev < 0 || prev >= completions.length ? 0 : prev,
+          );
+        } else {
+          setSelectedCompletion(-1);
+        }
+      } else if (fsSuggestions.length > 0) {
+        // Token cleared → clear menu
+        setFsSuggestions([]);
+        setSelectedCompletion(-1);
+      }
+    }
+  }
+
   // Load command history on component mount
   useEffect(() => {
     async function loadHistory() {
@@ -323,31 +358,7 @@ export default function TerminalChatInput({
         }
 
         if (_key.tab) {
-          // Determine the current token (last whitespace-separated word)
-          const words = input.trim().split(/\s+/);
-          const lastWord = words[words.length - 1] ?? "";
-
-          // Strip optional leading '@' for the path prefix
-          const pathPrefix = lastWord.startsWith("@")
-            ? lastWord.slice(1)
-            : lastWord;
-
-          // If there is any prefix to suggest against, query the FS
-          if (pathPrefix.length > 0) {
-            const completions = getFileSystemSuggestions(pathPrefix);
-            setFsSuggestions(completions);
-            if (completions.length > 0) {
-              setSelectedCompletion((prev) =>
-                prev < 0 || prev >= completions.length ? 0 : prev,
-              );
-            } else {
-              setSelectedCompletion(-1);
-            }
-          } else if (fsSuggestions.length > 0) {
-            // Token cleared → clear menu
-            setFsSuggestions([]);
-            setSelectedCompletion(-1);
-          }
+          updateFsSuggestions(input);
         }
       }
 
@@ -707,37 +718,7 @@ export default function TerminalChatInput({
                 }
                 setInput(txt);
 
-                // Clear tab completions if a space is typed
-                if (txt.endsWith(" ")) {
-                  setFsSuggestions([]);
-                  setSelectedCompletion(-1);
-                } else {
-                  // Determine the current token (last whitespace-separated word)
-                  const words = txt.trim().split(/\s+/);
-                  const lastWord = words[words.length - 1] ?? "";
-
-                  // Strip optional leading '@' for the path prefix
-                  const pathPrefix = lastWord.startsWith("@")
-                    ? lastWord.slice(1)
-                    : lastWord;
-
-                  // If there is any prefix to suggest against, query the FS
-                  if (pathPrefix.length > 0) {
-                    const completions = getFileSystemSuggestions(pathPrefix);
-                    setFsSuggestions(completions);
-                    if (completions.length > 0) {
-                      setSelectedCompletion((prev) =>
-                        prev < 0 || prev >= completions.length ? 0 : prev,
-                      );
-                    } else {
-                      setSelectedCompletion(-1);
-                    }
-                  } else if (fsSuggestions.length > 0) {
-                    // Token cleared → clear menu
-                    setFsSuggestions([]);
-                    setSelectedCompletion(-1);
-                  }
-                }
+                updateFsSuggestions(txt);
               }}
               key={editorKey}
               initialText={input}
