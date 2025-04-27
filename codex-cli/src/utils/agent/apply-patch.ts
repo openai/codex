@@ -307,6 +307,8 @@ class Parser {
 
   private parse_add_file(): PatchAction {
     const lines: Array<string> = [];
+    // skip new-file hunk header (e.g. "@@ -0,0 +1@@" or "+1,NN@@")
+    const NEW_FILE_HUNK = /^@@\s+-0,0\s+\+1(?:,[1-9]\d*)?\s+@@/;
     while (
       !this.is_done([
         PATCH_SUFFIX,
@@ -316,6 +318,9 @@ class Parser {
       ])
     ) {
       const s = this.read_str();
+      if (NEW_FILE_HUNK.test(s)) {
+        continue;
+      }
       if (!s.startsWith(HUNK_ADD_LINE_PREFIX)) {
         throw new DiffError(`Invalid Add File Line: ${s}`);
       }
