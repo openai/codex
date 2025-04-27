@@ -7,13 +7,13 @@ import type { ResponseInputItem } from "openai/resources/responses/responses.mjs
 import { canAutoApprove } from "../../approvals.js";
 import { formatCommandForDisplay } from "../../format-command.js";
 import { FullAutoErrorMode } from "../auto-approval-mode.js";
+import { CODEX_UNSAFE_ALLOW_NO_SANDBOX } from "../config.js";
 import { exec, execApplyPatch } from "./exec.js";
 import { ReviewDecision } from "./review.js";
 import { isLoggingEnabled, log } from "../logger/log.js";
 import { SandboxType } from "./sandbox/interface.js";
-import { constants } from "fs";
 import { access } from "fs/promises";
-import path from "path";
+import { execFile } from "node:child_process";
 
 // ---------------------------------------------------------------------------
 // Session‑level cache of commands that the user has chosen to always approve.
@@ -282,48 +282,18 @@ const isInLinux = async (): Promise<boolean> => {
 };
 
 /**
- * Return `true` if the `sandbox-exec` binary can be located on the current
- * $PATH and is executable.  This intentionally does **not** spawn the binary –
- * we only care about its presence.
+ * Return `true` if the `sandbox-exec` binary can be located. This intentionally does **not**
+ * spawn the binary – we only care about its presence.
  */
-const isSandboxExecAvailable = async (): Promise<boolean> => {
-  // The binary name we need to locate.
-  const binary = "sandbox-exec";
-
-  // If the caller provided an absolute path in $PATH entries we must resolve
-  // them relative to the file system.
-  const pathEntries = (process.env["PATH"] || "").split(":");
-
-  const accessPromises = pathEntries.map(async (p) => {
-    if (!p) {
-      return false;
-    }
-    const candidate = path.join(p, binary);
-    try {
-      await access(candidate, constants.X_OK);
-      return true;
-    } catch {
-      return false;
-    }
-  });
-
-  // Additionally check the well-known location under /usr/bin which is where
-  // the utility lives on most macOS installations.
-  accessPromises.push(
-    (async () => {
-      try {
-        await access("/usr/bin/sandbox-exec", constants.X_OK);
-        return true;
-      } catch {
-        return false;
-      }
-    })(),
+export const isSandboxExecAvailable = (): Promise<boolean> =>
+  new Promise((res) =>
+    execFile(
+      "command",
+      ["-v", "sandbox-exec"],
+      { signal: AbortSignal.timeout(200) },
+      (err) => res(!err), // exit 0 ⇒ found
+    ),
   );
-
-  // Resolve the array of promises and see if *any* path succeeded.
-  const results = await Promise.all(accessPromises);
-  return results.some((v) => v);
-};
 
 async function getSandbox(runInSandbox: boolean): Promise<SandboxType> {
   if (runInSandbox) {
@@ -346,11 +316,13 @@ async function getSandbox(runInSandbox: boolean): Promise<SandboxType> {
         return SandboxType.MACOS_SEATBELT;
       }
 
-      log(
-        "WARNING: macOS Seatbelt sandbox requested but 'sandbox-exec' was not found in PATH. " +
-          "Continuing without sandbox.",
-      );
-      return SandboxType.NONE;
+      if (CODEX_UNSAFE_ALLOW_NO_SANDBOX) {
+        log(
+          "WARNING: macOS Seatbelt sandbox requested but 'sandbox-exec' was not found in PATH. " +
+            "With `CODEX_UNSAFE_ALLOW_NO_SANDBOX` enabled, continuing without sandbox.",
+        );
+        return SandboxType.NONE;
+      }
     } else if (await isInLinux()) {
       return SandboxType.NONE;
     } else if (process.platform === "win32") {
