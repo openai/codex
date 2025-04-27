@@ -246,7 +246,8 @@ export default function TerminalChatInput({
               const newText = words.join(" ");
 
               setInput(newText);
-              setEditorKey((k) => k + 1); // remount editor with updated text
+              // Force remount of the editor with the new text
+              setEditorKey((k) => k + 1);
 
               // We need to move the cursor to the end after editor remounts
               setTimeout(() => {
@@ -304,7 +305,7 @@ export default function TerminalChatInput({
           // AND the caret sits on the last line of the buffer.
           const wasAtLastRow =
             prevCursorWasAtLastRow.current ??
-            editorRef.current?.isCursorAtLastRow?.() ??
+            editorRef.current?.isCursorAtLastRow() ??
             true;
           if (historyIndex != null && wasAtLastRow) {
             const newIndex = historyIndex + 1;
