@@ -116,9 +116,15 @@ export default function TerminalChatInput({
       const lastWord = words[words.length - 1] ?? "";
 
       // Strip optional leading '@' for the path prefix
-      const pathPrefix = lastWord.startsWith("@")
-        ? lastWord.slice(1)
-        : lastWord;
+      let pathPrefix: string;
+      if (lastWord === "@") {
+        // If only '@' is typed, list everything in the current directory
+        pathPrefix = "./";
+      } else if (lastWord.startsWith("@")) {
+        pathPrefix = lastWord.slice(1);
+      } else {
+        pathPrefix = lastWord;
+      }
 
       // If there is any prefix to suggest against, query the FS
       if (pathPrefix.length > 0) {
