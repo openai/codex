@@ -53,7 +53,11 @@ export default function HelpOverlay({
           <Text color="cyan">/clearhistory</Text> – clear command history
         </Text>
         <Text>
-          <Text color="cyan">/bug</Text> – file a bug report with session log
+          <Text color="cyan">/bug</Text> – generate a prefilled GitHub issue URL
+          with session log
+        </Text>
+        <Text>
+          <Text color="cyan">/diff</Text> – view working tree git diff
         </Text>
         <Text>
           <Text color="cyan">/compact</Text> – condense context into a summary

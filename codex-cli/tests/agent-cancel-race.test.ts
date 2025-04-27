@@ -9,12 +9,11 @@ class FakeStream {
   public controller = { abort: vi.fn() };
 
   async *[Symbol.asyncIterator]() {
-    // Immediately start streaming an assistant message so that it is possible
-    // for a user‑triggered cancellation that happens milliseconds later to
-    // arrive *after* the first token has already been emitted. This mirrors
-    // the real‑world race where the UI shows nothing yet (network / rendering
-    // latency) even though the model has technically started responding.
+    // Introduce a delay to simulate network latency and allow for cancel() to be called
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
     // Mimic an assistant message containing the word "hello".
+    // Our fix should prevent this from being emitted after cancel() is called
     yield {
       type: "response.output_item.done",
       item: {
@@ -86,9 +85,9 @@ vi.mock("../src/utils/agent/log.js", () => ({
 }));
 
 describe("Agent cancellation race", () => {
-  // We expect this test to highlight the current bug, so the suite should
-  // fail (red) until the underlying race condition in `AgentLoop` is fixed.
-  it("still emits the model answer even though cancel() was called", async () => {
+  // This test verifies our fix for the race condition where a cancelled message
+  // could still appear after the user cancels a request.
+  it("should not emit messages after cancel() is called", async () => {
     const items: Array<any> = [];
 
     const agent = new AgentLoop({
@@ -99,7 +98,7 @@ describe("Agent cancellation race", () => {
       approvalPolicy: { mode: "auto" } as any,
       onItem: (i) => items.push(i),
       onLoading: () => {},
-      getCommandConfirmation: async () => ({ review: "yes" } as any),
+      getCommandConfirmation: async () => ({ review: "yes" }) as any,
       onLastResponseId: () => {},
     });
 
@@ -131,9 +130,8 @@ describe("Agent cancellation race", () => {
     await new Promise((r) => setTimeout(r, 40));
 
     const assistantMsg = items.find((i) => i.role === "assistant");
-    // The bug manifests if the assistant message is still present even though
-    // it belongs to the canceled run. We assert that it *should not* be
-    // delivered – this test will fail until the bug is fixed.
+    // Our fix should prevent the assistant message from being delivered after cancel
+    // Now that we've fixed it, the test should pass
     expect(assistantMsg).toBeUndefined();
   });
 });

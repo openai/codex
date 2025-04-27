@@ -1,0 +1,94 @@
+name: rust-ci
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "codex-rs/**"
+      - ".github/**"
+  push:
+    branches:
+      - main
+
+  workflow_dispatch:
+
+# For CI, we build in debug (`--profile dev`) rather than release mode so we
+# get signal faster.
+
+jobs:
+  # CI that don't need specific targets
+  general:
+    name: Format / etc
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: codex-rs
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo fmt
+        run: cargo fmt -- --config imports_granularity=Item --check
+
+  # CI to validate on different os/targets
+  lint_build_test:
+    name: ${{ matrix.runner }} - ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: codex-rs
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Note: While Codex CLI does not support Windows today, we include
+        # Windows in CI to ensure the code at least builds there.
+        include:
+          - runner: macos-14
+            target: aarch64-apple-darwin
+          - runner: macos-14
+            target: x86_64-apple-darwin
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ${{ github.workspace }}/codex-rs/target/
+          key: cargo-${{ matrix.runner }}-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' }}
+        name: Install musl build tools
+        run: |
+          sudo apt install -y musl-tools pkg-config
+
+      - name: Initialize failure flag
+        run: echo "FAILED=" >> $GITHUB_ENV
+
+      - name: cargo clippy
+        run: cargo clippy --target ${{ matrix.target }} --all-features -- -D warnings || echo "FAILED=${FAILED:+$FAILED, }cargo clippy" >> $GITHUB_ENV
+
+      - name: cargo test
+        run: cargo test --target ${{ matrix.target }} || echo "FAILED=${FAILED:+$FAILED, }cargo test" >> $GITHUB_ENV
+
+      - name: Fail if any step failed
+        if: env.FAILED != ''
+        run: |
+          echo "See logs above, as the following steps failed:"
+          echo "$FAILED"
+          exit 1

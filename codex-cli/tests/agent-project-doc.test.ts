@@ -50,13 +50,13 @@ vi.mock("openai", () => {
 
 // The AgentLoop pulls these helpers in order to decide whether a command can
 // be auto‑approved. None of that matters for this test, so we stub the module
-// with minimal no‑op implementations.
+// with minimal no-op implementations.
 vi.mock("../src/approvals.js", () => {
   return {
     __esModule: true,
     alwaysApprovedCommands: new Set<string>(),
     canAutoApprove: () =>
-      ({ type: "auto-approve", runInSandbox: false } as any),
+      ({ type: "auto-approve", runInSandbox: false }) as any,
     isSafeCommand: () => null,
   };
 });
@@ -119,7 +119,7 @@ describe("AgentLoop", () => {
       approvalPolicy: { mode: "suggest" } as any,
       onItem: () => {},
       onLoading: () => {},
-      getCommandConfirmation: async () => ({ review: "yes" } as any),
+      getCommandConfirmation: async () => ({ review: "yes" }) as any,
       onLastResponseId: () => {},
     });
 

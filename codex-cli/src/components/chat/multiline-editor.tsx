@@ -3,7 +3,7 @@
 import { useTerminalSize } from "../../hooks/use-terminal-size";
 import TextBuffer from "../../text-buffer.js";
 import chalk from "chalk";
-import { Box, Text, useInput, useStdin } from "ink";
+import { Box, Text, useInput } from "ink";
 import { EventEmitter } from "node:events";
 import React, { useRef, useState } from "react";
 
@@ -14,7 +14,7 @@ import React, { useRef, useState } from "react";
  * The real `process.stdin` object exposed by Node.js inherits these methods
  * from `Socket`, but the lightweight stub used in tests only extends
  * `EventEmitter`.  Ink calls the two methods when enabling/disabling raw
- * mode, so make them harmless no‑ops when they're absent to avoid runtime
+ * mode, so make them harmless no-ops when they're absent to avoid runtime
  * failures during unit tests.
  * ----------------------------------------------------------------------- */
 
@@ -155,6 +155,8 @@ export interface MultilineTextEditorHandle {
   isCursorAtLastRow(): boolean;
   /** Full text contents */
   getText(): string;
+  /** Move the cursor to the end of the text */
+  moveCursorToEnd(): void;
 }
 
 const MultilineTextEditorInner = (
@@ -188,66 +190,12 @@ const MultilineTextEditorInner = (
   const effectiveWidth = Math.max(20, width ?? terminalSize.columns);
 
   // ---------------------------------------------------------------------------
-  // External editor integration helpers.
-  // ---------------------------------------------------------------------------
-
-  // Access to stdin so we can toggle raw‑mode while the external editor is
-  // in control of the terminal.
-  const { stdin, setRawMode } = useStdin();
-
-  /**
-   * Launch the user's preferred $EDITOR, blocking until they close it, then
-   * reload the edited file back into the in‑memory TextBuffer.  The heavy
-   * work is delegated to `TextBuffer.openInExternalEditor`, but we are
-   * responsible for temporarily *disabling* raw mode so the child process can
-   * interact with the TTY normally.
-   */
-  const openExternalEditor = React.useCallback(async () => {
-    // Preserve the current raw‑mode setting so we can restore it afterwards.
-    const wasRaw = stdin?.isRaw ?? false;
-    try {
-      setRawMode?.(false);
-      await buffer.current.openInExternalEditor();
-    } catch (err) {
-      // Surface the error so it doesn't fail silently – for now we log to
-      // stderr.  In the future this could surface a toast / overlay.
-      // eslint-disable-next-line no-console
-      console.error("[MultilineTextEditor] external editor error", err);
-    } finally {
-      if (wasRaw) {
-        setRawMode?.(true);
-      }
-      // Force a re‑render so the component reflects the mutated buffer.
-      setVersion((v) => v + 1);
-    }
-  }, [buffer, stdin, setRawMode]);
-
-  // ---------------------------------------------------------------------------
   // Keyboard handling.
   // ---------------------------------------------------------------------------
 
   useInput(
     (input, key) => {
       if (!focus) {
-        return;
-      }
-
-      // Single‑step editor shortcut: Ctrl+X or Ctrl+E
-      // Treat both true Ctrl+Key combinations *and* raw control codes so that
-      // the shortcut works consistently in real terminals (raw‑mode) and the
-      // ink‑testing‑library stub which delivers only the raw byte (e.g. 0x05
-      // for Ctrl‑E) without setting `key.ctrl`.
-      const isCtrlX =
-        (key.ctrl && (input === "x" || input === "\x18")) || input === "\x18";
-      const isCtrlE =
-        (key.ctrl && (input === "e" || input === "\x05")) ||
-        input === "\x05" ||
-        (!key.ctrl &&
-          input === "e" &&
-          input.length === 1 &&
-          input.charCodeAt(0) === 5);
-      if (isCtrlX || isCtrlE) {
-        openExternalEditor();
         return;
       }
 
@@ -372,6 +320,16 @@ const MultilineTextEditorInner = (
         return row === lineCount - 1;
       },
       getText: () => buffer.current.getText(),
+      moveCursorToEnd: () => {
+        buffer.current.move("home");
+        const lines = buffer.current.getText().split("\n");
+        for (let i = 0; i < lines.length - 1; i++) {
+          buffer.current.move("down");
+        }
+        buffer.current.move("end");
+        // Force a re-render
+        setVersion((v) => v + 1);
+      },
     }),
     [],
   );
@@ -427,5 +385,4 @@ const MultilineTextEditorInner = (
 };
 
 const MultilineTextEditor = React.forwardRef(MultilineTextEditorInner);
-
 export default MultilineTextEditor;
