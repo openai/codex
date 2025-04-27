@@ -225,38 +225,36 @@ export default function TerminalChatInput({
           }
 
           if (_key.tab && selectedCompletion >= 0) {
+            const words = input.trim().split(/\s+/);
             const selected = fsSuggestions[selectedCompletion];
 
-            if (selected) {
-              const words = input.trim().split(/\s+/);
-              if (words.length > 0) {
-                const lastWord = words[words.length - 1] ?? "";
+            if (words.length > 0 && selected) {
+              const lastWord = words[words.length - 1] ?? "";
 
-                const isDir = selected.endsWith(path.sep);
-                const relPath = path.relative(
-                  process.cwd(),
-                  selected.replace(/\/+$/, ""),
-                );
+              const isDir = selected.endsWith(path.sep);
+              const relPath = path.relative(
+                process.cwd(),
+                selected.replace(/\/+$/, ""),
+              );
 
-                let replacement = relPath + (isDir ? path.sep : "");
-                if (lastWord.startsWith("@")) {
-                  replacement = "@" + replacement;
-                }
-
-                words[words.length - 1] = replacement;
-                const newText = words.join(" ");
-
-                setInput(newText);
-                setEditorKey((k) => k + 1); // remount editor with updated text
-
-                // We need to move the cursor to the end after editor remounts
-                setTimeout(() => {
-                  editorRef.current?.moveCursorToEnd?.();
-                }, 0);
-
-                setFsSuggestions([]);
-                setSelectedCompletion(-1);
+              let replacement = relPath + (isDir ? path.sep : "");
+              if (lastWord.startsWith("@")) {
+                replacement = "@" + replacement;
               }
+
+              words[words.length - 1] = replacement;
+              const newText = words.join(" ");
+
+              setInput(newText);
+              setEditorKey((k) => k + 1); // remount editor with updated text
+
+              // We need to move the cursor to the end after editor remounts
+              setTimeout(() => {
+                editorRef.current?.moveCursorToEnd?.();
+              }, 0);
+
+              setFsSuggestions([]);
+              setSelectedCompletion(-1);
             }
             return;
           }
