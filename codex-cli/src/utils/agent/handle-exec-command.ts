@@ -1,17 +1,19 @@
-import type { CommandConfirmation } from "./agent-loop.js";
-import type { AppConfig } from "../config.js";
-import type { ExecInput } from "./sandbox/interface.js";
 import type { ApplyPatchCommand, ApprovalPolicy } from "../../approvals.js";
+import type { AppConfig } from "../config.js";
+import type { CommandConfirmation } from "./agent-loop.js";
+import type { ExecInput } from "./sandbox/interface.js";
 import type { ResponseInputItem } from "openai/resources/responses/responses.mjs";
 
-import { exec, execApplyPatch } from "./exec.js";
-import { ReviewDecision } from "./review.js";
-import { FullAutoErrorMode } from "../auto-approval-mode.js";
-import { SandboxType } from "./sandbox/interface.js";
 import { canAutoApprove } from "../../approvals.js";
 import { formatCommandForDisplay } from "../../format-command.js";
+import { FullAutoErrorMode } from "../auto-approval-mode.js";
+import { exec, execApplyPatch } from "./exec.js";
+import { ReviewDecision } from "./review.js";
 import { isLoggingEnabled, log } from "../logger/log.js";
+import { SandboxType } from "./sandbox/interface.js";
+import { constants } from "fs";
 import { access } from "fs/promises";
+import path from "path";
 
 // ---------------------------------------------------------------------------
 // Session‑level cache of commands that the user has chosen to always approve.
@@ -279,10 +281,76 @@ const isInLinux = async (): Promise<boolean> => {
   }
 };
 
+/**
+ * Return `true` if the `sandbox-exec` binary can be located on the current
+ * $PATH and is executable.  This intentionally does **not** spawn the binary –
+ * we only care about its presence.
+ */
+const isSandboxExecAvailable = async (): Promise<boolean> => {
+  // The binary name we need to locate.
+  const binary = "sandbox-exec";
+
+  // If the caller provided an absolute path in $PATH entries we must resolve
+  // them relative to the file system.
+  const pathEntries = (process.env["PATH"] || "").split(":");
+
+  const accessPromises = pathEntries.map(async (p) => {
+    if (!p) {
+      return false;
+    }
+    const candidate = path.join(p, binary);
+    try {
+      await access(candidate, constants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+
+  // Additionally check the well-known location under /usr/bin which is where
+  // the utility lives on most macOS installations.
+  accessPromises.push(
+    (async () => {
+      try {
+        await access("/usr/bin/sandbox-exec", constants.X_OK);
+        return true;
+      } catch {
+        return false;
+      }
+    })(),
+  );
+
+  // Resolve the array of promises and see if *any* path succeeded.
+  const results = await Promise.all(accessPromises);
+  return results.some((v) => v);
+};
+
 async function getSandbox(runInSandbox: boolean): Promise<SandboxType> {
   if (runInSandbox) {
     if (process.platform === "darwin") {
-      return SandboxType.MACOS_SEATBELT;
+      // On macOS we rely on the system-provided `sandbox-exec` binary to
+      // enforce the Seatbelt profile.  However, starting with macOS 14 the
+      // executable may be removed from the default installation or the user
+      // might be running the CLI on a stripped-down environment (for
+      // instance, inside certain CI images).  Attempting to spawn a missing
+      // binary makes Node.js throw an *uncaught* `ENOENT` error further down
+      // the stack which crashes the whole CLI.
+
+      // To provide a graceful degradation path we first check at runtime
+      // whether `sandbox-exec` can be found **and** is executable.  If the
+      // check fails we fall back to the NONE sandbox while emitting a
+      // warning so users and maintainers are aware that the additional
+      // process isolation is not in effect.
+
+      if (await isSandboxExecAvailable()) {
+        return SandboxType.MACOS_SEATBELT;
+      }
+
+      log(
+        "WARNING: macOS Seatbelt sandbox requested but 'sandbox-exec' was not found in PATH. " +
+          "Continuing without sandbox.",
+      );
+      return SandboxType.NONE;
     } else if (await isInLinux()) {
       return SandboxType.NONE;
     } else if (process.platform === "win32") {
