@@ -323,35 +323,30 @@ export default function TerminalChatInput({
         }
 
         if (_key.tab) {
-          // eslint-disable-next-line no-useless-escape
-          const atMatch = /(?:^|\s)@([\w.\/\-~]*)$/.exec(input);
-          if (atMatch) {
-            const pathPrefix = atMatch[1] ?? "";
+          // Determine the current token (last whitespace-separated word)
+          const words = input.trim().split(/\s+/);
+          const lastWord = words[words.length - 1] ?? "";
+
+          // Strip optional leading '@' for the path prefix
+          const pathPrefix = lastWord.startsWith("@")
+            ? lastWord.slice(1)
+            : lastWord;
+
+          // If there is any prefix to suggest against, query the FS
+          if (pathPrefix.length > 0) {
             const completions = getFileSystemSuggestions(pathPrefix);
             setFsSuggestions(completions);
             if (completions.length > 0) {
-              // Cycle through suggestions on repeated Tab / Shift+Tab
-              const len = completions.length;
-              const nextIdx = _key.shift
-                ? selectedCompletion <= 0
-                  ? len - 1
-                  : selectedCompletion - 1
-                : selectedCompletion >= len - 1
-                  ? 0
-                  : selectedCompletion + 1;
-              setSelectedCompletion(nextIdx);
+              setSelectedCompletion((prev) =>
+                prev < 0 || prev >= completions.length ? 0 : prev,
+              );
+            } else {
+              setSelectedCompletion(-1);
             }
-            return; // handled – do **not** fall through to history/tab logic
-          }
-          const words = input.split(/\s+/);
-          const mostRecentWord = words[words.length - 1];
-          if (mostRecentWord === undefined || mostRecentWord === "") {
-            return;
-          }
-          const completions = getFileSystemSuggestions(mostRecentWord);
-          setFsSuggestions(completions);
-          if (completions.length > 0) {
-            setSelectedCompletion(0);
+          } else if (fsSuggestions.length > 0) {
+            // Token cleared → clear menu
+            setFsSuggestions([]);
+            setSelectedCompletion(-1);
           }
         }
       }
@@ -717,10 +712,17 @@ export default function TerminalChatInput({
                   setFsSuggestions([]);
                   setSelectedCompletion(-1);
                 } else {
-                  // eslint-disable-next-line no-useless-escape
-                  const atMatch = /(?:^|\s)@([\w.\/\-~]*)$/.exec(txt);
-                  if (atMatch) {
-                    const pathPrefix = atMatch[1] ?? "";
+                  // Determine the current token (last whitespace-separated word)
+                  const words = txt.trim().split(/\s+/);
+                  const lastWord = words[words.length - 1] ?? "";
+
+                  // Strip optional leading '@' for the path prefix
+                  const pathPrefix = lastWord.startsWith("@")
+                    ? lastWord.slice(1)
+                    : lastWord;
+
+                  // If there is any prefix to suggest against, query the FS
+                  if (pathPrefix.length > 0) {
                     const completions = getFileSystemSuggestions(pathPrefix);
                     setFsSuggestions(completions);
                     if (completions.length > 0) {
@@ -731,7 +733,7 @@ export default function TerminalChatInput({
                       setSelectedCompletion(-1);
                     }
                   } else if (fsSuggestions.length > 0) {
-                    // Exited @-suggest context → clear menu
+                    // Token cleared → clear menu
                     setFsSuggestions([]);
                     setSelectedCompletion(-1);
                   }
