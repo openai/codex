@@ -74,6 +74,15 @@ describe("expandFileTags", () => {
     expect(output).toContain(`<${fileName}>`);
   });
 
+  it("handles repeated @file tokens", async () => {
+    const fileName = "repeat.txt";
+    fs.writeFileSync(path.join(tmpDir, fileName), "repeat content");
+    const input = `@${fileName} @${fileName}`;
+    const output = await expandFileTags(input);
+    // Both tags should be replaced
+    expect(output.match(new RegExp(`<${fileName}>`, "g"))?.length).toBe(2);
+  });
+
   it("handles empty file", async () => {
     const fileName = "empty.txt";
     fs.writeFileSync(path.join(tmpDir, fileName), "");
@@ -92,5 +101,16 @@ describe("expandFileTags", () => {
     const input = "Ends with @";
     const output = await expandFileTags(input);
     expect(output).toBe(input);
+  });
+
+  it("handles adjacent tokens", async () => {
+    const file1 = "adj1.txt";
+    const file2 = "adj2.txt";
+    fs.writeFileSync(path.join(tmpDir, file1), "adj1");
+    fs.writeFileSync(path.join(tmpDir, file2), "adj2");
+    const input = `@${file1}@${file2}`;
+    const output = await expandFileTags(input);
+    expect(output).toContain("adj1");
+    expect(output).toContain("adj2");
   });
 });
