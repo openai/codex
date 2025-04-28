@@ -30,6 +30,8 @@ import OpenAI from "openai";
 import { zodResponseFormat } from "openai/helpers/zod";
 import path from "path";
 import React, { useEffect, useState, useRef } from "react";
+import { scoreAndSortFiles } from "../utils/singlepass/relevance_scoring";
+import type { z } from "zod"; // Import z
 
 /** Maximum number of characters allowed in the context passed to the model. */
 const MAX_CONTEXT_CHARACTER_LIMIT = 2_000_000;
@@ -350,6 +352,14 @@ export function SinglePassApp({
     | "error"
     | "interrupted"
   >("init");
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [loadingMessage, setLoadingMessage] = useState("Loading context...");
+  const [error, setError] = useState<string | null>(null);
+  const [progress, setProgress] = useState<{ value: number; label?: string } | null>(
+    null,
+  );
+  const [modelResponse, setModelResponse] =
+    useState<z.infer<typeof EditedFilesSchema> | null>(null);
 
   // we don't need to read the current prompt / spinner state outside of
   // updating functions, so we intentionally ignore the first tuple element.
@@ -371,61 +381,113 @@ export function SinglePassApp({
 
   /* ---------------------------- Load file context --------------------------- */
   useEffect(() => {
-    (async () => {
-      const ignorePats = loadIgnorePatterns();
-      const fileContents = await getFileContents(rootPath, ignorePats);
-      setFiles(fileContents);
-    })();
+    setIsLoading(true);
+    setLoadingMessage("Scanning files...");
+    // Load ignore patterns first
+    const ignorePatterns = loadIgnorePatterns(); // Assuming default .gitignore location or similar
+
+    // Call getFileContents instead of getContextFiles
+    getFileContents(rootPath, ignorePatterns)
+      .then((fileContents) => {
+        setLoadingMessage("Context loaded.");
+        // Initial files loaded - prompt state will be set later based on user input
+        // We store the initially loaded files here, relevance sorting happens
+        // *after* we get the user prompt in runSinglePassTask.
+        setFiles(fileContents);
+        setIsLoading(false);
+        setProgress(null);
+      })
+      .catch((err) => {
+        setError(`Failed to load context: ${err.message}`);
+        setIsLoading(false);
+        setProgress(null);
+      });
   }, [rootPath]);
 
+  // Once files are loaded, move to prompt state
   useEffect(() => {
-    if (files.length) {
+    if (!isLoading && files.length > 0 && state === "init") {
       setState("prompt");
     }
-  }, [files]);
+  }, [isLoading, files, state]);
 
   /* -------------------------------- Helpers -------------------------------- */
 
   async function runSinglePassTask(userPrompt: string) {
+    if (!userPrompt) {
+      // Handle empty prompt case if necessary
+      setState("prompt");
+      return;
+    }
     setPrompt(userPrompt);
-    setShowSpinner(true);
     setState("thinking");
+    setError(null);
+    setModelResponse(null); // Clear previous response
+
+    // >>> Relevance Scoring Integration <<<
+    const initialFilePaths = files.map(f => f.path);
+    // TODO: Decide on maxFiles based on token budget/heuristics
+    const maxFilesForContext = 50; // Example limit
+    const relevantFilesScored = scoreAndSortFiles(initialFilePaths, userPrompt, maxFilesForContext);
+    const relevantFilePaths = new Set(relevantFilesScored.map(f => f.filePath));
+
+    // Filter the original files array to only include the relevant ones
+    const relevantFilesContent = files.filter(f => relevantFilePaths.has(f.path));
+
+    // Log which files were selected (basic telemetry)
+    console.log(`Selected ${relevantFilesContent.length} relevant files based on prompt: "${userPrompt.substring(0, 50)}..."`);
+    // console.log('Relevant files:', relevantFilesScored.map(f => `${f.filePath} (score: ${f.score})`));
 
     try {
+      // Calculate structure based on relevant files
+      const structureString = makeAsciiDirectoryStructure(
+        rootPath,
+        relevantFilesContent.map(f => f.path)
+      );
+
       const taskContextStr = renderTaskContext({
         prompt: userPrompt,
         input_paths: [rootPath],
-        input_paths_structure: "(omitted for brevity in single pass mode)",
-        files,
+        input_paths_structure: structureString,
+        // Use the filtered list of files for context
+        files: relevantFilesContent,
       });
 
-      const headers: Record<string, string> = {};
-      if (OPENAI_ORGANIZATION) {
-        headers["OpenAI-Organization"] = OPENAI_ORGANIZATION;
-      }
-      if (OPENAI_PROJECT) {
-        headers["OpenAI-Project"] = OPENAI_PROJECT;
-      }
+      // console.log("--- TASK CONTEXT ---");
+      // console.log(taskContextStr);
+      // console.log("--------------------");
 
-      const openai = new OpenAI({
-        apiKey: getApiKey(config.provider),
-        baseURL: getBaseUrl(config.provider),
-        timeout: OPENAI_TIMEOUT_MS,
-        defaultHeaders: headers,
-      });
-      const chatResp = await openai.beta.chat.completions.parse({
+      // --- Make the API call ---
+      const client = new OpenAI({ apiKey: getApiKey("openai"), baseURL: getBaseUrl("openai") });
+      const startTime = Date.now();
+
+      const response = await client.chat.completions.create({
         model: config.model,
-        ...(config.flexMode ? { service_tier: "flex" } : {}),
         messages: [
+          {
+            role: "system",
+            content:
+              "You are an expert programmer assisting with code modifications. Follow the user\'s instructions precisely. You MUST respond ONLY with the JSON object matching the requested schema. Do not add any commentary, explanations, or markdown formatting around the JSON output.",
+          },
           {
             role: "user",
             content: taskContextStr,
           },
         ],
         response_format: zodResponseFormat(EditedFilesSchema, "schema"),
+        temperature: 0.1,
+        // Add other parameters as needed (max_tokens, etc.)
       });
 
-      const edited = chatResp.choices[0]?.message?.parsed ?? null;
+      const duration = Date.now() - startTime;
+      console.log(`API call completed in ${duration}ms`);
+
+      const jsonResponse = response.choices[0]?.message?.content;
+      if (!jsonResponse) {
+        throw new Error("Empty response from model");
+      }
+
+      const edited = JSON.parse(jsonResponse) as z.infer<typeof EditedFilesSchema> | null;
 
       setShowSpinner(false);
 
