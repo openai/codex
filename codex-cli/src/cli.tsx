@@ -83,6 +83,11 @@ const cli = meow(
                                Skip all confirmation prompts and execute commands without
                                sandboxing. Intended solely for ephemeral local testing.
 
+    --in-safe-container        Signals that Codex is already running inside a locked-down
+                               execution environment (for instance, inside an isolated
+                               container) and that additional process sandboxing should be
+                               skipped.
+
   Experimental options
     -f, --full-context         Launch in "full-context" mode which loads the entire repository
                                into context and applies a batch of edits in one go. Incompatible
@@ -183,6 +188,10 @@ const cli = meow(
     },
   },
 );
+
+// ---------------------------------------------------------------------------
+// Global flag handling
+// ---------------------------------------------------------------------------
 
 // Handle 'completion' subcommand before any prompting or API calls
 if (cli.input[0] === "completion") {
