@@ -747,9 +747,7 @@ export default function TerminalChatInput({
               focus={active}
               onSubmit={(txt) => {
                 // Replace @path with filesystem suggestion if available
-                const submissionText = replaceFileSystemSuggestion(txt, true);
-
-                onSubmit(submissionText);
+                onSubmit(replaceFileSystemSuggestion(txt, true));
                 setEditorKey((k) => k + 1);
                 setInput("");
                 setHistoryIndex(null);
