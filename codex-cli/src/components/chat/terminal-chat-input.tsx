@@ -145,6 +145,34 @@ export default function TerminalChatInput({
     }
   }
 
+  // --- Helper for replacing @path with file system suggestion ---
+  function replaceFileSystemSuggestion(txt: string): string {
+    if (fsSuggestions.length === 0 || selectedCompletion < 0) {
+      return txt;
+    }
+
+    const words = txt.trim().split(/\s+/);
+    const lastWord = words[words.length - 1] ?? "";
+
+    if (!lastWord.startsWith("@")) {
+      return txt;
+    }
+
+    const selected = fsSuggestions[selectedCompletion];
+    if (!selected) {
+      return txt;
+    }
+
+    const isDir = selected.endsWith(path.sep);
+    const relPath = path.relative(process.cwd(), selected.replace(/\/+$/, ""));
+
+    let replacement = relPath + (isDir ? path.sep : "");
+    replacement = "@" + replacement;
+
+    words[words.length - 1] = replacement;
+    return words.join(" ");
+  }
+
   // Load command history on component mount
   useEffect(() => {
     async function loadHistory() {
@@ -731,7 +759,10 @@ export default function TerminalChatInput({
               height={6}
               focus={active}
               onSubmit={(txt) => {
-                onSubmit(txt);
+                // Replace @path with filesystem suggestion if available
+                const submissionText = replaceFileSystemSuggestion(txt);
+
+                onSubmit(submissionText);
                 setEditorKey((k) => k + 1);
                 setInput("");
                 setHistoryIndex(null);
