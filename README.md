@@ -427,6 +427,12 @@ Below is a comprehensive example of `config.json` with multiple custom providers
       "envKey": "GROQ_API_KEY"
     }
   },
+  "fireworks": {
+      "name": "Fireworks AI",
+      "baseURL": "https://api.fireworks.ai",
+      "envKey": "FIREWORKS_API_KEY"
+    },
+
   "history": {
     "maxSize": 1000,
     "saveHistory": true,
