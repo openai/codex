@@ -105,7 +105,7 @@ export default function TerminalChatInput({
   const prevCursorWasAtLastRow = useRef<boolean>(false);
 
   // --- Helper for updating file system suggestions ---
-  function updateFsSuggestions(txt: string) {
+  function updateFsSuggestions(txt: string, forceUpdate: boolean = false) {
     // Clear tab completions if a space is typed
     if (txt.endsWith(" ")) {
       setFsSuggestions([]);
@@ -114,6 +114,8 @@ export default function TerminalChatInput({
       // Determine the current token (last whitespace-separated word)
       const words = txt.trim().split(/\s+/);
       const lastWord = words[words.length - 1] ?? "";
+
+      const shouldUpdateSelection = lastWord.startsWith("@") || forceUpdate;
 
       // Strip optional leading '@' for the path prefix
       let pathPrefix: string;
@@ -127,7 +129,7 @@ export default function TerminalChatInput({
       }
 
       // If there is any prefix to suggest against, query the FS
-      if (pathPrefix.length > 0) {
+      if (shouldUpdateSelection && pathPrefix.length > 0) {
         const completions = getFileSystemSuggestions(pathPrefix);
         setFsSuggestions(completions);
         if (completions.length > 0) {
@@ -392,7 +394,7 @@ export default function TerminalChatInput({
         }
 
         if (_key.tab) {
-          updateFsSuggestions(input);
+          updateFsSuggestions(input, true);
         }
       }
 
@@ -752,7 +754,7 @@ export default function TerminalChatInput({
                 }
                 setInput(txt);
 
-                updateFsSuggestions(txt);
+                updateFsSuggestions(txt, false);
               }}
               key={editorKey}
               initialText={input}
