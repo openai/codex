@@ -12,6 +12,7 @@ import { useConfirmation } from "../../hooks/use-confirmation.js";
 import { useTerminalSize } from "../../hooks/use-terminal-size.js";
 import { AgentLoop } from "../../utils/agent/agent-loop.js";
 import { ReviewDecision } from "../../utils/agent/review.js";
+import { approximateTokensUsed } from "../../utils/approximate-tokens-used";
 import { generateCompactSummary } from "../../utils/compact-summary.js";
 import { getBaseUrl, getApiKey, saveConfig } from "../../utils/config.js";
 import { extractAppliedPatches as _extractAppliedPatches } from "../../utils/extract-applied-patches.js";
@@ -148,10 +149,51 @@ export default function TerminalChat({
   const [lastResponseId, setLastResponseId] = useState<string | null>(null);
   const [items, setItems] = useState<Array<ResponseItem>>([]);
   const [loading, setLoading] = useState<boolean>(false);
+  // Token-report refs to track per-turn usage
+  const prevPromptTokRef = useRef<number>(0);
+  const prevCompletionTokRef = useRef<number>(0);
   const [approvalPolicy, setApprovalPolicy] = useState<ApprovalPolicy>(
     initialApprovalPolicy,
   );
   const [thinkingSeconds, setThinkingSeconds] = useState(0);
+  // Inject a token usage report after each completed response
+  useEffect(() => {
+    if (config.tokenReport && lastResponseId) {
+      // Filter only chat message items with explicit roles
+      // Filter messages with role 'user'
+      const userItems = items.filter(
+        (it): it is ResponseItem & { type: 'message'; role: 'user' } => {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          return it.type === 'message' && (it as any).role === 'user';
+        },
+      );
+      // Filter messages with role 'assistant'
+      const aiItems = items.filter(
+        (it): it is ResponseItem & { type: 'message'; role: 'assistant' } => {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          return it.type === 'message' && (it as any).role === 'assistant';
+        },
+      );
+      const promptTok = approximateTokensUsed(userItems);
+      const completionTok = approximateTokensUsed(aiItems);
+      const deltaPrompt = promptTok - prevPromptTokRef.current;
+      const deltaCompletion = completionTok - prevCompletionTokRef.current;
+      const deltaTotal = deltaPrompt + deltaCompletion;
+      prevPromptTokRef.current = promptTok;
+      prevCompletionTokRef.current = completionTok;
+      const text = `Prompt: ${deltaPrompt} tok   Completion: ${deltaCompletion} tok   Total: ${deltaTotal} tok`;
+      setItems((prev) => [
+        ...prev,
+        {
+          id: `token-report-${Date.now()}`,
+          type: 'message',
+          role: 'system',
+          content: [{ type: 'input_text', text }],
+        } as ResponseItem,
+      ]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lastResponseId]);
 
   const handleCompact = async () => {
     setLoading(true);

@@ -222,6 +222,14 @@ The hardening mechanism Codex uses depends on your OS:
 
 Key flags: `--model/-m`, `--approval-mode/-a`, `--quiet/-q`, and `--notify`.
 
+**Retry & Rate-Limit Options**
+- `--max-retries <number>`   Maximum number of retry attempts for rate-limit and transient errors (default: 5)
+- `--base-delay-ms <ms>`     Base back-off delay in milliseconds (default: 2500)
+- `--max-delay-ms <ms>`      Maximum back-off delay in milliseconds (default: 60000)
+
+**Token Usage Reporting**
+- `--token-report`           Print a token usage summary after each response
+
 ---
 
 ## Memory & Project Docs

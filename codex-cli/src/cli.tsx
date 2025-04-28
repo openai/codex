@@ -160,10 +160,31 @@ const cli = meow(
           "Disable truncation of command stdout/stderr messages (show everything)",
         aliases: ["no-truncate"],
       },
-      // Notification
+    // Notification
       notify: {
         type: "boolean",
         description: "Enable desktop notifications for responses",
+      },
+    // Retry/back-off options
+      maxRetries: {
+        type: "number",
+        default: 5,
+        description: "Max number of retry attempts for rate-limit and transient errors",
+      },
+      baseDelayMs: {
+        type: "number",
+        default: 2500,
+        description: "Base delay in milliseconds for exponential back-off",
+      },
+      maxDelayMs: {
+        type: "number",
+        default: 60000,
+        description: "Maximum back-off delay in milliseconds",
+      },
+      tokenReport: {
+        type: "boolean",
+        default: false,
+        description: "Print token usage report after each request",
       },
 
       disableResponseStorage: {
@@ -294,6 +315,11 @@ config = {
     cli.flags.disableResponseStorage !== undefined
       ? Boolean(cli.flags.disableResponseStorage)
       : config.disableResponseStorage,
+  // Retry/back-off and token-report settings
+  maxRetries: cli.flags.maxRetries,
+  baseDelayMs: cli.flags.baseDelayMs,
+  maxDelayMs: cli.flags.maxDelayMs,
+  tokenReport: Boolean(cli.flags.tokenReport),
 };
 
 // Check for updates after loading config. This is important because we write state file in

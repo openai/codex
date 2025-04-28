@@ -670,8 +670,8 @@ export class AgentLoop {
         // Send request to OpenAI with retry on timeout.
         let stream;
 
-        // Retry loop for transient errors. Up to MAX_RETRIES attempts.
-        const MAX_RETRIES = 5;
+        // Retry loop for transient errors. Up to maxRetries attempts.
+        const MAX_RETRIES = this.config.maxRetries ?? 5;
         for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
           try {
             let reasoning: Reasoning | undefined;
@@ -779,9 +779,10 @@ export class AgentLoop {
               /rate limit/i.test(errCtx.message ?? "");
             if (isRateLimit) {
               if (attempt < MAX_RETRIES) {
-                // Exponential backoff: base wait * 2^(attempt-1), or use suggested retry time
-                // if provided.
-                let delayMs = RATE_LIMIT_RETRY_WAIT_MS * 2 ** (attempt - 1);
+                // Exponential backoff: baseDelayMs * 2^(attempt-1), or use suggested retry time if provided.
+                const base = this.config.baseDelayMs ?? RATE_LIMIT_RETRY_WAIT_MS;
+                let delayMs = base * 2 ** (attempt - 1);
+                const maxDelay = this.config.maxDelayMs ?? delayMs;
 
                 // Parse suggested retry time from error message, e.g., "Please try again in 1.3s"
                 const msg = errCtx?.message ?? "";
@@ -789,14 +790,12 @@ export class AgentLoop {
                 if (m && m[1]) {
                   const suggested = parseFloat(m[1]) * 1000;
                   if (!Number.isNaN(suggested)) {
-                    delayMs = suggested;
+                    delayMs = Math.min(suggested, maxDelay);
                   }
                 }
-                log(
-                  `OpenAI rate limit exceeded (attempt ${attempt}/${MAX_RETRIES}), retrying in ${Math.round(
-                    delayMs,
-                  )} ms...`,
-                );
+                // Cap delay to maxDelay
+                if (delayMs > maxDelay) { delayMs = maxDelay; }
+                log(`OpenAI rate limit exceeded (attempt ${attempt}/${MAX_RETRIES}), retrying in ${Math.round(delayMs)} ms...`);
                 // eslint-disable-next-line no-await-in-loop
                 await new Promise((resolve) => setTimeout(resolve, delayMs));
                 continue;
@@ -907,7 +906,8 @@ export class AgentLoop {
           return;
         }
 
-        const MAX_STREAM_RETRIES = 5;
+        // Max number of retries for streaming on rate-limit or transient errors
+        const MAX_STREAM_RETRIES = this.config.maxRetries ?? 5;
         let streamRetryAttempt = 0;
 
         // eslint-disable-next-line no-constant-condition
@@ -1037,8 +1037,11 @@ export class AgentLoop {
             ) {
               streamRetryAttempt += 1;
 
-              const waitMs =
-                RATE_LIMIT_RETRY_WAIT_MS * 2 ** (streamRetryAttempt - 1);
+              // Exponential backoff for stream retry
+              const baseStream = this.config.baseDelayMs ?? RATE_LIMIT_RETRY_WAIT_MS;
+              let waitMs = baseStream * 2 ** (streamRetryAttempt - 1);
+              const maxDelay = this.config.maxDelayMs ?? waitMs;
+              if (waitMs > maxDelay) { waitMs = maxDelay; }
               log(
                 `OpenAI stream rate‑limited – retry ${streamRetryAttempt}/${MAX_STREAM_RETRIES} in ${waitMs} ms`,
               );

@@ -171,6 +171,14 @@ export type AppConfig = {
 
   /** Enable the "flex-mode" processing mode for supported models (o3, o4-mini) */
   flexMode?: boolean;
+  /** Max number of retry attempts for rate-limit and transient errors */
+  maxRetries?: number;
+  /** Base delay in milliseconds for exponential back-off */
+  baseDelayMs?: number;
+  /** Maximum back-off delay in milliseconds */
+  maxDelayMs?: number;
+  /** Print token usage report after each request */
+  tokenReport?: boolean;
   providers?: Record<string, { name: string; baseURL: string; envKey: string }>;
   history?: {
     maxSize: number;
