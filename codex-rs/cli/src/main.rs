@@ -7,7 +7,6 @@ use clap::ArgAction;
 use clap::Parser;
 use codex_core::SandboxModeCliArg;
 use codex_exec::Cli as ExecCli;
-use codex_interactive::Cli as InteractiveCli;
 use codex_repl::Cli as ReplCli;
 use codex_tui::Cli as TuiCli;
 
@@ -25,7 +24,7 @@ use crate::proto::ProtoCli;
 )]
 struct MultitoolCli {
     #[clap(flatten)]
-    interactive: InteractiveCli,
+    interactive: TuiCli,
 
     #[clap(subcommand)]
     subcommand: Option<Subcommand>,
@@ -36,10 +35,6 @@ enum Subcommand {
     /// Run Codex non-interactively.
     #[clap(visible_alias = "e")]
     Exec(ExecCli),
-
-    /// Run the TUI.
-    #[clap(visible_alias = "t")]
-    Tui(TuiCli),
 
     /// Run the REPL.
     #[clap(visible_alias = "r")]
@@ -89,13 +84,10 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.subcommand {
         None => {
-            codex_interactive::run_main(cli.interactive).await?;
+            codex_tui::run_main(cli.interactive)?;
         }
         Some(Subcommand::Exec(exec_cli)) => {
             codex_exec::run_main(exec_cli).await?;
-        }
-        Some(Subcommand::Tui(tui_cli)) => {
-            codex_tui::run_main(tui_cli)?;
         }
         Some(Subcommand::Repl(repl_cli)) => {
             codex_repl::run_main(repl_cli).await?;
