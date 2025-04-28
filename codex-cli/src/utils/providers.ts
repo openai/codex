@@ -42,4 +42,9 @@ export const providers: Record<
     baseURL: "https://api.groq.com/openai/v1",
     envKey: "GROQ_API_KEY",
   },
+  fireworks: {
+    name: "Fireworks AI",
+    baseURL: "https://api.fireworks.ai",
+    envKey: "FIREWORKS_API_KEY",
+  }
 };
