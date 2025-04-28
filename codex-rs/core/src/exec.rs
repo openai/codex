@@ -98,7 +98,7 @@ pub async fn process_exec_tool_call(
                 workdir,
                 timeout_ms,
             } = params;
-            let seatbelt_command = create_seatbelt_command(command, writable_roots);
+            let seatbelt_command = create_seatbelt_command(command, sandbox_policy, writable_roots);
             exec(
                 ExecParams {
                     command: seatbelt_command,
@@ -154,7 +154,11 @@ pub async fn process_exec_tool_call(
     }
 }
 
-pub fn create_seatbelt_command(command: Vec<String>, writable_roots: &[PathBuf]) -> Vec<String> {
+pub fn create_seatbelt_command(
+    command: Vec<String>,
+    sandbox_policy: SandboxPolicy,
+    writable_roots: &[PathBuf],
+) -> Vec<String> {
     let (policies, cli_args): (Vec<String>, Vec<String>) = writable_roots
         .iter()
         .enumerate()
@@ -165,6 +169,14 @@ pub fn create_seatbelt_command(command: Vec<String>, writable_roots: &[PathBuf])
             (policy, cli_arg)
         })
         .unzip();
+
+    // TODO(ragona): The seatbelt policy should reflect the SandboxPolicy that
+    // is passed, but everything is currently hardcoded to use
+    // MACOS_SEATBELT_READONLY_POLICY.
+    // TODO(mbolin): apply_patch calls must also honor the SandboxPolicy.
+    if !matches!(sandbox_policy, SandboxPolicy::NetworkRestricted) {
+        tracing::error!("specified sandbox policy {sandbox_policy:?} will not be honroed");
+    }
 
     let full_policy = if policies.is_empty() {
         MACOS_SEATBELT_READONLY_POLICY.to_string()
