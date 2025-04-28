@@ -23,7 +23,6 @@ import {
 import { clearTerminal, onExit } from "../../utils/terminal.js";
 import { Box, Text, useApp, useInput, useStdin } from "ink";
 import { fileURLToPath } from "node:url";
-import path from "path";
 import React, {
   useCallback,
   useState,
@@ -125,6 +124,8 @@ export default function TerminalChatInput({
       let pathPrefix: string;
       if (lastWord.startsWith("@")) {
         pathPrefix = lastWord.slice(1);
+        // If only '@' is typed, list everything in the current directory
+        pathPrefix = pathPrefix.length === 0 ? "./" : pathPrefix;
       } else {
         pathPrefix = lastWord;
       }
@@ -169,15 +170,7 @@ export default function TerminalChatInput({
       return txt;
     }
 
-    const isDir = selected.endsWith(path.sep);
-    const relPath = path.relative(process.cwd(), selected.replace(/\/+$/, ""));
-
-    let replacement = relPath + (isDir ? path.sep : "");
-    // Only add @ prefix if the original word had it
-    if (lastWord.startsWith("@")) {
-      replacement = "@" + replacement;
-    }
-
+    const replacement = lastWord.startsWith("@") ? `@${selected}` : selected;
     words[words.length - 1] = replacement;
     return words.join(" ");
   }

@@ -17,10 +17,11 @@ async function type(
 // Mock the file system suggestions utility
 vi.mock("../src/utils/file-system-suggestions.js", () => ({
   getFileSystemSuggestions: vi.fn((pathPrefix: string) => {
-    // return different results based on the prefix
-    const baseName = pathPrefix.slice(2);
+    const normalizedPrefix = pathPrefix.startsWith("./")
+      ? pathPrefix.slice(2)
+      : pathPrefix;
     const allItems = ["file1.txt", "file2.js", "directory1/", "directory2/"];
-    return allItems.filter((item) => item.slice(2).startsWith(baseName));
+    return allItems.filter((item) => item.startsWith(normalizedPrefix));
   }),
 }));
 
