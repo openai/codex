@@ -12,7 +12,6 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 codex-core = { path = "../core" }
 codex-exec = { path = "../exec" }
-codex-interactive = { path = "../interactive" }
 codex-repl = { path = "../repl" }
 codex-tui = { path = "../tui" }
 serde_json = "1"
