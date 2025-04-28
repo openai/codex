@@ -25,6 +25,7 @@
 use std::path::PathBuf;
 
 use thiserror::Error;
+use regex::Regex;
 
 const BEGIN_PATCH_MARKER: &str = "*** Begin Patch";
 const END_PATCH_MARKER: &str = "*** End Patch";
@@ -113,10 +114,20 @@ fn parse_one_hunk(lines: &[&str], line_number: usize) -> Result<(Hunk, usize), P
     // Be tolerant of case mismatches and extra padding around marker strings.
     let first_line = lines[0].trim();
     if let Some(path) = first_line.strip_prefix(ADD_FILE_MARKER) {
-        // Add File
+        // Add File: only skip the first new-file hunk header emitted by some AI models (e.g., Gemini 2.0 Flash)
         let mut contents = String::new();
         let mut parsed_lines = 1;
+        // Regex to match new-file hunk header with optional section name
+        let new_file_re = Regex::new(r"^@@\s*-0,0\s*\+1(?:,[1-9]\d*)?\s*@@(?: .*)?$").unwrap();
+        let mut first = true;
         for add_line in &lines[1..] {
+            // Only skip the initial new-file hunk header once
+            if first && new_file_re.is_match(add_line.trim()) {
+                parsed_lines += 1;
+                first = false;
+                continue;
+            }
+            first = false;
             if let Some(line_to_add) = add_line.strip_prefix('+') {
                 contents.push_str(line_to_add);
                 contents.push('\n');
@@ -496,4 +507,32 @@ fn test_update_file_chunk() {
             3
         ))
     );
+}
+   
+// Regex self-test for new-file hunk headers
+#[test]
+fn test_new_file_hunk_regex() {
+    let re = Regex::new(r"^@@\s*-0,0\s*\+1(?:,[1-9]\d*)?\s*@@(?: .*)?$").unwrap();
+    let matching = vec![
+        "@@ -0,0 +1@@",
+        "@@ -0,0 +1 @@",
+        "@@ -0,0 +1,10 @@",
+        "@@ -0,0 +1,10@@",
+        "@@-0,0+1@@",
+        "@@-0,0 +1@@",
+        "@@ -0,0+1,2@@",
+        "@@ -0,0 +1,2@@ foo",
+        "@@ -0,0 +1,2 @@ foo",
+    ];
+    let nonmatching = vec![
+        "@@ -1,1 +2,2 @@",
+        "@@ -0,0 +2,2 @@",
+        "@@ -0,0 +1,2 @@@@",
+    ];
+    for s in matching {
+        assert!(re.is_match(s), "should match: {}", s);
+    }
+    for s in nonmatching {
+        assert!(!re.is_match(s), "should not match: {}", s);
+    }
 }

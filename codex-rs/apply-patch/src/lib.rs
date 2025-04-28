@@ -648,6 +648,21 @@ PATCH"#,
         let contents = fs::read_to_string(path).unwrap();
         assert_eq!(contents, "ab\ncd\n");
     }
+    
+    #[test]
+    fn test_add_file_skip_full_hunk_header_with_section() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("z.txt");
+        let patch = wrap_patch(&format!(
+            "*** Add File: {}\n@@ -0,0 +1,2 @@ SectionName\n+foo\n+bar",
+            path.display()
+        ));
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        apply_patch(&patch, &mut stdout, &mut stderr).unwrap();
+        let contents = fs::read_to_string(&path).unwrap();
+        assert_eq!(contents, "foo\nbar\n");
+    }
 
     #[test]
     fn test_delete_file_hunk_removes_file() {

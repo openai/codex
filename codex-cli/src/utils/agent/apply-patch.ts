@@ -307,8 +307,9 @@ class Parser {
 
   private parse_add_file(): PatchAction {
     const lines: Array<string> = [];
-    // skip new-file hunk header (e.g. "@@ -0,0 +1@@" or "+1,NN@@")
-    const NEW_FILE_HUNK = /^@@\s+-0,0\s+\+1(?:,[1-9]\d*)?\s+@@/;
+    // Only skip the first new-file hunk header emitted by some AI models (e.g., Gemini 2.0 Flash)
+    const NEW_FILE_HUNK = /^@@\s*-0,0\s*\+1(?:,[1-9]\d*)?\s*@@(?: .*)?$/;
+    let isFirst = true;
     while (
       !this.is_done([
         PATCH_SUFFIX,
@@ -318,9 +319,12 @@ class Parser {
       ])
     ) {
       const s = this.read_str();
-      if (NEW_FILE_HUNK.test(s)) {
+      // Only skip the initial new-file hunk header once
+      if (isFirst && NEW_FILE_HUNK.test(s.trim())) {
+        isFirst = false;
         continue;
       }
+      isFirst = false;
       if (!s.startsWith(HUNK_ADD_LINE_PREFIX)) {
         throw new DiffError(`Invalid Add File Line: ${s}`);
       }

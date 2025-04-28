@@ -98,6 +98,42 @@ test("process_patch - add file", () => {
   expect(fs.removals).toEqual([]);
 });
 
+test("process_patch - add file skips full hunk headers", () => {
+  const patch = `*** Begin Patch
+*** Add File: z.txt
+@@ -0,0 +1,2 @@ SectionName
++foo
++bar
+*** End Patch`;
+  const fs = createInMemoryFS({});
+  process_patch(patch, fs.openFn, fs.writeFn, fs.removeFn);
+  expect(fs.writes).toEqual({ "z.txt": "foo\nbar" });
+  expect(fs.removals).toEqual([]);
+});
+
+// Regex self-test for new-file hunk headers
+test("NEW_FILE_HUNK regex matches expected patterns and rejects others", () => {
+  const re = /^@@\s*-0,0\s*\+1(?:,[1-9]\d*)?\s*@@(?: .*)?$/;
+  const matching = [
+    "@@ -0,0 +1@@",
+    "@@ -0,0 +1 @@",
+    "@@ -0,0 +1,10 @@",
+    "@@ -0,0 +1,10@@",
+    "@@-0,0+1@@",
+    "@@-0,0 +1@@",
+    "@@ -0,0+1,2@@",
+    "@@ -0,0 +1,2@@ foo",
+    "@@ -0,0 +1,2 @@ foo",
+  ];
+  const nonmatching = [
+    "@@ -1,1 +2,2 @@",
+    "@@ -0,0 +2,2 @@",
+    "@@ -0,0 +1,2 @@@@",
+  ];
+  matching.forEach(s => expect(re.test(s)).toBe(true));
+  nonmatching.forEach(s => expect(re.test(s)).toBe(false));
+});
+
 test("process_patch - delete file", () => {
   const patch = `*** Begin Patch
 *** Delete File: c.txt
