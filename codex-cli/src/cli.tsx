@@ -83,7 +83,6 @@ const cli = meow(
                                Skip all confirmation prompts and execute commands without
                                sandboxing. Intended solely for ephemeral local testing.
 
-
   Experimental options
     -f, --full-context         Launch in "full-context" mode which loads the entire repository
                                into context and applies a batch of edits in one go. Incompatible
