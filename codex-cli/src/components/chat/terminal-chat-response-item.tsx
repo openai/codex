@@ -131,24 +131,20 @@ function TerminalChatResponseMessage({
       </Text>
       <Markdown>
         {message.content
-          .map((c) => {
-            if (c.type === "output_text") {
-              return collapseXmlBlocks(c.text);
-            }
-            if (c.type === "refusal") {
-              return c.refusal;
-            }
-            if (c.type === "input_text") {
-              return collapseXmlBlocks(c.text);
-            }
-            if (c.type === "input_image") {
-              return "<Image>";
-            }
-            if (c.type === "input_file") {
-              return c.filename;
-            }
-            return "";
-          })
+          .map(
+            (c) =>
+              c.type === "output_text"
+                ? c.text
+                : c.type === "refusal"
+                  ? c.refusal
+                  : c.type === "input_text"
+                    ? collapseXmlBlocks(c.text)
+                    : c.type === "input_image"
+                      ? "<Image>"
+                      : c.type === "input_file"
+                        ? c.filename
+                        : "", // unknown content type
+          )
           .join(" ")}
       </Markdown>
     </Box>
