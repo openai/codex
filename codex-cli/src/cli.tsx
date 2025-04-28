@@ -160,16 +160,17 @@ const cli = meow(
           "Disable truncation of command stdout/stderr messages (show everything)",
         aliases: ["no-truncate"],
       },
-    // Notification
+      // Notification
       notify: {
         type: "boolean",
         description: "Enable desktop notifications for responses",
       },
-    // Retry/back-off options
+      // Retry/back-off options
       maxRetries: {
         type: "number",
         default: 5,
-        description: "Max number of retry attempts for rate-limit and transient errors",
+        description:
+          "Max number of retry attempts for rate-limit and transient errors",
       },
       baseDelayMs: {
         type: "number",

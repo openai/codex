@@ -780,7 +780,8 @@ export class AgentLoop {
             if (isRateLimit) {
               if (attempt < MAX_RETRIES) {
                 // Exponential backoff: baseDelayMs * 2^(attempt-1), or use suggested retry time if provided.
-                const base = this.config.baseDelayMs ?? RATE_LIMIT_RETRY_WAIT_MS;
+                const base =
+                  this.config.baseDelayMs ?? RATE_LIMIT_RETRY_WAIT_MS;
                 let delayMs = base * 2 ** (attempt - 1);
                 const maxDelay = this.config.maxDelayMs ?? delayMs;
 
@@ -794,8 +795,14 @@ export class AgentLoop {
                   }
                 }
                 // Cap delay to maxDelay
-                if (delayMs > maxDelay) { delayMs = maxDelay; }
-                log(`OpenAI rate limit exceeded (attempt ${attempt}/${MAX_RETRIES}), retrying in ${Math.round(delayMs)} ms...`);
+                if (delayMs > maxDelay) {
+                  delayMs = maxDelay;
+                }
+                log(
+                  `OpenAI rate limit exceeded (attempt ${attempt}/${MAX_RETRIES}), retrying in ${Math.round(
+                    delayMs,
+                  )} ms...`,
+                );
                 // eslint-disable-next-line no-await-in-loop
                 await new Promise((resolve) => setTimeout(resolve, delayMs));
                 continue;
@@ -1038,10 +1045,13 @@ export class AgentLoop {
               streamRetryAttempt += 1;
 
               // Exponential backoff for stream retry
-              const baseStream = this.config.baseDelayMs ?? RATE_LIMIT_RETRY_WAIT_MS;
+              const baseStream =
+                this.config.baseDelayMs ?? RATE_LIMIT_RETRY_WAIT_MS;
               let waitMs = baseStream * 2 ** (streamRetryAttempt - 1);
               const maxDelay = this.config.maxDelayMs ?? waitMs;
-              if (waitMs > maxDelay) { waitMs = maxDelay; }
+              if (waitMs > maxDelay) {
+                waitMs = maxDelay;
+              }
               log(
                 `OpenAI stream rate‑limited – retry ${streamRetryAttempt}/${MAX_STREAM_RETRIES} in ${waitMs} ms`,
               );

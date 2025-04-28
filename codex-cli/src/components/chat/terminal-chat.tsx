@@ -162,16 +162,16 @@ export default function TerminalChat({
       // Filter only chat message items with explicit roles
       // Filter messages with role 'user'
       const userItems = items.filter(
-        (it): it is ResponseItem & { type: 'message'; role: 'user' } => {
+        (it): it is ResponseItem & { type: "message"; role: "user" } => {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          return it.type === 'message' && (it as any).role === 'user';
+          return it.type === "message" && (it as any).role === "user";
         },
       );
       // Filter messages with role 'assistant'
       const aiItems = items.filter(
-        (it): it is ResponseItem & { type: 'message'; role: 'assistant' } => {
+        (it): it is ResponseItem & { type: "message"; role: "assistant" } => {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          return it.type === 'message' && (it as any).role === 'assistant';
+          return it.type === "message" && (it as any).role === "assistant";
         },
       );
       const promptTok = approximateTokensUsed(userItems);
@@ -186,9 +186,9 @@ export default function TerminalChat({
         ...prev,
         {
           id: `token-report-${Date.now()}`,
-          type: 'message',
-          role: 'system',
-          content: [{ type: 'input_text', text }],
+          type: "message",
+          role: "system",
+          content: [{ type: "input_text", text }],
         } as ResponseItem,
       ]);
     }
