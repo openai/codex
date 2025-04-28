@@ -57,6 +57,7 @@
     "@types/diff": "^7.0.2",
     "@types/js-yaml": "^4.0.9",
     "@types/marked-terminal": "^6.1.1",
+    "@types/node": "^22.15.3",
     "@types/react": "^18.0.32",
     "@types/semver": "^7.7.0",
     "@types/shell-quote": "^1.7.5",

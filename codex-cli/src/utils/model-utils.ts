@@ -6,8 +6,8 @@ import {
   OPENAI_PROJECT,
   getBaseUrl,
   getApiKey,
-} from "./config";
-import { type SupportedModelId, openAiModelInfo } from "./model-info.js";
+} from "./config.js";
+import { type SupportedModelId, allModelInfo } from "./model-info.js";
 import OpenAI from "openai";
 
 const MODEL_LIST_TIMEOUT_MS = 2_000; // 2 seconds
@@ -16,8 +16,8 @@ export const RECOMMENDED_MODELS: Array<string> = ["o4-mini", "o3"];
 /**
  * Background model loader / cache.
  *
- * We start fetching the list of available models from OpenAI once the CLI
- * enters interactive mode.  The request is made exactly once during the
+ * We start fetching the list of available models from providers once the CLI
+ * enters interactive mode. The request is made exactly once during the
  * lifetime of the process and the results are cached for subsequent calls.
  */
 async function fetchModels(provider: string): Promise<Array<string>> {
@@ -27,6 +27,25 @@ async function fetchModels(provider: string): Promise<Array<string>> {
   }
 
   try {
+    // For providers that don't have a built-in model listing endpoint or require
+    // special handling, return predefined models instead
+    const providerLower = provider.toLowerCase();
+
+    // Handle Anthropic provider
+    if (providerLower === "anthropic") {
+      return Object.keys(allModelInfo).filter((model) =>
+        model.includes("claude"),
+      );
+    }
+
+    // Handle Gemini provider
+    if (providerLower === "gemini") {
+      return Object.keys(allModelInfo).filter((model) =>
+        model.includes("gemini"),
+      );
+    }
+
+    // For OpenAI and compatible providers, use standard OpenAI API
     const headers: Record<string, string> = {};
     if (OPENAI_ORGANIZATION) {
       headers["OpenAI-Organization"] = OPENAI_ORGANIZATION;
@@ -40,6 +59,7 @@ async function fetchModels(provider: string): Promise<Array<string>> {
       baseURL: getBaseUrl(provider),
       defaultHeaders: headers,
     });
+
     const list = await openai.models.list();
     const models: Array<string> = [];
     for await (const model of list as AsyncIterable<{ id?: string }>) {
@@ -55,6 +75,23 @@ async function fetchModels(provider: string): Promise<Array<string>> {
 
     return models.sort();
   } catch (error) {
+    // Silently handle error and return predefined models for common providers
+
+    // Return a predefined list for known providers if API fetch fails
+    const providerLower = provider.toLowerCase();
+
+    if (providerLower === "anthropic") {
+      return Object.keys(allModelInfo).filter((model) =>
+        model.includes("claude"),
+      );
+    }
+
+    if (providerLower === "gemini") {
+      return Object.keys(allModelInfo).filter((model) =>
+        model.includes("gemini"),
+      );
+    }
+
     return [];
   }
 }
@@ -64,6 +101,22 @@ export async function getAvailableModels(
   provider: string,
 ): Promise<Array<string>> {
   return fetchModels(provider.toLowerCase());
+}
+
+/** Returns the provider name for a given model */
+export function getProviderForModel(model: string): string | undefined {
+  const modelLower = model.toLowerCase();
+
+  if (modelLower.includes("claude")) {
+    return "anthropic";
+  }
+
+  if (modelLower.includes("gemini")) {
+    return "gemini";
+  }
+
+  // Default to OpenAI for GPT models and other models
+  return "openai";
 }
 
 /**
@@ -79,6 +132,11 @@ export async function isModelSupportedForResponses(
     model.trim() === "" ||
     RECOMMENDED_MODELS.includes(model)
   ) {
+    return true;
+  }
+
+  // If model is known in allModelInfo, it's definitely supported
+  if (model in allModelInfo) {
     return true;
   }
 
@@ -105,8 +163,8 @@ export async function isModelSupportedForResponses(
 
 /** Returns the maximum context length (in tokens) for a given model. */
 export function maxTokensForModel(model: string): number {
-  if (model in openAiModelInfo) {
-    return openAiModelInfo[model as SupportedModelId].maxContextLength;
+  if (model in allModelInfo) {
+    return allModelInfo[model as SupportedModelId].maxContextLength;
   }
 
   // fallback to heuristics for models not in the registry

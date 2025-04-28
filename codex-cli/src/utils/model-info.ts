@@ -5,7 +5,6 @@ export type ModelInfo = {
   maxContextLength: number;
 };
 
-export type SupportedModelId = keyof typeof openAiModelInfo;
 export const openAiModelInfo = {
   "o1-pro-2025-03-19": {
     label: "o1 Pro (2025-03-19)",
@@ -195,4 +194,23 @@ export const openAiModelInfo = {
     label: "GPT-4 (1106) Preview",
     maxContextLength: 128000,
   },
+} as const satisfies Record<string, ModelInfo>;
+
+// Import additional model info
+import type { SupportedAnthropicModelId } from "./anthropic-model-info";
+import type { SupportedGeminiModelId } from "./gemini-model-info";
+
+import { anthropicModelInfo } from "./anthropic-model-info";
+import { geminiModelInfo } from "./gemini-model-info";
+
+export type SupportedModelId =
+  | keyof typeof openAiModelInfo
+  | SupportedAnthropicModelId
+  | SupportedGeminiModelId;
+
+// Combined model info for all providers
+export const allModelInfo = {
+  ...openAiModelInfo,
+  ...anthropicModelInfo,
+  ...geminiModelInfo,
 } as const satisfies Record<string, ModelInfo>;
