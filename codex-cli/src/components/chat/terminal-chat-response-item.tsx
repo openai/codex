@@ -10,12 +10,12 @@ import type {
 } from "openai/resources/responses/responses";
 
 import { useTerminalSize } from "../../hooks/use-terminal-size";
+import { collapseXmlBlocks } from "../../utils/file-tag-utils";
 import { parseToolCall, parseToolCallOutput } from "../../utils/parsers";
 import chalk, { type ForegroundColorName } from "chalk";
 import { Box, Text } from "ink";
 import { parse, setOptions } from "marked";
 import TerminalRenderer from "marked-terminal";
-import path from "path";
 import React, { useEffect, useMemo } from "react";
 
 export default function TerminalChatResponseItem({
@@ -153,14 +153,6 @@ function TerminalChatResponseMessage({
       </Markdown>
     </Box>
   );
-}
-
-function collapseXmlBlocks(text: string): string {
-  return text.replace(/<([^\n>]+)>[\s\S]*?<\/\1>/g, (_m, p1: string) => {
-    const relPath = p1.trim();
-    const displayPath = path.normalize(relPath);
-    return "@" + displayPath;
-  });
 }
 
 function TerminalChatResponseToolCall({

@@ -2,12 +2,15 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import fs from "fs";
 import path from "path";
 import os from "os";
-import { expandFileTags } from "../src/utils/expand-file-tags.js";
+import {
+  expandFileTags,
+  collapseXmlBlocks,
+} from "../src/utils/file-tag-utils.js";
 
 /**
- * Unit-tests for the expandFileTags() helper. The helper replaces tokens like
- * `@relative/path` with an XML block that inlines the file contents so that it
- * can be sent to the LLM. The tests exercise positive and negative cases.
+ * Unit-tests for file tag utility functions:
+ * - expandFileTags(): Replaces tokens like `@relative/path` with XML blocks containing file contents
+ * - collapseXmlBlocks(): Reverses the expansion, converting XML blocks back to @path format
  */
 
 describe("expandFileTags", () => {
@@ -112,5 +115,64 @@ describe("expandFileTags", () => {
     const output = await expandFileTags(input);
     expect(output).toContain("adj1");
     expect(output).toContain("adj2");
+  });
+});
+
+describe("collapseXmlBlocks", () => {
+  it("collapses a single XML block to @path format", () => {
+    const input = "<hello.txt>\nHello, world!\n</hello.txt>";
+    const output = collapseXmlBlocks(input);
+    expect(output).toBe("@hello.txt");
+  });
+
+  it("collapses multiple XML blocks in one string", () => {
+    const input =
+      "<a.txt>\nA content\n</a.txt> and <b.txt>\nB content\n</b.txt>";
+    const output = collapseXmlBlocks(input);
+    expect(output).toBe("@a.txt and @b.txt");
+  });
+
+  it("handles paths with subdirectories", () => {
+    const input = "<path/to/file.txt>\nContent here\n</path/to/file.txt>";
+    const output = collapseXmlBlocks(input);
+    const expectedPath = path.normalize("path/to/file.txt");
+    expect(output).toBe(`@${expectedPath}`);
+  });
+
+  it("handles XML blocks with special characters in path", () => {
+    const input = "<weird-._~name.txt>\nspecial chars\n</weird-._~name.txt>";
+    const output = collapseXmlBlocks(input);
+    expect(output).toBe("@weird-._~name.txt");
+  });
+
+  it("handles XML blocks with empty content", () => {
+    const input = "<empty.txt>\n\n</empty.txt>";
+    const output = collapseXmlBlocks(input);
+    expect(output).toBe("@empty.txt");
+  });
+
+  it("handles string with no XML blocks", () => {
+    const input = "No tags here.";
+    const output = collapseXmlBlocks(input);
+    expect(output).toBe(input);
+  });
+
+  it("handles adjacent XML blocks", () => {
+    const input = "<adj1.txt>\nadj1\n</adj1.txt><adj2.txt>\nadj2\n</adj2.txt>";
+    const output = collapseXmlBlocks(input);
+    expect(output).toBe("@adj1.txt@adj2.txt");
+  });
+
+  it("ignores malformed XML blocks", () => {
+    const input = "<incomplete>content without closing tag";
+    const output = collapseXmlBlocks(input);
+    expect(output).toBe(input);
+  });
+
+  it("handles mixed content with XML blocks and regular text", () => {
+    const input =
+      "This is <file.txt>\nfile content\n</file.txt> and some more text.";
+    const output = collapseXmlBlocks(input);
+    expect(output).toBe("This is @file.txt and some more text.");
   });
 });

@@ -37,3 +37,15 @@ export async function expandFileTags(raw: string): Promise<string> {
   }
   return out;
 }
+
+/**
+ * Collapses <path>content</path> XML blocks back to @path format.
+ * This is the reverse operation of expandFileTags.
+ */
+export function collapseXmlBlocks(text: string): string {
+  return text.replace(/<([^\n>]+)>[\s\S]*?<\/\1>/g, (_m, p1: string) => {
+    const relPath = p1.trim();
+    const displayPath = path.normalize(relPath);
+    return "@" + displayPath;
+  });
+}
