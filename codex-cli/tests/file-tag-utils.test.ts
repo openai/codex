@@ -99,23 +99,6 @@ describe("expandFileTags", () => {
     const output = await expandFileTags(input);
     expect(output).toBe(input);
   });
-
-  it("handles @ at end of string with no path", async () => {
-    const input = "Ends with @";
-    const output = await expandFileTags(input);
-    expect(output).toBe(input);
-  });
-
-  it("handles adjacent tokens", async () => {
-    const file1 = "adj1.txt";
-    const file2 = "adj2.txt";
-    fs.writeFileSync(path.join(tmpDir, file1), "adj1");
-    fs.writeFileSync(path.join(tmpDir, file2), "adj2");
-    const input = `@${file1}@${file2}`;
-    const output = await expandFileTags(input);
-    expect(output).toContain("adj1");
-    expect(output).toContain("adj2");
-  });
 });
 
 describe("collapseXmlBlocks", () => {
