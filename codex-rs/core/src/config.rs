@@ -21,6 +21,13 @@ pub struct Config {
     pub approval_policy: AskForApproval,
     #[serde(default)]
     pub sandbox_policy: SandboxPolicy,
+
+    /// Disable server-side response storage (sends the full conversation
+    /// context with every request). Currently necessary for OpenAI customers
+    /// who have opted into Zero Data Retention (ZDR).
+    #[serde(default)]
+    pub disable_response_storage: bool,
+
     /// System instructions.
     pub instructions: Option<String>,
 }
@@ -31,6 +38,7 @@ pub struct ConfigOverrides {
     pub model: Option<String>,
     pub approval_policy: Option<AskForApproval>,
     pub sandbox_policy: Option<SandboxPolicy>,
+    pub disable_response_storage: Option<bool>,
 }
 
 impl Config {
@@ -50,6 +58,7 @@ impl Config {
             model,
             approval_policy,
             sandbox_policy,
+            disable_response_storage,
         } = overrides;
 
         if let Some(model) = model {
@@ -60,6 +69,9 @@ impl Config {
         }
         if let Some(sandbox_policy) = sandbox_policy {
             cfg.sandbox_policy = sandbox_policy;
+        }
+        if let Some(disable_response_storage) = disable_response_storage {
+            cfg.disable_response_storage = disable_response_storage;
         }
         Ok(cfg)
     }
