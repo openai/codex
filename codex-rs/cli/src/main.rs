@@ -1,3 +1,5 @@
+#[cfg(target_os = "linux")]
+mod landlock;
 mod proto;
 mod seatbelt;
 
@@ -58,11 +60,14 @@ struct DebugArgs {
 enum DebugCommand {
     /// Run a command under Seatbelt (macOS only).
     Seatbelt(SeatbeltCommand),
+
+    /// Run a command under Landlock+seccomp (Linux only).
+    Landlock(LandlockCommand),
 }
 
 #[derive(Debug, Parser)]
 struct SeatbeltCommand {
-    /// Writable folder for sandbox in full-auto mode (can be specified multiple times).
+    /// Writable folder for sandbox (can be specified multiple times).
     #[arg(long = "writable-root", short = 'w', value_name = "DIR", action = ArgAction::Append, use_value_delimiter = false)]
     writable_roots: Vec<PathBuf>,
 
@@ -71,6 +76,21 @@ struct SeatbeltCommand {
     sandbox_policy: SandboxModeCliArg,
 
     /// Full command args to run under seatbelt.
+    #[arg(trailing_var_arg = true)]
+    command: Vec<String>,
+}
+
+#[derive(Debug, Parser)]
+struct LandlockCommand {
+    /// Writable folder for sandbox (can be specified multiple times).
+    #[arg(long = "writable-root", short = 'w', value_name = "DIR", action = ArgAction::Append, use_value_delimiter = false)]
+    writable_roots: Vec<PathBuf>,
+
+    /// Configure the process restrictions for the command.
+    #[arg(long = "sandbox", short = 's')]
+    sandbox_policy: SandboxModeCliArg,
+
+    /// Full command args to run under landlock.
     #[arg(trailing_var_arg = true)]
     command: Vec<String>,
 }
@@ -102,6 +122,18 @@ async fn main() -> anyhow::Result<()> {
                 writable_roots,
             }) => {
                 seatbelt::run_seatbelt(command, sandbox_policy.into(), writable_roots).await?;
+            }
+            #[cfg(target_os = "linux")]
+            DebugCommand::Landlock(LandlockCommand {
+                command,
+                sandbox_policy,
+                writable_roots,
+            }) => {
+                landlock::run_landlock(command, sandbox_policy.into(), writable_roots)?;
+            }
+            #[cfg(not(target_os = "linux"))]
+            DebugCommand::Landlock(_) => {
+                anyhow::bail!("Landlock is only supported on Linux.");
             }
         },
     }
