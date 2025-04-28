@@ -11,8 +11,8 @@ import { exec, execApplyPatch } from "./exec.js";
 import { ReviewDecision } from "./review.js";
 import { isLoggingEnabled, log } from "../logger/log.js";
 import { SandboxType } from "./sandbox/interface.js";
-import { access } from "fs/promises";
-import { execFile } from "node:child_process";
+import { PATH_TO_SEATBELT_EXECUTABLE } from "./sandbox/macos-seatbelt.js";
+import fs from "fs/promises";
 
 // ---------------------------------------------------------------------------
 // Session‑level cache of commands that the user has chosen to always approve.
@@ -218,7 +218,7 @@ async function execCommand(
   let { workdir } = execInput;
   if (workdir) {
     try {
-      await access(workdir);
+      await fs.access(workdir);
     } catch (e) {
       log(`EXEC workdir=${workdir} not found, use process.cwd() instead`);
       workdir = process.cwd();
@@ -271,18 +271,19 @@ async function execCommand(
   };
 }
 
-/**
- * Return `true` if the `sandbox-exec` binary can be located. This intentionally does **not**
- * spawn the binary – we only care about its presence.
- */
-export const isSandboxExecAvailable = (): Promise<boolean> =>
-  new Promise((res) =>
-    execFile(
-      "command",
-      ["-v", "sandbox-exec"],
-      { signal: AbortSignal.timeout(200) },
-      (err) => res(!err), // exit 0 ⇒ found
-    ),
+/** Return `true` if the `/usr/bin/sandbox-exec` is present and executable. */
+const isSandboxExecAvailable: Promise<boolean> = fs
+  .access(PATH_TO_SEATBELT_EXECUTABLE, fs.constants.X_OK)
+  .then(
+    () => true,
+    (err) => {
+      if (!["ENOENT", "ACCESS", "EPERM"].includes(err.code)) {
+        log(
+          `Unexpected error for \`stat ${PATH_TO_SEATBELT_EXECUTABLE}\`: ${err.message}`,
+        );
+      }
+      return false;
+    },
   );
 
 async function getSandbox(runInSandbox: boolean): Promise<SandboxType> {
@@ -295,7 +296,7 @@ async function getSandbox(runInSandbox: boolean): Promise<SandboxType> {
       // instance, inside certain CI images).  Attempting to spawn a missing
       // binary makes Node.js throw an *uncaught* `ENOENT` error further down
       // the stack which crashes the whole CLI.
-      if (await isSandboxExecAvailable()) {
+      if (await isSandboxExecAvailable) {
         return SandboxType.MACOS_SEATBELT;
       } else {
         throw new Error(

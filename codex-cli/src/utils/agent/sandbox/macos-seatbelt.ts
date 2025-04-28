@@ -12,6 +12,14 @@ function getCommonRoots() {
   ];
 }
 
+/**
+ * When working with `sandbox-exec`, only consider `sandbox-exec` in `/usr/bin`
+ * to defend against an attacker trying to inject a malicious version on the
+ * PATH. If /usr/bin/sandbox-exec has been tampered with, then the attacker
+ * already has root access.
+ */
+export const PATH_TO_SEATBELT_EXECUTABLE = "/usr/bin/sandbox-exec";
+
 export function execWithSeatbelt(
   cmd: Array<string>,
   opts: SpawnOptions,
@@ -57,7 +65,7 @@ export function execWithSeatbelt(
   );
 
   const fullCommand = [
-    "sandbox-exec",
+    PATH_TO_SEATBELT_EXECUTABLE,
     "-p",
     fullPolicy,
     ...policyTemplateParams,
