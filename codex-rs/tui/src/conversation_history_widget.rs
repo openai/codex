@@ -48,11 +48,11 @@ impl ConversationHistoryWidget {
                 self.scroll_down(1);
                 true
             }
-            KeyCode::PageUp | KeyCode::Char('b') | KeyCode::Char('u') | KeyCode::Char('U') => {
+            KeyCode::PageUp | KeyCode::Char('b') => {
                 self.scroll_page_up();
                 true
             }
-            KeyCode::PageDown | KeyCode::Char(' ') | KeyCode::Char('d') | KeyCode::Char('D') => {
+            KeyCode::PageDown | KeyCode::Char(' ') => {
                 self.scroll_page_down();
                 true
             }
@@ -238,7 +238,7 @@ impl WidgetRef for ConversationHistoryWidget {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let (title, border_style) = if self.has_input_focus {
             (
-                "Messages (↑/↓ or j/k = line,  b/u = PgUp, space/d = PgDn)",
+                "Messages (↑/↓ or j/k = line,  b/space = page)",
                 Style::default().fg(Color::LightYellow),
             )
         } else {
