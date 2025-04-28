@@ -105,7 +105,10 @@ export default function TerminalChatInput({
   const prevCursorWasAtLastRow = useRef<boolean>(false);
 
   // --- Helper for updating file system suggestions ---
-  function updateFsSuggestions(txt: string, forceUpdate: boolean = false) {
+  function updateFsSuggestions(
+    txt: string,
+    alwaysUpdateSelection: boolean = false,
+  ) {
     // Clear tab completions if a space is typed
     if (txt.endsWith(" ")) {
       setFsSuggestions([]);
@@ -115,7 +118,8 @@ export default function TerminalChatInput({
       const words = txt.trim().split(/\s+/);
       const lastWord = words[words.length - 1] ?? "";
 
-      const shouldUpdateSelection = lastWord.startsWith("@") || forceUpdate;
+      const shouldUpdateSelection =
+        lastWord.startsWith("@") || alwaysUpdateSelection;
 
       // Strip optional leading '@' for the path prefix
       let pathPrefix: string;
@@ -128,7 +132,6 @@ export default function TerminalChatInput({
         pathPrefix = lastWord;
       }
 
-      // If there is any prefix to suggest against, query the FS
       if (shouldUpdateSelection && pathPrefix.length > 0) {
         const completions = getFileSystemSuggestions(pathPrefix);
         setFsSuggestions(completions);
@@ -147,8 +150,11 @@ export default function TerminalChatInput({
     }
   }
 
-  // --- Helper for replacing @path with file system suggestion ---
-  function replaceFileSystemSuggestion(txt: string): string {
+  // --- Helper for replacing input with file system suggestion ---
+  function replaceFileSystemSuggestion(
+    txt: string,
+    requireAtPrefix: boolean = false,
+  ): string {
     if (fsSuggestions.length === 0 || selectedCompletion < 0) {
       return txt;
     }
@@ -156,7 +162,8 @@ export default function TerminalChatInput({
     const words = txt.trim().split(/\s+/);
     const lastWord = words[words.length - 1] ?? "";
 
-    if (!lastWord.startsWith("@")) {
+    // Check if @ prefix is required and the last word doesn't have it
+    if (requireAtPrefix && !lastWord.startsWith("@")) {
       return txt;
     }
 
@@ -169,7 +176,10 @@ export default function TerminalChatInput({
     const relPath = path.relative(process.cwd(), selected.replace(/\/+$/, ""));
 
     let replacement = relPath + (isDir ? path.sep : "");
-    replacement = "@" + replacement;
+    // Only add @ prefix if the original word had it
+    if (lastWord.startsWith("@")) {
+      replacement = "@" + replacement;
+    }
 
     words[words.length - 1] = replacement;
     return words.join(" ");
@@ -296,25 +306,10 @@ export default function TerminalChatInput({
           }
 
           if (_key.tab && selectedCompletion >= 0) {
-            const words = input.trim().split(/\s+/);
-            const selected = fsSuggestions[selectedCompletion];
+            const newText = replaceFileSystemSuggestion(input);
 
-            if (words.length > 0 && selected) {
-              const lastWord = words[words.length - 1] ?? "";
-
-              const isDir = selected.endsWith(path.sep);
-              const relPath = path.relative(
-                process.cwd(),
-                selected.replace(/\/+$/, ""),
-              );
-
-              let replacement = relPath + (isDir ? path.sep : "");
-              if (lastWord.startsWith("@")) {
-                replacement = "@" + replacement;
-              }
-
-              words[words.length - 1] = replacement;
-              const newText = words.join(" ");
+            // Only proceed if the text was actually changed
+            if (newText !== input) {
               setInput(newText);
               // Force remount of the editor with the new text
               setEditorKey((k) => k + 1);
@@ -754,7 +749,7 @@ export default function TerminalChatInput({
                 }
                 setInput(txt);
 
-                updateFsSuggestions(txt, false);
+                updateFsSuggestions(txt);
               }}
               key={editorKey}
               initialText={input}
@@ -762,7 +757,7 @@ export default function TerminalChatInput({
               focus={active}
               onSubmit={(txt) => {
                 // Replace @path with filesystem suggestion if available
-                const submissionText = replaceFileSystemSuggestion(txt);
+                const submissionText = replaceFileSystemSuggestion(txt, true);
 
                 onSubmit(submissionText);
                 setEditorKey((k) => k + 1);
