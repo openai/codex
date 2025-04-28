@@ -11,6 +11,7 @@ use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::util::is_inside_git_repo;
+use owo_colors::OwoColorize;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -56,9 +57,10 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
 
     if !has_api_key() {
         eprintln!(
-            "\n\x1b[31mMissing OpenAI API key.\x1b[0m\n\n\
-Set the environment variable \x1b[1mOPENAI_API_KEY\x1b[0m and re-run this command.\n\
-You can create a key here: \x1b[1m\x1b[4mhttps://platform.openai.com/account/api-keys\x1b[0m\n"
+            "\n{msg}\n\nSet the environment variable {var} and re-run this command.\nYou can create a key here: {url}\n",
+            msg = "Missing OpenAI API key.".red(),
+            var = "OPENAI_API_KEY".bold(),
+            url = "https://platform.openai.com/account/api-keys".bold().underline(),
         );
         std::process::exit(1);
     }
