@@ -277,7 +277,7 @@ const isInSafeContainer = async (): Promise<boolean> => {
   // explicit sandbox. The previous implementation tried to detect generic Linux
   // containers by probing `/proc/1/cgroup`, but that heuristic produced false
   // positives and offered no way for users to override the behaviour.
-  return Boolean(process.env["CODEX_IN_SAFE_CONTAINER"]);
+  return Boolean(process.env["CODEX_UNSAFE_ALLOW_NO_SANDBOX"]);
 };
 
 /**
