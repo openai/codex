@@ -52,6 +52,9 @@ jobs:
         working-directory: codex-cli
         run: pnpm run format
 
+      - name: Fix Markdown and config file formatting
+        run: pnpm run format:fix
+
       - name: Check Markdown and config file formatting
         run: pnpm run format
 
