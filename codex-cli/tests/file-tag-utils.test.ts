@@ -119,36 +119,106 @@ describe("expandFileTags", () => {
 });
 
 describe("collapseXmlBlocks", () => {
-  it("collapses a single XML block to @path format", () => {
-    const input = "<hello.txt>\nHello, world!\n</hello.txt>";
-    const output = collapseXmlBlocks(input);
-    expect(output).toBe("@hello.txt");
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-collapse-test-"));
+  const originalCwd = process.cwd();
+
+  beforeAll(() => {
+    // Run the test from within the temporary directory so that the helper
+    // generates relative paths that are predictable and isolated.
+    process.chdir(tmpDir);
   });
 
-  it("collapses multiple XML blocks in one string", () => {
-    const input =
-      "<a.txt>\nA content\n</a.txt> and <b.txt>\nB content\n</b.txt>";
-    const output = collapseXmlBlocks(input);
-    expect(output).toBe("@a.txt and @b.txt");
+  afterAll(() => {
+    process.chdir(originalCwd);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("handles paths with subdirectories", () => {
-    const input = "<path/to/file.txt>\nContent here\n</path/to/file.txt>";
+  it("collapses XML block to @path format for valid file", () => {
+    // Create a real file
+    const fileName = "valid-file.txt";
+    fs.writeFileSync(path.join(tmpDir, fileName), "file content");
+
+    const input = `<${fileName}>\nHello, world!\n</${fileName}>`;
     const output = collapseXmlBlocks(input);
-    const expectedPath = path.normalize("path/to/file.txt");
+    expect(output).toBe(`@${fileName}`);
+  });
+
+  it("does not collapse XML block for unrelated xml block", () => {
+    const xmlBlockName = "non-file-block";
+    const input = `<${xmlBlockName}>\nContent here\n</${xmlBlockName}>`;
+    const output = collapseXmlBlocks(input);
+    // Should remain unchanged
+    expect(output).toBe(input);
+  });
+
+  it("does not collapse XML block for a directory", () => {
+    // Create a directory
+    const dirName = "test-dir";
+    fs.mkdirSync(path.join(tmpDir, dirName), { recursive: true });
+
+    const input = `<${dirName}>\nThis is a directory\n</${dirName}>`;
+    const output = collapseXmlBlocks(input);
+    // Should remain unchanged
+    expect(output).toBe(input);
+  });
+
+  it("collapses multiple valid file XML blocks in one string", () => {
+    // Create real files
+    const fileA = "a.txt";
+    const fileB = "b.txt";
+    fs.writeFileSync(path.join(tmpDir, fileA), "A content");
+    fs.writeFileSync(path.join(tmpDir, fileB), "B content");
+
+    const input = `<${fileA}>\nA content\n</${fileA}> and <${fileB}>\nB content\n</${fileB}>`;
+    const output = collapseXmlBlocks(input);
+    expect(output).toBe(`@${fileA} and @${fileB}`);
+  });
+
+  it("only collapses valid file paths in mixed content", () => {
+    // Create a real file
+    const validFile = "valid.txt";
+    fs.writeFileSync(path.join(tmpDir, validFile), "valid content");
+    const invalidFile = "invalid.txt";
+
+    const input = `<${validFile}>\nvalid content\n</${validFile}> and <${invalidFile}>\ninvalid content\n</${invalidFile}>`;
+    const output = collapseXmlBlocks(input);
+    expect(output).toBe(
+      `@${validFile} and <${invalidFile}>\ninvalid content\n</${invalidFile}>`,
+    );
+  });
+
+  it("handles paths with subdirectories for valid files", () => {
+    // Create a nested file
+    const nestedDir = "nested/path";
+    const nestedFile = "nested/path/file.txt";
+    fs.mkdirSync(path.join(tmpDir, nestedDir), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, nestedFile), "nested content");
+
+    const relPath = "nested/path/file.txt";
+    const input = `<${relPath}>\nContent here\n</${relPath}>`;
+    const output = collapseXmlBlocks(input);
+    const expectedPath = path.normalize(relPath);
     expect(output).toBe(`@${expectedPath}`);
   });
 
-  it("handles XML blocks with special characters in path", () => {
-    const input = "<weird-._~name.txt>\nspecial chars\n</weird-._~name.txt>";
+  it("handles XML blocks with special characters in path for valid files", () => {
+    // Create a file with special characters
+    const specialFileName = "weird-._~name.txt";
+    fs.writeFileSync(path.join(tmpDir, specialFileName), "special chars");
+
+    const input = `<${specialFileName}>\nspecial chars\n</${specialFileName}>`;
     const output = collapseXmlBlocks(input);
-    expect(output).toBe("@weird-._~name.txt");
+    expect(output).toBe(`@${specialFileName}`);
   });
 
-  it("handles XML blocks with empty content", () => {
-    const input = "<empty.txt>\n\n</empty.txt>";
+  it("handles XML blocks with empty content for valid files", () => {
+    // Create an empty file
+    const emptyFileName = "empty.txt";
+    fs.writeFileSync(path.join(tmpDir, emptyFileName), "");
+
+    const input = `<${emptyFileName}>\n\n</${emptyFileName}>`;
     const output = collapseXmlBlocks(input);
-    expect(output).toBe("@empty.txt");
+    expect(output).toBe(`@${emptyFileName}`);
   });
 
   it("handles string with no XML blocks", () => {
@@ -157,10 +227,16 @@ describe("collapseXmlBlocks", () => {
     expect(output).toBe(input);
   });
 
-  it("handles adjacent XML blocks", () => {
-    const input = "<adj1.txt>\nadj1\n</adj1.txt><adj2.txt>\nadj2\n</adj2.txt>";
+  it("handles adjacent XML blocks for valid files", () => {
+    // Create real files
+    const adjFile1 = "adj1.txt";
+    const adjFile2 = "adj2.txt";
+    fs.writeFileSync(path.join(tmpDir, adjFile1), "adj1");
+    fs.writeFileSync(path.join(tmpDir, adjFile2), "adj2");
+
+    const input = `<${adjFile1}>\nadj1\n</${adjFile1}><${adjFile2}>\nadj2\n</${adjFile2}>`;
     const output = collapseXmlBlocks(input);
-    expect(output).toBe("@adj1.txt@adj2.txt");
+    expect(output).toBe(`@${adjFile1}@${adjFile2}`);
   });
 
   it("ignores malformed XML blocks", () => {
@@ -169,10 +245,13 @@ describe("collapseXmlBlocks", () => {
     expect(output).toBe(input);
   });
 
-  it("handles mixed content with XML blocks and regular text", () => {
-    const input =
-      "This is <file.txt>\nfile content\n</file.txt> and some more text.";
+  it("handles mixed content with valid file XML blocks and regular text", () => {
+    // Create a real file
+    const mixedFile = "mixed-file.txt";
+    fs.writeFileSync(path.join(tmpDir, mixedFile), "file content");
+
+    const input = `This is <${mixedFile}>\nfile content\n</${mixedFile}> and some more text.`;
     const output = collapseXmlBlocks(input);
-    expect(output).toBe("This is @file.txt and some more text.");
+    expect(output).toBe(`This is @${mixedFile} and some more text.`);
   });
 });

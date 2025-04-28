@@ -41,11 +41,22 @@ export async function expandFileTags(raw: string): Promise<string> {
 /**
  * Collapses <path>content</path> XML blocks back to @path format.
  * This is the reverse operation of expandFileTags.
+ * Only collapses blocks where the path points to a valid file; invalid paths remain unchanged.
  */
 export function collapseXmlBlocks(text: string): string {
-  return text.replace(/<([^\n>]+)>[\s\S]*?<\/\1>/g, (_m, p1: string) => {
-    const relPath = p1.trim();
-    const displayPath = path.normalize(relPath);
-    return "@" + displayPath;
-  });
+  return text.replace(
+    /<([^\n>]+)>([\s\S]*?)<\/\1>/g,
+    (match, path1: string) => {
+      const filePath = path.normalize(path1.trim());
+
+      try {
+        // Only convert to @path format if it's a valid file
+        return fs.statSync(path.resolve(process.cwd(), filePath)).isFile()
+          ? "@" + filePath
+          : match;
+      } catch {
+        return match; // Keep XML block if path is invalid
+      }
+    },
+  );
 }
