@@ -49,7 +49,6 @@ impl ChatWidget<'_> {
         app_event_tx: Sender<AppEvent>,
         initial_prompt: Option<String>,
         initial_images: Vec<std::path::PathBuf>,
-        disable_response_storage: bool,
     ) -> Self {
         let (codex_op_tx, mut codex_op_rx) = unbounded_channel::<Op>();
 
@@ -62,15 +61,14 @@ impl ChatWidget<'_> {
         // Create the Codex asynchronously so the UI loads as quickly as possible.
         let config_for_agent_loop = config.clone();
         tokio::spawn(async move {
-            let (codex, session_event, _ctrl_c) =
-                match init_codex(config_for_agent_loop, disable_response_storage).await {
-                    Ok(vals) => vals,
-                    Err(e) => {
-                        // TODO: surface this error to the user.
-                        tracing::error!("failed to initialize codex: {e}");
-                        return;
-                    }
-                };
+            let (codex, session_event, _ctrl_c) = match init_codex(config_for_agent_loop).await {
+                Ok(vals) => vals,
+                Err(e) => {
+                    // TODO: surface this error to the user.
+                    tracing::error!("failed to initialize codex: {e}");
+                    return;
+                }
+            };
 
             // Forward the captured `SessionInitialized` event that was consumed
             // inside `init_codex()` so it can be rendered in the UI.

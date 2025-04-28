@@ -39,6 +39,11 @@ pub fn run_main(cli: Cli) -> std::io::Result<()> {
             model: cli.model.clone(),
             approval_policy: cli.approval_policy.map(Into::into),
             sandbox_policy: cli.sandbox_policy.map(Into::into),
+            disable_response_storage: if cli.disable_response_storage {
+                Some(true)
+            } else {
+                None
+            },
         };
         #[allow(clippy::print_stderr)]
         match Config::load_with_overrides(overrides) {
@@ -134,19 +139,8 @@ fn run_ratatui_app(
     let mut terminal = tui::init()?;
     terminal.clear()?;
 
-    let Cli {
-        prompt,
-        images,
-        disable_response_storage,
-        ..
-    } = cli;
-    let mut app = App::new(
-        config,
-        prompt,
-        show_git_warning,
-        images,
-        disable_response_storage,
-    );
+    let Cli { prompt, images, .. } = cli;
+    let mut app = App::new(config.clone(), prompt, show_git_warning, images);
 
     // Bridge log receiver into the AppEvent channel so latest log lines update the UI.
     {

@@ -56,10 +56,14 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
         // the user for approval.
         approval_policy: Some(AskForApproval::Never),
         sandbox_policy: sandbox_policy.map(Into::into),
+        disable_response_storage: if disable_response_storage {
+            Some(true)
+        } else {
+            None
+        },
     };
     let config = Config::load_with_overrides(overrides)?;
-    let (codex_wrapper, event, ctrl_c) =
-        codex_wrapper::init_codex(config, disable_response_storage).await?;
+    let (codex_wrapper, event, ctrl_c) = codex_wrapper::init_codex(config).await?;
     let codex = Arc::new(codex_wrapper);
     info!("Codex initialized with event: {event:?}");
 
