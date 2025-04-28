@@ -421,6 +421,11 @@ Below is a comprehensive example of `config.json` with multiple custom providers
       "baseURL": "https://api.x.ai/v1",
       "envKey": "XAI_API_KEY"
     },
+    "fireworks": {
+      "name": "Fireworks AI",
+      "baseURL": "https://api.fireworks.ai/",
+      "envKey": "FIREWORKS_API_KEY"
+    },
     "groq": {
       "name": "Groq",
       "baseURL": "https://api.groq.com/openai/v1",
