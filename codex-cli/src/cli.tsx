@@ -201,6 +201,10 @@ const cli = meow(
   },
 );
 
+// ---------------------------------------------------------------------------
+// Global flag handling
+// ---------------------------------------------------------------------------
+
 // Handle 'completion' subcommand before any prompting or API calls
 if (cli.input[0] === "completion") {
   const shell = cli.input[1] || "bash";

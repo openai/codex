@@ -1,13 +1,12 @@
-import type { ApplyPatchCommand, ApprovalPolicy } from "../../approvals.js";
-import type { AppConfig } from "../config.js";
 import type { CommandConfirmation } from "./agent-loop.js";
+import type { ApplyPatchCommand, ApprovalPolicy } from "../../approvals.js";
 import type { ExecInput } from "./sandbox/interface.js";
 import type { ResponseInputItem } from "openai/resources/responses/responses.mjs";
 
 import { canAutoApprove } from "../../approvals.js";
 import { formatCommandForDisplay } from "../../format-command.js";
 import { FullAutoErrorMode } from "../auto-approval-mode.js";
-import { CODEX_UNSAFE_ALLOW_NO_SANDBOX } from "../config.js";
+import { CODEX_UNSAFE_ALLOW_NO_SANDBOX, type AppConfig } from "../config.js";
 import { exec, execApplyPatch } from "./exec.js";
 import { ReviewDecision } from "./review.js";
 import { isLoggingEnabled, log } from "../logger/log.js";
@@ -272,15 +271,6 @@ async function execCommand(
   };
 }
 
-const isInLinux = async (): Promise<boolean> => {
-  try {
-    await access("/proc/1/cgroup");
-    return true;
-  } catch {
-    return false;
-  }
-};
-
 /**
  * Return `true` if the `sandbox-exec` binary can be located. This intentionally does **not**
  * spawn the binary – we only care about its presence.
@@ -305,35 +295,20 @@ async function getSandbox(runInSandbox: boolean): Promise<SandboxType> {
       // instance, inside certain CI images).  Attempting to spawn a missing
       // binary makes Node.js throw an *uncaught* `ENOENT` error further down
       // the stack which crashes the whole CLI.
-
-      // To provide a graceful degradation path we first check at runtime
-      // whether `sandbox-exec` can be found **and** is executable.  If the
-      // check fails we fall back to the NONE sandbox while emitting a
-      // warning so users and maintainers are aware that the additional
-      // process isolation is not in effect.
-
       if (await isSandboxExecAvailable()) {
         return SandboxType.MACOS_SEATBELT;
-      }
-
-      if (CODEX_UNSAFE_ALLOW_NO_SANDBOX) {
-        log(
-          "WARNING: macOS Seatbelt sandbox requested but 'sandbox-exec' was not found in PATH. " +
-            "With `CODEX_UNSAFE_ALLOW_NO_SANDBOX` enabled, continuing without sandbox.",
+      } else {
+        throw new Error(
+          "Sandbox was mandated, but 'sandbox-exec' was not found in PATH!",
         );
-        return SandboxType.NONE;
       }
-    } else if (await isInLinux()) {
-      return SandboxType.NONE;
-    } else if (process.platform === "win32") {
-      // On Windows, we don't have a sandbox implementation yet, so we fall back to NONE
-      // instead of throwing an error, which would crash the application
-      log(
-        "WARNING: Sandbox was requested but is not available on Windows. Continuing without sandbox.",
-      );
+    } else if (CODEX_UNSAFE_ALLOW_NO_SANDBOX) {
+      // Allow running without a sandbox if the user has explicitly marked the
+      // environment as already being sufficiently locked-down.
       return SandboxType.NONE;
     }
-    // For other platforms, still throw an error as before
+
+    // For all else, we hard fail if the user has requested a sandbox and none is available.
     throw new Error("Sandbox was mandated, but no sandbox is available!");
   } else {
     return SandboxType.NONE;
