@@ -109,7 +109,7 @@ export default function TerminalChatInput({
     txt: string,
     alwaysUpdateSelection: boolean = false,
   ) {
-    // Clear tab completions if a space is typed
+    // Clear file system completions if a space is typed
     if (txt.endsWith(" ")) {
       setFsSuggestions([]);
       setSelectedCompletion(-1);
@@ -123,16 +123,13 @@ export default function TerminalChatInput({
 
       // Strip optional leading '@' for the path prefix
       let pathPrefix: string;
-      if (lastWord === "@") {
-        // If only '@' is typed, list everything in the current directory
-        pathPrefix = "./";
-      } else if (lastWord.startsWith("@")) {
+      if (lastWord.startsWith("@")) {
         pathPrefix = lastWord.slice(1);
       } else {
         pathPrefix = lastWord;
       }
 
-      if (shouldUpdateSelection && pathPrefix.length > 0) {
+      if (shouldUpdateSelection) {
         const completions = getFileSystemSuggestions(pathPrefix);
         setFsSuggestions(completions);
         if (completions.length > 0) {
