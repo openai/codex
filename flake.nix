@@ -90,16 +90,28 @@
           ];
           buildPhase = ''
             runHook preBuild
-            echo "pnpm --filter=codex-cli run build"
+            echo "pnpm --filter=@openai/codex run build"
             pnpm --filter="@openai/codex" run build
             runHook postBuild
           '';
           installPhase = ''
-            mkdir -p $out
-            cp -r ./codex-cli/dist $out
+            runHook preInstall
+
+            mkdir -p $out/lib/node_modules/@openai/codex
+            cp -r ./codex-cli/dist $out/lib/node_modules/@openai/codex/dist
+            cp ./codex-cli/package.json $out/lib/node_modules/@openai/codex/
+
+            mkdir -p $out/bin
+
+            cp $out/lib/node_modules/@openai/codex/dist/cli.js $out/bin/codex
+
+            # Make the script executable
+            chmod +x $out/bin/codex
+
+            runHook postInstall
           '';
           checkPhase = ''
-            pnpm --filter=codex-cli run test
+            pnpm --filter="@openai/codex" run test
           '';
           npmInstallFlags = ["--frozen-lockfile"];
           pnpmWorkspaces = ["@openai/codex"];
