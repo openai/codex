@@ -1,12 +1,12 @@
-import type { ApplyPatchCommand, ApprovalPolicy } from "../../approvals.js";
-import type { AppConfig } from "../config.js";
 import type { CommandConfirmation } from "./agent-loop.js";
+import type { ApplyPatchCommand, ApprovalPolicy } from "../../approvals.js";
 import type { ExecInput } from "./sandbox/interface.js";
 import type { ResponseInputItem } from "openai/resources/responses/responses.mjs";
 
 import { canAutoApprove } from "../../approvals.js";
 import { formatCommandForDisplay } from "../../format-command.js";
 import { FullAutoErrorMode } from "../auto-approval-mode.js";
+import { CODEX_UNSAFE_ALLOW_NO_SANDBOX, type AppConfig } from "../config.js";
 import { exec, execApplyPatch } from "./exec.js";
 import { ReviewDecision } from "./review.js";
 import { isLoggingEnabled, log } from "../logger/log.js";
@@ -271,15 +271,6 @@ async function execCommand(
   };
 }
 
-const isInSafeContainer = async (): Promise<boolean> => {
-  // Return `true` when Codex is running in an environment that is marked as already
-  // considered sufficiently locked-down so that we allow running wihtout an
-  // explicit sandbox. The previous implementation tried to detect generic Linux
-  // containers by probing `/proc/1/cgroup`, but that heuristic produced false
-  // positives and offered no way for users to override the behaviour.
-  return Boolean(process.env["CODEX_UNSAFE_ALLOW_NO_SANDBOX"]);
-};
-
 /**
  * Return `true` if the `sandbox-exec` binary can be located. This intentionally does **not**
  * spawn the binary – we only care about its presence.
@@ -311,7 +302,7 @@ async function getSandbox(runInSandbox: boolean): Promise<SandboxType> {
           "Sandbox was mandated, but 'sandbox-exec' was not found in PATH!",
         );
       }
-    } else if (await isInSafeContainer()) {
+    } else if (CODEX_UNSAFE_ALLOW_NO_SANDBOX) {
       // Allow running without a sandbox if the user has explicitly marked the
       // environment as already being sufficiently locked-down.
       return SandboxType.NONE;
