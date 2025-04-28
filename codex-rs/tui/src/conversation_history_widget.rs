@@ -1,6 +1,7 @@
 use crate::history_cell::CommandOutput;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::PatchEventType;
+use codex_core::config::Config;
 use codex_core::protocol::FileChange;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -181,13 +182,10 @@ impl ConversationHistoryWidget {
         self.add_to_history(HistoryCell::new_patch_event(event_type, changes));
     }
 
-    pub fn add_session_info(
-        &mut self,
-        model: String,
-        cwd: std::path::PathBuf,
-        approval_policy: codex_core::protocol::AskForApproval,
-    ) {
-        self.add_to_history(HistoryCell::new_session_info(model, cwd, approval_policy));
+    /// Note `model` could differ from `config.model` if the agent decided to
+    /// use a different model than the one requested by the user.
+    pub fn add_session_info(&mut self, config: &Config, model: String, cwd: PathBuf) {
+        self.add_to_history(HistoryCell::new_session_info(config, model, cwd));
     }
 
     pub fn add_active_exec_command(&mut self, call_id: String, command: Vec<String>) {

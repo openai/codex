@@ -1,4 +1,5 @@
 use clap::Parser;
+use codex_core::SandboxModeCliArg;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -11,6 +12,12 @@ pub struct Cli {
     /// Model the agent should use.
     #[arg(long, short = 'm')]
     pub model: Option<String>,
+
+    /// Configure the process restrictions when a command is executed.
+    ///
+    /// Uses OS-specific sandboxing tools; Seatbelt on OSX, landlock+seccomp on Linux.
+    #[arg(long = "sandbox", short = 's')]
+    pub sandbox_policy: Option<SandboxModeCliArg>,
 
     /// Allow running Codex outside a Git repository.
     #[arg(long = "skip-git-repo-check", default_value_t = false)]

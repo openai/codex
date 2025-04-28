@@ -26,7 +26,7 @@ pub enum Op {
     /// Configure the model session.
     ConfigureSession {
         /// If not specified, server will use its default model.
-        model: Option<String>,
+        model: String,
         /// Model instructions
         instructions: Option<String>,
         /// When to escalate for approval for execution
@@ -66,11 +66,13 @@ pub enum Op {
 }
 
 /// Determines how liberally commands are auto‑approved by the system.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum AskForApproval {
     /// Under this policy, only “known safe” commands—as determined by
     /// `is_safe_command()`—that **only read files** are auto‑approved.
     /// Everything else will ask the user to approve.
+    #[default]
     UnlessAllowListed,
 
     /// In addition to everything allowed by **`Suggest`**, commands that
@@ -91,13 +93,15 @@ pub enum AskForApproval {
 }
 
 /// Determines execution restrictions for model shell commands
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum SandboxPolicy {
     /// Network syscalls will be blocked
     NetworkRestricted,
     /// Filesystem writes will be restricted
     FileWriteRestricted,
     /// Network and filesystem writes will be restricted
+    #[default]
     NetworkAndFileWriteRestricted,
     /// No restrictions; full "unsandboxed" mode
     DangerousNoRestrictions,
