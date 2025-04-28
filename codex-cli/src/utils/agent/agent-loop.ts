@@ -11,7 +11,13 @@ import type {
 } from "openai/resources/responses/responses.mjs";
 import type { Reasoning } from "openai/resources.mjs";
 
-import { OPENAI_TIMEOUT_MS, getApiKey, getBaseUrl } from "../config.js";
+import {
+  OPENAI_TIMEOUT_MS,
+  OPENAI_ORGANIZATION,
+  OPENAI_PROJECT,
+  getApiKey,
+  getBaseUrl,
+} from "../config.js";
 import { log } from "../logger/log.js";
 import { parseToolCallArguments } from "../parsers.js";
 import { responsesCreateViaChatCompletions } from "../responses.js";
@@ -40,6 +46,7 @@ export type CommandConfirmation = {
 };
 
 const alreadyProcessedResponses = new Set();
+const alreadyStagedItemIds = new Set<string>();
 
 type AgentLoopParams = {
   model: string;
@@ -272,12 +279,10 @@ export class AgentLoop {
     // defined object.  We purposefully copy over the `model` and
     // `instructions` that have already been passed explicitly so that
     // downstream consumers (e.g. telemetry) still observe the correct values.
-    this.config =
-      config ??
-      ({
-        model,
-        instructions: instructions ?? "",
-      } as AppConfig);
+    this.config = config ?? {
+      model,
+      instructions: instructions ?? "",
+    };
     this.additionalWritableRoots = additionalWritableRoots;
     this.onItem = onItem;
     this.onLoading = onLoading;
@@ -304,6 +309,10 @@ export class AgentLoop {
         originator: ORIGIN,
         version: CLI_VERSION,
         session_id: this.sessionId,
+        ...(OPENAI_ORGANIZATION
+          ? { "OpenAI-Organization": OPENAI_ORGANIZATION }
+          : {}),
+        ...(OPENAI_PROJECT ? { "OpenAI-Project": OPENAI_PROJECT } : {}),
       },
       ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
     });
@@ -554,17 +563,27 @@ export class AgentLoop {
           return;
         }
 
+        // Skip items we've already processed to avoid staging duplicates
+        if (item.id && alreadyStagedItemIds.has(item.id)) {
+          return;
+        }
+        alreadyStagedItemIds.add(item.id);
+
         // Store the item so the final flush can still operate on a complete list.
         // We'll nil out entries once they're delivered.
         const idx = staged.push(item) - 1;
 
         // Instead of emitting synchronously we schedule a short‑delay delivery.
+        //
         // This accomplishes two things:
         //   1. The UI still sees new messages almost immediately, creating the
         //      perception of real‑time updates.
         //   2. If the user calls `cancel()` in the small window right after the
         //      item was staged we can still abort the delivery because the
         //      generation counter will have been bumped by `cancel()`.
+        //
+        // Use a minimal 3ms delay for terminal rendering to maintain readable
+        // streaming.
         setTimeout(() => {
           if (
             thisGeneration === this.generation &&
@@ -575,8 +594,9 @@ export class AgentLoop {
             // Mark as delivered so flush won't re-emit it
             staged[idx] = undefined;
 
-            // When we operate without server‑side storage we keep our own
-            // transcript so we can provide full context on subsequent calls.
+            // Handle transcript updates to maintain consistency. When we
+            // operate without server‑side storage we keep our own transcript
+            // so we can provide full context on subsequent calls.
             if (this.disableResponseStorage) {
               // Exclude system messages from transcript as they do not form
               // part of the assistant/user dialogue that the model needs.
@@ -620,7 +640,7 @@ export class AgentLoop {
               }
             }
           }
-        }, 10);
+        }, 3); // Small 3ms delay for readable streaming.
       };
 
       while (turnInput.length > 0) {
@@ -647,7 +667,7 @@ export class AgentLoop {
         for (const item of deltaInput) {
           stageItem(item as ResponseItem);
         }
-        // Send request to OpenAI with retry on timeout
+        // Send request to OpenAI with retry on timeout.
         let stream;
 
         // Retry loop for transient errors. Up to MAX_RETRIES attempts.
@@ -861,7 +881,6 @@ export class AgentLoop {
             throw error;
           }
         }
-        turnInput = []; // clear turn input, prepare for function call results
 
         // If the user requested cancellation while we were awaiting the network
         // request, abort immediately before we start handling the stream.
@@ -881,7 +900,7 @@ export class AgentLoop {
         // Keep track of the active stream so it can be aborted on demand.
         this.currentStream = stream;
 
-        // guard against an undefined stream before iterating
+        // Guard against an undefined stream before iterating.
         if (!stream) {
           this.onLoading(false);
           log("AgentLoop.run(): stream is undefined");
@@ -894,6 +913,8 @@ export class AgentLoop {
         // eslint-disable-next-line no-constant-condition
         while (true) {
           try {
+            let newTurnInput: Array<ResponseInputItem> = [];
+
             // eslint-disable-next-line no-await-in-loop
             for await (const event of stream as AsyncIterable<ResponseEvent>) {
               log(`AgentLoop.run(): response event ${event.type}`);
@@ -935,7 +956,7 @@ export class AgentLoop {
                     "requires_action"
                 ) {
                   // TODO: remove this once we can depend on streaming events
-                  const newTurnInput = await this.processEventsWithoutStreaming(
+                  newTurnInput = await this.processEventsWithoutStreaming(
                     event.response.output,
                     stageItem,
                   );
@@ -970,24 +991,30 @@ export class AgentLoop {
 
                     if (delta.length === 0) {
                       // No new input => end conversation.
-                      turnInput = [];
+                      newTurnInput = [];
                     } else {
                       // Re‑send full transcript *plus* the new delta so the
                       // stateless backend receives complete context.
-                      turnInput = [...this.transcript, ...delta];
+                      newTurnInput = [...this.transcript, ...delta];
                       // The prefix ends at the current transcript length –
                       // everything after this index is new for the next
                       // iteration.
                       transcriptPrefixLen = this.transcript.length;
                     }
-                  } else {
-                    turnInput = newTurnInput;
                   }
                 }
                 lastResponseId = event.response.id;
                 this.onLastResponseId(event.response.id);
               }
             }
+
+            // Set after we have consumed all stream events in case the stream wasn't
+            // complete or we missed events for whatever reason. That way, we will set
+            // the next turn to an empty array to prevent an infinite loop.
+            // And don't update the turn input too early otherwise we won't have the
+            // current turn inputs available for retries.
+            turnInput = newTurnInput;
+
             // Stream finished successfully – leave the retry loop.
             break;
           } catch (err: unknown) {
@@ -1191,8 +1218,18 @@ export class AgentLoop {
         this.onLoading(false);
       };
 
-      // Delay flush slightly to allow a near‑simultaneous cancel() to land.
-      setTimeout(flush, 30);
+      // Use a small delay to make sure UI rendering is smooth. Double-check
+      // cancellation state right before flushing to avoid race conditions.
+      setTimeout(() => {
+        if (
+          !this.canceled &&
+          !this.hardAbort.signal.aborted &&
+          thisGeneration === this.generation
+        ) {
+          flush();
+        }
+      }, 3);
+
       // End of main logic. The corresponding catch block for the wrapper at the
       // start of this method follows next.
     } catch (err) {

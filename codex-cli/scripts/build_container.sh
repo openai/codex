@@ -8,9 +8,9 @@ pushd "$SCRIPT_DIR/.." >> /dev/null || {
   echo "Error: Failed to change directory to $SCRIPT_DIR/.."
   exit 1
 }
-npm install
-npm run build
+pnpm install
+pnpm run build
 rm -rf ./dist/openai-codex-*.tgz
-npm pack --pack-destination ./dist
+pnpm pack --pack-destination ./dist
 mv ./dist/openai-codex-*.tgz ./dist/codex.tgz
 docker build -t codex -f "./Dockerfile" .

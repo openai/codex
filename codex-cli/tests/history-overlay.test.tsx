@@ -60,7 +60,7 @@ function createFunctionCall(
     id: `fn_${Math.random().toString(36).slice(2)}`,
     call_id: `call_${Math.random().toString(36).slice(2)}`,
     arguments: JSON.stringify(args),
-  };
+  } as ResponseFunctionToolCallItem;
 }
 
 // ---------------------------------------------------------------------------

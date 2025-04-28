@@ -24,10 +24,17 @@
 - [Tracing / Verbose Logging](#tracing--verbose-logging)
 - [Recipes](#recipes)
 - [Installation](#installation)
-- [Configuration](#configuration)
+- [Configuration Guide](#configuration-guide)
+  - [Basic Configuration Parameters](#basic-configuration-parameters)
+  - [Custom AI Provider Configuration](#custom-ai-provider-configuration)
+  - [History Configuration](#history-configuration)
+  - [Configuration Examples](#configuration-examples)
+  - [Full Configuration Example](#full-configuration-example)
+  - [Custom Instructions](#custom-instructions)
+  - [Environment Variables Setup](#environment-variables-setup)
 - [FAQ](#faq)
-- [Zero Data Retention (ZDR) Organization Limitation](#zero-data-retention-zdr-organization-limitation)
-- [Funding Opportunity](#funding-opportunity)
+- [Zero Data Retention (ZDR) Usage](#zero-data-retention-zdr-usage)
+- [Codex Open Source Fund](#codex-open-source-fund)
 - [Contributing](#contributing)
   - [Development workflow](#development-workflow)
   - [Git Hooks with Husky](#git-hooks-with-husky)
@@ -97,11 +104,18 @@ export OPENAI_API_KEY="your-api-key-here"
 > - deepseek
 > - xai
 > - groq
+> - any other provider that is compatible with the OpenAI API
 >
 > If you use a provider other than OpenAI, you will need to set the API key for the provider in the config file or in the environment variable as:
 >
 > ```shell
 > export <provider>_API_KEY="your-api-key-here"
+> ```
+>
+> If you use a provider not listed above, you must also set the base URL for the provider:
+>
+> ```shell
+> export <provider>_BASE_URL="https://your-provider-api-base-url"
 > ```
 
 </details>
@@ -308,20 +322,53 @@ pnpm link
 
 ---
 
-## Configuration
+## Configuration Guide
 
-Codex looks for config files in **`~/.codex/`** (either YAML or JSON format).
+Codex configuration files can be placed in the `~/.codex/` directory, supporting both YAML and JSON formats.
+
+### Basic Configuration Parameters
+
+| Parameter           | Type    | Default    | Description                      | Available Options                                                                              |
+| ------------------- | ------- | ---------- | -------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `model`             | string  | `o4-mini`  | AI model to use                  | Any model name supporting OpenAI API                                                           |
+| `approvalMode`      | string  | `suggest`  | AI assistant's permission mode   | `suggest` (suggestions only)<br>`auto-edit` (automatic edits)<br>`full-auto` (fully automatic) |
+| `fullAutoErrorMode` | string  | `ask-user` | Error handling in full-auto mode | `ask-user` (prompt for user input)<br>`ignore-and-continue` (ignore and proceed)               |
+| `notify`            | boolean | `true`     | Enable desktop notifications     | `true`/`false`                                                                                 |
+
+### Custom AI Provider Configuration
+
+In the `providers` object, you can configure multiple AI service providers. Each provider requires the following parameters:
+
+| Parameter | Type   | Description                             | Example                       |
+| --------- | ------ | --------------------------------------- | ----------------------------- |
+| `name`    | string | Display name of the provider            | `"OpenAI"`                    |
+| `baseURL` | string | API service URL                         | `"https://api.openai.com/v1"` |
+| `envKey`  | string | Environment variable name (for API key) | `"OPENAI_API_KEY"`            |
+
+### History Configuration
+
+In the `history` object, you can configure conversation history settings:
+
+| Parameter           | Type    | Description                                            | Example Value |
+| ------------------- | ------- | ------------------------------------------------------ | ------------- |
+| `maxSize`           | number  | Maximum number of history entries to save              | `1000`        |
+| `saveHistory`       | boolean | Whether to save history                                | `true`        |
+| `sensitivePatterns` | array   | Patterns of sensitive information to filter in history | `[]`          |
+
+### Configuration Examples
+
+1. YAML format (save as `~/.codex/config.yaml`):
 
 ```yaml
-# ~/.codex/config.yaml
-model: o4-mini # Default model
-approvalMode: suggest # or auto-edit, full-auto
-fullAutoErrorMode: ask-user # or ignore-and-continue
-notify: true # Enable desktop notifications for responses
+model: o4-mini
+approvalMode: suggest
+fullAutoErrorMode: ask-user
+notify: true
 ```
 
+2. JSON format (save as `~/.codex/config.json`):
+
 ```json
-// ~/.codex/config.json
 {
   "model": "o4-mini",
   "approvalMode": "suggest",
@@ -330,12 +377,85 @@ notify: true # Enable desktop notifications for responses
 }
 ```
 
-You can also define custom instructions:
+### Full Configuration Example
 
-```yaml
-# ~/.codex/instructions.md
+Below is a comprehensive example of `config.json` with multiple custom providers:
+
+```json
+{
+  "model": "o4-mini",
+  "provider": "openai",
+  "providers": {
+    "openai": {
+      "name": "OpenAI",
+      "baseURL": "https://api.openai.com/v1",
+      "envKey": "OPENAI_API_KEY"
+    },
+    "openrouter": {
+      "name": "OpenRouter",
+      "baseURL": "https://openrouter.ai/api/v1",
+      "envKey": "OPENROUTER_API_KEY"
+    },
+    "gemini": {
+      "name": "Gemini",
+      "baseURL": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "envKey": "GEMINI_API_KEY"
+    },
+    "ollama": {
+      "name": "Ollama",
+      "baseURL": "http://localhost:11434/v1",
+      "envKey": "OLLAMA_API_KEY"
+    },
+    "mistral": {
+      "name": "Mistral",
+      "baseURL": "https://api.mistral.ai/v1",
+      "envKey": "MISTRAL_API_KEY"
+    },
+    "deepseek": {
+      "name": "DeepSeek",
+      "baseURL": "https://api.deepseek.com",
+      "envKey": "DEEPSEEK_API_KEY"
+    },
+    "xai": {
+      "name": "xAI",
+      "baseURL": "https://api.x.ai/v1",
+      "envKey": "XAI_API_KEY"
+    },
+    "groq": {
+      "name": "Groq",
+      "baseURL": "https://api.groq.com/openai/v1",
+      "envKey": "GROQ_API_KEY"
+    }
+  },
+  "history": {
+    "maxSize": 1000,
+    "saveHistory": true,
+    "sensitivePatterns": []
+  }
+}
+```
+
+### Custom Instructions
+
+You can create a `~/.codex/instructions.md` file to define custom instructions:
+
+```markdown
 - Always respond with emojis
-- Only use git commands if I explicitly mention you should
+- Only use git commands when explicitly requested
+```
+
+### Environment Variables Setup
+
+For each AI provider, you need to set the corresponding API key in your environment variables. For example:
+
+```bash
+# OpenAI
+export OPENAI_API_KEY="your-api-key-here"
+
+# OpenRouter
+export OPENROUTER_API_KEY="your-openrouter-key-here"
+
+# Similarly for other providers
 ```
 
 ---
@@ -377,34 +497,23 @@ Not directly. It requires [Windows Subsystem for Linux (WSL2)](https://learn.mic
 
 ---
 
-## Zero Data Retention (ZDR) Organization Limitation
+## Zero Data Retention (ZDR) Usage
 
-> **Note:** Codex CLI does **not** currently support OpenAI organizations with [Zero Data Retention (ZDR)](https://platform.openai.com/docs/guides/your-data#zero-data-retention) enabled.
-
-If your OpenAI organization has Zero Data Retention enabled, you may encounter errors such as:
+Codex CLI **does** support OpenAI organizations with [Zero Data Retention (ZDR)](https://platform.openai.com/docs/guides/your-data#zero-data-retention) enabled. If your OpenAI organization has Zero Data Retention enabled and you still encounter errors such as:
 
 ```
 OpenAI rejected the request. Error details: Status: 400, Code: unsupported_parameter, Type: invalid_request_error, Message: 400 Previous response cannot be used for this organization due to Zero Data Retention.
 ```
 
-**Why?**
-
-- Codex CLI relies on the Responses API with `store:true` to enable internal reasoning steps.
-- As noted in the [docs](https://platform.openai.com/docs/guides/your-data#responses-api), the Responses API requires a 30-day retention period by default, or when the store parameter is set to true.
-- ZDR organizations cannot use `store:true`, so requests will fail.
-
-**What can I do?**
-
-- If you are part of a ZDR organization, Codex CLI will not work until support is added.
-- We are tracking this limitation and will update the documentation once support becomes available.
+You may need to upgrade to a more recent version with: `npm i -g @openai/codex@latest`
 
 ---
 
-## Funding Opportunity
+## Codex Open Source Fund
 
 We're excited to launch a **$1 million initiative** supporting open source projects that use Codex CLI and other OpenAI models.
 
-- Grants are awarded in **$25,000** API credit increments.
+- Grants are awarded up to **$25,000** API credits.
 - Applications are reviewed **on a rolling basis**.
 
 **Interested? [Apply here](https://openai.com/form/codex-open-source-fund/).**
