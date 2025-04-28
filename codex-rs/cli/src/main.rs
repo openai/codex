@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use clap::ArgAction;
 use clap::Parser;
+use codex_core::SandboxModeCliArg;
 use codex_exec::Cli as ExecCli;
 use codex_interactive::Cli as InteractiveCli;
 use codex_repl::Cli as ReplCli;
@@ -70,6 +71,10 @@ struct SeatbeltCommand {
     #[arg(long = "writable-root", short = 'w', value_name = "DIR", action = ArgAction::Append, use_value_delimiter = false)]
     writable_roots: Vec<PathBuf>,
 
+    /// Configure the process restrictions for the command.
+    #[arg(long = "sandbox", short = 's')]
+    sandbox_policy: SandboxModeCliArg,
+
     /// Full command args to run under seatbelt.
     #[arg(trailing_var_arg = true)]
     command: Vec<String>,
@@ -101,9 +106,10 @@ async fn main() -> anyhow::Result<()> {
         Some(Subcommand::Debug(debug_args)) => match debug_args.cmd {
             DebugCommand::Seatbelt(SeatbeltCommand {
                 command,
+                sandbox_policy,
                 writable_roots,
             }) => {
-                seatbelt::run_seatbelt(command, writable_roots).await?;
+                seatbelt::run_seatbelt(command, sandbox_policy.into(), writable_roots).await?;
             }
         },
     }
