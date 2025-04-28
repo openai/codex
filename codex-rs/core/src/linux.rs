@@ -225,7 +225,9 @@ mod tests_linux {
                 &format!("echo blah > {}", file_path.to_string_lossy()),
             ],
             &[tmpdir.path().to_path_buf()],
-            500,
+            // We have seen timeouts when running this test in CI on GitHub,
+            // so we are using a generous timeout until we can diagnose further.
+            1_000,
         )
         .await;
     }
