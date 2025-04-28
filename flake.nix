@@ -234,6 +234,7 @@
           '';
       };
       defaultPackage = packages.codex-cli;
+      default = packages.codex-cli;
       devShell = pkgs.mkShell {
         name = "codex-cli-dev";
         buildInputs = [
