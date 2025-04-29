@@ -15,20 +15,30 @@ jobs:
   tag-check:
     runs-on: ubuntu-latest
     steps:
-      - name: Verify tag format
+      - uses: actions/checkout@v4
+
+      - name: Validate tag matches Cargo.toml version
         shell: bash
         run: |
           set -euo pipefail
           echo "::group::Tag validation"
-          echo "Ref type : ${GITHUB_REF_TYPE}"
-          echo "Ref name : ${GITHUB_REF_NAME}"
-          if [[ "${GITHUB_REF_TYPE}" != "tag" ]]; then
-            echo "❌ Not a tag push"; exit 1
-          fi
-          if [[ ! "${GITHUB_REF_NAME}" =~ ${TAG_REGEX} ]]; then
-            echo "❌ Tag '${GITHUB_REF_NAME}' does not match ${TAG_REGEX}"; exit 1
-          fi
-          echo "✅ Tag format OK"
+
+          # 1. Must be a tag and match the regex
+          [[ "${GITHUB_REF_TYPE}" == "tag" ]] \
+            || { echo "❌  Not a tag push"; exit 1; }
+          [[ "${GITHUB_REF_NAME}" =~ ${TAG_REGEX} ]] \
+            || { echo "❌  Tag '${GITHUB_REF_NAME}' != ${TAG_REGEX}"; exit 1; }
+
+          # 2. Extract versions
+          tag_ver="${GITHUB_REF_NAME#rust-v.}"
+          cargo_ver="$(grep -m1 '^version' codex-rs/Cargo.toml \
+                        | sed -E 's/version *= *"([^"]+)".*/\1/')"
+
+          # 3. Compare
+          [[ "${tag_ver}" == "${cargo_ver}" ]] \
+            || { echo "❌  Tag ${tag_ver} ≠ Cargo.toml ${cargo_ver}"; exit 1; }
+
+          echo "✅  Tag and Cargo.toml agree (${tag_ver})"
           echo "::endgroup::"
 
   build:
