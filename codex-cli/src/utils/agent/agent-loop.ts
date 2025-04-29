@@ -676,7 +676,7 @@ export class AgentLoop {
           try {
             let reasoning: Reasoning | undefined;
             if (this.model.startsWith("o")) {
-              reasoning = { effort: "high" };
+              reasoning = { effort: this.config.reasoningEffort ?? "high" };
               if (this.model === "o3" || this.model === "o4-mini") {
                 reasoning.summary = "auto";
               }

@@ -10,6 +10,7 @@ import type { ApprovalPolicy } from "./approvals";
 import type { CommandConfirmation } from "./utils/agent/agent-loop";
 import type { AppConfig } from "./utils/config";
 import type { ResponseItem } from "openai/resources/responses/responses";
+import type { ReasoningEffort } from "openai/resources.mjs";
 
 import App from "./app";
 import { runSinglePass } from "./cli-singlepass";
@@ -160,6 +161,12 @@ const cli = meow(
           "Disable truncation of command stdout/stderr messages (show everything)",
         aliases: ["no-truncate"],
       },
+      reasoning: {
+        type: "string",
+        description: "Set the reasoning effort level (low, medium, high)",
+        choices: ["low", "medium", "high"],
+        default: "high",
+      },
       // Notification
       notify: {
         type: "boolean",
@@ -292,6 +299,8 @@ config = {
   ...config,
   model: model ?? config.model,
   notify: Boolean(cli.flags.notify),
+  reasoningEffort:
+    (cli.flags.reasoning as ReasoningEffort | undefined) ?? "high",
   flexMode: Boolean(cli.flags.flexMode),
   provider,
   disableResponseStorage:
