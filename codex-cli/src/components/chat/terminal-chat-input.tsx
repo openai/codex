@@ -101,6 +101,10 @@ export default function TerminalChatInput({
   // Track the caret row across keystrokes
   const prevCursorRow = useRef<number | null>(null);
   const prevCursorWasAtLastRow = useRef<boolean>(false);
+  const [reverseSearch, setReverseSearch] = useState(false);
+  const [reverseQuery, setReverseQuery] = useState("");
+  const [reverseResults, setReverseResults] = useState<Array<HistoryEntry>>([]);
+  const [reverseIndex, setReverseIndex] = useState(0);
 
   // Load command history on component mount
   useEffect(() => {
@@ -120,6 +124,67 @@ export default function TerminalChatInput({
 
   useInput(
     (_input, _key) => {
+      // Reverse search mode (Ctrl+R)
+      if (reverseSearch) {
+        if (_key.escape) {
+          setReverseSearch(false);
+          setReverseQuery("");
+          setReverseResults([]);
+          setReverseIndex(0);
+          return;
+        }
+        if (_key.return) {
+          if (reverseResults.length > 0) {
+            setInput(reverseResults[reverseIndex]?.command ?? "");
+            setReverseSearch(false);
+            setReverseQuery("");
+            setReverseResults([]);
+            setReverseIndex(0);
+            setEditorKey((k: number) => k + 1);
+          }
+          return;
+        }
+        if (_key.upArrow) {
+          setReverseIndex((i: number) => (i <= 0 ? reverseResults.length - 1 : i - 1));
+          return;
+        }
+        if (_key.downArrow) {
+          setReverseIndex((i: number) => (i >= reverseResults.length - 1 ? 0 : i + 1));
+          return;
+        }
+        if (_key.backspace || _input === "\x7f") {
+          const newQuery = reverseQuery.slice(0, -1);
+          setReverseQuery(newQuery);
+          setReverseIndex(0);
+          setReverseResults(
+            history.filter((h) => h.command.includes(newQuery)).reverse()
+          );
+          return;
+        }
+        if (_input && !_key.ctrl && !_key.meta && !_key.alt) {
+          const newQuery = reverseQuery + _input;
+          setReverseQuery(newQuery);
+          setReverseIndex(0);
+          setReverseResults(
+            history.filter((h) => h.command.includes(newQuery)).reverse()
+          );
+          return;
+        }
+        return;
+      }
+      // Ctrl+R: Start reverse search
+      if (_key.ctrl && (_input === "r" || _input === "\x12")) {
+        setReverseSearch(true);
+        setReverseQuery("");
+        setReverseResults(history.slice().reverse());
+        setReverseIndex(0);
+        return;
+      }
+      // Ctrl+L: Clear screen
+      if (_key.ctrl && (_input === "l" || _input === "\x0c")) {
+        clearTerminal();
+        return;
+      }
       // Slash command navigation: up/down to select, enter to fill
       if (!confirmationPrompt && !loading && input.trim().startsWith("/")) {
         const prefix = input.trim();
@@ -231,7 +296,7 @@ export default function TerminalChatInput({
               const newText = words.join(" ");
               setInput(newText);
               // Force remount of the editor with the new text
-              setEditorKey((k) => k + 1);
+              setEditorKey((k: number) => k + 1);
 
               // We need to move the cursor to the end after editor remounts
               setTimeout(() => {
@@ -246,65 +311,38 @@ export default function TerminalChatInput({
         }
 
         if (_key.upArrow) {
-          let moveThroughHistory = true;
-
-          // Only use history when the caret was *already* on the very first
-          // row *before* this key-press.
           const cursorRow = editorRef.current?.getRow?.() ?? 0;
-          const cursorCol = editorRef.current?.getCol?.() ?? 0;
-          const wasAtFirstRow = (prevCursorRow.current ?? cursorRow) === 0;
-          if (!(cursorRow === 0 && wasAtFirstRow)) {
-            moveThroughHistory = false;
-          }
-
-          // If we are not yet in history mode, then also require that the col is zero so that
-          // we only trigger history navigation when the user is at the start of the input.
-          if (historyIndex == null && !(cursorRow === 0 && cursorCol === 0)) {
-            moveThroughHistory = false;
-          }
-
-          // Move through history.
-          if (history.length && moveThroughHistory) {
-            let newIndex: number;
+          if (cursorRow === 0) {
+            let newIndex;
             if (historyIndex == null) {
-              const currentDraft = editorRef.current?.getText?.() ?? input;
-              setDraftInput(currentDraft);
+              setDraftInput(editorRef.current?.getText?.() ?? input);
               newIndex = history.length - 1;
             } else {
               newIndex = Math.max(0, historyIndex - 1);
             }
             setHistoryIndex(newIndex);
-
             setInput(history[newIndex]?.command ?? "");
-            // Re-mount the editor so it picks up the new initialText
-            setEditorKey((k) => k + 1);
-            return; // handled
+            setEditorKey((k: number) => k + 1);
+            return;
           }
-
-          // Otherwise let it propagate.
         }
 
         if (_key.downArrow) {
-          // Only move forward in history when we're already *in* history mode
-          // AND the caret sits on the last line of the buffer.
-          const wasAtLastRow =
-            prevCursorWasAtLastRow.current ??
-            editorRef.current?.isCursorAtLastRow() ??
-            true;
-          if (historyIndex != null && wasAtLastRow) {
+          const cursorRow = editorRef.current?.getRow?.() ?? 0;
+          const lineCount = editorRef.current?.getLineCount?.() ?? 1;
+          if (cursorRow === lineCount - 1 && historyIndex != null) {
             const newIndex = historyIndex + 1;
             if (newIndex >= history.length) {
               setHistoryIndex(null);
               setInput(draftInput);
-              setEditorKey((k) => k + 1);
+              setEditorKey((k: number) => k + 1);
             } else {
               setHistoryIndex(newIndex);
               setInput(history[newIndex]?.command ?? "");
-              setEditorKey((k) => k + 1);
+              setEditorKey((k: number) => k + 1);
             }
-            return; // handled
+            return;
           }
-          // Otherwise let it propagate
         }
 
         if (_key.tab) {
@@ -654,6 +692,27 @@ export default function TerminalChatInput({
     );
   }
 
+  // Reverse search overlay UI
+  if (reverseSearch) {
+    return (
+      <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1}>
+        <Text color="cyan">(reverse-i-search): {reverseQuery}_</Text>
+        {reverseResults.length > 0 ? (
+          <Box flexDirection="column">
+            {reverseResults.slice(0, 5).map((h: HistoryEntry, idx: number) => (
+              <Text key={h.timestamp} backgroundColor={idx === reverseIndex ? "cyan" : undefined} color={idx === reverseIndex ? "black" : undefined}>
+                {h.command}
+              </Text>
+            ))}
+          </Box>
+        ) : (
+          <Text dimColor>No matches</Text>
+        )}
+        <Text dimColor>esc to cancel | enter to select | up/down to navigate</Text>
+      </Box>
+    );
+  }
+
   return (
     <Box flexDirection="column">
       <Box borderStyle="round">
@@ -694,7 +753,7 @@ export default function TerminalChatInput({
               focus={active}
               onSubmit={(txt) => {
                 onSubmit(txt);
-                setEditorKey((k) => k + 1);
+                setEditorKey((k: number) => k + 1);
                 setInput("");
                 setHistoryIndex(null);
                 setDraftInput("");
