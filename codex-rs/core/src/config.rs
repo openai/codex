@@ -1,5 +1,6 @@
 use crate::flags::OPENAI_DEFAULT_MODEL;
 use crate::protocol::AskForApproval;
+use crate::protocol::SandboxPermission;
 use crate::protocol::SandboxPolicy;
 use dirs::home_dir;
 use serde::Deserialize;
@@ -11,25 +12,66 @@ use std::path::PathBuf;
 const EMBEDDED_INSTRUCTIONS: &str = include_str!("../prompt.md");
 
 /// Application configuration loaded from disk and merged with overrides.
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct Config {
     /// Optional override of model selection.
-    #[serde(default = "default_model")]
     pub model: String,
-    /// Default approval policy for executing commands.
-    #[serde(default)]
+
+    /// Approval policy for executing commands.
     pub approval_policy: AskForApproval,
-    #[serde(default)]
+
     pub sandbox_policy: SandboxPolicy,
 
     /// Disable server-side response storage (sends the full conversation
     /// context with every request). Currently necessary for OpenAI customers
     /// who have opted into Zero Data Retention (ZDR).
-    #[serde(default)]
     pub disable_response_storage: bool,
 
     /// System instructions.
     pub instructions: Option<String>,
+}
+
+/// Base config deserialized from ~/.codex/config.toml.
+#[derive(Deserialize, Debug, Clone, Default)]
+pub struct ConfigToml {
+    /// Optional override of model selection.
+    pub model: Option<String>,
+
+    /// Default approval policy for executing commands.
+    pub approval_policy: Option<AskForApproval>,
+
+    pub sandbox_permissions: Option<Vec<SandboxPermission>>,
+
+    /// Disable server-side response storage (sends the full conversation
+    /// context with every request). Currently necessary for OpenAI customers
+    /// who have opted into Zero Data Retention (ZDR).
+    pub disable_response_storage: Option<bool>,
+
+    /// System instructions.
+    pub instructions: Option<String>,
+}
+
+impl ConfigToml {
+    /// Attempt to parse the file at `~/.codex/config.toml`. If it does not
+    /// exist, return a default config. Though if it exists and cannot be
+    /// parsed, report that to the user and force them to fix it.
+    fn load_from_toml() -> std::io::Result<Self> {
+        let config_toml_path = codex_dir()?.join("config.toml");
+        match std::fs::read_to_string(&config_toml_path) {
+            Ok(contents) => toml::from_str::<Self>(&contents).map_err(|e| {
+                tracing::error!("Failed to parse config.toml: {e}");
+                std::io::Error::new(std::io::ErrorKind::InvalidData, e)
+            }),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                tracing::info!("config.toml not found, using defaults");
+                Ok(Self::default())
+            }
+            Err(e) => {
+                tracing::error!("Failed to read config.toml: {e}");
+                Err(e)
+            }
+        }
+    }
 }
 
 /// Optional overrides for user configuration (e.g., from CLI flags).
@@ -46,11 +88,14 @@ impl Config {
     /// ~/.codex/config.toml, ~/.codex/instructions.md, embedded defaults, and
     /// any values provided in `overrides` (highest precedence).
     pub fn load_with_overrides(overrides: ConfigOverrides) -> std::io::Result<Self> {
-        let mut cfg: Config = Self::load_from_toml()?;
+        let cfg: ConfigToml = ConfigToml::load_from_toml()?;
         tracing::warn!("Config parsed from config.toml: {cfg:?}");
+        Ok(Self::load_from_base_config_with_overrides(cfg, overrides))
+    }
 
+    fn load_from_base_config_with_overrides(cfg: ConfigToml, overrides: ConfigOverrides) -> Self {
         // Instructions: user-provided instructions.md > embedded default.
-        cfg.instructions =
+        let instructions =
             Self::load_instructions().or_else(|| Some(EMBEDDED_INSTRUCTIONS.to_string()));
 
         // Destructure ConfigOverrides fully to ensure all overrides are applied.
@@ -61,56 +106,47 @@ impl Config {
             disable_response_storage,
         } = overrides;
 
-        if let Some(model) = model {
-            cfg.model = model;
-        }
-        if let Some(approval_policy) = approval_policy {
-            cfg.approval_policy = approval_policy;
-        }
-        if let Some(sandbox_policy) = sandbox_policy {
-            cfg.sandbox_policy = sandbox_policy;
-        }
-        if let Some(disable_response_storage) = disable_response_storage {
-            cfg.disable_response_storage = disable_response_storage;
-        }
-        Ok(cfg)
-    }
-
-    /// Attempt to parse the file at `~/.codex/config.toml` into a Config.
-    fn load_from_toml() -> std::io::Result<Self> {
-        let config_toml_path = codex_dir()?.join("config.toml");
-        match std::fs::read_to_string(&config_toml_path) {
-            Ok(contents) => toml::from_str::<Self>(&contents).map_err(|e| {
-                tracing::error!("Failed to parse config.toml: {e}");
-                std::io::Error::new(std::io::ErrorKind::InvalidData, e)
-            }),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                tracing::info!("config.toml not found, using defaults");
-                Ok(Self::load_default_config())
+        let sandbox_policy = match sandbox_policy {
+            Some(sandbox_policy) => sandbox_policy,
+            None => {
+                // Derive a SandboxPolicy from the permissions in the config.
+                match cfg.sandbox_permissions {
+                    // Note this means the user can explicitly set permissions
+                    // to the empty list in the config file, granting it no
+                    // permissions whatsoever.
+                    Some(permissions) => SandboxPolicy::from(permissions),
+                    // Default to read only rather than completely locked down.
+                    None => SandboxPolicy::new_read_only_policy(),
+                }
             }
-            Err(e) => {
-                tracing::error!("Failed to read config.toml: {e}");
-                Err(e)
-            }
+        };
+
+        Self {
+            model: model.or(cfg.model).unwrap_or_else(default_model),
+            approval_policy: approval_policy
+                .or(cfg.approval_policy)
+                .unwrap_or_else(AskForApproval::default),
+            sandbox_policy,
+            disable_response_storage: disable_response_storage
+                .or(cfg.disable_response_storage)
+                .unwrap_or(false),
+            instructions,
         }
-    }
-
-    /// Meant to be used exclusively for tests: load_with_overrides() should be
-    /// used in all other cases.
-    pub fn load_default_config_for_test() -> Self {
-        Self::load_default_config()
-    }
-
-    fn load_default_config() -> Self {
-        // Load from an empty string to exercise #[serde(default)] to
-        // get the default values for each field.
-        toml::from_str::<Self>("").expect("empty string should parse as TOML")
     }
 
     fn load_instructions() -> Option<String> {
         let mut p = codex_dir().ok()?;
         p.push("instructions.md");
         std::fs::read_to_string(&p).ok()
+    }
+
+    /// Meant to be used exclusively for tests: `load_with_overrides()` should
+    /// be used in all other cases.
+    pub fn load_default_config_for_test() -> Self {
+        Self::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+        )
     }
 }
 

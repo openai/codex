@@ -1,6 +1,5 @@
 use clap::Parser;
 use clap::ValueEnum;
-use codex_core::SandboxModeCliArg;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -14,11 +13,9 @@ pub struct Cli {
     #[arg(long, short = 'm')]
     pub model: Option<String>,
 
-    /// Configure the process restrictions when a command is executed.
-    ///
-    /// Uses OS-specific sandboxing tools; Seatbelt on OSX, landlock+seccomp on Linux.
-    #[arg(long = "sandbox", short = 's')]
-    pub sandbox_policy: Option<SandboxModeCliArg>,
+    /// Convenience alias for low-friction sandboxed automatic execution (network-disabled sandbox that can write to cwd and TMPDIR)
+    #[arg(long = "full-auto", default_value_t = false)]
+    pub full_auto: bool,
 
     /// Allow running Codex outside a Git repository.
     #[arg(long = "skip-git-repo-check", default_value_t = false)]
