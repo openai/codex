@@ -19,11 +19,6 @@ async function type(
  *
  * This function simulates typing '@' followed by Tab to ensure suggestions appear.
  *
- * NOTE: We need to explicitly press Tab after the '@' in tests because of how
- * the test environment handles stdin/event propagation. In the test environment,
- * the normal onChange events don't reliably trigger suggestion updates when typing '@',
- * so we simulate pressing Tab to explicitly activate them.
- *
  * In real usage, simply typing '@' does trigger suggestions correctly.
  */
 async function typeFileTag(
@@ -34,8 +29,6 @@ async function typeFileTag(
   stdin.write("@");
   await flush();
 
-  // Explicitly press Tab to ensure suggestions appear
-  // This is only needed in the test environment
   stdin.write("\t");
   await flush();
 }
