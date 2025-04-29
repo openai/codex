@@ -746,7 +746,7 @@ export default function TerminalChatInput({
               height={6}
               focus={active}
               onSubmit={(txt) => {
-                // Replace @path with filesystem suggestion if available
+                // If final token is an @path, replace with filesystem suggestion if available
                 onSubmit(replaceFileSystemSuggestion(txt, true));
                 setEditorKey((k) => k + 1);
                 setInput("");
