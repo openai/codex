@@ -140,16 +140,20 @@ export default function TerminalChatInput({
             setReverseQuery("");
             setReverseResults([]);
             setReverseIndex(0);
-            setEditorKey((k: number) => k + 1);
+            setEditorKey((k) => k + 1);
           }
           return;
         }
         if (_key.upArrow) {
-          setReverseIndex((i: number) => (i <= 0 ? reverseResults.length - 1 : i - 1));
+          setReverseIndex((i: number) =>
+            i <= 0 ? reverseResults.length - 1 : i - 1,
+          );
           return;
         }
         if (_key.downArrow) {
-          setReverseIndex((i: number) => (i >= reverseResults.length - 1 ? 0 : i + 1));
+          setReverseIndex((i: number) =>
+            i >= reverseResults.length - 1 ? 0 : i + 1,
+          );
           return;
         }
         if (_key.backspace || _input === "\x7f") {
@@ -157,7 +161,7 @@ export default function TerminalChatInput({
           setReverseQuery(newQuery);
           setReverseIndex(0);
           setReverseResults(
-            history.filter((h) => h.command.includes(newQuery)).reverse()
+            history.filter((h) => h.command.includes(newQuery)).reverse(),
           );
           return;
         }
@@ -166,7 +170,7 @@ export default function TerminalChatInput({
           setReverseQuery(newQuery);
           setReverseIndex(0);
           setReverseResults(
-            history.filter((h) => h.command.includes(newQuery)).reverse()
+            history.filter((h) => h.command.includes(newQuery)).reverse(),
           );
           return;
         }
@@ -296,7 +300,7 @@ export default function TerminalChatInput({
               const newText = words.join(" ");
               setInput(newText);
               // Force remount of the editor with the new text
-              setEditorKey((k: number) => k + 1);
+              setEditorKey((k) => k + 1);
 
               // We need to move the cursor to the end after editor remounts
               setTimeout(() => {
@@ -322,7 +326,7 @@ export default function TerminalChatInput({
             }
             setHistoryIndex(newIndex);
             setInput(history[newIndex]?.command ?? "");
-            setEditorKey((k: number) => k + 1);
+            setEditorKey((k) => k + 1);
             return;
           }
         }
@@ -335,13 +339,13 @@ export default function TerminalChatInput({
             if (newIndex >= history.length) {
               setHistoryIndex(null);
               setInput(draftInput);
-              setEditorKey((k: number) => k + 1);
+              setEditorKey((k) => k + 1);
             } else {
               setHistoryIndex(newIndex);
               setInput(history[newIndex]?.command ?? "");
-              setEditorKey((k: number) => k + 1);
+              setEditorKey((k) => k + 1);
             }
-            return;
+            return; // handled
           }
         }
 
@@ -695,12 +699,21 @@ export default function TerminalChatInput({
   // Reverse search overlay UI
   if (reverseSearch) {
     return (
-      <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1}>
+      <Box
+        flexDirection="column"
+        borderStyle="round"
+        borderColor="cyan"
+        paddingX={1}
+      >
         <Text color="cyan">(reverse-i-search): {reverseQuery}_</Text>
         {reverseResults.length > 0 ? (
           <Box flexDirection="column">
             {reverseResults.slice(0, 5).map((h: HistoryEntry, idx: number) => (
-              <Text key={h.timestamp} backgroundColor={idx === reverseIndex ? "cyan" : undefined} color={idx === reverseIndex ? "black" : undefined}>
+              <Text
+                key={h.timestamp}
+                backgroundColor={idx === reverseIndex ? "cyan" : undefined}
+                color={idx === reverseIndex ? "black" : undefined}
+              >
                 {h.command}
               </Text>
             ))}
@@ -708,7 +721,9 @@ export default function TerminalChatInput({
         ) : (
           <Text dimColor>No matches</Text>
         )}
-        <Text dimColor>esc to cancel | enter to select | up/down to navigate</Text>
+        <Text dimColor>
+          esc to cancel | enter to select | up/down to navigate
+        </Text>
       </Box>
     );
   }
@@ -753,7 +768,7 @@ export default function TerminalChatInput({
               focus={active}
               onSubmit={(txt) => {
                 onSubmit(txt);
-                setEditorKey((k: number) => k + 1);
+                setEditorKey((k) => k + 1);
                 setInput("");
                 setHistoryIndex(null);
                 setDraftInput("");
