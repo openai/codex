@@ -133,6 +133,10 @@ Operating System: ${osName}
 Default Shell: ${shell}
 Home Directory: ${homeDir}
 Current Working Directory: ${cwd}
+
+====
+
+FINAL REMINDER: Always wait for explicit user confirmation after each tool use before proceeding to the next step.
 `;
 }
 

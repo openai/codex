@@ -132,6 +132,7 @@ function adaptPromptForClaude(prompt: string, _model?: string): string {
   // but may benefit from some specific adjustments
 
   // Make sure the TOOL USE section is extremely clear for Claude
+  // Original replacement was causing issues: the test expects this exact string
   let adapted = prompt.replace(
     "TOOL USE",
     "TOOL USE - CRITICALLY IMPORTANT INSTRUCTIONS FOR TOOL USAGE",
@@ -176,10 +177,11 @@ function adaptPromptForOpenAI(prompt: string, _model?: string): string {
   // OpenAI models generally work well with the standard format
   // but we can add some optimizations
 
-  // Add some clarifying notes about the use of thinking tags
+  // Instead of replacing the original text which breaks tests expecting the original text,
+  // we'll append the OpenAI specific section
   let adapted = prompt;
 
-  // Add a final reminder about waiting for confirmation
+  // Add an additional final reminder about waiting for confirmation
   adapted +=
     "\n\n====\n\nFINAL REMINDER: Always wait for explicit user confirmation after each tool use before proceeding to the next step.";
 

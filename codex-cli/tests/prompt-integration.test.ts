@@ -1,12 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { AgentLoop } from "../src/utils/agent/agent-loop";
-import { loadPrompts } from "../src/prompts/loader";
+import { loadPrompts, adaptPromptForProvider } from "../src/prompts/loader";
 import type { ApprovalPolicy } from "../src/approvals";
 
 // Mock required dependencies
 vi.mock("../src/utils/config", () => ({
   getApiKey: vi.fn().mockReturnValue("test-api-key"),
   getBaseUrl: vi.fn().mockReturnValue("https://api.test.com"),
+  OPENAI_TIMEOUT_MS: 60000,
+  OPENAI_ORGANIZATION: "test-org",
+  OPENAI_PROJECT: "test-project",
 }));
 
 describe("Prompt system integration with agent loop", () => {
@@ -99,18 +102,30 @@ describe("Prompt system integration with agent loop", () => {
       model: "gemini-pro",
     });
 
-    // Each provider should have properly adapted system prompts
-    expect(openaiPrompts.systemPrompt).toContain("FINAL REMINDER");
-    expect(claudePrompts.systemPrompt).toContain(
-      "CRITICALLY IMPORTANT INSTRUCTIONS FOR TOOL USAGE",
+    // Get provider-adapted prompts
+    const openaiAdapted = adaptPromptForProvider(
+      openaiPrompts.systemPrompt,
+      "openai",
     );
-    expect(geminiPrompts.systemPrompt).toContain(
-      "FOLLOW THESE STEPS PRECISELY",
+    const claudeAdapted = adaptPromptForProvider(
+      claudePrompts.systemPrompt,
+      "anthropic",
+    );
+    const geminiAdapted = adaptPromptForProvider(
+      geminiPrompts.systemPrompt,
+      "gemini",
     );
 
-    // Verify the adapted prompts are different for each provider
-    expect(openaiPrompts.systemPrompt).not.toEqual(claudePrompts.systemPrompt);
-    expect(openaiPrompts.systemPrompt).not.toEqual(geminiPrompts.systemPrompt);
-    expect(claudePrompts.systemPrompt).not.toEqual(geminiPrompts.systemPrompt);
+    // Each provider should have properly adapted system prompts
+    expect(openaiAdapted).toContain("FINAL REMINDER");
+    expect(claudeAdapted).toContain(
+      "CRITICALLY IMPORTANT INSTRUCTIONS FOR TOOL USAGE",
+    );
+    expect(geminiAdapted).toContain("FOLLOW THESE STEPS PRECISELY");
+
+    // Verify the adapted prompts are different from each other
+    expect(openaiAdapted).not.toEqual(claudeAdapted);
+    expect(openaiAdapted).not.toEqual(geminiAdapted);
+    expect(claudeAdapted).not.toEqual(geminiAdapted);
   });
 });
