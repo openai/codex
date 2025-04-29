@@ -103,7 +103,8 @@ jobs:
           mkdir -p "$dest"
 
           cp target/${{ matrix.target }}/release/codex-repl "$dest/codex-repl-${{ matrix.target }}"
-          cp target/${{ matrix.target }}/release/codex-tui "$dest/codex-tui-${{ matrix.target }}"
+          cp target/${{ matrix.target }}/release/codex-exec "$dest/codex-exec-${{ matrix.target }}"
+          cp target/${{ matrix.target }}/release/codex-cli "$dest/codex-cli-${{ matrix.target }}"
 
           zstd -T0 -19 --rm "$dest"/*
 
