@@ -779,7 +779,7 @@ export default function TerminalChatInput({
                   wasReplaced,
                 } = replaceFileSystemSuggestion(txt, true);
 
-                // If we replaced `@path` token with a directory, don't submit
+                // If we replaced @path token with a directory, don't submit
                 if (wasReplaced && suggestion?.isDirectory) {
                   applyFsSuggestion(replacedText);
                   // Update suggestions for the new directory
