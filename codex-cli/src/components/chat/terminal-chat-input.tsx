@@ -404,8 +404,11 @@ export default function TerminalChatInput({
           // Otherwise let it propagate
         }
 
-        if (_key.tab) {
-          updateFsSuggestions(input, true);
+        // Defer fs suggestion logic to code in onSubmit if enter key is pressed
+        if (!_key.return) {
+          // Pressing tab should trigger the file system suggestions
+          const shouldUpdateSelection = _key.tab;
+          updateFsSuggestions(input + _input, shouldUpdateSelection);
         }
       }
 
@@ -764,8 +767,6 @@ export default function TerminalChatInput({
                   setHistoryIndex(null);
                 }
                 setInput(txt);
-
-                updateFsSuggestions(txt);
               }}
               key={editorKey}
               initialText={input}
