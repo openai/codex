@@ -13,6 +13,9 @@ use crossterm::event::KeyEvent;
 use crossterm::event::MouseEvent;
 use crossterm::event::MouseEventKind;
 use std::sync::mpsc::channel;
+use std::time::Duration;
+use std::time::Instant;
+
 use std::sync::mpsc::Receiver;
 use std::sync::mpsc::Sender;
 
@@ -29,6 +32,7 @@ pub(crate) struct App<'a> {
     app_event_rx: Receiver<AppEvent>,
     chat_widget: ChatWidget<'a>,
     app_state: AppState,
+    last_esc_press: Option<Instant>,
 }
 
 impl App<'_> {
@@ -95,6 +99,7 @@ impl App<'_> {
             app_event_rx,
             chat_widget,
             app_state,
+            last_esc_press: None,
         }
     }
 
@@ -122,6 +127,22 @@ impl App<'_> {
                             ..
                         } => {
                             self.chat_widget.submit_op(Op::Interrupt);
+                        }
+                        KeyEvent {
+                            code: KeyCode::Esc,
+                            modifiers: crossterm::event::KeyModifiers::NONE,
+                            ..
+                        } => {
+                            let now = Instant::now();
+                            if let Some(last_press) = self.last_esc_press {
+                                if now.duration_since(last_press) < Duration::from_millis(500) {
+                                    self.chat_widget.submit_op(Op::Interrupt);
+                                } else {
+                                    self.last_esc_press = Some(now);
+                                }
+                            } else {
+                                self.last_esc_press = Some(now);
+                            }
                         }
                         KeyEvent {
                             code: KeyCode::Char('d'),

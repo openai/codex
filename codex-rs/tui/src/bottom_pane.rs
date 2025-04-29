@@ -110,6 +110,19 @@ impl BottomPane<'_> {
         Ok(())
     }
 
+    pub(crate) fn set_input_text(&mut self, text: String) -> Result<(), SendError<AppEvent>> {
+        // Always update the textarea content, regardless of current state
+        self.textarea.delete_word();
+        self.textarea.insert_str(&text);
+        
+        // If we're currently in text input mode, request a redraw to show the new content
+        if matches!(self.state, PaneState::TextInput) {
+            self.request_redraw()?;
+        }
+        
+        Ok(())
+    }
+
     pub(crate) fn set_input_focus(&mut self, has_input_focus: bool) {
         self.has_input_focus = has_input_focus;
         update_border_for_input_focus(&mut self.textarea, has_input_focus);

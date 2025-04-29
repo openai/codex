@@ -144,6 +144,14 @@ impl HistoryCell {
         HistoryCell::BackgroundEvent { lines }
     }
 
+    pub(crate) fn system_message(message: String) -> Self {
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        lines.push(Line::from("system".magenta().bold()));
+        lines.extend(message.lines().map(|l| Line::from(l.to_string())));
+        lines.push(Line::from(""));
+        HistoryCell::BackgroundEvent { lines }
+    }
+
     pub(crate) fn new_session_info(
         config: &Config,
         model: String,

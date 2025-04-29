@@ -209,6 +209,24 @@ impl WidgetRef for StatusIndicatorWidget {
         let paragraph = Paragraph::new(Line::from(spans))
             .block(block)
             .alignment(Alignment::Left);
+        
+        // Render the main paragraph
         paragraph.render_ref(area, buf);
+        
+        // Add the "press Esc twice to interrupt" text at the right side
+        if area.height > 0 {
+            let interrupt_text = "press Esc twice to interrupt";
+            let text_style = Style::default().fg(Color::DarkGray);
+            
+            // Calculate position for right-aligned text
+            let text_width = interrupt_text.len() as u16;
+            let x_pos = area.x + area.width.saturating_sub(text_width + 2); // +2 for padding
+            let y_pos = area.y + area.height - 1;
+            
+            // Only render if it fits
+            if x_pos >= area.x && x_pos + text_width <= area.x + area.width {
+                buf.set_string(x_pos, y_pos, interrupt_text, text_style);
+            }
+        }
     }
 }

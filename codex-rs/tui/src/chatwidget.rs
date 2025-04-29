@@ -18,7 +18,6 @@ use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::mpsc::UnboundedSender;
-
 use crate::app_event::AppEvent;
 use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
@@ -136,6 +135,30 @@ impl ChatWidget<'_> {
             return Ok(());
         }
 
+        // Handle arrow keys for history navigation
+        if self.input_focus == InputFocus::BottomPane {
+            match key_event.code {
+                crossterm::event::KeyCode::Up => {
+                    if let Some(previous_message) = self.conversation_history.previous() {
+                        self.bottom_pane.set_input_text(previous_message)?;
+                        self.request_redraw()?;
+                    }
+                    return Ok(());
+                }
+                crossterm::event::KeyCode::Down => {
+                    if let Some(next_message) = self.conversation_history.next() {
+                        self.bottom_pane.set_input_text(next_message)?;
+                    } else {
+                        // If there's no next message, clear the input
+                        self.bottom_pane.set_input_text(String::new())?;
+                    }
+                    self.request_redraw()?;
+                    return Ok(());
+                }
+                _ => {}
+            }
+        }
+
         match self.input_focus {
             InputFocus::HistoryPane => {
                 let needs_redraw = self.conversation_history.handle_key_event(key_event);
@@ -155,15 +178,20 @@ impl ChatWidget<'_> {
                                 // Gracefully request application shutdown.
                                 let _ = self.app_event_tx.send(AppEvent::ExitRequest);
                             }
+                       
                             "/clear" => {
                                 // Clear the current conversation history without exiting.
                                 self.conversation_history.clear();
-                                self.request_redraw()?;
+                                self.submit_welcome_message()?;
+                                self.conversation_history.scroll_to_bottom();
                             }
+                         
                             _ => {
+                                // Handle all other cases
                                 self.submit_user_message(text)?;
                             }
                         }
+
                     }
                     InputResult::None => {}
                 }
@@ -252,7 +280,7 @@ impl ChatWidget<'_> {
             }
             EventMsg::Error { message } => {
                 self.conversation_history
-                    .add_background_event(format!("Error: {message}"));
+                    .add_system_message(format!("{message}"));
                 self.bottom_pane.set_task_running(false)?;
             }
             EventMsg::ExecApprovalRequest {

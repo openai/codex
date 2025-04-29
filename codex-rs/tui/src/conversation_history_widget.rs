@@ -20,6 +20,7 @@ pub struct ConversationHistoryWidget {
     /// The height of the viewport last time render_ref() was called
     last_viewport_height: StdCell<usize>,
     has_input_focus: bool,
+    history_selection_index: Option<usize>,
 }
 
 impl ConversationHistoryWidget {
@@ -30,13 +31,13 @@ impl ConversationHistoryWidget {
             num_rendered_lines: StdCell::new(0),
             last_viewport_height: StdCell::new(0),
             has_input_focus: false,
+            history_selection_index: None,
         }
     }
 
     pub(crate) fn set_input_focus(&mut self, has_input_focus: bool) {
         self.has_input_focus = has_input_focus;
     }
-
     /// Returns true if it needs a redraw.
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) -> bool {
         match key_event.code {
@@ -173,6 +174,10 @@ impl ConversationHistoryWidget {
         self.add_to_history(HistoryCell::new_background_event(message));
     }
 
+    pub fn add_system_message(&mut self, message: String) {
+        self.add_to_history(HistoryCell::system_message(message));
+    }
+
     /// Add a pending patch entry (before user approval).
     pub fn add_patch_event(
         &mut self,
@@ -231,6 +236,87 @@ impl ConversationHistoryWidget {
                 }
             }
         }
+    }
+
+    pub fn previous(&mut self) -> Option<String> {
+        let user_prompts: Vec<_> = self.history.iter().enumerate()
+            .filter_map(|(idx, cell)| {
+                if let HistoryCell::UserPrompt { lines } = cell {
+                    // Get the user's message from the prompt
+                    // Assuming the message is in the second line
+                    lines.get(1).map(|line| (idx, line.to_string()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if user_prompts.is_empty() {
+            return None;
+        }
+
+        // If no selection yet, start from the most recent
+        if self.history_selection_index.is_none() {
+            self.history_selection_index = Some(user_prompts.last().unwrap().0);
+        } else {
+            // Find the previous user prompt
+            let current_idx = self.history_selection_index.unwrap();
+            let prev_prompt = user_prompts.iter()
+                .filter(|(idx, _)| *idx < current_idx)
+                .last();
+            
+            if let Some((idx, _)) = prev_prompt {
+                self.history_selection_index = Some(*idx);
+            }
+        }
+
+        // Return the selected message
+        self.get_selected_message()
+    }
+
+    pub fn next(&mut self) -> Option<String> {
+        if self.history_selection_index.is_none() {
+            return None;
+        }
+
+        let user_prompts: Vec<_> = self.history.iter().enumerate()
+            .filter_map(|(idx, cell)| {
+                if let HistoryCell::UserPrompt { lines } = cell {
+                    // Get the user's message from the prompt
+                    lines.get(1).map(|line| (idx, line.to_string()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if user_prompts.is_empty() {
+            return None;
+        }
+
+        let current_idx = self.history_selection_index.unwrap();
+        let next_prompt = user_prompts.iter()
+            .filter(|(idx, _)| *idx > current_idx)
+            .next();
+        
+        if let Some((idx, _)) = next_prompt {
+            self.history_selection_index = Some(*idx);
+            self.get_selected_message()
+        } else {
+            // If we're at the end, clear the selection
+            self.history_selection_index = None;
+            Some(String::new()) // Return empty string to clear input
+        }
+    }
+
+    fn get_selected_message(&self) -> Option<String> {
+        if let Some(idx) = self.history_selection_index {
+            if let Some(HistoryCell::UserPrompt { lines }) = self.history.get(idx) {
+                // Get the user's message from the prompt
+                return lines.get(1).map(|line| line.to_string());
+            }
+        }
+        None
     }
 }
 
@@ -343,7 +429,7 @@ impl WidgetRef for ConversationHistoryWidget {
                 .position(scroll_pos);
 
             // Choose a thumb colour that stands out only when this pane has focus so that the
-            // user’s attention is naturally drawn to the active viewport. When unfocused we show
+            // user's attention is naturally drawn to the active viewport. When unfocused we show
             // a low‑contrast thumb so the scrollbar fades into the background without becoming
             // invisible.
 
@@ -358,7 +444,7 @@ impl WidgetRef for ConversationHistoryWidget {
                 // in the underlying buffer cells.  That means if a coloured line (for example a
                 // background task notification that we render in blue) happens to be underneath
                 // the scrollbar, the track and thumb adopt that colour and the scrollbar appears
-                // to “change colour”.  Explicitly setting the *track* and *thumb* styles ensures
+                // to "change colour".  Explicitly setting the *track* and *thumb* styles ensures
                 // we always draw the scrollbar with the same palette regardless of what content
                 // is behind it.
                 //
