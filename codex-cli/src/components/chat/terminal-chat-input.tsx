@@ -106,6 +106,18 @@ export default function TerminalChatInput({
   const prevCursorRow = useRef<number | null>(null);
   const prevCursorWasAtLastRow = useRef<boolean>(false);
 
+  // Helper function to update input, remount editor, and move cursor to end
+  const applyFsSuggestion = useCallback((newInputText: string) => {
+    setInput(newInputText);
+    // Force remount of the editor with the new text
+    setEditorKey((k) => k + 1);
+
+    // We need to move the cursor to the end after editor remounts
+    setTimeout(() => {
+      editorRef.current?.moveCursorToEnd?.();
+    }, 0);
+  }, []);
+
   // --- Helper for updating file system suggestions ---
   function updateFsSuggestions(
     txt: string,
@@ -322,15 +334,7 @@ export default function TerminalChatInput({
 
             // Only proceed if the text was actually changed
             if (wasReplaced) {
-              setInput(newText);
-              // Force remount of the editor with the new text
-              setEditorKey((k) => k + 1);
-
-              // We need to move the cursor to the end after editor remounts
-              setTimeout(() => {
-                editorRef.current?.moveCursorToEnd?.();
-              }, 0);
-
+              applyFsSuggestion(newText);
               setFsSuggestions([]);
               setSelectedCompletion(-1);
             }
@@ -775,22 +779,14 @@ export default function TerminalChatInput({
                   wasReplaced,
                 } = replaceFileSystemSuggestion(txt, true);
 
-                // If we replaced with a directory, handle directory navigation
+                // If we replaced `@path` token with a directory, don't submit
                 if (wasReplaced && suggestion?.isDirectory) {
-                  // Set input to the directory path
-                  setInput(replacedText);
-                  // Force remount of the editor
-                  setEditorKey((k) => k + 1);
-                  // Move cursor to end after remount
-                  setTimeout(() => {
-                    editorRef.current?.moveCursorToEnd?.();
-                  }, 0);
+                  applyFsSuggestion(replacedText);
                   // Update suggestions for the new directory
                   updateFsSuggestions(replacedText, true);
-                  return; // Prevent submission
+                  return;
                 }
 
-                // Normal submission flow for non-directory selections
                 onSubmit(replacedText);
                 setEditorKey((k) => k + 1);
                 setInput("");
