@@ -3,7 +3,8 @@
   "version": "0.1.2504251709",
   "license": "Apache-2.0",
   "bin": {
-    "codex": "bin/codex.js"
+    "codex": "bin/codex.js",
+    "$": "bin/codex.js"
   },
   "type": "module",
   "engines": {
