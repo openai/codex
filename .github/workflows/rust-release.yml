@@ -4,15 +4,35 @@ on:
     tags:
       - "rust-v.*.*.*"
 
-  # remove before landing
-  workflow_dispatch:
-
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}
   cancel-in-progress: true
 
+env:
+  TAG_REGEX: '^rust-v\.[0-9]+\.[0-9]+\.[0-9]+$'
+
 jobs:
+  tag-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify tag format
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "::group::Tag validation"
+          echo "Ref type : ${GITHUB_REF_TYPE}"
+          echo "Ref name : ${GITHUB_REF_NAME}"
+          if [[ "${GITHUB_REF_TYPE}" != "tag" ]]; then
+            echo "❌ Not a tag push"; exit 1
+          fi
+          if [[ ! "${GITHUB_REF_NAME}" =~ ${TAG_REGEX} ]]; then
+            echo "❌ Tag '${GITHUB_REF_NAME}' does not match ${TAG_REGEX}"; exit 1
+          fi
+          echo "✅ Tag format OK"
+          echo "::endgroup::"
+
   build:
+    needs: tag-check
     name: ${{ matrix.runner }} - ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
