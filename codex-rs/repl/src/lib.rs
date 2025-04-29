@@ -81,6 +81,11 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
         model: cli.model.clone(),
         approval_policy: cli.approval_policy.map(Into::into),
         sandbox_policy: cli.sandbox_policy.map(Into::into),
+        disable_response_storage: if cli.disable_response_storage {
+            Some(true)
+        } else {
+            None
+        },
     };
     let config = Config::load_with_overrides(overrides)?;
 
@@ -104,7 +109,7 @@ async fn codex_main(cli: Cli, cfg: Config, ctrl_c: Arc<Notify>) -> anyhow::Resul
             instructions: cfg.instructions,
             approval_policy: cfg.approval_policy,
             sandbox_policy: cfg.sandbox_policy,
-            disable_response_storage: cli.disable_response_storage,
+            disable_response_storage: cfg.disable_response_storage,
         },
     };
 

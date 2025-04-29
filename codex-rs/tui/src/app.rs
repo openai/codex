@@ -37,7 +37,6 @@ impl App<'_> {
         initial_prompt: Option<String>,
         show_git_warning: bool,
         initial_images: Vec<std::path::PathBuf>,
-        disable_response_storage: bool,
     ) -> Self {
         let (app_event_tx, app_event_rx) = channel();
         let scroll_event_helper = ScrollEventHelper::new(app_event_tx.clone());
@@ -81,7 +80,6 @@ impl App<'_> {
             app_event_tx.clone(),
             initial_prompt.clone(),
             initial_images,
-            disable_response_storage,
         );
 
         let app_state = if show_git_warning {
