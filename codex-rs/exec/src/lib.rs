@@ -13,6 +13,7 @@ use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
+use codex_core::protocol::SandboxPolicy;
 use codex_core::util::is_inside_git_repo;
 use event_processor::EventProcessor;
 use owo_colors::OwoColorize;
@@ -26,7 +27,7 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
     let Cli {
         images,
         model,
-        sandbox_policy,
+        full_auto,
         skip_git_repo_check,
         disable_response_storage,
         color,
@@ -61,13 +62,19 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
         .with_writer(std::io::stderr)
         .try_init();
 
+    let sandbox_policy = if full_auto {
+        Some(SandboxPolicy::new_full_auto_policy())
+    } else {
+        None
+    };
+
     // Load configuration and determine approval policy
     let overrides = ConfigOverrides {
         model,
         // This CLI is intended to be headless and has no affordances for asking
         // the user for approval.
         approval_policy: Some(AskForApproval::Never),
-        sandbox_policy: sandbox_policy.map(Into::into),
+        sandbox_policy,
         disable_response_storage: if disable_response_storage {
             Some(true)
         } else {

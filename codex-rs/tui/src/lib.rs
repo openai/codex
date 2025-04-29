@@ -6,6 +6,8 @@
 use app::App;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
+use codex_core::protocol::AskForApproval;
+use codex_core::protocol::SandboxPolicy;
 use codex_core::util::is_inside_git_repo;
 use log_layer::TuiLogLayer;
 use std::fs::OpenOptions;
@@ -33,12 +35,21 @@ pub use cli::Cli;
 pub fn run_main(cli: Cli) -> std::io::Result<()> {
     assert_env_var_set();
 
+    let (sandbox_policy, approval_policy) = if cli.full_auto {
+        (
+            Some(SandboxPolicy::new_full_auto_policy()),
+            Some(AskForApproval::OnFailure),
+        )
+    } else {
+        (None, cli.approval_policy.map(Into::into))
+    };
+
     let config = {
         // Load configuration and support CLI overrides.
         let overrides = ConfigOverrides {
             model: cli.model.clone(),
-            approval_policy: cli.approval_policy.map(Into::into),
-            sandbox_policy: cli.sandbox_policy.map(Into::into),
+            approval_policy,
+            sandbox_policy,
             disable_response_storage: if cli.disable_response_storage {
                 Some(true)
             } else {
