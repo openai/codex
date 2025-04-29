@@ -192,6 +192,148 @@ Remember to:
 }
 
 /**
+ * Response text for the browser_action tool command
+ */
+export function browserActionResponse(): string {
+  return `<explicit_instructions type="browser_action">
+The user has explicitly asked you to use the browser_action tool to interact with a web browser.
+
+You should use this tool when you need to test web applications, navigate websites, or interact with web content to complete a task.
+
+The browser_action tool is defined below:
+
+Description:
+Request to interact with a Puppeteer-controlled browser. Every action, except 'close', will be responded to with a screenshot of the browser's current state, along with any new console logs. You may only perform one browser action per message, and must wait for the user's response including a screenshot and logs before determining the next action.
+
+Parameters:
+- action: (required) The action to perform. Available options:
+  * launch: Launch a new browser instance at the specified URL (must be the first action)
+  * click: Click at a specific x,y coordinate
+  * type: Type a string of text on the keyboard
+  * scroll_down: Scroll down the page by one page height
+  * scroll_up: Scroll up the page by one page height
+  * close: Close the browser instance (must be the final action)
+- url: (optional) The URL to navigate to (used with the 'launch' action)
+- coordinate: (optional) The X and Y coordinates for the 'click' action
+- text: (optional) The text to type for the 'type' action
+
+Usage:
+<browser_action>
+<action>launch|click|type|scroll_down|scroll_up|close</action>
+<url>URL to launch the browser at (only for launch)</url>
+<coordinate>x,y coordinates (only for click)</coordinate>
+<text>Text to type (only for type)</text>
+</browser_action>
+
+Remember:
+1. Always start with 'launch' and end with 'close'
+2. Only use one browser action per message
+3. Wait for the screenshot response before your next action
+4. Base click coordinates on the current screenshot
+5. The browser window has a resolution of 900x600 pixels
+</explicit_instructions>\n`;
+}
+
+/**
+ * Response text for the list_code_definition_names tool command
+ */
+export function listCodeDefinitionNamesResponse(): string {
+  return `<explicit_instructions type="list_code_definition_names">
+The user has explicitly asked you to use the list_code_definition_names tool to get an overview of code definitions.
+
+You should use this tool when you need to understand the structure and organization of source code files in a directory without having to read each file individually.
+
+The list_code_definition_names tool is defined below:
+
+Description:
+Request to list definition names (classes, functions, methods, etc.) used in source code files at the top level of the specified directory. This tool provides insights into the codebase structure and important constructs, encapsulating high-level concepts and relationships that are crucial for understanding the overall architecture.
+
+Parameters:
+- path: (required) The path of the directory to list top-level source code definitions for.
+
+Usage:
+<list_code_definition_names>
+<path>Directory path here</path>
+</list_code_definition_names>
+
+Remember to:
+1. Use this tool to get a high-level overview of code structure in a directory
+2. Focus on understanding the key components and their relationships
+3. Use the results to inform your approach to the task at hand
+</explicit_instructions>\n`;
+}
+
+/**
+ * Response text for the use_mcp_tool command
+ */
+export function mcpToolResponse(): string {
+  return `<explicit_instructions type="use_mcp_tool">
+The user has explicitly asked you to use the use_mcp_tool to interact with a connected MCP server tool.
+
+You should use this tool when you need to access functionality provided by a Model Context Protocol (MCP) server that extends your capabilities.
+
+The use_mcp_tool is defined below:
+
+Description:
+Request to use a tool provided by a connected MCP server. Each MCP server can provide multiple tools with different capabilities. Tools have defined input schemas that specify required and optional parameters.
+
+Parameters:
+- server_name: (required) The name of the MCP server providing the tool
+- tool_name: (required) The name of the tool to execute
+- arguments: (required) A JSON object containing the tool's input parameters, following the tool's input schema
+
+Usage:
+<use_mcp_tool>
+<server_name>server name here</server_name>
+<tool_name>tool name here</tool_name>
+<arguments>
+{
+  "param1": "value1",
+  "param2": "value2"
+}
+</arguments>
+</use_mcp_tool>
+
+Remember to:
+1. Use the correct server name as it appears in the MCP servers list
+2. Specify the exact tool name provided by the server
+3. Format the arguments as a valid JSON object following the tool's schema
+4. Wait for the response before proceeding to the next action
+</explicit_instructions>\n`;
+}
+
+/**
+ * Response text for the access_mcp_resource command
+ */
+export function mcpResourceResponse(): string {
+  return `<explicit_instructions type="access_mcp_resource">
+The user has explicitly asked you to use the access_mcp_resource tool to retrieve data from a connected MCP server.
+
+You should use this tool when you need to access data resources provided by a Model Context Protocol (MCP) server.
+
+The access_mcp_resource tool is defined below:
+
+Description:
+Request to access a resource provided by a connected MCP server. Resources represent data sources that can be used as context, such as files, API responses, or system information.
+
+Parameters:
+- server_name: (required) The name of the MCP server providing the resource
+- uri: (required) The URI identifying the specific resource to access
+
+Usage:
+<access_mcp_resource>
+<server_name>server name here</server_name>
+<uri>resource URI here</uri>
+</access_mcp_resource>
+
+Remember to:
+1. Use the correct server name as it appears in the MCP servers list
+2. Specify the exact resource URI format required by the server
+3. Wait for the response before proceeding to the next action
+</explicit_instructions>\n`;
+}
+
+/**
  * Response text for MCP documentation loading
  */
 export function mcpDocumentationResponse(): string {
