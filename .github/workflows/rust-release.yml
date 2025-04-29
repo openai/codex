@@ -1,3 +1,11 @@
+# Release workflow for codex-rs.
+# To release, follow a workflow like:
+# ```
+# git tag -a rust-v0.1.0 -m "Release 0.1.0"
+# git push origin rust-v0.1.0
+# ```
+
+
 name: rust-release
 on:
   push:
