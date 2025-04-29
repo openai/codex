@@ -2,39 +2,29 @@ use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 use crate::config::Config;
-use crate::protocol::AskForApproval;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::Op;
-use crate::protocol::SandboxPolicy;
 use crate::protocol::Submission;
 use crate::util::notify_on_sigint;
 use crate::Codex;
 use tokio::sync::Notify;
-use tracing::debug;
 
 /// Spawn a new [`Codex`] and initialise the session.
 ///
 /// Returns the wrapped [`Codex`] **and** the `SessionInitialized` event that
 /// is received as a response to the initial `ConfigureSession` submission so
 /// that callers can surface the information to the UI.
-pub async fn init_codex(
-    approval_policy: AskForApproval,
-    sandbox_policy: SandboxPolicy,
-    disable_response_storage: bool,
-    model_override: Option<String>,
-) -> anyhow::Result<(CodexWrapper, Event, Arc<Notify>)> {
+pub async fn init_codex(config: Config) -> anyhow::Result<(CodexWrapper, Event, Arc<Notify>)> {
     let ctrl_c = notify_on_sigint();
-    let config = Config::load().unwrap_or_default();
-    debug!("loaded config: {config:?}");
     let codex = CodexWrapper::new(Codex::spawn(ctrl_c.clone())?);
     let init_id = codex
         .submit(Op::ConfigureSession {
-            model: model_override.or_else(|| config.model.clone()),
-            instructions: config.instructions,
-            approval_policy,
-            sandbox_policy,
-            disable_response_storage,
+            model: config.model.clone(),
+            instructions: config.instructions.clone(),
+            approval_policy: config.approval_policy,
+            sandbox_policy: config.sandbox_policy,
+            disable_response_storage: config.disable_response_storage,
         })
         .await?;
 

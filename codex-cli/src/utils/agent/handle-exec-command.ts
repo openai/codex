@@ -1,17 +1,18 @@
 import type { CommandConfirmation } from "./agent-loop.js";
-import type { AppConfig } from "../config.js";
-import type { ExecInput } from "./sandbox/interface.js";
 import type { ApplyPatchCommand, ApprovalPolicy } from "../../approvals.js";
+import type { ExecInput } from "./sandbox/interface.js";
 import type { ResponseInputItem } from "openai/resources/responses/responses.mjs";
 
-import { exec, execApplyPatch } from "./exec.js";
-import { ReviewDecision } from "./review.js";
-import { FullAutoErrorMode } from "../auto-approval-mode.js";
-import { SandboxType } from "./sandbox/interface.js";
 import { canAutoApprove } from "../../approvals.js";
 import { formatCommandForDisplay } from "../../format-command.js";
+import { FullAutoErrorMode } from "../auto-approval-mode.js";
+import { CODEX_UNSAFE_ALLOW_NO_SANDBOX, type AppConfig } from "../config.js";
+import { exec, execApplyPatch } from "./exec.js";
+import { ReviewDecision } from "./review.js";
 import { isLoggingEnabled, log } from "../logger/log.js";
-import { access } from "fs/promises";
+import { SandboxType } from "./sandbox/interface.js";
+import { PATH_TO_SEATBELT_EXECUTABLE } from "./sandbox/macos-seatbelt.js";
+import fs from "fs/promises";
 
 // ---------------------------------------------------------------------------
 // Session‑level cache of commands that the user has chosen to always approve.
@@ -217,7 +218,7 @@ async function execCommand(
   let { workdir } = execInput;
   if (workdir) {
     try {
-      await access(workdir);
+      await fs.access(workdir);
     } catch (e) {
       log(`EXEC workdir=${workdir} not found, use process.cwd() instead`);
       workdir = process.cwd();
@@ -270,30 +271,45 @@ async function execCommand(
   };
 }
 
-const isInLinux = async (): Promise<boolean> => {
-  try {
-    await access("/proc/1/cgroup");
-    return true;
-  } catch {
-    return false;
-  }
-};
+/** Return `true` if the `/usr/bin/sandbox-exec` is present and executable. */
+const isSandboxExecAvailable: Promise<boolean> = fs
+  .access(PATH_TO_SEATBELT_EXECUTABLE, fs.constants.X_OK)
+  .then(
+    () => true,
+    (err) => {
+      if (!["ENOENT", "ACCESS", "EPERM"].includes(err.code)) {
+        log(
+          `Unexpected error for \`stat ${PATH_TO_SEATBELT_EXECUTABLE}\`: ${err.message}`,
+        );
+      }
+      return false;
+    },
+  );
 
 async function getSandbox(runInSandbox: boolean): Promise<SandboxType> {
   if (runInSandbox) {
     if (process.platform === "darwin") {
-      return SandboxType.MACOS_SEATBELT;
-    } else if (await isInLinux()) {
-      return SandboxType.NONE;
-    } else if (process.platform === "win32") {
-      // On Windows, we don't have a sandbox implementation yet, so we fall back to NONE
-      // instead of throwing an error, which would crash the application
-      log(
-        "WARNING: Sandbox was requested but is not available on Windows. Continuing without sandbox.",
-      );
+      // On macOS we rely on the system-provided `sandbox-exec` binary to
+      // enforce the Seatbelt profile.  However, starting with macOS 14 the
+      // executable may be removed from the default installation or the user
+      // might be running the CLI on a stripped-down environment (for
+      // instance, inside certain CI images).  Attempting to spawn a missing
+      // binary makes Node.js throw an *uncaught* `ENOENT` error further down
+      // the stack which crashes the whole CLI.
+      if (await isSandboxExecAvailable) {
+        return SandboxType.MACOS_SEATBELT;
+      } else {
+        throw new Error(
+          "Sandbox was mandated, but 'sandbox-exec' was not found in PATH!",
+        );
+      }
+    } else if (CODEX_UNSAFE_ALLOW_NO_SANDBOX) {
+      // Allow running without a sandbox if the user has explicitly marked the
+      // environment as already being sufficiently locked-down.
       return SandboxType.NONE;
     }
-    // For other platforms, still throw an error as before
+
+    // For all else, we hard fail if the user has requested a sandbox and none is available.
     throw new Error("Sandbox was mandated, but no sandbox is available!");
   } else {
     return SandboxType.NONE;

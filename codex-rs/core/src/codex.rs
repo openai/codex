@@ -3,8 +3,6 @@ use std::collections::HashSet;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::Command;
-use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -36,7 +34,6 @@ use crate::exec::process_exec_tool_call;
 use crate::exec::ExecParams;
 use crate::exec::ExecToolCallOutput;
 use crate::exec::SandboxType;
-use crate::flags::OPENAI_DEFAULT_MODEL;
 use crate::flags::OPENAI_STREAM_MAX_RETRIES;
 use crate::models::ContentItem;
 use crate::models::FunctionCallOutputPayload;
@@ -486,7 +483,6 @@ async fn submission_loop(
                 sandbox_policy,
                 disable_response_storage,
             } => {
-                let model = model.unwrap_or_else(|| OPENAI_DEFAULT_MODEL.to_string());
                 info!(model, "Configuring session");
                 let client = ModelClient::new(model.clone());
 
@@ -1348,6 +1344,7 @@ fn convert_apply_patch_to_protocol(
             ApplyPatchFileChange::Update {
                 unified_diff,
                 move_path,
+                new_content: _new_content,
             } => FileChange::Update {
                 unified_diff: unified_diff.clone(),
                 move_path: move_path.clone(),
@@ -1402,28 +1399,10 @@ fn apply_changes_from_apply_patch(
                 deleted.push(path.clone());
             }
             ApplyPatchFileChange::Update {
-                unified_diff,
+                unified_diff: _unified_diff,
                 move_path,
+                new_content,
             } => {
-                // TODO(mbolin): `patch` is not guaranteed to be available.
-                // Allegedly macOS provides it, but minimal Linux installs
-                // might omit it.
-                Command::new("patch")
-                    .arg(path)
-                    .arg("-p0")
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .stdin(Stdio::piped())
-                    .spawn()
-                    .and_then(|mut child| {
-                        let mut stdin = child.stdin.take().unwrap();
-                        stdin.write_all(unified_diff.as_bytes())?;
-                        stdin.flush()?;
-                        // Drop stdin to send EOF.
-                        drop(stdin);
-                        child.wait()
-                    })
-                    .with_context(|| format!("Failed to apply patch to {}", path.display()))?;
                 if let Some(move_path) = move_path {
                     if let Some(parent) = move_path.parent() {
                         if !parent.as_os_str().is_empty() {
@@ -1435,11 +1414,14 @@ fn apply_changes_from_apply_patch(
                             })?;
                         }
                     }
+
                     std::fs::rename(path, move_path)
                         .with_context(|| format!("Failed to rename file {}", path.display()))?;
+                    std::fs::write(move_path, new_content)?;
                     modified.push(move_path.clone());
                     deleted.push(path.clone());
                 } else {
+                    std::fs::write(path, new_content)?;
                     modified.push(path.clone());
                 }
             }
