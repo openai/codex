@@ -526,9 +526,11 @@ name = "codex-exec"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "codex-core",
- "owo-colors",
+ "owo-colors 4.2.0",
+ "shlex",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -561,7 +563,7 @@ dependencies = [
  "anyhow",
  "clap",
  "codex-core",
- "owo-colors",
+ "owo-colors 4.2.0",
  "rand",
  "tokio",
  "tracing",
@@ -599,7 +601,7 @@ dependencies = [
  "eyre",
  "indenter",
  "once_cell",
- "owo-colors",
+ "owo-colors 3.5.0",
  "tracing-error",
 ]
 
@@ -610,7 +612,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cd6be1b2a7e382e2b98b43b2adcca6bb0e465af0bdd38123873ae61eb17a72c2"
 dependencies = [
  "once_cell",
- "owo-colors",
+ "owo-colors 3.5.0",
  "tracing-core",
  "tracing-error",
 ]
@@ -2224,6 +2226,12 @@ name = "overload"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b15813163c1d831bf4a13c3610c05c0d03b39feb07f7e09fa234dac9b15aaf39"
+
+[[package]]
+name = "owo-colors"
+version = "3.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c1b04fb49957986fdce4d6ee7a65027d55d4b6d2265e5848bbb507b58ccfdb6f"
 
 [[package]]
 name = "owo-colors"
