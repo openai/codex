@@ -85,6 +85,12 @@ export default function HelpOverlay({
           <Text color="yellow">Up/Down</Text> – scroll prompt history
         </Text>
         <Text>
+          <Text color="yellow">Ctrl+R</Text> – reverse search command history
+        </Text>
+        <Text>
+          <Text color="yellow">Ctrl+L</Text> – clear the screen
+        </Text>
+        <Text>
           <Text color="yellow">
             Esc<Text dimColor>(✕2)</Text>
           </Text>{" "}
