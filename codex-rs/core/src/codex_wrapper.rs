@@ -15,10 +15,7 @@ use tokio::sync::Notify;
 /// Returns the wrapped [`Codex`] **and** the `SessionInitialized` event that
 /// is received as a response to the initial `ConfigureSession` submission so
 /// that callers can surface the information to the UI.
-pub async fn init_codex(
-    config: Config,
-    disable_response_storage: bool,
-) -> anyhow::Result<(CodexWrapper, Event, Arc<Notify>)> {
+pub async fn init_codex(config: Config) -> anyhow::Result<(CodexWrapper, Event, Arc<Notify>)> {
     let ctrl_c = notify_on_sigint();
     let codex = CodexWrapper::new(Codex::spawn(ctrl_c.clone())?);
     let init_id = codex
@@ -27,7 +24,7 @@ pub async fn init_codex(
             instructions: config.instructions.clone(),
             approval_policy: config.approval_policy,
             sandbox_policy: config.sandbox_policy,
-            disable_response_storage,
+            disable_response_storage: config.disable_response_storage,
         })
         .await?;
 

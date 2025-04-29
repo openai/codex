@@ -14,7 +14,7 @@ pub mod exec;
 mod flags;
 mod is_safe_command;
 #[cfg(target_os = "linux")]
-mod linux;
+pub mod linux;
 mod models;
 pub mod protocol;
 mod safety;

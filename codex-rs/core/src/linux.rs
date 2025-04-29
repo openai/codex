@@ -72,7 +72,15 @@ pub async fn exec_linux(
     }
 }
 
-fn install_filesystem_landlock_rules_on_current_thread(writable_roots: Vec<PathBuf>) -> Result<()> {
+/// Installs Landlock file-system rules on the current thread allowing read
+/// access to the entire file-system while restricting write access to
+/// `/dev/null` and the provided list of `writable_roots`.
+///
+/// # Errors
+/// Returns [`CodexErr::Sandbox`] variants when the ruleset fails to apply.
+pub fn install_filesystem_landlock_rules_on_current_thread(
+    writable_roots: Vec<PathBuf>,
+) -> Result<()> {
     let abi = ABI::V5;
     let access_rw = AccessFs::from_all(abi);
     let access_ro = AccessFs::from_read(abi);
@@ -98,7 +106,9 @@ fn install_filesystem_landlock_rules_on_current_thread(writable_roots: Vec<PathB
     Ok(())
 }
 
-fn install_network_seccomp_filter_on_current_thread() -> std::result::Result<(), SandboxErr> {
+/// Installs a seccomp filter that blocks outbound network access except for
+/// AF_UNIX domain sockets.
+pub fn install_network_seccomp_filter_on_current_thread() -> std::result::Result<(), SandboxErr> {
     // Build rule map.
     let mut rules: BTreeMap<i64, Vec<SeccompRule>> = BTreeMap::new();
 
@@ -225,7 +235,9 @@ mod tests_linux {
                 &format!("echo blah > {}", file_path.to_string_lossy()),
             ],
             &[tmpdir.path().to_path_buf()],
-            500,
+            // We have seen timeouts when running this test in CI on GitHub,
+            // so we are using a generous timeout until we can diagnose further.
+            1_000,
         )
         .await;
     }

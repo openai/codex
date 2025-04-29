@@ -12,10 +12,22 @@ use codex_core::protocol::FileChange;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::util::is_inside_git_repo;
+use owo_colors::OwoColorize;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
+
+/// Returns `true` if a recognised API key is present in the environment.
+///
+/// At present we only support `OPENAI_API_KEY`, mirroring the behaviour of the
+/// Node-based `codex-cli`.  Additional providers can be added here when the
+/// Rust implementation gains first-class support for them.
+fn has_api_key() -> bool {
+    std::env::var("OPENAI_API_KEY")
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false)
+}
 
 pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
     // TODO(mbolin): Take a more thoughtful approach to logging.
@@ -41,6 +53,20 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
         ..
     } = cli;
 
+    // ---------------------------------------------------------------------
+    // API key handling
+    // ---------------------------------------------------------------------
+
+    if !has_api_key() {
+        eprintln!(
+            "\n{msg}\n\nSet the environment variable {var} and re-run this command.\nYou can create a key here: {url}\n",
+            msg = "Missing OpenAI API key.".red(),
+            var = "OPENAI_API_KEY".bold(),
+            url = "https://platform.openai.com/account/api-keys".bold().underline(),
+        );
+        std::process::exit(1);
+    }
+
     if !skip_git_repo_check && !is_inside_git_repo() {
         eprintln!("Not inside a Git repo and --skip-git-repo-check was not specified.");
         std::process::exit(1);
@@ -56,10 +82,14 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
         // the user for approval.
         approval_policy: Some(AskForApproval::Never),
         sandbox_policy: sandbox_policy.map(Into::into),
+        disable_response_storage: if disable_response_storage {
+            Some(true)
+        } else {
+            None
+        },
     };
     let config = Config::load_with_overrides(overrides)?;
-    let (codex_wrapper, event, ctrl_c) =
-        codex_wrapper::init_codex(config, disable_response_storage).await?;
+    let (codex_wrapper, event, ctrl_c) = codex_wrapper::init_codex(config).await?;
     let codex = Arc::new(codex_wrapper);
     info!("Codex initialized with event: {event:?}");
 
