@@ -1,4 +1,5 @@
 use clap::Parser;
+use clap::ValueEnum;
 use codex_core::SandboxModeCliArg;
 use std::path::PathBuf;
 
@@ -27,6 +28,19 @@ pub struct Cli {
     #[arg(long = "disable-response-storage", default_value_t = false)]
     pub disable_response_storage: bool,
 
+    /// Specifies color settings for use in the output.
+    #[arg(long = "color", value_enum, default_value_t = Color::Auto)]
+    pub color: Color,
+
     /// Initial instructions for the agent.
-    pub prompt: Option<String>,
+    pub prompt: String,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "kebab-case")]
+pub enum Color {
+    Always,
+    Never,
+    #[default]
+    Auto,
 }
