@@ -10,7 +10,6 @@ jobs:
     steps:
       - name: Comment PR
         uses: thollander/actions-comment-pull-request@v3
-        if: steps.changed-pnpm-lock-yaml.outputs.any_changed == 'true'
         with:
           message: |
             I have read the CLA Document and I hereby sign the CLA
