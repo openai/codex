@@ -325,10 +325,13 @@ export default function TerminalChatInput({
               newIndex = Math.max(0, historyIndex - 1);
             }
             setHistoryIndex(newIndex);
+
             setInput(history[newIndex]?.command ?? "");
+            // Re-mount the editor so it picks up the new initialText
             setEditorKey((k) => k + 1);
-            return;
+            return; // handled
           }
+          // Otherwise let it propagate.
         }
 
         if (_key.downArrow) {
@@ -347,6 +350,7 @@ export default function TerminalChatInput({
             }
             return; // handled
           }
+          // Otherwise let it propagate
         }
 
         if (_key.tab) {
