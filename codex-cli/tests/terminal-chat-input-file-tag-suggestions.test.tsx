@@ -14,14 +14,46 @@ async function type(
   await flush();
 }
 
+/**
+ * Helper to reliably trigger file system suggestions in tests.
+ *
+ * This function simulates typing '@' followed by Tab to ensure suggestions appear.
+ *
+ * NOTE: We need to explicitly press Tab after the '@' in tests because of how
+ * the test environment handles stdin/event propagation. In the test environment,
+ * the normal onChange events don't reliably trigger suggestion updates when typing '@',
+ * so we simulate pressing Tab to explicitly activate them.
+ *
+ * In real usage, simply typing '@' does trigger suggestions correctly.
+ */
+async function typeFileTag(
+  stdin: NodeJS.WritableStream,
+  flush: () => Promise<void>,
+) {
+  // Type @ character
+  stdin.write("@");
+  await flush();
+
+  // Explicitly press Tab to ensure suggestions appear
+  // This is only needed in the test environment
+  stdin.write("\t");
+  await flush();
+}
+
 // Mock the file system suggestions utility
 vi.mock("../src/utils/file-system-suggestions.js", () => ({
+  FileSystemSuggestion: class {}, // Mock the interface
   getFileSystemSuggestions: vi.fn((pathPrefix: string) => {
     const normalizedPrefix = pathPrefix.startsWith("./")
       ? pathPrefix.slice(2)
       : pathPrefix;
-    const allItems = ["file1.txt", "file2.js", "directory1/", "directory2/"];
-    return allItems.filter((item) => item.startsWith(normalizedPrefix));
+    const allItems = [
+      { path: "file1.txt", isDirectory: false },
+      { path: "file2.js", isDirectory: false },
+      { path: "directory1/", isDirectory: true },
+      { path: "directory2/", isDirectory: true },
+    ];
+    return allItems.filter((item) => item.path.startsWith(normalizedPrefix));
   }),
 }));
 
@@ -39,7 +71,7 @@ describe("TerminalChatInput file tag suggestions", () => {
   const baseProps: ComponentProps<typeof TerminalChatInput> = {
     isNew: false,
     loading: false,
-    submitInput: vi.fn(),
+    submitInput: vi.fn().mockImplementation(() => {}),
     confirmationPrompt: null,
     explanation: undefined,
     submitConfirmation: vi.fn(),
@@ -66,11 +98,8 @@ describe("TerminalChatInput file tag suggestions", () => {
       <TerminalChatInput {...baseProps} />,
     );
 
-    // Type @ to trigger current directory suggestions
-    await type(stdin, "@", flush);
-
-    // Press Tab to activate suggestions
-    await type(stdin, "\t", flush);
+    // Type @ and activate suggestions
+    await typeFileTag(stdin, flush);
 
     // Check that current directory suggestions are shown
     const frame = lastFrameStripped();
@@ -84,11 +113,8 @@ describe("TerminalChatInput file tag suggestions", () => {
       <TerminalChatInput {...baseProps} />,
     );
 
-    // Type @ to trigger suggestions
-    await type(stdin, "@", flush);
-
-    // Press Tab to activate suggestions
-    await type(stdin, "\t", flush);
+    // Type @ and activate suggestions
+    await typeFileTag(stdin, flush);
 
     // Press Tab to select the first suggestion
     await type(stdin, "\t", flush);
@@ -109,11 +135,8 @@ describe("TerminalChatInput file tag suggestions", () => {
       <TerminalChatInput {...baseProps} />,
     );
 
-    // Type @ to trigger suggestions
-    await type(stdin, "@", flush);
-
-    // Press Tab to activate suggestions
-    await type(stdin, "\t", flush);
+    // Type @ and activate suggestions
+    await typeFileTag(stdin, flush);
 
     // Check that suggestions are shown
     let frame = lastFrameStripped();
@@ -125,6 +148,65 @@ describe("TerminalChatInput file tag suggestions", () => {
     // Check that suggestions are cleared
     frame = lastFrameStripped();
     expect(frame).not.toContain("file1.txt");
+
+    cleanup();
+  });
+
+  it("selects and retains directory when pressing Enter on directory suggestion", async () => {
+    const { stdin, lastFrameStripped, flush, cleanup } = renderTui(
+      <TerminalChatInput {...baseProps} />,
+    );
+
+    // Type @ and activate suggestions
+    await typeFileTag(stdin, flush);
+
+    // Navigate to directory suggestion (we need two down keys to get to the first directory)
+    await type(stdin, "\u001B[B", flush); // Down arrow key - move to file2.js
+    await type(stdin, "\u001B[B", flush); // Down arrow key - move to directory1/
+
+    // Check that the directory suggestion is selected
+    let frame = lastFrameStripped();
+    expect(frame).toContain("directory1/");
+
+    // Press Enter to select the directory
+    await type(stdin, "\r", flush);
+
+    // Check that the input now contains the directory path
+    frame = lastFrameStripped();
+    expect(frame).toContain("@directory1/");
+
+    // Check that submitInput was NOT called (since we're only navigating, not submitting)
+    expect(baseProps.submitInput).not.toHaveBeenCalled();
+
+    cleanup();
+  });
+
+  it("submits when pressing Enter on file suggestion", async () => {
+    const { stdin, flush, cleanup } = renderTui(
+      <TerminalChatInput {...baseProps} />,
+    );
+
+    // Type @ and activate suggestions
+    await typeFileTag(stdin, flush);
+
+    // Press Enter to select first suggestion (file1.txt)
+    await type(stdin, "\r", flush);
+
+    // Check that submitInput was called
+    expect(baseProps.submitInput).toHaveBeenCalled();
+
+    // Get the arguments passed to submitInput
+    const submitArgs = (baseProps.submitInput as any).mock.calls[0][0];
+
+    // Verify the first argument is an array with at least one item
+    expect(Array.isArray(submitArgs)).toBe(true);
+    expect(submitArgs.length).toBeGreaterThan(0);
+
+    // Check that the content includes the file path
+    const content = submitArgs[0].content;
+    expect(Array.isArray(content)).toBe(true);
+    expect(content.length).toBeGreaterThan(0);
+    expect(content[0].text).toContain("@file1.txt");
 
     cleanup();
   });

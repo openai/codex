@@ -1,5 +1,6 @@
 import type { MultilineTextEditorHandle } from "./multiline-editor";
 import type { ReviewDecision } from "../../utils/agent/review.js";
+import type { FileSystemSuggestion } from "../../utils/file-system-suggestions.js";
 import type { HistoryEntry } from "../../utils/storage/command-history.js";
 import type {
   ResponseInputItem,
@@ -93,7 +94,9 @@ export default function TerminalChatInput({
   const [historyIndex, setHistoryIndex] = useState<number | null>(null);
   const [draftInput, setDraftInput] = useState<string>("");
   const [skipNextSubmit, setSkipNextSubmit] = useState<boolean>(false);
-  const [fsSuggestions, setFsSuggestions] = useState<Array<string>>([]);
+  const [fsSuggestions, setFsSuggestions] = useState<
+    Array<FileSystemSuggestion>
+  >([]);
   const [selectedCompletion, setSelectedCompletion] = useState<number>(-1);
   // Multiline text editor key to force remount after submission
   const [editorKey, setEditorKey] = useState(0);
@@ -148,13 +151,25 @@ export default function TerminalChatInput({
     }
   }
 
+  /**
+   * Result of replacing text with a file system suggestion
+   */
+  interface ReplacementResult {
+    /** The new text with the suggestion applied */
+    text: string;
+    /** The selected suggestion if a replacement was made */
+    suggestion: FileSystemSuggestion | null;
+    /** Whether a replacement was actually made */
+    wasReplaced: boolean;
+  }
+
   // --- Helper for replacing input with file system suggestion ---
   function replaceFileSystemSuggestion(
     txt: string,
     requireAtPrefix: boolean = false,
-  ): string {
+  ): ReplacementResult {
     if (fsSuggestions.length === 0 || selectedCompletion < 0) {
-      return txt;
+      return { text: txt, suggestion: null, wasReplaced: false };
     }
 
     const words = txt.trim().split(/\s+/);
@@ -162,17 +177,23 @@ export default function TerminalChatInput({
 
     // Check if @ prefix is required and the last word doesn't have it
     if (requireAtPrefix && !lastWord.startsWith("@")) {
-      return txt;
+      return { text: txt, suggestion: null, wasReplaced: false };
     }
 
     const selected = fsSuggestions[selectedCompletion];
     if (!selected) {
-      return txt;
+      return { text: txt, suggestion: null, wasReplaced: false };
     }
 
-    const replacement = lastWord.startsWith("@") ? `@${selected}` : selected;
+    const replacement = lastWord.startsWith("@")
+      ? `@${selected.path}`
+      : selected.path;
     words[words.length - 1] = replacement;
-    return words.join(" ");
+    return {
+      text: words.join(" "),
+      suggestion: selected,
+      wasReplaced: true,
+    };
   }
 
   // Load command history on component mount
@@ -296,10 +317,11 @@ export default function TerminalChatInput({
           }
 
           if (_key.tab && selectedCompletion >= 0) {
-            const newText = replaceFileSystemSuggestion(input);
+            const { text: newText, wasReplaced } =
+              replaceFileSystemSuggestion(input);
 
             // Only proceed if the text was actually changed
-            if (newText !== input) {
+            if (wasReplaced) {
               setInput(newText);
               // Force remount of the editor with the new text
               setEditorKey((k) => k + 1);
@@ -747,7 +769,29 @@ export default function TerminalChatInput({
               focus={active}
               onSubmit={(txt) => {
                 // If final token is an @path, replace with filesystem suggestion if available
-                onSubmit(replaceFileSystemSuggestion(txt, true));
+                const {
+                  text: replacedText,
+                  suggestion,
+                  wasReplaced,
+                } = replaceFileSystemSuggestion(txt, true);
+
+                // If we replaced with a directory, handle directory navigation
+                if (wasReplaced && suggestion?.isDirectory) {
+                  // Set input to the directory path
+                  setInput(replacedText);
+                  // Force remount of the editor
+                  setEditorKey((k) => k + 1);
+                  // Move cursor to end after remount
+                  setTimeout(() => {
+                    editorRef.current?.moveCursorToEnd?.();
+                  }, 0);
+                  // Update suggestions for the new directory
+                  updateFsSuggestions(replacedText, true);
+                  return; // Prevent submission
+                }
+
+                // Normal submission flow for non-directory selections
+                onSubmit(replacedText);
                 setEditorKey((k) => k + 1);
                 setInput("");
                 setHistoryIndex(null);
@@ -795,7 +839,7 @@ export default function TerminalChatInput({
           </Text>
         ) : fsSuggestions.length > 0 ? (
           <TextCompletions
-            completions={fsSuggestions}
+            completions={fsSuggestions.map((suggestion) => suggestion.path)}
             selectedCompletion={selectedCompletion}
             displayLimit={5}
           />
