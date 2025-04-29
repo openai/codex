@@ -3,13 +3,14 @@ use std::sync::Arc;
 
 pub use cli::Cli;
 use codex_core::codex_wrapper;
+use codex_core::config::Config;
+use codex_core::config::ConfigOverrides;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
 use codex_core::util::is_inside_git_repo;
 use tracing::debug;
 use tracing::error;
@@ -33,6 +34,7 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
     let Cli {
         images,
         model,
+        sandbox_policy,
         skip_git_repo_check,
         disable_response_storage,
         prompt,
@@ -47,17 +49,21 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
         std::process::exit(1);
     }
 
-    // TODO(mbolin): We are reworking the CLI args right now, so this will
-    // likely come from a new --execution-policy arg.
-    let approval_policy = AskForApproval::Never;
-    let sandbox_policy = SandboxPolicy::NetworkAndFileWriteRestricted;
-    let (codex_wrapper, event, ctrl_c) = codex_wrapper::init_codex(
-        approval_policy,
-        sandbox_policy,
-        disable_response_storage,
-        model,
-    )
-    .await?;
+    // Load configuration and determine approval policy
+    let overrides = ConfigOverrides {
+        model: model.clone(),
+        // This CLI is intended to be headless and has no affordances for asking
+        // the user for approval.
+        approval_policy: Some(AskForApproval::Never),
+        sandbox_policy: sandbox_policy.map(Into::into),
+        disable_response_storage: if disable_response_storage {
+            Some(true)
+        } else {
+            None
+        },
+    };
+    let config = Config::load_with_overrides(overrides)?;
+    let (codex_wrapper, event, ctrl_c) = codex_wrapper::init_codex(config).await?;
     let codex = Arc::new(codex_wrapper);
     info!("Codex initialized with event: {event:?}");
 

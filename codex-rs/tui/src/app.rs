@@ -4,10 +4,9 @@ use crate::git_warning_screen::GitWarningOutcome;
 use crate::git_warning_screen::GitWarningScreen;
 use crate::scroll_event_helper::ScrollEventHelper;
 use crate::tui;
-use codex_core::protocol::AskForApproval;
+use codex_core::config::Config;
 use codex_core::protocol::Event;
 use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -34,13 +33,10 @@ pub(crate) struct App<'a> {
 
 impl App<'_> {
     pub(crate) fn new(
-        approval_policy: AskForApproval,
-        sandbox_policy: SandboxPolicy,
+        config: Config,
         initial_prompt: Option<String>,
         show_git_warning: bool,
         initial_images: Vec<std::path::PathBuf>,
-        model: Option<String>,
-        disable_response_storage: bool,
     ) -> Self {
         let (app_event_tx, app_event_rx) = channel();
         let scroll_event_helper = ScrollEventHelper::new(app_event_tx.clone());
@@ -80,13 +76,10 @@ impl App<'_> {
         }
 
         let chat_widget = ChatWidget::new(
-            approval_policy,
-            sandbox_policy,
+            config,
             app_event_tx.clone(),
             initial_prompt.clone(),
             initial_images,
-            model,
-            disable_response_storage,
         );
 
         let app_state = if show_git_warning {

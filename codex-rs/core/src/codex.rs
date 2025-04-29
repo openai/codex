@@ -36,7 +36,6 @@ use crate::exec::process_exec_tool_call;
 use crate::exec::ExecParams;
 use crate::exec::ExecToolCallOutput;
 use crate::exec::SandboxType;
-use crate::flags::OPENAI_DEFAULT_MODEL;
 use crate::flags::OPENAI_STREAM_MAX_RETRIES;
 use crate::models::ContentItem;
 use crate::models::FunctionCallOutputPayload;
@@ -486,7 +485,6 @@ async fn submission_loop(
                 sandbox_policy,
                 disable_response_storage,
             } => {
-                let model = model.unwrap_or_else(|| OPENAI_DEFAULT_MODEL.to_string());
                 info!(model, "Configuring session");
                 let client = ModelClient::new(model.clone());
 

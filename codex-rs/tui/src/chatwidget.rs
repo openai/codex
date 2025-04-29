@@ -3,12 +3,11 @@ use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
 use codex_core::codex_wrapper::init_codex;
-use codex_core::protocol::AskForApproval;
+use codex_core::config::Config;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
@@ -34,7 +33,7 @@ pub(crate) struct ChatWidget<'a> {
     conversation_history: ConversationHistoryWidget,
     bottom_pane: BottomPane<'a>,
     input_focus: InputFocus,
-    approval_policy: AskForApproval,
+    config: Config,
     cwd: std::path::PathBuf,
 }
 
@@ -46,13 +45,10 @@ enum InputFocus {
 
 impl ChatWidget<'_> {
     pub(crate) fn new(
-        approval_policy: AskForApproval,
-        sandbox_policy: SandboxPolicy,
+        config: Config,
         app_event_tx: Sender<AppEvent>,
         initial_prompt: Option<String>,
         initial_images: Vec<std::path::PathBuf>,
-        model: Option<String>,
-        disable_response_storage: bool,
     ) -> Self {
         let (codex_op_tx, mut codex_op_rx) = unbounded_channel::<Op>();
 
@@ -63,19 +59,12 @@ impl ChatWidget<'_> {
 
         let app_event_tx_clone = app_event_tx.clone();
         // Create the Codex asynchronously so the UI loads as quickly as possible.
+        let config_for_agent_loop = config.clone();
         tokio::spawn(async move {
-            // Initialize session; storage enabled by default
-            let (codex, session_event, _ctrl_c) = match init_codex(
-                approval_policy,
-                sandbox_policy,
-                disable_response_storage,
-                model,
-            )
-            .await
-            {
+            let (codex, session_event, _ctrl_c) = match init_codex(config_for_agent_loop).await {
                 Ok(vals) => vals,
                 Err(e) => {
-                    // TODO(mbolin): This error needs to be surfaced to the user.
+                    // TODO: surface this error to the user.
                     tracing::error!("failed to initialize codex: {e}");
                     return;
                 }
@@ -115,7 +104,7 @@ impl ChatWidget<'_> {
                 has_input_focus: true,
             }),
             input_focus: InputFocus::BottomPane,
-            approval_policy,
+            config,
             cwd: cwd.clone(),
         };
 
@@ -243,11 +232,8 @@ impl ChatWidget<'_> {
         match msg {
             EventMsg::SessionConfigured { model } => {
                 // Record session information at the top of the conversation.
-                self.conversation_history.add_session_info(
-                    model,
-                    self.cwd.clone(),
-                    self.approval_policy,
-                );
+                self.conversation_history
+                    .add_session_info(&self.config, model, self.cwd.clone());
                 self.request_redraw()?;
             }
             EventMsg::AgentMessage { message } => {

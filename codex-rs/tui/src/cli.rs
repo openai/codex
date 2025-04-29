@@ -18,14 +18,14 @@ pub struct Cli {
     pub model: Option<String>,
 
     /// Configure when the model requires human approval before executing a command.
-    #[arg(long = "ask-for-approval", short = 'a', value_enum, default_value_t = ApprovalModeCliArg::OnFailure)]
-    pub approval_policy: ApprovalModeCliArg,
+    #[arg(long = "ask-for-approval", short = 'a')]
+    pub approval_policy: Option<ApprovalModeCliArg>,
 
     /// Configure the process restrictions when a command is executed.
     ///
     /// Uses OS-specific sandboxing tools; Seatbelt on OSX, landlock+seccomp on Linux.
-    #[arg(long = "sandbox", short = 's', value_enum, default_value_t = SandboxModeCliArg::NetworkAndFileWriteRestricted)]
-    pub sandbox_policy: SandboxModeCliArg,
+    #[arg(long = "sandbox", short = 's')]
+    pub sandbox_policy: Option<SandboxModeCliArg>,
 
     /// Allow running Codex outside a Git repository.
     #[arg(long = "skip-git-repo-check", default_value_t = false)]

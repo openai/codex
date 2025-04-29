@@ -17,7 +17,6 @@ Currently, the Rust implementation is materially behind the TypeScript implement
 This folder is the root of a Cargo workspace. It contains quite a bit of experimental code, but here are the key crates:
 
 - [`core/`](./core) contains the business logic for Codex. Ultimately, we hope this to be a library crate that is generally useful for building other Rust/native applications that use Codex.
-- [`interactive/`](./interactive) CLI with a UX comparable to the TypeScript Codex CLI.
 - [`exec/`](./exec) "headless" CLI for use in automation.
 - [`tui/`](./tui) CLI that launches a fullscreen TUI built with [Ratatui](https://ratatui.rs/).
 - [`repl/`](./repl) CLI that launches a lightweight REPL similar to the Python or Node.js REPL.
