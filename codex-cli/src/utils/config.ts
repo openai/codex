@@ -323,6 +323,22 @@ export const loadConfig = (
     }
   }
 
+  if (
+    storedConfig.disableResponseStorage !== undefined &&
+    typeof storedConfig.disableResponseStorage !== "boolean"
+  ) {
+    if (storedConfig.disableResponseStorage === "true") {
+      storedConfig.disableResponseStorage = true;
+    } else if (storedConfig.disableResponseStorage === "false") {
+      storedConfig.disableResponseStorage = false;
+    } else {
+      log(
+        `[codex] Warning: 'disableResponseStorage' in config is not a boolean (got '${storedConfig.disableResponseStorage}'). Ignoring this value.`,
+      );
+      delete storedConfig.disableResponseStorage;
+    }
+  }
+
   const instructionsFilePathResolved =
     instructionsPath ?? INSTRUCTIONS_FILEPATH;
   const userInstructions = existsSync(instructionsFilePathResolved)
@@ -372,7 +388,7 @@ export const loadConfig = (
     instructions: combinedInstructions,
     notify: storedConfig.notify === true,
     approvalMode: storedConfig.approvalMode,
-    disableResponseStorage: storedConfig.disableResponseStorage ?? false,
+    disableResponseStorage: storedConfig.disableResponseStorage === true,
     reasoningEffort: storedConfig.reasoningEffort,
   };
 
@@ -488,6 +504,7 @@ export const saveConfig = (
     provider: config.provider,
     providers: config.providers,
     approvalMode: config.approvalMode,
+    disableResponseStorage: config.disableResponseStorage,
     reasoningEffort: config.reasoningEffort,
   };
 

@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use clap::ArgAction;
 use clap::Parser;
-use codex_core::SandboxModeCliArg;
+use codex_core::protocol::SandboxPolicy;
 use codex_exec::Cli as ExecCli;
 use codex_repl::Cli as ReplCli;
 use codex_tui::Cli as TuiCli;
@@ -71,9 +71,9 @@ struct SeatbeltCommand {
     #[arg(long = "writable-root", short = 'w', value_name = "DIR", action = ArgAction::Append, use_value_delimiter = false)]
     writable_roots: Vec<PathBuf>,
 
-    /// Configure the process restrictions for the command.
-    #[arg(long = "sandbox", short = 's')]
-    sandbox_policy: SandboxModeCliArg,
+    /// Convenience alias for low-friction sandboxed automatic execution (network-disabled sandbox that can write to cwd and TMPDIR)
+    #[arg(long = "full-auto", default_value_t = false)]
+    full_auto: bool,
 
     /// Full command args to run under seatbelt.
     #[arg(trailing_var_arg = true)]
@@ -86,9 +86,9 @@ struct LandlockCommand {
     #[arg(long = "writable-root", short = 'w', value_name = "DIR", action = ArgAction::Append, use_value_delimiter = false)]
     writable_roots: Vec<PathBuf>,
 
-    /// Configure the process restrictions for the command.
-    #[arg(long = "sandbox", short = 's')]
-    sandbox_policy: SandboxModeCliArg,
+    /// Convenience alias for low-friction sandboxed automatic execution (network-disabled sandbox that can write to cwd and TMPDIR)
+    #[arg(long = "full-auto", default_value_t = false)]
+    full_auto: bool,
 
     /// Full command args to run under landlock.
     #[arg(trailing_var_arg = true)]
@@ -118,18 +118,20 @@ async fn main() -> anyhow::Result<()> {
         Some(Subcommand::Debug(debug_args)) => match debug_args.cmd {
             DebugCommand::Seatbelt(SeatbeltCommand {
                 command,
-                sandbox_policy,
                 writable_roots,
+                full_auto,
             }) => {
-                seatbelt::run_seatbelt(command, sandbox_policy.into(), writable_roots).await?;
+                let sandbox_policy = create_sandbox_policy(full_auto, &writable_roots);
+                seatbelt::run_seatbelt(command, sandbox_policy).await?;
             }
             #[cfg(target_os = "linux")]
             DebugCommand::Landlock(LandlockCommand {
                 command,
-                sandbox_policy,
                 writable_roots,
+                full_auto,
             }) => {
-                landlock::run_landlock(command, sandbox_policy.into(), writable_roots)?;
+                let sandbox_policy = create_sandbox_policy(full_auto, &writable_roots);
+                landlock::run_landlock(command, sandbox_policy)?;
             }
             #[cfg(not(target_os = "linux"))]
             DebugCommand::Landlock(_) => {
@@ -139,4 +141,12 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+fn create_sandbox_policy(full_auto: bool, writable_roots: &[PathBuf]) -> SandboxPolicy {
+    if full_auto {
+        SandboxPolicy::new_full_auto_policy_with_writable_roots(writable_roots)
+    } else {
+        SandboxPolicy::new_read_only_policy_with_writable_roots(writable_roots)
+    }
 }

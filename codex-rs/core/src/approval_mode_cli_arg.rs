@@ -4,7 +4,6 @@
 use clap::ValueEnum;
 
 use crate::protocol::AskForApproval;
-use crate::protocol::SandboxPolicy;
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 #[value(rename_all = "kebab-case")]
@@ -24,38 +23,12 @@ pub enum ApprovalModeCliArg {
     Never,
 }
 
-#[derive(Clone, Copy, Debug, ValueEnum)]
-#[value(rename_all = "kebab-case")]
-pub enum SandboxModeCliArg {
-    /// Network syscalls will be blocked
-    NetworkRestricted,
-    /// Filesystem writes will be restricted
-    FileWriteRestricted,
-    /// Network and filesystem writes will be restricted
-    NetworkAndFileWriteRestricted,
-    /// No restrictions; full "unsandboxed" mode
-    DangerousNoRestrictions,
-}
-
 impl From<ApprovalModeCliArg> for AskForApproval {
     fn from(value: ApprovalModeCliArg) -> Self {
         match value {
             ApprovalModeCliArg::OnFailure => AskForApproval::OnFailure,
             ApprovalModeCliArg::UnlessAllowListed => AskForApproval::UnlessAllowListed,
             ApprovalModeCliArg::Never => AskForApproval::Never,
-        }
-    }
-}
-
-impl From<SandboxModeCliArg> for SandboxPolicy {
-    fn from(value: SandboxModeCliArg) -> Self {
-        match value {
-            SandboxModeCliArg::NetworkRestricted => SandboxPolicy::NetworkRestricted,
-            SandboxModeCliArg::FileWriteRestricted => SandboxPolicy::FileWriteRestricted,
-            SandboxModeCliArg::NetworkAndFileWriteRestricted => {
-                SandboxPolicy::NetworkAndFileWriteRestricted
-            }
-            SandboxModeCliArg::DangerousNoRestrictions => SandboxPolicy::DangerousNoRestrictions,
         }
     }
 }

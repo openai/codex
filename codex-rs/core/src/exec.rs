@@ -1,7 +1,6 @@
 use std::io;
 #[cfg(target_family = "unix")]
 use std::os::unix::process::ExitStatusExt;
-use std::path::PathBuf;
 use std::process::ExitStatus;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -33,7 +32,7 @@ const DEFAULT_TIMEOUT_MS: u64 = 10_000;
 const SIGKILL_CODE: i32 = 9;
 const TIMEOUT_CODE: i32 = 64;
 
-const MACOS_SEATBELT_READONLY_POLICY: &str = include_str!("seatbelt_readonly_policy.sbpl");
+const MACOS_SEATBELT_BASE_POLICY: &str = include_str!("seatbelt_base_policy.sbpl");
 
 /// When working with `sandbox-exec`, only consider `sandbox-exec` in `/usr/bin`
 /// to defend against an attacker trying to inject a malicious version on the
@@ -67,19 +66,17 @@ pub enum SandboxType {
 #[cfg(target_os = "linux")]
 async fn exec_linux(
     params: ExecParams,
-    writable_roots: &[PathBuf],
     ctrl_c: Arc<Notify>,
-    sandbox_policy: SandboxPolicy,
+    sandbox_policy: &SandboxPolicy,
 ) -> Result<RawExecToolCallOutput> {
-    crate::linux::exec_linux(params, writable_roots, ctrl_c, sandbox_policy).await
+    crate::linux::exec_linux(params, ctrl_c, sandbox_policy).await
 }
 
 #[cfg(not(target_os = "linux"))]
 async fn exec_linux(
     _params: ExecParams,
-    _writable_roots: &[PathBuf],
     _ctrl_c: Arc<Notify>,
-    _sandbox_policy: SandboxPolicy,
+    _sandbox_policy: &SandboxPolicy,
 ) -> Result<RawExecToolCallOutput> {
     Err(CodexErr::Io(io::Error::new(
         io::ErrorKind::InvalidInput,
@@ -90,9 +87,8 @@ async fn exec_linux(
 pub async fn process_exec_tool_call(
     params: ExecParams,
     sandbox_type: SandboxType,
-    writable_roots: &[PathBuf],
     ctrl_c: Arc<Notify>,
-    sandbox_policy: SandboxPolicy,
+    sandbox_policy: &SandboxPolicy,
 ) -> Result<ExecToolCallOutput> {
     let start = Instant::now();
 
@@ -104,7 +100,7 @@ pub async fn process_exec_tool_call(
                 workdir,
                 timeout_ms,
             } = params;
-            let seatbelt_command = create_seatbelt_command(command, sandbox_policy, writable_roots);
+            let seatbelt_command = create_seatbelt_command(command, sandbox_policy);
             exec(
                 ExecParams {
                     command: seatbelt_command,
@@ -115,9 +111,7 @@ pub async fn process_exec_tool_call(
             )
             .await
         }
-        SandboxType::LinuxSeccomp => {
-            exec_linux(params, writable_roots, ctrl_c, sandbox_policy).await
-        }
+        SandboxType::LinuxSeccomp => exec_linux(params, ctrl_c, sandbox_policy).await,
     };
     let duration = start.elapsed();
     match raw_output_result {
@@ -162,41 +156,61 @@ pub async fn process_exec_tool_call(
 
 pub fn create_seatbelt_command(
     command: Vec<String>,
-    sandbox_policy: SandboxPolicy,
-    writable_roots: &[PathBuf],
+    sandbox_policy: &SandboxPolicy,
 ) -> Vec<String> {
-    let (policies, cli_args): (Vec<String>, Vec<String>) = writable_roots
-        .iter()
-        .enumerate()
-        .map(|(index, root)| {
-            let param_name = format!("WRITABLE_ROOT_{index}");
-            let policy: String = format!("(subpath (param \"{param_name}\"))");
-            let cli_arg = format!("-D{param_name}={}", root.to_string_lossy());
-            (policy, cli_arg)
-        })
-        .unzip();
-
-    // TODO(ragona): The seatbelt policy should reflect the SandboxPolicy that
-    // is passed, but everything is currently hardcoded to use
-    // MACOS_SEATBELT_READONLY_POLICY.
-    // TODO(mbolin): apply_patch calls must also honor the SandboxPolicy.
-    if !matches!(sandbox_policy, SandboxPolicy::NetworkRestricted) {
-        tracing::error!("specified sandbox policy {sandbox_policy:?} will not be honroed");
-    }
-
-    let full_policy = if policies.is_empty() {
-        MACOS_SEATBELT_READONLY_POLICY.to_string()
-    } else {
-        let scoped_write_policy = format!("(allow file-write*\n{}\n)", policies.join(" "));
-        format!("{MACOS_SEATBELT_READONLY_POLICY}\n{scoped_write_policy}")
+    let (file_write_policy, extra_cli_args) = {
+        if sandbox_policy.has_full_disk_write_access() {
+            // Allegedly, this is more permissive than `(allow file-write*)`.
+            (
+                r#"(allow file-write* (regex #"^/"))"#.to_string(),
+                Vec::<String>::new(),
+            )
+        } else {
+            let writable_roots = sandbox_policy.get_writable_roots();
+            let (writable_folder_policies, cli_args): (Vec<String>, Vec<String>) = writable_roots
+                .iter()
+                .enumerate()
+                .map(|(index, root)| {
+                    let param_name = format!("WRITABLE_ROOT_{index}");
+                    let policy: String = format!("(subpath (param \"{param_name}\"))");
+                    let cli_arg = format!("-D{param_name}={}", root.to_string_lossy());
+                    (policy, cli_arg)
+                })
+                .unzip();
+            if writable_folder_policies.is_empty() {
+                ("".to_string(), Vec::<String>::new())
+            } else {
+                let file_write_policy = format!(
+                    "(allow file-write*\n{}\n)",
+                    writable_folder_policies.join(" ")
+                );
+                (file_write_policy, cli_args)
+            }
+        }
     };
 
+    let file_read_policy = if sandbox_policy.has_full_disk_read_access() {
+        "; allow read-only file operations\n(allow file-read*)"
+    } else {
+        ""
+    };
+
+    // TODO(mbolin): apply_patch calls must also honor the SandboxPolicy.
+    let network_policy = if sandbox_policy.has_full_network_access() {
+        "(allow network-outbound)\n(allow network-inbound)\n(allow system-socket)"
+    } else {
+        ""
+    };
+
+    let full_policy = format!(
+        "{MACOS_SEATBELT_BASE_POLICY}\n{file_read_policy}\n{file_write_policy}\n{network_policy}"
+    );
     let mut seatbelt_command: Vec<String> = vec![
         MACOS_PATH_TO_SEATBELT_EXECUTABLE.to_string(),
         "-p".to_string(),
-        full_policy.to_string(),
+        full_policy,
     ];
-    seatbelt_command.extend(cli_args);
+    seatbelt_command.extend(extra_cli_args);
     seatbelt_command.push("--".to_string());
     seatbelt_command.extend(command);
     seatbelt_command

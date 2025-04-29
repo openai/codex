@@ -6,7 +6,9 @@ use std::sync::Arc;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::protocol;
+use codex_core::protocol::AskForApproval;
 use codex_core::protocol::FileChange;
+use codex_core::protocol::SandboxPolicy;
 use codex_core::util::is_inside_git_repo;
 use codex_core::util::notify_on_sigint;
 use codex_core::Codex;
@@ -76,11 +78,20 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
     // Initialize logging before any other work so early errors are captured.
     init_logger(cli.verbose, !cli.no_ansi);
 
+    let (sandbox_policy, approval_policy) = if cli.full_auto {
+        (
+            Some(SandboxPolicy::new_full_auto_policy()),
+            Some(AskForApproval::OnFailure),
+        )
+    } else {
+        (None, cli.approval_policy.map(Into::into))
+    };
+
     // Load config file and apply CLI overrides (model & approval policy)
     let overrides = ConfigOverrides {
         model: cli.model.clone(),
-        approval_policy: cli.approval_policy.map(Into::into),
-        sandbox_policy: cli.sandbox_policy.map(Into::into),
+        approval_policy,
+        sandbox_policy,
         disable_response_storage: if cli.disable_response_storage {
             Some(true)
         } else {
