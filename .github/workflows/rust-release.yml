@@ -5,7 +5,6 @@
 # git push origin rust-v0.1.0
 # ```
 
-
 name: rust-release
 on:
   push:
