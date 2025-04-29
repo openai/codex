@@ -404,7 +404,7 @@ export default function TerminalChatInput({
           // Otherwise let it propagate
         }
 
-        // Defer fs suggestion logic to code in onSubmit if enter key is pressed
+        // Defer filesystem suggestion logic to onSubmit if enter key is pressed
         if (!_key.return) {
           // Pressing tab should trigger the file system suggestions
           const shouldUpdateSelection = _key.tab;
