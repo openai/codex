@@ -294,6 +294,12 @@ if (!apiKey && !NO_API_KEY_REQUIRED.has(provider.toLowerCase())) {
   process.exit(1);
 }
 
+const flagPresent = Object.hasOwn(cli.flags, "disableResponseStorage");
+
+const disableResponseStorage = flagPresent
+  ? Boolean(cli.flags.disableResponseStorage) // value user actually passed
+  : (config.disableResponseStorage ?? false); // fall back to YAML, default to false
+
 config = {
   apiKey,
   ...config,
@@ -303,10 +309,7 @@ config = {
     (cli.flags.reasoning as ReasoningEffort | undefined) ?? "high",
   flexMode: Boolean(cli.flags.flexMode),
   provider,
-  disableResponseStorage:
-    cli.flags.disableResponseStorage !== undefined
-      ? Boolean(cli.flags.disableResponseStorage)
-      : config.disableResponseStorage,
+  disableResponseStorage,
 };
 
 // Check for updates after loading config. This is important because we write state file in
