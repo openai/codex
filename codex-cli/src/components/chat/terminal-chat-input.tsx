@@ -106,7 +106,7 @@ export default function TerminalChatInput({
   const prevCursorRow = useRef<number | null>(null);
   const prevCursorWasAtLastRow = useRef<boolean>(false);
 
-  // Helper function to update input, remount editor, and move cursor to end
+  // --- Helper for updaing input, remounting editor, and moving cursor to end ---
   const applyFsSuggestion = useCallback((newInputText: string) => {
     setInput(newInputText);
     // Force remount of the editor with the new text
