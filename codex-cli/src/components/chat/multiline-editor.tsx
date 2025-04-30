@@ -157,6 +157,8 @@ export interface MultilineTextEditorHandle {
   getText(): string;
   /** Move the cursor to the end of the text */
   moveCursorToEnd(): void;
+  /** Replace the entire text content and move cursor to end */
+  setTextAndMoveCursorToEnd(text: string): void;
 }
 
 const MultilineTextEditorInner = (
@@ -330,8 +332,15 @@ const MultilineTextEditorInner = (
         // Force a re-render
         setVersion((v) => v + 1);
       },
+      setTextAndMoveCursorToEnd: (text: string) => {
+        buffer.current.setText(text);
+        // Force a re-render
+        setVersion((v) => v + 1);
+        // Notify parent about the change
+        onChange?.(text);
+      },
     }),
-    [],
+    [onChange],
   );
 
   // Read everything from the buffer

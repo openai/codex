@@ -234,6 +234,27 @@ export default class TextBuffer {
   /* =======================================================================
    *  Editing operations
    * ===================================================================== */
+
+  /**
+   * Replaces the entire buffer content with new text.
+   * Pushes the previous state to undo history and moves cursor to the end.
+   */
+  setText(newText: string): void {
+    dbg("setText", { newText });
+    this.pushUndo();
+    this.lines = newText.split("\n");
+    if (this.lines.length === 0) {
+      this.lines = [""]; // Ensure at least one empty line
+    }
+    // Cursor might be out of bounds now, ensure it's valid
+    this.ensureCursorInRange();
+    // Move cursor to the very end
+    this.move("end");
+    this.version++;
+    // Preferred column is reset on text change
+    this.preferredCol = null;
+  }
+
   /**
    * Insert a single character or string without newlines. If the string
    * contains a newline we delegate to insertStr so that line splitting

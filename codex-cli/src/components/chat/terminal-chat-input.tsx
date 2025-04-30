@@ -109,13 +109,7 @@ export default function TerminalChatInput({
   // --- Helper for updating input, remounting editor, and moving cursor to end ---
   const applyFsSuggestion = useCallback((newInputText: string) => {
     setInput(newInputText);
-    // Force remount of the editor with the new text
-    setEditorKey((k) => k + 1);
-
-    // We need to move the cursor to the end after editor remounts
-    setTimeout(() => {
-      editorRef.current?.moveCursorToEnd?.();
-    }, 0);
+    editorRef.current?.setTextAndMoveCursorToEnd?.(newInputText);
   }, []);
 
   // --- Helper for updating file system suggestions ---
