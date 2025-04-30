@@ -116,6 +116,7 @@ jobs:
       - name: Compress artifacts
         shell: bash
         run: |
+          dest="dist/${{ matrix.target }}"
           zstd -T0 -19 --rm "$dest"/*
 
       - uses: actions/upload-artifact@v4
