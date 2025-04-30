@@ -18,12 +18,12 @@
       }
     },
 
-    "codex-cli": {
+    "codex": {
       "platforms": {
-        "macos-aarch64":  { "regex": "^codex-cli-aarch64-apple-darwin\\.zst$",          "path": "codex-cli" },
-        "macos-x86_64":   { "regex": "^codex-cli-x86_64-apple-darwin\\.zst$",           "path": "codex-cli" },
-        "linux-x86_64":   { "regex": "^codex-cli-x86_64-unknown-linux-musl\\.zst$",     "path": "codex-cli" },
-        "linux-aarch64":  { "regex": "^codex-cli-aarch64-unknown-linux-gnu\\.zst$",     "path": "codex-cli" }
+        "macos-aarch64":  { "regex": "^codex-aarch64-apple-darwin\\.zst$",          "path": "codex" },
+        "macos-x86_64":   { "regex": "^codex-x86_64-apple-darwin\\.zst$",           "path": "codex" },
+        "linux-x86_64":   { "regex": "^codex-x86_64-unknown-linux-musl\\.zst$",     "path": "codex" },
+        "linux-aarch64":  { "regex": "^codex-aarch64-unknown-linux-gnu\\.zst$",     "path": "codex" }
       }
     },
 
