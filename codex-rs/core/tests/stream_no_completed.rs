@@ -78,7 +78,7 @@ async fn retries_on_early_close() {
                 model: config.model,
                 instructions: None,
                 approval_policy: config.approval_policy,
-                sandbox_policy: SandboxPolicy::NetworkAndFileWriteRestricted,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 disable_response_storage: false,
             },
         })
