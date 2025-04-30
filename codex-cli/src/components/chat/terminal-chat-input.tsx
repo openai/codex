@@ -402,7 +402,8 @@ export default function TerminalChatInput({
         if (!_key.return) {
           // Pressing tab should trigger the file system suggestions
           const shouldUpdateSelection = _key.tab;
-          updateFsSuggestions(input + _input, shouldUpdateSelection);
+          const targetInput = _key.delete ? input.slice(0, -1) : input + _input;
+          updateFsSuggestions(targetInput, shouldUpdateSelection);
         }
       }
 
