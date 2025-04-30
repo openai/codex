@@ -3,8 +3,6 @@ use std::collections::HashSet;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::Command;
-use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -863,7 +861,7 @@ async fn handle_function_call(
                 assess_command_safety(
                     &params.command,
                     sess.approval_policy,
-                    sess.sandbox_policy,
+                    &sess.sandbox_policy,
                     &state.approved_commands,
                 )
             };
@@ -918,14 +916,11 @@ async fn handle_function_call(
             )
             .await;
 
-            let roots_snapshot = { sess.writable_roots.lock().unwrap().clone() };
-
             let output_result = process_exec_tool_call(
                 params.clone(),
                 sandbox_type,
-                &roots_snapshot,
                 sess.ctrl_c.clone(),
-                sess.sandbox_policy,
+                &sess.sandbox_policy,
             )
             .await;
 
@@ -1008,16 +1003,13 @@ async fn handle_function_call(
                             )
                             .await;
 
-                            let retry_roots = { sess.writable_roots.lock().unwrap().clone() };
-
                             // This is an escalated retry; the policy will not be
                             // examined and the sandbox has been set to `None`.
                             let retry_output_result = process_exec_tool_call(
                                 params.clone(),
                                 SandboxType::None,
-                                &retry_roots,
                                 sess.ctrl_c.clone(),
-                                sess.sandbox_policy,
+                                &sess.sandbox_policy,
                             )
                             .await;
 
@@ -1346,6 +1338,7 @@ fn convert_apply_patch_to_protocol(
             ApplyPatchFileChange::Update {
                 unified_diff,
                 move_path,
+                new_content: _new_content,
             } => FileChange::Update {
                 unified_diff: unified_diff.clone(),
                 move_path: move_path.clone(),
@@ -1400,28 +1393,10 @@ fn apply_changes_from_apply_patch(
                 deleted.push(path.clone());
             }
             ApplyPatchFileChange::Update {
-                unified_diff,
+                unified_diff: _unified_diff,
                 move_path,
+                new_content,
             } => {
-                // TODO(mbolin): `patch` is not guaranteed to be available.
-                // Allegedly macOS provides it, but minimal Linux installs
-                // might omit it.
-                Command::new("patch")
-                    .arg(path)
-                    .arg("-p0")
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .stdin(Stdio::piped())
-                    .spawn()
-                    .and_then(|mut child| {
-                        let mut stdin = child.stdin.take().unwrap();
-                        stdin.write_all(unified_diff.as_bytes())?;
-                        stdin.flush()?;
-                        // Drop stdin to send EOF.
-                        drop(stdin);
-                        child.wait()
-                    })
-                    .with_context(|| format!("Failed to apply patch to {}", path.display()))?;
                 if let Some(move_path) = move_path {
                     if let Some(parent) = move_path.parent() {
                         if !parent.as_os_str().is_empty() {
@@ -1433,11 +1408,14 @@ fn apply_changes_from_apply_patch(
                             })?;
                         }
                     }
+
                     std::fs::rename(path, move_path)
                         .with_context(|| format!("Failed to rename file {}", path.display()))?;
+                    std::fs::write(move_path, new_content)?;
                     modified.push(move_path.clone());
                     deleted.push(path.clone());
                 } else {
+                    std::fs::write(path, new_content)?;
                     modified.push(path.clone());
                 }
             }

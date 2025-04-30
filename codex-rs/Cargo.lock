@@ -469,7 +469,7 @@ dependencies = [
 
 [[package]]
 name = "codex-cli"
-version = "0.1.0"
+version = "0.0.2504292236"
 dependencies = [
  "anyhow",
  "clap",
@@ -504,6 +504,7 @@ dependencies = [
  "mime_guess",
  "openssl-sys",
  "patch",
+ "path-absolutize",
  "predicates",
  "rand",
  "reqwest",
@@ -523,11 +524,14 @@ dependencies = [
 
 [[package]]
 name = "codex-exec"
-version = "0.1.0"
+version = "0.0.2504292236"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "codex-core",
+ "owo-colors 4.2.0",
+ "shlex",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -555,7 +559,7 @@ dependencies = [
 
 [[package]]
 name = "codex-repl"
-version = "0.1.0"
+version = "0.0.2504292236"
 dependencies = [
  "anyhow",
  "clap",
