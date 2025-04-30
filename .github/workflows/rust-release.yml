@@ -9,14 +9,14 @@ name: rust-release
 on:
   push:
     tags:
-      - "rust-v.*.*.*"
+      - "rust-v*.*.*"
 
 concurrency:
   group: ${{ github.workflow }}
   cancel-in-progress: true
 
 env:
-  TAG_REGEX: '^rust-v\.[0-9]+\.[0-9]+\.[0-9]+$'
+  TAG_REGEX: '^rust-v[0-9]+\.[0-9]+\.[0-9]+$'
 
 jobs:
   tag-check:
@@ -37,7 +37,7 @@ jobs:
             || { echo "❌  Tag '${GITHUB_REF_NAME}' != ${TAG_REGEX}"; exit 1; }
 
           # 2. Extract versions
-          tag_ver="${GITHUB_REF_NAME#rust-v.}"
+          tag_ver="${GITHUB_REF_NAME#rust-v}"
           cargo_ver="$(grep -m1 '^version' codex-rs/Cargo.toml \
                         | sed -E 's/version *= *"([^"]+)".*/\1/')"
 
