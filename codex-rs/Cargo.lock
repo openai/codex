@@ -475,7 +475,6 @@ dependencies = [
  "clap",
  "codex-core",
  "codex-exec",
- "codex-repl",
  "codex-tui",
  "serde_json",
  "tokio",
@@ -555,20 +554,6 @@ dependencies = [
  "serde_with",
  "starlark",
  "tempfile",
-]
-
-[[package]]
-name = "codex-repl"
-version = "0.0.2504292236"
-dependencies = [
- "anyhow",
- "clap",
- "codex-core",
- "owo-colors 4.2.0",
- "rand",
- "tokio",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

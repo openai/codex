@@ -7,7 +7,6 @@ members = [
     "core",
     "exec",
     "execpolicy",
-    "repl",
     "tui",
 ]
 
