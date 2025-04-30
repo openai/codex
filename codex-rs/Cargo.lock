@@ -469,7 +469,7 @@ dependencies = [
 
 [[package]]
 name = "codex-cli"
-version = "0.0.2504301132"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -523,7 +523,7 @@ dependencies = [
 
 [[package]]
 name = "codex-exec"
-version = "0.0.2504301132"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "chrono",
