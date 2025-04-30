@@ -847,16 +847,18 @@ export default class TextBuffer {
     //  key.
     // ------------------------------------------------------------------
     else if (
+      // ⌥/Alt/Meta + (Backspace|Delete|DEL byte) → backward word delete
       (key["meta"] || key["ctrl"] || key["alt"]) &&
-      (key["backspace"] || input === "\x7f" || (key["delete"] && !key["shift"])) // treat un-shifted Delete like Backspace
+      !key["shift"] &&
+      (key["backspace"] || input === "\x7f" || key["delete"])
     ) {
       this.deleteWordLeft();
     } else if (
+      // ⇧+⌥/Alt/Meta + (Backspace|Delete|DEL byte) → forward word delete
       (key["meta"] || key["ctrl"] || key["alt"]) &&
-      key["delete"] &&
-      key["shift"]
+      key["shift"] &&
+      (key["backspace"] || input === "\x7f" || key["delete"])
     ) {
-      // ⇧+⌥/Alt/Meta+Delete → forward word delete
       this.deleteWordRight();
     } else if (
       key["backspace"] ||
