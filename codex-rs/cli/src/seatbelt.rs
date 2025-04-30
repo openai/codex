@@ -1,7 +1,7 @@
 use codex_core::exec::create_seatbelt_command;
 use codex_core::protocol::SandboxPolicy;
 
-pub(crate) async fn run_seatbelt(
+pub async fn run_seatbelt(
     command: Vec<String>,
     sandbox_policy: SandboxPolicy,
 ) -> anyhow::Result<()> {

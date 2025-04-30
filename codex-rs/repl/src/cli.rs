@@ -1,6 +1,7 @@
 use clap::ArgAction;
 use clap::Parser;
 use codex_core::ApprovalModeCliArg;
+use codex_core::SandboxPermissionOption;
 use std::path::PathBuf;
 
 /// Command‑line arguments.
@@ -39,6 +40,9 @@ pub struct Cli {
     /// Convenience alias for low-friction sandboxed automatic execution (-a on-failure, network-disabled sandbox that can write to cwd and TMPDIR)
     #[arg(long = "full-auto", default_value_t = false)]
     pub full_auto: bool,
+
+    #[clap(flatten)]
+    pub sandbox: SandboxPermissionOption,
 
     /// Allow running Codex outside a Git repository.  By default the CLI
     /// aborts early when the current working directory is **not** inside a

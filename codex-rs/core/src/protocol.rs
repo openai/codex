@@ -132,16 +132,6 @@ impl SandboxPolicy {
         }
     }
 
-    pub fn new_full_auto_policy_with_writable_roots(writable_roots: &[PathBuf]) -> Self {
-        let mut permissions = Self::new_full_auto_policy().permissions;
-        permissions.extend(writable_roots.iter().map(|folder| {
-            SandboxPermission::DiskWriteFolder {
-                folder: folder.clone(),
-            }
-        }));
-        Self { permissions }
-    }
-
     pub fn has_full_disk_read_access(&self) -> bool {
         self.permissions
             .iter()

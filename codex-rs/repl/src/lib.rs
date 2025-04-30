@@ -84,7 +84,8 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
             Some(AskForApproval::OnFailure),
         )
     } else {
-        (None, cli.approval_policy.map(Into::into))
+        let sandbox_policy = cli.sandbox.permissions.clone().map(Into::into);
+        (sandbox_policy, cli.approval_policy.map(Into::into))
     };
 
     // Load config file and apply CLI overrides (model & approval policy)

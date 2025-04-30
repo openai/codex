@@ -11,10 +11,7 @@ use std::process::ExitStatus;
 
 /// Execute `command` in a Linux sandbox (Landlock + seccomp) the way Codex
 /// would.
-pub(crate) fn run_landlock(
-    command: Vec<String>,
-    sandbox_policy: SandboxPolicy,
-) -> anyhow::Result<()> {
+pub fn run_landlock(command: Vec<String>, sandbox_policy: SandboxPolicy) -> anyhow::Result<()> {
     if command.is_empty() {
         anyhow::bail!("command args are empty");
     }
