@@ -137,6 +137,9 @@ export interface MultilineTextEditorProps {
 
   // Called when the internal text buffer updates.
   readonly onChange?: (text: string) => void;
+
+  // Optional initial cursor position (character offset)
+  readonly initialCursorOffset?: number;
 }
 
 // Expose a minimal imperative API so parent components (e.g. TerminalChatInput)
@@ -156,9 +159,7 @@ export interface MultilineTextEditorHandle {
   /** Full text contents */
   getText(): string;
   /** Move the cursor to the end of the text */
-  moveCursorToEnd(): void;
-  /** Replace the entire text content and move cursor to end */
-  setTextAndMoveCursorToEnd(text: string): void;
+  moveCursorToEnd: () => void;
 }
 
 const MultilineTextEditorInner = (
@@ -171,6 +172,7 @@ const MultilineTextEditorInner = (
     onSubmit,
     focus = true,
     onChange,
+    initialCursorOffset,
   }: MultilineTextEditorProps,
   ref: React.Ref<MultilineTextEditorHandle | null>,
 ): React.ReactElement => {
@@ -178,7 +180,7 @@ const MultilineTextEditorInner = (
   // Editor State
   // ---------------------------------------------------------------------------
 
-  const buffer = useRef(new TextBuffer(initialText));
+  const buffer = useRef(new TextBuffer(initialText, initialCursorOffset));
   const [version, setVersion] = useState(0);
 
   // Keep track of the current terminal size so that the editor grows/shrinks
@@ -332,15 +334,8 @@ const MultilineTextEditorInner = (
         // Force a re-render
         setVersion((v) => v + 1);
       },
-      setTextAndMoveCursorToEnd: (text: string) => {
-        buffer.current.setText(text);
-        // Force a re-render
-        setVersion((v) => v + 1);
-        // Notify parent about the change
-        onChange?.(text);
-      },
     }),
-    [onChange],
+    [],
   );
 
   // Read everything from the buffer

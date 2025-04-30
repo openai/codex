@@ -100,11 +100,13 @@ export default class TextBuffer {
 
   private clipboard: string | null = null;
 
-  constructor(text = "") {
+  constructor(text = "", initialCursorIdx = 0) {
     this.lines = text.split("\n");
     if (this.lines.length === 0) {
       this.lines = [""];
     }
+
+    this.setCursorIdx(initialCursorIdx);
   }
 
   /* =======================================================================
@@ -113,6 +115,7 @@ export default class TextBuffer {
   private line(r: number): string {
     return this.lines[r] ?? "";
   }
+
   private lineLen(r: number): number {
     return cpLen(this.line(r));
   }
@@ -120,6 +123,47 @@ export default class TextBuffer {
   private ensureCursorInRange(): void {
     this.cursorRow = clamp(this.cursorRow, 0, this.lines.length - 1);
     this.cursorCol = clamp(this.cursorCol, 0, this.lineLen(this.cursorRow));
+  }
+
+  /**
+   * Sets the cursor position based on a character offset from the start of the document.
+   * @param idx The character offset to move to (0-based)
+   * @returns true if successful, false if the index was invalid
+   */
+  private setCursorIdx(idx: number): boolean {
+    // Reset preferred column since this is an explicit horizontal movement
+    this.preferredCol = null;
+
+    // Handle idx=0 specially since we know it's always [0,0]
+    if (idx === 0) {
+      this.cursorRow = 0;
+      this.cursorCol = 0;
+      return true;
+    }
+
+    let remainingChars = idx;
+    let row = 0;
+
+    // Count characters line by line until we find the right position
+    while (row < this.lines.length) {
+      const lineLength = this.lineLen(row);
+      // Add 1 for the newline character (except for the last line)
+      const totalChars = lineLength + (row < this.lines.length - 1 ? 1 : 0);
+
+      if (remainingChars <= lineLength) {
+        // Found the right line and we have enough characters left
+        this.cursorRow = row;
+        this.cursorCol = remainingChars;
+        return true;
+      }
+
+      // Move to next line, subtract this line's characters plus newline
+      remainingChars -= totalChars;
+      row++;
+    }
+
+    // If we get here, the index was too large
+    return false;
   }
 
   /* =====================================================================
@@ -234,28 +278,6 @@ export default class TextBuffer {
   /* =======================================================================
    *  Editing operations
    * ===================================================================== */
-
-  /**
-   * Replace the entire buffer contents with `newText`.
-   * Adds the previous state to the undo stack and positions the caret
-   * at the absolute end of the new document.
-   */
-  setText(newText: string): void {
-    dbg("setText", { newText });
-    this.pushUndo();
-
-    // Normalise all newline variants so the internal model stays \n-only.
-    const normalised = newText.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-    this.lines = normalised.split("\n");
-    if (this.lines.length === 0) {
-      this.lines = [""];
-    }
-
-    // Position caret at absolute EOF
-    this.moveToEndOfDocument();
-
-    this.version++;
-  }
 
   /**
    * Insert a single character or string without newlines. If the string

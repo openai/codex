@@ -99,7 +99,10 @@ export default function TerminalChatInput({
   >([]);
   const [selectedCompletion, setSelectedCompletion] = useState<number>(-1);
   // Multiline text editor key to force remount after submission
-  const [editorKey, setEditorKey] = useState(0);
+  const [editorState, setEditorState] = useState<{
+    key: number;
+    initialCursorOffset?: number;
+  }>({ key: 0 });
   // Imperative handle from the multiline editor so we can query caret position
   const editorRef = useRef<MultilineTextEditorHandle | null>(null);
   // Track the caret row across keystrokes
@@ -109,7 +112,10 @@ export default function TerminalChatInput({
   // --- Helper for updating input, remounting editor, and moving cursor to end ---
   const applyFsSuggestion = useCallback((newInputText: string) => {
     setInput(newInputText);
-    editorRef.current?.setTextAndMoveCursorToEnd?.(newInputText);
+    setEditorState((s) => ({
+      key: s.key + 1,
+      initialCursorOffset: newInputText.length,
+    }));
   }, []);
 
   // --- Helper for updating file system suggestions ---
@@ -368,7 +374,7 @@ export default function TerminalChatInput({
 
             setInput(history[newIndex]?.command ?? "");
             // Re-mount the editor so it picks up the new initialText
-            setEditorKey((k) => k + 1);
+            setEditorState((s) => ({ key: s.key + 1 }));
             return; // handled
           }
 
@@ -387,11 +393,11 @@ export default function TerminalChatInput({
             if (newIndex >= history.length) {
               setHistoryIndex(null);
               setInput(draftInput);
-              setEditorKey((k) => k + 1);
+              setEditorState((s) => ({ key: s.key + 1 }));
             } else {
               setHistoryIndex(newIndex);
               setInput(history[newIndex]?.command ?? "");
-              setEditorKey((k) => k + 1);
+              setEditorState((s) => ({ key: s.key + 1 }));
             }
             return; // handled
           }
@@ -763,7 +769,8 @@ export default function TerminalChatInput({
                 }
                 setInput(txt);
               }}
-              key={editorKey}
+              key={editorState.key}
+              initialCursorOffset={editorState.initialCursorOffset}
               initialText={input}
               height={6}
               focus={active}
@@ -784,7 +791,7 @@ export default function TerminalChatInput({
                 }
 
                 onSubmit(replacedText);
-                setEditorKey((k) => k + 1);
+                setEditorState((s) => ({ key: s.key + 1 }));
                 setInput("");
                 setHistoryIndex(null);
                 setDraftInput("");
