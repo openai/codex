@@ -143,10 +143,10 @@ jobs:
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           files: dist/**
-          # TODO(ragona): I'm going to leave these as prerelease/draft for now.
+          # TODO(ragona): I'm going to leave these as draft for now.
           # It gives us 1) clarity that these are not yet a stable version, and
           # 2) allows a human step to review the release before publishing the draft.
-          prerelease: true
+          prerelease: false
           draft: true
 
       - uses: facebook/dotslash-publish-release@v2
