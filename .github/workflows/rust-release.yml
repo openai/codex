@@ -102,7 +102,6 @@ jobs:
           dest="dist/${{ matrix.target }}"
           mkdir -p "$dest"
 
-          cp target/${{ matrix.target }}/release/codex-repl "$dest/codex-repl-${{ matrix.target }}"
           cp target/${{ matrix.target }}/release/codex-exec "$dest/codex-exec-${{ matrix.target }}"
           cp target/${{ matrix.target }}/release/codex "$dest/codex-${{ matrix.target }}"
 
