@@ -1032,16 +1032,22 @@ export class AgentLoop {
             };
 
             if (
-              isRateLimitError(err) &&
               streamRetryAttempt < MAX_STREAM_RETRIES
             ) {
               streamRetryAttempt += 1;
 
-              const waitMs =
-                RATE_LIMIT_RETRY_WAIT_MS * 2 ** (streamRetryAttempt - 1);
-              log(
-                `OpenAI stream rate‑limited – retry ${streamRetryAttempt}/${MAX_STREAM_RETRIES} in ${waitMs} ms`,
-              );
+              let waitMs;
+              if (isRateLimitError(err)) {
+                  waitMs = RATE_LIMIT_RETRY_WAIT_MS * 2 ** (streamRetryAttempt - 1);
+                  log(
+                    `OpenAI stream rate‑limited – retry ${streamRetryAttempt}/${MAX_STREAM_RETRIES} in ${waitMs} ms`,
+                  );
+              } else {
+                  waitMs = RATE_LIMIT_RETRY_WAIT_MS;
+                  log(
+                    `OpenAI stream error "${err}" – retry ${streamRetryAttempt}/${MAX_STREAM_RETRIES} in ${waitMs} ms`,
+                  );
+              }
 
               // Give the server a breather before retrying.
               // eslint-disable-next-line no-await-in-loop
