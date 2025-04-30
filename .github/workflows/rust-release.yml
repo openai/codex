@@ -106,10 +106,11 @@ jobs:
           cp target/${{ matrix.target }}/release/codex-exec "$dest/codex-exec-${{ matrix.target }}"
           cp target/${{ matrix.target }}/release/codex "$dest/codex-${{ matrix.target }}"
 
-      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' }} || ${{ matrix.target == 'aarch64-unknown-linux-gnu' }}
+      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-gnu' }}
         name: Stage Linux-only artifacts
         shell: bash
         run: |
+          dest="dist/${{ matrix.target }}"
           cp target/${{ matrix.target }}/release/codex-linux-sandbox "$dest/codex-linux-sandbox-${{ matrix.target }}"
 
       - name: Compress artifacts
