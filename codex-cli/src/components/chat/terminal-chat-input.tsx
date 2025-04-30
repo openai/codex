@@ -170,7 +170,7 @@ export default function TerminalChatInput({
   }
 
   // --- Helper for replacing input with file system suggestion ---
-  function replaceFileSystemSuggestion(
+  function getFileSystemSuggestion(
     txt: string,
     requireAtPrefix: boolean = false,
   ): ReplacementResult {
@@ -324,7 +324,7 @@ export default function TerminalChatInput({
 
           if (_key.tab && selectedCompletion >= 0) {
             const { text: newText, wasReplaced } =
-              replaceFileSystemSuggestion(input);
+              getFileSystemSuggestion(input);
 
             // Only proceed if the text was actually changed
             if (wasReplaced) {
@@ -773,7 +773,7 @@ export default function TerminalChatInput({
                   text: replacedText,
                   suggestion,
                   wasReplaced,
-                } = replaceFileSystemSuggestion(txt, true);
+                } = getFileSystemSuggestion(txt, true);
 
                 // If we replaced @path token with a directory, don't submit
                 if (wasReplaced && suggestion?.isDirectory) {
