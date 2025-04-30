@@ -236,23 +236,25 @@ export default class TextBuffer {
    * ===================================================================== */
 
   /**
-   * Replaces the entire buffer content with new text.
-   * Pushes the previous state to undo history and moves cursor to the end.
+   * Replace the entire buffer contents with `newText`.
+   * Adds the previous state to the undo stack and positions the caret
+   * at the absolute end of the new document.
    */
   setText(newText: string): void {
     dbg("setText", { newText });
     this.pushUndo();
-    this.lines = newText.split("\n");
+
+    // Normalise all newline variants so the internal model stays \n-only.
+    const normalised = newText.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    this.lines = normalised.split("\n");
     if (this.lines.length === 0) {
-      this.lines = [""]; // Ensure at least one empty line
+      this.lines = [""];
     }
-    // Cursor might be out of bounds now, ensure it's valid
-    this.ensureCursorInRange();
-    // Move cursor to the very end
-    this.move("end");
+
+    // Position caret at absolute EOF
+    this.moveToEndOfDocument();
+
     this.version++;
-    // Preferred column is reset on text change
-    this.preferredCol = null;
   }
 
   /**
