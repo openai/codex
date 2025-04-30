@@ -1,11 +1,9 @@
-#[cfg(target_os = "linux")]
-mod landlock;
-mod proto;
-mod seatbelt;
-
 use clap::Parser;
-use codex_core::protocol::SandboxPolicy;
-use codex_core::SandboxPermissionOption;
+use codex_cli::create_sandbox_policy;
+use codex_cli::proto;
+use codex_cli::seatbelt;
+use codex_cli::LandlockCommand;
+use codex_cli::SeatbeltCommand;
 use codex_exec::Cli as ExecCli;
 use codex_repl::Cli as ReplCli;
 use codex_tui::Cli as TuiCli;
@@ -64,34 +62,6 @@ enum DebugCommand {
 }
 
 #[derive(Debug, Parser)]
-struct SeatbeltCommand {
-    /// Convenience alias for low-friction sandboxed automatic execution (network-disabled sandbox that can write to cwd and TMPDIR)
-    #[arg(long = "full-auto", default_value_t = false)]
-    full_auto: bool,
-
-    #[clap(flatten)]
-    pub sandbox: SandboxPermissionOption,
-
-    /// Full command args to run under seatbelt.
-    #[arg(trailing_var_arg = true)]
-    command: Vec<String>,
-}
-
-#[derive(Debug, Parser)]
-struct LandlockCommand {
-    /// Convenience alias for low-friction sandboxed automatic execution (network-disabled sandbox that can write to cwd and TMPDIR)
-    #[arg(long = "full-auto", default_value_t = false)]
-    full_auto: bool,
-
-    #[clap(flatten)]
-    sandbox: SandboxPermissionOption,
-
-    /// Full command args to run under landlock.
-    #[arg(trailing_var_arg = true)]
-    command: Vec<String>,
-}
-
-#[derive(Debug, Parser)]
 struct ReplProto {}
 
 #[tokio::main]
@@ -127,7 +97,7 @@ async fn main() -> anyhow::Result<()> {
                 full_auto,
             }) => {
                 let sandbox_policy = create_sandbox_policy(full_auto, sandbox);
-                landlock::run_landlock(command, sandbox_policy)?;
+                codex_cli::landlock::run_landlock(command, sandbox_policy)?;
             }
             #[cfg(not(target_os = "linux"))]
             DebugCommand::Landlock(_) => {
@@ -137,15 +107,4 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
-}
-
-fn create_sandbox_policy(full_auto: bool, sandbox: SandboxPermissionOption) -> SandboxPolicy {
-    if full_auto {
-        SandboxPolicy::new_full_auto_policy()
-    } else {
-        match sandbox.permissions.map(Into::into) {
-            Some(sandbox_policy) => sandbox_policy,
-            None => SandboxPolicy::new_read_only_policy(),
-        }
-    }
 }
