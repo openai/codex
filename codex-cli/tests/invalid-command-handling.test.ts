@@ -10,7 +10,7 @@ describe("rawExec – invalid command handling", () => {
   it("resolves with non‑zero exit code when executable is missing", async () => {
     const cmd = ["definitely-not-a-command-1234567890"];
 
-    const result = await rawExec(cmd, {}, []);
+    const result = await rawExec(cmd, {});
 
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr.length).toBeGreaterThan(0);
