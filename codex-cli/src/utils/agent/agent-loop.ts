@@ -1137,7 +1137,7 @@ export class AgentLoop {
                 content: [
                   {
                     type: "input_text",
-                    text: "⚠️ Insufficient quota. Please check your billing details and retry.",
+                    text: `\u26a0 Insufficient quota: ${err instanceof Error && err.message ? err.message.trim() : "No remaining quota."} Manage or purchase credits at https://platform.openai.com/account/billing.`,
                   },
                 ],
               });
