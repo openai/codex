@@ -226,13 +226,15 @@ Key flags: `--model/-m`, `--approval-mode/-a`, `--quiet/-q`, and `--notify`.
 
 ## Memory & Project Docs
 
-Codex merges Markdown instructions in this order:
+Codex looks for Markdown agent files (preferred: `AGENTS.md`) in the following order and merges them top-down:
 
-1. `~/.codex/instructions.md` - personal global guidance
-2. `codex.md` at repo root - shared project notes
-3. `codex.md` in cwd - sub-package specifics
+1. `~/.codex/AGENTS.md` – personal global guidance
+2. `AGENTS.md` at repo root – shared project notes
+3. `AGENTS.md` in the current working directory – sub-folder/feature specifics
 
-Disable with `--no-project-doc` or `CODEX_DISABLE_PROJECT_DOC=1`.
+Disable loading of these files with `--no-project-doc` or the environment variable `CODEX_DISABLE_PROJECT_DOC=1`.
+
+For backwards-compatibility with older Codex versions, `instructions.md` and `codex.md` are still supported but `AGENTS.md` is recommended.
 
 ---
 
@@ -437,7 +439,7 @@ Below is a comprehensive example of `config.json` with multiple custom providers
 
 ### Custom Instructions
 
-You can create a `~/.codex/instructions.md` file to define custom instructions:
+You can create a `~/.codex/AGENTS.md` file to define custom guidance for the agent:
 
 ```markdown
 - Always respond with emojis
