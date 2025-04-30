@@ -106,9 +106,8 @@ export default class TextBuffer {
       this.lines = [""];
     }
 
-    if (!this.setCursorIdx(initialCursorIdx)) {
-      this.setCursorIdx(0);
-    }
+    // No need to reset cursor on failure - class already default cursor position to 0,0
+    this.setCursorIdx(initialCursorIdx);
   }
 
   /* =======================================================================
