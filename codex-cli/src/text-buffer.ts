@@ -100,11 +100,14 @@ export default class TextBuffer {
 
   private clipboard: string | null = null;
 
-  constructor(text = "") {
+  constructor(text = "", initialCursorIdx = 0) {
     this.lines = text.split("\n");
     if (this.lines.length === 0) {
       this.lines = [""];
     }
+
+    // No need to reset cursor on failure - class already default cursor position to 0,0
+    this.setCursorIdx(initialCursorIdx);
   }
 
   /* =======================================================================
@@ -120,6 +123,39 @@ export default class TextBuffer {
   private ensureCursorInRange(): void {
     this.cursorRow = clamp(this.cursorRow, 0, this.lines.length - 1);
     this.cursorCol = clamp(this.cursorCol, 0, this.lineLen(this.cursorRow));
+  }
+
+  /**
+   * Sets the cursor position based on a character offset from the start of the document.
+   * @param idx The character offset to move to (0-based)
+   * @returns true if successful, false if the index was invalid
+   */
+  private setCursorIdx(idx: number): boolean {
+    // Reset preferred column since this is an explicit horizontal movement
+    this.preferredCol = null;
+
+    let remainingChars = idx;
+    let row = 0;
+
+    // Count characters line by line until we find the right position
+    while (row < this.lines.length) {
+      const lineLength = this.lineLen(row);
+      // Add 1 for the newline character (except for the last line)
+      const totalChars = lineLength + (row < this.lines.length - 1 ? 1 : 0);
+
+      if (remainingChars <= lineLength) {
+        this.cursorRow = row;
+        this.cursorCol = remainingChars;
+        return true;
+      }
+
+      // Move to next line, subtract this line's characters plus newline
+      remainingChars -= totalChars;
+      row++;
+    }
+
+    // If we get here, the index was too large
+    return false;
   }
 
   /* =====================================================================
