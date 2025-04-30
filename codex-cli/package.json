@@ -21,7 +21,7 @@
     "build": "node build.mjs",
     "build:dev": "NODE_ENV=development node build.mjs --dev && NODE_OPTIONS=--enable-source-maps node dist/cli-dev.js",
     "release:readme": "cp ../README.md ./README.md",
-    "release:version": "TS=$(date +%y%m%d%H%M) && sed -E -i'' -e \"s/\\\"0\\.1\\.[0-9]{10}\\\"/\\\"0.1.${TS}\\\"/g\" package.json src/utils/session.ts",
+    "release:version": "TS=$(date +%y%m%d%H%M) && sed -E -i'' -e \"s/\\\"0\\.1\\.[0-9]{10}\\\"/\\\"0.1.${TS}\\\"/g\" package.json",
     "release:build-and-publish": "pnpm run build && npm publish",
     "release": "pnpm run release:readme && pnpm run release:version && pnpm install && pnpm run release:build-and-publish"
   },
