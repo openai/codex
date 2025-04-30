@@ -1,5 +1,6 @@
 use clap::Parser;
 use clap::ValueEnum;
+use codex_core::SandboxPermissionOption;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -16,6 +17,9 @@ pub struct Cli {
     /// Convenience alias for low-friction sandboxed automatic execution (network-disabled sandbox that can write to cwd and TMPDIR)
     #[arg(long = "full-auto", default_value_t = false)]
     pub full_auto: bool,
+
+    #[clap(flatten)]
+    pub sandbox: SandboxPermissionOption,
 
     /// Allow running Codex outside a Git repository.
     #[arg(long = "skip-git-repo-check", default_value_t = false)]

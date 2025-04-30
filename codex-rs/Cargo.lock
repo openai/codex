@@ -504,6 +504,7 @@ dependencies = [
  "mime_guess",
  "openssl-sys",
  "patch",
+ "path-absolutize",
  "predicates",
  "rand",
  "reqwest",

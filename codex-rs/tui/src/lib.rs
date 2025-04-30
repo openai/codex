@@ -41,7 +41,8 @@ pub fn run_main(cli: Cli) -> std::io::Result<()> {
             Some(AskForApproval::OnFailure),
         )
     } else {
-        (None, cli.approval_policy.map(Into::into))
+        let sandbox_policy = cli.sandbox.permissions.clone().map(Into::into);
+        (sandbox_policy, cli.approval_policy.map(Into::into))
     };
 
     let config = {
