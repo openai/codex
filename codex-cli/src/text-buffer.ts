@@ -106,7 +106,9 @@ export default class TextBuffer {
       this.lines = [""];
     }
 
-    this.setCursorIdx(initialCursorIdx);
+    if (!this.setCursorIdx(initialCursorIdx)) {
+      this.setCursorIdx(0);
+    }
   }
 
   /* =======================================================================
@@ -115,7 +117,6 @@ export default class TextBuffer {
   private line(r: number): string {
     return this.lines[r] ?? "";
   }
-
   private lineLen(r: number): number {
     return cpLen(this.line(r));
   }
@@ -278,7 +279,6 @@ export default class TextBuffer {
   /* =======================================================================
    *  Editing operations
    * ===================================================================== */
-
   /**
    * Insert a single character or string without newlines. If the string
    * contains a newline we delegate to insertStr so that line splitting

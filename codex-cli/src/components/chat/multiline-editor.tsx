@@ -159,7 +159,7 @@ export interface MultilineTextEditorHandle {
   /** Full text contents */
   getText(): string;
   /** Move the cursor to the end of the text */
-  moveCursorToEnd: () => void;
+  moveCursorToEnd(): void;
 }
 
 const MultilineTextEditorInner = (
