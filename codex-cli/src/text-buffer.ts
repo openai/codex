@@ -134,13 +134,6 @@ export default class TextBuffer {
     // Reset preferred column since this is an explicit horizontal movement
     this.preferredCol = null;
 
-    // Handle idx=0 specially since we know it's always [0,0]
-    if (idx === 0) {
-      this.cursorRow = 0;
-      this.cursorCol = 0;
-      return true;
-    }
-
     let remainingChars = idx;
     let row = 0;
 
@@ -151,7 +144,6 @@ export default class TextBuffer {
       const totalChars = lineLength + (row < this.lines.length - 1 ? 1 : 0);
 
       if (remainingChars <= lineLength) {
-        // Found the right line and we have enough characters left
         this.cursorRow = row;
         this.cursorCol = remainingChars;
         return true;
