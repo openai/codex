@@ -1,7 +1,5 @@
 // Node ESM supports JSON imports behind an assertion. TypeScript's
 // `resolveJsonModule` takes care of the typings.
-//
-// eslint-disable-next-line @typescript-eslint/consistent-type-imports
 import pkg from "../../package.json" assert { type: "json" };
 
 // Read the version directly from package.json.
