@@ -16,3 +16,6 @@ version = "0.1.0"
 
 [profile.release]
 lto = "fat"
+# Because we bundle some of these executables with the TypeScript CLI, we
+# remove everything to make the binary as small as possible.
+strip = "symbols"

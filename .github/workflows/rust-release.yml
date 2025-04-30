@@ -106,6 +106,15 @@ jobs:
           cp target/${{ matrix.target }}/release/codex-exec "$dest/codex-exec-${{ matrix.target }}"
           cp target/${{ matrix.target }}/release/codex-cli "$dest/codex-cli-${{ matrix.target }}"
 
+      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' }} || ${{ matrix.target == 'aarch64-unknown-linux-gnu' }}
+        name: Stage Linux-only artifacts
+        shell: bash
+        run: |
+          cp target/${{ matrix.target }}/release/codex-linux-sandbox "$dest/codex-linux-sandbox-${{ matrix.target }}"
+
+      - name: Compress artifacts
+        shell: bash
+        run: |
           zstd -T0 -19 --rm "$dest"/*
 
       - uses: actions/upload-artifact@v4
