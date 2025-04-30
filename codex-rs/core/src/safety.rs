@@ -65,7 +65,7 @@ pub fn assess_patch_safety(
 pub fn assess_command_safety(
     command: &[String],
     approval_policy: AskForApproval,
-    sandbox_policy: SandboxPolicy,
+    sandbox_policy: &SandboxPolicy,
     approved: &HashSet<Vec<String>>,
 ) -> SafetyCheck {
     let approve_without_sandbox = || SafetyCheck::AutoApprove {
@@ -81,11 +81,10 @@ pub fn assess_command_safety(
     }
 
     // Command was not known-safe or allow-listed
-    match sandbox_policy {
-        // Only the dangerous sandbox policy will run arbitrary commands outside a sandbox
-        SandboxPolicy::DangerousNoRestrictions => approve_without_sandbox(),
-        // All other policies try to run the command in a sandbox if it is available
-        _ => match get_platform_sandbox() {
+    if sandbox_policy.is_unrestricted() {
+        approve_without_sandbox()
+    } else {
+        match get_platform_sandbox() {
             // We have a sandbox, so we can approve the command in all modes
             Some(sandbox_type) => SafetyCheck::AutoApprove { sandbox_type },
             None => {
@@ -99,7 +98,7 @@ pub fn assess_command_safety(
                     _ => SafetyCheck::AskUser,
                 }
             }
-        },
+        }
     }
 }
 

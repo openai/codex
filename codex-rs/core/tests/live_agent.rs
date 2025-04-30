@@ -55,7 +55,7 @@ async fn spawn_codex() -> Codex {
                 model: config.model,
                 instructions: None,
                 approval_policy: config.approval_policy,
-                sandbox_policy: SandboxPolicy::NetworkAndFileWriteRestricted,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 disable_response_storage: false,
             },
         })

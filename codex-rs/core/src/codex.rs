@@ -859,7 +859,7 @@ async fn handle_function_call(
                 assess_command_safety(
                     &params.command,
                     sess.approval_policy,
-                    sess.sandbox_policy,
+                    &sess.sandbox_policy,
                     &state.approved_commands,
                 )
             };
@@ -914,14 +914,11 @@ async fn handle_function_call(
             )
             .await;
 
-            let roots_snapshot = { sess.writable_roots.lock().unwrap().clone() };
-
             let output_result = process_exec_tool_call(
                 params.clone(),
                 sandbox_type,
-                &roots_snapshot,
                 sess.ctrl_c.clone(),
-                sess.sandbox_policy,
+                &sess.sandbox_policy,
             )
             .await;
 
@@ -1004,16 +1001,13 @@ async fn handle_function_call(
                             )
                             .await;
 
-                            let retry_roots = { sess.writable_roots.lock().unwrap().clone() };
-
                             // This is an escalated retry; the policy will not be
                             // examined and the sandbox has been set to `None`.
                             let retry_output_result = process_exec_tool_call(
                                 params.clone(),
                                 SandboxType::None,
-                                &retry_roots,
                                 sess.ctrl_c.clone(),
-                                sess.sandbox_policy,
+                                &sess.sandbox_policy,
                             )
                             .await;
 
