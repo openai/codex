@@ -228,9 +228,9 @@ Key flags: `--model/-m`, `--approval-mode/-a`, `--quiet/-q`, and `--notify`.
 
 Codex looks for Markdown agent files (preferred: `AGENTS.md`) in the following order and merges them top-down:
 
-1. `~/.codex/AGENTS.md` – personal global guidance
-2. `AGENTS.md` at repo root – shared project notes
-3. `AGENTS.md` in the current working directory – sub-folder/feature specifics
+1. `~/.codex/AGENTS.md` - personal global guidance
+2. `AGENTS.md` at repo root - shared project notes
+3. `AGENTS.md` in the current working directory - sub-folder/feature specifics
 
 Disable loading of these files with `--no-project-doc` or the environment variable `CODEX_DISABLE_PROJECT_DOC=1`.
 
