@@ -1,0 +1,146 @@
+# Release workflow for codex-rs.
+# To release, follow a workflow like:
+# ```
+# git tag -a rust-v0.1.0 -m "Release 0.1.0"
+# git push origin rust-v0.1.0
+# ```
+
+name: rust-release
+on:
+  push:
+    tags:
+      - "rust-v.*.*.*"
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+env:
+  TAG_REGEX: '^rust-v\.[0-9]+\.[0-9]+\.[0-9]+$'
+
+jobs:
+  tag-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate tag matches Cargo.toml version
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "::group::Tag validation"
+
+          # 1. Must be a tag and match the regex
+          [[ "${GITHUB_REF_TYPE}" == "tag" ]] \
+            || { echo "❌  Not a tag push"; exit 1; }
+          [[ "${GITHUB_REF_NAME}" =~ ${TAG_REGEX} ]] \
+            || { echo "❌  Tag '${GITHUB_REF_NAME}' != ${TAG_REGEX}"; exit 1; }
+
+          # 2. Extract versions
+          tag_ver="${GITHUB_REF_NAME#rust-v.}"
+          cargo_ver="$(grep -m1 '^version' codex-rs/Cargo.toml \
+                        | sed -E 's/version *= *"([^"]+)".*/\1/')"
+
+          # 3. Compare
+          [[ "${tag_ver}" == "${cargo_ver}" ]] \
+            || { echo "❌  Tag ${tag_ver} ≠ Cargo.toml ${cargo_ver}"; exit 1; }
+
+          echo "✅  Tag and Cargo.toml agree (${tag_ver})"
+          echo "::endgroup::"
+
+  build:
+    needs: tag-check
+    name: ${{ matrix.runner }} - ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: codex-rs
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            target: aarch64-apple-darwin
+          - runner: macos-14
+            target: x86_64-apple-darwin
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ${{ github.workspace }}/codex-rs/target/
+          key: cargo-release-${{ matrix.runner }}-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' }}
+        name: Install musl build tools
+        run: |
+          sudo apt install -y musl-tools pkg-config
+
+      - name: Cargo build
+        run: cargo build --target ${{ matrix.target }} --release --all-targets --all-features
+
+      - name: Stage artifacts
+        shell: bash
+        run: |
+          dest="dist/${{ matrix.target }}"
+          mkdir -p "$dest"
+
+          cp target/${{ matrix.target }}/release/codex-repl "$dest/codex-repl-${{ matrix.target }}"
+          cp target/${{ matrix.target }}/release/codex-exec "$dest/codex-exec-${{ matrix.target }}"
+          cp target/${{ matrix.target }}/release/codex-cli "$dest/codex-cli-${{ matrix.target }}"
+
+          zstd -T0 -19 --rm "$dest"/*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: codex-rs/dist/${{ matrix.target }}/*
+
+  release:
+    needs: build
+    name: release
+    runs-on: ubuntu-24.04
+    env:
+      RELEASE_TAG: codex-rs-${{ github.sha }}-${{ github.run_attempt }}-${{ github.ref_name }}
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: List
+        run: ls -R dist/
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          files: dist/**
+          # TODO(ragona): I'm going to leave these as prerelease/draft for now.
+          # It gives us 1) clarity that these are not yet a stable version, and
+          # 2) allows a human step to review the release before publishing the draft.
+          prerelease: true
+          draft: true
+
+      - uses: facebook/dotslash-publish-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag: ${{ env.RELEASE_TAG }}
+          config: .github/dotslash-config.json
