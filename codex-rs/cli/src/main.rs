@@ -1,13 +1,10 @@
-mod proto;
-mod seatbelt;
-
-use std::path::PathBuf;
-
-use clap::ArgAction;
 use clap::Parser;
-use codex_core::SandboxModeCliArg;
+use codex_cli::create_sandbox_policy;
+use codex_cli::proto;
+use codex_cli::seatbelt;
+use codex_cli::LandlockCommand;
+use codex_cli::SeatbeltCommand;
 use codex_exec::Cli as ExecCli;
-use codex_interactive::Cli as InteractiveCli;
 use codex_repl::Cli as ReplCli;
 use codex_tui::Cli as TuiCli;
 
@@ -25,7 +22,7 @@ use crate::proto::ProtoCli;
 )]
 struct MultitoolCli {
     #[clap(flatten)]
-    interactive: InteractiveCli,
+    interactive: TuiCli,
 
     #[clap(subcommand)]
     subcommand: Option<Subcommand>,
@@ -36,10 +33,6 @@ enum Subcommand {
     /// Run Codex non-interactively.
     #[clap(visible_alias = "e")]
     Exec(ExecCli),
-
-    /// Run the TUI.
-    #[clap(visible_alias = "t")]
-    Tui(TuiCli),
 
     /// Run the REPL.
     #[clap(visible_alias = "r")]
@@ -63,21 +56,9 @@ struct DebugArgs {
 enum DebugCommand {
     /// Run a command under Seatbelt (macOS only).
     Seatbelt(SeatbeltCommand),
-}
 
-#[derive(Debug, Parser)]
-struct SeatbeltCommand {
-    /// Writable folder for sandbox in full-auto mode (can be specified multiple times).
-    #[arg(long = "writable-root", short = 'w', value_name = "DIR", action = ArgAction::Append, use_value_delimiter = false)]
-    writable_roots: Vec<PathBuf>,
-
-    /// Configure the process restrictions for the command.
-    #[arg(long = "sandbox", short = 's')]
-    sandbox_policy: SandboxModeCliArg,
-
-    /// Full command args to run under seatbelt.
-    #[arg(trailing_var_arg = true)]
-    command: Vec<String>,
+    /// Run a command under Landlock+seccomp (Linux only).
+    Landlock(LandlockCommand),
 }
 
 #[derive(Debug, Parser)]
@@ -89,13 +70,10 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.subcommand {
         None => {
-            codex_interactive::run_main(cli.interactive).await?;
+            codex_tui::run_main(cli.interactive)?;
         }
         Some(Subcommand::Exec(exec_cli)) => {
             codex_exec::run_main(exec_cli).await?;
-        }
-        Some(Subcommand::Tui(tui_cli)) => {
-            codex_tui::run_main(tui_cli)?;
         }
         Some(Subcommand::Repl(repl_cli)) => {
             codex_repl::run_main(repl_cli).await?;
@@ -106,10 +84,24 @@ async fn main() -> anyhow::Result<()> {
         Some(Subcommand::Debug(debug_args)) => match debug_args.cmd {
             DebugCommand::Seatbelt(SeatbeltCommand {
                 command,
-                sandbox_policy,
-                writable_roots,
+                sandbox,
+                full_auto,
             }) => {
-                seatbelt::run_seatbelt(command, sandbox_policy.into(), writable_roots).await?;
+                let sandbox_policy = create_sandbox_policy(full_auto, sandbox);
+                seatbelt::run_seatbelt(command, sandbox_policy).await?;
+            }
+            #[cfg(target_os = "linux")]
+            DebugCommand::Landlock(LandlockCommand {
+                command,
+                sandbox,
+                full_auto,
+            }) => {
+                let sandbox_policy = create_sandbox_policy(full_auto, sandbox);
+                codex_cli::landlock::run_landlock(command, sandbox_policy)?;
+            }
+            #[cfg(not(target_os = "linux"))]
+            DebugCommand::Landlock(_) => {
+                anyhow::bail!("Landlock is only supported on Linux.");
             }
         },
     }

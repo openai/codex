@@ -7,6 +7,7 @@
 // compiled `dist/` output used by the published CLI.
 
 import type { FullAutoErrorMode } from "./auto-approval-mode.js";
+import type { ReasoningEffort } from "openai/resources.mjs";
 
 import { AutoApprovalMode } from "./auto-approval-mode.js";
 import { log } from "./logger/log.js";
@@ -62,6 +63,8 @@ export const OPENAI_TIMEOUT_MS =
   parseInt(process.env["OPENAI_TIMEOUT_MS"] || "0", 10) || undefined;
 export const OPENAI_BASE_URL = process.env["OPENAI_BASE_URL"] || "";
 export let OPENAI_API_KEY = process.env["OPENAI_API_KEY"] || "";
+
+export const DEFAULT_REASONING_EFFORT = "high";
 export const OPENAI_ORGANIZATION = process.env["OPENAI_ORGANIZATION"] || "";
 export const OPENAI_PROJECT = process.env["OPENAI_PROJECT"] || "";
 
@@ -142,6 +145,9 @@ export type StoredConfig = {
     saveHistory?: boolean;
     sensitivePatterns?: Array<string>;
   };
+  /** User-defined safe commands */
+  safeCommands?: Array<string>;
+  reasoningEffort?: ReasoningEffort;
 };
 
 // Minimal config written on first run.  An *empty* model string ensures that
@@ -165,6 +171,7 @@ export type AppConfig = {
   approvalMode?: AutoApprovalMode;
   fullAutoErrorMode?: FullAutoErrorMode;
   memory?: MemoryConfig;
+  reasoningEffort?: ReasoningEffort;
   /** Whether to enable desktop notifications for responses */
   notify?: boolean;
 
@@ -316,6 +323,22 @@ export const loadConfig = (
     }
   }
 
+  if (
+    storedConfig.disableResponseStorage !== undefined &&
+    typeof storedConfig.disableResponseStorage !== "boolean"
+  ) {
+    if (storedConfig.disableResponseStorage === "true") {
+      storedConfig.disableResponseStorage = true;
+    } else if (storedConfig.disableResponseStorage === "false") {
+      storedConfig.disableResponseStorage = false;
+    } else {
+      log(
+        `[codex] Warning: 'disableResponseStorage' in config is not a boolean (got '${storedConfig.disableResponseStorage}'). Ignoring this value.`,
+      );
+      delete storedConfig.disableResponseStorage;
+    }
+  }
+
   const instructionsFilePathResolved =
     instructionsPath ?? INSTRUCTIONS_FILEPATH;
   const userInstructions = existsSync(instructionsFilePathResolved)
@@ -365,7 +388,8 @@ export const loadConfig = (
     instructions: combinedInstructions,
     notify: storedConfig.notify === true,
     approvalMode: storedConfig.approvalMode,
-    disableResponseStorage: storedConfig.disableResponseStorage ?? false,
+    disableResponseStorage: storedConfig.disableResponseStorage === true,
+    reasoningEffort: storedConfig.reasoningEffort,
   };
 
   // -----------------------------------------------------------------------
@@ -480,6 +504,8 @@ export const saveConfig = (
     provider: config.provider,
     providers: config.providers,
     approvalMode: config.approvalMode,
+    disableResponseStorage: config.disableResponseStorage,
+    reasoningEffort: config.reasoningEffort,
   };
 
   // Add history settings if they exist
