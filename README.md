@@ -640,7 +640,7 @@ To publish a new version of the CLI, run the release scripts defined in `codex-c
 3. Bump the version and `CLI_VERSION` to current datetime: `pnpm release:version`
 4. Commit the version bump (with DCO sign-off):
    ```bash
-   git add codex-cli/src/utils/session.ts codex-cli/package.json
+   git add codex-cli/package.json
    git commit -s -m "chore(release): codex-cli v$(node -p \"require('./codex-cli/package.json').version\")"
    ```
 5. Copy README, build, and publish to npm: `pnpm release`

@@ -10,10 +10,6 @@ install:
 tui *args:
     cargo run --bin codex -- tui {{args}}
 
-# Run the REPL app
-repl *args:
-    cargo run --bin codex -- repl {{args}}
-
 # Run the Proto app
 proto *args:
     cargo run --bin codex -- proto {{args}}
