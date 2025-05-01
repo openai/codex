@@ -5,7 +5,6 @@ use codex_cli::seatbelt;
 use codex_cli::LandlockCommand;
 use codex_cli::SeatbeltCommand;
 use codex_exec::Cli as ExecCli;
-use codex_repl::Cli as ReplCli;
 use codex_tui::Cli as TuiCli;
 
 use crate::proto::ProtoCli;
@@ -33,10 +32,6 @@ enum Subcommand {
     /// Run Codex non-interactively.
     #[clap(visible_alias = "e")]
     Exec(ExecCli),
-
-    /// Run the REPL.
-    #[clap(visible_alias = "r")]
-    Repl(ReplCli),
 
     /// Run the Protocol stream via stdin/stdout
     #[clap(visible_alias = "p")]
@@ -74,9 +69,6 @@ async fn main() -> anyhow::Result<()> {
         }
         Some(Subcommand::Exec(exec_cli)) => {
             codex_exec::run_main(exec_cli).await?;
-        }
-        Some(Subcommand::Repl(repl_cli)) => {
-            codex_repl::run_main(repl_cli).await?;
         }
         Some(Subcommand::Proto(proto_cli)) => {
             proto::run_main(proto_cli).await?;
