@@ -2,6 +2,26 @@
 
 You can install any of these versions: `npm install -g codex@version`
 
+## `0.1.2504301751`
+
+### 🚀 Features
+
+- User config api key (#569)
+- `@mention` files in codex (#701)
+- Add `--reasoning` CLI flag (#314)
+- Lower default retry wait time and increase number of tries (#720)
+- Add common package registries domains to allowed-domains list (#414)
+
+### 🪲 Bug Fixes
+
+- Insufficient quota message (#758)
+- Input keyboard shortcut opt+delete (#685)
+- `/diff` should include untracked files (#686)
+- Only allow running without sandbox if explicitly marked in safe container (#699)
+- Tighten up check for /usr/bin/sandbox-exec (#710)
+- Check if sandbox-exec is available (#696)
+- Duplicate messages in quiet mode (#680)
+
 ## `0.1.2504251709`
 
 ### 🚀 Features
