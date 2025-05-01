@@ -489,6 +489,22 @@ export default class TextBuffer {
       end++;
     }
 
+    /*
+     * After consuming the actual word we also want to swallow any immediate
+     * separator run that *follows* it so that a forward word-delete mirrors
+     * the behaviour of common shells/editors (and matches the expectations
+     * encoded in our test-suite).
+     *
+     * Example – given the text "foo bar baz" and the caret placed at the
+     * beginning of "bar" (index 4) we want Alt+Delete to turn the string
+     * into "foo␠baz" (single space).  Without this extra loop we would stop
+     * right before the separating space, producing "foo␠␠baz".
+     */
+
+    while (end < arr.length && !isWordChar(arr[end])) {
+      end++;
+    }
+
     this.lines[this.cursorRow] =
       cpSlice(line, 0, this.cursorCol) + cpSlice(line, end);
     // caret stays in place
