@@ -3,7 +3,7 @@
 import { useTerminalSize } from "../../hooks/use-terminal-size";
 import TextBuffer from "../../text-buffer.js";
 import chalk from "chalk";
-import { Box, Text, useInput, useStdin } from "ink";
+import { Box, Text, useInput } from "ink";
 import { EventEmitter } from "node:events";
 import React, { useRef, useState } from "react";
 
@@ -14,7 +14,7 @@ import React, { useRef, useState } from "react";
  * The real `process.stdin` object exposed by Node.js inherits these methods
  * from `Socket`, but the lightweight stub used in tests only extends
  * `EventEmitter`.  Ink calls the two methods when enabling/disabling raw
- * mode, so make them harmless no‑ops when they're absent to avoid runtime
+ * mode, so make them harmless no-ops when they're absent to avoid runtime
  * failures during unit tests.
  * ----------------------------------------------------------------------- */
 
@@ -137,6 +137,9 @@ export interface MultilineTextEditorProps {
 
   // Called when the internal text buffer updates.
   readonly onChange?: (text: string) => void;
+
+  // Optional initial cursor position (character offset)
+  readonly initialCursorOffset?: number;
 }
 
 // Expose a minimal imperative API so parent components (e.g. TerminalChatInput)
@@ -155,6 +158,8 @@ export interface MultilineTextEditorHandle {
   isCursorAtLastRow(): boolean;
   /** Full text contents */
   getText(): string;
+  /** Move the cursor to the end of the text */
+  moveCursorToEnd(): void;
 }
 
 const MultilineTextEditorInner = (
@@ -167,6 +172,7 @@ const MultilineTextEditorInner = (
     onSubmit,
     focus = true,
     onChange,
+    initialCursorOffset,
   }: MultilineTextEditorProps,
   ref: React.Ref<MultilineTextEditorHandle | null>,
 ): React.ReactElement => {
@@ -174,7 +180,7 @@ const MultilineTextEditorInner = (
   // Editor State
   // ---------------------------------------------------------------------------
 
-  const buffer = useRef(new TextBuffer(initialText));
+  const buffer = useRef(new TextBuffer(initialText, initialCursorOffset));
   const [version, setVersion] = useState(0);
 
   // Keep track of the current terminal size so that the editor grows/shrinks
@@ -188,66 +194,12 @@ const MultilineTextEditorInner = (
   const effectiveWidth = Math.max(20, width ?? terminalSize.columns);
 
   // ---------------------------------------------------------------------------
-  // External editor integration helpers.
-  // ---------------------------------------------------------------------------
-
-  // Access to stdin so we can toggle raw‑mode while the external editor is
-  // in control of the terminal.
-  const { stdin, setRawMode } = useStdin();
-
-  /**
-   * Launch the user's preferred $EDITOR, blocking until they close it, then
-   * reload the edited file back into the in‑memory TextBuffer.  The heavy
-   * work is delegated to `TextBuffer.openInExternalEditor`, but we are
-   * responsible for temporarily *disabling* raw mode so the child process can
-   * interact with the TTY normally.
-   */
-  const openExternalEditor = React.useCallback(async () => {
-    // Preserve the current raw‑mode setting so we can restore it afterwards.
-    const wasRaw = stdin?.isRaw ?? false;
-    try {
-      setRawMode?.(false);
-      await buffer.current.openInExternalEditor();
-    } catch (err) {
-      // Surface the error so it doesn't fail silently – for now we log to
-      // stderr.  In the future this could surface a toast / overlay.
-      // eslint-disable-next-line no-console
-      console.error("[MultilineTextEditor] external editor error", err);
-    } finally {
-      if (wasRaw) {
-        setRawMode?.(true);
-      }
-      // Force a re‑render so the component reflects the mutated buffer.
-      setVersion((v) => v + 1);
-    }
-  }, [buffer, stdin, setRawMode]);
-
-  // ---------------------------------------------------------------------------
   // Keyboard handling.
   // ---------------------------------------------------------------------------
 
   useInput(
     (input, key) => {
       if (!focus) {
-        return;
-      }
-
-      // Single‑step editor shortcut: Ctrl+X or Ctrl+E
-      // Treat both true Ctrl+Key combinations *and* raw control codes so that
-      // the shortcut works consistently in real terminals (raw‑mode) and the
-      // ink‑testing‑library stub which delivers only the raw byte (e.g. 0x05
-      // for Ctrl‑E) without setting `key.ctrl`.
-      const isCtrlX =
-        (key.ctrl && (input === "x" || input === "\x18")) || input === "\x18";
-      const isCtrlE =
-        (key.ctrl && (input === "e" || input === "\x05")) ||
-        input === "\x05" ||
-        (!key.ctrl &&
-          input === "e" &&
-          input.length === 1 &&
-          input.charCodeAt(0) === 5);
-      if (isCtrlX || isCtrlE) {
-        openExternalEditor();
         return;
       }
 
@@ -259,25 +211,47 @@ const MultilineTextEditorInner = (
         console.log("[MultilineTextEditor] event", { input, key });
       }
 
-      // 1) CSI‑u / modifyOtherKeys (Ink strips initial ESC, so we start with '[')
+      // 1a) CSI-u / modifyOtherKeys *mode 2* (Ink strips initial ESC, so we
+      //     start with '[') – format: "[<code>;<modifiers>u".
       if (input.startsWith("[") && input.endsWith("u")) {
         const m = input.match(/^\[([0-9]+);([0-9]+)u$/);
         if (m && m[1] === "13") {
           const mod = Number(m[2]);
-          // In xterm's encoding: bit‑1 (value 2) is Shift. Everything >1 that
-          // isn't exactly 1 means some modifier was held. We treat *shift
-          // present* (2,4,6,8) as newline; plain (1) as submit.
+          // In xterm's encoding: bit-1 (value 2) is Shift. Everything >1 that
+          // isn't exactly 1 means some modifier was held. We treat *shift or
+          // alt present* (2,3,4,6,8,9) as newline; Ctrl (bit-2 / value 4)
+          // triggers submit.  See xterm/DEC modifyOtherKeys docs.
 
-          // Xterm encodes modifier keys in `mod` – bit‑2 (value 4) indicates
-          // that Ctrl was held. We avoid the `&` bitwise operator (disallowed
-          // by our ESLint config) by using arithmetic instead.
           const hasCtrl = Math.floor(mod / 4) % 2 === 1;
           if (hasCtrl) {
             if (onSubmit) {
               onSubmit(buffer.current.getText());
             }
           } else {
-            // Any variant without Ctrl just inserts newline (Shift, Alt, none)
+            buffer.current.newline();
+          }
+          setVersion((v) => v + 1);
+          return;
+        }
+      }
+
+      // 1b) CSI-~ / modifyOtherKeys *mode 1* – format: "[27;<mod>;<code>~".
+      //     Terminals such as iTerm2 (default), older xterm versions, or when
+      //     modifyOtherKeys=1 is configured, emit this legacy sequence.  We
+      //     translate it to the same behaviour as the mode‑2 variant above so
+      //     that Shift+Enter (newline) / Ctrl+Enter (submit) work regardless
+      //     of the user’s terminal settings.
+      if (input.startsWith("[27;") && input.endsWith("~")) {
+        const m = input.match(/^\[27;([0-9]+);13~$/);
+        if (m) {
+          const mod = Number(m[1]);
+          const hasCtrl = Math.floor(mod / 4) % 2 === 1;
+
+          if (hasCtrl) {
+            if (onSubmit) {
+              onSubmit(buffer.current.getText());
+            }
+          } else {
             buffer.current.newline();
           }
           setVersion((v) => v + 1);
@@ -350,6 +324,16 @@ const MultilineTextEditorInner = (
         return row === lineCount - 1;
       },
       getText: () => buffer.current.getText(),
+      moveCursorToEnd: () => {
+        buffer.current.move("home");
+        const lines = buffer.current.getText().split("\n");
+        for (let i = 0; i < lines.length - 1; i++) {
+          buffer.current.move("down");
+        }
+        buffer.current.move("end");
+        // Force a re-render
+        setVersion((v) => v + 1);
+      },
     }),
     [],
   );
@@ -405,5 +389,4 @@ const MultilineTextEditorInner = (
 };
 
 const MultilineTextEditor = React.forwardRef(MultilineTextEditorInner);
-
 export default MultilineTextEditor;

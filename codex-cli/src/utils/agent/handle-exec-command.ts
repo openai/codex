@@ -1,17 +1,18 @@
 import type { CommandConfirmation } from "./agent-loop.js";
-import type { AppConfig } from "../config.js";
-import type { ExecInput } from "./sandbox/interface.js";
 import type { ApplyPatchCommand, ApprovalPolicy } from "../../approvals.js";
+import type { ExecInput } from "./sandbox/interface.js";
 import type { ResponseInputItem } from "openai/resources/responses/responses.mjs";
 
-import { exec, execApplyPatch } from "./exec.js";
-import { isLoggingEnabled, log } from "./log.js";
-import { ReviewDecision } from "./review.js";
-import { FullAutoErrorMode } from "../auto-approval-mode.js";
-import { SandboxType } from "./sandbox/interface.js";
 import { canAutoApprove } from "../../approvals.js";
 import { formatCommandForDisplay } from "../../format-command.js";
-import { access } from "fs/promises";
+import { FullAutoErrorMode } from "../auto-approval-mode.js";
+import { CODEX_UNSAFE_ALLOW_NO_SANDBOX, type AppConfig } from "../config.js";
+import { exec, execApplyPatch } from "./exec.js";
+import { ReviewDecision } from "./review.js";
+import { isLoggingEnabled, log } from "../logger/log.js";
+import { SandboxType } from "./sandbox/interface.js";
+import { PATH_TO_SEATBELT_EXECUTABLE } from "./sandbox/macos-seatbelt.js";
+import fs from "fs/promises";
 
 // ---------------------------------------------------------------------------
 // Session‑level cache of commands that the user has chosen to always approve.
@@ -81,7 +82,7 @@ export async function handleExecCommand(
   ) => Promise<CommandConfirmation>,
   abortSignal?: AbortSignal,
 ): Promise<HandleExecCommandResult> {
-  const { cmd: command } = args;
+  const { cmd: command, workdir } = args;
 
   const key = deriveCommandKey(command);
 
@@ -103,7 +104,7 @@ export async function handleExecCommand(
   // working directory so that edits are constrained to the project root.  If
   // the caller wishes to broaden or restrict the set it can be made
   // configurable in the future.
-  const safety = canAutoApprove(command, policy, [process.cwd()]);
+  const safety = canAutoApprove(command, workdir, policy, [process.cwd()]);
 
   let runInSandbox: boolean;
   switch (safety.type) {
@@ -144,7 +145,7 @@ export async function handleExecCommand(
     abortSignal,
   );
   // If the operation was aborted in the meantime, propagate the cancellation
-  // upward by returning an empty (no‑op) result so that the agent loop will
+  // upward by returning an empty (no-op) result so that the agent loop will
   // exit cleanly without emitting spurious output.
   if (abortSignal?.aborted) {
     return {
@@ -217,29 +218,28 @@ async function execCommand(
   let { workdir } = execInput;
   if (workdir) {
     try {
-      await access(workdir);
+      await fs.access(workdir);
     } catch (e) {
       log(`EXEC workdir=${workdir} not found, use process.cwd() instead`);
       workdir = process.cwd();
     }
   }
-  if (isLoggingEnabled()) {
-    if (applyPatchCommand != null) {
-      log("EXEC running apply_patch command");
-    } else {
-      const { cmd, timeoutInMillis } = execInput;
-      // Seconds are a bit easier to read in log messages and most timeouts
-      // are specified as multiples of 1000, anyway.
-      const timeout =
-        timeoutInMillis != null
-          ? Math.round(timeoutInMillis / 1000).toString()
-          : "undefined";
-      log(
-        `EXEC running \`${formatCommandForDisplay(
-          cmd,
-        )}\` in workdir=${workdir} with timeout=${timeout}s`,
-      );
-    }
+
+  if (applyPatchCommand != null) {
+    log("EXEC running apply_patch command");
+  } else if (isLoggingEnabled()) {
+    const { cmd, timeoutInMillis } = execInput;
+    // Seconds are a bit easier to read in log messages and most timeouts
+    // are specified as multiples of 1000, anyway.
+    const timeout =
+      timeoutInMillis != null
+        ? Math.round(timeoutInMillis / 1000).toString()
+        : "undefined";
+    log(
+      `EXEC running \`${formatCommandForDisplay(
+        cmd,
+      )}\` in workdir=${workdir} with timeout=${timeout}s`,
+    );
   }
 
   // Note execApplyPatch() and exec() are coded defensively and should not
@@ -248,7 +248,7 @@ async function execCommand(
   const start = Date.now();
   const execResult =
     applyPatchCommand != null
-      ? execApplyPatch(applyPatchCommand.patch)
+      ? execApplyPatch(applyPatchCommand.patch, workdir)
       : await exec(
           { ...execInput, additionalWritableRoots },
           await getSandbox(runInSandbox),
@@ -271,30 +271,45 @@ async function execCommand(
   };
 }
 
-const isInLinux = async (): Promise<boolean> => {
-  try {
-    await access("/proc/1/cgroup");
-    return true;
-  } catch {
-    return false;
-  }
-};
+/** Return `true` if the `/usr/bin/sandbox-exec` is present and executable. */
+const isSandboxExecAvailable: Promise<boolean> = fs
+  .access(PATH_TO_SEATBELT_EXECUTABLE, fs.constants.X_OK)
+  .then(
+    () => true,
+    (err) => {
+      if (!["ENOENT", "ACCESS", "EPERM"].includes(err.code)) {
+        log(
+          `Unexpected error for \`stat ${PATH_TO_SEATBELT_EXECUTABLE}\`: ${err.message}`,
+        );
+      }
+      return false;
+    },
+  );
 
 async function getSandbox(runInSandbox: boolean): Promise<SandboxType> {
   if (runInSandbox) {
     if (process.platform === "darwin") {
-      return SandboxType.MACOS_SEATBELT;
-    } else if (await isInLinux()) {
-      return SandboxType.NONE;
-    } else if (process.platform === "win32") {
-      // On Windows, we don't have a sandbox implementation yet, so we fall back to NONE
-      // instead of throwing an error, which would crash the application
-      log(
-        "WARNING: Sandbox was requested but is not available on Windows. Continuing without sandbox.",
-      );
+      // On macOS we rely on the system-provided `sandbox-exec` binary to
+      // enforce the Seatbelt profile.  However, starting with macOS 14 the
+      // executable may be removed from the default installation or the user
+      // might be running the CLI on a stripped-down environment (for
+      // instance, inside certain CI images).  Attempting to spawn a missing
+      // binary makes Node.js throw an *uncaught* `ENOENT` error further down
+      // the stack which crashes the whole CLI.
+      if (await isSandboxExecAvailable) {
+        return SandboxType.MACOS_SEATBELT;
+      } else {
+        throw new Error(
+          "Sandbox was mandated, but 'sandbox-exec' was not found in PATH!",
+        );
+      }
+    } else if (CODEX_UNSAFE_ALLOW_NO_SANDBOX) {
+      // Allow running without a sandbox if the user has explicitly marked the
+      // environment as already being sufficiently locked-down.
       return SandboxType.NONE;
     }
-    // For other platforms, still throw an error as before
+
+    // For all else, we hard fail if the user has requested a sandbox and none is available.
     throw new Error("Sandbox was mandated, but no sandbox is available!");
   } else {
     return SandboxType.NONE;

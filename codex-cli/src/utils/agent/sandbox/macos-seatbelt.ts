@@ -2,37 +2,41 @@ import type { ExecResult } from "./interface.js";
 import type { SpawnOptions } from "child_process";
 
 import { exec } from "./raw-exec.js";
-import { log } from "../log.js";
-import { realpathSync } from "fs";
-import { CONFIG_DIR } from "src/utils/config.js";
+import { log } from "../../logger/log.js";
 
 function getCommonRoots() {
   return [
-    CONFIG_DIR,
     // Without this root, it'll cause:
     // pyenv: cannot rehash: $HOME/.pyenv/shims isn't writable
     `${process.env["HOME"]}/.pyenv`,
   ];
 }
 
+/**
+ * When working with `sandbox-exec`, only consider `sandbox-exec` in `/usr/bin`
+ * to defend against an attacker trying to inject a malicious version on the
+ * PATH. If /usr/bin/sandbox-exec has been tampered with, then the attacker
+ * already has root access.
+ */
+export const PATH_TO_SEATBELT_EXECUTABLE = "/usr/bin/sandbox-exec";
+
 export function execWithSeatbelt(
   cmd: Array<string>,
   opts: SpawnOptions,
-  writableRoots: Array<string>,
+  writableRoots: ReadonlyArray<string>,
   abortSignal?: AbortSignal,
 ): Promise<ExecResult> {
   let scopedWritePolicy: string;
   let policyTemplateParams: Array<string>;
-  if (writableRoots.length > 0) {
-    // Add `~/.codex` to the list of writable roots
-    // (if there's any already, not in read-only mode)
-    getCommonRoots().map((root) => writableRoots.push(root));
-    const { policies, params } = writableRoots
+
+  const fullWritableRoots = [...writableRoots, ...getCommonRoots()];
+  // In practice, fullWritableRoots will be non-empty, but we check just in
+  // case the logic to build up fullWritableRoots changes.
+  if (fullWritableRoots.length > 0) {
+    const { policies, params } = fullWritableRoots
       .map((root, index) => ({
         policy: `(subpath (param "WRITABLE_ROOT_${index}"))`,
-        // the kernel resolves symlinks before handing them to seatbelt for checking
-        // so store the canonicalized form in the policy to be compared against
-        param: `-DWRITABLE_ROOT_${index}=${realpathSync(root)}`,
+        param: `-DWRITABLE_ROOT_${index}=${root}`,
       }))
       .reduce(
         (
@@ -61,14 +65,14 @@ export function execWithSeatbelt(
   );
 
   const fullCommand = [
-    "sandbox-exec",
+    PATH_TO_SEATBELT_EXECUTABLE,
     "-p",
     fullPolicy,
     ...policyTemplateParams,
     "--",
     ...cmd,
   ];
-  return exec(fullCommand, opts, writableRoots, abortSignal);
+  return exec(fullCommand, opts, abortSignal);
 }
 
 const READ_ONLY_SEATBELT_POLICY = `

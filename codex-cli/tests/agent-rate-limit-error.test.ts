@@ -37,7 +37,7 @@ vi.mock("openai", () => {
 vi.mock("../src/approvals.js", () => ({
   __esModule: true,
   alwaysApprovedCommands: new Set<string>(),
-  canAutoApprove: () => ({ type: "auto-approve", runInSandbox: false } as any),
+  canAutoApprove: () => ({ type: "auto-approve", runInSandbox: false }) as any,
   isSafeCommand: () => null,
 }));
 
@@ -82,7 +82,7 @@ describe("AgentLoop – rate‑limit handling", () => {
         additionalWritableRoots: [],
         onItem: (i) => received.push(i),
         onLoading: () => {},
-        getCommandConfirmation: async () => ({ review: "yes" } as any),
+        getCommandConfirmation: async () => ({ review: "yes" }) as any,
         onLastResponseId: () => {},
       });
 
@@ -98,10 +98,8 @@ describe("AgentLoop – rate‑limit handling", () => {
       // is in progress.
       const runPromise = agent.run(userMsg as any);
 
-      // The agent waits 15 000 ms between retries (rate‑limit back‑off) and does
-      // this four times (after attempts 1‑4). Fast‑forward a bit more to cover
-      // any additional small `setTimeout` calls inside the implementation.
-      await vi.advanceTimersByTimeAsync(61_000); // 4 * 15s + 1s safety margin
+      // Should be done in at most 180 seconds.
+      await vi.advanceTimersByTimeAsync(180_000);
 
       // Ensure the promise settles without throwing.
       await expect(runPromise).resolves.not.toThrow();
@@ -110,8 +108,8 @@ describe("AgentLoop – rate‑limit handling", () => {
       await vi.advanceTimersByTimeAsync(20);
 
       // The OpenAI client should have been called the maximum number of retry
-      // attempts (5).
-      expect(openAiState.createSpy).toHaveBeenCalledTimes(5);
+      // attempts (8).
+      expect(openAiState.createSpy).toHaveBeenCalledTimes(8);
 
       // Finally, verify that the user sees a helpful system message.
       const sysMsg = received.find(

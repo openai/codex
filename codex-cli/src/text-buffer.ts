@@ -34,6 +34,10 @@ function clamp(v: number, min: number, max: number): number {
  * ---------------------------------------------------------------------- */
 
 function toCodePoints(str: string): Array<string> {
+  if (typeof Intl !== "undefined" && "Segmenter" in Intl) {
+    const seg = new Intl.Segmenter();
+    return [...seg.segment(str)].map((seg) => seg.segment);
+  }
   // [...str] or Array.from both iterate by UTF‑32 code point, handling
   // surrogate pairs correctly.
   return Array.from(str);
@@ -96,93 +100,14 @@ export default class TextBuffer {
 
   private clipboard: string | null = null;
 
-  constructor(text = "") {
+  constructor(text = "", initialCursorIdx = 0) {
     this.lines = text.split("\n");
     if (this.lines.length === 0) {
       this.lines = [""];
     }
-  }
 
-  /* =====================================================================
-   *  External editor integration (git‑style $EDITOR workflow)
-   * =================================================================== */
-
-  /**
-   * Opens the current buffer contents in the user’s preferred terminal text
-   * editor ($VISUAL or $EDITOR, falling back to "vi").  The method blocks
-   * until the editor exits, then reloads the file and replaces the in‑memory
-   * buffer with whatever the user saved.
-   *
-   * The operation is treated as a single undoable edit – we snapshot the
-   * previous state *once* before launching the editor so one `undo()` will
-   * revert the entire change set.
-   *
-   * Note: We purposefully rely on the *synchronous* spawn API so that the
-   * calling process genuinely waits for the editor to close before
-   * continuing.  This mirrors Git’s behaviour and simplifies downstream
-   * control‑flow (callers can simply `await` the Promise).
-   */
-  async openInExternalEditor(opts: { editor?: string } = {}): Promise<void> {
-    // Deliberately use `require()` so that unit tests can stub the
-    // respective modules with `vi.spyOn(require("node:child_process"), …)`.
-    // Dynamic `import()` would circumvent those CommonJS stubs.
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const pathMod = require("node:path");
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const fs = require("node:fs");
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const os = require("node:os");
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { spawnSync } = require("node:child_process");
-
-    const editor =
-      opts.editor ??
-      process.env["VISUAL"] ??
-      process.env["EDITOR"] ??
-      (process.platform === "win32" ? "notepad" : "vi");
-
-    // Prepare a temporary file with the current contents.  We use mkdtempSync
-    // to obtain an isolated directory and avoid name collisions.
-    const tmpDir = fs.mkdtempSync(pathMod.join(os.tmpdir(), "codex-edit-"));
-    const filePath = pathMod.join(tmpDir, "buffer.txt");
-
-    fs.writeFileSync(filePath, this.getText(), "utf8");
-
-    // One snapshot for undo semantics *before* we mutate anything.
-    this.pushUndo();
-
-    // The child inherits stdio so the user can interact with the editor as if
-    // they had launched it directly.
-    const { status, error } = spawnSync(editor, [filePath], {
-      stdio: "inherit",
-    });
-
-    if (error) {
-      throw error;
-    }
-    if (typeof status === "number" && status !== 0) {
-      throw new Error(`External editor exited with status ${status}`);
-    }
-
-    // Read the edited contents back in – normalise line endings to \n.
-    let newText = fs.readFileSync(filePath, "utf8");
-    newText = newText.replace(/\r\n?/g, "\n");
-
-    // Update buffer.
-    this.lines = newText.split("\n");
-    if (this.lines.length === 0) {
-      this.lines = [""];
-    }
-
-    // Position the caret at EOF.
-    this.cursorRow = this.lines.length - 1;
-    this.cursorCol = cpLen(this.line(this.cursorRow));
-
-    // Reset scroll offsets so the new end is visible.
-    this.scrollRow = Math.max(0, this.cursorRow - 1);
-    this.scrollCol = 0;
-
-    this.version++;
+    // No need to reset cursor on failure - class already default cursor position to 0,0
+    this.setCursorIdx(initialCursorIdx);
   }
 
   /* =======================================================================
@@ -198,6 +123,39 @@ export default class TextBuffer {
   private ensureCursorInRange(): void {
     this.cursorRow = clamp(this.cursorRow, 0, this.lines.length - 1);
     this.cursorCol = clamp(this.cursorCol, 0, this.lineLen(this.cursorRow));
+  }
+
+  /**
+   * Sets the cursor position based on a character offset from the start of the document.
+   * @param idx The character offset to move to (0-based)
+   * @returns true if successful, false if the index was invalid
+   */
+  private setCursorIdx(idx: number): boolean {
+    // Reset preferred column since this is an explicit horizontal movement
+    this.preferredCol = null;
+
+    let remainingChars = idx;
+    let row = 0;
+
+    // Count characters line by line until we find the right position
+    while (row < this.lines.length) {
+      const lineLength = this.lineLen(row);
+      // Add 1 for the newline character (except for the last line)
+      const totalChars = lineLength + (row < this.lines.length - 1 ? 1 : 0);
+
+      if (remainingChars <= lineLength) {
+        this.cursorRow = row;
+        this.cursorCol = remainingChars;
+        return true;
+      }
+
+      // Move to next line, subtract this line's characters plus newline
+      remainingChars -= totalChars;
+      row++;
+    }
+
+    // If we get here, the index was too large
+    return false;
   }
 
   /* =====================================================================
@@ -415,6 +373,58 @@ export default class TextBuffer {
     });
   }
 
+  /**
+   * Delete everything from the caret to the *end* of the current line. The
+   * caret itself stays in place (column remains unchanged). Mirrors the
+   * common Ctrl+K shortcut in many shells and editors.
+   */
+  deleteToLineEnd(): void {
+    dbg("deleteToLineEnd", { beforeCursor: this.getCursor() });
+
+    const line = this.line(this.cursorRow);
+    if (this.cursorCol >= this.lineLen(this.cursorRow)) {
+      // Nothing to delete – caret already at EOL.
+      return;
+    }
+
+    this.pushUndo();
+
+    // Keep the prefix before the caret, discard the remainder.
+    this.lines[this.cursorRow] = cpSlice(line, 0, this.cursorCol);
+    this.version++;
+
+    dbg("deleteToLineEnd:after", {
+      cursor: this.getCursor(),
+      line: this.line(this.cursorRow),
+    });
+  }
+
+  /**
+   * Delete everything from the *start* of the current line up to (but not
+   * including) the caret.  The caret is moved to column-0, mirroring the
+   * behaviour of the familiar Ctrl+U binding.
+   */
+  deleteToLineStart(): void {
+    dbg("deleteToLineStart", { beforeCursor: this.getCursor() });
+
+    if (this.cursorCol === 0) {
+      // Nothing to delete – caret already at SOL.
+      return;
+    }
+
+    this.pushUndo();
+
+    const line = this.line(this.cursorRow);
+    this.lines[this.cursorRow] = cpSlice(line, this.cursorCol);
+    this.cursorCol = 0;
+    this.version++;
+
+    dbg("deleteToLineStart:after", {
+      cursor: this.getCursor(),
+      line: this.line(this.cursorRow),
+    });
+  }
+
   /* ------------------------------------------------------------------
    *  Word‑wise deletion helpers – exposed publicly so tests (and future
    *  key‑bindings) can invoke them directly.
@@ -423,7 +433,7 @@ export default class TextBuffer {
   /** Delete the word to the *left* of the caret, mirroring common
    *  Ctrl/Alt+Backspace behaviour in editors & terminals.  Both the adjacent
    *  whitespace *and* the word characters immediately preceding the caret are
-   *  removed.  If the caret is already at column‑0 this becomes a no‑op. */
+   *  removed.  If the caret is already at column‑0 this becomes a no-op. */
   deleteWordLeft(): void {
     dbg("deleteWordLeft", { beforeCursor: this.getCursor() });
 
@@ -512,6 +522,22 @@ export default class TextBuffer {
 
     // Skip the word characters.
     while (end < arr.length && isWordChar(arr[end])) {
+      end++;
+    }
+
+    /*
+     * After consuming the actual word we also want to swallow any immediate
+     * separator run that *follows* it so that a forward word-delete mirrors
+     * the behaviour of common shells/editors (and matches the expectations
+     * encoded in our test-suite).
+     *
+     * Example – given the text "foo bar baz" and the caret placed at the
+     * beginning of "bar" (index 4) we want Alt+Delete to turn the string
+     * into "foo␠baz" (single space).  Without this extra loop we would stop
+     * right before the separating space, producing "foo␠␠baz".
+     */
+
+    while (end < arr.length && !isWordChar(arr[end])) {
       end++;
     }
 
@@ -636,6 +662,24 @@ export default class TextBuffer {
     }
   }
 
+  /* ------------------------------------------------------------------
+   *  Document-level navigation helpers
+   * ---------------------------------------------------------------- */
+
+  /** Move caret to *absolute* beginning of the buffer (row-0, col-0). */
+  private moveToStartOfDocument(): void {
+    this.preferredCol = null;
+    this.cursorRow = 0;
+    this.cursorCol = 0;
+  }
+
+  /** Move caret to *absolute* end of the buffer (last row, last column). */
+  private moveToEndOfDocument(): void {
+    this.preferredCol = null;
+    this.cursorRow = this.lines.length - 1;
+    this.cursorCol = this.lineLen(this.cursorRow);
+  }
+
   /* =====================================================================
    *  Higher‑level helpers
    * =================================================================== */
@@ -710,7 +754,7 @@ export default class TextBuffer {
   }
 
   endSelection(): void {
-    // no‑op for now, kept for API symmetry
+    // no-op for now, kept for API symmetry
     // we rely on anchor + current cursor to compute selection
   }
 
@@ -787,7 +831,6 @@ export default class TextBuffer {
       !key["ctrl"] &&
       !key["alt"]
     ) {
-      /* navigation */
       this.move("left");
     } else if (
       key["rightArrow"] &&
@@ -807,23 +850,67 @@ export default class TextBuffer {
       key["rightArrow"]
     ) {
       this.move("wordRight");
+    }
+    // Many terminal/OS combinations (e.g. macOS Terminal.app & iTerm2 with
+    // the default key-bindings) translate ⌥← / ⌥→ into the classic readline
+    // shortcuts ESC-b / ESC-f rather than an ANSI arrow sequence that Ink
+    // would tag with `leftArrow` / `rightArrow`.  Ink parses those 2-byte
+    // escape sequences into `input === "b"|"f"` with `key.meta === true`.
+    // Handle this variant explicitly so that Option+Arrow performs word
+    // navigation consistently across environments.
+    else if (key["meta"] && (input === "b" || input === "B")) {
+      this.move("wordLeft");
+    } else if (key["meta"] && (input === "f" || input === "F")) {
+      this.move("wordRight");
     } else if (key["home"]) {
       this.move("home");
     } else if (key["end"]) {
       this.move("end");
     }
-    /* delete */
+
+    // Deletions
+    //
     // In raw terminal mode many frameworks (Ink included) surface a physical
     // Backspace key‑press as the single DEL (0x7f) byte placed in `input` with
     // no `key.backspace` flag set.  Treat that byte exactly like an ordinary
     // Backspace for parity with textarea.rs and to make interactive tests
     // feedable through the simpler `(ch, {}, vp)` path.
+    // ------------------------------------------------------------------
+    //  Word-wise deletions
+    //
+    //  macOS (and many terminals on Linux/BSD) map the physical “Delete” key
+    //  to a *backspace* operation – emitting either the raw DEL (0x7f) byte
+    //  or setting `key.backspace = true` in Ink’s parsed event.  Holding the
+    //  Option/Alt modifier therefore *also* sends backspace semantics even
+    //  though users colloquially refer to the shortcut as “⌥+Delete”.
+    //
+    //  Historically we treated **modifier + Delete** as a *forward* word
+    //  deletion.  This behaviour, however, diverges from the default found
+    //  in shells (zsh, bash, fish, etc.) and native macOS text fields where
+    //  ⌥+Delete removes the word *to the left* of the caret.  Update the
+    //  mapping so that both
+    //
+    //    • ⌥/Alt/Meta + Backspace  and
+    //    • ⌥/Alt/Meta + Delete
+    //
+    //  perform a **backward** word deletion.  We keep the ability to delete
+    //  the *next* word by requiring an additional Shift modifier – a common
+    //  binding on full-size keyboards that expose a dedicated Forward Delete
+    //  key.
+    // ------------------------------------------------------------------
     else if (
+      // ⌥/Alt/Meta + (Backspace|Delete|DEL byte) → backward word delete
       (key["meta"] || key["ctrl"] || key["alt"]) &&
-      (key["backspace"] || input === "\x7f")
+      !key["shift"] &&
+      (key["backspace"] || input === "\x7f" || key["delete"])
     ) {
       this.deleteWordLeft();
-    } else if ((key["meta"] || key["ctrl"] || key["alt"]) && key["delete"]) {
+    } else if (
+      // ⇧+⌥/Alt/Meta + (Backspace|Delete|DEL byte) → forward word delete
+      (key["meta"] || key["ctrl"] || key["alt"]) &&
+      key["shift"] &&
+      (key["backspace"] || input === "\x7f" || key["delete"])
+    ) {
       this.deleteWordRight();
     } else if (
       key["backspace"] ||
@@ -835,22 +922,47 @@ export default class TextBuffer {
       // forward deletion so we don't lose that capability on keyboards that
       // expose both behaviours.
       this.backspace();
-    }
-    // Forward deletion (Fn+Delete on macOS, or Delete key with Shift held after
-    // the branch above) – remove the character *under / to the right* of the
-    // caret, merging lines when at EOL similar to many editors.
-    else if (key["delete"]) {
+    } else if (key["delete"]) {
+      // Forward deletion (Fn+Delete on macOS, or Delete key with Shift held after
+      // the branch above) – remove the character *under / to the right* of the
+      // caret, merging lines when at EOL similar to many editors.
       this.del();
-    } else if (input && !key["ctrl"] && !key["meta"]) {
+    }
+    // Normal input
+    else if (input && !key["ctrl"] && !key["meta"]) {
       this.insert(input);
     }
 
-    /* printable */
+    // Emacs/readline-style shortcuts
+    else if (key["ctrl"] && (input === "a" || input === "\x01")) {
+      // Ctrl+A → start of input (first row, first column)
+      this.moveToStartOfDocument();
+    } else if (key["ctrl"] && (input === "e" || input === "\x05")) {
+      // Ctrl+E → end of input (last row, last column)
+      this.moveToEndOfDocument();
+    } else if (key["ctrl"] && (input === "b" || input === "\x02")) {
+      // Ctrl+B → char left
+      this.move("left");
+    } else if (key["ctrl"] && (input === "f" || input === "\x06")) {
+      // Ctrl+F → char right
+      this.move("right");
+    } else if (key["ctrl"] && (input === "d" || input === "\x04")) {
+      // Ctrl+D → forward delete
+      this.del();
+    } else if (key["ctrl"] && (input === "k" || input === "\x0b")) {
+      // Ctrl+K → kill to EOL
+      this.deleteToLineEnd();
+    } else if (key["ctrl"] && (input === "u" || input === "\x15")) {
+      // Ctrl+U → kill to SOL
+      this.deleteToLineStart();
+    } else if (key["ctrl"] && (input === "w" || input === "\x17")) {
+      // Ctrl+W → delete word left
+      this.deleteWordLeft();
+    }
 
-    /* clamp + scroll */
+    /* printable, clamp + scroll */
     this.ensureCursorInRange();
     this.ensureCursorVisible(vp);
-
     const cursorMoved =
       this.cursorRow !== beforeRow || this.cursorCol !== beforeCol;
 

@@ -19,13 +19,14 @@ body:
     id: version
     attributes:
       label: What version of Codex is running?
-      description: Copy the output of `codex --revision`
+      description: Copy the output of `codex --version`
   - type: input
     id: model
     attributes:
       label: Which model were you using?
       description: Like `gpt-4.1`, `o4-mini`, `o3`, etc.
   - type: input
+    id: platform
     attributes:
       label: What platform is your computer?
       description: |

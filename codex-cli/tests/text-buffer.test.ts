@@ -127,11 +127,38 @@ describe("TextBuffer – basic editing parity with Rust suite", () => {
       expect(buf.getCursor()).toEqual([0, 2]); // after 'b'
     });
 
-    it("is a no‑op at the very beginning of the buffer", () => {
+    it("is a no-op at the very beginning of the buffer", () => {
       const buf = new TextBuffer("ab");
       buf.backspace(); // caret starts at (0,0)
 
       expect(buf.getLines()).toEqual(["ab"]);
+      expect(buf.getCursor()).toEqual([0, 0]);
+    });
+  });
+
+  describe("cursor initialization", () => {
+    it("initializes cursor to (0,0) by default", () => {
+      const buf = new TextBuffer("hello\nworld");
+      expect(buf.getCursor()).toEqual([0, 0]);
+    });
+
+    it("sets cursor to valid position within line", () => {
+      const buf = new TextBuffer("hello", 2);
+      expect(buf.getCursor()).toEqual([0, 2]); // cursor at 'l'
+    });
+
+    it("sets cursor to end of line", () => {
+      const buf = new TextBuffer("hello", 5);
+      expect(buf.getCursor()).toEqual([0, 5]); // cursor after 'o'
+    });
+
+    it("sets cursor across multiple lines", () => {
+      const buf = new TextBuffer("hello\nworld", 7);
+      expect(buf.getCursor()).toEqual([1, 1]); // cursor at 'o' in 'world'
+    });
+
+    it("defaults to position 0 for invalid index", () => {
+      const buf = new TextBuffer("hello", 999);
       expect(buf.getCursor()).toEqual([0, 0]);
     });
   });

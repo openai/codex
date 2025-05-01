@@ -1,0 +1,33 @@
+[package]
+name = "codex-cli"
+version = { workspace = true }
+edition = "2021"
+
+[[bin]]
+name = "codex"
+path = "src/main.rs"
+
+[[bin]]
+name = "codex-linux-sandbox"
+path = "src/linux-sandbox/main.rs"
+
+[lib]
+name = "codex_cli"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+codex-core = { path = "../core" }
+codex-exec = { path = "../exec" }
+codex-tui = { path = "../tui" }
+serde_json = "1"
+tokio = { version = "1", features = [
+    "io-std",
+    "macros",
+    "process",
+    "rt-multi-thread",
+    "signal",
+] }
+tracing = "0.1.41"
+tracing-subscriber = "0.3.19"

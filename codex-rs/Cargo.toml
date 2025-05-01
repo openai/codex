@@ -1,0 +1,20 @@
+[workspace]
+resolver = "2"
+members = [
+    "ansi-escape",
+    "apply-patch",
+    "cli",
+    "core",
+    "exec",
+    "execpolicy",
+    "tui",
+]
+
+[workspace.package]
+version = "0.0.0"
+
+[profile.release]
+lto = "fat"
+# Because we bundle some of these executables with the TypeScript CLI, we
+# remove everything to make the binary as small as possible.
+strip = "symbols"

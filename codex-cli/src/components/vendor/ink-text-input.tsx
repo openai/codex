@@ -44,6 +44,11 @@ export type TextInputProps = {
    * Function to call when `Enter` is pressed, where first argument is a value of the input.
    */
   readonly onSubmit?: (value: string) => void;
+
+  /**
+   * Explicitly set the cursor position to the end of the text
+   */
+  readonly cursorToEnd?: boolean;
 };
 
 function findPrevWordJump(prompt: string, cursorOffset: number) {
@@ -90,11 +95,21 @@ function TextInput({
   showCursor = true,
   onChange,
   onSubmit,
+  cursorToEnd = false,
 }: TextInputProps) {
   const [state, setState] = useState({
     cursorOffset: (originalValue || "").length,
     cursorWidth: 0,
   });
+
+  useEffect(() => {
+    if (cursorToEnd) {
+      setState((prev) => ({
+        ...prev,
+        cursorOffset: (originalValue || "").length,
+      }));
+    }
+  }, [cursorToEnd, originalValue, focus]);
 
   const { cursorOffset, cursorWidth } = state;
 
@@ -153,6 +168,78 @@ function TextInput({
 
   useInput(
     (input, key) => {
+      // ────────────────────────────────────────────────────────────────
+      // Support Shift+Enter / Ctrl+Enter from terminals that have
+      // modifyOtherKeys enabled.  Such terminals encode the key‑combo in a
+      // CSI sequence rather than sending a bare "\r"/"\n".  Ink passes the
+      // sequence through as raw text (without the initial ESC), so we need to
+      // detect and translate it before the generic character handler below
+      // treats it as literal input (e.g. "[27;2;13~").  We support both the
+      // modern *mode 2* (CSI‑u, ending in "u") and the legacy *mode 1*
+      // variant (ending in "~").
+      //
+      //  - Shift+Enter  → insert newline (same behaviour as Option+Enter)
+      //  - Ctrl+Enter   → submit the input (same as plain Enter)
+      //
+      // References: https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-Modify-Other-Keys
+      // ────────────────────────────────────────────────────────────────
+
+      function handleEncodedEnterSequence(raw: string): boolean {
+        // CSI‑u (modifyOtherKeys=2)  → "[13;<mod>u"
+        let m = raw.match(/^\[([0-9]+);([0-9]+)u$/);
+        if (m && m[1] === "13") {
+          const mod = Number(m[2]);
+          const hasCtrl = Math.floor(mod / 4) % 2 === 1;
+
+          if (hasCtrl) {
+            if (onSubmit) {
+              onSubmit(originalValue);
+            }
+          } else {
+            const newValue =
+              originalValue.slice(0, cursorOffset) +
+              "\n" +
+              originalValue.slice(cursorOffset);
+
+            setState({
+              cursorOffset: cursorOffset + 1,
+              cursorWidth: 0,
+            });
+            onChange(newValue);
+          }
+          return true; // handled
+        }
+
+        // CSI‑~ (modifyOtherKeys=1) → "[27;<mod>;13~"
+        m = raw.match(/^\[27;([0-9]+);13~$/);
+        if (m) {
+          const mod = Number(m[1]);
+          const hasCtrl = Math.floor(mod / 4) % 2 === 1;
+
+          if (hasCtrl) {
+            if (onSubmit) {
+              onSubmit(originalValue);
+            }
+          } else {
+            const newValue =
+              originalValue.slice(0, cursorOffset) +
+              "\n" +
+              originalValue.slice(cursorOffset);
+
+            setState({
+              cursorOffset: cursorOffset + 1,
+              cursorWidth: 0,
+            });
+            onChange(newValue);
+          }
+          return true; // handled
+        }
+        return false; // not an encoded Enter sequence
+      }
+
+      if (handleEncodedEnterSequence(input)) {
+        return;
+      }
       if (
         key.upArrow ||
         key.downArrow ||
