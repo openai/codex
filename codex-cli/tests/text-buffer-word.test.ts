@@ -43,18 +43,17 @@ describe("TextBuffer – word‑wise navigation & deletion", () => {
     expect(tb.getText()).toBe("foo bar ");
   });
 
-  test("Option/Alt+Delete deletes next word", () => {
+  test("Option/Alt+Delete deletes previous word (matches shells)", () => {
     const tb = new TextBuffer("foo bar baz");
     const vp = { height: 10, width: 80 } as const;
 
-    // Move caret between first and second word (after space)
-    tb.move("wordRight"); // after foo
-    tb.move("right"); // skip space -> start of bar
+    // Place caret at end so we can test backward deletion.
+    tb.move("end");
 
-    // Option+Delete
+    // Simulate Option+Delete (parsed as alt-modified Delete on some terminals)
     tb.handleInput(undefined, { delete: true, alt: true }, vp);
 
-    expect(tb.getText()).toBe("foo  baz"); // note double space removed later maybe
+    expect(tb.getText()).toBe("foo bar ");
   });
 
   test("wordLeft eventually reaches column 0", () => {
@@ -120,5 +119,19 @@ describe("TextBuffer – word‑wise navigation & deletion", () => {
     expect(tb.getText()).toBe("hello ");
     const [, col] = tb.getCursor();
     expect(col).toBe(6);
+  });
+
+  test("Shift+Option/Alt+Delete deletes next word", () => {
+    const tb = new TextBuffer("foo bar baz");
+    const vp = { height: 10, width: 80 } as const;
+
+    // Move caret between first and second word (after space)
+    tb.move("wordRight"); // after foo
+    tb.move("right"); // skip space -> start of bar
+
+    // Shift+Option+Delete should now remove "bar "
+    tb.handleInput(undefined, { delete: true, alt: true, shift: true }, vp);
+
+    expect(tb.getText()).toBe("foo baz");
   });
 });
