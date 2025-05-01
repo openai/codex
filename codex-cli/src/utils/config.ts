@@ -151,7 +151,7 @@ export type StoredConfig = {
   /** Configuration for watch mode */
   watchMode?: {
     /**
-     * Custom trigger pattern. Default is '/(?:\/\/|#|--|;|\'|%|REM)\s*(.*?)(?:,\s*)?AI[!?]/i'.
+     * Custom trigger pattern. Default is '/\\/\\/\\s*CODEX:\\s+(.*)/i'.
      * Must be a valid regular expression string, with the first capture group containing the instruction.
      * Examples:
      * - '/(?:\/\/|#)\s*AI:(TODO|FIXME)\s+(.*)/i' to match "// AI:TODO fix this" or "# AI:FIXME handle errors"
@@ -209,7 +209,7 @@ export type AppConfig = {
   /** Configuration for watch mode */
   watchMode?: {
     /**
-     * Custom trigger pattern. Default is '/(?:\/\/|#|--|;|\'|%|REM)\s*(.*?)(?:,\s*)?AI[!?]/i'.
+     * Custom trigger pattern. Default is '/\\/\\/\\s*CODEX:\\s+(.*)/i'.
      * Must be a valid regular expression string, with the first capture group containing the instruction.
      * Examples:
      * - '/(?:\/\/|#)\s*AI:(TODO|FIXME)\s+(.*)/i' to match "// AI:TODO fix this" or "# AI:FIXME handle errors"
