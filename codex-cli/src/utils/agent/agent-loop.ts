@@ -676,7 +676,7 @@ export class AgentLoop {
           try {
             let reasoning: Reasoning | undefined;
             if (this.model.startsWith("o")) {
-              reasoning = { effort: "high" };
+              reasoning = { effort: this.config.reasoningEffort ?? "high" };
               if (this.model === "o3" || this.model === "o4-mini") {
                 reasoning.summary = "auto";
               }
@@ -1137,7 +1137,7 @@ export class AgentLoop {
                 content: [
                   {
                     type: "input_text",
-                    text: "⚠️ Insufficient quota. Please check your billing details and retry.",
+                    text: `\u26a0 Insufficient quota: ${err instanceof Error && err.message ? err.message.trim() : "No remaining quota."} Manage or purchase credits at https://platform.openai.com/account/billing.`,
                   },
                 ],
               });
