@@ -308,6 +308,9 @@ corepack enable
 pnpm install
 pnpm build
 
+# Linux-only: download prebuilt sandboxing binaries (requires gh and zstd).
+./scripts/install_native_deps.sh
+
 # Get the usage and the options
 node ./dist/cli.js --help
 
@@ -633,18 +636,25 @@ The **DCO check** blocks merges until every commit in the PR carries the footer 
 
 ### Releasing `codex`
 
-To publish a new version of the CLI, run the release scripts defined in `codex-cli/package.json`:
+To publish a new version of the CLI, run the following in the `codex-cli` folder to stage the release in a temporary directory:
 
-1. Open the `codex-cli` directory
-2. Make sure you're on a branch like `git checkout -b bump-version`
-3. Bump the version and `CLI_VERSION` to current datetime: `pnpm release:version`
-4. Commit the version bump (with DCO sign-off):
-   ```bash
-   git add codex-cli/package.json
-   git commit -s -m "chore(release): codex-cli v$(node -p \"require('./codex-cli/package.json').version\")"
-   ```
-5. Copy README, build, and publish to npm: `pnpm release`
-6. Push to branch: `git push origin HEAD`
+```
+pnpm stage-release
+```
+
+Note you can specify the folder for the staged release:
+
+```
+RELEASE_DIR=$(mktemp -d)
+pnpm stage-release "$RELEASE_DIR"
+```
+
+Go to the folder where the release is staged and verify that it works as intended. If so, run the following from the temp folder:
+
+```
+cd "$RELEASE_DIR"
+npm publish
+```
 
 ### Alternative Build Options
 
