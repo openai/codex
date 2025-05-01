@@ -12,11 +12,11 @@ import {
 const TEST_CONTEXT_SIZE = 20;
 
 describe("Watch mode trigger pattern matching", () => {
-  it("should detect double-slash (JS-style) AI triggers", () => {
+  it("should detect double-slash (JS-style) CODEX triggers", () => {
     const content = `
     function testFunction() {
       // This is a normal comment
-      // Fix this bug, AI!
+      // CODEX: Fix this bug
       return 1 + 1;
     }
     `;
@@ -24,40 +24,40 @@ describe("Watch mode trigger pattern matching", () => {
     const matches = findAllTriggers(content);
 
     expect(matches.length).toBe(1);
-    expect(matches[0]![0]).toContain("Fix this bug, AI!");
+    expect(matches[0]![0]).toContain("// CODEX: Fix this bug");
     expect(matches[0]![1]).toBe("Fix this bug");
   });
 
-  it("should detect hash (Python/Ruby-style) AI triggers", () => {
+  it("should detect CODEX triggers with different indentation", () => {
     const content = `
     def test_function():
       # This is a normal comment
-      # What does this function do, AI?
+      // CODEX: What does this function do
       return 1 + 1
     `;
 
     const matches = findAllTriggers(content);
 
     expect(matches.length).toBe(1);
-    expect(matches[0]![0]).toContain("# What does this function do, AI?");
+    expect(matches[0]![0]).toContain("// CODEX: What does this function do");
     expect(matches[0]![1]).toBe("What does this function do");
   });
 
 
-  it("should detect multiple AI triggers in a single file", () => {
+  it("should detect multiple CODEX triggers in a single file", () => {
     const content = `
     function testFunction() {
-      // Fix this bug, AI!
+      // CODEX: Fix this bug
       return 1 + 1;
     }
     
     function anotherFunction() {
-      # What does this function do, AI?
+      // CODEX: What does this function do
       return 2 + 2;
     }
     
     function thirdFunction() {
-      -- Optimize this algorithm, AI!
+      // CODEX: Optimize this algorithm
       return 3 + 3;
     }
     `;
@@ -70,10 +70,10 @@ describe("Watch mode trigger pattern matching", () => {
     expect(matches[2]![1]).toBe("Optimize this algorithm");
   });
 
-  it("should handle AI! pattern with question mark", () => {
+  it("should handle CODEX pattern with question", () => {
     const content = `
     function testFunction() {
-      // What's going on here, AI?
+      // CODEX: What's going on here?
       return 1 + 1;
     }
     `;
@@ -81,13 +81,13 @@ describe("Watch mode trigger pattern matching", () => {
     const matches = findAllTriggers(content);
 
     expect(matches.length).toBe(1);
-    expect(matches[0]![1]).toBe("What's going on here");
+    expect(matches[0]![1]).toBe("What's going on here?");
   });
 
-  it("should handle AI! pattern with exclamation mark", () => {
+  it("should handle CODEX pattern with imperative", () => {
     const content = `
     function testFunction() {
-      // Fix this, AI!
+      // CODEX: Fix this
       return 1 + 1;
     }
     `;
@@ -98,12 +98,12 @@ describe("Watch mode trigger pattern matching", () => {
     expect(matches[0]![1]).toBe("Fix this");
   });
 
-  it("should ignore non-AI comments", () => {
+  it("should ignore non-CODEX comments", () => {
     const content = `
     function testFunction() {
       // This is a normal comment
-      // AI is an interesting topic
-      // This uses an AI model
+      // CODEX is a great tool
+      // This uses a CODEX model
       return 1 + 1;
     }
     `;
@@ -113,19 +113,18 @@ describe("Watch mode trigger pattern matching", () => {
     expect(matches.length).toBe(0);
   });
 
-  it("should detect SQL-style (--) AI triggers", () => {
+  it("should not detect SQL-style (--) comments with the new pattern", () => {
     const content = `
     SELECT * FROM users
     -- This is a normal comment
-    -- Optimize this query, AI!
+    -- CODEX: Optimize this query
     WHERE age > 18;
     `;
 
     const matches = findAllTriggers(content);
 
-    expect(matches.length).toBe(1);
-    expect(matches[0]![0]).toContain("-- Optimize this query, AI!");
-    expect(matches[0]![1]).toBe("Optimize this query");
+    // Should not match because the pattern only looks for // CODEX:
+    expect(matches.length).toBe(0);
   });
 
   
@@ -163,7 +162,7 @@ describe("Watch mode trigger pattern matching", () => {
   });
 });
 
-describe("Context extraction around AI triggers", () => {
+describe("Context extraction around CODEX triggers", () => {
   it("should extract the correct context around a trigger in the middle of the file", () => {
     const content = `// File header
 import { useState } from 'react';
@@ -173,7 +172,7 @@ function Counter() {
   // State initialization
   const [count, setCount] = useState(0);
   
-  // Fix this increment function, AI!
+  // CODEX: Fix this increment function
   const increment = () => {
     setCount(count);  // Bug: doesn't increment
   };
@@ -206,7 +205,7 @@ export default Counter;`;
 
     // Should include appropriate context around the trigger (the entire file in this case)
     // Use includes instead of exact equality to handle whitespace differences
-    expect(context).toContain("// Fix this increment function, AI!");
+    expect(context).toContain("// CODEX: Fix this increment function");
 
     // Should extract the instruction correctly
     expect(instruction).toBe("Fix this increment function");
@@ -217,7 +216,7 @@ export default Counter;`;
     const fileLines = Array.from({ length: 100 }, (_, i) => `// Line ${i + 1}`);
 
     // Insert the trigger at line 50
-    fileLines[49] = "// Optimize this code, AI!";
+    fileLines[49] = "// CODEX: Optimize this code";
 
     const content = fileLines.join("\n");
     const matches = findAllTriggers(content);
@@ -234,14 +233,14 @@ export default Counter;`;
     expect(contextLines.length).toBeGreaterThanOrEqual(41); // At least the trigger line + 20 before + 20 after
 
     // Should include the trigger line
-    expect(context).toContain("// Optimize this code, AI!");
+    expect(context).toContain("// CODEX: Optimize this code");
 
     // Should extract the instruction correctly
     expect(instruction).toBe("Optimize this code");
   });
 
   it("should handle triggers at the beginning of the file", () => {
-    const content = `// Explain this code, AI!
+    const content = `// CODEX: Explain this code
 function complexFunction() {
   return [1, 2, 3].map(x => x * 2).reduce((a, b) => a + b, 0);
 }`;
@@ -265,7 +264,7 @@ function complexFunction() {
     const content = `function complexFunction() {
   return [1, 2, 3].map(x => x * 2).reduce((a, b) => a + b, 0);
 }
-// Explain this code, AI!`;
+// CODEX: Explain this code`;
 
     const matches = findAllTriggers(content);
 

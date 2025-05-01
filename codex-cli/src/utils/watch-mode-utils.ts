@@ -16,10 +16,10 @@ import { loadConfig } from "./config";
  * 
  * Examples:
  * 
- * Default pattern (single-line comments ending with AI! or AI?):
- * - "// what does this function do, AI?"
- * - "# Fix this code, AI!"
- * - "-- Optimize this query, AI!"
+ * Default pattern (single-line comments starting with "// CODEX: "):
+ * - "// CODEX: what does this function do"
+ * - "// CODEX: Fix this code"
+ * - "// CODEX: Optimize this query"
  * 
  * Custom pattern for task management:
  * - "// AI:TODO fix this bug"
@@ -32,7 +32,7 @@ import { loadConfig } from "./config";
  */
 
 // Default trigger pattern
-const DEFAULT_TRIGGER_PATTERN = '/(?:\\/\\/|#|--|;|\'|%|REM)\\s*(.*?)(?:,\\s*)?AI[!?]/i';
+const DEFAULT_TRIGGER_PATTERN = '/\\/\\/\\s*CODEX:\\s+(.*)/i';
 
 /**
  * Get the configured trigger pattern from config.json or use the default
@@ -124,7 +124,7 @@ export function extractContextAroundTrigger(
     : "fix or improve this code";
   
   // Remove any comment prefixes that might have been captured
-  instruction = instruction.replace(/^(?:\/\/|#|--|;|'|%|REM)\s*/, "");
+  instruction = instruction.replace(/^(?:\/\/|#|--|;|'|%|REM)\s*CODEX:\s*/, "").replace(/^(?:\/\/|#|--|;|'|%|REM)\s*/, "");
   
   return { context, instruction };
 }
