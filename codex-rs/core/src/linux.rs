@@ -32,14 +32,13 @@ use tokio::sync::Notify;
 
 pub async fn exec_linux(
     params: ExecParams,
-    writable_roots: &[PathBuf],
     ctrl_c: Arc<Notify>,
-    sandbox_policy: SandboxPolicy,
+    sandbox_policy: &SandboxPolicy,
 ) -> Result<RawExecToolCallOutput> {
     // Allow READ on /
     // Allow WRITE on /dev/null
     let ctrl_c_copy = ctrl_c.clone();
-    let writable_roots_copy = writable_roots.to_vec();
+    let sandbox_policy = sandbox_policy.clone();
 
     // Isolate thread to run the sandbox from
     let tool_call_output = std::thread::spawn(move || {
@@ -49,14 +48,7 @@ pub async fn exec_linux(
             .expect("Failed to create runtime");
 
         rt.block_on(async {
-            if sandbox_policy.is_network_restricted() {
-                install_network_seccomp_filter_on_current_thread()?;
-            }
-
-            if sandbox_policy.is_file_write_restricted() {
-                install_filesystem_landlock_rules_on_current_thread(writable_roots_copy)?;
-            }
-
+            apply_sandbox_policy_to_current_thread(sandbox_policy)?;
             exec(params, ctrl_c_copy).await
         })
     })
@@ -72,6 +64,30 @@ pub async fn exec_linux(
     }
 }
 
+/// Apply sandbox policies inside this thread so only the child inherits
+/// them, not the entire CLI process.
+pub fn apply_sandbox_policy_to_current_thread(sandbox_policy: SandboxPolicy) -> Result<()> {
+    if !sandbox_policy.has_full_network_access() {
+        install_network_seccomp_filter_on_current_thread()?;
+    }
+
+    if !sandbox_policy.has_full_disk_write_access() {
+        let writable_roots = sandbox_policy.get_writable_roots();
+        install_filesystem_landlock_rules_on_current_thread(writable_roots)?;
+    }
+
+    // TODO(ragona): Add appropriate restrictions if
+    // `sandbox_policy.has_full_disk_read_access()` is `false`.
+
+    Ok(())
+}
+
+/// Installs Landlock file-system rules on the current thread allowing read
+/// access to the entire file-system while restricting write access to
+/// `/dev/null` and the provided list of `writable_roots`.
+///
+/// # Errors
+/// Returns [`CodexErr::Sandbox`] variants when the ruleset fails to apply.
 fn install_filesystem_landlock_rules_on_current_thread(writable_roots: Vec<PathBuf>) -> Result<()> {
     let abi = ABI::V5;
     let access_rw = AccessFs::from_all(abi);
@@ -98,6 +114,8 @@ fn install_filesystem_landlock_rules_on_current_thread(writable_roots: Vec<PathB
     Ok(())
 }
 
+/// Installs a seccomp filter that blocks outbound network access except for
+/// AF_UNIX domain sockets.
 fn install_network_seccomp_filter_on_current_thread() -> std::result::Result<(), SandboxErr> {
     // Build rule map.
     let mut rules: BTreeMap<i64, Vec<SeccompRule>> = BTreeMap::new();
@@ -168,21 +186,20 @@ mod tests_linux {
     use tokio::sync::Notify;
 
     #[allow(clippy::print_stdout)]
-    async fn run_cmd(cmd: &[&str], writable_roots: &[PathBuf]) {
+    async fn run_cmd(cmd: &[&str], writable_roots: &[PathBuf], timeout_ms: u64) {
         let params = ExecParams {
             command: cmd.iter().map(|elm| elm.to_string()).collect(),
             workdir: None,
-            timeout_ms: Some(200),
+            timeout_ms: Some(timeout_ms),
         };
-        let res = process_exec_tool_call(
-            params,
-            SandboxType::LinuxSeccomp,
-            writable_roots,
-            Arc::new(Notify::new()),
-            SandboxPolicy::NetworkAndFileWriteRestricted,
-        )
-        .await
-        .unwrap();
+
+        let sandbox_policy =
+            SandboxPolicy::new_read_only_policy_with_writable_roots(writable_roots);
+        let ctrl_c = Arc::new(Notify::new());
+        let res =
+            process_exec_tool_call(params, SandboxType::LinuxSeccomp, ctrl_c, &sandbox_policy)
+                .await
+                .unwrap();
 
         if res.exit_code != 0 {
             println!("stdout:\n{}", res.stdout);
@@ -193,7 +210,7 @@ mod tests_linux {
 
     #[tokio::test]
     async fn test_root_read() {
-        run_cmd(&["ls", "-l", "/bin"], &[]).await;
+        run_cmd(&["ls", "-l", "/bin"], &[], 200).await;
     }
 
     #[tokio::test]
@@ -204,13 +221,14 @@ mod tests_linux {
         run_cmd(
             &["bash", "-lc", &format!("echo blah > {}", tmpfile_path)],
             &[],
+            200,
         )
         .await;
     }
 
     #[tokio::test]
     async fn test_dev_null_write() {
-        run_cmd(&["echo", "blah", ">", "/dev/null"], &[]).await;
+        run_cmd(&["echo", "blah", ">", "/dev/null"], &[], 200).await;
     }
 
     #[tokio::test]
@@ -224,8 +242,17 @@ mod tests_linux {
                 &format!("echo blah > {}", file_path.to_string_lossy()),
             ],
             &[tmpdir.path().to_path_buf()],
+            // We have seen timeouts when running this test in CI on GitHub,
+            // so we are using a generous timeout until we can diagnose further.
+            1_000,
         )
         .await;
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "Sandbox(Timeout)")]
+    async fn test_timeout() {
+        run_cmd(&["sleep", "2"], &[], 50).await;
     }
 
     /// Helper that runs `cmd` under the Linux sandbox and asserts that the command
@@ -241,14 +268,11 @@ mod tests_linux {
             timeout_ms: Some(2_000),
         };
 
-        let result = process_exec_tool_call(
-            params,
-            SandboxType::LinuxSeccomp,
-            &[],
-            Arc::new(Notify::new()),
-            SandboxPolicy::NetworkRestricted,
-        )
-        .await;
+        let sandbox_policy = SandboxPolicy::new_read_only_policy();
+        let ctrl_c = Arc::new(Notify::new());
+        let result =
+            process_exec_tool_call(params, SandboxType::LinuxSeccomp, ctrl_c, &sandbox_policy)
+                .await;
 
         let (exit_code, stdout, stderr) = match result {
             Ok(output) => (output.exit_code, output.stdout, output.stderr),

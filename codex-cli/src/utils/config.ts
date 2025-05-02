@@ -7,14 +7,41 @@
 // compiled `dist/` output used by the published CLI.
 
 import type { FullAutoErrorMode } from "./auto-approval-mode.js";
+import type { ReasoningEffort } from "openai/resources.mjs";
 
 import { AutoApprovalMode } from "./auto-approval-mode.js";
 import { log } from "./logger/log.js";
 import { providers } from "./providers.js";
+import { config as loadDotenv } from "dotenv";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { load as loadYaml, dump as dumpYaml } from "js-yaml";
 import { homedir } from "os";
 import { dirname, join, extname, resolve as resolvePath } from "path";
+
+// ---------------------------------------------------------------------------
+// User‑wide environment config (~/.codex.env)
+// ---------------------------------------------------------------------------
+
+// Load a user‑level dotenv file **after** process.env and any project‑local
+// .env file (loaded via "dotenv/config" in cli.tsx) are in place.  We rely on
+// dotenv's default behaviour of *not* overriding existing variables so that
+// the precedence order becomes:
+//   1. Explicit environment variables
+//   2. Project‑local .env (handled in cli.tsx)
+//   3. User‑wide ~/.codex.env (loaded here)
+// This guarantees that users can still override the global key on a per‑project
+// basis while enjoying the convenience of a persistent default.
+
+// Skip when running inside Vitest to avoid interfering with the FS mocks used
+// by tests that stub out `fs` *after* importing this module.
+const USER_WIDE_CONFIG_PATH = join(homedir(), ".codex.env");
+
+const isVitest =
+  typeof (globalThis as { vitest?: unknown }).vitest !== "undefined";
+
+if (!isVitest) {
+  loadDotenv({ path: USER_WIDE_CONFIG_PATH });
+}
 
 export const DEFAULT_AGENTIC_MODEL = "o4-mini";
 export const DEFAULT_FULL_CONTEXT_MODEL = "gpt-4.1";
@@ -36,6 +63,16 @@ export const OPENAI_TIMEOUT_MS =
   parseInt(process.env["OPENAI_TIMEOUT_MS"] || "0", 10) || undefined;
 export const OPENAI_BASE_URL = process.env["OPENAI_BASE_URL"] || "";
 export let OPENAI_API_KEY = process.env["OPENAI_API_KEY"] || "";
+
+export const DEFAULT_REASONING_EFFORT = "high";
+export const OPENAI_ORGANIZATION = process.env["OPENAI_ORGANIZATION"] || "";
+export const OPENAI_PROJECT = process.env["OPENAI_PROJECT"] || "";
+
+// Can be set `true` when Codex is running in an environment that is marked as already
+// considered sufficiently locked-down so that we allow running wihtout an explicit sandbox.
+export const CODEX_UNSAFE_ALLOW_NO_SANDBOX = Boolean(
+  process.env["CODEX_UNSAFE_ALLOW_NO_SANDBOX"] || "",
+);
 
 export function setApiKey(apiKey: string): void {
   OPENAI_API_KEY = apiKey;
@@ -108,6 +145,9 @@ export type StoredConfig = {
     saveHistory?: boolean;
     sensitivePatterns?: Array<string>;
   };
+  /** User-defined safe commands */
+  safeCommands?: Array<string>;
+  reasoningEffort?: ReasoningEffort;
 };
 
 // Minimal config written on first run.  An *empty* model string ensures that
@@ -115,7 +155,7 @@ export type StoredConfig = {
 // propagating to existing users until they explicitly set a model.
 export const EMPTY_STORED_CONFIG: StoredConfig = { model: "" };
 
-// Pre‑stringified JSON variant so we don’t stringify repeatedly.
+// Pre‑stringified JSON variant so we don't stringify repeatedly.
 const EMPTY_CONFIG_JSON = JSON.stringify(EMPTY_STORED_CONFIG, null, 2) + "\n";
 
 export type MemoryConfig = {
@@ -131,6 +171,7 @@ export type AppConfig = {
   approvalMode?: AutoApprovalMode;
   fullAutoErrorMode?: FullAutoErrorMode;
   memory?: MemoryConfig;
+  reasoningEffort?: ReasoningEffort;
   /** Whether to enable desktop notifications for responses */
   notify?: boolean;
 
@@ -282,6 +323,22 @@ export const loadConfig = (
     }
   }
 
+  if (
+    storedConfig.disableResponseStorage !== undefined &&
+    typeof storedConfig.disableResponseStorage !== "boolean"
+  ) {
+    if (storedConfig.disableResponseStorage === "true") {
+      storedConfig.disableResponseStorage = true;
+    } else if (storedConfig.disableResponseStorage === "false") {
+      storedConfig.disableResponseStorage = false;
+    } else {
+      log(
+        `[codex] Warning: 'disableResponseStorage' in config is not a boolean (got '${storedConfig.disableResponseStorage}'). Ignoring this value.`,
+      );
+      delete storedConfig.disableResponseStorage;
+    }
+  }
+
   const instructionsFilePathResolved =
     instructionsPath ?? INSTRUCTIONS_FILEPATH;
   const userInstructions = existsSync(instructionsFilePathResolved)
@@ -331,7 +388,8 @@ export const loadConfig = (
     instructions: combinedInstructions,
     notify: storedConfig.notify === true,
     approvalMode: storedConfig.approvalMode,
-    disableResponseStorage: storedConfig.disableResponseStorage ?? false,
+    disableResponseStorage: storedConfig.disableResponseStorage === true,
+    reasoningEffort: storedConfig.reasoningEffort,
   };
 
   // -----------------------------------------------------------------------
@@ -446,6 +504,8 @@ export const saveConfig = (
     provider: config.provider,
     providers: config.providers,
     approvalMode: config.approvalMode,
+    disableResponseStorage: config.disableResponseStorage,
+    reasoningEffort: config.reasoningEffort,
   };
 
   // Add history settings if they exist

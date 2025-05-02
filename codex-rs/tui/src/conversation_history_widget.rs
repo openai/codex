@@ -1,6 +1,7 @@
 use crate::history_cell::CommandOutput;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::PatchEventType;
+use codex_core::config::Config;
 use codex_core::protocol::FileChange;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -40,18 +41,18 @@ impl ConversationHistoryWidget {
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) -> bool {
         match key_event.code {
             KeyCode::Up | KeyCode::Char('k') => {
-                self.scroll_up();
+                self.scroll_up(1);
                 true
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                self.scroll_down();
+                self.scroll_down(1);
                 true
             }
-            KeyCode::PageUp | KeyCode::Char('b') | KeyCode::Char('u') | KeyCode::Char('U') => {
+            KeyCode::PageUp | KeyCode::Char('b') => {
                 self.scroll_page_up();
                 true
             }
-            KeyCode::PageDown | KeyCode::Char(' ') | KeyCode::Char('d') | KeyCode::Char('D') => {
+            KeyCode::PageDown | KeyCode::Char(' ') => {
                 self.scroll_page_down();
                 true
             }
@@ -59,9 +60,18 @@ impl ConversationHistoryWidget {
         }
     }
 
-    fn scroll_up(&mut self) {
-        // If a user is scrolling up from the "stick to bottom" mode, we
-        // need to scroll them back such that they move just one line up.
+    /// Negative delta scrolls up; positive delta scrolls down.
+    pub(crate) fn scroll(&mut self, delta: i32) {
+        match delta.cmp(&0) {
+            std::cmp::Ordering::Less => self.scroll_up(-delta as u32),
+            std::cmp::Ordering::Greater => self.scroll_down(delta as u32),
+            std::cmp::Ordering::Equal => {}
+        }
+    }
+
+    fn scroll_up(&mut self, num_lines: u32) {
+        // If a user is scrolling up from the "stick to bottom" mode, we need to
+        // map this to a specific scroll position so we can caluate the delta.
         // This requires us to care about how tall the screen is.
         if self.scroll_position == usize::MAX {
             self.scroll_position = self
@@ -70,24 +80,26 @@ impl ConversationHistoryWidget {
                 .saturating_sub(self.last_viewport_height.get());
         }
 
-        self.scroll_position = self.scroll_position.saturating_sub(1);
+        self.scroll_position = self.scroll_position.saturating_sub(num_lines as usize);
     }
 
-    fn scroll_down(&mut self) {
+    fn scroll_down(&mut self, num_lines: u32) {
         // If we're already pinned to the bottom there's nothing to do.
         if self.scroll_position == usize::MAX {
             return;
         }
 
         let viewport_height = self.last_viewport_height.get().max(1);
-        let num_lines = self.num_rendered_lines.get();
+        let num_rendered_lines = self.num_rendered_lines.get();
 
         // Compute the maximum explicit scroll offset that still shows a full
         // viewport. This mirrors the calculation in `scroll_page_down()` and
         // in the render path.
-        let max_scroll = num_lines.saturating_sub(viewport_height).saturating_add(1);
+        let max_scroll = num_rendered_lines
+            .saturating_sub(viewport_height)
+            .saturating_add(1);
 
-        let new_pos = self.scroll_position.saturating_add(1);
+        let new_pos = self.scroll_position.saturating_add(num_lines as usize);
 
         if new_pos >= max_scroll {
             // Reached (or passed) the bottom – switch to stick‑to‑bottom mode
@@ -170,13 +182,10 @@ impl ConversationHistoryWidget {
         self.add_to_history(HistoryCell::new_patch_event(event_type, changes));
     }
 
-    pub fn add_session_info(
-        &mut self,
-        model: String,
-        cwd: std::path::PathBuf,
-        approval_policy: codex_core::protocol::AskForApproval,
-    ) {
-        self.add_to_history(HistoryCell::new_session_info(model, cwd, approval_policy));
+    /// Note `model` could differ from `config.model` if the agent decided to
+    /// use a different model than the one requested by the user.
+    pub fn add_session_info(&mut self, config: &Config, model: String, cwd: PathBuf) {
+        self.add_to_history(HistoryCell::new_session_info(config, model, cwd));
     }
 
     pub fn add_active_exec_command(&mut self, call_id: String, command: Vec<String>) {
@@ -229,7 +238,7 @@ impl WidgetRef for ConversationHistoryWidget {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let (title, border_style) = if self.has_input_focus {
             (
-                "Messages (↑/↓ or j/k = line,  b/u = PgUp, space/d = PgDn)",
+                "Messages (↑/↓ or j/k = line,  b/space = page)",
                 Style::default().fg(Color::LightYellow),
             )
         } else {

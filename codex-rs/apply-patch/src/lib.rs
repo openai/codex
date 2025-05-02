@@ -86,6 +86,8 @@ pub enum ApplyPatchFileChange {
     Update {
         unified_diff: String,
         move_path: Option<PathBuf>,
+        /// new_content that will result after the unified_diff is applied.
+        new_content: String,
     },
 }
 
@@ -126,7 +128,10 @@ pub fn maybe_parse_apply_patch_verified(argv: &[String]) -> MaybeApplyPatchVerif
                         move_path,
                         chunks,
                     } => {
-                        let unified_diff = match unified_diff_from_chunks(&path, &chunks) {
+                        let ApplyPatchFileUpdate {
+                            unified_diff,
+                            content: contents,
+                        } = match unified_diff_from_chunks(&path, &chunks) {
                             Ok(diff) => diff,
                             Err(e) => {
                                 return MaybeApplyPatchVerified::CorrectnessError(e);
@@ -137,6 +142,7 @@ pub fn maybe_parse_apply_patch_verified(argv: &[String]) -> MaybeApplyPatchVerif
                             ApplyPatchFileChange::Update {
                                 unified_diff,
                                 move_path,
+                                new_content: contents,
                             },
                         );
                     }
@@ -516,10 +522,17 @@ fn apply_replacements(
     lines
 }
 
+/// Intended result of a file update for apply_patch.
+#[derive(Debug, Eq, PartialEq)]
+pub struct ApplyPatchFileUpdate {
+    unified_diff: String,
+    content: String,
+}
+
 pub fn unified_diff_from_chunks(
     path: &Path,
     chunks: &[UpdateFileChunk],
-) -> std::result::Result<String, ApplyPatchError> {
+) -> std::result::Result<ApplyPatchFileUpdate, ApplyPatchError> {
     unified_diff_from_chunks_with_context(path, chunks, 1)
 }
 
@@ -527,13 +540,17 @@ pub fn unified_diff_from_chunks_with_context(
     path: &Path,
     chunks: &[UpdateFileChunk],
     context: usize,
-) -> std::result::Result<String, ApplyPatchError> {
+) -> std::result::Result<ApplyPatchFileUpdate, ApplyPatchError> {
     let AppliedPatch {
         original_contents,
         new_contents,
     } = derive_new_contents_from_chunks(path, chunks)?;
     let text_diff = TextDiff::from_lines(&original_contents, &new_contents);
-    Ok(text_diff.unified_diff().context_radius(context).to_string())
+    let unified_diff = text_diff.unified_diff().context_radius(context).to_string();
+    Ok(ApplyPatchFileUpdate {
+        unified_diff,
+        content: new_contents,
+    })
 }
 
 /// Print the summary of changes in git-style format.
@@ -820,6 +837,51 @@ PATCH"#,
         assert_eq!(contents, "a\nB\nc\nd\nE\nf\ng\n");
     }
 
+    /// Ensure that patches authored with ASCII characters can update lines that
+    /// contain typographic Unicode punctuation (e.g. EN DASH, NON-BREAKING
+    /// HYPHEN). Historically `git apply` succeeds in such scenarios but our
+    /// internal matcher failed requiring an exact byte-for-byte match.  The
+    /// fuzzy-matching pass that normalises common punctuation should now bridge
+    /// the gap.
+    #[test]
+    fn test_update_line_with_unicode_dash() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("unicode.py");
+
+        // Original line contains EN DASH (\u{2013}) and NON-BREAKING HYPHEN (\u{2011}).
+        let original = "import asyncio  # local import \u{2013} avoids top\u{2011}level dep\n";
+        std::fs::write(&path, original).unwrap();
+
+        // Patch uses plain ASCII dash / hyphen.
+        let patch = wrap_patch(&format!(
+            r#"*** Update File: {}
+@@
+-import asyncio  # local import - avoids top-level dep
++import asyncio  # HELLO"#,
+            path.display()
+        ));
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        apply_patch(&patch, &mut stdout, &mut stderr).unwrap();
+
+        // File should now contain the replaced comment.
+        let expected = "import asyncio  # HELLO\n";
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(contents, expected);
+
+        // Ensure success summary lists the file as modified.
+        let stdout_str = String::from_utf8(stdout).unwrap();
+        let expected_out = format!(
+            "Success. Updated the following files:\nM {}\n",
+            path.display()
+        );
+        assert_eq!(stdout_str, expected_out);
+
+        // No stderr expected.
+        assert_eq!(String::from_utf8(stderr).unwrap(), "");
+    }
+
     #[test]
     fn test_unified_diff() {
         // Start with a file containing four lines.
@@ -853,7 +915,11 @@ PATCH"#,
 -qux
 +QUX
 "#;
-        assert_eq!(expected_diff, diff);
+        let expected = ApplyPatchFileUpdate {
+            unified_diff: expected_diff.to_string(),
+            content: "foo\nBAR\nbaz\nQUX\n".to_string(),
+        };
+        assert_eq!(expected, diff);
     }
 
     #[test]
@@ -885,7 +951,11 @@ PATCH"#,
 +FOO
  bar
 "#;
-        assert_eq!(expected_diff, diff);
+        let expected = ApplyPatchFileUpdate {
+            unified_diff: expected_diff.to_string(),
+            content: "FOO\nbar\nbaz\n".to_string(),
+        };
+        assert_eq!(expected, diff);
     }
 
     #[test]
@@ -918,7 +988,11 @@ PATCH"#,
 -baz
 +BAZ
 "#;
-        assert_eq!(expected_diff, diff);
+        let expected = ApplyPatchFileUpdate {
+            unified_diff: expected_diff.to_string(),
+            content: "foo\nbar\nBAZ\n".to_string(),
+        };
+        assert_eq!(expected, diff);
     }
 
     #[test]
@@ -948,7 +1022,11 @@ PATCH"#,
  baz
 +quux
 "#;
-        assert_eq!(expected_diff, diff);
+        let expected = ApplyPatchFileUpdate {
+            unified_diff: expected_diff.to_string(),
+            content: "foo\nbar\nbaz\nquux\n".to_string(),
+        };
+        assert_eq!(expected, diff);
     }
 
     #[test]
@@ -987,7 +1065,7 @@ PATCH"#,
 
         let diff = unified_diff_from_chunks(&path, chunks).unwrap();
 
-        let expected = r#"@@ -1,6 +1,7 @@
+        let expected_diff = r#"@@ -1,6 +1,7 @@
  a
 -b
 +B
@@ -998,6 +1076,11 @@ PATCH"#,
  f
 +g
 "#;
+
+        let expected = ApplyPatchFileUpdate {
+            unified_diff: expected_diff.to_string(),
+            content: "a\nB\nc\nd\nE\nf\ng\n".to_string(),
+        };
 
         assert_eq!(expected, diff);
 

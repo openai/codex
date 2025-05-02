@@ -4,6 +4,10 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
 use app::App;
+use codex_core::config::Config;
+use codex_core::config::ConfigOverrides;
+use codex_core::protocol::AskForApproval;
+use codex_core::protocol::SandboxPolicy;
 use codex_core::util::is_inside_git_repo;
 use log_layer::TuiLogLayer;
 use std::fs::OpenOptions;
@@ -21,6 +25,7 @@ mod exec_command;
 mod git_warning_screen;
 mod history_cell;
 mod log_layer;
+mod scroll_event_helper;
 mod status_indicator_widget;
 mod tui;
 mod user_approval_widget;
@@ -30,19 +35,63 @@ pub use cli::Cli;
 pub fn run_main(cli: Cli) -> std::io::Result<()> {
     assert_env_var_set();
 
+    let (sandbox_policy, approval_policy) = if cli.full_auto {
+        (
+            Some(SandboxPolicy::new_full_auto_policy()),
+            Some(AskForApproval::OnFailure),
+        )
+    } else {
+        let sandbox_policy = cli.sandbox.permissions.clone().map(Into::into);
+        (sandbox_policy, cli.approval_policy.map(Into::into))
+    };
+
+    let config = {
+        // Load configuration and support CLI overrides.
+        let overrides = ConfigOverrides {
+            model: cli.model.clone(),
+            approval_policy,
+            sandbox_policy,
+            disable_response_storage: if cli.disable_response_storage {
+                Some(true)
+            } else {
+                None
+            },
+        };
+        #[allow(clippy::print_stderr)]
+        match Config::load_with_overrides(overrides) {
+            Ok(config) => config,
+            Err(err) => {
+                eprintln!("Error loading configuration: {err}");
+                std::process::exit(1);
+            }
+        }
+    };
+
+    let log_dir = codex_core::config::log_dir()?;
+    std::fs::create_dir_all(&log_dir)?;
     // Open (or create) your log file, appending to it.
-    let file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/tmp/codex-rs.log")?;
+    let mut log_file_opts = OpenOptions::new();
+    log_file_opts.create(true).append(true);
+
+    // Ensure the file is only readable and writable by the current user.
+    // Doing the equivalent to `chmod 600` on Windows is quite a bit more code
+    // and requires the Windows API crates, so we can reconsider that when
+    // Codex CLI is officially supported on Windows.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        log_file_opts.mode(0o600);
+    }
+
+    let log_file = log_file_opts.open(log_dir.join("codex-tui.log"))?;
 
     // Wrap file in non‑blocking writer.
-    let (non_blocking, _guard) = non_blocking(file);
+    let (non_blocking, _guard) = non_blocking(log_file);
 
-    // use RUST_LOG env var, default to trace for codex crates.
+    // use RUST_LOG env var, default to info for codex crates.
     let env_filter = || {
         EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new("codex=trace,codex_tui=trace"))
+            .unwrap_or_else(|_| EnvFilter::new("codex_core=info,codex_tui=info"))
     };
 
     // Build layered subscriber:
@@ -66,7 +115,7 @@ pub fn run_main(cli: Cli) -> std::io::Result<()> {
     // `--allow-no-git-exec` flag.
     let show_git_warning = !cli.skip_git_repo_check && !is_inside_git_repo();
 
-    try_run_ratatui_app(cli, show_git_warning, log_rx);
+    try_run_ratatui_app(cli, config, show_git_warning, log_rx);
     Ok(())
 }
 
@@ -76,16 +125,18 @@ pub fn run_main(cli: Cli) -> std::io::Result<()> {
 )]
 fn try_run_ratatui_app(
     cli: Cli,
+    config: Config,
     show_git_warning: bool,
     log_rx: tokio::sync::mpsc::UnboundedReceiver<String>,
 ) {
-    if let Err(report) = run_ratatui_app(cli, show_git_warning, log_rx) {
+    if let Err(report) = run_ratatui_app(cli, config, show_git_warning, log_rx) {
         eprintln!("Error: {report:?}");
     }
 }
 
 fn run_ratatui_app(
     cli: Cli,
+    config: Config,
     show_git_warning: bool,
     mut log_rx: tokio::sync::mpsc::UnboundedReceiver<String>,
 ) -> color_eyre::Result<()> {
@@ -100,26 +151,8 @@ fn run_ratatui_app(
     let mut terminal = tui::init()?;
     terminal.clear()?;
 
-    let Cli {
-        prompt,
-        images,
-        approval_policy,
-        sandbox_policy: sandbox,
-        model,
-        ..
-    } = cli;
-
-    let approval_policy = approval_policy.into();
-    let sandbox_policy = sandbox.into();
-
-    let mut app = App::new(
-        approval_policy,
-        sandbox_policy,
-        prompt,
-        show_git_warning,
-        images,
-        model,
-    );
+    let Cli { prompt, images, .. } = cli;
+    let mut app = App::new(config.clone(), prompt, show_git_warning, images);
 
     // Bridge log receiver into the AppEvent channel so latest log lines update the UI.
     {
