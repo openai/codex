@@ -264,13 +264,49 @@ impl BottomPane<'_> {
                         }
                         Ok(InputResult::None)
                     }
+                    // Handle ctrl + <key> shortcuts.
+                    Input {
+                        key,
+                        shift: false,
+                        alt: false,
+                        ctrl: true,
+                    } => {
+                        match key {
+                            Key::Char('u') => {
+                                self.textarea.select_all();
+                                self.textarea.cut();
+                                self.cli_edited = false;
+                                self.request_redraw()?;
+                                Ok(InputResult::None)
+                            }
+                            Key::Char('w') => {
+                                self.textarea.delete_word();
+                                self.cli_edited = !self.textarea.is_empty();
+                                self.request_redraw()?;
+                                Ok(InputResult::None)
+                            }
+                            Key::Char('y') => {
+                                self.textarea.paste();
+                                self.cli_edited = !self.textarea.is_empty();
+                                self.request_redraw()?;
+                                Ok(InputResult::None)
+                            }
+                            Key::Char('a') => {
+                                self.textarea.move_cursor(tui_textarea::CursorMove::Head);
+                                self.request_redraw()?;
+                                Ok(InputResult::None)
+                            }
+                            Key::Char('e') => {
+                                self.textarea.move_cursor(tui_textarea::CursorMove::End);
+                                self.request_redraw()?;
+                                Ok(InputResult::None)
+                            }
+                            _ => Ok(InputResult::None)
+                        }
+                    }
                     input => {
                         self.textarea.input(input);
-                        if self.textarea.is_empty() {
-                            self.cli_edited = false;
-                        } else {
-                            self.cli_edited = true;
-                        }
+                        self.cli_edited = !self.textarea.is_empty();
                         self.request_redraw()?;
                         Ok(InputResult::None)
                     }
