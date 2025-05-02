@@ -7,10 +7,14 @@ import type {
   ResponseInputItem,
   ResponseItem,
   ResponseCreateParams,
-  FunctionTool,
 } from "openai/resources/responses/responses.mjs";
 import type { Reasoning } from "openai/resources.mjs";
 
+import { registerDefaultTools } from "../../tools/register-default-tools.js";
+import {
+  getToolHandler,
+  getRegisteredToolDefinitions,
+} from "../../tools/tool-registry.js";
 import {
   OPENAI_TIMEOUT_MS,
   OPENAI_ORGANIZATION,
@@ -28,7 +32,6 @@ import {
   setCurrentModel,
   setSessionId,
 } from "../session.js";
-import { handleExecCommand } from "./handle-exec-command.js";
 import { randomUUID } from "node:crypto";
 import OpenAI, { APIConnectionTimeoutError } from "openai";
 
@@ -74,30 +77,6 @@ type AgentLoopParams = {
     applyPatch: ApplyPatchCommand | undefined,
   ) => Promise<CommandConfirmation>;
   onLastResponseId: (lastResponseId: string) => void;
-};
-
-const shellTool: FunctionTool = {
-  type: "function",
-  name: "shell",
-  description: "Runs a shell command, and returns its output.",
-  strict: false,
-  parameters: {
-    type: "object",
-    properties: {
-      command: { type: "array", items: { type: "string" } },
-      workdir: {
-        type: "string",
-        description: "The working directory for the command.",
-      },
-      timeout: {
-        type: "number",
-        description:
-          "The maximum time to wait for the command to complete in milliseconds.",
-      },
-    },
-    required: ["command"],
-    additionalProperties: false,
-  },
 };
 
 export class AgentLoop {
@@ -274,6 +253,8 @@ export class AgentLoop {
     this.instructions = instructions;
     this.approvalPolicy = approvalPolicy;
 
+    registerDefaultTools();
+
     // If no `config` has been provided we derive a minimal stub so that the
     // rest of the implementation can rely on `this.config` always being a
     // defined object.  We purposefully copy over the `model` and
@@ -409,24 +390,22 @@ export class AgentLoop {
     // used to tell model to stop if needed
     const additionalItems: Array<ResponseInputItem> = [];
 
-    // TODO: allow arbitrary function calls (beyond shell/container.exec)
-    if (name === "container.exec" || name === "shell") {
-      const {
-        outputText,
-        metadata,
-        additionalItems: additionalItemsFromExec,
-      } = await handleExecCommand(
-        args,
-        this.config,
-        this.approvalPolicy,
-        this.additionalWritableRoots,
-        this.getCommandConfirmation,
-        this.execAbortController?.signal,
-      );
-      outputItem.output = JSON.stringify({ output: outputText, metadata });
+    // Tool calls are handled dynamically via the tool handler registry
+    const handler = name ? getToolHandler(name) : undefined;
+    if (handler) {
+      const result = await handler(args, {
+        config: this.config,
+        approvalPolicy: this.approvalPolicy,
+        cwd: process.cwd(),
+        signal: this.execAbortController?.signal,
+        additionalWritableRoots: this.additionalWritableRoots,
+        getCommandConfirmation: this.getCommandConfirmation,
+      });
 
-      if (additionalItemsFromExec) {
-        additionalItems.push(...additionalItemsFromExec);
+      outputItem.output = result.output;
+
+      if (Array.isArray(result.additionalItems)) {
+        additionalItems.push(...result.additionalItems);
       }
     }
 
@@ -714,7 +693,7 @@ export class AgentLoop {
                     store: true,
                     previous_response_id: lastResponseId || undefined,
                   }),
-              tools: [shellTool],
+              tools: getRegisteredToolDefinitions(),
               // Explicitly tell the model it is allowed to pick whatever
               // tool it deems appropriate.  Omitting this sometimes leads to
               // the model ignoring the available tools and responding with
@@ -1090,7 +1069,7 @@ export class AgentLoop {
                       store: true,
                       previous_response_id: lastResponseId || undefined,
                     }),
-                tools: [shellTool],
+                tools: getRegisteredToolDefinitions(),
                 tool_choice: "auto",
               });
 
