@@ -14,6 +14,8 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+use codex_core::protocol::Op;
+use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Alignment;
@@ -51,7 +53,10 @@ pub(crate) struct StatusIndicatorWidget {
     // animation thread is still running. The field itself is currently not
     // accessed anywhere, therefore the leading underscore silences the
     // `dead_code` warning without affecting behavior.
-    _app_event_tx: Sender<AppEvent>,
+    app_event_tx: Sender<AppEvent>,
+
+    // ESC twice to interrupt the current task
+    is_prev_esc: bool,
 }
 
 impl StatusIndicatorWidget {
@@ -83,16 +88,30 @@ impl StatusIndicatorWidget {
             height: height.max(3),
             frame_idx,
             running,
-            _app_event_tx: app_event_tx,
+            app_event_tx,
+            is_prev_esc: false,
         }
     }
 
     pub(crate) fn handle_key_event(
         &mut self,
-        _key: KeyEvent,
+        key_event: KeyEvent,
     ) -> Result<bool, std::sync::mpsc::SendError<AppEvent>> {
-        // The indicator does not handle any input – always return `false`.
-        Ok(false)
+        match key_event {
+            KeyEvent { code: KeyCode::Esc, .. } => {
+                if self.is_prev_esc {
+                    self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt))?;
+                    return Ok(true);
+                } else {
+                    self.is_prev_esc = true;
+                    return Ok(false);
+                }
+            }
+            _ => {
+                self.is_prev_esc = false;
+                Ok(false)
+            }
+        }
     }
 
     /// Preferred height in terminal rows.
