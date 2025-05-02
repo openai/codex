@@ -40,7 +40,7 @@ const RATE_LIMIT_RETRY_WAIT_MS = parseInt(
 );
 
 // See https://github.com/openai/openai-node/tree/v4?tab=readme-ov-file#configuring-an-https-agent-eg-for-proxies
-const PROXY_URL = process.env.HTTPS_PROXY;
+const PROXY_URL = process.env["HTTPS_PROXY"];
 
 export type CommandConfirmation = {
   review: ReviewDecision;
