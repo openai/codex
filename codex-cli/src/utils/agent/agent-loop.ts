@@ -35,19 +35,6 @@ import { handleExecCommand } from "./handle-exec-command.js";
 import { randomUUID } from "node:crypto";
 import OpenAI, { APIConnectionTimeoutError } from "openai";
 
-// interface ReasoningItem {
-//   type: string;
-//   text?: string;
-//   summary?: Array<string>;
-//   duration_ms?: number;
-// }
-
-// interface ExecInput {
-//   command: string | Array<string>;
-//   workdir?: string;
-//   timeout?: number;
-//   [key: string]: unknown;
-// }
 
 // Wait time before retrying after rate limit errors (ms).
 const RATE_LIMIT_RETRY_WAIT_MS = parseInt(
