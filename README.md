@@ -152,7 +152,7 @@ Codex-Docs is released under the [MIT License](./LICENSE).
 
 ---
 
-Made with ❤️ by [Khushwant Sanwalot](https://github.com/khushwant)
+Made with ❤️ by [Khushwant Sanwalot](https://github.com/khushwant04)
 
 
 
