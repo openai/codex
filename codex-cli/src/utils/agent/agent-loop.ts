@@ -19,6 +19,9 @@ import {
   getBaseUrl,
 } from "../config.js";
 import { log } from "../logger/log.js";
+import {
+  initWorkspaceLogger
+} from "../logger/workspace-logger.js";
 import { parseToolCallArguments } from "../parsers.js";
 import { responsesCreateViaChatCompletions } from "../responses.js";
 import {
@@ -31,6 +34,20 @@ import {
 import { handleExecCommand } from "./handle-exec-command.js";
 import { randomUUID } from "node:crypto";
 import OpenAI, { APIConnectionTimeoutError } from "openai";
+
+// interface ReasoningItem {
+//   type: string;
+//   text?: string;
+//   summary?: Array<string>;
+//   duration_ms?: number;
+// }
+
+// interface ExecInput {
+//   command: string | Array<string>;
+//   workdir?: string;
+//   timeout?: number;
+//   [key: string]: unknown;
+// }
 
 // Wait time before retrying after rate limit errors (ms).
 const RATE_LIMIT_RETRY_WAIT_MS = parseInt(
@@ -158,6 +175,8 @@ export class AgentLoop {
   /** Master abort controller – fires when terminate() is invoked. */
   private readonly hardAbort = new AbortController();
 
+  private workspaceLogger;
+
   /**
    * Abort the ongoing request/stream, if any. This allows callers (typically
    * the UI layer) to interrupt the current agent step so the user can issue
@@ -236,6 +255,11 @@ export class AgentLoop {
     if (this.terminated) {
       return;
     }
+
+    if (this.workspaceLogger) {
+      this.workspaceLogger.logSessionEnd();
+    }
+
     this.terminated = true;
 
     this.hardAbort.abort();
@@ -327,6 +351,9 @@ export class AgentLoop {
       () => this.execAbortController?.abort(),
       { once: true },
     );
+
+    this.workspaceLogger = initWorkspaceLogger(process.cwd());
+    this.workspaceLogger.logSessionStart(process.cwd());
   }
 
   private async handleFunctionCall(
@@ -423,6 +450,19 @@ export class AgentLoop {
         this.getCommandConfirmation,
         this.execAbortController?.signal,
       );
+
+      const cmd = args.command || args.cmd || []; // Try both possible property names
+      const commandStr = Array.isArray(cmd)
+      ? cmd.join(" ")
+      : String(cmd);
+
+      this.workspaceLogger?.logCommand(
+        commandStr,
+        metadata && typeof metadata['exit_code'] === 'number' ? metadata['exit_code'] : 0,
+        metadata && typeof metadata['duration_seconds'] === 'number' ? metadata['duration_seconds'] : 0,
+        outputText,
+      );
+
       outputItem.output = JSON.stringify({ output: outputText, metadata });
 
       if (additionalItemsFromExec) {
@@ -445,10 +485,32 @@ export class AgentLoop {
     // the user retry the request if desired.
     // ---------------------------------------------------------------------
 
+    // ---------------------------------------------------------------------
+    // Top‑level error wrapper so that known transient network issues like
+    // `ERR_STREAM_PREMATURE_CLOSE` do not crash the entire CLI process.
+    // Instead we surface the failure to the user as a regular system‑message
+    // and terminate the current run gracefully. The calling UI can then let
+    // the user retry the request if desired.
+    // ---------------------------------------------------------------------
+
     try {
       if (this.terminated) {
         throw new Error("AgentLoop has been terminated");
       }
+
+      // Log user input at the start of a run
+      const userInput = input.find(
+        (item) => item.type === "message" && item.role === "user",
+      );
+
+      if (userInput) {
+        const contentItem = userInput.type === "message" && userInput.content && userInput.content[0];
+        const content = typeof contentItem === 'object' && contentItem != null && 'text' in contentItem
+        ? contentItem.text 
+        : JSON.stringify(userInput);
+        this.workspaceLogger?.logUserInput(content);
+      }
+
       // Record when we start "thinking" so we can report accurate elapsed time.
       const thinkingStart = Date.now();
       // Bump generation so that any late events from previous runs can be
@@ -923,10 +985,20 @@ export class AgentLoop {
               if (event.type === "response.output_item.done") {
                 const item = event.item;
                 // 1) if it's a reasoning item, annotate it
-                type ReasoningItem = { type?: string; duration_ms?: number };
+                type ReasoningItem = {
+                  type?: string;
+                  text?: string;
+                  duration_ms?: number;
+                  summary?: Array<string>;
+                };
+
                 const maybeReasoning = item as ReasoningItem;
                 if (maybeReasoning.type === "reasoning") {
                   maybeReasoning.duration_ms = Date.now() - thinkingStart;
+                  // Add debug logging for reasoning summary
+                  log(
+                    `Reasoning summary received: ${JSON.stringify(maybeReasoning.summary)}`,
+                  );
                 }
                 if (item.type === "function_call") {
                   // Track outstanding tool call so we can abort later if needed.
@@ -941,6 +1013,23 @@ export class AgentLoop {
                   }
                 } else {
                   stageItem(item as ResponseItem);
+                }
+
+                if (item.type === "reasoning") {
+                  const reasoningItem = item as ReasoningItem;
+                  const reasoningText = reasoningItem.text || JSON.stringify(item);
+                  log(
+                    `Logging reasoning to workspace: ${reasoningText.substring(0, 100)}...`,
+                  );
+                  this.workspaceLogger?.logModelReasoning(reasoningText);
+                  if (
+                    reasoningItem.summary &&
+                    Array.isArray(reasoningItem.summary)
+                  ) {
+                    log(
+                      `Reasoning summary: ${JSON.stringify(reasoningItem.summary)}`,
+                    );
+                  }
                 }
               }
 
@@ -1233,6 +1322,14 @@ export class AgentLoop {
       // End of main logic. The corresponding catch block for the wrapper at the
       // start of this method follows next.
     } catch (err) {
+      // Log errors
+      if (err instanceof Error) {
+        this.workspaceLogger?.logError(
+          `Error in agent loop: ${err.message}`,
+          err,
+        );
+      }
+
       // Handle known transient network/streaming issues so they do not crash the
       // CLI. We currently match Node/undici's `ERR_STREAM_PREMATURE_CLOSE`
       // error which manifests when the HTTP/2 stream terminates unexpectedly
