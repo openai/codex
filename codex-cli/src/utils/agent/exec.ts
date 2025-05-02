@@ -4,6 +4,7 @@ import type { ParseEntry } from "shell-quote";
 
 import { process_patch } from "./apply-patch.js";
 import { SandboxType } from "./sandbox/interface.js";
+import { execWithLandlock } from "./sandbox/landlock.js";
 import { execWithSeatbelt } from "./sandbox/macos-seatbelt.js";
 import { exec as rawExec } from "./sandbox/raw-exec.js";
 import { formatCommandForDisplay } from "../../format-command.js";
@@ -42,26 +43,30 @@ export function exec(
   sandbox: SandboxType,
   abortSignal?: AbortSignal,
 ): Promise<ExecResult> {
-  // This is a temporary measure to understand what are the common base commands
-  // until we start persisting and uploading rollouts
-
   const opts: SpawnOptions = {
     timeout: timeoutInMillis || DEFAULT_TIMEOUT_MS,
     ...(requiresShell(cmd) ? { shell: true } : {}),
     ...(workdir ? { cwd: workdir } : {}),
   };
-  // Merge default writable roots with any user-specified ones.
-  const writableRoots = [
-    process.cwd(),
-    os.tmpdir(),
-    ...additionalWritableRoots,
-  ];
-  if (sandbox === SandboxType.MACOS_SEATBELT) {
-    return execWithSeatbelt(cmd, opts, writableRoots, abortSignal);
-  }
 
-  // SandboxType.NONE (or any other) falls back to the raw exec implementation
-  return rawExec(cmd, opts, abortSignal);
+  switch (sandbox) {
+    case SandboxType.NONE: {
+      // SandboxType.NONE uses the raw exec implementation.
+      return rawExec(cmd, opts, abortSignal);
+    }
+    case SandboxType.MACOS_SEATBELT: {
+      // Merge default writable roots with any user-specified ones.
+      const writableRoots = [
+        process.cwd(),
+        os.tmpdir(),
+        ...additionalWritableRoots,
+      ];
+      return execWithSeatbelt(cmd, opts, writableRoots, abortSignal);
+    }
+    case SandboxType.LINUX_LANDLOCK: {
+      return execWithLandlock(cmd, opts, additionalWritableRoots, abortSignal);
+    }
+  }
 }
 
 export function execApplyPatch(
