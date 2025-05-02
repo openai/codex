@@ -1,6 +1,7 @@
 // Based on reference implementation from
 // https://cookbook.openai.com/examples/gpt4-1_prompting_guide#reference-implementation-apply_patchpy
 
+import { getWorkspaceLogger } from "../logger/workspace-logger";
 import fs from "fs";
 import path from "path";
 import {
@@ -676,17 +677,23 @@ export function apply_commit(
   writeFn: (p: string, c: string) => void,
   removeFn: (p: string) => void,
 ): void {
+  const logger = getWorkspaceLogger();
+
   for (const [p, change] of Object.entries(commit.changes)) {
     if (change.type === ActionType.DELETE) {
       removeFn(p);
+      logger?.logFileChange("Deleted", p);
     } else if (change.type === ActionType.ADD) {
       writeFn(p, change.new_content ?? "");
+      logger?.logFileChange("Created", p);
     } else if (change.type === ActionType.UPDATE) {
       if (change.move_path) {
         writeFn(change.move_path, change.new_content ?? "");
         removeFn(p);
+        logger?.logFileChange("Modified", `${p} → ${change.move_path}`);
       } else {
         writeFn(p, change.new_content ?? "");
+        logger?.logFileChange("Modified", p);
       }
     }
   }
