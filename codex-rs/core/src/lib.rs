@@ -27,3 +27,5 @@ pub use codex::Codex;
 mod approval_mode_cli_arg;
 #[cfg(feature = "cli")]
 pub use approval_mode_cli_arg::ApprovalModeCliArg;
+#[cfg(feature = "cli")]
+pub use approval_mode_cli_arg::SandboxPermissionOption;

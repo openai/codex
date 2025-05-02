@@ -14,7 +14,7 @@ describe("exec cancellation", () => {
     const cmd = ["node", "-e", "setTimeout(() => console.log('late'), 5000);"];
 
     const start = Date.now();
-    const promise = rawExec(cmd, {}, [], abortController.signal);
+    const promise = rawExec(cmd, {}, abortController.signal);
 
     // Abort almost immediately.
     abortController.abort();
@@ -38,7 +38,7 @@ describe("exec cancellation", () => {
 
     const cmd = ["node", "-e", "console.log('finished')"];
 
-    const result = await rawExec(cmd, {}, [], abortController.signal);
+    const result = await rawExec(cmd, {}, abortController.signal);
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe("finished");

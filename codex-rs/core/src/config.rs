@@ -1,3 +1,4 @@
+use crate::approval_mode_cli_arg::parse_sandbox_permission_with_base_path;
 use crate::flags::OPENAI_DEFAULT_MODEL;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPermission;
@@ -40,6 +41,10 @@ pub struct ConfigToml {
     /// Default approval policy for executing commands.
     pub approval_policy: Option<AskForApproval>,
 
+    // The `default` attribute ensures that the field is treated as `None` when
+    // the key is omitted from the TOML. Without it, Serde treats the field as
+    // required because we supply a custom deserializer.
+    #[serde(default, deserialize_with = "deserialize_sandbox_permissions")]
     pub sandbox_permissions: Option<Vec<SandboxPermission>>,
 
     /// Disable server-side response storage (sends the full conversation
@@ -71,6 +76,32 @@ impl ConfigToml {
                 Err(e)
             }
         }
+    }
+}
+
+fn deserialize_sandbox_permissions<'de, D>(
+    deserializer: D,
+) -> Result<Option<Vec<SandboxPermission>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let permissions: Option<Vec<String>> = Option::deserialize(deserializer)?;
+
+    match permissions {
+        Some(raw_permissions) => {
+            let base_path = codex_dir().map_err(serde::de::Error::custom)?;
+
+            let converted = raw_permissions
+                .into_iter()
+                .map(|raw| {
+                    parse_sandbox_permission_with_base_path(&raw, base_path.clone())
+                        .map_err(serde::de::Error::custom)
+                })
+                .collect::<Result<Vec<_>, D::Error>>()?;
+
+            Ok(Some(converted))
+        }
+        None => Ok(None),
     }
 }
 
@@ -173,4 +204,61 @@ pub fn log_dir() -> std::io::Result<PathBuf> {
     let mut p = codex_dir()?;
     p.push("log");
     Ok(p)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verify that the `sandbox_permissions` field on `ConfigToml` correctly
+    /// differentiates between a value that is completely absent in the
+    /// provided TOML (i.e. `None`) and one that is explicitly specified as an
+    /// empty array (i.e. `Some(vec![])`). This ensures that downstream logic
+    /// that treats these two cases differently (default read-only policy vs a
+    /// fully locked-down sandbox) continues to function.
+    #[test]
+    fn test_sandbox_permissions_none_vs_empty_vec() {
+        // Case 1: `sandbox_permissions` key is *absent* from the TOML source.
+        let toml_source_without_key = "";
+        let cfg_without_key: ConfigToml = toml::from_str(toml_source_without_key)
+            .expect("TOML deserialization without key should succeed");
+        assert!(cfg_without_key.sandbox_permissions.is_none());
+
+        // Case 2: `sandbox_permissions` is present but set to an *empty array*.
+        let toml_source_with_empty = "sandbox_permissions = []";
+        let cfg_with_empty: ConfigToml = toml::from_str(toml_source_with_empty)
+            .expect("TOML deserialization with empty array should succeed");
+        assert_eq!(Some(vec![]), cfg_with_empty.sandbox_permissions);
+
+        // Case 3: `sandbox_permissions` contains a non-empty list of valid values.
+        let toml_source_with_values = r#"
+            sandbox_permissions = ["disk-full-read-access", "network-full-access"]
+        "#;
+        let cfg_with_values: ConfigToml = toml::from_str(toml_source_with_values)
+            .expect("TOML deserialization with valid permissions should succeed");
+
+        assert_eq!(
+            Some(vec![
+                SandboxPermission::DiskFullReadAccess,
+                SandboxPermission::NetworkFullAccess
+            ]),
+            cfg_with_values.sandbox_permissions
+        );
+    }
+
+    /// Deserializing a TOML string containing an *invalid* permission should
+    /// fail with a helpful error rather than silently defaulting or
+    /// succeeding.
+    #[test]
+    fn test_sandbox_permissions_illegal_value() {
+        let toml_bad = r#"sandbox_permissions = ["not-a-real-permission"]"#;
+
+        let err = toml::from_str::<ConfigToml>(toml_bad)
+            .expect_err("Deserialization should fail for invalid permission");
+
+        // Make sure the error message contains the invalid value so users have
+        // useful feedback.
+        let msg = err.to_string();
+        assert!(msg.contains("not-a-real-permission"));
+    }
 }

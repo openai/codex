@@ -100,11 +100,14 @@ export default class TextBuffer {
 
   private clipboard: string | null = null;
 
-  constructor(text = "") {
+  constructor(text = "", initialCursorIdx = 0) {
     this.lines = text.split("\n");
     if (this.lines.length === 0) {
       this.lines = [""];
     }
+
+    // No need to reset cursor on failure - class already default cursor position to 0,0
+    this.setCursorIdx(initialCursorIdx);
   }
 
   /* =======================================================================
@@ -120,6 +123,39 @@ export default class TextBuffer {
   private ensureCursorInRange(): void {
     this.cursorRow = clamp(this.cursorRow, 0, this.lines.length - 1);
     this.cursorCol = clamp(this.cursorCol, 0, this.lineLen(this.cursorRow));
+  }
+
+  /**
+   * Sets the cursor position based on a character offset from the start of the document.
+   * @param idx The character offset to move to (0-based)
+   * @returns true if successful, false if the index was invalid
+   */
+  private setCursorIdx(idx: number): boolean {
+    // Reset preferred column since this is an explicit horizontal movement
+    this.preferredCol = null;
+
+    let remainingChars = idx;
+    let row = 0;
+
+    // Count characters line by line until we find the right position
+    while (row < this.lines.length) {
+      const lineLength = this.lineLen(row);
+      // Add 1 for the newline character (except for the last line)
+      const totalChars = lineLength + (row < this.lines.length - 1 ? 1 : 0);
+
+      if (remainingChars <= lineLength) {
+        this.cursorRow = row;
+        this.cursorCol = remainingChars;
+        return true;
+      }
+
+      // Move to next line, subtract this line's characters plus newline
+      remainingChars -= totalChars;
+      row++;
+    }
+
+    // If we get here, the index was too large
+    return false;
   }
 
   /* =====================================================================
@@ -489,6 +525,22 @@ export default class TextBuffer {
       end++;
     }
 
+    /*
+     * After consuming the actual word we also want to swallow any immediate
+     * separator run that *follows* it so that a forward word-delete mirrors
+     * the behaviour of common shells/editors (and matches the expectations
+     * encoded in our test-suite).
+     *
+     * Example – given the text "foo bar baz" and the caret placed at the
+     * beginning of "bar" (index 4) we want Alt+Delete to turn the string
+     * into "foo␠baz" (single space).  Without this extra loop we would stop
+     * right before the separating space, producing "foo␠␠baz".
+     */
+
+    while (end < arr.length && !isWordChar(arr[end])) {
+      end++;
+    }
+
     this.lines[this.cursorRow] =
       cpSlice(line, 0, this.cursorCol) + cpSlice(line, end);
     // caret stays in place
@@ -823,12 +875,42 @@ export default class TextBuffer {
     // no `key.backspace` flag set.  Treat that byte exactly like an ordinary
     // Backspace for parity with textarea.rs and to make interactive tests
     // feedable through the simpler `(ch, {}, vp)` path.
+    // ------------------------------------------------------------------
+    //  Word-wise deletions
+    //
+    //  macOS (and many terminals on Linux/BSD) map the physical “Delete” key
+    //  to a *backspace* operation – emitting either the raw DEL (0x7f) byte
+    //  or setting `key.backspace = true` in Ink’s parsed event.  Holding the
+    //  Option/Alt modifier therefore *also* sends backspace semantics even
+    //  though users colloquially refer to the shortcut as “⌥+Delete”.
+    //
+    //  Historically we treated **modifier + Delete** as a *forward* word
+    //  deletion.  This behaviour, however, diverges from the default found
+    //  in shells (zsh, bash, fish, etc.) and native macOS text fields where
+    //  ⌥+Delete removes the word *to the left* of the caret.  Update the
+    //  mapping so that both
+    //
+    //    • ⌥/Alt/Meta + Backspace  and
+    //    • ⌥/Alt/Meta + Delete
+    //
+    //  perform a **backward** word deletion.  We keep the ability to delete
+    //  the *next* word by requiring an additional Shift modifier – a common
+    //  binding on full-size keyboards that expose a dedicated Forward Delete
+    //  key.
+    // ------------------------------------------------------------------
     else if (
+      // ⌥/Alt/Meta + (Backspace|Delete|DEL byte) → backward word delete
       (key["meta"] || key["ctrl"] || key["alt"]) &&
-      (key["backspace"] || input === "\x7f")
+      !key["shift"] &&
+      (key["backspace"] || input === "\x7f" || key["delete"])
     ) {
       this.deleteWordLeft();
-    } else if ((key["meta"] || key["ctrl"] || key["alt"]) && key["delete"]) {
+    } else if (
+      // ⇧+⌥/Alt/Meta + (Backspace|Delete|DEL byte) → forward word delete
+      (key["meta"] || key["ctrl"] || key["alt"]) &&
+      key["shift"] &&
+      (key["backspace"] || input === "\x7f" || key["delete"])
+    ) {
       this.deleteWordRight();
     } else if (
       key["backspace"] ||

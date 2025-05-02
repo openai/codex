@@ -28,6 +28,7 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
         images,
         model,
         full_auto,
+        sandbox,
         skip_git_repo_check,
         disable_response_storage,
         color,
@@ -65,7 +66,7 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
     let sandbox_policy = if full_auto {
         Some(SandboxPolicy::new_full_auto_policy())
     } else {
-        None
+        sandbox.permissions.clone().map(Into::into)
     };
 
     // Load configuration and determine approval policy
