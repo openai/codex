@@ -72,6 +72,12 @@ pub(crate) struct BottomPane<'a> {
     has_input_focus: bool,
 
     is_task_running: bool,
+
+    cli_history_vec: Vec<String>,
+
+    cli_index: Option<usize>,
+
+    cli_edited: bool,
 }
 
 pub(crate) struct BottomPaneParams {
@@ -97,6 +103,9 @@ impl BottomPane<'_> {
             app_event_tx,
             has_input_focus,
             is_task_running: false,
+            cli_index: None,
+            cli_history_vec: Vec::new(),
+            cli_edited: false,
         }
     }
 
@@ -113,6 +122,40 @@ impl BottomPane<'_> {
     pub(crate) fn set_input_focus(&mut self, has_input_focus: bool) {
         self.has_input_focus = has_input_focus;
         update_border_for_input_focus(&mut self.textarea, has_input_focus);
+    }
+
+    fn navigate_command_history(&mut self, direction: i32) -> Result<Option<()>, SendError<AppEvent>> {
+        // Can't navigate history while editing a command.
+        if self.cli_edited {
+            return Ok(None);
+        }
+        match self.get_command_from_history(direction) {
+            Some(command) => {
+                self.textarea.set_yank_text(command);
+                self.textarea.select_all();
+                self.textarea.paste();
+                return Ok(Some(()))
+            }
+            None => Ok(None)
+        }
+    }
+
+    fn get_command_from_history(&mut self, direction: i32) -> Option<String> {
+        match self.cli_index {
+            Some(index) => {
+                let new_index = index as i32 + direction;
+                if new_index < 0 || new_index > self.cli_history_vec.len() as i32 {
+                    return None;
+                }
+                self.cli_index = Some(new_index as usize);
+                if new_index == self.cli_history_vec.len() as i32 {
+                    return Some("".to_string());
+                } else {
+                    self.cli_history_vec.get(new_index as usize).cloned()
+                }
+            }
+            None => None,
+        }
     }
 
     /// Forward a key event to the appropriate child widget.
@@ -169,14 +212,65 @@ impl BottomPane<'_> {
                         ctrl: false,
                     } => {
                         let text = self.textarea.lines().join("\n");
+
+                        // Update the history buffer.
+                        self.cli_history_vec.push(text.clone());
+                        self.cli_index = Some(self.cli_history_vec.len());
+
                         // Clear the textarea (there is no dedicated clear API).
+                        self.cli_edited = false;
                         self.textarea.select_all();
                         self.textarea.cut();
                         self.request_redraw()?;
                         Ok(InputResult::Submitted(text))
                     }
+                    Input {
+                        key: Key::Up,
+                        shift: false,
+                        alt: false,
+                        ctrl: false,
+                    }
+                    | Input {
+                        key: Key::Char('p'),
+                        shift: false,
+                        alt: false,
+                        ctrl: true,
+                    } => {
+                        match self.navigate_command_history(-1)? {
+                            Some(()) => {
+                                self.request_redraw()?;
+                            }
+                            None => {}
+                        }
+                        Ok(InputResult::None)
+                    }
+                    Input {
+                        key: Key::Down,
+                        shift: false,
+                        alt: false,
+                        ctrl: false,
+                    }
+                    | Input {
+                        key: Key::Char('n'),
+                        shift: false,
+                        alt: false,
+                        ctrl: true,
+                    } => {
+                        match self.navigate_command_history(1)? {
+                            Some(()) => {
+                                self.request_redraw()?;
+                            }
+                            None => {}
+                        }
+                        Ok(InputResult::None)
+                    }
                     input => {
                         self.textarea.input(input);
+                        if self.textarea.is_empty() {
+                            self.cli_edited = false;
+                        } else {
+                            self.cli_edited = true;
+                        }
                         self.request_redraw()?;
                         Ok(InputResult::None)
                     }
