@@ -1,6 +1,6 @@
 {
-  "name": "@openai/codex",
-  "version": "0.1.2504301751",
+  "name": "@hexel-studio/codex-docs",
+  "version": "0.1.2504301754",
   "license": "Apache-2.0",
   "bin": {
     "codex": "bin/codex.js"
@@ -79,6 +79,6 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/openai/codex"
+    "url": "https://github.com/khushwant04/codex-docs"
   }
 }
