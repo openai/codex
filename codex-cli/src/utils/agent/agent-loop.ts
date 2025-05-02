@@ -32,6 +32,7 @@ import {
   setCurrentModel,
   setSessionId,
 } from "../session.js";
+import { HttpsProxyAgent } from "https-proxy-agent";
 import { randomUUID } from "node:crypto";
 import OpenAI, { APIConnectionTimeoutError } from "openai";
 
@@ -40,6 +41,9 @@ const RATE_LIMIT_RETRY_WAIT_MS = parseInt(
   process.env["OPENAI_RATE_LIMIT_RETRY_WAIT_MS"] || "500",
   10,
 );
+
+// See https://github.com/openai/openai-node/tree/v4?tab=readme-ov-file#configuring-an-https-agent-eg-for-proxies
+const PROXY_URL = process.env["HTTPS_PROXY"];
 
 export type CommandConfirmation = {
   review: ReviewDecision;
@@ -295,6 +299,7 @@ export class AgentLoop {
           : {}),
         ...(OPENAI_PROJECT ? { "OpenAI-Project": OPENAI_PROJECT } : {}),
       },
+      httpAgent: PROXY_URL ? new HttpsProxyAgent(PROXY_URL) : undefined,
       ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
     });
 
