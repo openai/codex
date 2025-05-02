@@ -1,14 +1,5 @@
 {
   "outputs": {
-    "codex-repl": {
-      "platforms": {
-        "macos-aarch64":  { "regex": "^codex-repl-aarch64-apple-darwin\\.zst$",          "path": "codex-repl" },
-        "macos-x86_64":   { "regex": "^codex-repl-x86_64-apple-darwin\\.zst$",           "path": "codex-repl" },
-        "linux-x86_64":   { "regex": "^codex-repl-x86_64-unknown-linux-musl\\.zst$",     "path": "codex-repl" },
-        "linux-aarch64":  { "regex": "^codex-repl-aarch64-unknown-linux-gnu\\.zst$",     "path": "codex-repl" }
-      }
-    },
-
     "codex-exec": {
       "platforms": {
         "macos-aarch64":  { "regex": "^codex-exec-aarch64-apple-darwin\\.zst$",          "path": "codex-exec" },
