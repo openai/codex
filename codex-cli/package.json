@@ -34,6 +34,7 @@
     "fast-npm-meta": "^0.4.2",
     "figures": "^6.1.0",
     "file-type": "^20.1.0",
+    "https-proxy-agent": "^7.0.6",
     "ink": "^5.2.0",
     "js-yaml": "^4.1.0",
     "marked": "^15.0.7",
@@ -73,7 +74,8 @@
     "semver": "^7.7.1",
     "ts-node": "^10.9.1",
     "typescript": "^5.0.3",
-    "vitest": "^3.0.9",
+    "vite": "^6.3.4",
+    "vitest": "^3.1.2",
     "whatwg-url": "^14.2.0",
     "which": "^5.0.0"
   },
