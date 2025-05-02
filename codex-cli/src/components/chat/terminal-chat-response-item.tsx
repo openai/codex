@@ -10,6 +10,7 @@ import type {
 } from "openai/resources/responses/responses";
 
 import { useTerminalSize } from "../../hooks/use-terminal-size";
+import { collapseXmlBlocks } from "../../utils/file-tag-utils";
 import { parseToolCall, parseToolCallOutput } from "../../utils/parsers";
 import chalk, { type ForegroundColorName } from "chalk";
 import { Box, Text } from "ink";
@@ -137,7 +138,7 @@ function TerminalChatResponseMessage({
                 : c.type === "refusal"
                   ? c.refusal
                   : c.type === "input_text"
-                    ? c.text
+                    ? collapseXmlBlocks(c.text)
                     : c.type === "input_image"
                       ? "<Image>"
                       : c.type === "input_file"

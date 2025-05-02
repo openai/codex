@@ -7,12 +7,12 @@ members = [
     "core",
     "exec",
     "execpolicy",
-    "repl",
+    "mcp-types",
     "tui",
 ]
 
 [workspace.package]
-version = "0.0.2504292236"
+version = "0.0.0"
 
 [profile.release]
 lto = "fat"
