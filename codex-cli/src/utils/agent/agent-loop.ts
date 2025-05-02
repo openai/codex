@@ -25,12 +25,14 @@ import {
 import { handleExecCommand } from "./handle-exec-command.js";
 import { randomUUID } from "node:crypto";
 import OpenAI, { APIConnectionTimeoutError } from "openai";
+import { HttpsProxyAgent } from 'https-proxy-agent';
 
 // Wait time before retrying after rate limit errors (ms).
 const RATE_LIMIT_RETRY_WAIT_MS = parseInt(
   process.env["OPENAI_RATE_LIMIT_RETRY_WAIT_MS"] || "2500",
   10,
 );
+const PROXY_URL = process.env.HTTPS_PROXY;
 
 export type CommandConfirmation = {
   review: ReviewDecision;
@@ -303,6 +305,7 @@ export class AgentLoop {
         version: CLI_VERSION,
         session_id: this.sessionId,
       },
+      httpAgent: PROXY_URL ? new HttpsProxyAgent(PROXY_URL) : undefined,
       ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
     });
 
