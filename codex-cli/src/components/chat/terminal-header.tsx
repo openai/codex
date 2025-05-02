@@ -42,7 +42,7 @@ const TerminalHeader: React.FC<TerminalHeaderProps> = ({
         <>
           <Box borderStyle="round" paddingX={1} width={64}>
             <Text>
-              ● OpenAI <Text bold>Codex</Text>{" "}
+              ● Hexel Studio <Text bold>Codex</Text>{" "}
               <Text dimColor>
                 (research preview) <Text color="blueBright">v{version}</Text>
               </Text>

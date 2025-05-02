@@ -31,5 +31,5 @@ export const SLASH_COMMANDS: Array<SlashCommand> = [
     command: "/diff",
     description:
       "Show git diff of the working directory (or applied patches if not in git)",
-  },
+  }
 ];
