@@ -111,9 +111,17 @@ impl BottomPane<'_> {
     }
 
     pub(crate) fn set_input_text(&mut self, text: String) -> Result<(), SendError<AppEvent>> {
-        // Always update the textarea content, regardless of current state
-        self.textarea.delete_word();
+        // Clear the existing content first
+        self.textarea.select_all();
+        self.textarea.cut();
+        
+        // Insert the new text
         self.textarea.insert_str(&text);
+        
+        // Move cursor to the beginning of the text
+        if !text.is_empty() {
+            self.textarea.move_cursor(tui_textarea::CursorMove::Head);
+        }
         
         // If we're currently in text input mode, request a redraw to show the new content
         if matches!(self.state, PaneState::TextInput) {
@@ -276,6 +284,19 @@ impl BottomPane<'_> {
                 let text_rows = self.textarea.lines().len();
                 std::cmp::max(text_rows, MIN_TEXTAREA_ROWS) as u16 + TEXTAREA_BORDER_LINES
             }
+        }
+    }
+
+    /// Returns the current cursor position in the input text.
+    /// Only meaningful when in TextInput state.
+    pub(crate) fn cursor_position(&self) -> usize {
+        match &self.state {
+            PaneState::TextInput => {
+                // Get the cursor column position from the textarea
+                let (_, column) = self.textarea.cursor();
+                column
+            }
+            _ => 0,
         }
     }
 }

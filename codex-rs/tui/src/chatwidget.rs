@@ -137,26 +137,7 @@ impl ChatWidget<'_> {
 
         // Handle arrow keys for history navigation
         if self.input_focus == InputFocus::BottomPane {
-            match key_event.code {
-                crossterm::event::KeyCode::Up => {
-                    if let Some(previous_message) = self.conversation_history.previous() {
-                        self.bottom_pane.set_input_text(previous_message)?;
-                        self.request_redraw()?;
-                    }
-                    return Ok(());
-                }
-                crossterm::event::KeyCode::Down => {
-                    if let Some(next_message) = self.conversation_history.next() {
-                        self.bottom_pane.set_input_text(next_message)?;
-                    } else {
-                        // If there's no next message, clear the input
-                        self.bottom_pane.set_input_text(String::new())?;
-                    }
-                    self.request_redraw()?;
-                    return Ok(());
-                }
-                _ => {}
-            }
+          
         }
 
         match self.input_focus {
@@ -168,37 +149,58 @@ impl ChatWidget<'_> {
                 Ok(())
             }
             InputFocus::BottomPane => {
-                match self.bottom_pane.handle_key_event(key_event)? {
-                    InputResult::Submitted(text) => {
-                        // Special client‑side commands start with a leading slash.
-                        let trimmed = text.trim();
-
-                        match trimmed {
-                            "q" => {
-                                // Gracefully request application shutdown.
-                                let _ = self.app_event_tx.send(AppEvent::ExitRequest);
-                            }
-                       
-                            "/clear" => {
-                                // Clear the current conversation history without exiting.
-                                self.conversation_history.clear();
-                                self.submit_welcome_message()?;
-                                self.conversation_history.scroll_to_bottom();
-                            }
-                         
-                            _ => {
-                                // Handle all other cases
-                                self.submit_user_message(text)?;
-                            }
+                match key_event.code {
+                    crossterm::event::KeyCode::Up if self.bottom_pane.cursor_position() == 0 => {
+                        // Only navigate history if cursor is at position 0
+                        if let Some(previous_message) = self.conversation_history.previous() {
+                            self.bottom_pane.set_input_text(previous_message)?;
+                            self.request_redraw()?;
                         }
-
+                        return Ok(());
                     }
-                    InputResult::None => {}
+                    crossterm::event::KeyCode::Down if self.bottom_pane.cursor_position() == 0 => {
+                        // Only navigate history if cursor is at position 0
+                        if let Some(next_message) = self.conversation_history.next() {
+                            self.bottom_pane.set_input_text(next_message)?;
+                        } else {
+                            // If there's no next message, clear the input
+                            self.bottom_pane.set_input_text(String::new())?;
+                        }
+                        self.request_redraw()?;
+                        return Ok(());
+                    }
+                    _ => {
+                        match self.bottom_pane.handle_key_event(key_event)? {
+                            InputResult::Submitted(text) => {
+                                // Special client‑side commands start with a leading slash.
+                                let trimmed = text.trim();
+
+                                match trimmed {
+                                    "q" => {
+                                        // Gracefully request application shutdown.
+                                        let _ = self.app_event_tx.send(AppEvent::ExitRequest);
+                                    }
+                                    "/clear" => {
+                                        // Clear the current conversation history without exiting.
+                                        self.conversation_history.clear();
+                                        self.submit_welcome_message()?;
+                                        self.conversation_history.scroll_to_bottom();
+                                    }
+                                    _ => {
+                                        self.submit_user_message(text)?;
+                                    }
+                                }
+                            }
+                            InputResult::None => {}
+                        }
+                        Ok(())
+                    }
                 }
-                Ok(())
             }
         }
     }
+                
+               
 
     fn submit_welcome_message(&mut self) -> std::result::Result<(), SendError<AppEvent>> {
         self.handle_codex_event(Event {

@@ -2,7 +2,7 @@
 //! application while the agent is processing a long‑running task.
 //!
 //! It replaces the old spinner animation with real log feedback so users can
-//! watch Codex “think” in real‑time. Whenever new text is provided via
+//! watch Codex "think" in real‑time. Whenever new text is provided via
 //! [`StatusIndicatorWidget::update_text`], the parent widget triggers a
 //! redraw so the change is visible immediately.
 
@@ -34,6 +34,12 @@ use ratatui::widgets::WidgetRef;
 use crate::app_event::AppEvent;
 
 use codex_ansi_escape::ansi_escape_line;
+
+/// Text displayed to inform users they can interrupt the agent by pressing Esc twice
+const INTERRUPT_HINT_TEXT: &str = "press Esc twice to interrupt";
+
+/// Number of characters to pad the interrupt hint text from the right border.
+const INTERRUPT_HINT_PADDING: u16 = 2;
 
 pub(crate) struct StatusIndicatorWidget {
     /// Latest text to display (truncated to the available width at render
@@ -215,17 +221,16 @@ impl WidgetRef for StatusIndicatorWidget {
         
         // Add the "press Esc twice to interrupt" text at the right side
         if area.height > 0 {
-            let interrupt_text = "press Esc twice to interrupt";
             let text_style = Style::default().fg(Color::DarkGray);
             
             // Calculate position for right-aligned text
-            let text_width = interrupt_text.len() as u16;
-            let x_pos = area.x + area.width.saturating_sub(text_width + 2); // +2 for padding
+            let text_width = INTERRUPT_HINT_TEXT.len() as u16;
+            let x_pos = area.x + area.width.saturating_sub(text_width + INTERRUPT_HINT_PADDING);
             let y_pos = area.y + area.height - 1;
             
             // Only render if it fits
             if x_pos >= area.x && x_pos + text_width <= area.x + area.width {
-                buf.set_string(x_pos, y_pos, interrupt_text, text_style);
+                buf.set_string(x_pos, y_pos, INTERRUPT_HINT_TEXT, text_style);
             }
         }
     }

@@ -15,9 +15,11 @@ use crossterm::event::MouseEventKind;
 use std::sync::mpsc::channel;
 use std::time::Duration;
 use std::time::Instant;
-
 use std::sync::mpsc::Receiver;
 use std::sync::mpsc::Sender;
+
+/// Duration threshold for detecting double-press of the ESC key (in milliseconds).
+const DOUBLE_PRESS_THRESHOLD_MS: u64 = 500;
 
 /// Top‑level application state – which full‑screen view is currently active.
 enum AppState {
@@ -135,7 +137,7 @@ impl App<'_> {
                         } => {
                             let now = Instant::now();
                             if let Some(last_press) = self.last_esc_press {
-                                if now.duration_since(last_press) < Duration::from_millis(500) {
+                                if now.duration_since(last_press) < Duration::from_millis(DOUBLE_PRESS_THRESHOLD_MS) {
                                     self.chat_widget.submit_op(Op::Interrupt);
                                 } else {
                                     self.last_esc_press = Some(now);
