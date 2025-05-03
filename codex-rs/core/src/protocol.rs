@@ -291,6 +291,12 @@ pub enum EventMsg {
     Error {
         message: String,
     },
+    
+    /// Task was interrupted by the user
+    TaskInterrupted {
+        /// Optional message with additional information
+        message: String,
+    },
 
     /// Agent has started a task
     TaskStarted,

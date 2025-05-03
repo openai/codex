@@ -454,7 +454,7 @@ impl AgentTask {
             self.handle.abort();
             let event = Event {
                 id: self.sub_id,
-                msg: EventMsg::Error { message: "⏹️ Execution interrupted by user. You can continue typing.".to_string() },
+                msg: EventMsg::TaskInterrupted { message: Some("⏹️ Execution interrupted by user. You can continue typing.".to_string()) },
             };
             let tx_event = self.sess.tx_event.clone();
             tokio::spawn(async move {

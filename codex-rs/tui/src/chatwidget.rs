@@ -280,6 +280,11 @@ impl ChatWidget<'_> {
                 self.bottom_pane.set_task_running(false)?;
                 self.request_redraw()?;
             }
+            EventMsg::TaskInterrupted { message } => {
+                self.conversation_history
+                    .add_system_message(format!("{message:?}"));
+                self.bottom_pane.set_task_running(false)?;
+            }
             EventMsg::Error { message } => {
                 self.conversation_history
                     .add_system_message(format!("{message}"));
