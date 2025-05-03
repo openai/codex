@@ -25,6 +25,7 @@ pub async fn init_codex(config: Config) -> anyhow::Result<(CodexWrapper, Event, 
             approval_policy: config.approval_policy,
             sandbox_policy: config.sandbox_policy,
             disable_response_storage: config.disable_response_storage,
+            notify: config.notify.clone(),
         })
         .await?;
 

@@ -17,6 +17,7 @@ use codex_apply_patch::MaybeApplyPatchVerified;
 use fs_err as fs;
 use futures::prelude::*;
 use serde::Serialize;
+use serde_json;
 use tokio::sync::oneshot;
 use tokio::sync::Notify;
 use tokio::task::AbortHandle;
@@ -51,6 +52,7 @@ use crate::protocol::Submission;
 use crate::safety::assess_command_safety;
 use crate::safety::assess_patch_safety;
 use crate::safety::SafetyCheck;
+use crate::user_notification::UserNotification;
 use crate::util::backoff;
 use crate::zdr_transcript::ZdrTranscript;
 
@@ -192,6 +194,10 @@ struct Session {
     approval_policy: AskForApproval,
     sandbox_policy: SandboxPolicy,
     writable_roots: Mutex<Vec<PathBuf>>,
+
+    /// External notifier command (will be passed as args to exec()). When
+    /// `None` this feature is disabled.
+    notify: Option<Vec<String>>,
 
     state: Mutex<State>,
 }
@@ -377,6 +383,35 @@ impl Session {
             task.abort();
         }
     }
+
+    /// Spawn the configured notifier (if any) with the given JSON payload as
+    /// the last argument. Failures are logged but otherwise ignored so that
+    /// notification issues do not interfere with the main workflow.
+    fn maybe_notify(&self, notification: UserNotification) {
+        let Some(notify_command) = &self.notify else {
+            return;
+        };
+
+        if notify_command.is_empty() {
+            return;
+        }
+
+        let Ok(json) = serde_json::to_string(&notification) else {
+            tracing::error!("failed to serialise notification payload");
+            return;
+        };
+
+        let mut command = std::process::Command::new(&notify_command[0]);
+        if notify_command.len() > 1 {
+            command.args(&notify_command[1..]);
+        }
+        command.arg(json);
+
+        // Fire-and-forget – we do not wait for completion.
+        if let Err(e) = command.spawn() {
+            tracing::warn!("failed to spawn notifier '{}': {e}", notify_command[0]);
+        }
+    }
 }
 
 impl Drop for Session {
@@ -482,6 +517,7 @@ async fn submission_loop(
                 approval_policy,
                 sandbox_policy,
                 disable_response_storage,
+                notify,
             } => {
                 info!(model, "Configuring session");
                 let client = ModelClient::new(model.clone());
@@ -511,6 +547,7 @@ async fn submission_loop(
                     approval_policy,
                     sandbox_policy,
                     writable_roots: Mutex::new(get_writable_roots()),
+                    notify,
                     state: Mutex::new(state),
                 }));
 
@@ -610,6 +647,19 @@ async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
                 net_new_turn_input
             };
 
+        let turn_input_messages: Vec<String> = turn_input
+            .iter()
+            .filter_map(|item| match item {
+                ResponseItem::Message { content, .. } => Some(content),
+                _ => None,
+            })
+            .flat_map(|content| {
+                content.iter().filter_map(|item| match item {
+                    ContentItem::OutputText { text } => Some(text.clone()),
+                    _ => None,
+                })
+            })
+            .collect();
         match run_turn(&sess, sub_id.clone(), turn_input).await {
             Ok(turn_output) => {
                 let (items, responses): (Vec<_>, Vec<_>) = turn_output
@@ -620,6 +670,7 @@ async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
                     .into_iter()
                     .flatten()
                     .collect::<Vec<ResponseInputItem>>();
+                let last_assistant_message = get_last_assistant_message_from_turn(&items);
 
                 // Only attempt to take the lock if there is something to record.
                 if !items.is_empty() {
@@ -630,6 +681,11 @@ async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
 
                 if responses.is_empty() {
                     debug!("Turn completed");
+                    sess.maybe_notify(UserNotification::AgentTurnComplete {
+                        turn_id: sub_id.clone(),
+                        input_messages: turn_input_messages,
+                        last_assistant_message,
+                    });
                     break;
                 }
 
@@ -1484,4 +1540,24 @@ fn format_exec_output(output: &str, exit_code: i32, duration: std::time::Duratio
     };
 
     serde_json::to_string(&payload).expect("serialize ExecOutput")
+}
+
+fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -> Option<String> {
+    responses.iter().rev().find_map(|item| {
+        if let ResponseItem::Message { role, content } = item {
+            if role == "assistant" {
+                content.iter().rev().find_map(|ci| {
+                    if let ContentItem::OutputText { text } = ci {
+                        Some(text.clone())
+                    } else {
+                        None
+                    }
+                })
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    })
 }
