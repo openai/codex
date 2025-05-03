@@ -130,8 +130,8 @@ test("NEW_FILE_HUNK regex matches expected patterns and rejects others", () => {
     "@@ -0,0 +2,2 @@",
     "@@ -0,0 +1,2 @@@@",
   ];
-  matching.forEach(s => expect(re.test(s)).toBe(true));
-  nonmatching.forEach(s => expect(re.test(s)).toBe(false));
+  matching.forEach((s) => expect(re.test(s)).toBe(true));
+  nonmatching.forEach((s) => expect(re.test(s)).toBe(false));
 });
 
 test("process_patch - delete file", () => {
