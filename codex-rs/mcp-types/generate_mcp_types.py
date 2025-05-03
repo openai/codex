@@ -359,7 +359,6 @@ def implements_notification_trait(name: str) -> bool:
 def add_trait_impl(
     type_name: str, trait_name: str, fields: list[StructField], out: list[str]
 ) -> None:
-    # out.append("#[derive(Debug)]\n")
     out.append(STANDARD_DERIVE)
     out.append(f"pub enum {type_name} {{}}\n\n")
 
@@ -507,10 +506,8 @@ def get_serde_annotation_for_anyof_type(type_name: str) -> str | None:
             return '#[serde(tag = "method", content = "params")]'
         case "ServerNotification":
             return '#[serde(tag = "method", content = "params")]'
-        case "JSONRPCMessage":
-            return "#[serde(untagged)]"
         case _:
-            return None
+            return "#[serde(untagged)]"
 
 
 def map_type(
