@@ -16,7 +16,7 @@
       node = pkgs.nodejs_22;
       ppnpm = pkgs.pnpm_10;
       version = "0.1.0";
-      hash = "sha256-pPwHjtqqaG+Zqmq6x5o+WCT1H9XuXAqFNKMzevp7wTc=";
+      hash = "sha256-rQusKKn+lSAMxP0QY2Pcos7TxQE2AF//xDiFAJ2gTfk=";
 
       buildPnpmPackageFn = {
         pkgs,
