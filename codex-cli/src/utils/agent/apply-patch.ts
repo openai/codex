@@ -718,7 +718,9 @@ function open_file(p: string): string {
     return fs.readFileSync(p, "utf8");
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
-    throw new DiffError(`Failed to open file '${p}': ${errorMessage} Check that the file exists and you have permission to read it.`);
+    throw new DiffError(
+      `Failed to open file '${p}': ${errorMessage} Check that the file exists and you have permission to read it.`,
+    );
   }
 }
 
@@ -737,7 +739,9 @@ function write_file(p: string, content: string): void {
       throw error; // Re-throw DiffError without modification
     }
     const errorMessage = error instanceof Error ? error.message : String(error);
-    throw new DiffError(`Failed to write file '${p}': ${errorMessage} Check that the file exists and you have permission to write to it.`);
+    throw new DiffError(
+      `Failed to write file '${p}': ${errorMessage} Check that the file exists and you have permission to write to it.`,
+    );
   }
 }
 
@@ -752,7 +756,9 @@ function remove_file(p: string): void {
       throw error; // Re-throw DiffError without modification
     }
     const errorMessage = error instanceof Error ? error.message : String(error);
-    throw new DiffError(`Failed to remove file '${p}': ${errorMessage} Check that the file exists and you have permission to remove it.`);
+    throw new DiffError(
+      `Failed to remove file '${p}': ${errorMessage} Check that the file exists and you have permission to remove it.`,
+    );
   }
 }
 
