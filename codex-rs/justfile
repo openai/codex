@@ -1,0 +1,15 @@
+# Display help
+help:
+    just -l
+
+# Install the `codex-tui` binary
+install:
+    cargo install --path tui
+
+# Run the TUI app
+tui *args:
+    cargo run --bin codex -- tui {{args}}
+
+# Run the Proto app
+proto *args:
+    cargo run --bin codex -- proto {{args}}

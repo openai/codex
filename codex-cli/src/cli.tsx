@@ -10,6 +10,7 @@ import type { ApprovalPolicy } from "./approvals";
 import type { CommandConfirmation } from "./utils/agent/agent-loop";
 import type { AppConfig } from "./utils/config";
 import type { ResponseItem } from "openai/resources/responses/responses";
+import type { ReasoningEffort } from "openai/resources.mjs";
 
 import App from "./app";
 import { runSinglePass } from "./cli-singlepass";
@@ -160,6 +161,12 @@ const cli = meow(
           "Disable truncation of command stdout/stderr messages (show everything)",
         aliases: ["no-truncate"],
       },
+      reasoning: {
+        type: "string",
+        description: "Set the reasoning effort level (low, medium, high)",
+        choices: ["low", "medium", "high"],
+        default: "high",
+      },
       // Notification
       notify: {
         type: "boolean",
@@ -183,6 +190,10 @@ const cli = meow(
     },
   },
 );
+
+// ---------------------------------------------------------------------------
+// Global flag handling
+// ---------------------------------------------------------------------------
 
 // Handle 'completion' subcommand before any prompting or API calls
 if (cli.input[0] === "completion") {
@@ -272,28 +283,33 @@ if (!apiKey && !NO_API_KEY_REQUIRED.has(provider.toLowerCase())) {
               chalk.underline("https://platform.openai.com/account/api-keys"),
             )}\n`
           : provider.toLowerCase() === "gemini"
-          ? `You can create a ${chalk.bold(
-              `${provider.toUpperCase()}_API_KEY`,
-            )} ` + `in the ${chalk.bold(`Google AI Studio`)}.\n`
-          : `You can create a ${chalk.bold(
-              `${provider.toUpperCase()}_API_KEY`,
-            )} ` + `in the ${chalk.bold(`${provider}`)} dashboard.\n`
+            ? `You can create a ${chalk.bold(
+                `${provider.toUpperCase()}_API_KEY`,
+              )} ` + `in the ${chalk.bold(`Google AI Studio`)}.\n`
+            : `You can create a ${chalk.bold(
+                `${provider.toUpperCase()}_API_KEY`,
+              )} ` + `in the ${chalk.bold(`${provider}`)} dashboard.\n`
       }`,
   );
   process.exit(1);
 }
+
+const flagPresent = Object.hasOwn(cli.flags, "disableResponseStorage");
+
+const disableResponseStorage = flagPresent
+  ? Boolean(cli.flags.disableResponseStorage) // value user actually passed
+  : (config.disableResponseStorage ?? false); // fall back to YAML, default to false
 
 config = {
   apiKey,
   ...config,
   model: model ?? config.model,
   notify: Boolean(cli.flags.notify),
+  reasoningEffort:
+    (cli.flags.reasoning as ReasoningEffort | undefined) ?? "high",
   flexMode: Boolean(cli.flags.flexMode),
   provider,
-  disableResponseStorage:
-    cli.flags.disableResponseStorage !== undefined
-      ? Boolean(cli.flags.disableResponseStorage)
-      : config.disableResponseStorage,
+  disableResponseStorage,
 };
 
 // Check for updates after loading config. This is important because we write state file in
@@ -381,8 +397,8 @@ if (cli.flags.quiet) {
     cli.flags.fullAuto || cli.flags.approvalMode === "full-auto"
       ? AutoApprovalMode.FULL_AUTO
       : cli.flags.autoEdit || cli.flags.approvalMode === "auto-edit"
-      ? AutoApprovalMode.AUTO_EDIT
-      : config.approvalMode || AutoApprovalMode.SUGGEST;
+        ? AutoApprovalMode.AUTO_EDIT
+        : config.approvalMode || AutoApprovalMode.SUGGEST;
 
   await runQuietMode({
     prompt,
@@ -412,8 +428,8 @@ const approvalPolicy: ApprovalPolicy =
   cli.flags.fullAuto || cli.flags.approvalMode === "full-auto"
     ? AutoApprovalMode.FULL_AUTO
     : cli.flags.autoEdit || cli.flags.approvalMode === "auto-edit"
-    ? AutoApprovalMode.AUTO_EDIT
-    : config.approvalMode || AutoApprovalMode.SUGGEST;
+      ? AutoApprovalMode.AUTO_EDIT
+      : config.approvalMode || AutoApprovalMode.SUGGEST;
 
 const instance = render(
   <App

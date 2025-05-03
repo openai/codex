@@ -1,4 +1,9 @@
-export const CLI_VERSION = "0.1.2504221401"; // Must be in sync with package.json.
+// Node ESM supports JSON imports behind an assertion. TypeScript's
+// `resolveJsonModule` takes care of the typings.
+import pkg from "../../package.json" assert { type: "json" };
+
+// Read the version directly from package.json.
+export const CLI_VERSION: string = (pkg as { version: string }).version;
 export const ORIGIN = "codex_cli_ts";
 
 export type TerminalChatSession = {

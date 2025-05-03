@@ -73,7 +73,7 @@ const TerminalHeader: React.FC<TerminalHeaderProps> = ({
             </Text>
             <Text dimColor>
               <Text color="blueBright">↳</Text> approval:{" "}
-              <Text bold color={colorsByPolicy[approvalPolicy]} dimColor>
+              <Text bold color={colorsByPolicy[approvalPolicy]}>
                 {approvalPolicy}
               </Text>
             </Text>

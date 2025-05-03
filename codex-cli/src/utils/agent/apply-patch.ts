@@ -219,8 +219,8 @@ class Parser {
           s.normalize("NFC").replace(
             /./gu,
             (c) =>
-              ((
-                {
+              (
+                ({
                   "-": "-",
                   "\u2010": "-",
                   "\u2011": "-",
@@ -238,8 +238,10 @@ class Parser {
                   "\u2018": "'",
                   "\u2019": "'",
                   "\u201B": "'",
-                } as Record<string, string>
-              )[c] ?? c),
+                  "\u00A0": " ",
+                  "\u202F": " ",
+                }) as Record<string, string>
+              )[c] ?? c,
           );
 
         if (
@@ -373,6 +375,9 @@ function find_context_core(
     /* U+2018 LEFT SINGLE QUOTATION MARK */ "\u2018": "'",
     /* U+2019 RIGHT SINGLE QUOTATION MARK */ "\u2019": "'",
     /* U+201B SINGLE HIGH-REVERSED-9 QUOTATION MARK */ "\u201B": "'",
+    // Spaces ------------------------------------------------------------------
+    /* U+00A0 NO-BREAK SPACE */ "\u00A0": " ",
+    /* U+202F NARROW NO-BREAK SPACE */ "\u202F": " ",
   };
 
   const canon = (s: string): string =>
@@ -385,9 +390,10 @@ function find_context_core(
     return [start, 0];
   }
   // Pass 1 – exact equality after canonicalisation ---------------------------
+  const canonicalContext = canon(context.join("\n"));
   for (let i = start; i < lines.length; i++) {
     const segment = canon(lines.slice(i, i + context.length).join("\n"));
-    if (segment === canon(context.join("\n"))) {
+    if (segment === canonicalContext) {
       return [i, 0];
     }
   }

@@ -35,7 +35,7 @@ conventional_commits = true
 
 commit_parsers = [
   { message = "^feat", group = "<!-- 0 -->🚀 Features" },
-  { message = "^fix",  group = "<!-- 1 -->🐛 Bug Fixes" },
+  { message = "^fix",  group = "<!-- 1 -->🪲 Bug Fixes" },
   { message = "^bump", group = "<!-- 6 -->🛳️ Release" },
   # Fallback – skip anything that didn't match the above rules.
   { message = ".*",  group = "<!-- 10 -->💼 Other" },
