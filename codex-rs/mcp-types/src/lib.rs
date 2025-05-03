@@ -92,6 +92,7 @@ pub struct CallToolResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(untagged)]
 pub enum CallToolResultContent {
     TextContent(TextContent),
     ImageContent(ImageContent),
@@ -144,6 +145,7 @@ pub struct ClientCapabilitiesRoots {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(untagged)]
 pub enum ClientNotification {
     CancelledNotification(CancelledNotification),
     InitializedNotification(InitializedNotification),
@@ -185,6 +187,7 @@ pub enum ClientRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(untagged)]
 pub enum ClientResult {
     Result(Result),
     CreateMessageResult(CreateMessageResult),
@@ -214,6 +217,7 @@ pub struct CompleteRequestParamsArgument {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(untagged)]
 pub enum CompleteRequestParamsRef {
     PromptReference(PromptReference),
     ResourceReference(ResourceReference),
@@ -299,6 +303,7 @@ pub struct CreateMessageResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(untagged)]
 pub enum CreateMessageResultContent {
     TextContent(TextContent),
     ImageContent(ImageContent),
@@ -327,6 +332,7 @@ pub struct EmbeddedResource {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(untagged)]
 pub enum EmbeddedResourceResource {
     TextResourceContents(TextResourceContents),
     BlobResourceContents(BlobResourceContents),
@@ -427,6 +433,7 @@ impl ModelContextProtocolNotification for InitializedNotification {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(untagged)]
 pub enum JSONRPCBatchRequestItem {
     JSONRPCRequest(JSONRPCRequest),
     JSONRPCNotification(JSONRPCNotification),
@@ -435,6 +442,7 @@ pub enum JSONRPCBatchRequestItem {
 pub type JSONRPCBatchRequest = Vec<JSONRPCBatchRequestItem>;
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(untagged)]
 pub enum JSONRPCBatchResponseItem {
     JSONRPCResponse(JSONRPCResponse),
     JSONRPCError(JSONRPCError),
@@ -852,6 +860,7 @@ pub struct PromptMessage {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(untagged)]
 pub enum PromptMessageContent {
     TextContent(TextContent),
     ImageContent(ImageContent),
@@ -887,6 +896,7 @@ pub struct ReadResourceResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(untagged)]
 pub enum ReadResourceResultContents {
     TextResourceContents(TextResourceContents),
     BlobResourceContents(BlobResourceContents),
@@ -1012,6 +1022,7 @@ pub struct SamplingMessage {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(untagged)]
 pub enum SamplingMessageContent {
     TextContent(TextContent),
     ImageContent(ImageContent),
@@ -1100,6 +1111,7 @@ pub enum ServerNotification {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(untagged)]
 pub enum ServerRequest {
     PingRequest(PingRequest),
     CreateMessageRequest(CreateMessageRequest),
@@ -1107,6 +1119,7 @@ pub enum ServerRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(untagged)]
 pub enum ServerResult {
     Result(Result),
     InitializeResult(InitializeResult),
