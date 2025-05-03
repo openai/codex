@@ -12,44 +12,44 @@
 
 <!-- Begin ToC -->
 
-- [Experimental Technology Disclaimer](#experimental-technology-disclaimer)
+- [Experimental technology disclaimer](#experimental-technology-disclaimer)
 - [Quickstart](#quickstart)
 - [Why Codex?](#why-codex)
-- [Security Model & Permissions](#security-model--permissions)
+- [Security model & permissions](#security-model--permissions)
   - [Platform sandboxing details](#platform-sandboxing-details)
-- [System Requirements](#system-requirements)
-- [CLI Reference](#cli-reference)
-- [Memory & Project Docs](#memory--project-docs)
+- [System requirements](#system-requirements)
+- [CLI reference](#cli-reference)
+- [Memory & project docs](#memory--project-docs)
 - [Non-interactive / CI mode](#non-interactive--ci-mode)
-- [Tracing / Verbose Logging](#tracing--verbose-logging)
+- [Tracing / verbose logging](#tracing--verbose-logging)
 - [Recipes](#recipes)
 - [Installation](#installation)
-- [Configuration Guide](#configuration-guide)
-  - [Basic Configuration Parameters](#basic-configuration-parameters)
-  - [Custom AI Provider Configuration](#custom-ai-provider-configuration)
-  - [History Configuration](#history-configuration)
-  - [Configuration Examples](#configuration-examples)
-  - [Full Configuration Example](#full-configuration-example)
-  - [Custom Instructions](#custom-instructions)
-  - [Environment Variables Setup](#environment-variables-setup)
+- [Configuration guide](#configuration-guide)
+  - [Basic configuration parameters](#basic-configuration-parameters)
+  - [Custom AI provider configuration](#custom-ai-provider-configuration)
+  - [History configuration](#history-configuration)
+  - [Configuration examples](#configuration-examples)
+  - [Full configuration example](#full-configuration-example)
+  - [Custom instructions](#custom-instructions)
+  - [Environment variables setup](#environment-variables-setup)
 - [FAQ](#faq)
-- [Zero Data Retention (ZDR) Usage](#zero-data-retention-zdr-usage)
-- [Codex Open Source Fund](#codex-open-source-fund)
+- [Zero data retention (ZDR) usage](#zero-data-retention-zdr-usage)
+- [Codex open source fund](#codex-open-source-fund)
 - [Contributing](#contributing)
   - [Development workflow](#development-workflow)
-  - [Git Hooks with Husky](#git-hooks-with-husky)
+  - [Git hooks with Husky](#git-hooks-with-husky)
   - [Debugging](#debugging)
   - [Writing high-impact code changes](#writing-high-impact-code-changes)
   - [Opening a pull request](#opening-a-pull-request)
   - [Review process](#review-process)
   - [Community values](#community-values)
   - [Getting help](#getting-help)
-  - [Contributor License Agreement (CLA)](#contributor-license-agreement-cla)
+  - [Contributor license agreement (CLA)](#contributor-license-agreement-cla)
     - [Quick fixes](#quick-fixes)
   - [Releasing `codex`](#releasing-codex)
-  - [Alternative Build Options](#alternative-build-options)
-    - [Nix Flake Development](#nix-flake-development)
-- [Security & Responsible AI](#security--responsible-ai)
+  - [Alternative build options](#alternative-build-options)
+    - [Nix flake development](#nix-flake-development)
+- [Security & responsible AI](#security--responsible-ai)
 - [License](#license)
 
 <!-- End ToC -->
@@ -58,7 +58,7 @@
 
 ---
 
-## Experimental Technology Disclaimer
+## Experimental technology disclaimer
 
 Codex CLI is an experimental project under active development. It is not yet stable, may contain bugs, incomplete features, or undergo breaking changes. We're building it in the open with the community and welcome:
 
@@ -158,7 +158,7 @@ And it's **fully open-source** so you can see and contribute to how it develops!
 
 ---
 
-## Security Model & Permissions
+## Security model & permissions
 
 Codex lets you decide _how much autonomy_ the agent receives and auto-approval policy via the
 `--approval-mode` flag (or the interactive onboarding prompt):
@@ -198,7 +198,7 @@ The hardening mechanism Codex uses depends on your OS:
 
 ---
 
-## System Requirements
+## System requirements
 
 | Requirement                 | Details                                                         |
 | --------------------------- | --------------------------------------------------------------- |
@@ -211,7 +211,7 @@ The hardening mechanism Codex uses depends on your OS:
 
 ---
 
-## CLI Reference
+## CLI reference
 
 | Command                              | Purpose                             | Example                              |
 | ------------------------------------ | ----------------------------------- | ------------------------------------ |
@@ -224,7 +224,7 @@ Key flags: `--model/-m`, `--approval-mode/-a`, `--quiet/-q`, and `--notify`.
 
 ---
 
-## Memory & Project Docs
+## Memory & project docs
 
 Codex merges Markdown instructions in this order:
 
@@ -250,7 +250,7 @@ Run Codex head-less in pipelines. Example GitHub Action step:
 
 Set `CODEX_QUIET_MODE=1` to silence interactive UI noise.
 
-## Tracing / Verbose Logging
+## Tracing / verbose logging
 
 Setting the environment variable `DEBUG=true` prints full API request and response details:
 
@@ -325,11 +325,11 @@ pnpm link
 
 ---
 
-## Configuration Guide
+## Configuration guide
 
 Codex configuration files can be placed in the `~/.codex/` directory, supporting both YAML and JSON formats.
 
-### Basic Configuration Parameters
+### Basic configuration parameters
 
 | Parameter           | Type    | Default    | Description                      | Available Options                                                                              |
 | ------------------- | ------- | ---------- | -------------------------------- | ---------------------------------------------------------------------------------------------- |
@@ -338,7 +338,7 @@ Codex configuration files can be placed in the `~/.codex/` directory, supporting
 | `fullAutoErrorMode` | string  | `ask-user` | Error handling in full-auto mode | `ask-user` (prompt for user input)<br>`ignore-and-continue` (ignore and proceed)               |
 | `notify`            | boolean | `true`     | Enable desktop notifications     | `true`/`false`                                                                                 |
 
-### Custom AI Provider Configuration
+### Custom AI provider configuration
 
 In the `providers` object, you can configure multiple AI service providers. Each provider requires the following parameters:
 
@@ -348,7 +348,7 @@ In the `providers` object, you can configure multiple AI service providers. Each
 | `baseURL` | string | API service URL                         | `"https://api.openai.com/v1"` |
 | `envKey`  | string | Environment variable name (for API key) | `"OPENAI_API_KEY"`            |
 
-### History Configuration
+### History configuration
 
 In the `history` object, you can configure conversation history settings:
 
@@ -358,7 +358,7 @@ In the `history` object, you can configure conversation history settings:
 | `saveHistory`       | boolean | Whether to save history                                | `true`        |
 | `sensitivePatterns` | array   | Patterns of sensitive information to filter in history | `[]`          |
 
-### Configuration Examples
+### Configuration examples
 
 1. YAML format (save as `~/.codex/config.yaml`):
 
@@ -380,7 +380,7 @@ notify: true
 }
 ```
 
-### Full Configuration Example
+### Full configuration example
 
 Below is a comprehensive example of `config.json` with multiple custom providers:
 
@@ -438,7 +438,7 @@ Below is a comprehensive example of `config.json` with multiple custom providers
 }
 ```
 
-### Custom Instructions
+### Custom instructions
 
 You can create a `~/.codex/instructions.md` file to define custom instructions:
 
@@ -447,7 +447,7 @@ You can create a `~/.codex/instructions.md` file to define custom instructions:
 - Only use git commands when explicitly requested
 ```
 
-### Environment Variables Setup
+### Environment variables setup
 
 For each AI provider, you need to set the corresponding API key in your environment variables. For example:
 
@@ -500,7 +500,7 @@ Not directly. It requires [Windows Subsystem for Linux (WSL2)](https://learn.mic
 
 ---
 
-## Zero Data Retention (ZDR) Usage
+## Zero data retention (ZDR) usage
 
 Codex CLI **does** support OpenAI organizations with [Zero Data Retention (ZDR)](https://platform.openai.com/docs/guides/your-data#zero-data-retention) enabled. If your OpenAI organization has Zero Data Retention enabled and you still encounter errors such as:
 
@@ -512,7 +512,7 @@ You may need to upgrade to a more recent version with: `npm i -g @openai/codex@l
 
 ---
 
-## Codex Open Source Fund
+## Codex open source fund
 
 We're excited to launch a **$1 million initiative** supporting open source projects that use Codex CLI and other OpenAI models.
 
@@ -537,7 +537,7 @@ More broadly we welcome contributions - whether you are opening your very first 
 - We use **Vitest** for unit tests, **ESLint** + **Prettier** for style, and **TypeScript** for type-checking.
 - Before pushing, run the full test/type/lint suite:
 
-### Git Hooks with Husky
+### Git hooks with Husky
 
 This project uses [Husky](https://typicode.github.io/husky/) to enforce code quality checks:
 
@@ -611,7 +611,7 @@ If you run into problems setting up the project, would like feedback on an idea,
 
 Together we can make Codex CLI an incredible tool. **Happy hacking!** :rocket:
 
-### Contributor License Agreement (CLA)
+### Contributor license agreement (CLA)
 
 All contributors **must** accept the CLA. The process is lightweight:
 
@@ -656,9 +656,9 @@ cd "$RELEASE_DIR"
 npm publish
 ```
 
-### Alternative Build Options
+### Alternative build options
 
-#### Nix Flake Development
+#### Nix flake development
 
 Prerequisite: Nix >= 2.4 with flakes enabled (`experimental-features = nix-command flakes` in `~/.config/nix/nix.conf`).
 
@@ -685,7 +685,7 @@ nix run .#codex
 
 ---
 
-## Security & Responsible AI
+## Security & responsible AI
 
 Have you discovered a vulnerability or have concerns about model output? Please e-mail **security@openai.com** and we will respond promptly.
 

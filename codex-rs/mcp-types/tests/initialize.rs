@@ -5,6 +5,7 @@ use mcp_types::InitializeRequestParams;
 use mcp_types::JSONRPCMessage;
 use mcp_types::JSONRPCRequest;
 use mcp_types::RequestId;
+use mcp_types::JSONRPC_VERSION;
 use serde_json::json;
 
 #[test]
@@ -30,6 +31,7 @@ fn deserialize_initialize_request() {
     };
 
     let expected_req = JSONRPCRequest {
+        jsonrpc: JSONRPC_VERSION.into(),
         id: RequestId::Integer(1),
         method: "initialize".into(),
         params: Some(json!({
