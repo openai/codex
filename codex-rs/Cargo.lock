@@ -557,6 +557,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-mcp-server"
+version = "0.1.0"
+dependencies = [
+ "codex-core",
+ "mcp-types",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "codex-tui"
 version = "0.1.0"
 dependencies = [
