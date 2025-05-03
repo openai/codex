@@ -97,6 +97,7 @@ async fn keeps_previous_response_id_between_tasks() {
                 approval_policy: config.approval_policy,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 disable_response_storage: false,
+                notify: None,
             },
         })
         .await

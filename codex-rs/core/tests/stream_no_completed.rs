@@ -80,6 +80,7 @@ async fn retries_on_early_close() {
                 approval_policy: config.approval_policy,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 disable_response_storage: false,
+                notify: None,
             },
         })
         .await

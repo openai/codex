@@ -36,6 +36,13 @@ pub enum Op {
         /// Disable server-side response storage (send full context each request)
         #[serde(default)]
         disable_response_storage: bool,
+
+        /// Optional external notifier command tokens. Present only when the
+        /// client wants the agent to spawn a program after each completed
+        /// turn.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default)]
+        notify: Option<Vec<String>>,
     },
 
     /// Abort current task.

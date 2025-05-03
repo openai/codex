@@ -557,6 +557,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-mcp-server"
+version = "0.1.0"
+dependencies = [
+ "codex-core",
+ "mcp-types",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "codex-tui"
 version = "0.1.0"
 dependencies = [
@@ -1938,6 +1951,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8263075bb86c5a1b1427b5ae862e8889656f126e9f77c484496e8b47cf5c5558"
 dependencies = [
  "regex-automata 0.1.10",
+]
+
+[[package]]
+name = "mcp-types"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

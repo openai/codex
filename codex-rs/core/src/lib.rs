@@ -18,6 +18,7 @@ pub mod linux;
 mod models;
 pub mod protocol;
 mod safety;
+mod user_notification;
 pub mod util;
 mod zdr_transcript;
 
