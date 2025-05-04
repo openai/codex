@@ -1,13 +1,14 @@
 use std::io;
 #[cfg(target_family = "unix")]
 use std::os::unix::process::ExitStatusExt;
+use std::path::Path;
+use std::path::PathBuf;
 use std::process::ExitStatus;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
-use serde::Deserialize;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncReadExt;
 use tokio::io::BufReader;
@@ -40,15 +41,10 @@ const MACOS_SEATBELT_BASE_POLICY: &str = include_str!("seatbelt_base_policy.sbpl
 /// already has root access.
 const MACOS_PATH_TO_SEATBELT_EXECUTABLE: &str = "/usr/bin/sandbox-exec";
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct ExecParams {
     pub command: Vec<String>,
-    pub workdir: Option<String>,
-
-    /// This is the maximum time in seconds that the command is allowed to run.
-    #[serde(rename = "timeout")]
-    // The wire format uses `timeout`, which has ambiguous units, so we use
-    // `timeout_ms` as the field name so it is clear in code.
+    pub cwd: PathBuf,
     pub timeout_ms: Option<u64>,
 }
 
@@ -97,14 +93,14 @@ pub async fn process_exec_tool_call(
         SandboxType::MacosSeatbelt => {
             let ExecParams {
                 command,
-                workdir,
+                cwd,
                 timeout_ms,
             } = params;
-            let seatbelt_command = create_seatbelt_command(command, sandbox_policy);
+            let seatbelt_command = create_seatbelt_command(command, sandbox_policy, &cwd);
             exec(
                 ExecParams {
                     command: seatbelt_command,
-                    workdir,
+                    cwd,
                     timeout_ms,
                 },
                 ctrl_c,
@@ -157,6 +153,7 @@ pub async fn process_exec_tool_call(
 pub fn create_seatbelt_command(
     command: Vec<String>,
     sandbox_policy: &SandboxPolicy,
+    cwd: &Path,
 ) -> Vec<String> {
     let (file_write_policy, extra_cli_args) = {
         if sandbox_policy.has_full_disk_write_access() {
@@ -166,7 +163,7 @@ pub fn create_seatbelt_command(
                 Vec::<String>::new(),
             )
         } else {
-            let writable_roots = sandbox_policy.get_writable_roots();
+            let writable_roots = sandbox_policy.get_writable_roots_with_cwd(cwd);
             let (writable_folder_policies, cli_args): (Vec<String>, Vec<String>) = writable_roots
                 .iter()
                 .enumerate()
@@ -234,7 +231,7 @@ pub struct ExecToolCallOutput {
 pub async fn exec(
     ExecParams {
         command,
-        workdir,
+        cwd,
         timeout_ms,
     }: ExecParams,
     ctrl_c: Arc<Notify>,
@@ -251,9 +248,7 @@ pub async fn exec(
         if command.len() > 1 {
             cmd.args(&command[1..]);
         }
-        if let Some(dir) = &workdir {
-            cmd.current_dir(dir);
-        }
+        cmd.current_dir(cwd);
 
         // Do not create a file descriptor for stdin because otherwise some
         // commands may hang forever waiting for input. For example, ripgrep has

@@ -81,6 +81,7 @@ async fn retries_on_early_close() {
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 disable_response_storage: false,
                 notify: None,
+                cwd: std::env::current_dir().unwrap(),
             },
         })
         .await

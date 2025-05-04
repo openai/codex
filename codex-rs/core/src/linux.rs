@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::io;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -48,7 +49,7 @@ pub async fn exec_linux(
             .expect("Failed to create runtime");
 
         rt.block_on(async {
-            apply_sandbox_policy_to_current_thread(sandbox_policy)?;
+            apply_sandbox_policy_to_current_thread(sandbox_policy, &params.cwd)?;
             exec(params, ctrl_c_copy).await
         })
     })
@@ -66,13 +67,16 @@ pub async fn exec_linux(
 
 /// Apply sandbox policies inside this thread so only the child inherits
 /// them, not the entire CLI process.
-pub fn apply_sandbox_policy_to_current_thread(sandbox_policy: SandboxPolicy) -> Result<()> {
+pub fn apply_sandbox_policy_to_current_thread(
+    sandbox_policy: SandboxPolicy,
+    cwd: &Path,
+) -> Result<()> {
     if !sandbox_policy.has_full_network_access() {
         install_network_seccomp_filter_on_current_thread()?;
     }
 
     if !sandbox_policy.has_full_disk_write_access() {
-        let writable_roots = sandbox_policy.get_writable_roots();
+        let writable_roots = sandbox_policy.get_writable_roots_with_cwd(cwd);
         install_filesystem_landlock_rules_on_current_thread(writable_roots)?;
     }
 
@@ -189,7 +193,7 @@ mod tests_linux {
     async fn run_cmd(cmd: &[&str], writable_roots: &[PathBuf], timeout_ms: u64) {
         let params = ExecParams {
             command: cmd.iter().map(|elm| elm.to_string()).collect(),
-            workdir: None,
+            cwd: std::env::current_dir().expect("cwd should exist"),
             timeout_ms: Some(timeout_ms),
         };
 
@@ -262,7 +266,7 @@ mod tests_linux {
     async fn assert_network_blocked(cmd: &[&str]) {
         let params = ExecParams {
             command: cmd.iter().map(|s| s.to_string()).collect(),
-            workdir: None,
+            cwd: std::env::current_dir().expect("cwd should exist"),
             // Give the tool a generous 2‑second timeout so even slow DNS timeouts
             // do not stall the suite.
             timeout_ms: Some(2_000),
