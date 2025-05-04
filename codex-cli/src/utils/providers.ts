@@ -44,7 +44,7 @@ export const providers: Record<
   },
   lightllm: {
     name: "LightLLM",
-    baseURL: process.env["LIGHTLLM_BASE_URL"] || "http://35.166.170.146:9080",
+    baseURL: process.env["LIGHTLLM_BASE_URL"] || "",
     envKey: "LIGHTLLM_API_KEY",
   },
 };
