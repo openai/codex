@@ -139,6 +139,7 @@ export type StoredConfig = {
   notify?: boolean;
   /** Disable server-side response storage (send full transcript each request) */
   disableResponseStorage?: boolean;
+  flexMode?: boolean;
   providers?: Record<string, { name: string; baseURL: string; envKey: string }>;
   history?: {
     maxSize?: number;
@@ -451,6 +452,10 @@ export const loadConfig = (
   }
   // Notification setting: enable desktop notifications when set in config
   config.notify = storedConfig.notify === true;
+  // Flex-mode setting: enable the flex-mode service tier when set in config
+  if (storedConfig.flexMode !== undefined) {
+    config.flexMode = storedConfig.flexMode;
+  }
 
   // Add default history config if not provided
   if (storedConfig.history !== undefined) {
@@ -505,6 +510,7 @@ export const saveConfig = (
     providers: config.providers,
     approvalMode: config.approvalMode,
     disableResponseStorage: config.disableResponseStorage,
+    flexMode: config.flexMode,
     reasoningEffort: config.reasoningEffort,
   };
 
