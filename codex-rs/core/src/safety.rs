@@ -22,6 +22,7 @@ pub fn assess_patch_safety(
     changes: &HashMap<PathBuf, ApplyPatchFileChange>,
     policy: AskForApproval,
     writable_roots: &[PathBuf],
+    cwd: &Path,
 ) -> SafetyCheck {
     if changes.is_empty() {
         return SafetyCheck::Reject {
@@ -40,7 +41,7 @@ pub fn assess_patch_safety(
         }
     }
 
-    if is_write_patch_constrained_to_writable_paths(changes, writable_roots) {
+    if is_write_patch_constrained_to_writable_paths(changes, writable_roots, cwd) {
         SafetyCheck::AutoApprove {
             sandbox_type: SandboxType::None,
         }
@@ -115,6 +116,7 @@ pub fn get_platform_sandbox() -> Option<SandboxType> {
 fn is_write_patch_constrained_to_writable_paths(
     changes: &HashMap<PathBuf, ApplyPatchFileChange>,
     writable_roots: &[PathBuf],
+    cwd: &Path,
 ) -> bool {
     // Early‑exit if there are no declared writable roots.
     if writable_roots.is_empty() {
@@ -141,11 +143,6 @@ fn is_write_patch_constrained_to_writable_paths(
     // and roots are converted to absolute, normalized forms before the
     // prefix check.
     let is_path_writable = |p: &PathBuf| {
-        let cwd = match std::env::current_dir() {
-            Ok(cwd) => cwd,
-            Err(_) => return false,
-        };
-
         let abs = if p.is_absolute() {
             p.clone()
         } else {
@@ -217,19 +214,22 @@ mod tests {
 
         assert!(is_write_patch_constrained_to_writable_paths(
             &add_inside,
-            &[PathBuf::from(".")]
+            &[PathBuf::from(".")],
+            &cwd,
         ));
 
         let add_outside_2 = make_add_change(parent.join("outside.txt"));
         assert!(!is_write_patch_constrained_to_writable_paths(
             &add_outside_2,
-            &[PathBuf::from(".")]
+            &[PathBuf::from(".")],
+            &cwd,
         ));
 
         // With parent dir added as writable root, it should pass.
         assert!(is_write_patch_constrained_to_writable_paths(
             &add_outside,
-            &[PathBuf::from("..")]
+            &[PathBuf::from("..")],
+            &cwd,
         ))
     }
 }

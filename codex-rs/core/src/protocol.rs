@@ -4,6 +4,7 @@
 //! between user and agent.
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
 
 use serde::Deserialize;
@@ -43,6 +44,15 @@ pub enum Op {
         #[serde(skip_serializing_if = "Option::is_none")]
         #[serde(default)]
         notify: Option<Vec<String>>,
+
+        /// Working directory that should be treated as the *root* of the
+        /// session. All relative paths supplied by the model as well as the
+        /// execution sandbox are resolved against this directory **instead**
+        /// of the process-wide current working directory. CLI front-ends are
+        /// expected to expand this to an absolute path before sending the
+        /// `ConfigureSession` operation so that the business-logic layer can
+        /// operate deterministically.
+        cwd: std::path::PathBuf,
     },
 
     /// Abort current task.
@@ -157,7 +167,7 @@ impl SandboxPolicy {
             .any(|perm| matches!(perm, SandboxPermission::NetworkFullAccess))
     }
 
-    pub fn get_writable_roots(&self) -> Vec<PathBuf> {
+    pub fn get_writable_roots_with_cwd(&self, cwd: &Path) -> Vec<PathBuf> {
         let mut writable_roots = Vec::<PathBuf>::new();
         for perm in &self.permissions {
             use SandboxPermission::*;
@@ -193,12 +203,9 @@ impl SandboxPolicy {
                         writable_roots.push(PathBuf::from("/tmp"));
                     }
                 }
-                DiskWriteCwd => match std::env::current_dir() {
-                    Ok(cwd) => writable_roots.push(cwd),
-                    Err(err) => {
-                        tracing::error!("Failed to get current working directory: {err}");
-                    }
-                },
+                DiskWriteCwd => {
+                    writable_roots.push(cwd.to_path_buf());
+                }
                 DiskWriteFolder { folder } => {
                     writable_roots.push(folder.clone());
                 }
@@ -317,7 +324,7 @@ pub enum EventMsg {
         command: Vec<String>,
         /// The command's working directory if not the default cwd for the
         /// agent.
-        cwd: String,
+        cwd: PathBuf,
     },
 
     ExecCommandEnd {
