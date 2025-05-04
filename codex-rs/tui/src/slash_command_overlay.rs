@@ -1,7 +1,7 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::widgets::{Block, Borders, Widget};
+use ratatui::widgets::Widget;
 
 use crate::slash_commands::{COMMANDS, CommandInfo};
 
@@ -61,41 +61,69 @@ impl<'a> SlashCommandOverlay<'a> {
 impl<'a> Widget for SlashCommandOverlay<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let commands = self.filtered_commands();
-        let block = Block::default()
-            .title("Available Commands")
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray));
-        block.render(area, buf);
         if commands.is_empty() {
-            let msg = "No commands found";
-            let y = area.y + 1;
-            buf.set_string(area.x + 2, y, msg, Style::default().fg(Color::Red));
+            // Do not render anything if there are no commands
             return;
         }
-        let max_lines = self.max_height.saturating_sub(2) as usize; // borders
-        let desc_indent = 6;
-        let desc_width = area.width.saturating_sub(desc_indent as u16 + 2) as usize;
-        let mut rendered_cmds = Vec::new();
+        let max_lines = self.max_height as usize;
+        let chevron_width = 2; // chevron + space
+        let cmd_max_len = crate::slash_commands::COMMANDS.iter().map(|c| c.name.len()).max().unwrap_or(0);
+        let desc_start_x = area.x + 1 + chevron_width as u16 + cmd_max_len as u16 + 1; // chevron + space + cmd + space
+        let desc_width = (area.x + area.width).saturating_sub(desc_start_x) as usize;
+
+        // Compute how many lines each command will take
+        let mut command_line_counts = Vec::with_capacity(commands.len());
         for cmd in &commands {
-            let desc_lines = Self::wrap_text(&cmd.description, desc_width);
-            rendered_cmds.push((cmd, desc_lines));
+            let wrapped_desc = Self::wrap_text(&cmd.description, desc_width);
+            let needed = 1.max(wrapped_desc.len());
+            command_line_counts.push(needed);
         }
+
+        // Adjust scroll_offset so selected command is always fully visible
+        let mut first_visible = self.scroll_offset;
         let mut lines_used = 0;
-        let mut visible = Vec::new();
-        let mut idx = self.scroll_offset;
-        while idx < rendered_cmds.len() && lines_used < max_lines {
-            let (cmd, desc_lines) = &rendered_cmds[idx];
-            let needed = 1 + desc_lines.len();
+        // Find the window of commands that fits in max_lines and includes the selected command
+        let mut last_visible = first_visible;
+        while last_visible < commands.len() {
+            let needed = command_line_counts[last_visible];
             if lines_used + needed > max_lines {
                 break;
             }
-            visible.push((idx, cmd, desc_lines));
             lines_used += needed;
-            idx += 1;
+            last_visible += 1;
         }
-        let mut y = area.y + 1;
-        for (idx, cmd, desc_lines) in visible {
-            if y >= area.y + area.height - 1 { break; }
+        // If selected is below the window, scroll down
+        while self.selected >= last_visible {
+            lines_used -= command_line_counts[first_visible];
+            first_visible += 1;
+            let mut temp_last = last_visible;
+            while temp_last < commands.len() {
+                let needed = command_line_counts[temp_last];
+                if lines_used + needed > max_lines {
+                    break;
+                }
+                lines_used += needed;
+                temp_last += 1;
+            }
+            last_visible = temp_last;
+        }
+        // If selected is above the window, scroll up
+        while self.selected < first_visible {
+            if first_visible == 0 { break; }
+            first_visible -= 1;
+            lines_used += command_line_counts[first_visible];
+            while lines_used > max_lines {
+                lines_used -= command_line_counts[last_visible - 1];
+                last_visible -= 1;
+            }
+        }
+
+        // Render the visible window
+        let mut y = area.y;
+        for idx in first_visible..last_visible {
+            if y >= area.y + area.height { break; }
+            let cmd = &commands[idx];
+            let wrapped_desc = Self::wrap_text(&cmd.description, desc_width);
             let is_selected = idx == self.selected;
             let chevron = if is_selected { "❭" } else { " " };
             let chevron_style = if is_selected {
@@ -104,20 +132,25 @@ impl<'a> Widget for SlashCommandOverlay<'a> {
                 Style::default().fg(Color::DarkGray)
             };
             let cmd_style = if is_selected {
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::Blue)
             };
-            // Chevron
-            buf.set_string(area.x + 1, y, chevron, chevron_style);
-            // Command name
-            buf.set_string(area.x + 3, y, &cmd.name, cmd_style);
-            y += 1;
-            // Description rows, indented
             let desc_style = Style::default().fg(Color::Gray);
-            for line in desc_lines {
-                if y >= area.y + area.height - 1 { break; }
-                buf.set_string(area.x + desc_indent, y, &line, desc_style);
+            // Render: chevron, command, space, description (first line)
+            let mut x = area.x + 1;
+            buf.set_string(x, y, chevron, chevron_style);
+            x += chevron_width as u16;
+            buf.set_string(x, y, &cmd.name, cmd_style);
+            x += cmd.name.len() as u16 + 1;
+            if let Some(first_desc) = wrapped_desc.get(0) {
+                buf.set_string(x, y, first_desc.trim_start(), desc_style);
+            }
+            y += 1;
+            // Render any additional wrapped lines, aligned with the first description line (no extra indentation)
+            for desc_line in wrapped_desc.iter().skip(1) {
+                if y >= area.y + area.height { break; }
+                buf.set_string(x, y, desc_line.trim_start(), desc_style);
                 y += 1;
             }
         }

@@ -83,6 +83,8 @@ pub(crate) struct BottomPane<'a> {
     pub slash_filter: String,
     pub slash_selected: usize,
     pub slash_scroll_offset: usize,
+    pub slash_overlay_height: Option<u16>,
+    pub slash_overlay_locked: bool,
 }
 
 pub(crate) struct BottomPaneParams {
@@ -112,6 +114,8 @@ impl BottomPane<'_> {
             slash_filter: String::new(),
             slash_selected: 0,
             slash_scroll_offset: 0,
+            slash_overlay_height: None,
+            slash_overlay_locked: false,
         }
     }
 
@@ -236,8 +240,16 @@ impl BottomPane<'_> {
                         self.textarea.input(input);
                         let current_input = self.textarea.lines().join("\n");
                         if current_input.starts_with('/') {
-                            self.show_slash_overlay = true;
                             self.slash_filter = current_input[1..].to_string();
+                            let filter_trimmed = self.slash_filter.trim();
+                            let filtered = self.filtered_slash_commands();
+                            if filter_trimmed.is_empty() || !filtered.is_empty() {
+                                self.lock_overlay_height(80);
+                                self.show_slash_overlay = true;
+                            } else {
+                                self.show_slash_overlay = false;
+                                self.reset_overlay_height_lock();
+                            }
                             self.slash_selected = 0;
                             self.slash_scroll_offset = 0;
                         } else {
@@ -245,6 +257,7 @@ impl BottomPane<'_> {
                             self.slash_filter.clear();
                             self.slash_selected = 0;
                             self.slash_scroll_offset = 0;
+                            self.reset_overlay_height_lock();
                         }
                         self.request_redraw()?;
                         Ok(InputResult::None)
@@ -361,22 +374,57 @@ impl BottomPane<'_> {
     }
 
     fn calc_overlay_height(&self, area: &Rect) -> u16 {
-        if !self.show_slash_overlay {
+        let filtered = self.filtered_slash_commands();
+        if !self.show_slash_overlay || filtered.is_empty() {
             return 0;
         }
-        let commands = self.filtered_slash_commands();
-        let desc_indent = 6;
-        let desc_width = area.width.saturating_sub(desc_indent as u16 + 2) as usize;
-        if commands.is_empty() {
-            // Border + message + border
-            return 3;
+        if let Some(h) = self.slash_overlay_height {
+            // Use locked height if set
+            let available_height = area.height.saturating_sub(5);
+            return h.min(available_height);
         }
+        // Fallback: calculate as before
+        let available_height = area.height.saturating_sub(5);
+        let chevron_width = 2;
+        let all_cmds = crate::slash_commands::COMMANDS;
+        let cmd_max_len = all_cmds.iter().map(|c| c.name.len()).max().unwrap_or(0);
+        let desc_start_x = 1 + chevron_width + cmd_max_len + 1;
+        let desc_width = area.width.saturating_sub(desc_start_x as u16) as usize;
         let mut total_lines = 0;
-        for cmd in &commands {
+        for cmd in all_cmds {
             let desc_lines = crate::slash_command_overlay::SlashCommandOverlay::wrap_text(&cmd.description, desc_width);
-            total_lines += 1 + desc_lines.len();
+            total_lines += 1.max(desc_lines.len());
         }
-        total_lines as u16 + 2 // +2 for borders
+        total_lines.min(available_height as usize) as u16
+    }
+
+    /// Calculate the height needed to display all commands, given a width.
+    fn calculate_overlay_height_for_all_commands(&self, area_width: u16) -> u16 {
+        let all_cmds = crate::slash_commands::COMMANDS;
+        let chevron_width = 2;
+        let cmd_max_len = all_cmds.iter().map(|c| c.name.len()).max().unwrap_or(0);
+        let desc_start_x = 1 + chevron_width + cmd_max_len + 1;
+        let desc_width = area_width.saturating_sub(desc_start_x as u16) as usize;
+        let mut total_lines = 0;
+        for cmd in all_cmds {
+            let desc_lines = crate::slash_command_overlay::SlashCommandOverlay::wrap_text(&cmd.description, desc_width);
+            total_lines += 1.max(desc_lines.len());
+        }
+        total_lines.min(20 as usize) as u16
+    }
+
+    /// Lock the overlay height if not already locked.
+    fn lock_overlay_height(&mut self, area_width: u16) {
+        if !self.slash_overlay_locked {
+            self.slash_overlay_height = Some(self.calculate_overlay_height_for_all_commands(area_width));
+            self.slash_overlay_locked = true;
+        }
+    }
+
+    /// Reset the overlay height lock.
+    fn reset_overlay_height_lock(&mut self) {
+        self.slash_overlay_height = None;
+        self.slash_overlay_locked = false;
     }
 }
 
@@ -387,24 +435,31 @@ impl WidgetRef for &BottomPane<'_> {
             PaneState::ApprovalModal { current, .. } => current.render(area, buf),
             PaneState::TextInput => {
                 let textarea_height = std::cmp::max(self.textarea.lines().len(), MIN_TEXTAREA_ROWS) as u16 + TEXTAREA_BORDER_LINES;
-                let overlay_height = self.calc_overlay_height(&area);
+                let filtered = self.filtered_slash_commands();
+                let overlay_height = if self.show_slash_overlay && !filtered.is_empty() {
+                    self.calc_overlay_height(&area)
+                } else {
+                    0
+                };
+                let total_height = textarea_height + overlay_height;
                 let input_area = Rect {
                     x: area.x,
-                    y: area.y + area.height - textarea_height,
+                    y: area.y + area.height - total_height,
                     width: area.width,
                     height: textarea_height,
                 };
-                let overlay_area = if self.show_slash_overlay && overlay_height > 0 {
+                let overlay_area = if self.show_slash_overlay && overlay_height > 0 && !filtered.is_empty() {
                     Rect {
                         x: area.x,
-                        y: input_area.y - overlay_height,
+                        y: input_area.y + input_area.height,
                         width: area.width,
                         height: overlay_height,
                     }
                 } else {
                     Rect { x: 0, y: 0, width: 0, height: 0 }
                 };
-                if self.show_slash_overlay && overlay_height > 0 {
+                self.textarea.render(input_area, buf);
+                if self.show_slash_overlay && overlay_height > 0 && !filtered.is_empty() {
                     let overlay = SlashCommandOverlay {
                         filter: &self.slash_filter,
                         selected: self.slash_selected,
@@ -413,7 +468,6 @@ impl WidgetRef for &BottomPane<'_> {
                     };
                     overlay.render(overlay_area, buf);
                 }
-                self.textarea.render(input_area, buf);
             }
         }
     }
