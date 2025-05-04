@@ -29,6 +29,7 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
         model,
         full_auto,
         sandbox,
+        cwd,
         skip_git_repo_check,
         disable_response_storage,
         color,
@@ -81,6 +82,7 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
         } else {
             None
         },
+        cwd: cwd.map(|p| p.canonicalize().unwrap_or(p)),
     };
     let config = Config::load_with_overrides(overrides)?;
     let (codex_wrapper, event, ctrl_c) = codex_wrapper::init_codex(config).await?;
