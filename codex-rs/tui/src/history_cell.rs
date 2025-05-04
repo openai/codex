@@ -144,18 +144,14 @@ impl HistoryCell {
         HistoryCell::BackgroundEvent { lines }
     }
 
-    pub(crate) fn new_session_info(
-        config: &Config,
-        model: String,
-        cwd: std::path::PathBuf,
-    ) -> Self {
+    pub(crate) fn new_session_info(config: &Config, model: String) -> Self {
         let mut lines: Vec<Line<'static>> = Vec::new();
 
         lines.push(Line::from("codex session:".magenta().bold()));
         lines.push(Line::from(vec!["↳ model: ".bold(), model.into()]));
         lines.push(Line::from(vec![
             "↳ cwd: ".bold(),
-            cwd.display().to_string().into(),
+            config.cwd.display().to_string().into(),
         ]));
         lines.push(Line::from(vec![
             "↳ approval: ".bold(),

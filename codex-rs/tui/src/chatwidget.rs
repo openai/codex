@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::mpsc::SendError;
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
@@ -34,7 +35,6 @@ pub(crate) struct ChatWidget<'a> {
     bottom_pane: BottomPane<'a>,
     input_focus: InputFocus,
     config: Config,
-    cwd: std::path::PathBuf,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -48,14 +48,9 @@ impl ChatWidget<'_> {
         config: Config,
         app_event_tx: Sender<AppEvent>,
         initial_prompt: Option<String>,
-        initial_images: Vec<std::path::PathBuf>,
+        initial_images: Vec<PathBuf>,
     ) -> Self {
         let (codex_op_tx, mut codex_op_rx) = unbounded_channel::<Op>();
-
-        // Determine the current working directory up‑front so we can display
-        // it alongside the Session information when the session is
-        // initialised.
-        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
 
         let app_event_tx_clone = app_event_tx.clone();
         // Create the Codex asynchronously so the UI loads as quickly as possible.
@@ -105,7 +100,6 @@ impl ChatWidget<'_> {
             }),
             input_focus: InputFocus::BottomPane,
             config,
-            cwd: cwd.clone(),
         };
 
         let _ = chat_widget.submit_welcome_message();
@@ -193,7 +187,7 @@ impl ChatWidget<'_> {
     fn submit_user_message_with_images(
         &mut self,
         text: String,
-        image_paths: Vec<std::path::PathBuf>,
+        image_paths: Vec<PathBuf>,
     ) -> std::result::Result<(), SendError<AppEvent>> {
         let mut items: Vec<InputItem> = Vec::new();
 
@@ -233,7 +227,7 @@ impl ChatWidget<'_> {
             EventMsg::SessionConfigured { model } => {
                 // Record session information at the top of the conversation.
                 self.conversation_history
-                    .add_session_info(&self.config, model, self.cwd.clone());
+                    .add_session_info(&self.config, model);
                 self.request_redraw()?;
             }
             EventMsg::AgentMessage { message } => {
