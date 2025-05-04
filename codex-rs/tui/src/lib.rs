@@ -114,7 +114,7 @@ pub fn run_main(cli: Cli) -> std::io::Result<()> {
     // modal. The flag is shown when the current working directory is *not*
     // inside a Git repository **and** the user did *not* pass the
     // `--allow-no-git-exec` flag.
-    let show_git_warning = !cli.skip_git_repo_check && !is_inside_git_repo();
+    let show_git_warning = !cli.skip_git_repo_check && !is_inside_git_repo(&config);
 
     try_run_ratatui_app(cli, config, show_git_warning, log_rx);
     Ok(())

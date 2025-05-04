@@ -47,23 +47,6 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
 
     assert_api_key(stderr_with_ansi);
 
-    if !skip_git_repo_check && !is_inside_git_repo() {
-        eprintln!("Not inside a Git repo and --skip-git-repo-check was not specified.");
-        std::process::exit(1);
-    }
-
-    // TODO(mbolin): Take a more thoughtful approach to logging.
-    let default_level = "error";
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .or_else(|_| EnvFilter::try_new(default_level))
-                .unwrap(),
-        )
-        .with_ansi(stderr_with_ansi)
-        .with_writer(std::io::stderr)
-        .try_init();
-
     let sandbox_policy = if full_auto {
         Some(SandboxPolicy::new_full_auto_policy())
     } else {
@@ -85,6 +68,24 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
         cwd: cwd.map(|p| p.canonicalize().unwrap_or(p)),
     };
     let config = Config::load_with_overrides(overrides)?;
+
+    if !skip_git_repo_check && !is_inside_git_repo(&config) {
+        eprintln!("Not inside a Git repo and --skip-git-repo-check was not specified.");
+        std::process::exit(1);
+    }
+
+    // TODO(mbolin): Take a more thoughtful approach to logging.
+    let default_level = "error";
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env()
+                .or_else(|_| EnvFilter::try_new(default_level))
+                .unwrap(),
+        )
+        .with_ansi(stderr_with_ansi)
+        .with_writer(std::io::stderr)
+        .try_init();
+
     let (codex_wrapper, event, ctrl_c) = codex_wrapper::init_codex(config).await?;
     let codex = Arc::new(codex_wrapper);
     info!("Codex initialized with event: {event:?}");
