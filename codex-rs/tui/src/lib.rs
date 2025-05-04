@@ -15,6 +15,8 @@ use tracing_appender::non_blocking;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::EnvFilter;
 
+pub mod slash_commands;
+pub mod slash_command_overlay;
 mod app;
 mod app_event;
 mod bottom_pane;
