@@ -19,6 +19,7 @@ use ratatui::text::Line;
 use ratatui::widgets::BorderType;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
+use tui_textarea::CursorMove;
 use tui_textarea::Input;
 use tui_textarea::Key;
 use tui_textarea::TextArea;
@@ -229,12 +230,6 @@ impl BottomPane<'_> {
                         shift: false,
                         alt: false,
                         ctrl: false,
-                    }
-                    | Input {
-                        key: Key::Char('p'),
-                        shift: false,
-                        alt: false,
-                        ctrl: true,
                     } => {
                         match self.navigate_command_history(-1)? {
                             Some(()) => {
@@ -249,12 +244,6 @@ impl BottomPane<'_> {
                         shift: false,
                         alt: false,
                         ctrl: false,
-                    }
-                    | Input {
-                        key: Key::Char('n'),
-                        shift: false,
-                        alt: false,
-                        ctrl: true,
                     } => {
                         match self.navigate_command_history(1)? {
                             Some(()) => {
@@ -272,6 +261,34 @@ impl BottomPane<'_> {
                         ctrl: true,
                     } => {
                         match key {
+                            Key::Char('p') => {
+                                if !self.textarea.is_empty() {
+                                    self.textarea.move_cursor(CursorMove::Up);
+                                    self.request_redraw()?;
+                                } else {
+                                    match self.navigate_command_history(-1)? {
+                                        Some(()) => {
+                                            self.request_redraw()?;
+                                        }
+                                        None => {}
+                                    }
+                                }
+                                Ok(InputResult::None)
+                            }
+                            Key::Char('n') => {
+                                if !self.textarea.is_empty() {
+                                    self.textarea.move_cursor(CursorMove::Down);
+                                    self.request_redraw()?;
+                                } else {
+                                    match self.navigate_command_history(1)? {
+                                        Some(()) => {
+                                            self.request_redraw()?;
+                                        }
+                                        None => {}
+                                    }
+                                }
+                                Ok(InputResult::None)
+                            }
                             Key::Char('u') => {
                                 self.textarea.select_all();
                                 self.textarea.cut();
@@ -292,13 +309,30 @@ impl BottomPane<'_> {
                                 Ok(InputResult::None)
                             }
                             Key::Char('a') => {
-                                self.textarea.move_cursor(tui_textarea::CursorMove::Head);
+                                self.textarea.move_cursor(CursorMove::Head);
                                 self.request_redraw()?;
                                 Ok(InputResult::None)
                             }
                             Key::Char('e') => {
-                                self.textarea.move_cursor(tui_textarea::CursorMove::End);
+                                self.textarea.move_cursor(CursorMove::End);
                                 self.request_redraw()?;
+                                Ok(InputResult::None)
+                            }
+                            Key::Char('h') => {
+                                self.textarea.move_cursor(CursorMove::Back);
+                                self.request_redraw()?;
+                                Ok(InputResult::None)
+                            }
+                            Key::Char('l') => {
+                                self.textarea.move_cursor(CursorMove::Forward);
+                                self.request_redraw()?;
+                                Ok(InputResult::None)
+                            }
+                            Key::Char('j') => {
+                                if !self.textarea.is_empty() {
+                                    self.textarea.insert_newline();
+                                    self.request_redraw()?;
+                                }
                                 Ok(InputResult::None)
                             }
                             _ => Ok(InputResult::None)
