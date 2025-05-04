@@ -7,7 +7,16 @@ members = [
     "core",
     "exec",
     "execpolicy",
-    "interactive",
-    "repl",
+    "mcp-server",
+    "mcp-types",
     "tui",
 ]
+
+[workspace.package]
+version = "0.0.0"
+
+[profile.release]
+lto = "fat"
+# Because we bundle some of these executables with the TypeScript CLI, we
+# remove everything to make the binary as small as possible.
+strip = "symbols"

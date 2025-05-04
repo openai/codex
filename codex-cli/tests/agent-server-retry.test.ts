@@ -122,7 +122,7 @@ describe("AgentLoop – automatic retry on 5xx errors", () => {
     expect(assistant?.content?.[0]?.text).toBe("ok");
   });
 
-  it("fails after 3 attempts and surfaces system message", async () => {
+  it("fails after a few attempts and surfaces system message", async () => {
     openAiState.createSpy = vi.fn(async () => {
       const err: any = new Error("Internal Server Error");
       err.status = 502; // any 5xx
@@ -154,7 +154,7 @@ describe("AgentLoop – automatic retry on 5xx errors", () => {
 
     await new Promise((r) => setTimeout(r, 20));
 
-    expect(openAiState.createSpy).toHaveBeenCalledTimes(5);
+    expect(openAiState.createSpy).toHaveBeenCalledTimes(8);
 
     const sysMsg = received.find(
       (i) =>

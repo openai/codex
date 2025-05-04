@@ -1,0 +1,30 @@
+[package]
+name = "codex-mcp-server"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+#
+# codex-core contains optional functionality that is gated behind the "cli"
+# feature. Unfortunately there is an unconditional reference to a module that
+# is only compiled when the feature is enabled, which breaks the build when
+# the default (no-feature) variant is used.
+#
+# We therefore explicitly enable the "cli" feature when codex-mcp-server pulls
+# in codex-core so that the required symbols are present.  This does _not_
+# change the public API of codex-core – it merely opts into compiling the
+# extra, feature-gated source files so the build succeeds.
+#
+codex-core = { path = "../core", features = ["cli"] }
+mcp-types = { path = "../mcp-types" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = { version = "0.1.41", features = ["log"] }
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+tokio = { version = "1", features = [
+    "io-std",
+    "macros",
+    "process",
+    "rt-multi-thread",
+    "signal",
+] }

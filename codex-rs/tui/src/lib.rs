@@ -4,6 +4,10 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
 use app::App;
+use codex_core::config::Config;
+use codex_core::config::ConfigOverrides;
+use codex_core::protocol::AskForApproval;
+use codex_core::protocol::SandboxPolicy;
 use codex_core::util::is_inside_git_repo;
 use log_layer::TuiLogLayer;
 use std::fs::OpenOptions;
@@ -30,6 +34,39 @@ pub use cli::Cli;
 
 pub fn run_main(cli: Cli) -> std::io::Result<()> {
     assert_env_var_set();
+
+    let (sandbox_policy, approval_policy) = if cli.full_auto {
+        (
+            Some(SandboxPolicy::new_full_auto_policy()),
+            Some(AskForApproval::OnFailure),
+        )
+    } else {
+        let sandbox_policy = cli.sandbox.permissions.clone().map(Into::into);
+        (sandbox_policy, cli.approval_policy.map(Into::into))
+    };
+
+    let config = {
+        // Load configuration and support CLI overrides.
+        let overrides = ConfigOverrides {
+            model: cli.model.clone(),
+            approval_policy,
+            sandbox_policy,
+            disable_response_storage: if cli.disable_response_storage {
+                Some(true)
+            } else {
+                None
+            },
+            cwd: cli.cwd.clone().map(|p| p.canonicalize().unwrap_or(p)),
+        };
+        #[allow(clippy::print_stderr)]
+        match Config::load_with_overrides(overrides) {
+            Ok(config) => config,
+            Err(err) => {
+                eprintln!("Error loading configuration: {err}");
+                std::process::exit(1);
+            }
+        }
+    };
 
     let log_dir = codex_core::config::log_dir()?;
     std::fs::create_dir_all(&log_dir)?;
@@ -77,9 +114,9 @@ pub fn run_main(cli: Cli) -> std::io::Result<()> {
     // modal. The flag is shown when the current working directory is *not*
     // inside a Git repository **and** the user did *not* pass the
     // `--allow-no-git-exec` flag.
-    let show_git_warning = !cli.skip_git_repo_check && !is_inside_git_repo();
+    let show_git_warning = !cli.skip_git_repo_check && !is_inside_git_repo(&config);
 
-    try_run_ratatui_app(cli, show_git_warning, log_rx);
+    try_run_ratatui_app(cli, config, show_git_warning, log_rx);
     Ok(())
 }
 
@@ -89,16 +126,18 @@ pub fn run_main(cli: Cli) -> std::io::Result<()> {
 )]
 fn try_run_ratatui_app(
     cli: Cli,
+    config: Config,
     show_git_warning: bool,
     log_rx: tokio::sync::mpsc::UnboundedReceiver<String>,
 ) {
-    if let Err(report) = run_ratatui_app(cli, show_git_warning, log_rx) {
+    if let Err(report) = run_ratatui_app(cli, config, show_git_warning, log_rx) {
         eprintln!("Error: {report:?}");
     }
 }
 
 fn run_ratatui_app(
     cli: Cli,
+    config: Config,
     show_git_warning: bool,
     mut log_rx: tokio::sync::mpsc::UnboundedReceiver<String>,
 ) -> color_eyre::Result<()> {
@@ -113,28 +152,8 @@ fn run_ratatui_app(
     let mut terminal = tui::init()?;
     terminal.clear()?;
 
-    let Cli {
-        prompt,
-        images,
-        approval_policy,
-        sandbox_policy: sandbox,
-        model,
-        disable_response_storage,
-        ..
-    } = cli;
-
-    let approval_policy = approval_policy.into();
-    let sandbox_policy = sandbox.into();
-
-    let mut app = App::new(
-        approval_policy,
-        sandbox_policy,
-        prompt,
-        show_git_warning,
-        images,
-        model,
-        disable_response_storage,
-    );
+    let Cli { prompt, images, .. } = cli;
+    let mut app = App::new(config.clone(), prompt, show_git_warning, images);
 
     // Bridge log receiver into the AppEvent channel so latest log lines update the UI.
     {

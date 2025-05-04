@@ -1,4 +1,5 @@
 use codex_ansi_escape::ansi_escape_line;
+use codex_core::config::Config;
 use codex_core::protocol::FileChange;
 use ratatui::prelude::*;
 use ratatui::style::Color;
@@ -143,22 +144,22 @@ impl HistoryCell {
         HistoryCell::BackgroundEvent { lines }
     }
 
-    pub(crate) fn new_session_info(
-        model: String,
-        cwd: std::path::PathBuf,
-        approval_policy: codex_core::protocol::AskForApproval,
-    ) -> Self {
+    pub(crate) fn new_session_info(config: &Config, model: String) -> Self {
         let mut lines: Vec<Line<'static>> = Vec::new();
 
         lines.push(Line::from("codex session:".magenta().bold()));
         lines.push(Line::from(vec!["↳ model: ".bold(), model.into()]));
         lines.push(Line::from(vec![
             "↳ cwd: ".bold(),
-            cwd.display().to_string().into(),
+            config.cwd.display().to_string().into(),
         ]));
         lines.push(Line::from(vec![
             "↳ approval: ".bold(),
-            format!("{:?}", approval_policy).into(),
+            format!("{:?}", config.approval_policy).into(),
+        ]));
+        lines.push(Line::from(vec![
+            "↳ sandbox: ".bold(),
+            format!("{:?}", config.sandbox_policy).into(),
         ]));
         lines.push(Line::from(""));
 

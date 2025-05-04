@@ -14,10 +14,11 @@ pub mod exec;
 mod flags;
 mod is_safe_command;
 #[cfg(target_os = "linux")]
-mod linux;
+pub mod linux;
 mod models;
 pub mod protocol;
 mod safety;
+mod user_notification;
 pub mod util;
 mod zdr_transcript;
 
@@ -28,4 +29,4 @@ mod approval_mode_cli_arg;
 #[cfg(feature = "cli")]
 pub use approval_mode_cli_arg::ApprovalModeCliArg;
 #[cfg(feature = "cli")]
-pub use approval_mode_cli_arg::SandboxModeCliArg;
+pub use approval_mode_cli_arg::SandboxPermissionOption;

@@ -6,9 +6,6 @@
 ; start with closed-by-default
 (deny default)
 
-; allow read-only file operations
-(allow file-read*)
-
 ; child processes inherit the policy of their parent
 (allow process-exec)
 (allow process-fork)

@@ -1,0 +1,28 @@
+{
+  "outputs": {
+    "codex-exec": {
+      "platforms": {
+        "macos-aarch64":  { "regex": "^codex-exec-aarch64-apple-darwin\\.zst$",          "path": "codex-exec" },
+        "macos-x86_64":   { "regex": "^codex-exec-x86_64-apple-darwin\\.zst$",           "path": "codex-exec" },
+        "linux-x86_64":   { "regex": "^codex-exec-x86_64-unknown-linux-musl\\.zst$",     "path": "codex-exec" },
+        "linux-aarch64":  { "regex": "^codex-exec-aarch64-unknown-linux-gnu\\.zst$",     "path": "codex-exec" }
+      }
+    },
+
+    "codex": {
+      "platforms": {
+        "macos-aarch64":  { "regex": "^codex-aarch64-apple-darwin\\.zst$",          "path": "codex" },
+        "macos-x86_64":   { "regex": "^codex-x86_64-apple-darwin\\.zst$",           "path": "codex" },
+        "linux-x86_64":   { "regex": "^codex-x86_64-unknown-linux-musl\\.zst$",     "path": "codex" },
+        "linux-aarch64":  { "regex": "^codex-aarch64-unknown-linux-gnu\\.zst$",     "path": "codex" }
+      }
+    },
+
+    "codex-linux-sandbox": {
+      "platforms": {
+        "linux-x86_64":   { "regex": "^codex-linux-sandbox-x86_64-unknown-linux-musl\\.zst$",     "path": "codex-linux-sandbox" },
+        "linux-aarch64":  { "regex": "^codex-linux-sandbox-aarch64-unknown-linux-gnu\\.zst$",     "path": "codex-linux-sandbox" }
+      }
+    }
+  }
+}
