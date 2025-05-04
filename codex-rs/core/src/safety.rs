@@ -1,9 +1,9 @@
-use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 
+use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
 
 use crate::exec::SandboxType;
@@ -19,12 +19,12 @@ pub enum SafetyCheck {
 }
 
 pub fn assess_patch_safety(
-    changes: &HashMap<PathBuf, ApplyPatchFileChange>,
+    action: &ApplyPatchAction,
     policy: AskForApproval,
     writable_roots: &[PathBuf],
     cwd: &Path,
 ) -> SafetyCheck {
-    if changes.is_empty() {
+    if action.is_empty() {
         return SafetyCheck::Reject {
             reason: "empty patch".to_string(),
         };
@@ -41,7 +41,7 @@ pub fn assess_patch_safety(
         }
     }
 
-    if is_write_patch_constrained_to_writable_paths(changes, writable_roots, cwd) {
+    if is_write_patch_constrained_to_writable_paths(action, writable_roots, cwd) {
         SafetyCheck::AutoApprove {
             sandbox_type: SandboxType::None,
         }
@@ -114,7 +114,7 @@ pub fn get_platform_sandbox() -> Option<SandboxType> {
 }
 
 fn is_write_patch_constrained_to_writable_paths(
-    changes: &HashMap<PathBuf, ApplyPatchFileChange>,
+    action: &ApplyPatchAction,
     writable_roots: &[PathBuf],
     cwd: &Path,
 ) -> bool {
@@ -164,7 +164,7 @@ fn is_write_patch_constrained_to_writable_paths(
         })
     };
 
-    for (path, change) in changes {
+    for (path, change) in action.changes() {
         match change {
             ApplyPatchFileChange::Add { .. } | ApplyPatchFileChange::Delete => {
                 if !is_path_writable(path) {
@@ -198,18 +198,9 @@ mod tests {
 
         // Helper to build a single‑entry map representing a patch that adds a
         // file at `p`.
-        let make_add_change = |p: PathBuf| {
-            let mut m = HashMap::new();
-            m.insert(
-                p.clone(),
-                ApplyPatchFileChange::Add {
-                    content: String::new(),
-                },
-            );
-            m
-        };
+        let make_add_change = |p: PathBuf| ApplyPatchAction::new_add_for_test(&p, "".to_string());
 
-        let add_inside = make_add_change(PathBuf::from("inner.txt"));
+        let add_inside = make_add_change(cwd.join("inner.txt"));
         let add_outside = make_add_change(parent.join("outside.txt"));
 
         assert!(is_write_patch_constrained_to_writable_paths(
