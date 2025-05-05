@@ -13,21 +13,30 @@ pub struct SlashCommandOverlay<'a> {
 }
 
 impl<'a> SlashCommandOverlay<'a> {
-    pub fn filtered_commands(&self) -> Vec<&'static CommandInfo> {
-        // Treat only-whitespace filter as empty, and also if filter is all spaces
-        if self.filter.chars().all(|c| c.is_whitespace()) {
-            COMMANDS.iter().collect()
-        } else {
-            let filter = self.filter.trim().to_ascii_lowercase();
-            if filter.is_empty() {
-                COMMANDS.iter().collect()
-            } else {
-                COMMANDS
-                    .iter()
-                    .filter(|cmd| cmd.name[1..].to_ascii_lowercase().starts_with(&filter))
-                    .collect()
-            }
+    /// Returns commands filtered and ranked by the filter string.
+    pub fn filter_and_rank_commands(filter: &str) -> Vec<&'static CommandInfo> {
+        let filter = filter.trim().to_ascii_lowercase();
+        if filter.is_empty() {
+            return COMMANDS.iter().collect();
         }
+        let mut matches: Vec<_> = COMMANDS
+            .iter()
+            .filter_map(|cmd| {
+                let name = &cmd.name[1..].to_ascii_lowercase(); // skip '/'
+                if name.starts_with(&filter) {
+                    Some(cmd)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        // Sort alphabetically by name
+        matches.sort_by(|a, b| a.name.cmp(b.name));
+        matches
+    }
+
+    pub fn filtered_commands(&self) -> Vec<&'static CommandInfo> {
+        Self::filter_and_rank_commands(self.filter)
     }
 
     pub fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
@@ -65,6 +74,8 @@ impl<'a> Widget for SlashCommandOverlay<'a> {
             // Do not render anything if there are no commands
             return;
         }
+        // Clamp selected index to valid range
+        let selected = self.selected.min(commands.len().saturating_sub(1));
         let max_lines = self.max_height as usize;
         let chevron_width = 2; // chevron + space
         let cmd_max_len = crate::slash_commands::COMMANDS.iter().map(|c| c.name.len()).max().unwrap_or(0);
@@ -93,7 +104,7 @@ impl<'a> Widget for SlashCommandOverlay<'a> {
             last_visible += 1;
         }
         // If selected is below the window, scroll down
-        while self.selected >= last_visible {
+        while selected < first_visible && first_visible > 0 {
             lines_used -= command_line_counts[first_visible];
             first_visible += 1;
             let mut temp_last = last_visible;
@@ -108,11 +119,11 @@ impl<'a> Widget for SlashCommandOverlay<'a> {
             last_visible = temp_last;
         }
         // If selected is above the window, scroll up
-        while self.selected < first_visible {
+        while selected < first_visible && first_visible > 0 {
             if first_visible == 0 { break; }
             first_visible -= 1;
             lines_used += command_line_counts[first_visible];
-            while lines_used > max_lines {
+            while lines_used > max_lines && last_visible > 0 {
                 lines_used -= command_line_counts[last_visible - 1];
                 last_visible -= 1;
             }
@@ -124,7 +135,7 @@ impl<'a> Widget for SlashCommandOverlay<'a> {
             if y >= area.y + area.height { break; }
             let cmd = &commands[idx];
             let wrapped_desc = Self::wrap_text(&cmd.description, desc_width);
-            let is_selected = idx == self.selected;
+            let is_selected = idx == selected;
             let chevron = if is_selected { "❭" } else { " " };
             let chevron_style = if is_selected {
                 Style::default().fg(Color::Cyan)

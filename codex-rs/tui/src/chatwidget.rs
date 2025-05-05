@@ -447,6 +447,11 @@ impl ChatWidget<'_> {
         })?;
         Ok(())
     }
+
+    // Add this method to handle terminal resize
+    pub fn handle_terminal_resize(&mut self) {
+        self.bottom_pane.reset_overlay_height_lock();
+    }
 }
 
 impl WidgetRef for &ChatWidget<'_> {

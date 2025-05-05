@@ -28,7 +28,6 @@ use crate::status_indicator_widget::StatusIndicatorWidget;
 use crate::user_approval_widget::ApprovalRequest;
 use crate::user_approval_widget::UserApprovalWidget;
 use crate::slash_command_overlay::SlashCommandOverlay;
-use crate::slash_commands::COMMANDS;
 
 /// Minimum number of visible text rows inside the textarea.
 const MIN_TEXTAREA_ROWS: usize = 3;
@@ -185,8 +184,12 @@ impl BottomPane<'_> {
                     let overlay_height = filtered.len().min(12);
                     match key_event.code {
                         crossterm::event::KeyCode::Up => {
-                            if self.slash_selected > 0 {
-                                self.slash_selected -= 1;
+                            if !filtered.is_empty() {
+                                if self.slash_selected == 0 {
+                                    self.slash_selected = filtered.len() - 1;
+                                } else {
+                                    self.slash_selected -= 1;
+                                }
                                 if self.slash_selected < self.slash_scroll_offset {
                                     self.slash_scroll_offset = self.slash_selected;
                                 }
@@ -195,8 +198,12 @@ impl BottomPane<'_> {
                             return Ok(InputResult::None);
                         }
                         crossterm::event::KeyCode::Down => {
-                            if self.slash_selected + 1 < filtered.len() {
-                                self.slash_selected += 1;
+                            if !filtered.is_empty() {
+                                if self.slash_selected + 1 >= filtered.len() {
+                                    self.slash_selected = 0;
+                                } else {
+                                    self.slash_selected += 1;
+                                }
                                 if self.slash_selected >= self.slash_scroll_offset + overlay_height {
                                     self.slash_scroll_offset = self.slash_selected + 1 - overlay_height;
                                 }
@@ -250,7 +257,12 @@ impl BottomPane<'_> {
                                 self.show_slash_overlay = false;
                                 self.reset_overlay_height_lock();
                             }
-                            self.slash_selected = 0;
+                            // Clamp selected index to filtered length
+                            if self.slash_selected >= filtered.len() && !filtered.is_empty() {
+                                self.slash_selected = filtered.len() - 1;
+                            } else {
+                                self.slash_selected = 0;
+                            }
                             self.slash_scroll_offset = 0;
                         } else {
                             self.show_slash_overlay = false;
@@ -358,19 +370,8 @@ impl BottomPane<'_> {
     }
 
     fn filtered_slash_commands(&self) -> Vec<&'static crate::slash_commands::CommandInfo> {
-        // Trim whitespace from the filter string
-        let trimmed_filter = self.slash_filter.trim();
-        
-        // If filter is empty or contains only whitespace, show all commands
-        if trimmed_filter.is_empty() {
-            COMMANDS.iter().collect()
-        } else {
-            // Otherwise filter commands that contain the trimmed filter string
-            COMMANDS
-                .iter()
-                .filter(|cmd| cmd.name.contains(trimmed_filter) || cmd.description.contains(trimmed_filter))
-                .collect()
-        }
+        // Use the unified filter and rank logic from SlashCommandOverlay
+        crate::slash_command_overlay::SlashCommandOverlay::filter_and_rank_commands(&self.slash_filter)
     }
 
     fn calc_overlay_height(&self, area: &Rect) -> u16 {
@@ -422,7 +423,7 @@ impl BottomPane<'_> {
     }
 
     /// Reset the overlay height lock.
-    fn reset_overlay_height_lock(&mut self) {
+    pub fn reset_overlay_height_lock(&mut self) {
         self.slash_overlay_height = None;
         self.slash_overlay_locked = false;
     }

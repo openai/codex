@@ -112,6 +112,10 @@ impl App<'_> {
         while let Ok(event) = self.app_event_rx.recv() {
             match event {
                 AppEvent::Redraw => {
+                    // On redraw (including terminal resize), reset overlay height lock
+                    if let AppState::Chat = self.app_state {
+                        self.chat_widget.handle_terminal_resize();
+                    }
                     self.draw_next_frame(terminal)?;
                 }
                 AppEvent::KeyEvent(key_event) => {
