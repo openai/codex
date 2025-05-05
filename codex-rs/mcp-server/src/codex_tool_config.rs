@@ -22,6 +22,10 @@ pub(crate) struct CodexToolCallParam {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
 
+    /// Optional override for the service tier for request
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<String>,
+
     /// Working directory for the session. If relative, it is resolved against
     /// the server process's current working directory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -146,6 +150,7 @@ impl CodexToolCallParam {
             approval_policy,
             sandbox_permissions,
             disable_response_storage,
+            service_tier,
         } = self;
         let sandbox_policy = sandbox_permissions.map(|perms| {
             SandboxPolicy::from(perms.into_iter().map(Into::into).collect::<Vec<_>>())
@@ -158,6 +163,7 @@ impl CodexToolCallParam {
             approval_policy: approval_policy.map(Into::into),
             sandbox_policy,
             disable_response_storage,
+            service_tier
         };
 
         let cfg = codex_core::config::Config::load_with_overrides(overrides)?;
