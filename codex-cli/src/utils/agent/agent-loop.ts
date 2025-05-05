@@ -1,7 +1,10 @@
 import type { ReviewDecision } from "./review.js";
 import type { ApplyPatchCommand, ApprovalPolicy } from "../../approvals.js";
 import type { AppConfig } from "../config.js";
+import type { MCPManager } from "../mcp/mcp-manager.js";
 import type { ResponseEvent } from "../responses.js";
+import type { ExecInput } from "./sandbox/interface.js";
+import type { Tool as MCPTool } from "@modelcontextprotocol/sdk/types.js";
 import type {
   ResponseFunctionToolCall,
   ResponseInputItem,
@@ -21,7 +24,12 @@ import {
   AZURE_OPENAI_API_VERSION,
 } from "../config.js";
 import { log } from "../logger/log.js";
-import { parseToolCallArguments } from "../parsers.js";
+import { mcpToOpenaiTools } from "../mcp/mcp-to-openai-tools.js";
+import { parsePrefixedToolName } from "../mcp/tool-utils.js";
+import {
+  parseExecToolCallArguments,
+  parseToolCallArguments,
+} from "../parsers.js";
 import { responsesCreateViaChatCompletions } from "../responses.js";
 import {
   ORIGIN,
@@ -76,6 +84,12 @@ type AgentLoopParams = {
   /** Extra writable roots to use with sandbox execution. */
   additionalWritableRoots: ReadonlyArray<string>;
 
+  /** MCP tools to include with the standard tools */
+  mcpTools?: Array<MCPTool>;
+
+  /** MCP Manager instance for tool execution */
+  mcpManager?: MCPManager;
+
   /** Called when the command is not auto-approved to request explicit user review. */
   getCommandConfirmation: (
     command: Array<string>,
@@ -122,6 +136,10 @@ export class AgentLoop {
   private additionalWritableRoots: ReadonlyArray<string>;
   /** Whether we ask the API to persist conversation state on the server */
   private readonly disableResponseStorage: boolean;
+  /** MCP tools to include with standard tools */
+  private readonly mcpTools: Array<MCPTool>;
+  /** MCP Manager for tool execution */
+  private readonly mcpManager?: MCPManager;
 
   // Using `InstanceType<typeof OpenAI>` sidesteps typing issues with the OpenAI package under
   // the TS 5+ `moduleResolution=bundler` setup. OpenAI client instance. We keep the concrete
@@ -281,6 +299,8 @@ export class AgentLoop {
     getCommandConfirmation,
     onLastResponseId,
     additionalWritableRoots,
+    mcpTools = [],
+    mcpManager,
   }: AgentLoopParams & { config?: AppConfig }) {
     this.model = model;
     this.provider = provider;
@@ -301,6 +321,8 @@ export class AgentLoop {
     this.onLoading = onLoading;
     this.getCommandConfirmation = getCommandConfirmation;
     this.onLastResponseId = onLastResponseId;
+    this.mcpTools = mcpTools ?? [];
+    this.mcpManager = mcpManager;
 
     this.disableResponseStorage = disableResponseStorage ?? false;
     this.sessionId = getSessionId() || randomUUID().replaceAll("-", "");
@@ -399,12 +421,14 @@ export class AgentLoop {
         (item as any).arguments;
 
     // The OpenAI "function_call" item may have either `call_id` (responses
-    // endpoint) or `id` (chat endpoint).  Prefer `call_id` if present but fall
+    // endpoint) or `id` (chat endpoint). Prefer `call_id` if present but fall
     // back to `id` to remain compatible.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const callId: string = (item as any).call_id ?? (item as any).id;
-
-    const args = parseToolCallArguments(rawArguments ?? "{}");
+    const isExecToolCall = name === "container.exec" || name === "shell";
+    const args = isExecToolCall
+      ? parseExecToolCallArguments(rawArguments ?? "{}")
+      : parseToolCallArguments(rawArguments ?? "{}");
     log(
       `handleFunctionCall(): name=${
         name ?? "undefined"
@@ -442,14 +466,48 @@ export class AgentLoop {
     // used to tell model to stop if needed
     const additionalItems: Array<ResponseInputItem> = [];
 
-    // TODO: allow arbitrary function calls (beyond shell/container.exec)
-    if (name === "container.exec" || name === "shell") {
+    // Check if this is an MCP tool call
+    if (name && name !== "container.exec" && name !== "shell") {
+      // Try to parse the MCP tool name
+      const parsedName = parsePrefixedToolName(name);
+      if (parsedName && this.mcpManager) {
+        const { serverName, toolName } = parsedName;
+        const mcpClient = this.mcpManager.getClientByName(serverName);
+
+        if (mcpClient && this.mcpManager.isServerConnected(serverName)) {
+          try {
+            log(
+              `Calling MCP tool: ${serverName}:${toolName} with args: ${JSON.stringify(args)}`,
+            );
+            const result = await mcpClient.callTool(toolName, args);
+            outputItem.output = JSON.stringify({ output: result });
+          } catch (error) {
+            log(`Error calling MCP tool ${serverName}:${toolName}: ${error}`);
+            outputItem.output = JSON.stringify({
+              output: `Error calling MCP tool: ${error}`,
+              metadata: { error: true },
+            });
+          }
+          return [outputItem, ...additionalItems];
+        } else {
+          log(`MCP server not connected: ${serverName}`);
+          outputItem.output = JSON.stringify({
+            output: `MCP server not connected: ${serverName}`,
+            metadata: { error: true },
+          });
+          return [outputItem, ...additionalItems];
+        }
+      }
+    }
+
+    // Handle built-in tools (container.exec/shell)
+    if (isExecToolCall) {
       const {
         outputText,
         metadata,
         additionalItems: additionalItemsFromExec,
       } = await handleExecCommand(
-        args,
+        args as ExecInput,
         this.config,
         this.approvalPolicy,
         this.additionalWritableRoots,
@@ -798,6 +856,12 @@ export class AgentLoop {
               .filter(Boolean)
               .join("\n");
 
+            // Combine shell tool with MCP tools
+            const allTools: Array<FunctionTool> = [
+              localShellTool as FunctionTool,
+              ...mcpToOpenaiTools(this.mcpTools),
+            ];
+
             const responseCall =
               !this.config.provider ||
               this.config.provider?.toLowerCase() === "openai"
@@ -827,7 +891,7 @@ export class AgentLoop {
                     store: true,
                     previous_response_id: lastResponseId || undefined,
                   }),
-              tools: tools,
+              tools: allTools,
               // Explicitly tell the model it is allowed to pick whatever
               // tool it deems appropriate.  Omitting this sometimes leads to
               // the model ignoring the available tools and responding with
@@ -1630,6 +1694,8 @@ You MUST adhere to the following criteria when executing the task:
 - Analyzing code for vulnerabilities is allowed.
 - Showing user code and tool call details is allowed.
 - User instructions may overwrite the *CODING GUIDELINES* section in this developer message.
+- Use the tools available at full capacity when completing the user's task. Think of tools as a way to extend your capabilities, not as a crutch, understand the user's request and use the tools if a tool can be used to complete the task.
+    - Use reporadar tool to search the codebase for relevant information. This tool helps you get relevant pieces of files and code snippets that can aid you in completing the user's task. Think of this as a shortcut to retrieve contextually relevant information from the codebase.
 - Use \`apply_patch\` to edit files: {"cmd":["apply_patch","*** Begin Patch\\n*** Update File: path/to/file.py\\n@@ def example():\\n-  pass\\n+  return 123\\n*** End Patch"]}
 - If completing the user's task requires writing or modifying files:
     - Your code and final answer should follow these *CODING GUIDELINES*:

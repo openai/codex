@@ -13,7 +13,7 @@ export default function HelpOverlay({
   onExit: () => void;
 }): JSX.Element {
   useInput((input, key) => {
-    if (key.escape || input === "q") {
+    if (input === "q" || input === "Q" || key.escape) {
       onExit();
     }
   });
@@ -23,81 +23,73 @@ export default function HelpOverlay({
       flexDirection="column"
       borderStyle="round"
       borderColor="gray"
-      width={80}
+      padding={1}
     >
-      <Box paddingX={1}>
+      <Text bold>Help</Text>
+      <Box margin={1} flexDirection="column">
         <Text bold>Available commands</Text>
-      </Box>
-
-      <Box flexDirection="column" paddingX={1} paddingTop={1}>
-        <Text bold dimColor>
-          Slash‑commands
-        </Text>
-        <Text>
-          <Text color="cyan">/help</Text> – show this help overlay
-        </Text>
-        <Text>
-          <Text color="cyan">/model</Text> – switch the LLM model in‑session
-        </Text>
-        <Text>
-          <Text color="cyan">/approval</Text> – switch auto‑approval mode
-        </Text>
-        <Text>
-          <Text color="cyan">/history</Text> – show command &amp; file history
-          for this session
-        </Text>
-        <Text>
-          <Text color="cyan">/clear</Text> – clear screen &amp; context
-        </Text>
-        <Text>
-          <Text color="cyan">/clearhistory</Text> – clear command history
-        </Text>
-        <Text>
-          <Text color="cyan">/bug</Text> – generate a prefilled GitHub issue URL
-          with session log
-        </Text>
-        <Text>
-          <Text color="cyan">/diff</Text> – view working tree git diff
-        </Text>
-        <Text>
-          <Text color="cyan">/compact</Text> – condense context into a summary
-        </Text>
-
-        <Box marginTop={1}>
-          <Text bold dimColor>
-            Keyboard shortcuts
+        <Box marginLeft={2} flexDirection="column">
+          <Text>
+            <Text bold>/help</Text> - Show this help
+          </Text>
+          <Text>
+            <Text bold>/clear</Text> - Clear message history
+          </Text>
+          <Text>
+            <Text bold>/diff</Text> - Show git diff of working directory
+          </Text>
+          <Text>
+            <Text bold>/model</Text> - Change the model
+          </Text>
+          <Text>
+            <Text bold>/approval</Text> - Change the approval mode
+          </Text>
+          <Text>
+            <Text bold>/history</Text> - View message history
+          </Text>
+          <Text>
+            <Text bold>/compact</Text> - Compact message history
+          </Text>
+          <Text>
+            <Text bold>/mcp</Text> - Show MCP servers status
           </Text>
         </Box>
-        <Text>
-          <Text color="yellow">Enter</Text> – send message
-        </Text>
-        <Text>
-          <Text color="yellow">Ctrl+J</Text> – insert newline
-        </Text>
-        {/* Re-enable once we re-enable new input */}
-        {/*
-        <Text>
-          <Text color="yellow">Ctrl+X</Text>/<Text color="yellow">Ctrl+E</Text>
-          &nbsp;– open external editor ($EDITOR)
-        </Text>
-        */}
-        <Text>
-          <Text color="yellow">Up/Down</Text> – scroll prompt history
-        </Text>
-        <Text>
-          <Text color="yellow">
-            Esc<Text dimColor>(✕2)</Text>
-          </Text>{" "}
-          – interrupt current action
-        </Text>
-        <Text>
-          <Text color="yellow">Ctrl+C</Text> – quit Codex
-        </Text>
       </Box>
 
-      <Box paddingX={1}>
-        <Text dimColor>esc or q to close</Text>
+      <Box margin={1} flexDirection="column">
+        <Text bold>Key bindings</Text>
+        <Box marginLeft={2} flexDirection="column" gap={0}>
+          <Text>
+            <Text bold>Esc</Text> - Cancel model response
+          </Text>
+          <Text>
+            <Text bold>Up/Down arrows</Text> - Navigate command history
+          </Text>
+          <Text>
+            <Text bold>Tab</Text> - Auto-complete commands
+          </Text>
+        </Box>
       </Box>
+
+      <Box margin={1} flexDirection="column">
+        <Text bold>Approval modes</Text>
+        <Box marginLeft={2} flexDirection="column" gap={0}>
+          <Text>
+            <Text bold>suggest</Text> - Ask before executing any commands
+          </Text>
+          <Text>
+            <Text bold>auto-edit</Text> - Auto-approve file edits; prompt for
+            commands
+          </Text>
+          <Text>
+            <Text bold>full-auto</Text> - Auto-approve all operations when safe
+          </Text>
+        </Box>
+      </Box>
+
+      <Text color="gray" dimColor>
+        Press ESC or q to go back
+      </Text>
     </Box>
   );
 }
