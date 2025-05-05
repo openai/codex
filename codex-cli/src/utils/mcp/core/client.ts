@@ -28,6 +28,7 @@ export class MCPClient {
           command,
           args,
           env,
+          stderr: 1,
         });
       } catch (e) {
         // eslint-disable-next-line no-console
