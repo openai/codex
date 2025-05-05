@@ -44,7 +44,7 @@ import {
 } from "./utils/get-api-key";
 import { createInputItem } from "./utils/input-utils";
 import { initLogger, log } from "./utils/logger/log";
-import { MCPManager } from "./utils/mcp/mcp-manager.js";
+import { MCPManager } from "./utils/mcp";
 import { isModelSupportedForResponses } from "./utils/model-utils.js";
 import { parseToolCall } from "./utils/parsers";
 import { onExit, setInkRenderer } from "./utils/terminal";

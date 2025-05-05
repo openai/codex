@@ -4,6 +4,7 @@ import type {
 } from "./agent/sandbox/interface.js";
 import type { ResponseFunctionToolCall } from "openai/resources/responses/responses.mjs";
 
+import { unsanitizeToolName } from "./mcp/utils/sanitizeToolName.js";
 import { log } from "node:console";
 import { formatCommandForDisplay } from "src/format-command.js";
 
@@ -17,6 +18,16 @@ export function parseToolCallOutput(toolCallOutput: string): {
 } {
   try {
     const { output, metadata } = JSON.parse(toolCallOutput);
+    // toolCallOutput can be a MCP tool response, so we need to handle it differently
+    if (typeof output !== "string" || typeof metadata !== "object") {
+      return {
+        output: JSON.stringify(output, null, 2),
+        metadata: {
+          exit_code: 0,
+          duration_seconds: 0,
+        },
+      };
+    }
     return {
       output,
       metadata,
@@ -52,16 +63,25 @@ export function parseToolCall(
     return undefined;
   }
 
-  const { cmd, workdir } = toolCallArgs;
-  if (!Array.isArray(cmd) || cmd.length === 0) {
-    return undefined;
+  const { cmd, workdir, ...rest } = toolCallArgs;
+  let cmdArray: Array<string> = [];
+
+  // cmd has been explicitly set and expects a cli tool
+  // during the time of implementing MCP tooling, I am trying not to change the existing code
+  // so I am checking for the cmd to be an array and not empty
+  // If it's empty, it's a MCP tool and we should use the tool name as the command
+  if (!cmd || !Array.isArray(cmd) || cmd.length === 0) {
+    const { serverName, toolName } = unsanitizeToolName(toolCall.name);
+    cmdArray = [`${serverName}: ${toolName}`, `Args: ${JSON.stringify(rest)}`];
+  } else {
+    cmdArray = cmd;
   }
-  const cmdReadableText = formatCommandForDisplay(cmd);
+  const cmdReadableText = formatCommandForDisplay(cmdArray);
 
   return {
-    cmd,
+    cmd: cmdArray,
     cmdReadableText,
-    workdir,
+    workdir: typeof workdir === "string" ? workdir : undefined,
   };
 }
 

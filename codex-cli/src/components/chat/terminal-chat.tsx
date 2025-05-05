@@ -21,7 +21,7 @@ import { extractAppliedPatches as _extractAppliedPatches } from "../../utils/ext
 import { getGitDiff } from "../../utils/get-diff.js";
 import { createInputItem } from "../../utils/input-utils.js";
 import { log } from "../../utils/logger/log.js";
-import { MCPManager } from "../../utils/mcp/mcp-manager.js";
+import { useMcpManager } from "../../utils/mcp";
 import {
   getAvailableModels,
   calculateContextPercentRemaining,
@@ -159,11 +159,9 @@ export default function TerminalChat({
   );
   const [thinkingSeconds, setThinkingSeconds] = useState(0);
 
-  const [mcpManager] = useState(() => new MCPManager());
+  // Use the MCP context instead of creating a new MCPManager
+  const { manager: mcpManager, stats: mcpStats } = useMcpManager();
   const [mcpTools, setMcpTools] = useState<Array<Tool>>([]);
-  const [mcpServersStatus, setMcpServersStatus] = useState<
-    Array<{ name: string; connected: boolean }>
-  >([]);
 
   const handleCompact = async () => {
     setLoading(true);
@@ -235,28 +233,22 @@ export default function TerminalChat({
     }`,
   );
 
-  // Add useEffect for MCP initialization
+  // Fetch MCP tools when manager is ready
   useEffect(() => {
-    const initializeMcp = async () => {
+    const fetchMcpTools = async () => {
       try {
-        await mcpManager.initialize();
         const tools = await mcpManager.getFlattendTools();
         setMcpTools(tools);
-        setMcpServersStatus(mcpManager.getServersStatus());
-        log(`Initialized MCP Manager with ${tools.length} tools`);
+        log(`Fetched ${tools.length} MCP tools`);
       } catch (error) {
-        log(`Failed to initialize MCP Manager: ${error}`);
-        setMcpServersStatus(mcpManager.getServersStatus());
+        log(`Failed to fetch MCP tools: ${error}`);
       }
     };
 
-    initializeMcp();
-
-    return () => {
-      // Clean up MCP connections
-      mcpManager.disconnectAll();
-    };
-  }, [mcpManager]);
+    if (mcpStats.status === "connected") {
+      fetchMcpTools();
+    }
+  }, [mcpManager, mcpStats.status]);
 
   // Update AgentLoop creation useEffect to include mcpTools and mcpManager
   useEffect(() => {
@@ -801,7 +793,11 @@ export default function TerminalChat({
 
         {overlayMode === "mcp" && (
           <MCPOverlay
-            serversStatus={mcpServersStatus}
+            serversStatus={
+              mcpStats.status === "connected"
+                ? mcpManager.getServersStatus()
+                : []
+            }
             onExit={() => setOverlayMode("none")}
           />
         )}

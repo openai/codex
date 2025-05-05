@@ -22,6 +22,9 @@ import React, { useEffect, useMemo } from "react";
 import { formatCommandForDisplay } from "src/format-command.js";
 import supportsHyperlinks from "supports-hyperlinks";
 
+const MAX_LINES = 6;
+const MAX_CHARS_PER_LINE = 50;
+
 export default function TerminalChatResponseItem({
   item,
   fullStdout = false,
@@ -198,6 +201,77 @@ function TerminalChatResponseToolCall({
   );
 }
 
+/**
+ * Truncates a single line if it exceeds the maximum length
+ * @param line The line to potentially truncate
+ * @param maxCharsPerLine Maximum characters allowed per line
+ * @returns Truncated line with ellipsis if needed
+ */
+function truncateLine(line: string, maxCharsPerLine: number): string {
+  return line.length > maxCharsPerLine
+    ? `${line.slice(0, maxCharsPerLine)}...`
+    : line;
+}
+
+/**
+ * Truncates an array of lines if it exceeds the maximum number of lines
+ * @param lines Array of content lines
+ * @param maxLines Maximum number of lines to show
+ * @param maxCharsPerLine Maximum characters allowed per line
+ * @returns Truncated content with line count message
+ */
+function truncateByLineCount(
+  lines: Array<string>,
+  maxLines: number,
+  maxCharsPerLine: number,
+): string {
+  const head = lines.slice(0, maxLines);
+  const truncatedHead = head.map((line) => truncateLine(line, maxCharsPerLine));
+  const remaining = lines.length - maxLines;
+  return [...truncatedHead, `... (${remaining} more lines)`].join("\n");
+}
+
+/**
+ * Truncates an array of lines based on total character length
+ * @param lines Array of content lines
+ * @param maxCharsPerLine Maximum characters allowed per line
+ * @returns Truncated content with line count message
+ */
+function truncateByCharCount(
+  lines: Array<string>,
+  maxCharsPerLine: number,
+): string {
+  const totalLength = lines.reduce((acc, line) => acc + line.length, 0);
+  if (totalLength > maxCharsPerLine) {
+    const truncatedLines = lines.map((line) =>
+      truncateLine(line, maxCharsPerLine),
+    );
+    return [...truncatedLines, `... (${lines.length} more lines)`].join("\n");
+  }
+  return lines.join("\n");
+}
+
+/**
+ * Truncates output content based on line count and character count
+ * @param content Original content to truncate
+ * @param maxLines Maximum number of lines to show
+ * @param maxCharsPerLine Maximum characters allowed per line
+ * @returns Truncated content
+ */
+function truncateOutput(
+  content: string,
+  maxLines: number,
+  maxCharsPerLine: number,
+): string {
+  const lines = content.split("\n");
+
+  if (lines.length > maxLines) {
+    return truncateByLineCount(lines, maxLines, maxCharsPerLine);
+  }
+
+  return truncateByCharCount(lines, maxCharsPerLine);
+}
+
 function TerminalChatResponseToolCallOutput({
   message,
   fullStdout,
@@ -207,7 +281,7 @@ function TerminalChatResponseToolCallOutput({
   fullStdout: boolean;
 }) {
   const { output, metadata } = parseToolCallOutput(message.output);
-  const { exit_code, duration_seconds } = metadata;
+  const { exit_code, duration_seconds } = metadata || {};
   const metadataInfo = useMemo(
     () =>
       [
@@ -222,12 +296,11 @@ function TerminalChatResponseToolCallOutput({
   );
   let displayedContent = output;
   if (message.type === "function_call_output" && !fullStdout) {
-    const lines = displayedContent.split("\n");
-    if (lines.length > 4) {
-      const head = lines.slice(0, 4);
-      const remaining = lines.length - 4;
-      displayedContent = [...head, `... (${remaining} more lines)`].join("\n");
-    }
+    displayedContent = truncateOutput(
+      displayedContent,
+      MAX_LINES,
+      MAX_CHARS_PER_LINE,
+    );
   }
 
   // -------------------------------------------------------------------------

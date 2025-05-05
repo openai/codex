@@ -1,7 +1,7 @@
 import type { ReviewDecision } from "./review.js";
 import type { ApplyPatchCommand, ApprovalPolicy } from "../../approvals.js";
 import type { AppConfig } from "../config.js";
-import type { MCPManager } from "../mcp/mcp-manager.js";
+import type { MCPManager } from "../mcp/index.js";
 import type { ResponseEvent } from "../responses.js";
 import type { ExecInput } from "./sandbox/interface.js";
 import type { Tool as MCPTool } from "@modelcontextprotocol/sdk/types.js";
@@ -24,8 +24,8 @@ import {
   AZURE_OPENAI_API_VERSION,
 } from "../config.js";
 import { log } from "../logger/log.js";
-import { mcpToOpenaiTools } from "../mcp/mcp-to-openai-tools.js";
-import { parsePrefixedToolName } from "../mcp/tool-utils.js";
+import { mcpToOpenaiTools } from "../mcp";
+import { unsanitizeToolName } from "../mcp/utils/sanitizeToolName.js";
 import {
   parseExecToolCallArguments,
   parseToolCallArguments,
@@ -469,11 +469,9 @@ export class AgentLoop {
     // Check if this is an MCP tool call
     if (name && name !== "container.exec" && name !== "shell") {
       // Try to parse the MCP tool name
-      const parsedName = parsePrefixedToolName(name);
-      if (parsedName && this.mcpManager) {
-        const { serverName, toolName } = parsedName;
+      const { serverName, toolName } = unsanitizeToolName(name);
+      if (serverName && toolName && this.mcpManager) {
         const mcpClient = this.mcpManager.getClientByName(serverName);
-
         if (mcpClient && this.mcpManager.isServerConnected(serverName)) {
           try {
             log(
@@ -1695,7 +1693,6 @@ You MUST adhere to the following criteria when executing the task:
 - Showing user code and tool call details is allowed.
 - User instructions may overwrite the *CODING GUIDELINES* section in this developer message.
 - Use the tools available at full capacity when completing the user's task. Think of tools as a way to extend your capabilities, not as a crutch, understand the user's request and use the tools if a tool can be used to complete the task.
-    - Use reporadar tool to search the codebase for relevant information. This tool helps you get relevant pieces of files and code snippets that can aid you in completing the user's task. Think of this as a shortcut to retrieve contextually relevant information from the codebase.
 - Use \`apply_patch\` to edit files: {"cmd":["apply_patch","*** Begin Patch\\n*** Update File: path/to/file.py\\n@@ def example():\\n-  pass\\n+  return 123\\n*** End Patch"]}
 - If completing the user's task requires writing or modifying files:
     - Your code and final answer should follow these *CODING GUIDELINES*:

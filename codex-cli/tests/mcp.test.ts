@@ -77,10 +77,10 @@ test(
   async () => {
     const [client, _] = buildClients();
     expect(client).toBeDefined();
-    await client?.connectToServer(
-      testMcpServers["memory"].command,
-      testMcpServers["memory"].args,
-    );
+    await client?.connectToServer({
+      command: testMcpServers["memory"].command,
+      args: testMcpServers["memory"].args,
+    });
     const tools = await client?.getTools();
     expect(tools).toBeDefined();
     expect(tools?.length).toBe(9);
