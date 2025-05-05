@@ -2,7 +2,7 @@ import { Box, Text, useInput } from "ink";
 import React from "react";
 
 /**
- * An overlay that lists the available slash-commands and their description.
+ * An overlay that lists the available slash‑commands and their description.
  * The overlay is purely informational and can be dismissed with the Escape
  * key. Keeping the implementation extremely small avoids adding any new
  * dependencies or complex state handling.
@@ -31,16 +31,16 @@ export default function HelpOverlay({
 
       <Box flexDirection="column" paddingX={1} paddingTop={1}>
         <Text bold dimColor>
-          Slash-commands
+          Slash‑commands
         </Text>
         <Text>
           <Text color="cyan">/help</Text> - show this help overlay
         </Text>
         <Text>
-          <Text color="cyan">/model</Text> - switch the LLM model in-session
+          <Text color="cyan">/model</Text> - switch the LLM model in‑session
         </Text>
         <Text>
-          <Text color="cyan">/approval</Text> - switch auto-approval mode
+          <Text color="cyan">/approval</Text> - switch auto‑approval mode
         </Text>
         <Text>
           <Text color="cyan">/history</Text> - show command &amp; file history
