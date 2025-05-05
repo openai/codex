@@ -1,4 +1,5 @@
 //! Prototype MCP server.
+#![deny(clippy::print_stdout, clippy::print_stderr)]
 
 use std::io::Result as IoResult;
 
@@ -12,7 +13,10 @@ use tracing::debug;
 use tracing::error;
 use tracing::info;
 
+mod codex_tool_config;
+mod codex_tool_runner;
 mod message_processor;
+
 use crate::message_processor::MessageProcessor;
 
 /// Size of the bounded channels used to communicate between tasks. The value
