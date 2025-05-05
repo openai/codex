@@ -50,6 +50,7 @@ pub fn run_main(cli: Cli) -> std::io::Result<()> {
         // Load configuration and support CLI overrides.
         let overrides = ConfigOverrides {
             model: cli.model.clone(),
+            service_tier: cli.service_tier.clone(),
             approval_policy,
             sandbox_policy,
             disable_response_storage: if cli.disable_response_storage {

@@ -103,6 +103,7 @@ async fn keeps_previous_response_id_between_tasks() {
                 disable_response_storage: false,
                 notify: None,
                 cwd: std::env::current_dir().unwrap(),
+                service_tier: config.service_tier,
             },
         })
         .await

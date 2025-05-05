@@ -34,6 +34,7 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
         disable_response_storage,
         color,
         prompt,
+        service_tier,
     } = cli;
 
     let (stdout_with_ansi, stderr_with_ansi) = match color {
@@ -56,6 +57,7 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
     // Load configuration and determine approval policy
     let overrides = ConfigOverrides {
         model,
+        service_tier,
         // This CLI is intended to be headless and has no affordances for asking
         // the user for approval.
         approval_policy: Some(AskForApproval::Never),

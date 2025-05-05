@@ -14,6 +14,10 @@ pub struct Cli {
     #[arg(long, short = 'm')]
     pub model: Option<String>,
 
+    /// Service tier for request, defaults to auto, use flex to enable Flex Processing.
+    #[arg(long)]
+    pub service_tier: Option<String>,
+
     /// Convenience alias for low-friction sandboxed automatic execution (network-disabled sandbox that can write to cwd and TMPDIR)
     #[arg(long = "full-auto", default_value_t = false)]
     pub full_auto: bool,

@@ -29,6 +29,7 @@ pub enum Op {
     ConfigureSession {
         /// If not specified, server will use its default model.
         model: String,
+        service_tier: String,
         /// Model instructions
         instructions: Option<String>,
         /// When to escalate for approval for execution

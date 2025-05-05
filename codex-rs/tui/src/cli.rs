@@ -17,6 +17,10 @@ pub struct Cli {
     #[arg(long, short = 'm')]
     pub model: Option<String>,
 
+    /// Service tier for request, defaults to auto, use flex to enable Flex Processing.
+    #[arg(long)]
+    pub service_tier: Option<String>,
+
     /// Configure when the model requires human approval before executing a command.
     #[arg(long = "ask-for-approval", short = 'a')]
     pub approval_policy: Option<ApprovalModeCliArg>,

@@ -75,6 +75,7 @@ struct Payload<'a> {
     /// true when using the Responses API.
     store: bool,
     stream: bool,
+    service_tier: &'a str,
 }
 
 #[derive(Debug, Serialize)]
@@ -141,13 +142,15 @@ static DEFAULT_TOOLS: LazyLock<Vec<ResponsesApiTool>> = LazyLock::new(|| {
 pub struct ModelClient {
     model: String,
     client: reqwest::Client,
+    service_tier: String,
 }
 
 impl ModelClient {
-    pub fn new(model: impl ToString) -> Self {
+    pub fn new(model: impl ToString, service_tier: impl ToString) -> Self {
         let model = model.to_string();
         let client = reqwest::Client::new();
-        Self { model, client }
+        let service_tier = service_tier.to_string();
+        Self { model, client, service_tier }
     }
 
     pub async fn stream(&mut self, prompt: &Prompt) -> Result<ResponseStream> {
@@ -186,6 +189,7 @@ impl ModelClient {
             previous_response_id: prompt.prev_id.clone(),
             store: prompt.store,
             stream: true,
+            service_tier: &self.service_tier,
         };
 
         let url = format!("{}/v1/responses", *OPENAI_API_BASE);

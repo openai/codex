@@ -547,6 +547,7 @@ async fn submission_loop(
                 disable_response_storage,
                 notify,
                 cwd,
+                service_tier,
             } => {
                 info!(model, "Configuring session");
                 if !cwd.is_absolute() {
@@ -562,7 +563,7 @@ async fn submission_loop(
                     return;
                 }
 
-                let client = ModelClient::new(model.clone());
+                let client = ModelClient::new(model.clone(), service_tier);
 
                 // abort any current running session and clone its state
                 let state = match sess.take() {
