@@ -482,6 +482,7 @@ export default function TerminalChat({
               agent,
               initialImagePaths,
               flexModeEnabled: Boolean(config.flexMode),
+              reasoningEffort: config.reasoningEffort,
             }}
           />
         ) : (
