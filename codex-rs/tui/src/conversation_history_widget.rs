@@ -184,8 +184,8 @@ impl ConversationHistoryWidget {
 
     /// Note `model` could differ from `config.model` if the agent decided to
     /// use a different model than the one requested by the user.
-    pub fn add_session_info(&mut self, config: &Config, model: String, cwd: PathBuf) {
-        self.add_to_history(HistoryCell::new_session_info(config, model, cwd));
+    pub fn add_session_info(&mut self, config: &Config, model: String) {
+        self.add_to_history(HistoryCell::new_session_info(config, model));
     }
 
     pub fn add_active_exec_command(&mut self, call_id: String, command: Vec<String>) {

@@ -18,7 +18,8 @@ pub fn run_landlock(command: Vec<String>, sandbox_policy: SandboxPolicy) -> anyh
 
     // Spawn a new thread and apply the sandbox policies there.
     let handle = std::thread::spawn(move || -> anyhow::Result<ExitStatus> {
-        codex_core::linux::apply_sandbox_policy_to_current_thread(sandbox_policy)?;
+        let cwd = std::env::current_dir()?;
+        codex_core::linux::apply_sandbox_policy_to_current_thread(sandbox_policy, &cwd)?;
         let status = Command::new(&command[0]).args(&command[1..]).status()?;
         Ok(status)
     });
