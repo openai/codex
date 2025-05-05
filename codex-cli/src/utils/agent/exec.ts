@@ -1,3 +1,4 @@
+import type { AppConfig } from "../config.js";
 import type { ExecInput, ExecResult } from "./sandbox/interface.js";
 import type { SpawnOptions } from "child_process";
 import type { ParseEntry } from "shell-quote";
@@ -41,6 +42,7 @@ export function exec(
     additionalWritableRoots,
   }: ExecInput & { additionalWritableRoots: ReadonlyArray<string> },
   sandbox: SandboxType,
+  config: AppConfig,
   abortSignal?: AbortSignal,
 ): Promise<ExecResult> {
   const opts: SpawnOptions = {
@@ -52,7 +54,7 @@ export function exec(
   switch (sandbox) {
     case SandboxType.NONE: {
       // SandboxType.NONE uses the raw exec implementation.
-      return rawExec(cmd, opts, abortSignal);
+      return rawExec(cmd, opts, config, abortSignal);
     }
     case SandboxType.MACOS_SEATBELT: {
       // Merge default writable roots with any user-specified ones.
@@ -61,10 +63,16 @@ export function exec(
         os.tmpdir(),
         ...additionalWritableRoots,
       ];
-      return execWithSeatbelt(cmd, opts, writableRoots, abortSignal);
+      return execWithSeatbelt(cmd, opts, writableRoots, config, abortSignal);
     }
     case SandboxType.LINUX_LANDLOCK: {
-      return execWithLandlock(cmd, opts, additionalWritableRoots, abortSignal);
+      return execWithLandlock(
+        cmd,
+        opts,
+        additionalWritableRoots,
+        config,
+        abortSignal,
+      );
     }
   }
 }
