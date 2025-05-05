@@ -26,8 +26,8 @@ use crate::bottom_pane::BottomPaneParams;
 use crate::bottom_pane::InputResult;
 use crate::conversation_history_widget::ConversationHistoryWidget;
 use crate::history_cell::PatchEventType;
-use crate::user_approval_widget::ApprovalRequest;
 use crate::slash_commands::{SlashCommand, COMMANDS};
+use crate::user_approval_widget::ApprovalRequest;
 
 pub(crate) struct ChatWidget<'a> {
     app_event_tx: Sender<AppEvent>,
@@ -164,7 +164,10 @@ impl ChatWidget<'_> {
     }
 
     /// Process a slash command and take appropriate action
-    fn process_slash_command(&mut self, command: &str) -> std::result::Result<(), SendError<AppEvent>> {
+    fn process_slash_command(
+        &mut self,
+        command: &str,
+    ) -> std::result::Result<(), SendError<AppEvent>> {
         if let Some(cmd_info) = COMMANDS.iter().find(|c| c.name == command) {
             match cmd_info.command {
                 SlashCommand::Clear => {
@@ -181,7 +184,8 @@ impl ChatWidget<'_> {
                     let _ = self.submit_system_message("Model selection not yet implemented.");
                 }
                 SlashCommand::Approval => {
-                    let _ = self.submit_system_message("Approval mode selection not yet implemented.");
+                    let _ =
+                        self.submit_system_message("Approval mode selection not yet implemented.");
                 }
                 SlashCommand::Bug => {
                     let _ = self.submit_system_message("Bug report command not yet implemented.");
@@ -193,7 +197,8 @@ impl ChatWidget<'_> {
                     let _ = self.submit_system_message("Compact command not yet implemented.");
                 }
                 SlashCommand::ClearHistory => {
-                    let _ = self.submit_system_message("Clear history command not yet implemented.");
+                    let _ =
+                        self.submit_system_message("Clear history command not yet implemented.");
                 }
             }
             Ok(())

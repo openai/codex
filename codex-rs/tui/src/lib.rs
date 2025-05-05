@@ -15,8 +15,6 @@ use tracing_appender::non_blocking;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::EnvFilter;
 
-pub mod slash_commands;
-pub mod slash_command_overlay;
 mod app;
 mod app_event;
 mod bottom_pane;
@@ -28,6 +26,8 @@ mod git_warning_screen;
 mod history_cell;
 mod log_layer;
 mod scroll_event_helper;
+pub mod slash_command_overlay;
+pub mod slash_commands;
 mod status_indicator_widget;
 mod tui;
 mod user_approval_widget;
