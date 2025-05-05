@@ -94,6 +94,7 @@ export async function handleExecCommand(
       /* applyPatch */ undefined,
       /* runInSandbox */ false,
       additionalWritableRoots,
+      config,
       abortSignal,
     ).then(convertSummaryToResult);
   }
@@ -142,6 +143,7 @@ export async function handleExecCommand(
     applyPatch,
     runInSandbox,
     additionalWritableRoots,
+    config,
     abortSignal,
   );
   // If the operation was aborted in the meantime, propagate the cancellation
@@ -179,6 +181,7 @@ export async function handleExecCommand(
         applyPatch,
         false,
         additionalWritableRoots,
+        config,
         abortSignal,
       );
       return convertSummaryToResult(summary);
@@ -213,6 +216,7 @@ async function execCommand(
   applyPatchCommand: ApplyPatchCommand | undefined,
   runInSandbox: boolean,
   additionalWritableRoots: ReadonlyArray<string>,
+  config: AppConfig,
   abortSignal?: AbortSignal,
 ): Promise<ExecCommandSummary> {
   let { workdir } = execInput;
@@ -252,6 +256,7 @@ async function execCommand(
       : await exec(
           { ...execInput, additionalWritableRoots },
           await getSandbox(runInSandbox),
+          config,
           abortSignal,
         );
   const duration = Date.now() - start;
