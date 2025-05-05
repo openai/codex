@@ -2,7 +2,7 @@ import { Box, Text, useInput } from "ink";
 import React from "react";
 
 /**
- * An overlay that lists the available slash‑commands and their description.
+ * An overlay that lists the available slash–commands and their description.
  * The overlay is purely informational and can be dismissed with the Escape
  * key. Keeping the implementation extremely small avoids adding any new
  * dependencies or complex state handling.
@@ -31,39 +31,39 @@ export default function HelpOverlay({
 
       <Box flexDirection="column" paddingX={1} paddingTop={1}>
         <Text bold dimColor>
-          Slash‑commands
+          Slash–commands
         </Text>
         <Text>
-          <Text color="cyan">/help</Text> - show this help overlay
+          <Text color="cyan">/help</Text> – show this help overlay
         </Text>
         <Text>
-          <Text color="cyan">/model</Text> - switch the LLM model in‑session
+          <Text color="cyan">/model</Text> – switch the LLM model in–session
         </Text>
         <Text>
-          <Text color="cyan">/approval</Text> - switch auto‑approval mode
+          <Text color="cyan">/approval</Text> – switch auto–approval mode
         </Text>
         <Text>
-          <Text color="cyan">/history</Text> - show command &amp; file history
+          <Text color="cyan">/history</Text> – show command &amp; file history
           for this session
         </Text>
         <Text>
-          <Text color="cyan">/clear</Text> - clear screen &amp; context
+          <Text color="cyan">/clear</Text> – clear screen &amp; context
         </Text>
         <Text>
-          <Text color="cyan">/clearhistory</Text> - clear command history
+          <Text color="cyan">/clearhistory</Text> – clear command history
         </Text>
         <Text>
-          <Text color="cyan">/bug</Text> - generate a prefilled GitHub issue URL
+          <Text color="cyan">/bug</Text> – generate a prefilled GitHub issue URL
           with session log
         </Text>
         <Text>
-          <Text color="cyan">/diff</Text> - view working tree git diff
+          <Text color="cyan">/diff</Text> – view working tree git diff
         </Text>
         <Text>
-          <Text color="cyan">/compact</Text> - condense context into a summary
+          <Text color="cyan">/compact</Text> – condense context into a summary
         </Text>
         <Text>
-          <Text color="cyan">/mcp</Text> - show MCP servers status
+          <Text color="cyan">/mcp</Text> – show MCP servers status
         </Text>
 
         <Box marginTop={1}>
@@ -72,32 +72,29 @@ export default function HelpOverlay({
           </Text>
         </Box>
         <Text>
-          <Text color="yellow">Enter</Text> - send message
+          <Text color="yellow">Enter</Text> – send message
         </Text>
         <Text>
-          <Text color="yellow">Ctrl+J</Text> - insert newline
+          <Text color="yellow">Ctrl+J</Text> – insert newline
         </Text>
-        {/* Re-enable once we re-enable new input */}
+        {/* Re–enable once we re–enable new input */}
         {/*
         <Text>
           <Text color="yellow">Ctrl+X</Text>/<Text color="yellow">Ctrl+E</Text>
-          &nbsp;- open external editor ($EDITOR)
+          &nbsp;– open external editor ($EDITOR)
         </Text>
         */}
         <Text>
-          <Text color="yellow">Up/Down</Text> - scroll prompt history
-        </Text>
-        <Text>
-          <Text color="yellow">Tab</Text> - auto-complete commands
+          <Text color="yellow">Up/Down</Text> – scroll prompt history
         </Text>
         <Text>
           <Text color="yellow">
             Esc<Text dimColor>(✕2)</Text>
           </Text>{" "}
-          - interrupt current action
+          – interrupt current action
         </Text>
         <Text>
-          <Text color="yellow">Ctrl+C</Text> - quit Codex
+          <Text color="yellow">Ctrl+C</Text> – quit Codex
         </Text>
 
         <Box marginTop={1}>
@@ -106,14 +103,14 @@ export default function HelpOverlay({
           </Text>
         </Box>
         <Text>
-          <Text color="green">suggest</Text> - ask before executing any commands
+          <Text color="green">suggest</Text> – ask before executing any commands
         </Text>
         <Text>
-          <Text color="green">auto-edit</Text> - auto-approve file edits; prompt
+          <Text color="green">auto–edit</Text> – auto–approve file edits; prompt
           for commands
         </Text>
         <Text>
-          <Text color="green">full-auto</Text> - auto-approve all operations
+          <Text color="green">full–auto</Text> – auto–approve all operations
           when safe
         </Text>
       </Box>
