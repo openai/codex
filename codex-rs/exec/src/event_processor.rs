@@ -113,7 +113,7 @@ impl EventProcessor {
                     "{} {} in {}",
                     "exec".style(self.magenta),
                     escape_command(&command).style(self.bold),
-                    cwd,
+                    cwd.to_string_lossy(),
                 );
             }
             EventMsg::ExecCommandEnd {

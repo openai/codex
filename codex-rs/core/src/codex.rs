@@ -12,6 +12,7 @@ use async_channel::Sender;
 use codex_apply_patch::maybe_parse_apply_patch_verified;
 use codex_apply_patch::print_summary;
 use codex_apply_patch::AffectedPaths;
+use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
 use codex_apply_patch::MaybeApplyPatchVerified;
 use fs_err as fs;
@@ -22,6 +23,7 @@ use tokio::sync::oneshot;
 use tokio::sync::Notify;
 use tokio::task::AbortHandle;
 use tracing::debug;
+use tracing::error;
 use tracing::info;
 use tracing::trace;
 use tracing::warn;
@@ -40,6 +42,7 @@ use crate::models::ContentItem;
 use crate::models::FunctionCallOutputPayload;
 use crate::models::ResponseInputItem;
 use crate::models::ResponseItem;
+use crate::models::ShellToolCallParams;
 use crate::protocol::AskForApproval;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
@@ -190,6 +193,10 @@ struct Session {
     tx_event: Sender<Event>,
     ctrl_c: Arc<Notify>,
 
+    /// The session's current working directory. All relative paths provided by
+    /// the model as well as sandbox policies are resolved against this path
+    /// instead of `std::env::current_dir()`.
+    cwd: PathBuf,
     instructions: Option<String>,
     approval_policy: AskForApproval,
     sandbox_policy: SandboxPolicy,
@@ -198,8 +205,15 @@ struct Session {
     /// External notifier command (will be passed as args to exec()). When
     /// `None` this feature is disabled.
     notify: Option<Vec<String>>,
-
     state: Mutex<State>,
+}
+
+impl Session {
+    fn resolve_path(&self, path: Option<String>) -> PathBuf {
+        path.as_ref()
+            .map(PathBuf::from)
+            .map_or_else(|| self.cwd.clone(), |p| self.cwd.join(p))
+    }
 }
 
 /// Mutable state of the agent
@@ -258,7 +272,7 @@ impl Session {
     pub async fn request_patch_approval(
         &self,
         sub_id: String,
-        changes: &HashMap<PathBuf, ApplyPatchFileChange>,
+        action: &ApplyPatchAction,
         reason: Option<String>,
         grant_root: Option<PathBuf>,
     ) -> oneshot::Receiver<ReviewDecision> {
@@ -266,7 +280,7 @@ impl Session {
         let event = Event {
             id: sub_id.clone(),
             msg: EventMsg::ApplyPatchApprovalRequest {
-                changes: convert_apply_patch_to_protocol(changes),
+                changes: convert_apply_patch_to_protocol(action),
                 reason,
                 grant_root,
             },
@@ -291,26 +305,13 @@ impl Session {
         state.approved_commands.insert(cmd);
     }
 
-    async fn notify_exec_command_begin(
-        &self,
-        sub_id: &str,
-        call_id: &str,
-        command: Vec<String>,
-        cwd: Option<String>,
-    ) {
-        let cwd = cwd
-            .or_else(|| {
-                std::env::current_dir()
-                    .ok()
-                    .map(|p| p.to_string_lossy().to_string())
-            })
-            .unwrap_or_else(|| "<unknown cwd>".to_string());
+    async fn notify_exec_command_begin(&self, sub_id: &str, call_id: &str, params: &ExecParams) {
         let event = Event {
             id: sub_id.to_string(),
             msg: EventMsg::ExecCommandBegin {
                 call_id: call_id.to_string(),
-                command,
-                cwd,
+                command: params.command.clone(),
+                cwd: params.cwd.clone(),
             },
         };
         let _ = self.tx_event.send(event).await;
@@ -518,8 +519,22 @@ async fn submission_loop(
                 sandbox_policy,
                 disable_response_storage,
                 notify,
+                cwd,
             } => {
                 info!(model, "Configuring session");
+                if !cwd.is_absolute() {
+                    let message = format!("cwd is not absolute: {cwd:?}");
+                    error!(message);
+                    let event = Event {
+                        id: sub.id,
+                        msg: EventMsg::Error { message },
+                    };
+                    if let Err(e) = tx_event.send(event).await {
+                        error!("failed to send error message: {e:?}");
+                    }
+                    return;
+                }
+
                 let client = ModelClient::new(model.clone());
 
                 // abort any current running session and clone its state
@@ -538,7 +553,7 @@ async fn submission_loop(
                     },
                 };
 
-                // update session
+                let writable_roots = Mutex::new(get_writable_roots(&cwd));
                 sess = Some(Arc::new(Session {
                     client,
                     tx_event: tx_event.clone(),
@@ -546,7 +561,8 @@ async fn submission_loop(
                     instructions,
                     approval_policy,
                     sandbox_policy,
-                    writable_roots: Mutex::new(get_writable_roots()),
+                    cwd,
+                    writable_roots,
                     notify,
                     state: Mutex::new(state),
                 }));
@@ -865,8 +881,12 @@ async fn handle_function_call(
     match name.as_str() {
         "container.exec" | "shell" => {
             // parse command
-            let params = match serde_json::from_str::<ExecParams>(&arguments) {
-                Ok(v) => v,
+            let params: ExecParams = match serde_json::from_str::<ShellToolCallParams>(&arguments) {
+                Ok(shell_tool_call_params) => ExecParams {
+                    command: shell_tool_call_params.command,
+                    cwd: sess.resolve_path(shell_tool_call_params.workdir.clone()),
+                    timeout_ms: shell_tool_call_params.timeout_ms,
+                },
                 Err(e) => {
                     // allow model to re-sample
                     let output = ResponseInputItem::FunctionCallOutput {
@@ -881,7 +901,7 @@ async fn handle_function_call(
             };
 
             // check if this was a patch, and apply it if so
-            match maybe_parse_apply_patch_verified(&params.command) {
+            match maybe_parse_apply_patch_verified(&params.command, &params.cwd) {
                 MaybeApplyPatchVerified::Body(changes) => {
                     return apply_patch(sess, sub_id, call_id, changes).await;
                 }
@@ -903,14 +923,6 @@ async fn handle_function_call(
                 MaybeApplyPatchVerified::NotApplyPatch => (),
             }
 
-            // this was not a valid patch, execute command
-            let repo_root = std::env::current_dir().expect("no current dir");
-            let workdir: PathBuf = params
-                .workdir
-                .as_ref()
-                .map(PathBuf::from)
-                .unwrap_or(repo_root.clone());
-
             // safety checks
             let safety = {
                 let state = sess.state.lock().unwrap();
@@ -928,7 +940,7 @@ async fn handle_function_call(
                         .request_command_approval(
                             sub_id.clone(),
                             params.command.clone(),
-                            workdir.clone(),
+                            params.cwd.clone(),
                             None,
                         )
                         .await;
@@ -964,13 +976,8 @@ async fn handle_function_call(
                 }
             };
 
-            sess.notify_exec_command_begin(
-                &sub_id,
-                &call_id,
-                params.command.clone(),
-                params.workdir.clone(),
-            )
-            .await;
+            sess.notify_exec_command_begin(&sub_id, &call_id, &params)
+                .await;
 
             let output_result = process_exec_tool_call(
                 params.clone(),
@@ -1030,7 +1037,7 @@ async fn handle_function_call(
                         .request_command_approval(
                             sub_id.clone(),
                             params.command.clone(),
-                            workdir,
+                            params.cwd.clone(),
                             Some("command failed; retry without sandbox?".to_string()),
                         )
                         .await;
@@ -1051,18 +1058,13 @@ async fn handle_function_call(
 
                             // Emit a fresh Begin event so progress bars reset.
                             let retry_call_id = format!("{call_id}-retry");
-                            sess.notify_exec_command_begin(
-                                &sub_id,
-                                &retry_call_id,
-                                params.command.clone(),
-                                params.workdir.clone(),
-                            )
-                            .await;
+                            sess.notify_exec_command_begin(&sub_id, &retry_call_id, &params)
+                                .await;
 
                             // This is an escalated retry; the policy will not be
                             // examined and the sandbox has been set to `None`.
                             let retry_output_result = process_exec_tool_call(
-                                params.clone(),
+                                params,
                                 SandboxType::None,
                                 sess.ctrl_c.clone(),
                                 &sess.sandbox_policy,
@@ -1155,50 +1157,54 @@ async fn apply_patch(
     sess: &Session,
     sub_id: String,
     call_id: String,
-    changes: HashMap<PathBuf, ApplyPatchFileChange>,
+    action: ApplyPatchAction,
 ) -> ResponseInputItem {
     let writable_roots_snapshot = {
         let guard = sess.writable_roots.lock().unwrap();
         guard.clone()
     };
 
-    let auto_approved =
-        match assess_patch_safety(&changes, sess.approval_policy, &writable_roots_snapshot) {
-            SafetyCheck::AutoApprove { .. } => true,
-            SafetyCheck::AskUser => {
-                // Compute a readable summary of path changes to include in the
-                // approval request so the user can make an informed decision.
-                let rx_approve = sess
-                    .request_patch_approval(sub_id.clone(), &changes, None, None)
-                    .await;
-                match rx_approve.await.unwrap_or_default() {
-                    ReviewDecision::Approved | ReviewDecision::ApprovedForSession => false,
-                    ReviewDecision::Denied | ReviewDecision::Abort => {
-                        return ResponseInputItem::FunctionCallOutput {
-                            call_id,
-                            output: FunctionCallOutputPayload {
-                                content: "patch rejected by user".to_string(),
-                                success: Some(false),
-                            },
-                        };
-                    }
+    let auto_approved = match assess_patch_safety(
+        &action,
+        sess.approval_policy,
+        &writable_roots_snapshot,
+        &sess.cwd,
+    ) {
+        SafetyCheck::AutoApprove { .. } => true,
+        SafetyCheck::AskUser => {
+            // Compute a readable summary of path changes to include in the
+            // approval request so the user can make an informed decision.
+            let rx_approve = sess
+                .request_patch_approval(sub_id.clone(), &action, None, None)
+                .await;
+            match rx_approve.await.unwrap_or_default() {
+                ReviewDecision::Approved | ReviewDecision::ApprovedForSession => false,
+                ReviewDecision::Denied | ReviewDecision::Abort => {
+                    return ResponseInputItem::FunctionCallOutput {
+                        call_id,
+                        output: FunctionCallOutputPayload {
+                            content: "patch rejected by user".to_string(),
+                            success: Some(false),
+                        },
+                    };
                 }
             }
-            SafetyCheck::Reject { reason } => {
-                return ResponseInputItem::FunctionCallOutput {
-                    call_id,
-                    output: FunctionCallOutputPayload {
-                        content: format!("patch rejected: {reason}"),
-                        success: Some(false),
-                    },
-                };
-            }
-        };
+        }
+        SafetyCheck::Reject { reason } => {
+            return ResponseInputItem::FunctionCallOutput {
+                call_id,
+                output: FunctionCallOutputPayload {
+                    content: format!("patch rejected: {reason}"),
+                    success: Some(false),
+                },
+            };
+        }
+    };
 
     // Verify write permissions before touching the filesystem.
     let writable_snapshot = { sess.writable_roots.lock().unwrap().clone() };
 
-    if let Some(offending) = first_offending_path(&changes, &writable_snapshot) {
+    if let Some(offending) = first_offending_path(&action, &writable_snapshot, &sess.cwd) {
         let root = offending.parent().unwrap_or(&offending).to_path_buf();
 
         let reason = Some(format!(
@@ -1207,7 +1213,7 @@ async fn apply_patch(
         ));
 
         let rx = sess
-            .request_patch_approval(sub_id.clone(), &changes, reason.clone(), Some(root.clone()))
+            .request_patch_approval(sub_id.clone(), &action, reason.clone(), Some(root.clone()))
             .await;
 
         if !matches!(
@@ -1234,7 +1240,7 @@ async fn apply_patch(
             msg: EventMsg::PatchApplyBegin {
                 call_id: call_id.clone(),
                 auto_approved,
-                changes: convert_apply_patch_to_protocol(&changes),
+                changes: convert_apply_patch_to_protocol(&action),
             },
         })
         .await;
@@ -1243,35 +1249,43 @@ async fn apply_patch(
     let mut stderr = Vec::new();
     // Enforce writable roots. If a write is blocked, collect offending root
     // and prompt the user to extend permissions.
-    let mut result = apply_changes_from_apply_patch_and_report(&changes, &mut stdout, &mut stderr);
+    let mut result = apply_changes_from_apply_patch_and_report(&action, &mut stdout, &mut stderr);
 
     if let Err(err) = &result {
         if err.kind() == std::io::ErrorKind::PermissionDenied {
             // Determine first offending path.
-            let offending_opt = changes.iter().find_map(|(path, change)| {
-                let path_ref = match change {
-                    ApplyPatchFileChange::Add { .. } => path,
-                    ApplyPatchFileChange::Delete => path,
-                    ApplyPatchFileChange::Update { .. } => path,
-                };
+            let offending_opt = action
+                .changes()
+                .iter()
+                .flat_map(|(path, change)| match change {
+                    ApplyPatchFileChange::Add { .. } => vec![path.as_ref()],
+                    ApplyPatchFileChange::Delete => vec![path.as_ref()],
+                    ApplyPatchFileChange::Update {
+                        move_path: Some(move_path),
+                        ..
+                    } => {
+                        vec![path.as_ref(), move_path.as_ref()]
+                    }
+                    ApplyPatchFileChange::Update {
+                        move_path: None, ..
+                    } => vec![path.as_ref()],
+                })
+                .find_map(|path: &Path| {
+                    // ApplyPatchAction promises to guarantee absolute paths.
+                    if !path.is_absolute() {
+                        panic!("apply_patch invariant failed: path is not absolute: {path:?}");
+                    }
 
-                // Reuse safety normalisation logic: treat absolute path.
-                let abs = if path_ref.is_absolute() {
-                    path_ref.clone()
-                } else {
-                    std::env::current_dir().unwrap_or_default().join(path_ref)
-                };
-
-                let writable = {
-                    let roots = sess.writable_roots.lock().unwrap();
-                    roots.iter().any(|root| abs.starts_with(root))
-                };
-                if writable {
-                    None
-                } else {
-                    Some(path_ref.clone())
-                }
-            });
+                    let writable = {
+                        let roots = sess.writable_roots.lock().unwrap();
+                        roots.iter().any(|root| path.starts_with(root))
+                    };
+                    if writable {
+                        None
+                    } else {
+                        Some(path.to_path_buf())
+                    }
+                });
 
             if let Some(offending) = offending_opt {
                 let root = offending.parent().unwrap_or(&offending).to_path_buf();
@@ -1283,7 +1297,7 @@ async fn apply_patch(
                 let rx = sess
                     .request_patch_approval(
                         sub_id.clone(),
-                        &changes,
+                        &action,
                         reason.clone(),
                         Some(root.clone()),
                     )
@@ -1297,7 +1311,7 @@ async fn apply_patch(
                     stdout.clear();
                     stderr.clear();
                     result = apply_changes_from_apply_patch_and_report(
-                        &changes,
+                        &action,
                         &mut stdout,
                         &mut stderr,
                     );
@@ -1343,11 +1357,11 @@ async fn apply_patch(
 /// `writable_roots` (after normalising). If all paths are acceptable,
 /// returns None.
 fn first_offending_path(
-    changes: &HashMap<PathBuf, ApplyPatchFileChange>,
+    action: &ApplyPatchAction,
     writable_roots: &[PathBuf],
+    cwd: &Path,
 ) -> Option<PathBuf> {
-    let cwd = std::env::current_dir().unwrap_or_default();
-
+    let changes = action.changes();
     for (path, change) in changes {
         let candidate = match change {
             ApplyPatchFileChange::Add { .. } => path,
@@ -1381,9 +1395,8 @@ fn first_offending_path(
     None
 }
 
-fn convert_apply_patch_to_protocol(
-    changes: &HashMap<PathBuf, ApplyPatchFileChange>,
-) -> HashMap<PathBuf, FileChange> {
+fn convert_apply_patch_to_protocol(action: &ApplyPatchAction) -> HashMap<PathBuf, FileChange> {
+    let changes = action.changes();
     let mut result = HashMap::with_capacity(changes.len());
     for (path, change) in changes {
         let protocol_change = match change {
@@ -1406,11 +1419,11 @@ fn convert_apply_patch_to_protocol(
 }
 
 fn apply_changes_from_apply_patch_and_report(
-    changes: &HashMap<PathBuf, ApplyPatchFileChange>,
+    action: &ApplyPatchAction,
     stdout: &mut impl std::io::Write,
     stderr: &mut impl std::io::Write,
 ) -> std::io::Result<()> {
-    match apply_changes_from_apply_patch(changes) {
+    match apply_changes_from_apply_patch(action) {
         Ok(affected_paths) => {
             print_summary(&affected_paths, stdout)?;
         }
@@ -1422,13 +1435,12 @@ fn apply_changes_from_apply_patch_and_report(
     Ok(())
 }
 
-fn apply_changes_from_apply_patch(
-    changes: &HashMap<PathBuf, ApplyPatchFileChange>,
-) -> anyhow::Result<AffectedPaths> {
+fn apply_changes_from_apply_patch(action: &ApplyPatchAction) -> anyhow::Result<AffectedPaths> {
     let mut added: Vec<PathBuf> = Vec::new();
     let mut modified: Vec<PathBuf> = Vec::new();
     let mut deleted: Vec<PathBuf> = Vec::new();
 
+    let changes = action.changes();
     for (path, change) in changes {
         match change {
             ApplyPatchFileChange::Add { content } => {
@@ -1485,7 +1497,7 @@ fn apply_changes_from_apply_patch(
     })
 }
 
-fn get_writable_roots() -> Vec<PathBuf> {
+fn get_writable_roots(cwd: &Path) -> Vec<std::path::PathBuf> {
     let mut writable_roots = Vec::new();
     if cfg!(target_os = "macos") {
         // On macOS, $TMPDIR is private to the user.
@@ -1507,9 +1519,7 @@ fn get_writable_roots() -> Vec<PathBuf> {
         }
     }
 
-    if let Ok(cwd) = std::env::current_dir() {
-        writable_roots.push(cwd);
-    }
+    writable_roots.push(cwd.to_path_buf());
 
     writable_roots
 }
