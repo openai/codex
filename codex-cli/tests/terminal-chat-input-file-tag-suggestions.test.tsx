@@ -76,6 +76,7 @@ describe("TerminalChatInput file tag suggestions", () => {
     openModelOverlay: vi.fn(),
     openApprovalOverlay: vi.fn(),
     openHelpOverlay: vi.fn(),
+    openMcpOverlay: vi.fn(),
     onCompact: vi.fn(),
     interruptAgent: vi.fn(),
     active: true,
