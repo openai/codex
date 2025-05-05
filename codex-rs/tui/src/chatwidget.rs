@@ -145,41 +145,7 @@ impl ChatWidget<'_> {
                         let trimmed = text.trim();
                         // Check for slash command
                         if trimmed.starts_with('/') {
-                            if let Some(cmd_info) = COMMANDS.iter().find(|c| c.name == trimmed) {
-                                match cmd_info.command {
-                                    SlashCommand::Clear => {
-                                        self.conversation_history.clear();
-                                        self.request_redraw()?;
-                                    }
-                                    SlashCommand::Help => {
-                                        let _ = self.submit_system_message("Help: Available commands are /clear, /help, /history, /model, /approval, /bug, /diff, /compact, /clearhistory");
-                                    }
-                                    SlashCommand::History => {
-                                        let _ = self.submit_system_message("History command not yet implemented.");
-                                    }
-                                    SlashCommand::Model => {
-                                        let _ = self.submit_system_message("Model selection not yet implemented.");
-                                    }
-                                    SlashCommand::Approval => {
-                                        let _ = self.submit_system_message("Approval mode selection not yet implemented.");
-                                    }
-                                    SlashCommand::Bug => {
-                                        let _ = self.submit_system_message("Bug report command not yet implemented.");
-                                    }
-                                    SlashCommand::Diff => {
-                                        let _ = self.submit_system_message("Diff command not yet implemented.");
-                                    }
-                                    SlashCommand::Compact => {
-                                        let _ = self.submit_system_message("Compact command not yet implemented.");
-                                    }
-                                    SlashCommand::ClearHistory => {
-                                        let _ = self.submit_system_message("Clear history command not yet implemented.");
-                                    }
-                                }
-                            } else {
-                                let msg = format!("Unknown command: {}", trimmed);
-                                let _ = self.submit_system_message(&msg);
-                            }
+                            self.process_slash_command(trimmed)?;
                         } else if trimmed == "q" {
                             let _ = self.app_event_tx.send(AppEvent::ExitRequest);
                         } else {
@@ -188,43 +154,52 @@ impl ChatWidget<'_> {
                     }
                     InputResult::ExecuteCommand(cmd) => {
                         // Execute the command directly
-                        if let Some(cmd_info) = COMMANDS.iter().find(|c| c.name == cmd) {
-                            match cmd_info.command {
-                                SlashCommand::Clear => {
-                                    self.conversation_history.clear();
-                                    self.request_redraw()?;
-                                }
-                                SlashCommand::Help => {
-                                    let _ = self.submit_system_message("Help: Available commands are /clear, /help, /history, /model, /approval, /bug, /diff, /compact, /clearhistory");
-                                }
-                                SlashCommand::History => {
-                                    let _ = self.submit_system_message("History command not yet implemented.");
-                                }
-                                SlashCommand::Model => {
-                                    let _ = self.submit_system_message("Model selection not yet implemented.");
-                                }
-                                SlashCommand::Approval => {
-                                    let _ = self.submit_system_message("Approval mode selection not yet implemented.");
-                                }
-                                SlashCommand::Bug => {
-                                    let _ = self.submit_system_message("Bug report command not yet implemented.");
-                                }
-                                SlashCommand::Diff => {
-                                    let _ = self.submit_system_message("Diff command not yet implemented.");
-                                }
-                                SlashCommand::Compact => {
-                                    let _ = self.submit_system_message("Compact command not yet implemented.");
-                                }
-                                SlashCommand::ClearHistory => {
-                                    let _ = self.submit_system_message("Clear history command not yet implemented.");
-                                }
-                            }
-                        }
+                        self.process_slash_command(&cmd)?;
                     }
                     InputResult::None => {}
                 }
                 Ok(())
             }
+        }
+    }
+
+    /// Process a slash command and take appropriate action
+    fn process_slash_command(&mut self, command: &str) -> std::result::Result<(), SendError<AppEvent>> {
+        if let Some(cmd_info) = COMMANDS.iter().find(|c| c.name == command) {
+            match cmd_info.command {
+                SlashCommand::Clear => {
+                    self.conversation_history.clear();
+                    self.request_redraw()?;
+                }
+                SlashCommand::Help => {
+                    let _ = self.submit_system_message("Help: Available commands are /clear, /help, /history, /model, /approval, /bug, /diff, /compact, /clearhistory");
+                }
+                SlashCommand::History => {
+                    let _ = self.submit_system_message("History command not yet implemented.");
+                }
+                SlashCommand::Model => {
+                    let _ = self.submit_system_message("Model selection not yet implemented.");
+                }
+                SlashCommand::Approval => {
+                    let _ = self.submit_system_message("Approval mode selection not yet implemented.");
+                }
+                SlashCommand::Bug => {
+                    let _ = self.submit_system_message("Bug report command not yet implemented.");
+                }
+                SlashCommand::Diff => {
+                    let _ = self.submit_system_message("Diff command not yet implemented.");
+                }
+                SlashCommand::Compact => {
+                    let _ = self.submit_system_message("Compact command not yet implemented.");
+                }
+                SlashCommand::ClearHistory => {
+                    let _ = self.submit_system_message("Clear history command not yet implemented.");
+                }
+            }
+            Ok(())
+        } else {
+            let msg = format!("Unknown command: {}", command);
+            self.submit_system_message(&msg)
         }
     }
 
