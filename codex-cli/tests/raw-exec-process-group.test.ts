@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { exec as rawExec } from "../src/utils/agent/sandbox/raw-exec.js";
+import type { AppConfig } from "src/utils/config.js";
 
 // Regression test: When cancelling an in‑flight `rawExec()` the implementation
 // must terminate *all* processes that belong to the spawned command – not just
@@ -27,13 +28,17 @@ describe("rawExec – abort kills entire process group", () => {
     // Bash script: spawn `sleep 30` in background, print its PID, then wait.
     const script = "sleep 30 & pid=$!; echo $pid; wait $pid";
     const cmd = ["bash", "-c", script];
+    const config: AppConfig = {
+      model: "test-model",
+      instructions: "test-instructions",
+    };
 
     // Start a bash shell that:
     //  - spawns a background `sleep 30`
     //  - prints the PID of the `sleep`
     //  - waits for `sleep` to exit
     const { stdout, exitCode } = await (async () => {
-      const p = rawExec(cmd, {}, abortController.signal);
+      const p = rawExec(cmd, {}, config, abortController.signal);
 
       // Give Bash a tiny bit of time to start and print the PID.
       await new Promise((r) => setTimeout(r, 100));
