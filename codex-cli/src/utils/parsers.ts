@@ -52,6 +52,9 @@ export function parseToolCall(
   }
 
   const { cmd } = toolCallArgs;
+  if (!Array.isArray(cmd) || cmd.length === 0) {
+    return undefined;
+  }
   const cmdReadableText = formatCommandForDisplay(cmd);
 
   return {
@@ -60,12 +63,7 @@ export function parseToolCall(
   };
 }
 
-/**
- * If toolCallArguments is a string of JSON that can be parsed into an object
- * with a "cmd" or "command" property that is an `Array<string>`, then returns
- * that array. Otherwise, returns undefined.
- */
-export function parseToolCallArguments(
+export function parseExecToolCallArguments(
   toolCallArguments: string,
 ): ExecInput | undefined {
   let json: unknown;
@@ -88,6 +86,7 @@ export function parseToolCallArguments(
     toStringArray(command) ??
     (typeof cmd === "string" ? [cmd] : undefined) ??
     (typeof command === "string" ? [command] : undefined);
+
   if (commandArray == null) {
     return undefined;
   }
@@ -99,6 +98,29 @@ export function parseToolCallArguments(
     workdir: typeof workdir === "string" ? workdir : undefined,
     timeoutInMillis: typeof timeout === "number" ? timeout : undefined,
   };
+}
+
+/**
+ * If toolCallArguments is a string of JSON that can be parsed into an object
+ * with a "cmd" or "command" property that is an `Array<string>`, then returns
+ * that array. Otherwise, returns undefined.
+ */
+export function parseToolCallArguments(
+  toolCallArguments: string,
+): Record<string, unknown> | undefined {
+  let json: unknown;
+  try {
+    json = JSON.parse(toolCallArguments);
+  } catch (err) {
+    log(`Failed to parse toolCall.arguments: ${toolCallArguments}`);
+    return undefined;
+  }
+
+  if (typeof json !== "object" || json == null) {
+    return undefined;
+  }
+
+  return json as Record<string, unknown>;
 }
 
 function toStringArray(obj: unknown): Array<string> | undefined {

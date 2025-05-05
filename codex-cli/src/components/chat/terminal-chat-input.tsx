@@ -2,6 +2,7 @@ import type { MultilineTextEditorHandle } from "./multiline-editor";
 import type { ReviewDecision } from "../../utils/agent/review.js";
 import type { FileSystemSuggestion } from "../../utils/file-system-suggestions.js";
 import type { HistoryEntry } from "../../utils/storage/command-history.js";
+import type { ColorName } from "chalk";
 import type {
   ResponseInputItem,
   ResponseItem,
@@ -30,6 +31,7 @@ import React, {
   Fragment,
   useEffect,
   useRef,
+  useMemo,
 } from "react";
 import { useInterval } from "use-interval";
 
@@ -38,6 +40,34 @@ const suggestions = [
   "fix any build errors",
   "are there any bugs in my code?",
 ];
+
+type CompletionResult = Record<string, unknown>;
+
+type Props = {
+  loading: boolean;
+  isNew: boolean;
+  setItems: React.Dispatch<React.SetStateAction<Array<ResponseItem>>>;
+  setLastResponseId: React.Dispatch<React.SetStateAction<string | null>>;
+  submitInput: (input: Array<ResponseInputItem>) => CompletionResult;
+  confirmationPrompt: React.ReactNode | null;
+  explanation?: string;
+  openOverlay: () => void;
+  openModelOverlay: () => void;
+  openApprovalOverlay: () => void;
+  openHelpOverlay: () => void;
+  openDiffOverlay: () => void;
+  openMcpOverlay: () => void;
+  active: boolean;
+  onCompact: () => Promise<void>;
+  interruptAgent: () => void;
+  submitConfirmation: (
+    decision: ReviewDecision,
+    customDenyMessage?: string,
+  ) => void;
+  contextLeftPercent: number;
+  items?: Array<ResponseItem>;
+  thinkingSeconds: number;
+};
 
 export default function TerminalChatInput({
   isNew,
@@ -54,36 +84,13 @@ export default function TerminalChatInput({
   openApprovalOverlay,
   openHelpOverlay,
   openDiffOverlay,
+  openMcpOverlay,
   onCompact,
   interruptAgent,
   active,
   thinkingSeconds,
   items = [],
-}: {
-  isNew: boolean;
-  loading: boolean;
-  submitInput: (input: Array<ResponseInputItem>) => void;
-  confirmationPrompt: React.ReactNode | null;
-  explanation?: string;
-  submitConfirmation: (
-    decision: ReviewDecision,
-    customDenyMessage?: string,
-  ) => void;
-  setLastResponseId: (lastResponseId: string) => void;
-  setItems: React.Dispatch<React.SetStateAction<Array<ResponseItem>>>;
-  contextLeftPercent: number;
-  openOverlay: () => void;
-  openModelOverlay: () => void;
-  openApprovalOverlay: () => void;
-  openHelpOverlay: () => void;
-  openDiffOverlay: () => void;
-  onCompact: () => void;
-  interruptAgent: () => void;
-  active: boolean;
-  thinkingSeconds: number;
-  // New: current conversation items so we can include them in bug reports
-  items?: Array<ResponseItem>;
-}): React.ReactElement {
+}: Props): React.ReactElement {
   // Slash command suggestion index
   const [selectedSlashSuggestion, setSelectedSlashSuggestion] =
     useState<number>(0);
@@ -304,6 +311,9 @@ export default function TerminalChatInput({
                 case "/clearhistory":
                   onSubmit(cmd);
                   break;
+                case "/mcp":
+                  openMcpOverlay();
+                  break;
                 default:
                   break;
               }
@@ -515,7 +525,7 @@ export default function TerminalChatInput({
       } else if (inputValue === "/clear" || inputValue === "clear") {
         setInput("");
         setSessionId("");
-        setLastResponseId("");
+        setLastResponseId(null);
 
         // Clear the terminal screen (including scrollback) before resetting context.
         clearTerminal();
@@ -735,6 +745,29 @@ export default function TerminalChatInput({
     ],
   );
 
+  // Handle help text that shows context usage
+  const contextInfo = useMemo(() => {
+    if (contextLeftPercent === undefined) {
+      return null;
+    }
+
+    // Show remaining context as percentage
+    let contextColor: ColorName = "green";
+
+    if (contextLeftPercent < 30) {
+      contextColor = "red";
+    } else if (contextLeftPercent < 60) {
+      contextColor = "yellow";
+    }
+
+    return (
+      <Text>
+        Context:{" "}
+        <Text color={contextColor}>{Math.round(contextLeftPercent)}%</Text>
+      </Text>
+    );
+  }, [contextLeftPercent]);
+
   if (confirmationPrompt) {
     return (
       <TerminalChatCommandReview
@@ -756,7 +789,7 @@ export default function TerminalChatInput({
           <TerminalChatInputThinking
             onInterrupt={interruptAgent}
             active={active}
-            thinkingSeconds={thinkingSeconds}
+            thinkingSeconds={thinkingSeconds ?? 0}
           />
         ) : (
           <Box paddingX={1}>
@@ -845,23 +878,7 @@ export default function TerminalChatInput({
         ) : (
           <Text dimColor>
             ctrl+c to exit | "/" to see commands | enter to send
-            {contextLeftPercent > 25 && (
-              <>
-                {" — "}
-                <Text color={contextLeftPercent > 40 ? "green" : "yellow"}>
-                  {Math.round(contextLeftPercent)}% context left
-                </Text>
-              </>
-            )}
-            {contextLeftPercent <= 25 && (
-              <>
-                {" — "}
-                <Text color="red">
-                  {Math.round(contextLeftPercent)}% context left — send
-                  "/compact" to condense context
-                </Text>
-              </>
-            )}
+            {contextInfo}
           </Text>
         )}
       </Box>

@@ -27,6 +27,7 @@
   ],
   "dependencies": {
     "@inkjs/ui": "^2.0.0",
+    "@modelcontextprotocol/sdk": "^1.11.0",
     "chalk": "^5.2.0",
     "diff": "^7.0.0",
     "dotenv": "^16.1.4",

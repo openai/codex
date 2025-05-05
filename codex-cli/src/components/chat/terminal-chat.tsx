@@ -1,6 +1,7 @@
 import type { ApplyPatchCommand, ApprovalPolicy } from "../../approvals.js";
 import type { CommandConfirmation } from "../../utils/agent/agent-loop.js";
 import type { AppConfig } from "../../utils/config.js";
+import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import type { ColorName } from "chalk";
 import type { ResponseItem } from "openai/resources/responses/responses.mjs";
 
@@ -18,6 +19,7 @@ import { extractAppliedPatches as _extractAppliedPatches } from "../../utils/ext
 import { getGitDiff } from "../../utils/get-diff.js";
 import { createInputItem } from "../../utils/input-utils.js";
 import { log } from "../../utils/logger/log.js";
+import { MCPManager } from "../../utils/mcp/mcp-manager.js";
 import {
   getAvailableModels,
   calculateContextPercentRemaining,
@@ -30,6 +32,7 @@ import ApprovalModeOverlay from "../approval-mode-overlay.js";
 import DiffOverlay from "../diff-overlay.js";
 import HelpOverlay from "../help-overlay.js";
 import HistoryOverlay from "../history-overlay.js";
+import MCPOverlay from "../mcp-overlay.js";
 import ModelOverlay from "../model-overlay.js";
 import chalk from "chalk";
 import { Box, Text } from "ink";
@@ -44,7 +47,8 @@ export type OverlayModeType =
   | "model"
   | "approval"
   | "help"
-  | "diff";
+  | "diff"
+  | "mcp";
 
 type Props = {
   config: AppConfig;
@@ -153,6 +157,12 @@ export default function TerminalChat({
   );
   const [thinkingSeconds, setThinkingSeconds] = useState(0);
 
+  const [mcpManager] = useState(() => new MCPManager());
+  const [mcpTools, setMcpTools] = useState<Array<Tool>>([]);
+  const [mcpServersStatus, setMcpServersStatus] = useState<
+    Array<{ name: string; connected: boolean }>
+  >([]);
+
   const handleCompact = async () => {
     setLoading(true);
     try {
@@ -195,7 +205,7 @@ export default function TerminalChat({
   } = useConfirmation();
   const [overlayMode, setOverlayMode] = useState<OverlayModeType>("none");
 
-  // Store the diff text when opening the diff overlay so the view isn’t
+  // Store the diff text when opening the diff overlay so the view isn't
   // recomputed on every re‑render while it is open.
   // diffText is passed down to the DiffOverlay component. The setter is
   // currently unused but retained for potential future updates. Prefix with
@@ -222,6 +232,30 @@ export default function TerminalChat({
     }`,
   );
 
+  // Add useEffect for MCP initialization
+  useEffect(() => {
+    const initializeMcp = async () => {
+      try {
+        await mcpManager.initialize();
+        const tools = await mcpManager.getFlattendTools();
+        setMcpTools(tools);
+        setMcpServersStatus(mcpManager.getServersStatus());
+        log(`Initialized MCP Manager with ${tools.length} tools`);
+      } catch (error) {
+        log(`Failed to initialize MCP Manager: ${error}`);
+        setMcpServersStatus(mcpManager.getServersStatus());
+      }
+    };
+
+    initializeMcp();
+
+    return () => {
+      // Clean up MCP connections
+      mcpManager.disconnectAll();
+    };
+  }, [mcpManager]);
+
+  // Update AgentLoop creation useEffect to include mcpTools and mcpManager
   useEffect(() => {
     // Skip recreating the agent if awaiting a decision on a pending confirmation.
     if (confirmationPrompt != null) {
@@ -248,6 +282,8 @@ export default function TerminalChat({
       approvalPolicy,
       disableResponseStorage: config.disableResponseStorage,
       additionalWritableRoots,
+      mcpTools,
+      mcpManager,
       onLastResponseId: setLastResponseId,
       onItem: (item) => {
         log(`onItem: ${JSON.stringify(item)}`);
@@ -313,9 +349,17 @@ export default function TerminalChat({
       forceUpdate(); // re‑render after teardown too
     };
     // We intentionally omit 'approvalPolicy' and 'confirmationPrompt' from the deps
-    // so switching modes or showing confirmation dialogs doesn’t tear down the loop.
+    // so switching modes or showing confirmation dialogs doesn't tear down the loop.
+    // Add mcpTools to the dependency array
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [model, provider, config, requestConfirmation, additionalWritableRoots]);
+  }, [
+    model,
+    provider,
+    config,
+    requestConfirmation,
+    additionalWritableRoots,
+    mcpTools,
+  ]);
 
   // Whenever loading starts/stops, reset or start a timer — but pause the
   // timer while a confirmation overlay is displayed so we don't trigger a
@@ -511,6 +555,7 @@ export default function TerminalChat({
             openModelOverlay={() => setOverlayMode("model")}
             openApprovalOverlay={() => setOverlayMode("approval")}
             openHelpOverlay={() => setOverlayMode("help")}
+            openMcpOverlay={() => setOverlayMode("mcp")}
             openDiffOverlay={() => {
               const { isGitRepo, diff } = getGitDiff();
               let text: string;
@@ -718,6 +763,13 @@ export default function TerminalChat({
 
         {overlayMode === "help" && (
           <HelpOverlay onExit={() => setOverlayMode("none")} />
+        )}
+
+        {overlayMode === "mcp" && (
+          <MCPOverlay
+            serversStatus={mcpServersStatus}
+            onExit={() => setOverlayMode("none")}
+          />
         )}
 
         {overlayMode === "diff" && (
