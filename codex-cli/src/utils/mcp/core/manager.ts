@@ -214,10 +214,12 @@ export class MCPManager {
   /**
    * Disconnect all clients gracefully
    */
-  disconnectAll(): void {
+  async disconnectAll(): Promise<void> {
+    const disconnectPromises = [];
     for (const client of this.clients.values()) {
-      client.close();
+      disconnectPromises.push(client.close());
     }
+    await Promise.all(disconnectPromises);
     this.clients.clear();
     this.connectionStatus.clear();
     this.#isInitialized = false;
