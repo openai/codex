@@ -41,14 +41,12 @@ const suggestions = [
   "are there any bugs in my code?",
 ];
 
-type CompletionResult = Record<string, unknown>;
-
 type Props = {
   loading: boolean;
   isNew: boolean;
   setItems: React.Dispatch<React.SetStateAction<Array<ResponseItem>>>;
   setLastResponseId: React.Dispatch<React.SetStateAction<string | null>>;
-  submitInput: (input: Array<ResponseInputItem>) => CompletionResult;
+  submitInput: (input: Array<ResponseInputItem>) => void;
   confirmationPrompt: React.ReactNode | null;
   explanation?: string;
   openOverlay: () => void;
@@ -59,7 +57,7 @@ type Props = {
   openMcpOverlay: () => void;
   openSessionsOverlay: () => void;
   active: boolean;
-  onCompact: () => Promise<void>;
+  onCompact: () => void;
   interruptAgent: () => void;
   submitConfirmation: (
     decision: ReviewDecision,
@@ -764,16 +762,24 @@ export default function TerminalChatInput({
     // Show remaining context as percentage
     let contextColor: ColorName = "green";
 
-    if (contextLeftPercent < 30) {
-      contextColor = "red";
-    } else if (contextLeftPercent < 60) {
+    if (contextLeftPercent <= 25) {
+      return (
+        <Text>
+          <Text color="red">
+            {Math.round(contextLeftPercent)}% context left — send "/compact" to
+            condense context
+          </Text>
+        </Text>
+      );
+    } else if (contextLeftPercent <= 40) {
       contextColor = "yellow";
     }
 
     return (
       <Text>
-        Context:{" "}
-        <Text color={contextColor}>{Math.round(contextLeftPercent)}%</Text>
+        <Text color={contextColor}>
+          {Math.round(contextLeftPercent)}% context left
+        </Text>
       </Text>
     );
   }, [contextLeftPercent]);

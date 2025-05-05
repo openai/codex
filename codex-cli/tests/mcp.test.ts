@@ -1,5 +1,6 @@
 import type * as fsType from "fs";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { buildClients } from "../src/utils/mcp/utils/build-clients";
 
 // In‑memory FS store
 let memfs: Record<string, string> = {};
@@ -46,9 +47,6 @@ vi.mock("fs", async () => {
     },
   };
 });
-
-// Import after mocks are defined
-import { buildClients } from "../src/utils/mcp/build-clients";
 
 // Test data
 const testMcpServers: Record<string, any> = {
