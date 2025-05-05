@@ -50,7 +50,7 @@ export default function MCPOverlay({
 
       <Box flexDirection="column" marginY={1}>
         {serversStatus.map((server) => (
-          <Box key={server.name} marginY={1}>
+          <Box key={server.name}>
             <Text>
               <Text color={server.connected ? "green" : "red"}>●</Text>{" "}
               <Text bold>{server.name}</Text>

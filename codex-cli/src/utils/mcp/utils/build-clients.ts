@@ -1,5 +1,5 @@
-import { getMcpServers } from "../config";
-import { MCPClient } from "./mcp-client";
+import { getMcpServers } from "../../config";
+import { MCPClient } from "../core/client";
 
 export function buildClients(): Array<MCPClient> {
   const servers = getMcpServers();
