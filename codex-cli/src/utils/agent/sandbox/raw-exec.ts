@@ -1,4 +1,5 @@
 import type { ExecResult } from "./interface";
+import type { AppConfig } from "../../config";
 import type {
   ChildProcess,
   SpawnOptions,
@@ -20,6 +21,7 @@ import * as os from "os";
 export function exec(
   command: Array<string>,
   options: SpawnOptions,
+  config: AppConfig,
   abortSignal?: AbortSignal,
 ): Promise<ExecResult> {
   // Adapt command for the current platform (e.g., convert 'ls' to 'dir' on Windows)
@@ -142,9 +144,21 @@ export function exec(
   // ExecResult object so the rest of the agent loop can carry on gracefully.
 
   return new Promise<ExecResult>((resolve) => {
+    // Get shell output limits from config if available
+    const maxBytes = config?.tools?.shell?.maxBytes;
+    const maxLines = config?.tools?.shell?.maxLines;
+
     // Collect stdout and stderr up to configured limits.
-    const stdoutCollector = createTruncatingCollector(child.stdout!);
-    const stderrCollector = createTruncatingCollector(child.stderr!);
+    const stdoutCollector = createTruncatingCollector(
+      child.stdout!,
+      maxBytes,
+      maxLines,
+    );
+    const stderrCollector = createTruncatingCollector(
+      child.stderr!,
+      maxBytes,
+      maxLines,
+    );
 
     child.on("exit", (code, signal) => {
       const stdout = stdoutCollector.getString();

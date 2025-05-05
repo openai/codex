@@ -48,6 +48,10 @@ export const DEFAULT_FULL_CONTEXT_MODEL = "gpt-4.1";
 export const DEFAULT_APPROVAL_MODE = AutoApprovalMode.SUGGEST;
 export const DEFAULT_INSTRUCTIONS = "";
 
+// Default shell output limits
+export const DEFAULT_SHELL_MAX_BYTES = 1024 * 10; // 10 KB
+export const DEFAULT_SHELL_MAX_LINES = 256;
+
 export const CONFIG_DIR = join(homedir(), ".codex");
 export const CONFIG_JSON_FILEPATH = join(CONFIG_DIR, "config.json");
 export const CONFIG_YAML_FILEPATH = join(CONFIG_DIR, "config.yaml");
@@ -145,6 +149,12 @@ export type StoredConfig = {
     saveHistory?: boolean;
     sensitivePatterns?: Array<string>;
   };
+  tools?: {
+    shell?: {
+      maxBytes?: number;
+      maxLines?: number;
+    };
+  };
   /** User-defined safe commands */
   safeCommands?: Array<string>;
   reasoningEffort?: ReasoningEffort;
@@ -185,6 +195,12 @@ export type AppConfig = {
     maxSize: number;
     saveHistory: boolean;
     sensitivePatterns: Array<string>;
+  };
+  tools?: {
+    shell?: {
+      maxBytes: number;
+      maxLines: number;
+    };
   };
 };
 
@@ -388,6 +404,14 @@ export const loadConfig = (
     instructions: combinedInstructions,
     notify: storedConfig.notify === true,
     approvalMode: storedConfig.approvalMode,
+    tools: {
+      shell: {
+        maxBytes:
+          storedConfig.tools?.shell?.maxBytes ?? DEFAULT_SHELL_MAX_BYTES,
+        maxLines:
+          storedConfig.tools?.shell?.maxLines ?? DEFAULT_SHELL_MAX_LINES,
+      },
+    },
     disableResponseStorage: storedConfig.disableResponseStorage === true,
     reasoningEffort: storedConfig.reasoningEffort,
   };
@@ -514,6 +538,18 @@ export const saveConfig = (
       maxSize: config.history.maxSize,
       saveHistory: config.history.saveHistory,
       sensitivePatterns: config.history.sensitivePatterns,
+    };
+  }
+
+  // Add tools settings if they exist
+  if (config.tools) {
+    configToSave.tools = {
+      shell: config.tools.shell
+        ? {
+            maxBytes: config.tools.shell.maxBytes,
+            maxLines: config.tools.shell.maxLines,
+          }
+        : undefined,
     };
   }
 
