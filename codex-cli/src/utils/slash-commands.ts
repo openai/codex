@@ -35,6 +35,6 @@ export const SLASH_COMMANDS: Array<SlashCommand> = [
   },
   {
     command: "/mcp",
-    description: "Open MCP server selection panel",
+    description: "List MCP servers",
   },
 ];
