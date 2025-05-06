@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 
+use mcp_types::CallToolResult;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -314,6 +315,32 @@ pub enum EventMsg {
     SessionConfigured {
         /// Tell the client what model is being queried.
         model: String,
+    },
+
+    McpToolCallBegin {
+        /// Identifier so this can be paired with the McpToolCallEnd event.
+        call_id: String,
+
+        /// Name of the MCP server as defined in the config.
+        server: String,
+
+        /// Name of the tool as given by the MCP server.
+        tool: String,
+
+        /// Arguments to the tool call.
+        arguments: Option<serde_json::Value>,
+    },
+
+    McpToolCallEnd {
+        /// Identifier for the McpToolCallBegin that finished.
+        call_id: String,
+
+        /// Whether the tool call was successful. If `false`, `result` might
+        /// not be present.
+        success: bool,
+
+        /// Result of the tool call. Note this could be an error.
+        result: Option<CallToolResult>,
     },
 
     /// Notification that the server is about to execute a command.
