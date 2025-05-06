@@ -34,7 +34,7 @@ export class MCPClient {
             ...getDefaultEnvironment(), // inherit default env vars, base env variables are required for the server to run
             ...env,
           },
-          stderr: 1,
+          stderr: "pipe",
         });
       } catch (e) {
         // eslint-disable-next-line no-console
