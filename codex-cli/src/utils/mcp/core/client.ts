@@ -4,7 +4,10 @@ import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { log } from "../../logger/log";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import {
+  getDefaultEnvironment,
+  StdioClientTransport,
+} from "@modelcontextprotocol/sdk/client/stdio.js";
 import chalk from "chalk";
 
 type ConnectToServerOptions = StdioServerParameters | { url: string };
@@ -27,7 +30,10 @@ export class MCPClient {
         this.transport = new StdioClientTransport({
           command,
           args,
-          env,
+          env: {
+            ...getDefaultEnvironment(), // inherit default env vars, base env variables are required for the server to run
+            ...env,
+          },
           stderr: 1,
         });
       } catch (e) {
