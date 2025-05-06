@@ -1,13 +1,13 @@
-use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 
+use crate::Codex;
 use crate::config::Config;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::Op;
 use crate::protocol::Submission;
 use crate::util::notify_on_sigint;
-use crate::Codex;
 use tokio::sync::Notify;
 
 /// Spawn a new [`Codex`] and initialise the session.

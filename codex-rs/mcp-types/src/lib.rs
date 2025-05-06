@@ -5,9 +5,9 @@
 // ```shell
 // ./generate_mcp_types.py
 // ```
-use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::convert::TryFrom;
 
 pub const MCP_SCHEMA_VERSION: &str = "2025-03-26";

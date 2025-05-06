@@ -1,6 +1,5 @@
 extern crate codex_execpolicy;
 
-use codex_execpolicy::get_default_policy;
 use codex_execpolicy::ArgType;
 use codex_execpolicy::Error;
 use codex_execpolicy::ExecCall;
@@ -11,6 +10,7 @@ use codex_execpolicy::MatchedOpt;
 use codex_execpolicy::Policy;
 use codex_execpolicy::Result;
 use codex_execpolicy::ValidExec;
+use codex_execpolicy::get_default_policy;
 
 fn setup() -> Policy {
     get_default_policy().expect("failed to load default policy")
