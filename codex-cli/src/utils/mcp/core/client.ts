@@ -27,10 +27,7 @@ export class MCPClient {
         this.transport = new StdioClientTransport({
           command,
           args,
-          env: {
-            ...process.env,
-            ...env,
-          } as Record<string, string>,
+          env,
           stderr: 1,
         });
       } catch (e) {
