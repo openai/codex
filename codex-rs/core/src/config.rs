@@ -1,4 +1,3 @@
-use crate::approval_mode_cli_arg::parse_sandbox_permission_with_base_path;
 use crate::flags::OPENAI_DEFAULT_MODEL;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPermission;
@@ -255,6 +254,52 @@ pub fn log_dir() -> std::io::Result<PathBuf> {
     let mut p = codex_dir()?;
     p.push("log");
     Ok(p)
+}
+
+pub(crate) fn parse_sandbox_permission_with_base_path(
+    raw: &str,
+    base_path: PathBuf,
+) -> std::io::Result<SandboxPermission> {
+    use SandboxPermission::*;
+
+    if let Some(path) = raw.strip_prefix("disk-write-folder=") {
+        return if path.is_empty() {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "--sandbox-permission disk-write-folder=<PATH> requires a non-empty PATH",
+            ))
+        } else {
+            use path_absolutize::*;
+
+            let file = PathBuf::from(path);
+            let absolute_path = if file.is_relative() {
+                file.absolutize_from(base_path)
+            } else {
+                file.absolutize()
+            }
+            .map(|path| path.into_owned())?;
+            Ok(DiskWriteFolder {
+                folder: absolute_path,
+            })
+        };
+    }
+
+    match raw {
+        "disk-full-read-access" => Ok(DiskFullReadAccess),
+        "disk-write-platform-user-temp-folder" => Ok(DiskWritePlatformUserTempFolder),
+        "disk-write-platform-global-temp-folder" => Ok(DiskWritePlatformGlobalTempFolder),
+        "disk-write-cwd" => Ok(DiskWriteCwd),
+        "disk-full-write-access" => Ok(DiskFullWriteAccess),
+        "network-full-access" => Ok(NetworkFullAccess),
+        _ => Err(
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "`{raw}` is not a recognised permission.\nRun with `--help` to see the accepted values."
+                ),
+            )
+        ),
+    }
 }
 
 #[cfg(test)]
