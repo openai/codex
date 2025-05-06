@@ -24,6 +24,10 @@ type Props = {
   approvalPolicy: ApprovalPolicy;
   additionalWritableRoots: ReadonlyArray<string>;
   fullStdout: boolean;
+  /** Optional initial items to resume a session */
+  resumeItems?: Array<ResponseItem>;
+  /** Optional last response ID to resume server-side conversation */
+  resumeResponseId?: string;
 };
 
 export default function App({
@@ -34,6 +38,8 @@ export default function App({
   approvalPolicy,
   additionalWritableRoots,
   fullStdout,
+  resumeItems,
+  resumeResponseId,
 }: Props): JSX.Element {
   const app = useApp();
   const [accepted, setAccepted] = useState(() => false);
@@ -101,6 +107,8 @@ export default function App({
       approvalPolicy={approvalPolicy}
       additionalWritableRoots={additionalWritableRoots}
       fullStdout={fullStdout}
+      initialItems={resumeItems}
+      initialResponseId={resumeResponseId}
     />
   );
 }

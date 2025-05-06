@@ -11,25 +11,29 @@ const SESSIONS_ROOT = path.join(os.homedir(), ".codex", "sessions");
 async function saveRolloutAsync(
   sessionId: string,
   items: Array<ResponseItem>,
+  responseId?: string,
 ): Promise<void> {
   await fs.mkdir(SESSIONS_ROOT, { recursive: true });
 
   const timestamp = new Date().toISOString();
-  const ts = timestamp.replace(/[:.]/g, "-").slice(0, 10);
-  const filename = `rollout-${ts}-${sessionId}.json`;
+  const filename = `${sessionId}.json`;
   const filePath = path.join(SESSIONS_ROOT, filename);
   const config = loadConfig();
 
   try {
+    const sessionData: Record<string, unknown> = {
+      timestamp,
+      id: sessionId,
+      instructions: config.instructions,
+    };
+    if (responseId) {
+      sessionData["responseId"] = responseId;
+    }
     await fs.writeFile(
       filePath,
       JSON.stringify(
         {
-          session: {
-            timestamp,
-            id: sessionId,
-            instructions: config.instructions,
-          },
+          session: sessionData,
           items,
         },
         null,
@@ -45,8 +49,9 @@ async function saveRolloutAsync(
 export function saveRollout(
   sessionId: string,
   items: Array<ResponseItem>,
+  responseId?: string,
 ): void {
   // Best-effort. We also do not log here in case of failure as that should be taken care of
   // by `saveRolloutAsync` already.
-  saveRolloutAsync(sessionId, items).catch(() => {});
+  saveRolloutAsync(sessionId, items, responseId).catch(() => {});
 }

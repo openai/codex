@@ -23,7 +23,7 @@ import {
   calculateContextPercentRemaining,
   uniqueById,
 } from "../../utils/model-utils.js";
-import { CLI_VERSION } from "../../utils/session.js";
+import { getSessionId, CLI_VERSION } from "../../utils/session.js";
 import { shortCwd } from "../../utils/short-path.js";
 import { saveRollout } from "../../utils/storage/save-rollout.js";
 import ApprovalModeOverlay from "../approval-mode-overlay.js";
@@ -53,6 +53,10 @@ type Props = {
   approvalPolicy: ApprovalPolicy;
   additionalWritableRoots: ReadonlyArray<string>;
   fullStdout: boolean;
+  /** Optional initial items to resume a session */
+  initialItems?: Array<ResponseItem>;
+  /** Optional response ID to resume server-side conversation */
+  initialResponseId?: string;
 };
 
 const colorsByPolicy: Record<ApprovalPolicy, ColorName | undefined> = {
@@ -141,17 +145,29 @@ export default function TerminalChat({
   approvalPolicy: initialApprovalPolicy,
   additionalWritableRoots,
   fullStdout,
+  initialItems = [],
+  initialResponseId,
 }: Props): React.ReactElement {
   const notify = Boolean(config.notify);
   const [model, setModel] = useState<string>(config.model);
   const [provider, setProvider] = useState<string>(config.provider || "openai");
-  const [lastResponseId, setLastResponseId] = useState<string | null>(null);
-  const [items, setItems] = useState<Array<ResponseItem>>([]);
+  const [lastResponseId, setLastResponseId] = useState<string | null>(
+    initialResponseId ?? null,
+  );
+  const [items, setItems] = useState<Array<ResponseItem>>(initialItems);
   const [loading, setLoading] = useState<boolean>(false);
   const [approvalPolicy, setApprovalPolicy] = useState<ApprovalPolicy>(
     initialApprovalPolicy,
   );
   const [thinkingSeconds, setThinkingSeconds] = useState(0);
+
+  // Persist the lastResponseId along with items to resume server-side context
+  useEffect(() => {
+    if (lastResponseId) {
+      const sessionId = getSessionId();
+      saveRollout(sessionId, items, lastResponseId);
+    }
+  }, [lastResponseId, items]);
 
   const handleCompact = async () => {
     setLoading(true);

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* eslint-disable no-console */
 import "dotenv/config";
 
 // Hack to suppress deprecation warnings (punycode)
@@ -28,18 +29,51 @@ import { createInputItem } from "./utils/input-utils";
 import { initLogger } from "./utils/logger/log";
 import { isModelSupportedForResponses } from "./utils/model-utils.js";
 import { parseToolCall } from "./utils/parsers";
+import { setSessionId } from "./utils/session";
 import { onExit, setInkRenderer } from "./utils/terminal";
 import chalk from "chalk";
 import { spawnSync } from "child_process";
 import fs from "fs";
 import { render } from "ink";
 import meow from "meow";
+import os from "os";
 import path from "path";
 import React from "react";
 
 // Call this early so `tail -F "$TMPDIR/oai-codex/codex-cli-latest.log"` works
 // immediately. This must be run with DEBUG=1 for logging to work.
 initLogger();
+
+// Early exit for session listing (uses HOME env first for compatibility with test runners)
+{
+  const rawArgs = process.argv.slice(2);
+  if (rawArgs.includes("--session-list")) {
+    const homeDir = process.env["HOME"] || os.homedir();
+    const sessionsRoot = path.join(homeDir, ".codex", "sessions");
+    const sessions: Array<{ id: string }> = [];
+    if (fs.existsSync(sessionsRoot)) {
+      for (const file of fs.readdirSync(sessionsRoot)) {
+        const m = file.match(/^(.+)\.json$/);
+        if (m && m[1]) {
+          sessions.push({ id: m[1] });
+        }
+      }
+    }
+    for (const session of sessions) {
+      const sessionPath = path.join(sessionsRoot, `${session.id}.json`);
+      const stats = fs.statSync(sessionPath);
+      const size = stats.size;
+      const formattedDate = new Intl.DateTimeFormat(undefined, {
+        dateStyle: "medium",
+        timeStyle: "short",
+      }).format(stats.mtime); // Includes both date and time
+      console.log(
+        `${formattedDate} ${size.toString().padStart(10)} ${session.id}`,
+      );
+    }
+    process.exit(0);
+  }
+}
 
 // TODO: migrate to new versions of quiet mode
 //
@@ -89,10 +123,18 @@ const cli = meow(
                                into context and applies a batch of edits in one go. Incompatible
                                with all other flags, except for --model.
 
+  Session options
+    -S, --session <name>       Initiate or continue named session (does not work in quiet mode)
+    --session-list             List available sessions
+    --session-path <name>      Show path to session file
+    --session-dump <name>      Dump full session JSON to stdout
+    --session-delete <name>    Delete a session file
+
   Examples
     $ codex "Write and run a python program that prints ASCII art"
     $ codex -q "fix build issues"
     $ codex completion bash
+    $ codex -S weather "What is the weather today?"
 `,
   {
     importMeta: import.meta,
@@ -187,6 +229,28 @@ const cli = meow(
         description: `Run in full-context editing approach. The model is given the whole code
           directory as context and performs changes in one go without acting.`,
       },
+      // session options
+      session: {
+        type: "string",
+        aliases: ["S"],
+        description: "initiate or continue named session",
+      },
+      sessionList: {
+        type: "boolean",
+        description: "list sessions",
+      },
+      sessionPath: {
+        type: "string",
+        description: "show path to session file",
+      },
+      sessionDump: {
+        type: "string",
+        description: "dump session to stdout",
+      },
+      sessionDelete: {
+        type: "string",
+        description: "delete session file",
+      },
     },
   },
 );
@@ -218,11 +282,9 @@ complete -c codex -a '(__fish_complete_path)' -d 'file path'`,
   };
   const script = scripts[shell];
   if (!script) {
-    // eslint-disable-next-line no-console
     console.error(`Unsupported shell: ${shell}`);
     process.exit(1);
   }
-  // eslint-disable-next-line no-console
   console.log(script);
   process.exit(0);
 }
@@ -245,6 +307,107 @@ if (cli.flags.config) {
     process.env["EDITOR"] || (process.platform === "win32" ? "notepad" : "vi");
   spawnSync(editor, [filePath], { stdio: "inherit" });
   process.exit(0);
+}
+
+// Exit after handling session operations or prepare resumeItems for interactive session
+
+// Directory where session files are stored
+const homeDir = process.env["HOME"] || os.homedir();
+const sessionsDir = path.join(homeDir, ".codex", "sessions");
+
+// Session operations (list, path, dump, delete)
+if (cli.flags.sessionList) {
+  const sessions: Array<string> = [];
+  if (fs.existsSync(sessionsDir)) {
+    for (const file of fs.readdirSync(sessionsDir)) {
+      const m = file.match(/^rollout-[^-]+-([^.]+)\.json$/);
+      if (m && m[1]) {
+        sessions.push(m[1]);
+      }
+    }
+  }
+  sessions.sort();
+  console.log(...sessions);
+  process.exit(0);
+}
+
+// Prepare resume items/data if --session provided without other session operations
+let resumeItems: Array<ResponseItem> | undefined;
+let resumeResponseId: string | undefined;
+
+if (
+  cli.flags.session ||
+  cli.flags.sessionPath ||
+  cli.flags.sessionDump ||
+  cli.flags.sessionDelete
+) {
+  const sessionIdFlag =
+    cli.flags.session ||
+    cli.flags.sessionPath ||
+    cli.flags.sessionDump ||
+    cli.flags.sessionDelete;
+
+  if (!sessionIdFlag) {
+    console.error("session id required");
+    process.exit(1);
+  }
+  // Use provided session id for new or resuming sessions
+  if (cli.flags.session) {
+    setSessionId(sessionIdFlag);
+  }
+
+  let targetFile: string | undefined;
+  if (fs.existsSync(sessionsDir)) {
+    const candidateFile = `${sessionIdFlag}.json`;
+    const candidatePath = path.join(sessionsDir, candidateFile);
+    if (fs.existsSync(candidatePath)) {
+      targetFile = candidatePath;
+    }
+  }
+  if (!targetFile) {
+    if (!cli.flags.session) {
+      console.error(`session ${sessionIdFlag} does not exist`);
+      process.exit(1);
+    }
+  }
+
+  if (cli.flags.session && targetFile) {
+    try {
+      const content = fs.readFileSync(targetFile, "utf8");
+      const parsed = JSON.parse(content) as AppRollout & {
+        session?: { responseId?: string };
+      };
+      resumeItems = parsed.items as Array<ResponseItem>;
+      resumeResponseId = parsed.session?.responseId;
+    } catch (e) {
+      console.error(`error loading session ${sessionIdFlag}: ${e}`);
+      process.exit(1);
+    }
+    // Resume the named session (session id already set above)
+  }
+
+  if (cli.flags.sessionPath) {
+    console.log(targetFile);
+    process.exit(0);
+  }
+  if (cli.flags.sessionDump && targetFile) {
+    try {
+      console.log(fs.readFileSync(targetFile, "utf8"));
+    } catch (e) {
+      console.error(`error reading session ${sessionIdFlag}: ${e}`);
+      process.exit(1);
+    }
+    process.exit(0);
+  }
+  if (cli.flags.sessionDelete && targetFile) {
+    try {
+      fs.unlinkSync(targetFile);
+    } catch (e) {
+      console.error(`error deleting session ${sessionIdFlag}: ${e}`);
+      process.exit(1);
+    }
+    process.exit(0);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -270,7 +433,6 @@ const NO_API_KEY_REQUIRED = new Set(["ollama"]);
 
 // Skip API key validation for providers that don't require an API key
 if (!apiKey && !NO_API_KEY_REQUIRED.has(provider.toLowerCase())) {
-  // eslint-disable-next-line no-console
   console.error(
     `\n${chalk.red(`Missing ${provider} API key.`)}\n\n` +
       `Set the environment variable ${chalk.bold(
@@ -324,7 +486,6 @@ try {
 if (cli.flags.flexMode) {
   const allowedFlexModels = new Set(["o3", "o4-mini"]);
   if (!allowedFlexModels.has(config.model)) {
-    // eslint-disable-next-line no-console
     console.error(
       `The --flex-mode option is only supported when using the 'o3' or 'o4-mini' models. ` +
         `Current model: '${config.model}'.`,
@@ -337,7 +498,6 @@ if (
   !(await isModelSupportedForResponses(provider, config.model)) &&
   (!provider || provider.toLowerCase() === "openai")
 ) {
-  // eslint-disable-next-line no-console
   console.error(
     `The model "${config.model}" does not appear in the list of models ` +
       `available to your account. Double-check the spelling (use\n` +
@@ -359,7 +519,6 @@ if (cli.flags.view) {
     const content = fs.readFileSync(absolutePath, "utf-8");
     rollout = JSON.parse(content) as AppRollout;
   } catch (error) {
-    // eslint-disable-next-line no-console
     console.error("Error reading rollout file:", error);
     process.exit(1);
   }
@@ -385,7 +544,6 @@ const additionalWritableRoots: ReadonlyArray<string> = (
 if (cli.flags.quiet) {
   process.env["CODEX_QUIET_MODE"] = "1";
   if (!prompt || prompt.trim() === "") {
-    // eslint-disable-next-line no-console
     console.error(
       'Quiet mode requires a prompt string, e.g.,: codex -q "Fix bug #123 in the foobar project"',
     );
@@ -440,6 +598,8 @@ const instance = render(
     approvalPolicy={approvalPolicy}
     additionalWritableRoots={additionalWritableRoots}
     fullStdout={Boolean(cli.flags.fullStdout)}
+    resumeItems={resumeItems}
+    resumeResponseId={resumeResponseId}
   />,
   {
     patchConsole: process.env["DEBUG"] ? false : true,
@@ -518,7 +678,6 @@ async function runQuietMode({
     additionalWritableRoots,
     disableResponseStorage: config.disableResponseStorage,
     onItem: (item: ResponseItem) => {
-      // eslint-disable-next-line no-console
       console.log(formatResponseItemForQuietMode(item));
     },
     onLoading: () => {
