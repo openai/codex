@@ -884,6 +884,7 @@ export default function TerminalChatInput({
         ) : (
           <Text dimColor>
             ctrl+c to exit | "/" to see commands | enter to send
+            {" — "}
             {contextInfo}
           </Text>
         )}
