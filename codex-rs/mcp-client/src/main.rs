@@ -18,17 +18,20 @@ use mcp_types::ListToolsRequestParams;
 #[tokio::main]
 async fn main() -> Result<()> {
     // Collect command-line arguments excluding the program name itself.
-    let cmd_args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
 
-    if cmd_args.is_empty() || cmd_args[0] == "--help" || cmd_args[0] == "-h" {
+    if args.is_empty() || args[0] == "--help" || args[0] == "-h" {
         eprintln!("Usage: mcp-client <program> [args..]\n\nExample: mcp-client codex-mcp-server");
         std::process::exit(1);
     }
+    let original_args = args.clone();
 
     // Spawn the subprocess and connect the client.
-    let client = McpClient::new_stdio_client(cmd_args.clone())
+    let program = args.remove(0);
+    let env = None;
+    let client = McpClient::new_stdio_client(program, args, env)
         .await
-        .with_context(|| format!("failed to spawn subprocess: {:?}", cmd_args))?;
+        .with_context(|| format!("failed to spawn subprocess: {original_args:?}"))?;
 
     // Issue `tools/list` request (no params).
     let tools = client

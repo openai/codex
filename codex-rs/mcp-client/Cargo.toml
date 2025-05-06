@@ -5,7 +5,6 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1"
-codex-core = { path = "../core", features = ["cli"] }
 mcp-types = { path = "../mcp-types" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
