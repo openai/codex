@@ -8,6 +8,7 @@ use crossterm::event::KeyEvent;
 use ratatui::prelude::*;
 use ratatui::style::Style;
 use ratatui::widgets::*;
+use serde_json::Value as JsonValue;
 use std::cell::Cell as StdCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -192,6 +193,18 @@ impl ConversationHistoryWidget {
         self.add_to_history(HistoryCell::new_active_exec_command(call_id, command));
     }
 
+    pub fn add_active_mcp_tool_call(
+        &mut self,
+        call_id: String,
+        server: String,
+        tool: String,
+        arguments: Option<JsonValue>,
+    ) {
+        self.add_to_history(HistoryCell::new_active_mcp_tool_call(
+            call_id, server, tool, arguments,
+        ));
+    }
+
     fn add_to_history(&mut self, cell: HistoryCell) {
         self.history.push(cell);
     }
@@ -227,6 +240,43 @@ impl ConversationHistoryWidget {
                             duration: start.elapsed(),
                         },
                     );
+                    break;
+                }
+            }
+        }
+    }
+
+    pub fn record_completed_mcp_tool_call(
+        &mut self,
+        call_id: String,
+        success: bool,
+        result: Option<mcp_types::CallToolResult>,
+    ) {
+        // Convert result into serde_json::Value early so we don't have to
+        // worry about lifetimes inside the match arm.
+        let result_val = result.map(|r| {
+            serde_json::to_value(r)
+                .unwrap_or_else(|_| serde_json::Value::String("<serialization error>".into()))
+        });
+
+        for cell in self.history.iter_mut() {
+            if let HistoryCell::ActiveMcpToolCall {
+                call_id: history_id,
+                fq_tool_name,
+                invocation,
+                start,
+                ..
+            } = cell
+            {
+                if &call_id == history_id {
+                    let completed = HistoryCell::new_completed_mcp_tool_call(
+                        fq_tool_name.clone(),
+                        invocation.clone(),
+                        *start,
+                        success,
+                        result_val,
+                    );
+                    *cell = completed;
                     break;
                 }
             }
