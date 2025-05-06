@@ -143,12 +143,7 @@ impl ChatWidget<'_> {
                     InputResult::Submitted(text) => {
                         // Special client‑side commands start with a leading slash.
                         let trimmed = text.trim();
-
                         match trimmed {
-                            "q" => {
-                                // Gracefully request application shutdown.
-                                let _ = self.app_event_tx.send(AppEvent::ExitRequest);
-                            }
                             "/clear" => {
                                 // Clear the current conversation history without exiting.
                                 self.conversation_history.clear();
