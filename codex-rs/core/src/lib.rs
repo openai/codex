@@ -20,6 +20,7 @@ pub mod mcp_server_config;
 mod mcp_tool_call;
 mod models;
 pub mod protocol;
+mod rollout;
 mod safety;
 mod user_notification;
 pub mod util;

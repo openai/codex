@@ -34,8 +34,9 @@ async fn main() -> Result<()> {
         .with_context(|| format!("failed to spawn subprocess: {original_args:?}"))?;
 
     // Issue `tools/list` request (no params).
+    let timeout = None;
     let tools = client
-        .list_tools(None::<ListToolsRequestParams>)
+        .list_tools(None::<ListToolsRequestParams>, timeout)
         .await
         .context("tools/list request failed")?;
 
