@@ -15,7 +15,8 @@ path = "src/lib.rs"
 anyhow = "1"
 chrono = "0.4.40"
 clap = { version = "4", features = ["derive"] }
-codex-core = { path = "../core", features = ["cli"] }
+codex-core = { path = "../core" }
+codex-common = { path = "../common", features = ["cli", "elapsed"] }
 mcp-types = { path = "../mcp-types" }
 owo-colors = "4.2.0"
 serde_json = "1"

@@ -1,4 +1,5 @@
 use chrono::Utc;
+use codex_common::elapsed::format_elapsed;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::FileChange;
@@ -145,7 +146,7 @@ impl EventProcessor {
                 }) = exec_command
                 {
                     (
-                        format_duration(start_time),
+                        format!(" in {}", format_elapsed(start_time)),
                         format!("{}", escape_command(&command).style(self.bold)),
                     )
                 } else {
@@ -160,7 +161,7 @@ impl EventProcessor {
                     .join("\n");
                 match exit_code {
                     0 => {
-                        let title = format!("{call} succeded{duration}:");
+                        let title = format!("{call} succeeded{duration}:");
                         ts_println!("{}", title.style(self.green));
                     }
                     _ => {
@@ -221,7 +222,7 @@ impl EventProcessor {
                     ..
                 }) = info
                 {
-                    (format_duration(start_time), invocation)
+                    (format!(" in {}", format_elapsed(start_time)), invocation)
                 } else {
                     (String::new(), format!("tool('{call_id}')"))
                 };
@@ -335,7 +336,7 @@ impl EventProcessor {
                 }) = patch_begin
                 {
                     (
-                        format_duration(start_time),
+                        format!(" in {}", format_elapsed(start_time)),
                         format!("apply_patch(auto_approved={})", auto_approved),
                     )
                 } else {
@@ -381,15 +382,5 @@ fn format_file_change(change: &FileChange) -> &'static str {
         FileChange::Update {
             move_path: None, ..
         } => "M",
-    }
-}
-
-fn format_duration(start_time: chrono::DateTime<Utc>) -> String {
-    let elapsed = Utc::now().signed_duration_since(start_time);
-    let millis = elapsed.num_milliseconds();
-    if millis < 1000 {
-        format!(" in {}ms", millis)
-    } else {
-        format!(" in {:.2}s", millis as f64 / 1000.0)
     }
 }
