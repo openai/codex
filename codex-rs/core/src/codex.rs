@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -16,7 +16,6 @@ use codex_apply_patch::ApplyPatchFileChange;
 use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_apply_patch::maybe_parse_apply_patch_verified;
 use codex_apply_patch::print_summary;
-use fs_err as fs;
 use futures::prelude::*;
 use serde::Serialize;
 use serde_json;
@@ -33,7 +32,6 @@ use crate::client::ModelClient;
 use crate::client::Prompt;
 use crate::client::ResponseEvent;
 use crate::config::Config;
-use crate::config::ConfigOverrides;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::exec::ExecParams;
@@ -68,28 +66,59 @@ use crate::zdr_transcript::ZdrTranscript;
 
 /// The high-level interface to the Codex system.
 /// It operates as a queue pair where you send submissions and receive events.
-#[derive(Clone)]
 pub struct Codex {
+    next_id: AtomicU64,
     tx_sub: Sender<Submission>,
     rx_event: Receiver<Event>,
-    recorder: Recorder,
 }
 
 impl Codex {
-    pub fn spawn(ctrl_c: Arc<Notify>) -> CodexResult<Self> {
-        CodexBuilder::default().spawn(ctrl_c)
+    /// Spawn a new [`Codex`] and initialize the session. Returns the instance
+    /// of `Codex` and the ID of the `SessionInitialized` event that was
+    /// submitted to start the session.
+    pub async fn spawn(config: Config, ctrl_c: Arc<Notify>) -> CodexResult<(Codex, String)> {
+        let (tx_sub, rx_sub) = async_channel::bounded(64);
+        let (tx_event, rx_event) = async_channel::bounded(64);
+        let configure_session = Op::ConfigureSession {
+            model: config.model.clone(),
+            instructions: config.instructions.clone(),
+            approval_policy: config.approval_policy,
+            sandbox_policy: config.sandbox_policy.clone(),
+            disable_response_storage: config.disable_response_storage,
+            notify: config.notify.clone(),
+            cwd: config.cwd.clone(),
+        };
+
+        tokio::spawn(submission_loop(config, rx_sub, tx_event, ctrl_c));
+        let codex = Codex {
+            next_id: AtomicU64::new(0),
+            tx_sub,
+            rx_event,
+        };
+        let init_id = codex.submit(configure_session).await?;
+
+        Ok((codex, init_id))
     }
 
-    pub fn builder() -> CodexBuilder {
-        CodexBuilder::default()
+    /// Submit the `op` wrapped in a `Submission` with a unique ID.
+    pub async fn submit(&self, op: Op) -> CodexResult<String> {
+        let id = self
+            .next_id
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            .to_string();
+        let sub = Submission { id: id.clone(), op };
+        self.submit_with_id(sub).await?;
+        Ok(id)
     }
 
-    pub async fn submit(&self, sub: Submission) -> CodexResult<()> {
-        self.recorder.record_submission(&sub);
+    /// Use sparingly: prefer `submit()` so Codex is responsible for generating
+    /// unique IDs for each submission.
+    pub async fn submit_with_id(&self, sub: Submission) -> CodexResult<()> {
         self.tx_sub
             .send(sub)
             .await
-            .map_err(|_| CodexErr::InternalAgentDied)
+            .map_err(|_| CodexErr::InternalAgentDied)?;
+        Ok(())
     }
 
     pub async fn next_event(&self) -> CodexResult<Event> {
@@ -98,97 +127,7 @@ impl Codex {
             .recv()
             .await
             .map_err(|_| CodexErr::InternalAgentDied)?;
-        self.recorder.record_event(&event);
         Ok(event)
-    }
-}
-
-#[derive(Default)]
-pub struct CodexBuilder {
-    record_submissions: Option<PathBuf>,
-    record_events: Option<PathBuf>,
-}
-
-impl CodexBuilder {
-    pub fn spawn(self, ctrl_c: Arc<Notify>) -> CodexResult<Codex> {
-        let (tx_sub, rx_sub) = async_channel::bounded(64);
-        let (tx_event, rx_event) = async_channel::bounded(64);
-        let recorder = Recorder::new(&self)?;
-        tokio::spawn(submission_loop(rx_sub, tx_event, ctrl_c));
-        Ok(Codex {
-            tx_sub,
-            rx_event,
-            recorder,
-        })
-    }
-
-    pub fn record_submissions(mut self, path: impl AsRef<Path>) -> Self {
-        debug!("Recording submissions to {:?}", path.as_ref());
-        self.record_submissions = Some(path.as_ref().to_path_buf());
-        self
-    }
-
-    pub fn record_events(mut self, path: impl AsRef<Path>) -> Self {
-        debug!("Recording events to {:?}", path.as_ref());
-        self.record_events = Some(path.as_ref().to_path_buf());
-        self
-    }
-}
-
-#[derive(Clone)]
-struct Recorder {
-    submissions: Option<Arc<Mutex<fs::File>>>,
-    events: Option<Arc<Mutex<fs::File>>>,
-}
-
-impl Recorder {
-    fn new(builder: &CodexBuilder) -> CodexResult<Self> {
-        let submissions = match &builder.record_submissions {
-            Some(path) => {
-                if let Some(parent) = path.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                let f = fs::File::create(path)?;
-                Some(Arc::new(Mutex::new(f)))
-            }
-            None => None,
-        };
-        let events = match &builder.record_events {
-            Some(path) => {
-                if let Some(parent) = path.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                let f = fs::File::create(path)?;
-                Some(Arc::new(Mutex::new(f)))
-            }
-            None => None,
-        };
-        Ok(Self {
-            submissions,
-            events,
-        })
-    }
-
-    pub fn record_submission(&self, sub: &Submission) {
-        let Some(f) = &self.submissions else {
-            return;
-        };
-        let mut f = f.lock().unwrap();
-        let json = serde_json::to_string(sub).expect("failed to serialize submission json");
-        if let Err(e) = writeln!(f, "{json}") {
-            warn!("failed to record submission: {e:#}");
-        }
-    }
-
-    pub fn record_event(&self, event: &Event) {
-        let Some(f) = &self.events else {
-            return;
-        };
-        let mut f = f.lock().unwrap();
-        let json = serde_json::to_string(event).expect("failed to serialize event json");
-        if let Err(e) = writeln!(f, "{json}") {
-            warn!("failed to record event: {e:#}");
-        }
     }
 }
 
@@ -519,6 +458,7 @@ impl AgentTask {
 }
 
 async fn submission_loop(
+    config: Config,
     rx_sub: Receiver<Submission>,
     tx_event: Sender<Event>,
     ctrl_c: Arc<Notify>,
@@ -605,16 +545,6 @@ async fn submission_loop(
                 };
 
                 let writable_roots = Mutex::new(get_writable_roots(&cwd));
-
-                // Load config to initialize the MCP connection manager.
-                let config = match Config::load_with_overrides(ConfigOverrides::default()) {
-                    Ok(cfg) => cfg,
-                    Err(e) => {
-                        error!("Failed to load config for MCP servers: {e:#}");
-                        // Fall back to empty server map so the session can still proceed.
-                        Config::load_default_config_for_test()
-                    }
-                };
 
                 let mcp_connection_manager =
                     match McpConnectionManager::new(config.mcp_servers.clone()).await {

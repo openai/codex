@@ -1,7 +1,10 @@
 use std::io::IsTerminal;
+use std::sync::Arc;
 
 use clap::Parser;
 use codex_core::Codex;
+use codex_core::config::Config;
+use codex_core::config::ConfigOverrides;
 use codex_core::protocol::Submission;
 use codex_core::util::notify_on_sigint;
 use tokio::io::AsyncBufReadExt;
@@ -21,8 +24,10 @@ pub async fn run_main(_opts: ProtoCli) -> anyhow::Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
+    let config = Config::load_with_overrides(ConfigOverrides::default())?;
     let ctrl_c = notify_on_sigint();
-    let codex = Codex::spawn(ctrl_c.clone())?;
+    let (codex, _init_id) = Codex::spawn(config, ctrl_c.clone()).await?;
+    let codex = Arc::new(codex);
 
     // Task that reads JSON lines from stdin and forwards to Submission Queue
     let sq_fut = {
@@ -48,7 +53,7 @@ pub async fn run_main(_opts: ProtoCli) -> anyhow::Result<()> {
                         }
                         match serde_json::from_str::<Submission>(line) {
                             Ok(sub) => {
-                                if let Err(e) = codex.submit(sub).await {
+                                if let Err(e) = codex.submit_with_id(sub).await {
                                     error!("{e:#}");
                                     break;
                                 }

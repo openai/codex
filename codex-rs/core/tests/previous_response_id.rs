@@ -4,8 +4,6 @@ use codex_core::Codex;
 use codex_core::config::Config;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol::Submission;
 use serde_json::Value;
 use tokio::time::timeout;
 use wiremock::Match;
@@ -88,37 +86,17 @@ async fn keeps_previous_response_id_between_tasks() {
         std::env::set_var("OPENAI_STREAM_MAX_RETRIES", "0");
     }
 
-    let codex = Codex::spawn(std::sync::Arc::new(tokio::sync::Notify::new())).unwrap();
-
     // Init session
     let config = Config::load_default_config_for_test();
-    codex
-        .submit(Submission {
-            id: "init".into(),
-            op: Op::ConfigureSession {
-                model: config.model,
-                instructions: None,
-                approval_policy: config.approval_policy,
-                sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                disable_response_storage: false,
-                notify: None,
-                cwd: std::env::current_dir().unwrap(),
-            },
-        })
-        .await
-        .unwrap();
-    // drain init event
-    let _ = codex.next_event().await.unwrap();
+    let ctrl_c = std::sync::Arc::new(tokio::sync::Notify::new());
+    let (codex, _init_id) = Codex::spawn(config, ctrl_c.clone()).await.unwrap();
 
     // Task 1 – triggers first request (no previous_response_id)
     codex
-        .submit(Submission {
-            id: "task1".into(),
-            op: Op::UserInput {
-                items: vec![InputItem::Text {
-                    text: "hello".into(),
-                }],
-            },
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: "hello".into(),
+            }],
         })
         .await
         .unwrap();
@@ -136,13 +114,10 @@ async fn keeps_previous_response_id_between_tasks() {
 
     // Task 2 – should include `previous_response_id` (triggers second request)
     codex
-        .submit(Submission {
-            id: "task2".into(),
-            op: Op::UserInput {
-                items: vec![InputItem::Text {
-                    text: "again".into(),
-                }],
-            },
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: "again".into(),
+            }],
         })
         .await
         .unwrap();

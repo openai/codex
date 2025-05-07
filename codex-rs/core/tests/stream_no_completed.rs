@@ -7,8 +7,6 @@ use codex_core::Codex;
 use codex_core::config::Config;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol::Submission;
 use tokio::time::timeout;
 use wiremock::Mock;
 use wiremock::MockServer;
@@ -77,34 +75,15 @@ async fn retries_on_early_close() {
         std::env::set_var("OPENAI_STREAM_IDLE_TIMEOUT_MS", "2000");
     }
 
-    let codex = Codex::spawn(std::sync::Arc::new(tokio::sync::Notify::new())).unwrap();
-
+    let ctrl_c = std::sync::Arc::new(tokio::sync::Notify::new());
     let config = Config::load_default_config_for_test();
-    codex
-        .submit(Submission {
-            id: "init".into(),
-            op: Op::ConfigureSession {
-                model: config.model,
-                instructions: None,
-                approval_policy: config.approval_policy,
-                sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                disable_response_storage: false,
-                notify: None,
-                cwd: std::env::current_dir().unwrap(),
-            },
-        })
-        .await
-        .unwrap();
-    let _ = codex.next_event().await.unwrap();
+    let (codex, _init_id) = Codex::spawn(config, ctrl_c).await.unwrap();
 
     codex
-        .submit(Submission {
-            id: "task".into(),
-            op: Op::UserInput {
-                items: vec![InputItem::Text {
-                    text: "hello".into(),
-                }],
-            },
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: "hello".into(),
+            }],
         })
         .await
         .unwrap();
