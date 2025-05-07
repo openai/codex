@@ -539,12 +539,14 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.12",
+ "time",
  "tokio",
  "tokio-util",
  "toml",
  "tracing",
  "tree-sitter",
  "tree-sitter-bash",
+ "uuid",
  "wiremock",
 ]
 
@@ -4087,6 +4089,15 @@ name = "utf8parse"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
+
+[[package]]
+name = "uuid"
+version = "1.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "458f7a779bf54acc9f347480ac654f68407d3aab21269a6e3c9f922acd9e2da9"
+dependencies = [
+ "getrandom 0.3.2",
+]
 
 [[package]]
 name = "valuable"
