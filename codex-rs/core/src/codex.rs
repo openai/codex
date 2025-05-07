@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -16,7 +15,6 @@ use codex_apply_patch::ApplyPatchFileChange;
 use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_apply_patch::maybe_parse_apply_patch_verified;
 use codex_apply_patch::print_summary;
-use fs_err as fs;
 use futures::prelude::*;
 use serde::Serialize;
 use serde_json;
@@ -72,20 +70,17 @@ use crate::zdr_transcript::ZdrTranscript;
 pub struct Codex {
     tx_sub: Sender<Submission>,
     rx_event: Receiver<Event>,
-    recorder: Recorder,
 }
 
 impl Codex {
     pub fn spawn(ctrl_c: Arc<Notify>) -> CodexResult<Self> {
-        CodexBuilder::default().spawn(ctrl_c)
-    }
-
-    pub fn builder() -> CodexBuilder {
-        CodexBuilder::default()
+        let (tx_sub, rx_sub) = async_channel::bounded(64);
+        let (tx_event, rx_event) = async_channel::bounded(64);
+        tokio::spawn(submission_loop(rx_sub, tx_event, ctrl_c));
+        Ok(Self { tx_sub, rx_event })
     }
 
     pub async fn submit(&self, sub: Submission) -> CodexResult<()> {
-        self.recorder.record_submission(&sub);
         self.tx_sub
             .send(sub)
             .await
@@ -98,97 +93,7 @@ impl Codex {
             .recv()
             .await
             .map_err(|_| CodexErr::InternalAgentDied)?;
-        self.recorder.record_event(&event);
         Ok(event)
-    }
-}
-
-#[derive(Default)]
-pub struct CodexBuilder {
-    record_submissions: Option<PathBuf>,
-    record_events: Option<PathBuf>,
-}
-
-impl CodexBuilder {
-    pub fn spawn(self, ctrl_c: Arc<Notify>) -> CodexResult<Codex> {
-        let (tx_sub, rx_sub) = async_channel::bounded(64);
-        let (tx_event, rx_event) = async_channel::bounded(64);
-        let recorder = Recorder::new(&self)?;
-        tokio::spawn(submission_loop(rx_sub, tx_event, ctrl_c));
-        Ok(Codex {
-            tx_sub,
-            rx_event,
-            recorder,
-        })
-    }
-
-    pub fn record_submissions(mut self, path: impl AsRef<Path>) -> Self {
-        debug!("Recording submissions to {:?}", path.as_ref());
-        self.record_submissions = Some(path.as_ref().to_path_buf());
-        self
-    }
-
-    pub fn record_events(mut self, path: impl AsRef<Path>) -> Self {
-        debug!("Recording events to {:?}", path.as_ref());
-        self.record_events = Some(path.as_ref().to_path_buf());
-        self
-    }
-}
-
-#[derive(Clone)]
-struct Recorder {
-    submissions: Option<Arc<Mutex<fs::File>>>,
-    events: Option<Arc<Mutex<fs::File>>>,
-}
-
-impl Recorder {
-    fn new(builder: &CodexBuilder) -> CodexResult<Self> {
-        let submissions = match &builder.record_submissions {
-            Some(path) => {
-                if let Some(parent) = path.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                let f = fs::File::create(path)?;
-                Some(Arc::new(Mutex::new(f)))
-            }
-            None => None,
-        };
-        let events = match &builder.record_events {
-            Some(path) => {
-                if let Some(parent) = path.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                let f = fs::File::create(path)?;
-                Some(Arc::new(Mutex::new(f)))
-            }
-            None => None,
-        };
-        Ok(Self {
-            submissions,
-            events,
-        })
-    }
-
-    pub fn record_submission(&self, sub: &Submission) {
-        let Some(f) = &self.submissions else {
-            return;
-        };
-        let mut f = f.lock().unwrap();
-        let json = serde_json::to_string(sub).expect("failed to serialize submission json");
-        if let Err(e) = writeln!(f, "{json}") {
-            warn!("failed to record submission: {e:#}");
-        }
-    }
-
-    pub fn record_event(&self, event: &Event) {
-        let Some(f) = &self.events else {
-            return;
-        };
-        let mut f = f.lock().unwrap();
-        let json = serde_json::to_string(event).expect("failed to serialize event json");
-        if let Err(e) = writeln!(f, "{json}") {
-            warn!("failed to record event: {e:#}");
-        }
     }
 }
 
