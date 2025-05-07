@@ -58,6 +58,7 @@ use crate::protocol::Op;
 use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::Submission;
+use crate::rollout::RolloutRecorder;
 use crate::safety::SafetyCheck;
 use crate::safety::assess_command_safety;
 use crate::safety::assess_patch_safety;
@@ -214,6 +215,10 @@ pub(crate) struct Session {
     /// External notifier command (will be passed as args to exec()). When
     /// `None` this feature is disabled.
     notify: Option<Vec<String>>,
+
+    /// Optional rollout recorder for persisting the conversation transcript so
+    /// sessions can be replayed or inspected later.
+    rollout: Mutex<Option<crate::rollout::RolloutRecorder>>,
     state: Mutex<State>,
 }
 
@@ -320,6 +325,23 @@ impl Session {
     pub fn add_approved_command(&self, cmd: Vec<String>) {
         let mut state = self.state.lock().unwrap();
         state.approved_commands.insert(cmd);
+    }
+
+    /// Append the given items to the session's rollout transcript (if enabled)
+    /// and persist them to disk.
+    async fn record_rollout_items(&self, items: &[ResponseItem]) {
+        // Clone the recorder outside of the mutex so we don’t hold the lock
+        // across an await point (MutexGuard is not Send).
+        let recorder = {
+            let guard = self.rollout.lock().unwrap();
+            guard.as_ref().cloned()
+        };
+
+        if let Some(rec) = recorder {
+            if let Err(e) = rec.record_items(items).await {
+                error!("failed to record rollout items: {e:#}");
+            }
+        }
     }
 
     async fn notify_exec_command_begin(&self, sub_id: &str, call_id: &str, params: &ExecParams) {
@@ -603,6 +625,16 @@ async fn submission_loop(
                         }
                     };
 
+                // Attempt to create a RolloutRecorder *before* moving the
+                // `instructions` value into the Session struct.
+                let rollout_recorder = match RolloutRecorder::new(instructions.clone()).await {
+                    Ok(r) => Some(r),
+                    Err(e) => {
+                        tracing::warn!("failed to initialise rollout recorder: {e}");
+                        None
+                    }
+                };
+
                 sess = Some(Arc::new(Session {
                     client,
                     tx_event: tx_event.clone(),
@@ -615,6 +647,7 @@ async fn submission_loop(
                     mcp_connection_manager,
                     notify,
                     state: Mutex::new(state),
+                    rollout: Mutex::new(rollout_recorder),
                 }));
 
                 // ack
@@ -713,6 +746,10 @@ async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
                 net_new_turn_input
             };
 
+        // Persist the input part of the turn to the rollout (user messages /
+        // function_call_output from previous step).
+        sess.record_rollout_items(&turn_input).await;
+
         let turn_input_messages: Vec<String> = turn_input
             .iter()
             .filter_map(|item| match item {
@@ -740,6 +777,10 @@ async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
 
                 // Only attempt to take the lock if there is something to record.
                 if !items.is_empty() {
+                    // First persist model-generated output to the rollout file – this only borrows.
+                    sess.record_rollout_items(&items).await;
+
+                    // For ZDR we also need to keep a transcript clone.
                     if let Some(transcript) = sess.state.lock().unwrap().zdr_transcript.as_mut() {
                         transcript.record_items(items);
                     }
