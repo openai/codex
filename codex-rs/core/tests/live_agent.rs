@@ -22,8 +22,6 @@ use codex_core::config::Config;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol::Submission;
 use tokio::sync::Notify;
 use tokio::time::timeout;
 
@@ -54,36 +52,10 @@ async fn spawn_codex() -> Codex {
         std::env::set_var("OPENAI_STREAM_MAX_RETRIES", "2");
     }
 
-    let agent = Codex::spawn(std::sync::Arc::new(Notify::new())).unwrap();
-
     let config = Config::load_default_config_for_test();
-    agent
-        .submit(Submission {
-            id: "init".into(),
-            op: Op::ConfigureSession {
-                model: config.model,
-                instructions: None,
-                approval_policy: config.approval_policy,
-                sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                disable_response_storage: false,
-                notify: None,
-                cwd: std::env::current_dir().unwrap(),
-            },
-        })
+    let (agent, _init_id) = Codex::spawn(config, std::sync::Arc::new(Notify::new()))
         .await
-        .expect("failed to submit init");
-
-    // Drain the SessionInitialized event so subsequent helper loops don't have
-    // to special‑case it.
-    loop {
-        let ev = timeout(Duration::from_secs(30), agent.next_event())
-            .await
-            .expect("timeout waiting for init event")
-            .expect("agent channel closed");
-        if matches!(ev.msg, EventMsg::SessionConfigured { .. }) {
-            break;
-        }
-    }
+        .unwrap();
 
     agent
 }
@@ -103,13 +75,10 @@ async fn live_streaming_and_prev_id_reset() {
 
     // ---------- Task 1 ----------
     codex
-        .submit(Submission {
-            id: "task1".into(),
-            op: Op::UserInput {
-                items: vec![InputItem::Text {
-                    text: "Say the words 'stream test'".into(),
-                }],
-            },
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: "Say the words 'stream test'".into(),
+            }],
         })
         .await
         .unwrap();
@@ -136,13 +105,10 @@ async fn live_streaming_and_prev_id_reset() {
 
     // ---------- Task 2 (same session) ----------
     codex
-        .submit(Submission {
-            id: "task2".into(),
-            op: Op::UserInput {
-                items: vec![InputItem::Text {
-                    text: "Respond with exactly: second turn succeeded".into(),
-                }],
-            },
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: "Respond with exactly: second turn succeeded".into(),
+            }],
         })
         .await
         .unwrap();
@@ -184,15 +150,12 @@ async fn live_shell_function_call() {
     const MARKER: &str = "codex_live_echo_ok";
 
     codex
-        .submit(Submission {
-            id: "task_fn".into(),
-            op: Op::UserInput {
-                items: vec![InputItem::Text {
-                    text: format!(
-                        "Use the shell function to run the command `echo {MARKER}` and no other commands."
-                    ),
-                }],
-            },
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: format!(
+                    "Use the shell function to run the command `echo {MARKER}` and no other commands."
+                ),
+            }],
         })
         .await
         .unwrap();
