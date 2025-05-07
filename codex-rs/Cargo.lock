@@ -445,7 +445,7 @@ checksum = "e9b18233253483ce2f65329a24072ec414db782531bdbb7d0bbc4bd2ce6b7e21"
 
 [[package]]
 name = "codex-ansi-escape"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "ansi-to-tui",
  "ratatui",
@@ -454,7 +454,7 @@ dependencies = [
 
 [[package]]
 name = "codex-apply-patch"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "pretty_assertions",
@@ -485,7 +485,7 @@ dependencies = [
 
 [[package]]
 name = "codex-common"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "chrono",
  "clap",
@@ -494,7 +494,7 @@ dependencies = [
 
 [[package]]
 name = "codex-core"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -553,7 +553,7 @@ dependencies = [
 
 [[package]]
 name = "codex-execpolicy"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "allocative",
  "anyhow",
@@ -573,7 +573,7 @@ dependencies = [
 
 [[package]]
 name = "codex-mcp-client"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "mcp-types",
@@ -587,7 +587,7 @@ dependencies = [
 
 [[package]]
 name = "codex-mcp-server"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "codex-core",
  "mcp-types",
@@ -602,7 +602,7 @@ dependencies = [
 
 [[package]]
 name = "codex-tui"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1995,7 +1995,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-types"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "serde",
  "serde_json",
