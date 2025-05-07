@@ -196,7 +196,12 @@ fn parse_one_hunk(lines: &[&str], line_number: usize) -> Result<(Hunk, usize), P
         ));
     }
 
-    Err(InvalidHunkError { message: format!("'{first_line}' is not a valid hunk header. Valid hunk headers: '*** Add File: {{path}}', '*** Delete File: {{path}}', '*** Update File: {{path}}'"), line_number })
+    Err(InvalidHunkError {
+        message: format!(
+            "'{first_line}' is not a valid hunk header. Valid hunk headers: '*** Add File: {{path}}', '*** Delete File: {{path}}', '*** Update File: {{path}}'"
+        ),
+        line_number,
+    })
 }
 
 fn parse_update_file_chunk(
@@ -273,7 +278,12 @@ fn parse_update_file_chunk(
                     }
                     _ => {
                         if parsed_lines == 0 {
-                            return Err(InvalidHunkError { message: format!("Unexpected line found in update hunk: '{line_contents}'. Every line should start with ' ' (context line), '+' (added line), or '-' (removed line)"), line_number: line_number + 1 });
+                            return Err(InvalidHunkError {
+                                message: format!(
+                                    "Unexpected line found in update hunk: '{line_contents}'. Every line should start with ' ' (context line), '+' (added line), or '-' (removed line)"
+                                ),
+                                line_number: line_number + 1,
+                            });
                         }
                         // Assume this is the start of the next hunk.
                         break;

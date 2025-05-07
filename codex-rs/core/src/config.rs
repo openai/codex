@@ -301,14 +301,12 @@ pub fn parse_sandbox_permission_with_base_path(
         "disk-write-cwd" => Ok(DiskWriteCwd),
         "disk-full-write-access" => Ok(DiskFullWriteAccess),
         "network-full-access" => Ok(NetworkFullAccess),
-        _ => Err(
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!(
-                    "`{raw}` is not a recognised permission.\nRun with `--help` to see the accepted values."
-                ),
-            )
-        ),
+        _ => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "`{raw}` is not a recognised permission.\nRun with `--help` to see the accepted values."
+            ),
+        )),
     }
 }
 

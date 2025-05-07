@@ -8,11 +8,11 @@ use std::path::PathBuf;
 use anyhow::Context;
 use anyhow::Error;
 use anyhow::Result;
-pub use parser::parse_patch;
 pub use parser::Hunk;
 pub use parser::ParseError;
 use parser::ParseError::*;
 use parser::UpdateFileChunk;
+pub use parser::parse_patch;
 use similar::TextDiff;
 use thiserror::Error;
 use tree_sitter::Parser;
@@ -409,7 +409,7 @@ fn derive_new_contents_from_chunks(
             return Err(ApplyPatchError::IoError(IoError {
                 context: format!("Failed to read file to update {}", path.display()),
                 source: err,
-            }))
+            }));
         }
     };
 

@@ -1,7 +1,7 @@
 use base64::Engine;
-use serde::ser::Serializer;
 use serde::Deserialize;
 use serde::Serialize;
+use serde::ser::Serializer;
 
 use crate::protocol::InputItem;
 
