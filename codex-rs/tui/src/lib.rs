@@ -12,8 +12,8 @@ use codex_core::util::is_inside_git_repo;
 use log_layer::TuiLogLayer;
 use std::fs::OpenOptions;
 use tracing_appender::non_blocking;
-use tracing_subscriber::prelude::*;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::prelude::*;
 
 mod app;
 mod app_event;

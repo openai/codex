@@ -12,14 +12,15 @@
 //! issue requests and receive strongly-typed results.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
 
-use anyhow::anyhow;
 use anyhow::Result;
+use anyhow::anyhow;
 use mcp_types::CallToolRequest;
 use mcp_types::CallToolRequestParams;
+use mcp_types::JSONRPC_VERSION;
 use mcp_types::JSONRPCMessage;
 use mcp_types::JSONRPCNotification;
 use mcp_types::JSONRPCRequest;
@@ -29,16 +30,15 @@ use mcp_types::ListToolsRequestParams;
 use mcp_types::ListToolsResult;
 use mcp_types::ModelContextProtocolRequest;
 use mcp_types::RequestId;
-use mcp_types::JSONRPC_VERSION;
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
 use tokio::process::Command;
+use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
-use tokio::sync::Mutex;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
