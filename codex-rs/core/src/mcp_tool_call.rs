@@ -45,28 +45,25 @@ pub(crate) async fn handle_mcp_tool_call(
     notify_mcp_tool_call_event(sess, sub_id, tool_call_begin_event).await;
 
     // Perform the tool call.
-    let (tool_call_end_event, tool_call_err) = match sess
-        .mcp_connection_manager
-        .call_tool(&server, &tool_name, arguments_value)
-        .await
-    {
-        Ok(result) => (
-            EventMsg::McpToolCallEnd {
-                call_id,
-                success: !result.is_error.unwrap_or(false),
-                result: Some(result),
-            },
-            None,
-        ),
-        Err(e) => (
-            EventMsg::McpToolCallEnd {
-                call_id,
-                success: false,
-                result: None,
-            },
-            Some(e),
-        ),
-    };
+    let (tool_call_end_event, tool_call_err) =
+        match sess.call_tool(&server, &tool_name, arguments_value).await {
+            Ok(result) => (
+                EventMsg::McpToolCallEnd {
+                    call_id,
+                    success: !result.is_error.unwrap_or(false),
+                    result: Some(result),
+                },
+                None,
+            ),
+            Err(e) => (
+                EventMsg::McpToolCallEnd {
+                    call_id,
+                    success: false,
+                    result: None,
+                },
+                Some(e),
+            ),
+        };
 
     notify_mcp_tool_call_event(sess, sub_id, tool_call_end_event.clone()).await;
     let EventMsg::McpToolCallEnd {
@@ -94,14 +91,9 @@ pub(crate) async fn handle_mcp_tool_call(
 }
 
 async fn notify_mcp_tool_call_event(sess: &Session, sub_id: &str, event: EventMsg) {
-    if let Err(e) = sess
-        .tx_event
-        .send(Event {
-            id: sub_id.to_string(),
-            msg: event,
-        })
-        .await
-    {
-        error!("failed to send tool call event: {e}");
-    }
+    sess.send_event(Event {
+        id: sub_id.to_string(),
+        msg: event,
+    })
+    .await;
 }

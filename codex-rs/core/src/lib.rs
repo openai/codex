@@ -26,10 +26,3 @@ pub mod util;
 mod zdr_transcript;
 
 pub use codex::Codex;
-
-#[cfg(feature = "cli")]
-mod approval_mode_cli_arg;
-#[cfg(feature = "cli")]
-pub use approval_mode_cli_arg::ApprovalModeCliArg;
-#[cfg(feature = "cli")]
-pub use approval_mode_cli_arg::SandboxPermissionOption;

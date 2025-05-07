@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-codex-core = { path = "../core", features = ["cli"] }
+codex-core = { path = "../core" }
 mcp-types = { path = "../mcp-types" }
 schemars = "0.8.22"
 serde = { version = "1", features = ["derive"] }

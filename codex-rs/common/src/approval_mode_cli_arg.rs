@@ -5,9 +5,9 @@ use clap::ArgAction;
 use clap::Parser;
 use clap::ValueEnum;
 
-use crate::config::parse_sandbox_permission_with_base_path;
-use crate::protocol::AskForApproval;
-use crate::protocol::SandboxPermission;
+use codex_core::config::parse_sandbox_permission_with_base_path;
+use codex_core::protocol::AskForApproval;
+use codex_core::protocol::SandboxPermission;
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 #[value(rename_all = "kebab-case")]

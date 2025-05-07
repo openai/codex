@@ -1,4 +1,5 @@
 use chrono::Utc;
+use codex_common::elapsed::format_elapsed;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::FileChange;
@@ -15,6 +16,11 @@ pub(crate) struct EventProcessor {
     call_id_to_command: HashMap<String, ExecCommandBegin>,
     call_id_to_patch: HashMap<String, PatchApplyBegin>,
 
+    /// Tracks in-flight MCP tool calls so we can calculate duration and print
+    /// a concise summary when the corresponding `McpToolCallEnd` event is
+    /// received.
+    call_id_to_tool_call: HashMap<String, McpToolCallBegin>,
+
     // To ensure that --color=never is respected, ANSI escapes _must_ be added
     // using .style() with one of these fields. If you need a new style, add a
     // new field here.
@@ -30,6 +36,7 @@ impl EventProcessor {
     pub(crate) fn create_with_ansi(with_ansi: bool) -> Self {
         let call_id_to_command = HashMap::new();
         let call_id_to_patch = HashMap::new();
+        let call_id_to_tool_call = HashMap::new();
 
         if with_ansi {
             Self {
@@ -40,6 +47,7 @@ impl EventProcessor {
                 magenta: Style::new().magenta(),
                 red: Style::new().red(),
                 green: Style::new().green(),
+                call_id_to_tool_call,
             }
         } else {
             Self {
@@ -50,6 +58,7 @@ impl EventProcessor {
                 magenta: Style::new(),
                 red: Style::new(),
                 green: Style::new(),
+                call_id_to_tool_call,
             }
         }
     }
@@ -57,6 +66,14 @@ impl EventProcessor {
 
 struct ExecCommandBegin {
     command: Vec<String>,
+    start_time: chrono::DateTime<Utc>,
+}
+
+/// Metadata captured when an `McpToolCallBegin` event is received.
+struct McpToolCallBegin {
+    /// Formatted invocation string, e.g. `server.tool({"city":"sf"})`.
+    invocation: String,
+    /// Timestamp when the call started so we can compute duration later.
     start_time: chrono::DateTime<Utc>,
 }
 
@@ -129,7 +146,7 @@ impl EventProcessor {
                 }) = exec_command
                 {
                     (
-                        format_duration(start_time),
+                        format!(" in {}", format_elapsed(start_time)),
                         format!("{}", escape_command(&command).style(self.bold)),
                     )
                 } else {
@@ -144,7 +161,7 @@ impl EventProcessor {
                     .join("\n");
                 match exit_code {
                     0 => {
-                        let title = format!("{call} succeded{duration}:");
+                        let title = format!("{call} succeeded{duration}:");
                         ts_println!("{}", title.style(self.green));
                     }
                     _ => {
@@ -153,6 +170,78 @@ impl EventProcessor {
                     }
                 }
                 println!("{}", truncated_output.style(self.dimmed));
+            }
+
+            // Handle MCP tool calls (e.g. calling external functions via MCP).
+            EventMsg::McpToolCallBegin {
+                call_id,
+                server,
+                tool,
+                arguments,
+            } => {
+                // Build fully-qualified tool name: server.tool
+                let fq_tool_name = format!("{server}.{tool}");
+
+                // Format arguments as compact JSON so they fit on one line.
+                let args_str = arguments
+                    .as_ref()
+                    .map(|v| serde_json::to_string(v).unwrap_or_else(|_| v.to_string()))
+                    .unwrap_or_default();
+
+                let invocation = if args_str.is_empty() {
+                    format!("{fq_tool_name}()")
+                } else {
+                    format!("{fq_tool_name}({args_str})")
+                };
+
+                self.call_id_to_tool_call.insert(
+                    call_id.clone(),
+                    McpToolCallBegin {
+                        invocation: invocation.clone(),
+                        start_time: Utc::now(),
+                    },
+                );
+
+                ts_println!(
+                    "{} {}",
+                    "tool".style(self.magenta),
+                    invocation.style(self.bold),
+                );
+            }
+            EventMsg::McpToolCallEnd {
+                call_id,
+                success,
+                result,
+            } => {
+                // Retrieve start time and invocation for duration calculation and labeling.
+                let info = self.call_id_to_tool_call.remove(&call_id);
+
+                let (duration, invocation) = if let Some(McpToolCallBegin {
+                    invocation,
+                    start_time,
+                    ..
+                }) = info
+                {
+                    (format!(" in {}", format_elapsed(start_time)), invocation)
+                } else {
+                    (String::new(), format!("tool('{call_id}')"))
+                };
+
+                let status_str = if success { "success" } else { "failed" };
+                let title_style = if success { self.green } else { self.red };
+                let title = format!("{invocation} {status_str}{duration}:");
+
+                ts_println!("{}", title.style(title_style));
+
+                if let Some(res) = result {
+                    let val: serde_json::Value = res.into();
+                    let pretty =
+                        serde_json::to_string_pretty(&val).unwrap_or_else(|_| val.to_string());
+
+                    for line in pretty.lines().take(MAX_OUTPUT_LINES_FOR_EXEC_TOOL_CALL) {
+                        println!("{}", line.style(self.dimmed));
+                    }
+                }
             }
             EventMsg::PatchApplyBegin {
                 call_id,
@@ -247,7 +336,7 @@ impl EventProcessor {
                 }) = patch_begin
                 {
                     (
-                        format_duration(start_time),
+                        format!(" in {}", format_elapsed(start_time)),
                         format!("apply_patch(auto_approved={})", auto_approved),
                     )
                 } else {
@@ -293,15 +382,5 @@ fn format_file_change(change: &FileChange) -> &'static str {
         FileChange::Update {
             move_path: None, ..
         } => "M",
-    }
-}
-
-fn format_duration(start_time: chrono::DateTime<Utc>) -> String {
-    let elapsed = Utc::now().signed_duration_since(start_time);
-    let millis = elapsed.num_milliseconds();
-    if millis < 1000 {
-        format!(" in {}ms", millis)
-    } else {
-        format!(" in {:.2}s", millis as f64 / 1000.0)
     }
 }
