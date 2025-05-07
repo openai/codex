@@ -7,11 +7,12 @@ use std::sync::Arc;
 use crate::error::CodexErr;
 use crate::error::Result;
 use crate::error::SandboxErr;
-use crate::exec::exec;
 use crate::exec::ExecParams;
 use crate::exec::RawExecToolCallOutput;
+use crate::exec::exec;
 use crate::protocol::SandboxPolicy;
 
+use landlock::ABI;
 use landlock::Access;
 use landlock::AccessFs;
 use landlock::CompatLevel;
@@ -19,8 +20,6 @@ use landlock::Compatible;
 use landlock::Ruleset;
 use landlock::RulesetAttr;
 use landlock::RulesetCreatedAttr;
-use landlock::ABI;
-use seccompiler::apply_filter;
 use seccompiler::BpfProgram;
 use seccompiler::SeccompAction;
 use seccompiler::SeccompCmpArgLen;
@@ -29,6 +28,7 @@ use seccompiler::SeccompCondition;
 use seccompiler::SeccompFilter;
 use seccompiler::SeccompRule;
 use seccompiler::TargetArch;
+use seccompiler::apply_filter;
 use tokio::sync::Notify;
 
 pub async fn exec_linux(
@@ -181,9 +181,9 @@ fn install_network_seccomp_filter_on_current_thread() -> std::result::Result<(),
 #[cfg(test)]
 mod tests_linux {
     use super::*;
-    use crate::exec::process_exec_tool_call;
     use crate::exec::ExecParams;
     use crate::exec::SandboxType;
+    use crate::exec::process_exec_tool_call;
     use crate::protocol::SandboxPolicy;
     use std::sync::Arc;
     use tempfile::NamedTempFile;

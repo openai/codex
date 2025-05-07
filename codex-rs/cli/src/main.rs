@@ -1,9 +1,9 @@
 use clap::Parser;
+use codex_cli::LandlockCommand;
+use codex_cli::SeatbeltCommand;
 use codex_cli::create_sandbox_policy;
 use codex_cli::proto;
 use codex_cli::seatbelt;
-use codex_cli::LandlockCommand;
-use codex_cli::SeatbeltCommand;
 use codex_exec::Cli as ExecCli;
 use codex_tui::Cli as TuiCli;
 

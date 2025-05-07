@@ -17,13 +17,13 @@
 
 use std::time::Duration;
 
+use codex_core::Codex;
 use codex_core::config::Config;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::Submission;
-use codex_core::Codex;
 use tokio::sync::Notify;
 use tokio::time::timeout;
 
@@ -42,8 +42,17 @@ async fn spawn_codex() -> Codex {
 
     // Environment tweaks to keep the tests snappy and inexpensive while still
     // exercising retry/robustness logic.
-    std::env::set_var("OPENAI_REQUEST_MAX_RETRIES", "2");
-    std::env::set_var("OPENAI_STREAM_MAX_RETRIES", "2");
+    //
+    // NOTE: Starting with the 2024 edition `std::env::set_var` is `unsafe`
+    // because changing the process environment races with any other threads
+    // that might be performing environment look-ups at the same time.
+    // Restrict the unsafety to this tiny block that happens at the very
+    // beginning of the test, before we spawn any background tasks that could
+    // observe the environment.
+    unsafe {
+        std::env::set_var("OPENAI_REQUEST_MAX_RETRIES", "2");
+        std::env::set_var("OPENAI_STREAM_MAX_RETRIES", "2");
+    }
 
     let agent = Codex::spawn(std::sync::Arc::new(Notify::new())).unwrap();
 

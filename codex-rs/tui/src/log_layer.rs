@@ -11,13 +11,13 @@
 use std::fmt::Write as _;
 
 use tokio::sync::mpsc::UnboundedSender;
-use tracing::field::Field;
-use tracing::field::Visit;
 use tracing::Event;
 use tracing::Subscriber;
+use tracing::field::Field;
+use tracing::field::Visit;
+use tracing_subscriber::Layer;
 use tracing_subscriber::layer::Context;
 use tracing_subscriber::registry::LookupSpan;
-use tracing_subscriber::Layer;
 
 /// Maximum characters forwarded to the TUI. Longer messages are truncated so the
 /// single‑line status indicator cannot overflow the viewport.

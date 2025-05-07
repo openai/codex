@@ -1,9 +1,9 @@
 use std::io::IsTerminal;
 
 use clap::Parser;
+use codex_core::Codex;
 use codex_core::protocol::Submission;
 use codex_core::util::notify_on_sigint;
-use codex_core::Codex;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
 use tracing::error;
