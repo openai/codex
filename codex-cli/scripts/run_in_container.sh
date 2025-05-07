@@ -13,15 +13,22 @@ WORK_DIR="${WORKSPACE_ROOT_DIR:-$(pwd)}"
 # Default allowed domains - can be overridden with OPENAI_ALLOWED_DOMAINS env var
 OPENAI_ALLOWED_DOMAINS="${OPENAI_ALLOWED_DOMAINS:-api.openai.com}"
 
-# Parse optional flag.
-if [ "$1" = "--work_dir" ]; then
-  if [ -z "$2" ]; then
-    echo "Error: --work_dir flag provided but no directory specified."
-    exit 1
-  fi
-  WORK_DIR="$2"
-  shift 2
-fi
+# Default config path - can be overridden with CONFIG_PATH env var
+CONFIG_PATH="${CONFIG_PATH:-$HOME/.codex}"
+VOLUME_FLAGS=()
+EXTRA_CODEX_ARGS=()
+
+# Parse flags: --work_dir DIR, --config DIR & any extra arguments
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --work-dir)
+      WORK_DIR="$2"; shift 2 ;;
+    --config)
+      CONFIG_PATH="$2"; shift 2 ;;
+    *)
+      EXTRA_CODEX_ARGS+=("$1"); shift ;;
+  esac
+done
 
 WORK_DIR=$(realpath "$WORK_DIR")
 
@@ -36,8 +43,8 @@ cleanup() {
 trap cleanup EXIT
 
 # Ensure a command is provided.
-if [ "$#" -eq 0 ]; then
-  echo "Usage: $0 [--work_dir directory] \"COMMAND\""
+if [ ${#EXTRA_CODEX_ARGS[@]} -eq 0 ]; then
+  echo "Usage: $0 [--work-dir directory] \"COMMAND\""
   exit 1
 fi
 
@@ -53,6 +60,11 @@ if [ -z "$OPENAI_ALLOWED_DOMAINS" ]; then
   exit 1
 fi
 
+# check if the config directory exists
+if [[ -e "$CONFIG_PATH" ]]; then
+  VOLUME_FLAGS+=("-v" "$CONFIG_PATH:/home/node/.codex:ro")
+fi
+
 # Kill any existing container for the working directory using cleanup(), centralizing removal logic.
 cleanup
 
@@ -62,6 +74,7 @@ docker run --name "$CONTAINER_NAME" -d \
   --cap-add=NET_ADMIN \
   --cap-add=NET_RAW \
   -v "$WORK_DIR:/app$WORK_DIR" \
+  "${VOLUME_FLAGS[@]}" \
   codex \
   sleep infinity
 
@@ -89,7 +102,9 @@ docker exec --user root "$CONTAINER_NAME" bash -c "rm -f /usr/local/bin/init_fir
 # We use a parameterized bash command to safely handle the command and directory.
 
 quoted_args=""
-for arg in "$@"; do
+for arg in "${EXTRA_CODEX_ARGS[@]}"; do
   quoted_args+=" $(printf '%q' "$arg")"
 done
-docker exec -it "$CONTAINER_NAME" bash -c "cd \"/app$WORK_DIR\" && codex --full-auto ${quoted_args}"
+
+docker exec -it "$CONTAINER_NAME" bash -c \
+  "cd \"/app$WORK_DIR\" && codex ${quoted_args}"
