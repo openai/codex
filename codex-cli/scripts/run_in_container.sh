@@ -2,10 +2,11 @@
 set -e
 
 # Usage:
-#   ./run_in_container.sh [--work_dir directory] "COMMAND"
+#   ./run_in_container.sh [--work-dir directory] [--config directory] "COMMAND"
 #
 #   Examples:
-#     ./run_in_container.sh --work_dir project/code "ls -la"
+#     ./run_in_container.sh --work-dir project/code --config ~/.codex "codex run"
+#     ./run_in_container.sh --work-dir project/code "ls -la"
 #     ./run_in_container.sh "echo Hello, world!"
 
 # Default the work directory to WORKSPACE_ROOT_DIR if not provided.
