@@ -5,6 +5,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::Duration;
 
 use anyhow::Context;
 use async_channel::Receiver;
@@ -396,9 +397,10 @@ impl Session {
         server: &str,
         tool: &str,
         arguments: Option<serde_json::Value>,
+        timeout: Option<Duration>,
     ) -> anyhow::Result<mcp_types::CallToolResult> {
         self.mcp_connection_manager
-            .call_tool(server, tool, arguments)
+            .call_tool(server, tool, arguments, timeout)
             .await
     }
 
@@ -1194,7 +1196,12 @@ async fn handle_function_call(
         _ => {
             match try_parse_fully_qualified_tool_name(&name) {
                 Some((server, tool_name)) => {
-                    handle_mcp_tool_call(sess, &sub_id, call_id, server, tool_name, arguments).await
+                    // TODO(mbolin): Determine appropriate timeout for tool call.
+                    let timeout = None;
+                    handle_mcp_tool_call(
+                        sess, &sub_id, call_id, server, tool_name, arguments, timeout,
+                    )
+                    .await
                 }
                 None => {
                     // Unknown function: reply with structured failure so the model can adapt.
