@@ -1,3 +1,6 @@
+// Poisoned mutex should fail the program
+#![allow(clippy::unwrap_used)]
+
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
