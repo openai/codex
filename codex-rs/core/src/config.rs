@@ -18,7 +18,7 @@ const EMBEDDED_INSTRUCTIONS: &str = include_str!("../prompt.md");
 pub struct Config {
     /// Optional override of model selection.
     pub model: String,
-    
+
     pub service_tier: String,
 
     /// Approval policy for executing commands.
@@ -70,7 +70,7 @@ pub struct Config {
 pub struct ConfigToml {
     /// Optional override of model selection.
     pub model: Option<String>,
-    pub service_tier: Option<String>,   
+    pub service_tier: Option<String>,
 
     /// Default approval policy for executing commands.
     pub approval_policy: Option<AskForApproval>,
@@ -200,7 +200,9 @@ impl Config {
 
         Self {
             model: model.or(cfg.model).unwrap_or_else(default_model),
-            service_tier: service_tier.or(cfg.service_tier).unwrap_or_else(|| "auto".to_string()),
+            service_tier: service_tier
+                .or(cfg.service_tier)
+                .unwrap_or_else(|| "auto".to_string()),
             cwd: cwd.map_or_else(
                 || {
                     tracing::info!("cwd not set, using current dir");

@@ -150,7 +150,11 @@ impl ModelClient {
         let model = model.to_string();
         let client = reqwest::Client::new();
         let service_tier = service_tier.to_string();
-        Self { model, client, service_tier }
+        Self {
+            model,
+            client,
+            service_tier,
+        }
     }
 
     pub async fn stream(&mut self, prompt: &Prompt) -> Result<ResponseStream> {

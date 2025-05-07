@@ -163,7 +163,7 @@ impl CodexToolCallParam {
             approval_policy: approval_policy.map(Into::into),
             sandbox_policy,
             disable_response_storage,
-            service_tier
+            service_tier,
         };
 
         let cfg = codex_core::config::Config::load_with_overrides(overrides)?;
