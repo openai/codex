@@ -56,9 +56,3 @@ assert_cmd = "2"
 predicates = "3"
 tempfile = "3"
 wiremock = "0.6"
-
-[features]
-default = []
-
-# Separate feature so that `clap` is not a mandatory dependency.
-cli = ["clap"]

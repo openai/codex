@@ -195,7 +195,7 @@ impl Recorder {
 /// A session has at most 1 running task at a time, and can be interrupted by user input.
 pub(crate) struct Session {
     client: ModelClient,
-    pub(crate) tx_event: Sender<Event>,
+    tx_event: Sender<Event>,
     ctrl_c: Arc<Notify>,
 
     /// The session's current working directory. All relative paths provided by
@@ -208,7 +208,7 @@ pub(crate) struct Session {
     writable_roots: Mutex<Vec<PathBuf>>,
 
     /// Manager for external MCP servers/tools.
-    pub(crate) mcp_connection_manager: McpConnectionManager,
+    mcp_connection_manager: McpConnectionManager,
 
     /// External notifier command (will be passed as args to exec()). When
     /// `None` this feature is disabled.
@@ -250,6 +250,14 @@ impl Session {
             if task.sub_id == sub_id {
                 state.current_task.take();
             }
+        }
+    }
+
+    /// Sends the given event to the client and swallows the send event, if
+    /// any, logging it as an error.
+    pub(crate) async fn send_event(&self, event: Event) {
+        if let Err(e) = self.tx_event.send(event).await {
+            error!("failed to send tool call event: {e}");
         }
     }
 
@@ -381,6 +389,17 @@ impl Session {
             std::mem::swap(&mut ret, &mut state.pending_input);
             ret
         }
+    }
+
+    pub async fn call_tool(
+        &self,
+        server: &str,
+        tool: &str,
+        arguments: Option<serde_json::Value>,
+    ) -> anyhow::Result<mcp_types::CallToolResult> {
+        self.mcp_connection_manager
+            .call_tool(server, tool, arguments)
+            .await
     }
 
     pub fn abort(&self) {

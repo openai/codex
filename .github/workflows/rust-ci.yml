@@ -93,7 +93,7 @@ jobs:
         run: find . -name Cargo.toml -mindepth 2 -maxdepth 2 -print0 | xargs -0 -n1 -I{} bash -c 'cd "$(dirname "{}")" && cargo build' || echo "FAILED=${FAILED:+$FAILED, }cargo build individual crates" >> $GITHUB_ENV
 
       - name: cargo test
-        run: cargo test --target ${{ matrix.target }} || echo "FAILED=${FAILED:+$FAILED, }cargo test" >> $GITHUB_ENV
+        run: cargo test --all-features --target ${{ matrix.target }} || echo "FAILED=${FAILED:+$FAILED, }cargo test" >> $GITHUB_ENV
 
       - name: Fail if any step failed
         if: env.FAILED != ''

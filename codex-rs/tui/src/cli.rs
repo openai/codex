@@ -1,6 +1,6 @@
 use clap::Parser;
-use codex_core::ApprovalModeCliArg;
-use codex_core::SandboxPermissionOption;
+use codex_common::ApprovalModeCliArg;
+use codex_common::SandboxPermissionOption;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]

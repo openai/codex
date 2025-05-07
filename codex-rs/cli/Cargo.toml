@@ -19,6 +19,7 @@ path = "src/lib.rs"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 codex-core = { path = "../core" }
+codex-common = { path = "../common", features = ["cli"] }
 codex-exec = { path = "../exec" }
 codex-tui = { path = "../tui" }
 serde_json = "1"

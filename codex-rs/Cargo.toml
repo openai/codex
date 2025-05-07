@@ -4,6 +4,7 @@ members = [
     "ansi-escape",
     "apply-patch",
     "cli",
+    "common",
     "core",
     "exec",
     "execpolicy",

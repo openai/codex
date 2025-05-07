@@ -143,12 +143,7 @@ impl ChatWidget<'_> {
                     InputResult::Submitted(text) => {
                         // Special client‑side commands start with a leading slash.
                         let trimmed = text.trim();
-
                         match trimmed {
-                            "q" => {
-                                // Gracefully request application shutdown.
-                                let _ = self.app_event_tx.send(AppEvent::ExitRequest);
-                            }
                             "/clear" => {
                                 // Clear the current conversation history without exiting.
                                 self.conversation_history.clear();
@@ -326,6 +321,25 @@ impl ChatWidget<'_> {
             } => {
                 self.conversation_history
                     .record_completed_exec_command(call_id, stdout, stderr, exit_code);
+                self.request_redraw()?;
+            }
+            EventMsg::McpToolCallBegin {
+                call_id,
+                server,
+                tool,
+                arguments,
+            } => {
+                self.conversation_history
+                    .add_active_mcp_tool_call(call_id, server, tool, arguments);
+                self.request_redraw()?;
+            }
+            EventMsg::McpToolCallEnd {
+                call_id,
+                success,
+                result,
+            } => {
+                self.conversation_history
+                    .record_completed_mcp_tool_call(call_id, success, result);
                 self.request_redraw()?;
             }
             event => {
