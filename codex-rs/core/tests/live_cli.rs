@@ -115,7 +115,9 @@ fn live_create_file_hello_txt() {
         return;
     }
 
-    let (assert, dir) = run_live("Use the shell tool with the apply_patch command to create a file named hello.txt containing the text 'hello'.");
+    let (assert, dir) = run_live(
+        "Use the shell tool with the apply_patch command to create a file named hello.txt containing the text 'hello'.",
+    );
 
     assert.success();
 

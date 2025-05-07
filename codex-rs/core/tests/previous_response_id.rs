@@ -1,20 +1,20 @@
 use std::time::Duration;
 
+use codex_core::Codex;
 use codex_core::config::Config;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::Submission;
-use codex_core::Codex;
 use serde_json::Value;
 use tokio::time::timeout;
-use wiremock::matchers::method;
-use wiremock::matchers::path;
 use wiremock::Match;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::Request;
 use wiremock::ResponseTemplate;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
 
 /// Matcher asserting that JSON body has NO `previous_response_id` field.
 struct NoPrevId;
@@ -79,10 +79,14 @@ async fn keeps_previous_response_id_between_tasks() {
         .await;
 
     // Environment
-    std::env::set_var("OPENAI_API_KEY", "test-key");
-    std::env::set_var("OPENAI_API_BASE", server.uri());
-    std::env::set_var("OPENAI_REQUEST_MAX_RETRIES", "0");
-    std::env::set_var("OPENAI_STREAM_MAX_RETRIES", "0");
+    // Update environment – `set_var` is `unsafe` starting with the 2024
+    // edition so we group the calls into a single `unsafe { … }` block.
+    unsafe {
+        std::env::set_var("OPENAI_API_KEY", "test-key");
+        std::env::set_var("OPENAI_API_BASE", server.uri());
+        std::env::set_var("OPENAI_REQUEST_MAX_RETRIES", "0");
+        std::env::set_var("OPENAI_STREAM_MAX_RETRIES", "0");
+    }
 
     let codex = Codex::spawn(std::sync::Arc::new(tokio::sync::Notify::new())).unwrap();
 

@@ -26,8 +26,8 @@ use ratatui::widgets::List;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
-use tui_input::backend::crossterm::EventHandler;
 use tui_input::Input;
+use tui_input::backend::crossterm::EventHandler;
 
 use crate::app_event::AppEvent;
 use crate::exec_command::relativize_to_home;

@@ -1,16 +1,16 @@
-use std::io::stdout;
 use std::io::Stdout;
+use std::io::stdout;
 use std::io::{self};
 
 use crossterm::event::DisableMouseCapture;
 use crossterm::event::EnableMouseCapture;
+use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::execute;
-use ratatui::crossterm::terminal::disable_raw_mode;
-use ratatui::crossterm::terminal::enable_raw_mode;
 use ratatui::crossterm::terminal::EnterAlternateScreen;
 use ratatui::crossterm::terminal::LeaveAlternateScreen;
-use ratatui::Terminal;
+use ratatui::crossterm::terminal::disable_raw_mode;
+use ratatui::crossterm::terminal::enable_raw_mode;
 
 /// A type alias for the terminal type used in this application
 pub type Tui = Terminal<CrosstermBackend<Stdout>>;

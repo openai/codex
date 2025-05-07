@@ -10,11 +10,11 @@ use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use mcp_types::CallToolResult;
 use mcp_types::CallToolResultContent;
+use mcp_types::JSONRPC_VERSION;
 use mcp_types::JSONRPCMessage;
 use mcp_types::JSONRPCResponse;
 use mcp_types::RequestId;
 use mcp_types::TextContent;
-use mcp_types::JSONRPC_VERSION;
 use tokio::sync::mpsc::Sender;
 
 /// Convert a Codex [`Event`] to an MCP notification.

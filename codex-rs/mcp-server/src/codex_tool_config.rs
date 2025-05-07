@@ -4,8 +4,8 @@ use std::path::PathBuf;
 
 use mcp_types::Tool;
 use mcp_types::ToolInputSchema;
-use schemars::r#gen::SchemaSettings;
 use schemars::JsonSchema;
+use schemars::r#gen::SchemaSettings;
 use serde::Deserialize;
 
 use codex_core::protocol::AskForApproval;

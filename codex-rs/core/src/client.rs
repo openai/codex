@@ -14,8 +14,8 @@ use futures::prelude::*;
 use reqwest::StatusCode;
 use serde::Deserialize;
 use serde::Serialize;
-use serde_json::json;
 use serde_json::Value;
+use serde_json::json;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tokio_util::io::ReaderStream;
@@ -25,11 +25,11 @@ use tracing::warn;
 
 use crate::error::CodexErr;
 use crate::error::Result;
-use crate::flags::get_api_key;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::flags::OPENAI_API_BASE;
 use crate::flags::OPENAI_REQUEST_MAX_RETRIES;
 use crate::flags::OPENAI_STREAM_IDLE_TIMEOUT_MS;
+use crate::flags::get_api_key;
 use crate::models::ResponseItem;
 use crate::util::backoff;
 
