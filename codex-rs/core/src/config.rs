@@ -266,7 +266,7 @@ pub fn log_dir() -> std::io::Result<PathBuf> {
     Ok(p)
 }
 
-pub(crate) fn parse_sandbox_permission_with_base_path(
+pub fn parse_sandbox_permission_with_base_path(
     raw: &str,
     base_path: PathBuf,
 ) -> std::io::Result<SandboxPermission> {

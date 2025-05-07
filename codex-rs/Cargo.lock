@@ -473,6 +473,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "clap",
+ "codex-common",
  "codex-core",
  "codex-exec",
  "codex-tui",
@@ -480,6 +481,15 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "codex-common"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "clap",
+ "codex-core",
 ]
 
 [[package]]
@@ -530,6 +540,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
+ "codex-common",
  "codex-core",
  "mcp-types",
  "owo-colors 4.2.0",
@@ -596,6 +607,7 @@ dependencies = [
  "anyhow",
  "clap",
  "codex-ansi-escape",
+ "codex-common",
  "codex-core",
  "color-eyre",
  "crossterm",

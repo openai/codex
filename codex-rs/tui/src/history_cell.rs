@@ -1,4 +1,5 @@
 use codex_ansi_escape::ansi_escape_line;
+use codex_common::elapsed::format_duration;
 use codex_core::config::Config;
 use codex_core::protocol::FileChange;
 use ratatui::prelude::*;
@@ -132,7 +133,12 @@ impl HistoryCell {
         // Title depends on whether we have output yet.
         let title_line = Line::from(vec![
             "command".magenta(),
-            format!(" (code: {}, duration: {:?})", exit_code, duration).dim(),
+            format!(
+                " (code: {}, duration: {})",
+                exit_code,
+                format_duration(duration)
+            )
+            .dim(),
         ]);
         lines.push(title_line);
 
@@ -201,11 +207,11 @@ impl HistoryCell {
         success: bool,
         result: Option<serde_json::Value>,
     ) -> Self {
-        let duration = start.elapsed();
+        let duration = format_duration(start.elapsed());
         let status_str = if success { "success" } else { "failed" };
         let title_line = Line::from(vec![
             "tool".magenta(),
-            format!(" {fq_tool_name} ({status_str}, duration: {:?})", duration).dim(),
+            format!(" {fq_tool_name} ({status_str}, duration: {})", duration).dim(),
         ]);
 
         let mut lines: Vec<Line<'static>> = Vec::new();

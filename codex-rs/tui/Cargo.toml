@@ -15,7 +15,8 @@ path = "src/lib.rs"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 codex-ansi-escape = { path = "../ansi-escape" }
-codex-core = { path = "../core", features = ["cli"] }
+codex-core = { path = "../core" }
+codex-common = { path = "../common", features = ["cli", "elapsed"] }
 color-eyre = "0.6.3"
 crossterm = "0.28.1"
 mcp-types = { path = "../mcp-types" }
