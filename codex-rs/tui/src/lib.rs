@@ -25,6 +25,7 @@ mod exec_command;
 mod git_warning_screen;
 mod history_cell;
 mod log_layer;
+mod markdown;
 mod scroll_event_helper;
 mod status_indicator_widget;
 mod tui;
