@@ -14,6 +14,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::exec_command::escape_command;
+use crate::markdown::append_markdown;
 
 pub(crate) struct CommandOutput {
     pub(crate) exit_code: i32,
@@ -96,7 +97,7 @@ impl HistoryCell {
     pub(crate) fn new_agent_message(message: String) -> Self {
         let mut lines: Vec<Line<'static>> = Vec::new();
         lines.push(Line::from("codex".magenta().bold()));
-        lines.extend(message.lines().map(|l| Line::from(l.to_string())));
+        append_markdown(&message, &mut lines);
         lines.push(Line::from(""));
 
         HistoryCell::AgentMessage { lines }
