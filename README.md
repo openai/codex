@@ -104,6 +104,7 @@ export OPENAI_API_KEY="your-api-key-here"
 > - deepseek
 > - xai
 > - groq
+> - arceeai
 > - any other provider that is compatible with the OpenAI API
 >
 > If you use a provider other than OpenAI, you will need to set the API key for the provider in the config file or in the environment variable as:
@@ -428,6 +429,11 @@ Below is a comprehensive example of `config.json` with multiple custom providers
       "name": "Groq",
       "baseURL": "https://api.groq.com/openai/v1",
       "envKey": "GROQ_API_KEY"
+    },
+    "arceeai": {
+      "name": "ArceeAI",
+      "baseURL": "https://conductor.arcee.ai/v1",
+      "envKey": "ARCEEAI_API_KEY"
     }
   },
   "history": {
