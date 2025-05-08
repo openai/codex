@@ -22,6 +22,12 @@ version = "0.0.0"
 # edition.
 edition = "2024"
 
+[workspace.lints]
+rust = { }
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+
 [profile.release]
 lto = "fat"
 # Because we bundle some of these executables with the TypeScript CLI, we

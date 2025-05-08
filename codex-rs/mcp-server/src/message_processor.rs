@@ -227,6 +227,8 @@ impl MessageProcessor {
     where
         T: ModelContextProtocolRequest,
     {
+        // result has `Serialized` instance so should never fail
+        #[expect(clippy::unwrap_used)]
         let response = JSONRPCMessage::Response(JSONRPCResponse {
             jsonrpc: JSONRPC_VERSION.into(),
             id,

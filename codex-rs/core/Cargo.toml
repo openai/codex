@@ -7,6 +7,9 @@ edition = "2024"
 name = "codex_core"
 path = "src/lib.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow = "1"
 async-channel = "2.3.1"
