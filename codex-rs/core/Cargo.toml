@@ -12,7 +12,6 @@ anyhow = "1"
 async-channel = "2.3.1"
 base64 = "0.21"
 bytes = "1.10.1"
-clap = { version = "4", features = ["derive", "wrap_help"], optional = true }
 codex-apply-patch = { path = "../apply-patch" }
 codex-mcp-client = { path = "../mcp-client" }
 dirs = "6"
