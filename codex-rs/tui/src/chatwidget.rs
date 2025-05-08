@@ -1,14 +1,14 @@
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::mpsc::SendError;
 use std::sync::mpsc::Sender;
-use std::sync::Arc;
 
 use codex_core::codex_wrapper::init_codex;
-use codex_core::protocol::AskForApproval;
+use codex_core::config::Config;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
@@ -17,8 +17,8 @@ use ratatui::layout::Layout;
 use ratatui::layout::Rect;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
-use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::unbounded_channel;
 
 use crate::app_event::AppEvent;
 use crate::bottom_pane::BottomPane;
@@ -34,8 +34,7 @@ pub(crate) struct ChatWidget<'a> {
     conversation_history: ConversationHistoryWidget,
     bottom_pane: BottomPane<'a>,
     input_focus: InputFocus,
-    approval_policy: AskForApproval,
-    cwd: std::path::PathBuf,
+    config: Config,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -46,36 +45,21 @@ enum InputFocus {
 
 impl ChatWidget<'_> {
     pub(crate) fn new(
-        approval_policy: AskForApproval,
-        sandbox_policy: SandboxPolicy,
+        config: Config,
         app_event_tx: Sender<AppEvent>,
         initial_prompt: Option<String>,
-        initial_images: Vec<std::path::PathBuf>,
-        model: Option<String>,
-        disable_response_storage: bool,
+        initial_images: Vec<PathBuf>,
     ) -> Self {
         let (codex_op_tx, mut codex_op_rx) = unbounded_channel::<Op>();
 
-        // Determine the current working directory up‑front so we can display
-        // it alongside the Session information when the session is
-        // initialised.
-        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-
         let app_event_tx_clone = app_event_tx.clone();
         // Create the Codex asynchronously so the UI loads as quickly as possible.
+        let config_for_agent_loop = config.clone();
         tokio::spawn(async move {
-            // Initialize session; storage enabled by default
-            let (codex, session_event, _ctrl_c) = match init_codex(
-                approval_policy,
-                sandbox_policy,
-                disable_response_storage,
-                model,
-            )
-            .await
-            {
+            let (codex, session_event, _ctrl_c) = match init_codex(config_for_agent_loop).await {
                 Ok(vals) => vals,
                 Err(e) => {
-                    // TODO(mbolin): This error needs to be surfaced to the user.
+                    // TODO: surface this error to the user.
                     tracing::error!("failed to initialize codex: {e}");
                     return;
                 }
@@ -115,8 +99,7 @@ impl ChatWidget<'_> {
                 has_input_focus: true,
             }),
             input_focus: InputFocus::BottomPane,
-            approval_policy,
-            cwd: cwd.clone(),
+            config,
         };
 
         let _ = chat_widget.submit_welcome_message();
@@ -160,12 +143,7 @@ impl ChatWidget<'_> {
                     InputResult::Submitted(text) => {
                         // Special client‑side commands start with a leading slash.
                         let trimmed = text.trim();
-
                         match trimmed {
-                            "q" => {
-                                // Gracefully request application shutdown.
-                                let _ = self.app_event_tx.send(AppEvent::ExitRequest);
-                            }
                             "/clear" => {
                                 // Clear the current conversation history without exiting.
                                 self.conversation_history.clear();
@@ -204,7 +182,7 @@ impl ChatWidget<'_> {
     fn submit_user_message_with_images(
         &mut self,
         text: String,
-        image_paths: Vec<std::path::PathBuf>,
+        image_paths: Vec<PathBuf>,
     ) -> std::result::Result<(), SendError<AppEvent>> {
         let mut items: Vec<InputItem> = Vec::new();
 
@@ -243,11 +221,8 @@ impl ChatWidget<'_> {
         match msg {
             EventMsg::SessionConfigured { model } => {
                 // Record session information at the top of the conversation.
-                self.conversation_history.add_session_info(
-                    model,
-                    self.cwd.clone(),
-                    self.approval_policy,
-                );
+                self.conversation_history
+                    .add_session_info(&self.config, model);
                 self.request_redraw()?;
             }
             EventMsg::AgentMessage { message } => {
@@ -346,6 +321,25 @@ impl ChatWidget<'_> {
             } => {
                 self.conversation_history
                     .record_completed_exec_command(call_id, stdout, stderr, exit_code);
+                self.request_redraw()?;
+            }
+            EventMsg::McpToolCallBegin {
+                call_id,
+                server,
+                tool,
+                arguments,
+            } => {
+                self.conversation_history
+                    .add_active_mcp_tool_call(call_id, server, tool, arguments);
+                self.request_redraw()?;
+            }
+            EventMsg::McpToolCallEnd {
+                call_id,
+                success,
+                result,
+            } => {
+                self.conversation_history
+                    .record_completed_mcp_tool_call(call_id, success, result);
                 self.request_redraw()?;
             }
             event => {

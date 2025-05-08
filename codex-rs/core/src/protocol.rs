@@ -4,10 +4,14 @@
 //! between user and agent.
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
 
+use mcp_types::CallToolResult;
 use serde::Deserialize;
 use serde::Serialize;
+
+use crate::model_provider_info::ModelProviderInfo;
 
 /// Submission Queue Entry - requests from user
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -25,8 +29,11 @@ pub struct Submission {
 pub enum Op {
     /// Configure the model session.
     ConfigureSession {
+        /// Provider identifier ("openai", "openrouter", ...).
+        provider: ModelProviderInfo,
+
         /// If not specified, server will use its default model.
-        model: Option<String>,
+        model: String,
         /// Model instructions
         instructions: Option<String>,
         /// When to escalate for approval for execution
@@ -36,6 +43,22 @@ pub enum Op {
         /// Disable server-side response storage (send full context each request)
         #[serde(default)]
         disable_response_storage: bool,
+
+        /// Optional external notifier command tokens. Present only when the
+        /// client wants the agent to spawn a program after each completed
+        /// turn.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default)]
+        notify: Option<Vec<String>>,
+
+        /// Working directory that should be treated as the *root* of the
+        /// session. All relative paths supplied by the model as well as the
+        /// execution sandbox are resolved against this directory **instead**
+        /// of the process-wide current working directory. CLI front-ends are
+        /// expected to expand this to an absolute path before sending the
+        /// `ConfigureSession` operation so that the business-logic layer can
+        /// operate deterministically.
+        cwd: std::path::PathBuf,
     },
 
     /// Abort current task.
@@ -66,11 +89,13 @@ pub enum Op {
 }
 
 /// Determines how liberally commands are auto‑approved by the system.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum AskForApproval {
     /// Under this policy, only “known safe” commands—as determined by
     /// `is_safe_command()`—that **only read files** are auto‑approved.
     /// Everything else will ask the user to approve.
+    #[default]
     UnlessAllowListed,
 
     /// In addition to everything allowed by **`Suggest`**, commands that
@@ -91,42 +116,156 @@ pub enum AskForApproval {
 }
 
 /// Determines execution restrictions for model shell commands
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum SandboxPolicy {
-    /// Network syscalls will be blocked
-    NetworkRestricted,
-    /// Filesystem writes will be restricted
-    FileWriteRestricted,
-    /// Network and filesystem writes will be restricted
-    NetworkAndFileWriteRestricted,
-    /// No restrictions; full "unsandboxed" mode
-    DangerousNoRestrictions,
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct SandboxPolicy {
+    permissions: Vec<SandboxPermission>,
+}
+
+impl From<Vec<SandboxPermission>> for SandboxPolicy {
+    fn from(permissions: Vec<SandboxPermission>) -> Self {
+        Self { permissions }
+    }
 }
 
 impl SandboxPolicy {
-    pub fn is_dangerous(&self) -> bool {
-        match self {
-            SandboxPolicy::NetworkRestricted => false,
-            SandboxPolicy::FileWriteRestricted => false,
-            SandboxPolicy::NetworkAndFileWriteRestricted => false,
-            SandboxPolicy::DangerousNoRestrictions => true,
+    pub fn new_read_only_policy() -> Self {
+        Self {
+            permissions: vec![SandboxPermission::DiskFullReadAccess],
         }
     }
 
-    pub fn is_network_restricted(&self) -> bool {
-        matches!(
-            self,
-            SandboxPolicy::NetworkRestricted | SandboxPolicy::NetworkAndFileWriteRestricted
-        )
+    pub fn new_read_only_policy_with_writable_roots(writable_roots: &[PathBuf]) -> Self {
+        let mut permissions = Self::new_read_only_policy().permissions;
+        permissions.extend(writable_roots.iter().map(|folder| {
+            SandboxPermission::DiskWriteFolder {
+                folder: folder.clone(),
+            }
+        }));
+        Self { permissions }
     }
 
-    pub fn is_file_write_restricted(&self) -> bool {
-        matches!(
-            self,
-            SandboxPolicy::FileWriteRestricted | SandboxPolicy::NetworkAndFileWriteRestricted
-        )
+    pub fn new_full_auto_policy() -> Self {
+        Self {
+            permissions: vec![
+                SandboxPermission::DiskFullReadAccess,
+                SandboxPermission::DiskWritePlatformUserTempFolder,
+                SandboxPermission::DiskWriteCwd,
+            ],
+        }
+    }
+
+    pub fn has_full_disk_read_access(&self) -> bool {
+        self.permissions
+            .iter()
+            .any(|perm| matches!(perm, SandboxPermission::DiskFullReadAccess))
+    }
+
+    pub fn has_full_disk_write_access(&self) -> bool {
+        self.permissions
+            .iter()
+            .any(|perm| matches!(perm, SandboxPermission::DiskFullWriteAccess))
+    }
+
+    pub fn has_full_network_access(&self) -> bool {
+        self.permissions
+            .iter()
+            .any(|perm| matches!(perm, SandboxPermission::NetworkFullAccess))
+    }
+
+    pub fn get_writable_roots_with_cwd(&self, cwd: &Path) -> Vec<PathBuf> {
+        let mut writable_roots = Vec::<PathBuf>::new();
+        for perm in &self.permissions {
+            use SandboxPermission::*;
+            match perm {
+                DiskWritePlatformUserTempFolder => {
+                    if cfg!(target_os = "macos") {
+                        if let Some(tempdir) = std::env::var_os("TMPDIR") {
+                            // Likely something that starts with /var/folders/...
+                            let tmpdir_path = PathBuf::from(&tempdir);
+                            if tmpdir_path.is_absolute() {
+                                writable_roots.push(tmpdir_path.clone());
+                                match tmpdir_path.canonicalize() {
+                                    Ok(canonicalized) => {
+                                        // Likely something that starts with /private/var/folders/...
+                                        if canonicalized != tmpdir_path {
+                                            writable_roots.push(canonicalized);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("Failed to canonicalize TMPDIR: {e}");
+                                    }
+                                }
+                            } else {
+                                tracing::error!("TMPDIR is not an absolute path: {tempdir:?}");
+                            }
+                        }
+                    }
+
+                    // For Linux, should this be XDG_RUNTIME_DIR, /run/user/<uid>, or something else?
+                }
+                DiskWritePlatformGlobalTempFolder => {
+                    if cfg!(unix) {
+                        writable_roots.push(PathBuf::from("/tmp"));
+                    }
+                }
+                DiskWriteCwd => {
+                    writable_roots.push(cwd.to_path_buf());
+                }
+                DiskWriteFolder { folder } => {
+                    writable_roots.push(folder.clone());
+                }
+                DiskFullReadAccess | NetworkFullAccess => {}
+                DiskFullWriteAccess => {
+                    // Currently, we expect callers to only invoke this method
+                    // after verifying has_full_disk_write_access() is false.
+                }
+            }
+        }
+        writable_roots
+    }
+
+    pub fn is_unrestricted(&self) -> bool {
+        self.has_full_disk_read_access()
+            && self.has_full_disk_write_access()
+            && self.has_full_network_access()
     }
 }
+
+/// Permissions that should be granted to the sandbox in which the agent
+/// operates.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SandboxPermission {
+    /// Is allowed to read all files on disk.
+    DiskFullReadAccess,
+
+    /// Is allowed to write to the operating system's temp dir that
+    /// is restricted to the user the agent is running as. For
+    /// example, on macOS, this is generally something under
+    /// `/var/folders` as opposed to `/tmp`.
+    DiskWritePlatformUserTempFolder,
+
+    /// Is allowed to write to the operating system's shared temp
+    /// dir. On UNIX, this is generally `/tmp`.
+    DiskWritePlatformGlobalTempFolder,
+
+    /// Is allowed to write to the current working directory (in practice, this
+    /// is the `cwd` where `codex` was spawned).
+    DiskWriteCwd,
+
+    /// Is allowed to the specified folder. `PathBuf` must be an
+    /// absolute path, though it is up to the caller to canonicalize
+    /// it if the path contains symlinks.
+    DiskWriteFolder { folder: PathBuf },
+
+    /// Is allowed to write to any file on disk.
+    DiskFullWriteAccess,
+
+    /// Can make arbitrary network requests.
+    NetworkFullAccess,
+}
+
 /// User input
 #[non_exhaustive]
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -183,6 +322,32 @@ pub enum EventMsg {
         model: String,
     },
 
+    McpToolCallBegin {
+        /// Identifier so this can be paired with the McpToolCallEnd event.
+        call_id: String,
+
+        /// Name of the MCP server as defined in the config.
+        server: String,
+
+        /// Name of the tool as given by the MCP server.
+        tool: String,
+
+        /// Arguments to the tool call.
+        arguments: Option<serde_json::Value>,
+    },
+
+    McpToolCallEnd {
+        /// Identifier for the McpToolCallBegin that finished.
+        call_id: String,
+
+        /// Whether the tool call was successful. If `false`, `result` might
+        /// not be present.
+        success: bool,
+
+        /// Result of the tool call. Note this could be an error.
+        result: Option<CallToolResult>,
+    },
+
     /// Notification that the server is about to execute a command.
     ExecCommandBegin {
         /// Identifier so this can be paired with the ExecCommandEnd event.
@@ -191,7 +356,7 @@ pub enum EventMsg {
         command: Vec<String>,
         /// The command's working directory if not the default cwd for the
         /// agent.
-        cwd: String,
+        cwd: PathBuf,
     },
 
     ExecCommandEnd {

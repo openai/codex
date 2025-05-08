@@ -5,14 +5,14 @@ use crate::starlark::values::ValueLike;
 use allocative::Allocative;
 use derive_more::derive::Display;
 use starlark::any::ProvidesStaticType;
-use starlark::values::starlark_value;
-use starlark::values::string::StarlarkStr;
 use starlark::values::AllocValue;
 use starlark::values::Heap;
 use starlark::values::NoSerialize;
 use starlark::values::StarlarkValue;
 use starlark::values::UnpackValue;
 use starlark::values::Value;
+use starlark::values::starlark_value;
+use starlark::values::string::StarlarkStr;
 
 /// Patterns that lists of arguments should be compared against.
 #[derive(Clone, Debug, Display, Eq, PartialEq, NoSerialize, ProvidesStaticType, Allocative)]

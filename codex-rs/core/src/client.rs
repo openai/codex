@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::io::BufRead;
 use std::path::Path;
 use std::pin::Pin;
@@ -14,6 +15,7 @@ use reqwest::StatusCode;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
+use serde_json::json;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tokio_util::io::ReaderStream;
@@ -23,11 +25,10 @@ use tracing::warn;
 
 use crate::error::CodexErr;
 use crate::error::Result;
-use crate::flags::get_api_key;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
-use crate::flags::OPENAI_API_BASE;
 use crate::flags::OPENAI_REQUEST_MAX_RETRIES;
 use crate::flags::OPENAI_STREAM_IDLE_TIMEOUT_MS;
+use crate::model_provider_info::ModelProviderInfo;
 use crate::models::ResponseItem;
 use crate::util::backoff;
 
@@ -42,6 +43,11 @@ pub struct Prompt {
     pub instructions: Option<String>,
     /// Whether to store response on server side (disable_response_storage = !store).
     pub store: bool,
+
+    /// Additional tools sourced from external MCP servers. Note each key is
+    /// the "fully qualified" tool name (i.e., prefixed with the server name),
+    /// which should be reported to the model in place of Tool::name.
+    pub extra_tools: HashMap<String, mcp_types::Tool>,
 }
 
 #[derive(Debug)]
@@ -59,7 +65,7 @@ struct Payload<'a> {
     // we code defensively to avoid this case, but perhaps we should use a
     // separate enum for serialization.
     input: &'a Vec<ResponseItem>,
-    tools: &'a [Tool],
+    tools: &'a [serde_json::Value],
     tool_choice: &'static str,
     parallel_tool_calls: bool,
     reasoning: Option<Reasoning>,
@@ -77,11 +83,12 @@ struct Reasoning {
     generate_summary: Option<bool>,
 }
 
+/// When serialized as JSON, this produces a valid "Tool" in the OpenAI
+/// Responses API.
 #[derive(Debug, Serialize)]
-struct Tool {
+struct ResponsesApiTool {
     name: &'static str,
-    #[serde(rename = "type")]
-    kind: &'static str, // "function"
+    r#type: &'static str, // "function"
     description: &'static str,
     strict: bool,
     parameters: JsonSchema,
@@ -105,7 +112,7 @@ enum JsonSchema {
 }
 
 /// Tool usage specification
-static TOOLS: LazyLock<Vec<Tool>> = LazyLock::new(|| {
+static DEFAULT_TOOLS: LazyLock<Vec<ResponsesApiTool>> = LazyLock::new(|| {
     let mut properties = BTreeMap::new();
     properties.insert(
         "command".to_string(),
@@ -116,9 +123,9 @@ static TOOLS: LazyLock<Vec<Tool>> = LazyLock::new(|| {
     properties.insert("workdir".to_string(), JsonSchema::String);
     properties.insert("timeout".to_string(), JsonSchema::Number);
 
-    vec![Tool {
+    vec![ResponsesApiTool {
         name: "shell",
-        kind: "function",
+        r#type: "function",
         description: "Runs a shell command, and returns its output.",
         strict: false,
         parameters: JsonSchema::Object {
@@ -133,13 +140,16 @@ static TOOLS: LazyLock<Vec<Tool>> = LazyLock::new(|| {
 pub struct ModelClient {
     model: String,
     client: reqwest::Client,
+    provider: ModelProviderInfo,
 }
 
 impl ModelClient {
-    pub fn new(model: impl ToString) -> Self {
-        let model = model.to_string();
-        let client = reqwest::Client::new();
-        Self { model, client }
+    pub fn new(model: impl ToString, provider: ModelProviderInfo) -> Self {
+        Self {
+            model: model.to_string(),
+            client: reqwest::Client::new(),
+            provider,
+        }
     }
 
     pub async fn stream(&mut self, prompt: &Prompt) -> Result<ResponseStream> {
@@ -149,11 +159,26 @@ impl ModelClient {
             return stream_from_fixture(path).await;
         }
 
+        // Assemble tool list: built-in tools + any extra tools from the prompt.
+        let mut tools_json: Vec<serde_json::Value> = DEFAULT_TOOLS
+            .iter()
+            .map(|t| serde_json::to_value(t).expect("serialize builtin tool"))
+            .collect();
+        tools_json.extend(
+            prompt
+                .extra_tools
+                .clone()
+                .into_iter()
+                .map(|(name, tool)| mcp_tool_to_openai_tool(name, tool)),
+        );
+
+        debug!("tools_json: {}", serde_json::to_string_pretty(&tools_json)?);
+
         let payload = Payload {
             model: &self.model,
             instructions: prompt.instructions.as_ref(),
             input: &prompt.input,
-            tools: &TOOLS,
+            tools: &tools_json,
             tool_choice: "auto",
             parallel_tool_calls: false,
             reasoning: Some(Reasoning {
@@ -165,7 +190,9 @@ impl ModelClient {
             stream: true,
         };
 
-        let url = format!("{}/v1/responses", *OPENAI_API_BASE);
+        let base_url = self.provider.base_url.clone();
+        let base_url = base_url.trim_end_matches('/');
+        let url = format!("{}/responses", base_url);
         debug!(url, "POST");
         trace!("request payload: {}", serde_json::to_string(&payload)?);
 
@@ -173,10 +200,14 @@ impl ModelClient {
         loop {
             attempt += 1;
 
+            let api_key = self
+                .provider
+                .api_key()
+                .ok_or_else(|| crate::error::CodexErr::EnvVar("API_KEY"))?;
             let res = self
                 .client
                 .post(&url)
-                .bearer_auth(get_api_key()?)
+                .bearer_auth(api_key)
                 .header("OpenAI-Beta", "responses=experimental")
                 .header(reqwest::header::ACCEPT, "text/event-stream")
                 .json(&payload)
@@ -233,6 +264,20 @@ impl ModelClient {
             }
         }
     }
+}
+
+fn mcp_tool_to_openai_tool(
+    fully_qualified_name: String,
+    tool: mcp_types::Tool,
+) -> serde_json::Value {
+    // TODO(mbolin): Change the contract of this function to return
+    // ResponsesApiTool.
+    json!({
+        "name": fully_qualified_name,
+        "description": tool.description,
+        "parameters": tool.input_schema,
+        "type": "function",
+    })
 }
 
 #[derive(Debug, Deserialize, Serialize)]

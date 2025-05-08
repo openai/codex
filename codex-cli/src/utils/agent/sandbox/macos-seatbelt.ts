@@ -1,4 +1,5 @@
 import type { ExecResult } from "./interface.js";
+import type { AppConfig } from "../../config.js";
 import type { SpawnOptions } from "child_process";
 
 import { exec } from "./raw-exec.js";
@@ -12,10 +13,19 @@ function getCommonRoots() {
   ];
 }
 
+/**
+ * When working with `sandbox-exec`, only consider `sandbox-exec` in `/usr/bin`
+ * to defend against an attacker trying to inject a malicious version on the
+ * PATH. If /usr/bin/sandbox-exec has been tampered with, then the attacker
+ * already has root access.
+ */
+export const PATH_TO_SEATBELT_EXECUTABLE = "/usr/bin/sandbox-exec";
+
 export function execWithSeatbelt(
   cmd: Array<string>,
   opts: SpawnOptions,
   writableRoots: ReadonlyArray<string>,
+  config: AppConfig,
   abortSignal?: AbortSignal,
 ): Promise<ExecResult> {
   let scopedWritePolicy: string;
@@ -57,14 +67,14 @@ export function execWithSeatbelt(
   );
 
   const fullCommand = [
-    "sandbox-exec",
+    PATH_TO_SEATBELT_EXECUTABLE,
     "-p",
     fullPolicy,
     ...policyTemplateParams,
     "--",
     ...cmd,
   ];
-  return exec(fullCommand, opts, writableRoots, abortSignal);
+  return exec(fullCommand, opts, config, abortSignal);
 }
 
 const READ_ONLY_SEATBELT_POLICY = `

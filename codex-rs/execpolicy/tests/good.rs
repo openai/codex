@@ -1,5 +1,5 @@
-use codex_execpolicy::get_default_policy;
 use codex_execpolicy::PositiveExampleFailedCheck;
+use codex_execpolicy::get_default_policy;
 
 #[test]
 fn verify_everything_in_good_list_is_allowed() {

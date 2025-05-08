@@ -1,9 +1,9 @@
-use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 
+use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
 
 use crate::exec::SandboxType;
@@ -19,11 +19,12 @@ pub enum SafetyCheck {
 }
 
 pub fn assess_patch_safety(
-    changes: &HashMap<PathBuf, ApplyPatchFileChange>,
+    action: &ApplyPatchAction,
     policy: AskForApproval,
     writable_roots: &[PathBuf],
+    cwd: &Path,
 ) -> SafetyCheck {
-    if changes.is_empty() {
+    if action.is_empty() {
         return SafetyCheck::Reject {
             reason: "empty patch".to_string(),
         };
@@ -40,7 +41,7 @@ pub fn assess_patch_safety(
         }
     }
 
-    if is_write_patch_constrained_to_writable_paths(changes, writable_roots) {
+    if is_write_patch_constrained_to_writable_paths(action, writable_roots, cwd) {
         SafetyCheck::AutoApprove {
             sandbox_type: SandboxType::None,
         }
@@ -65,7 +66,7 @@ pub fn assess_patch_safety(
 pub fn assess_command_safety(
     command: &[String],
     approval_policy: AskForApproval,
-    sandbox_policy: SandboxPolicy,
+    sandbox_policy: &SandboxPolicy,
     approved: &HashSet<Vec<String>>,
 ) -> SafetyCheck {
     let approve_without_sandbox = || SafetyCheck::AutoApprove {
@@ -81,11 +82,10 @@ pub fn assess_command_safety(
     }
 
     // Command was not known-safe or allow-listed
-    match sandbox_policy {
-        // Only the dangerous sandbox policy will run arbitrary commands outside a sandbox
-        SandboxPolicy::DangerousNoRestrictions => approve_without_sandbox(),
-        // All other policies try to run the command in a sandbox if it is available
-        _ => match get_platform_sandbox() {
+    if sandbox_policy.is_unrestricted() {
+        approve_without_sandbox()
+    } else {
+        match get_platform_sandbox() {
             // We have a sandbox, so we can approve the command in all modes
             Some(sandbox_type) => SafetyCheck::AutoApprove { sandbox_type },
             None => {
@@ -99,7 +99,7 @@ pub fn assess_command_safety(
                     _ => SafetyCheck::AskUser,
                 }
             }
-        },
+        }
     }
 }
 
@@ -114,8 +114,9 @@ pub fn get_platform_sandbox() -> Option<SandboxType> {
 }
 
 fn is_write_patch_constrained_to_writable_paths(
-    changes: &HashMap<PathBuf, ApplyPatchFileChange>,
+    action: &ApplyPatchAction,
     writable_roots: &[PathBuf],
+    cwd: &Path,
 ) -> bool {
     // Early‑exit if there are no declared writable roots.
     if writable_roots.is_empty() {
@@ -142,11 +143,6 @@ fn is_write_patch_constrained_to_writable_paths(
     // and roots are converted to absolute, normalized forms before the
     // prefix check.
     let is_path_writable = |p: &PathBuf| {
-        let cwd = match std::env::current_dir() {
-            Ok(cwd) => cwd,
-            Err(_) => return false,
-        };
-
         let abs = if p.is_absolute() {
             p.clone()
         } else {
@@ -168,7 +164,7 @@ fn is_write_patch_constrained_to_writable_paths(
         })
     };
 
-    for (path, change) in changes {
+    for (path, change) in action.changes() {
         match change {
             ApplyPatchFileChange::Add { .. } | ApplyPatchFileChange::Delete => {
                 if !is_path_writable(path) {
@@ -202,35 +198,29 @@ mod tests {
 
         // Helper to build a single‑entry map representing a patch that adds a
         // file at `p`.
-        let make_add_change = |p: PathBuf| {
-            let mut m = HashMap::new();
-            m.insert(
-                p.clone(),
-                ApplyPatchFileChange::Add {
-                    content: String::new(),
-                },
-            );
-            m
-        };
+        let make_add_change = |p: PathBuf| ApplyPatchAction::new_add_for_test(&p, "".to_string());
 
-        let add_inside = make_add_change(PathBuf::from("inner.txt"));
+        let add_inside = make_add_change(cwd.join("inner.txt"));
         let add_outside = make_add_change(parent.join("outside.txt"));
 
         assert!(is_write_patch_constrained_to_writable_paths(
             &add_inside,
-            &[PathBuf::from(".")]
+            &[PathBuf::from(".")],
+            &cwd,
         ));
 
         let add_outside_2 = make_add_change(parent.join("outside.txt"));
         assert!(!is_write_patch_constrained_to_writable_paths(
             &add_outside_2,
-            &[PathBuf::from(".")]
+            &[PathBuf::from(".")],
+            &cwd,
         ));
 
         // With parent dir added as writable root, it should pass.
         assert!(is_write_patch_constrained_to_writable_paths(
             &add_outside,
-            &[PathBuf::from("..")]
+            &[PathBuf::from("..")],
+            &cwd,
         ))
     }
 }

@@ -1,11 +1,12 @@
 use codex_core::exec::create_seatbelt_command;
-use std::path::PathBuf;
+use codex_core::protocol::SandboxPolicy;
 
-pub(crate) async fn run_seatbelt(
+pub async fn run_seatbelt(
     command: Vec<String>,
-    writable_roots: Vec<PathBuf>,
+    sandbox_policy: SandboxPolicy,
 ) -> anyhow::Result<()> {
-    let seatbelt_command = create_seatbelt_command(command, &writable_roots);
+    let cwd = std::env::current_dir().expect("failed to get cwd");
+    let seatbelt_command = create_seatbelt_command(command, &sandbox_policy, &cwd);
     let status = tokio::process::Command::new(seatbelt_command[0].clone())
         .args(&seatbelt_command[1..])
         .spawn()
