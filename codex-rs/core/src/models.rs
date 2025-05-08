@@ -163,6 +163,7 @@ impl std::ops::Deref for FunctionCallOutputPayload {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
     use super::*;
 
     #[test]

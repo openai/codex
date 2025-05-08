@@ -20,6 +20,7 @@ pub(crate) enum UserNotification {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
     use super::*;
 
     #[test]

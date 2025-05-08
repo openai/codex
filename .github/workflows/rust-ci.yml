@@ -81,7 +81,7 @@ jobs:
         run: echo "FAILED=" >> $GITHUB_ENV
 
       - name: cargo clippy
-        run: cargo clippy --target ${{ matrix.target }} --all-features -- -D warnings || echo "FAILED=${FAILED:+$FAILED, }cargo clippy" >> $GITHUB_ENV
+        run: cargo clippy --target ${{ matrix.target }} --all-features --tests -- -D warnings || echo "FAILED=${FAILED:+$FAILED, }cargo clippy" >> $GITHUB_ENV
 
       # Running `cargo build` from the workspace root builds the workspace using
       # the union of all features from third-party crates. This can mask errors
