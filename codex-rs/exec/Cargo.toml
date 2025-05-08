@@ -11,6 +11,9 @@ path = "src/main.rs"
 name = "codex_exec"
 path = "src/lib.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow = "1"
 chrono = "0.4.40"

@@ -11,6 +11,9 @@ path = "src/main.rs"
 name = "codex_execpolicy"
 path = "src/lib.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow = "1"
 starlark = "0.13.0"

@@ -223,7 +223,9 @@ fn extract_heredoc_body_from_apply_patch_command(src: &str) -> anyhow::Result<St
     loop {
         let node = c.node();
         if node.kind() == "heredoc_body" {
-            let text = node.utf8_text(bytes).unwrap();
+            let text = node
+                .utf8_text(bytes)
+                .with_context(|| "failed to interpret heredoc body as UTF-8")?;
             return Ok(text.trim_end_matches('\n').to_owned());
         }
 
@@ -605,6 +607,8 @@ pub fn print_summary(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
+
     use super::*;
     use pretty_assertions::assert_eq;
     use std::fs;

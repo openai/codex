@@ -78,10 +78,12 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
     // TODO(mbolin): Take a more thoughtful approach to logging.
     let default_level = "error";
     let _ = tracing_subscriber::fmt()
+        // Fallback to the `default_level` log filter if the environment
+        // variable is not set _or_ contains an invalid value
         .with_env_filter(
             EnvFilter::try_from_default_env()
                 .or_else(|_| EnvFilter::try_new(default_level))
-                .unwrap(),
+                .unwrap_or_else(|_| EnvFilter::new(default_level)),
         )
         .with_ansi(stderr_with_ansi)
         .with_writer(std::io::stderr)
