@@ -212,7 +212,9 @@ fn extract_heredoc_body_from_apply_patch_command(src: &str) -> anyhow::Result<St
 
     let lang = BASH.into();
     let mut parser = Parser::new();
-    parser.set_language(&lang).expect("load bash grammar");
+    parser
+        .set_language(&lang)
+        .context("failed to load bash grammar")?;
     let tree = parser
         .parse(src, None)
         .ok_or_else(|| anyhow::anyhow!("failed to parse patch into AST"))?;
@@ -225,7 +227,7 @@ fn extract_heredoc_body_from_apply_patch_command(src: &str) -> anyhow::Result<St
         if node.kind() == "heredoc_body" {
             let text = node
                 .utf8_text(bytes)
-                .with_context(|| "failed to interpret heredoc body as UTF-8")?;
+                .context("failed to interpret heredoc body as UTF-8")?;
             return Ok(text.trim_end_matches('\n').to_owned());
         }
 

@@ -19,6 +19,7 @@ use tokio::sync::mpsc::Sender;
 
 /// Convert a Codex [`Event`] to an MCP notification.
 fn codex_event_to_notification(event: &Event) -> JSONRPCMessage {
+    #[expect(clippy::expect_used)]
     JSONRPCMessage::Notification(mcp_types::JSONRPCNotification {
         jsonrpc: JSONRPC_VERSION.into(),
         method: "codex/event".into(),

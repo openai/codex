@@ -1,3 +1,4 @@
+#![expect(clippy::expect_used)]
 use codex_execpolicy::NegativeExamplePassedCheck;
 use codex_execpolicy::get_default_policy;
 
