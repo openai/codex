@@ -11,6 +11,9 @@ path = "src/main.rs"
 name = "codex_tui"
 path = "src/lib.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }

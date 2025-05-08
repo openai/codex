@@ -166,7 +166,9 @@ fn create_log_file() -> std::io::Result<LogFileInfo> {
 
     // Custom format for YYYY-MM-DD.
     let format: &[FormatItem] = format_description!("[year]-[month]-[day]");
-    let date_str = timestamp.format(format).unwrap();
+    let date_str = timestamp
+        .format(format)
+        .map_err(|e| IoError::new(ErrorKind::Other, format!("failed to format timestamp: {e}")))?;
 
     let filename = format!("rollout-{date_str}-{session_id}.jsonl");
 

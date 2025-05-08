@@ -168,6 +168,8 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
                 .map(|v| v.items.to_vec())
                 .collect(),
         );
+
+        #[expect(clippy::unwrap_used)]
         let policy_builder = eval
             .extra
             .as_ref()
@@ -182,6 +184,7 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
         strings: UnpackList<String>,
         eval: &mut Evaluator,
     ) -> anyhow::Result<NoneType> {
+        #[expect(clippy::unwrap_used)]
         let policy_builder = eval
             .extra
             .as_ref()
@@ -197,6 +200,7 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
         reason: String,
         eval: &mut Evaluator,
     ) -> anyhow::Result<NoneType> {
+        #[expect(clippy::unwrap_used)]
         let policy_builder = eval
             .extra
             .as_ref()
