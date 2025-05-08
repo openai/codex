@@ -2,12 +2,11 @@ use std::time::Duration;
 
 use env_flags::env_flags;
 
-use crate::error::CodexErr;
-use crate::error::Result;
-
 env_flags! {
     pub OPENAI_DEFAULT_MODEL: &str = "o3";
-    pub OPENAI_API_BASE: &str = "https://api.openai.com";
+    pub OPENAI_API_BASE: &str = "https://api.openai.com/v1";
+
+    /// Fallback when the provider-specific key is not set.
     pub OPENAI_API_KEY: Option<&str> = None;
     pub OPENAI_TIMEOUT_MS: Duration = Duration::from_millis(300_000), |value| {
         value.parse().map(Duration::from_millis)
@@ -21,9 +20,6 @@ env_flags! {
         value.parse().map(Duration::from_millis)
     };
 
+    /// Fixture path for offline tests (see client.rs).
     pub CODEX_RS_SSE_FIXTURE: Option<&str> = None;
-}
-
-pub fn get_api_key() -> Result<&'static str> {
-    OPENAI_API_KEY.ok_or_else(|| CodexErr::EnvVar("OPENAI_API_KEY"))
 }

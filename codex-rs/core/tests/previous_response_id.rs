@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use codex_core::Codex;
+use codex_core::ModelProviderInfo;
 use codex_core::config::Config;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
@@ -80,14 +81,21 @@ async fn keeps_previous_response_id_between_tasks() {
     // Update environment – `set_var` is `unsafe` starting with the 2024
     // edition so we group the calls into a single `unsafe { … }` block.
     unsafe {
-        std::env::set_var("OPENAI_API_KEY", "test-key");
-        std::env::set_var("OPENAI_API_BASE", server.uri());
         std::env::set_var("OPENAI_REQUEST_MAX_RETRIES", "0");
         std::env::set_var("OPENAI_STREAM_MAX_RETRIES", "0");
     }
+    let model_provider = ModelProviderInfo {
+        name: "openai".into(),
+        base_url: format!("{}/v1", server.uri()),
+        // Environment variable that should exist in the test environment.
+        // ModelClient will return an error if the environment variable for the
+        // provider is not set.
+        env_key: "PATH".into(),
+    };
 
     // Init session
-    let config = Config::load_default_config_for_test();
+    let mut config = Config::load_default_config_for_test();
+    config.model_provider = model_provider;
     let ctrl_c = std::sync::Arc::new(tokio::sync::Notify::new());
     let (codex, _init_id) = Codex::spawn(config, ctrl_c.clone()).await.unwrap();
 
