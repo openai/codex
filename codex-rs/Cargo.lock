@@ -516,7 +516,6 @@ dependencies = [
  "async-channel",
  "base64 0.21.7",
  "bytes",
- "clap",
  "codex-apply-patch",
  "codex-mcp-client",
  "dirs",
