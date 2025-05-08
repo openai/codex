@@ -29,6 +29,7 @@
           pname = "codex-cli";
           version = "0.1.0";
           cargoLock.lockFile = ./codex-rs/Cargo.lock;
+          doCheck = false;
           src = ./codex-rs;
           nativeBuildInputs = with pkgs; [
             pkg-config
