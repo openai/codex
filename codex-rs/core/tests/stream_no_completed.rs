@@ -32,6 +32,8 @@ data: {{\"type\":\"response.completed\",\"response\":{{\"id\":\"{}\",\"output\":
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn retries_on_early_close() {
+    #![allow(clippy::unwrap_used)]
+
     let server = MockServer::start().await;
 
     struct SeqResponder;

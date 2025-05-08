@@ -67,7 +67,10 @@ fn test_head_one_flag_one_file() -> Result<()> {
             exec: ValidExec {
                 program: "head".to_string(),
                 flags: vec![],
-                opts: vec![MatchedOpt::new("-n", "100", ArgType::PositiveInteger).unwrap()],
+                opts: vec![
+                    MatchedOpt::new("-n", "100", ArgType::PositiveInteger)
+                        .expect("should validate")
+                ],
                 args: vec![MatchedArg::new(
                     2,
                     ArgType::ReadableFile,
