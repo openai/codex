@@ -377,9 +377,12 @@ impl WidgetRef for ConversationHistoryWidget {
         // second time by the widget – which manifested as the entire block
         // drifting off‑screen when the user attempted to scroll.
 
-        let paragraph = Paragraph::new(visible_lines)
-            .block(block)
-            .wrap(Wrap { trim: false });
+        // Currently, we do not use the `wrap` method on the `Paragraph` widget
+        // because it messes up our scrolling math above that assumes each Line
+        // contributes one line of height to the widget. Admittedly, this is
+        // bad because users cannot see content that is clipped without
+        // resizing the terminal.
+        let paragraph = Paragraph::new(visible_lines).block(block);
         paragraph.render(area, buf);
 
         let needs_scrollbar = num_lines > viewport_height;
