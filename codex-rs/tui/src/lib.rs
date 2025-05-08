@@ -58,6 +58,7 @@ pub fn run_main(cli: Cli) -> std::io::Result<()> {
                 None
             },
             cwd: cli.cwd.clone().map(|p| p.canonicalize().unwrap_or(p)),
+            provider: None,
         };
         #[allow(clippy::print_stderr)]
         match Config::load_with_overrides(overrides) {

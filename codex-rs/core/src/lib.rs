@@ -7,6 +7,7 @@
 
 mod client;
 pub mod codex;
+pub use codex::Codex;
 pub mod codex_wrapper;
 pub mod config;
 pub mod error;
@@ -18,6 +19,8 @@ pub mod linux;
 mod mcp_connection_manager;
 pub mod mcp_server_config;
 mod mcp_tool_call;
+mod model_provider_info;
+pub use model_provider_info::ModelProviderInfo;
 mod models;
 pub mod protocol;
 mod rollout;
@@ -25,5 +28,3 @@ mod safety;
 mod user_notification;
 pub mod util;
 mod zdr_transcript;
-
-pub use codex::Codex;

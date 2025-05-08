@@ -66,6 +66,7 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
             None
         },
         cwd: cwd.map(|p| p.canonicalize().unwrap_or(p)),
+        provider: None,
     };
     let config = Config::load_with_overrides(overrides)?;
 
