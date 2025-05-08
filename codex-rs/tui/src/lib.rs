@@ -2,7 +2,6 @@
 // The standalone `codex-tui` binary prints a short help message before the
 // alternate‑screen mode starts; that file opts‑out locally via `allow`.
 #![deny(clippy::print_stdout, clippy::print_stderr)]
-
 use app::App;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -58,6 +57,7 @@ pub fn run_main(cli: Cli) -> std::io::Result<()> {
                 None
             },
             cwd: cli.cwd.clone().map(|p| p.canonicalize().unwrap_or(p)),
+            provider: None,
         };
         #[allow(clippy::print_stderr)]
         match Config::load_with_overrides(overrides) {

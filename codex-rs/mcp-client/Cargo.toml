@@ -3,6 +3,9 @@ name = "codex-mcp-client"
 version = { workspace = true }
 edition = "2024"
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow = "1"
 mcp-types = { path = "../mcp-types" }
@@ -16,6 +19,7 @@ tokio = { version = "1", features = [
     "process",
     "rt-multi-thread",
     "sync",
+    "time",
 ] }
 
 [dev-dependencies]

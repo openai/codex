@@ -3,6 +3,9 @@ name = "codex-mcp-server"
 version = { workspace = true }
 edition = "2024"
 
+[lints]
+workspace = true
+
 [dependencies]
 codex-core = { path = "../core" }
 mcp-types = { path = "../mcp-types" }

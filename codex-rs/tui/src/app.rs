@@ -107,7 +107,7 @@ impl App<'_> {
     pub(crate) fn run(&mut self, terminal: &mut tui::Tui) -> Result<()> {
         // Insert an event to trigger the first render.
         let app_event_tx = self.app_event_tx.clone();
-        app_event_tx.send(AppEvent::Redraw).unwrap();
+        app_event_tx.send(AppEvent::Redraw)?;
 
         while let Ok(event) = self.app_event_rx.recv() {
             match event {
@@ -128,7 +128,7 @@ impl App<'_> {
                             modifiers: crossterm::event::KeyModifiers::CONTROL,
                             ..
                         } => {
-                            self.app_event_tx.send(AppEvent::ExitRequest).unwrap();
+                            self.app_event_tx.send(AppEvent::ExitRequest)?;
                         }
                         _ => {
                             self.dispatch_key_event(key_event);

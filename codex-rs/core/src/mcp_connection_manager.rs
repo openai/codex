@@ -7,6 +7,7 @@
 //! `"<server><MCP_TOOL_NAME_DELIMITER><tool>"` as the key.
 
 use std::collections::HashMap;
+use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -24,6 +25,9 @@ use crate::mcp_server_config::McpServerConfig;
 /// OpenAI requires tool names to conform to `^[a-zA-Z0-9_-]+$`, so we must
 /// choose a delimiter from this character set.
 const MCP_TOOL_NAME_DELIMITER: &str = "__OAI_CODEX_MCP__";
+
+/// Timeout for the `tools/list` request.
+const LIST_TOOLS_TIMEOUT: Duration = Duration::from_secs(10);
 
 fn fully_qualified_tool_name(server: &str, tool: &str) -> String {
     format!("{server}{MCP_TOOL_NAME_DELIMITER}{tool}")
@@ -104,6 +108,7 @@ impl McpConnectionManager {
         server: &str,
         tool: &str,
         arguments: Option<serde_json::Value>,
+        timeout: Option<Duration>,
     ) -> Result<mcp_types::CallToolResult> {
         let client = self
             .clients
@@ -112,7 +117,7 @@ impl McpConnectionManager {
             .clone();
 
         client
-            .call_tool(tool.to_string(), arguments)
+            .call_tool(tool.to_string(), arguments, timeout)
             .await
             .with_context(|| format!("tool call failed for `{server}/{tool}`"))
     }
@@ -132,7 +137,9 @@ pub async fn list_all_tools(
         let server_name_cloned = server_name.clone();
         let client_clone = client.clone();
         join_set.spawn(async move {
-            let res = client_clone.list_tools(None).await;
+            let res = client_clone
+                .list_tools(None, Some(LIST_TOOLS_TIMEOUT))
+                .await;
             (server_name_cloned, res)
         });
     }
