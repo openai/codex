@@ -26,10 +26,9 @@ use tracing::warn;
 use crate::error::CodexErr;
 use crate::error::Result;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
-use crate::flags::OPENAI_API_BASE;
 use crate::flags::OPENAI_REQUEST_MAX_RETRIES;
 use crate::flags::OPENAI_STREAM_IDLE_TIMEOUT_MS;
-use crate::flags::get_api_key;
+use crate::model_provider_info::ModelProviderInfo;
 use crate::models::ResponseItem;
 use crate::util::backoff;
 
@@ -141,13 +140,16 @@ static DEFAULT_TOOLS: LazyLock<Vec<ResponsesApiTool>> = LazyLock::new(|| {
 pub struct ModelClient {
     model: String,
     client: reqwest::Client,
+    provider: ModelProviderInfo,
 }
 
 impl ModelClient {
-    pub fn new(model: impl ToString) -> Self {
-        let model = model.to_string();
-        let client = reqwest::Client::new();
-        Self { model, client }
+    pub fn new(model: impl ToString, provider: ModelProviderInfo) -> Self {
+        Self {
+            model: model.to_string(),
+            client: reqwest::Client::new(),
+            provider,
+        }
     }
 
     pub async fn stream(&mut self, prompt: &Prompt) -> Result<ResponseStream> {
@@ -188,7 +190,9 @@ impl ModelClient {
             stream: true,
         };
 
-        let url = format!("{}/v1/responses", *OPENAI_API_BASE);
+        let base_url = self.provider.base_url.clone();
+        let base_url = base_url.trim_end_matches('/');
+        let url = format!("{}/responses", base_url);
         debug!(url, "POST");
         trace!("request payload: {}", serde_json::to_string(&payload)?);
 
@@ -196,10 +200,14 @@ impl ModelClient {
         loop {
             attempt += 1;
 
+            let api_key = self
+                .provider
+                .api_key()
+                .ok_or_else(|| crate::error::CodexErr::EnvVar("API_KEY"))?;
             let res = self
                 .client
                 .post(&url)
-                .bearer_auth(get_api_key()?)
+                .bearer_auth(api_key)
                 .header("OpenAI-Beta", "responses=experimental")
                 .header(reqwest::header::ACCEPT, "text/event-stream")
                 .json(&payload)
