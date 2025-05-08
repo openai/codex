@@ -1,7 +1,7 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::mpsc::SendError;
 use std::sync::mpsc::Sender;
-use std::sync::Arc;
 
 use codex_core::codex_wrapper::init_codex;
 use codex_core::config::Config;
@@ -17,8 +17,8 @@ use ratatui::layout::Layout;
 use ratatui::layout::Rect;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
-use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::unbounded_channel;
 
 use crate::app_event::AppEvent;
 use crate::bottom_pane::BottomPane;
@@ -368,6 +368,25 @@ impl ChatWidget<'_> {
             } => {
                 self.conversation_history
                     .record_completed_exec_command(call_id, stdout, stderr, exit_code);
+                self.request_redraw()?;
+            }
+            EventMsg::McpToolCallBegin {
+                call_id,
+                server,
+                tool,
+                arguments,
+            } => {
+                self.conversation_history
+                    .add_active_mcp_tool_call(call_id, server, tool, arguments);
+                self.request_redraw()?;
+            }
+            EventMsg::McpToolCallEnd {
+                call_id,
+                success,
+                result,
+            } => {
+                self.conversation_history
+                    .record_completed_mcp_tool_call(call_id, success, result);
                 self.request_redraw()?;
             }
             event => {

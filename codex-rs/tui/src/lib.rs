@@ -2,7 +2,6 @@
 // The standalone `codex-tui` binary prints a short help message before the
 // alternate‑screen mode starts; that file opts‑out locally via `allow`.
 #![deny(clippy::print_stdout, clippy::print_stderr)]
-
 use app::App;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -12,8 +11,8 @@ use codex_core::util::is_inside_git_repo;
 use log_layer::TuiLogLayer;
 use std::fs::OpenOptions;
 use tracing_appender::non_blocking;
-use tracing_subscriber::prelude::*;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::prelude::*;
 
 mod app;
 mod app_event;
@@ -25,6 +24,7 @@ mod exec_command;
 mod git_warning_screen;
 mod history_cell;
 mod log_layer;
+mod markdown;
 mod scroll_event_helper;
 pub mod slash_command_overlay;
 pub mod slash_commands;
@@ -59,6 +59,7 @@ pub fn run_main(cli: Cli) -> std::io::Result<()> {
                 None
             },
             cwd: cli.cwd.clone().map(|p| p.canonicalize().unwrap_or(p)),
+            provider: None,
         };
         #[allow(clippy::print_stderr)]
         match Config::load_with_overrides(overrides) {

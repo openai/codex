@@ -1,11 +1,14 @@
 [package]
 name = "codex-apply-patch"
-version = "0.1.0"
-edition = "2021"
+version = { workspace = true }
+edition = "2024"
 
 [lib]
 name = "codex_apply_patch"
 path = "src/lib.rs"
+
+[lints]
+workspace = true
 
 [dependencies]
 anyhow = "1"

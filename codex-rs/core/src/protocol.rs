@@ -7,8 +7,11 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 
+use mcp_types::CallToolResult;
 use serde::Deserialize;
 use serde::Serialize;
+
+use crate::model_provider_info::ModelProviderInfo;
 
 /// Submission Queue Entry - requests from user
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -26,6 +29,9 @@ pub struct Submission {
 pub enum Op {
     /// Configure the model session.
     ConfigureSession {
+        /// Provider identifier ("openai", "openrouter", ...).
+        provider: ModelProviderInfo,
+
         /// If not specified, server will use its default model.
         model: String,
         /// Model instructions
@@ -314,6 +320,32 @@ pub enum EventMsg {
     SessionConfigured {
         /// Tell the client what model is being queried.
         model: String,
+    },
+
+    McpToolCallBegin {
+        /// Identifier so this can be paired with the McpToolCallEnd event.
+        call_id: String,
+
+        /// Name of the MCP server as defined in the config.
+        server: String,
+
+        /// Name of the tool as given by the MCP server.
+        tool: String,
+
+        /// Arguments to the tool call.
+        arguments: Option<serde_json::Value>,
+    },
+
+    McpToolCallEnd {
+        /// Identifier for the McpToolCallBegin that finished.
+        call_id: String,
+
+        /// Whether the tool call was successful. If `false`, `result` might
+        /// not be present.
+        success: bool,
+
+        /// Result of the tool call. Note this could be an error.
+        result: Option<CallToolResult>,
     },
 
     /// Notification that the server is about to execute a command.

@@ -6,11 +6,11 @@
 //! [`StatusIndicatorWidget::update_text`], the parent widget triggers a
 //! redraw so the change is visible immediately.
 
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::Sender;
-use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 

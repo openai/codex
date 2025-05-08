@@ -12,12 +12,16 @@
 //! issue requests and receive strongly-typed results.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
+use std::time::Duration;
 
-use anyhow::anyhow;
 use anyhow::Result;
+use anyhow::anyhow;
+use mcp_types::CallToolRequest;
+use mcp_types::CallToolRequestParams;
+use mcp_types::JSONRPC_VERSION;
 use mcp_types::JSONRPCMessage;
 use mcp_types::JSONRPCNotification;
 use mcp_types::JSONRPCRequest;
@@ -27,16 +31,17 @@ use mcp_types::ListToolsRequestParams;
 use mcp_types::ListToolsResult;
 use mcp_types::ModelContextProtocolRequest;
 use mcp_types::RequestId;
-use mcp_types::JSONRPC_VERSION;
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
 use tokio::process::Command;
+use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
-use tokio::sync::Mutex;
+use tokio::time;
+use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -69,40 +74,22 @@ pub struct McpClient {
 
 impl McpClient {
     /// Spawn the given command and establish an MCP session over its STDIO.
-    ///
-    /// `args` follows the Unix convention where the first element is the
-    /// executable path and the rest are arguments.  For example:
-    ///
-    /// ```no_run
-    /// # use codex_mcp_client::McpClient;
-    /// # async fn run() -> anyhow::Result<()> {
-    /// let client = McpClient::new_stdio_client(vec![
-    ///     "codex-mcp-server".to_string(),
-    /// ]).await?;
-    /// # Ok(()) }
-    /// ```
-    pub async fn new_stdio_client(args: Vec<String>) -> std::io::Result<Self> {
-        if args.is_empty() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "expected at least one element in `args` - the program to spawn",
-            ));
-        }
-
-        let program = &args[0];
-        let mut command = Command::new(program);
-        if args.len() > 1 {
-            command.args(&args[1..]);
-        }
-
-        command.stdin(std::process::Stdio::piped());
-        command.stdout(std::process::Stdio::piped());
-        command.stderr(std::process::Stdio::null());
-        // As noted in the `kill_on_drop` documentation, the Tokio runtime makes
-        // a "best effort" to reap-after-exit to avoid zombie processes, but it
-        // is not a guarantee.
-        command.kill_on_drop(true);
-        let mut child = command.spawn()?;
+    pub async fn new_stdio_client(
+        program: String,
+        args: Vec<String>,
+        env: Option<HashMap<String, String>>,
+    ) -> std::io::Result<Self> {
+        let mut child = Command::new(program)
+            .args(args)
+            .envs(create_env_for_mcp_server(env))
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            // As noted in the `kill_on_drop` documentation, the Tokio runtime makes
+            // a "best effort" to reap-after-exit to avoid zombie processes, but it
+            // is not a guarantee.
+            .kill_on_drop(true)
+            .spawn()?;
 
         let stdin = child.stdin.take().ok_or_else(|| {
             std::io::Error::new(std::io::ErrorKind::Other, "failed to capture child stdin")
@@ -122,6 +109,7 @@ impl McpClient {
                 while let Some(msg) = outgoing_rx.recv().await {
                     match serde_json::to_string(&msg) {
                         Ok(json) => {
+                            debug!("MCP message to server: {json}");
                             if stdin.write_all(json.as_bytes()).await.is_err() {
                                 error!("failed to write message to child stdin");
                                 break;
@@ -149,6 +137,7 @@ impl McpClient {
 
             tokio::spawn(async move {
                 while let Ok(Some(line)) = lines.next_line().await {
+                    debug!("MCP message from server: {line}");
                     match serde_json::from_str::<JSONRPCMessage>(&line) {
                         Ok(JSONRPCMessage::Response(resp)) => {
                             Self::dispatch_response(resp, &pending).await;
@@ -188,7 +177,15 @@ impl McpClient {
     }
 
     /// Send an arbitrary MCP request and await the typed result.
-    pub async fn send_request<R>(&self, params: R::Params) -> Result<R::Result>
+    ///
+    /// If `timeout` is `None` the call waits indefinitely. If `Some(duration)`
+    /// is supplied and no response is received within the given period, a
+    /// timeout error is returned.
+    pub async fn send_request<R>(
+        &self,
+        params: R::Params,
+        timeout: Option<Duration>,
+    ) -> Result<R::Result>
     where
         R: ModelContextProtocolRequest,
         R::Params: Serialize,
@@ -229,14 +226,35 @@ impl McpClient {
         // Send to writer task.
         if self.outgoing_tx.send(message).await.is_err() {
             return Err(anyhow!(
-                "failed to send message to writer task – channel closed"
+                "failed to send message to writer task - channel closed"
             ));
         }
 
-        // Await the response.
-        let msg = rx
-            .await
-            .map_err(|_| anyhow!("response channel closed before a reply was received"))?;
+        // Await the response, optionally bounded by a timeout.
+        let msg = match timeout {
+            Some(duration) => {
+                match time::timeout(duration, rx).await {
+                    Ok(Ok(msg)) => msg,
+                    Ok(Err(_)) => {
+                        // Channel closed without a reply – remove the pending entry.
+                        let mut guard = self.pending.lock().await;
+                        guard.remove(&id);
+                        return Err(anyhow!(
+                            "response channel closed before a reply was received"
+                        ));
+                    }
+                    Err(_) => {
+                        // Timed out. Remove the pending entry so we don't leak.
+                        let mut guard = self.pending.lock().await;
+                        guard.remove(&id);
+                        return Err(anyhow!("request timed out"));
+                    }
+                }
+            }
+            None => rx
+                .await
+                .map_err(|_| anyhow!("response channel closed before a reply was received"))?,
+        };
 
         match msg {
             JSONRPCMessage::Response(JSONRPCResponse { result, .. }) => {
@@ -258,8 +276,21 @@ impl McpClient {
     pub async fn list_tools(
         &self,
         params: Option<ListToolsRequestParams>,
+        timeout: Option<Duration>,
     ) -> Result<ListToolsResult> {
-        self.send_request::<ListToolsRequest>(params).await
+        self.send_request::<ListToolsRequest>(params, timeout).await
+    }
+
+    /// Convenience wrapper around `tools/call`.
+    pub async fn call_tool(
+        &self,
+        name: String,
+        arguments: Option<serde_json::Value>,
+        timeout: Option<Duration>,
+    ) -> Result<mcp_types::CallToolResult> {
+        let params = CallToolRequestParams { name, arguments };
+        debug!("MCP tool call: {params:?}");
+        self.send_request::<CallToolRequest>(params, timeout).await
     }
 
     /// Internal helper: route a JSON-RPC *response* object to the pending map.
@@ -308,5 +339,77 @@ impl Drop for McpClient {
         // forcing the process to be reaped immediately if it has already exited
         // instead of waiting for the Tokio runtime to reap it later.
         let _ = self.child.try_wait();
+    }
+}
+
+/// Environment variables that are always included when spawning a new MCP
+/// server.
+#[rustfmt::skip]
+#[cfg(unix)]
+const DEFAULT_ENV_VARS: &[&str] = &[
+    // https://modelcontextprotocol.io/docs/tools/debugging#environment-variables
+    // states:
+    //
+    // > MCP servers inherit only a subset of environment variables automatically,
+    // > like `USER`, `HOME`, and `PATH`.
+    //
+    // But it does not fully enumerate the list. Empirically, when spawning a
+    // an MCP server via Claude Desktop on macOS, it reports the following
+    // environment variables:
+    "HOME",
+    "LOGNAME",
+    "PATH",
+    "SHELL",
+    "USER",
+    "__CF_USER_TEXT_ENCODING",
+
+    // Additional environment variables Codex chooses to include by default:
+    "LANG",
+    "LC_ALL",
+    "TERM",
+    "TMPDIR",
+    "TZ",
+];
+
+#[cfg(windows)]
+const DEFAULT_ENV_VARS: &[&str] = &[
+    // TODO: More research is necessary to curate this list.
+    "PATH",
+    "PATHEXT",
+    "USERNAME",
+    "USERDOMAIN",
+    "USERPROFILE",
+    "TEMP",
+    "TMP",
+];
+
+/// `extra_env` comes from the config for an entry in `mcp_servers` in
+/// `config.toml`.
+fn create_env_for_mcp_server(
+    extra_env: Option<HashMap<String, String>>,
+) -> HashMap<String, String> {
+    DEFAULT_ENV_VARS
+        .iter()
+        .filter_map(|var| match std::env::var(var) {
+            Ok(value) => Some((var.to_string(), value)),
+            Err(_) => None,
+        })
+        .chain(extra_env.unwrap_or_default())
+        .collect::<HashMap<_, _>>()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_create_env_for_mcp_server() {
+        let env_var = "USER";
+        let env_var_existing_value = std::env::var(env_var).unwrap_or_default();
+        let env_var_new_value = format!("{env_var_existing_value}-extra");
+        let extra_env = HashMap::from([(env_var.to_owned(), env_var_new_value.clone())]);
+        let mcp_server_env = create_env_for_mcp_server(Some(extra_env));
+        assert!(mcp_server_env.contains_key("PATH"));
+        assert_eq!(Some(&env_var_new_value), mcp_server_env.get(env_var));
     }
 }

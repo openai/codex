@@ -1,6 +1,6 @@
 use clap::Parser;
 use clap::ValueEnum;
-use codex_core::SandboxPermissionOption;
+use codex_common::SandboxPermissionOption;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]

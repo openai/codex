@@ -1,4 +1,5 @@
 use codex_ansi_escape::ansi_escape_line;
+use codex_common::elapsed::format_duration;
 use codex_core::config::Config;
 use codex_core::protocol::FileChange;
 use ratatui::prelude::*;
@@ -13,6 +14,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::exec_command::escape_command;
+use crate::markdown::append_markdown;
 
 pub(crate) struct CommandOutput {
     pub(crate) exit_code: i32,
@@ -48,6 +50,22 @@ pub(crate) enum HistoryCell {
     /// Completed exec tool call.
     CompletedExecCommand { lines: Vec<Line<'static>> },
 
+    /// An MCP tool call that has not finished yet.
+    ActiveMcpToolCall {
+        call_id: String,
+        /// `server.tool` fully-qualified name so we can show a concise label
+        fq_tool_name: String,
+        /// Formatted invocation that mirrors the `$ cmd ...` style of exec
+        /// commands. We keep this around so the completed state can reuse the
+        /// exact same text without re-formatting.
+        invocation: String,
+        start: Instant,
+        lines: Vec<Line<'static>>,
+    },
+
+    /// Completed MCP tool call.
+    CompletedMcpToolCall { lines: Vec<Line<'static>> },
+
     /// Background event
     BackgroundEvent { lines: Vec<Line<'static>> },
 
@@ -64,6 +82,8 @@ pub(crate) enum HistoryCell {
     },
 }
 
+const TOOL_CALL_MAX_LINES: usize = 5;
+
 impl HistoryCell {
     pub(crate) fn new_user_prompt(message: String) -> Self {
         let mut lines: Vec<Line<'static>> = Vec::new();
@@ -77,7 +97,7 @@ impl HistoryCell {
     pub(crate) fn new_agent_message(message: String) -> Self {
         let mut lines: Vec<Line<'static>> = Vec::new();
         lines.push(Line::from("codex".magenta().bold()));
-        lines.extend(message.lines().map(|l| Line::from(l.to_string())));
+        append_markdown(&message, &mut lines);
         lines.push(Line::from(""));
 
         HistoryCell::AgentMessage { lines }
@@ -114,17 +134,20 @@ impl HistoryCell {
         // Title depends on whether we have output yet.
         let title_line = Line::from(vec![
             "command".magenta(),
-            format!(" (code: {}, duration: {:?})", exit_code, duration).dim(),
+            format!(
+                " (code: {}, duration: {})",
+                exit_code,
+                format_duration(duration)
+            )
+            .dim(),
         ]);
         lines.push(title_line);
-
-        const MAX_LINES: usize = 5;
 
         let src = if exit_code == 0 { stdout } else { stderr };
 
         lines.push(Line::from(format!("$ {command}")));
         let mut lines_iter = src.lines();
-        for raw in lines_iter.by_ref().take(MAX_LINES) {
+        for raw in lines_iter.by_ref().take(TOOL_CALL_MAX_LINES) {
             lines.push(ansi_escape_line(raw).dim());
         }
         let remaining = lines_iter.count();
@@ -134,6 +157,84 @@ impl HistoryCell {
         lines.push(Line::from(""));
 
         HistoryCell::CompletedExecCommand { lines }
+    }
+
+    pub(crate) fn new_active_mcp_tool_call(
+        call_id: String,
+        server: String,
+        tool: String,
+        arguments: Option<serde_json::Value>,
+    ) -> Self {
+        let fq_tool_name = format!("{server}.{tool}");
+
+        // Format the arguments as compact JSON so they roughly fit on one
+        // line. If there are no arguments we keep it empty so the invocation
+        // mirrors a function-style call.
+        let args_str = arguments
+            .as_ref()
+            .map(|v| {
+                // Use compact form to keep things short but readable.
+                serde_json::to_string(v).unwrap_or_else(|_| v.to_string())
+            })
+            .unwrap_or_default();
+
+        let invocation = if args_str.is_empty() {
+            format!("{fq_tool_name}()")
+        } else {
+            format!("{fq_tool_name}({args_str})")
+        };
+
+        let start = Instant::now();
+        let title_line = Line::from(vec!["tool".magenta(), " running...".dim()]);
+        let lines: Vec<Line<'static>> = vec![
+            title_line,
+            Line::from(format!("$ {invocation}")),
+            Line::from(""),
+        ];
+
+        HistoryCell::ActiveMcpToolCall {
+            call_id,
+            fq_tool_name,
+            invocation,
+            start,
+            lines,
+        }
+    }
+
+    pub(crate) fn new_completed_mcp_tool_call(
+        fq_tool_name: String,
+        invocation: String,
+        start: Instant,
+        success: bool,
+        result: Option<serde_json::Value>,
+    ) -> Self {
+        let duration = format_duration(start.elapsed());
+        let status_str = if success { "success" } else { "failed" };
+        let title_line = Line::from(vec![
+            "tool".magenta(),
+            format!(" {fq_tool_name} ({status_str}, duration: {})", duration).dim(),
+        ]);
+
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        lines.push(title_line);
+        lines.push(Line::from(format!("$ {invocation}")));
+
+        if let Some(res_val) = result {
+            let json_pretty =
+                serde_json::to_string_pretty(&res_val).unwrap_or_else(|_| res_val.to_string());
+            let mut iter = json_pretty.lines();
+            for raw in iter.by_ref().take(TOOL_CALL_MAX_LINES) {
+                lines.push(Line::from(raw.to_string()).dim());
+            }
+            let remaining = iter.count();
+            if remaining > 0 {
+                lines.push(Line::from(format!("... {} additional lines", remaining)).dim());
+            }
+        }
+
+        lines.push(Line::from(""));
+
+        HistoryCell::CompletedMcpToolCall { lines }
     }
 
     pub(crate) fn new_background_event(message: String) -> Self {
@@ -234,6 +335,8 @@ impl HistoryCell {
             | HistoryCell::SessionInfo { lines, .. }
             | HistoryCell::ActiveExecCommand { lines, .. }
             | HistoryCell::CompletedExecCommand { lines, .. }
+            | HistoryCell::ActiveMcpToolCall { lines, .. }
+            | HistoryCell::CompletedMcpToolCall { lines, .. }
             | HistoryCell::PendingPatch { lines, .. } => lines,
         }
     }
