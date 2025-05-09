@@ -1,16 +1,18 @@
 use crate::models::ResponseItem;
 
-/// Transcript that needs to be maintained for ZDR clients for which
-/// previous_response_id is not available, so we must include the transcript
-/// with every API call. This must include each `function_call` and its
-/// corresponding `function_call_output`.
+/// Transcript of conversation history that is needed:
+/// - for ZDR clients for which previous_response_id is not available, so we
+///   must include the transcript with every API call. This must include each
+///   `function_call` and its corresponding `function_call_output`.
+/// - for clients using the "chat completions" API as opposed to the
+///   "responses" API.
 #[derive(Debug, Clone)]
-pub(crate) struct ZdrTranscript {
+pub(crate) struct ConversationHistory {
     /// The oldest items are at the beginning of the vector.
     items: Vec<ResponseItem>,
 }
 
-impl ZdrTranscript {
+impl ConversationHistory {
     pub(crate) fn new() -> Self {
         Self { items: Vec::new() }
     }
