@@ -92,7 +92,9 @@ async fn keeps_previous_response_id_between_tasks() {
         // Environment variable that should exist in the test environment.
         // ModelClient will return an error if the environment variable for the
         // provider is not set.
-        env_key: "PATH".into(),
+        env_key: Some("PATH".into()),
+        env_key_instructions: None,
+        wire_api: codex_core::WireApi::Responses,
     };
 
     // Init session

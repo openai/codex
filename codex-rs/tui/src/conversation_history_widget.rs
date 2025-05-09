@@ -162,6 +162,10 @@ impl ConversationHistoryWidget {
         self.scroll_position = usize::MAX;
     }
 
+    pub fn add_welcome_message(&mut self, config: &Config) {
+        self.add_to_history(HistoryCell::new_welcome_message(config));
+    }
+
     pub fn add_user_message(&mut self, message: String) {
         self.add_to_history(HistoryCell::new_user_prompt(message));
     }
@@ -172,6 +176,10 @@ impl ConversationHistoryWidget {
 
     pub fn add_background_event(&mut self, message: String) {
         self.add_to_history(HistoryCell::new_background_event(message));
+    }
+
+    pub fn add_error(&mut self, message: String) {
+        self.add_to_history(HistoryCell::new_error_event(message));
     }
 
     /// Add a pending patch entry (before user approval).
