@@ -81,8 +81,13 @@ pub async fn run_main(_opts: ProtoCli) -> anyhow::Result<()> {
             };
             match event {
                 Ok(event) => {
-                    let event_str =
-                        serde_json::to_string(&event).expect("JSON serialization failed");
+                    let event_str = match serde_json::to_string(&event) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            error!("Failed to serialize event: {e}");
+                            continue;
+                        }
+                    };
                     println!("{event_str}");
                 }
                 Err(e) => {

@@ -46,7 +46,12 @@ pub async fn exec_linux(
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .expect("Failed to create runtime");
+            .map_err(|e| {
+                CodexErr::Io(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("Failed to create runtime: {e}"),
+                ))
+            })?;
 
         rt.block_on(async {
             apply_sandbox_policy_to_current_thread(sandbox_policy, &params.cwd)?;
@@ -180,7 +185,7 @@ fn install_network_seccomp_filter_on_current_thread() -> std::result::Result<(),
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
+    #![expect(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
     use crate::exec::ExecParams;

@@ -75,6 +75,7 @@ fn is_safe_to_call_with_exec(command: &[String]) -> bool {
 fn try_parse_bash(bash_lc_arg: &str) -> Option<Tree> {
     let lang = BASH.into();
     let mut parser = Parser::new();
+    #[expect(clippy::expect_used)]
     parser.set_language(&lang).expect("load bash grammar");
 
     let old_tree: Option<&Tree> = None;

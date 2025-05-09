@@ -1,3 +1,5 @@
+#![expect(clippy::expect_used)]
+
 //! Optional smoke tests that hit the real OpenAI /v1/responses endpoint. They are `#[ignore]` by
 //! default so CI stays deterministic and free. Developers can run them locally with
 //! `cargo test --test live_cli -- --ignored` provided they set a valid `OPENAI_API_KEY`.

@@ -1,3 +1,5 @@
+#![expect(clippy::unwrap_used, clippy::expect_used)]
+
 //! Live integration tests that exercise the full [`Agent`] stack **against the real
 //! OpenAI `/v1/responses` API**.  These tests complement the lightweight mock‑based
 //! unit tests by verifying that the agent can drive an end‑to‑end conversation,
@@ -65,7 +67,6 @@ async fn spawn_codex() -> Result<Codex, CodexErr> {
 #[ignore]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn live_streaming_and_prev_id_reset() {
-    #![allow(clippy::unwrap_used)]
     if !api_key_available() {
         eprintln!("skipping live_streaming_and_prev_id_reset – OPENAI_API_KEY not set");
         return;
@@ -140,7 +141,6 @@ async fn live_streaming_and_prev_id_reset() {
 #[ignore]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn live_shell_function_call() {
-    #![allow(clippy::unwrap_used)]
     if !api_key_available() {
         eprintln!("skipping live_shell_function_call – OPENAI_API_KEY not set");
         return;
