@@ -561,14 +561,34 @@ async fn submission_loop(
 
                 let writable_roots = Mutex::new(get_writable_roots(&cwd));
 
-                let mcp_connection_manager =
+                // Error messages to dispatch after SessionConfigured is sent.
+                let mut mcp_connection_errors = Vec::<Event>::new();
+                let (mcp_connection_manager, failed_clients) =
                     match McpConnectionManager::new(config.mcp_servers.clone()).await {
-                        Ok(mgr) => mgr,
+                        Ok((mgr, failures)) => (mgr, failures),
                         Err(e) => {
-                            error!("Failed to create MCP connection manager: {e:#}");
-                            McpConnectionManager::default()
+                            let message = format!("Failed to create MCP connection manager: {e:#}");
+                            error!("{message}");
+                            mcp_connection_errors.push(Event {
+                                id: sub.id.clone(),
+                                msg: EventMsg::Error { message },
+                            });
+                            (McpConnectionManager::default(), Default::default())
                         }
                     };
+
+                // Surface individual client start-up failures to the user.
+                if !failed_clients.is_empty() {
+                    for (server_name, err) in failed_clients {
+                        let message =
+                            format!("MCP client for `{server_name}` failed to start: {err:#}");
+                        error!("{message}");
+                        mcp_connection_errors.push(Event {
+                            id: sub.id.clone(),
+                            msg: EventMsg::Error { message },
+                        });
+                    }
+                }
 
                 // Attempt to create a RolloutRecorder *before* moving the
                 // `instructions` value into the Session struct.
@@ -596,12 +616,15 @@ async fn submission_loop(
                 }));
 
                 // ack
-                let event = Event {
-                    id: sub.id,
+                let events = std::iter::once(Event {
+                    id: sub.id.clone(),
                     msg: EventMsg::SessionConfigured { model },
-                };
-                if tx_event.send(event).await.is_err() {
-                    return;
+                })
+                .chain(mcp_connection_errors.into_iter());
+                for event in events {
+                    if let Err(e) = tx_event.send(event).await {
+                        error!("failed to send event: {e:?}");
+                    }
                 }
             }
             Op::UserInput { items } => {
