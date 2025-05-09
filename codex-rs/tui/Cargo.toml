@@ -21,7 +21,7 @@ codex-ansi-escape = { path = "../ansi-escape" }
 codex-core = { path = "../core" }
 codex-common = { path = "../common", features = ["cli", "elapsed"] }
 color-eyre = "0.6.3"
-crossterm = "0.28.1"
+crossterm = { version = "0.28.1", features = ["bracketed-paste"] }
 mcp-types = { path = "../mcp-types" }
 ratatui = { version = "0.29.0", features = [
     "unstable-widget-ref",
