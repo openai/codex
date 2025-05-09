@@ -290,7 +290,26 @@ impl McpClient {
     ) -> Result<mcp_types::CallToolResult> {
         let params = CallToolRequestParams { name, arguments };
         debug!("MCP tool call: {params:?}");
-        self.send_request::<CallToolRequest>(params, timeout).await
+        
+        // Add timeout handling
+        let timeout_duration = timeout.unwrap_or(Duration::from_secs(30));
+        let timeout_future = tokio::time::sleep(timeout_duration);
+        
+        tokio::select! {
+            result = self.send_request::<CallToolRequest>(params, timeout) => {
+                match result {
+                    Ok(response) => Ok(response),
+                    Err(e) => {
+                        error!("Tool call failed: {}", e);
+                        Err(e)
+                    }
+                }
+            }
+            _ = timeout_future => {
+                error!("Tool call timed out after {:?}", timeout_duration);
+                Err(mcp_types::Error::Timeout)
+            }
+        }
     }
 
     /// Internal helper: route a JSON-RPC *response* object to the pending map.
