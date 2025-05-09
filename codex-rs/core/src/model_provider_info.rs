@@ -100,7 +100,7 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
             "gemini",
             P {
                 name: "Gemini".into(),
-                base_url: "https://generativelanguage.googleapis.com/v1beta/openai".into(),
+                base_url: "https://generativelanguage.googleapis.com/v1beta/models".into(),
                 env_key: Some("GEMINI_API_KEY".into()),
                 env_key_instructions: None,
                 wire_api: WireApi::Chat,

@@ -401,7 +401,7 @@ Below is a comprehensive example of `config.json` with multiple custom providers
     },
     "gemini": {
       "name": "Gemini",
-      "baseURL": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "baseURL": "https://generativelanguage.googleapis.com/v1beta/models",
       "envKey": "GEMINI_API_KEY"
     },
     "ollama": {
