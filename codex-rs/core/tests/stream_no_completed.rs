@@ -82,7 +82,9 @@ async fn retries_on_early_close() {
         // Environment variable that should exist in the test environment.
         // ModelClient will return an error if the environment variable for the
         // provider is not set.
-        env_key: "PATH".into(),
+        env_key: Some("PATH".into()),
+        env_key_instructions: None,
+        wire_api: codex_core::WireApi::Responses,
     };
 
     let ctrl_c = std::sync::Arc::new(tokio::sync::Notify::new());

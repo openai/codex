@@ -21,6 +21,9 @@ pub struct Config {
     /// Optional override of model selection.
     pub model: String,
 
+    /// Key into the model_providers map that specifies which provider to use.
+    pub model_provider_id: String,
+
     /// Info needed to make an API request to the model.
     pub model_provider: ModelProviderInfo,
 
@@ -219,21 +222,22 @@ impl Config {
             model_providers.entry(key).or_insert(provider);
         }
 
-        let model_provider_name = provider
+        let model_provider_id = provider
             .or(cfg.model_provider)
             .unwrap_or_else(|| "openai".to_string());
         let model_provider = model_providers
-            .get(&model_provider_name)
+            .get(&model_provider_id)
             .ok_or_else(|| {
                 std::io::Error::new(
                     std::io::ErrorKind::NotFound,
-                    format!("Model provider `{model_provider_name}` not found"),
+                    format!("Model provider `{model_provider_id}` not found"),
                 )
             })?
             .clone();
 
         let config = Self {
             model: model.or(cfg.model).unwrap_or_else(default_model),
+            model_provider_id,
             model_provider,
             cwd: cwd.map_or_else(
                 || {

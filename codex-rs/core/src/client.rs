@@ -1,11 +1,7 @@
 use std::collections::BTreeMap;
-use std::collections::HashMap;
 use std::io::BufRead;
 use std::path::Path;
-use std::pin::Pin;
 use std::sync::LazyLock;
-use std::task::Context;
-use std::task::Poll;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -23,65 +19,21 @@ use tracing::debug;
 use tracing::trace;
 use tracing::warn;
 
+use crate::chat_completions::stream_chat_completions;
+use crate::client_common::Payload;
+use crate::client_common::Prompt;
+use crate::client_common::Reasoning;
+use crate::client_common::ResponseEvent;
+use crate::client_common::ResponseStream;
 use crate::error::CodexErr;
 use crate::error::Result;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::flags::OPENAI_REQUEST_MAX_RETRIES;
 use crate::flags::OPENAI_STREAM_IDLE_TIMEOUT_MS;
 use crate::model_provider_info::ModelProviderInfo;
+use crate::model_provider_info::WireApi;
 use crate::models::ResponseItem;
 use crate::util::backoff;
-
-/// API request payload for a single model turn.
-#[derive(Default, Debug, Clone)]
-pub struct Prompt {
-    /// Conversation context input items.
-    pub input: Vec<ResponseItem>,
-    /// Optional previous response ID (when storage is enabled).
-    pub prev_id: Option<String>,
-    /// Optional initial instructions (only sent on first turn).
-    pub instructions: Option<String>,
-    /// Whether to store response on server side (disable_response_storage = !store).
-    pub store: bool,
-
-    /// Additional tools sourced from external MCP servers. Note each key is
-    /// the "fully qualified" tool name (i.e., prefixed with the server name),
-    /// which should be reported to the model in place of Tool::name.
-    pub extra_tools: HashMap<String, mcp_types::Tool>,
-}
-
-#[derive(Debug)]
-pub enum ResponseEvent {
-    OutputItemDone(ResponseItem),
-    Completed { response_id: String },
-}
-
-#[derive(Debug, Serialize)]
-struct Payload<'a> {
-    model: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    instructions: Option<&'a String>,
-    // TODO(mbolin): ResponseItem::Other should not be serialized. Currently,
-    // we code defensively to avoid this case, but perhaps we should use a
-    // separate enum for serialization.
-    input: &'a Vec<ResponseItem>,
-    tools: &'a [serde_json::Value],
-    tool_choice: &'static str,
-    parallel_tool_calls: bool,
-    reasoning: Option<Reasoning>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    previous_response_id: Option<String>,
-    /// true when using the Responses API.
-    store: bool,
-    stream: bool,
-}
-
-#[derive(Debug, Serialize)]
-struct Reasoning {
-    effort: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    generate_summary: Option<bool>,
-}
 
 /// When serialized as JSON, this produces a valid "Tool" in the OpenAI
 /// Responses API.
@@ -152,7 +104,20 @@ impl ModelClient {
         }
     }
 
-    pub async fn stream(&mut self, prompt: &Prompt) -> Result<ResponseStream> {
+    /// Dispatches to either the Responses or Chat implementation depending on
+    /// the provider config.  Public callers always invoke `stream()` – the
+    /// specialised helpers are private to avoid accidental misuse.
+    pub async fn stream(&self, prompt: &Prompt) -> Result<ResponseStream> {
+        match self.provider.wire_api {
+            WireApi::Responses => self.stream_responses(prompt).await,
+            WireApi::Chat => {
+                stream_chat_completions(prompt, &self.model, &self.client, &self.provider).await
+            }
+        }
+    }
+
+    /// Implementation for the OpenAI *Responses* experimental API.
+    async fn stream_responses(&self, prompt: &Prompt) -> Result<ResponseStream> {
         if let Some(path) = &*CODEX_RS_SSE_FIXTURE {
             // short circuit for tests
             warn!(path, "Streaming from fixture");
@@ -202,8 +167,8 @@ impl ModelClient {
 
             let api_key = self
                 .provider
-                .api_key()
-                .ok_or_else(|| crate::error::CodexErr::EnvVar("API_KEY"))?;
+                .api_key()?
+                .expect("Repsones API requires an API key");
             let res = self
                 .client
                 .post(&url)
@@ -393,18 +358,6 @@ where
             }
             other => debug!(other, "sse event"),
         }
-    }
-}
-
-pub struct ResponseStream {
-    rx_event: mpsc::Receiver<Result<ResponseEvent>>,
-}
-
-impl Stream for ResponseStream {
-    type Item = Result<ResponseEvent>;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.rx_event.poll_recv(cx)
     }
 }
 
