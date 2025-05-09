@@ -180,15 +180,19 @@ impl SandboxPolicy {
             use SandboxPermission::*;
             match perm {
                 DiskWritePlatformUserTempFolder => {
+                    use std::env;
+
+                    // -------- macOS -----------------------------------------------------------
+                    // macOS provides a per-user TMPDIR that typically points somewhere under
+                    // /var/folders and is already unique to the uid.  We allow writes to both
+                    // the raw path and its canonicalised form (which is often under /private).
                     if cfg!(target_os = "macos") {
-                        if let Some(tempdir) = std::env::var_os("TMPDIR") {
-                            // Likely something that starts with /var/folders/...
+                        if let Some(tempdir) = env::var_os("TMPDIR") {
                             let tmpdir_path = PathBuf::from(&tempdir);
                             if tmpdir_path.is_absolute() {
                                 writable_roots.push(tmpdir_path.clone());
                                 match tmpdir_path.canonicalize() {
                                     Ok(canonicalized) => {
-                                        // Likely something that starts with /private/var/folders/...
                                         if canonicalized != tmpdir_path {
                                             writable_roots.push(canonicalized);
                                         }
@@ -203,7 +207,52 @@ impl SandboxPolicy {
                         }
                     }
 
-                    // For Linux, should this be XDG_RUNTIME_DIR, /run/user/<uid>, or something else?
+                    // -------- Linux -----------------------------------------------------------
+                    // On Linux we prefer XDG_RUNTIME_DIR which is usually /run/user/<uid> unless
+                    // overridden.  If that is not set or unwritable, fall back to a directory
+                    // under $HOME (created lazily) and finally to /tmp.
+                    #[cfg(target_os = "linux")]
+                    {
+                        let candidate_paths: Vec<PathBuf> = {
+                            // Helper – build list in priority order.
+                            let mut paths = Vec::new();
+
+                            if let Ok(xdg_runtime) = env::var("XDG_RUNTIME_DIR") {
+                                paths.push(PathBuf::from(xdg_runtime));
+                            }
+
+                            if let Ok(tmpdir) = env::var("TMPDIR") {
+                                paths.push(PathBuf::from(tmpdir));
+                            }
+
+                            if let Some(home) = dirs::home_dir() {
+                                paths.push(home.join(".user_tmp"));
+                            }
+
+                            paths.push(PathBuf::from(format!("/run/user/{}", unsafe { libc::getuid() })));
+
+                            paths
+                        };
+
+                        for path in candidate_paths {
+                            if !path.exists() {
+                                // Attempt to create it; ignore error (just skip if cannot).
+                                if let Err(e) = std::fs::create_dir_all(&path) {
+                                    tracing::debug!("Skipping candidate user temp dir {:?} – {:?}", path, e);
+                                    continue;
+                                }
+                            }
+
+                            if let Ok(meta) = path.metadata() {
+                                if meta.permissions().readonly() {
+                                    continue; // Not writable
+                                }
+                            }
+
+                            writable_roots.push(path);
+                            break;
+                        }
+                    }
                 }
                 DiskWritePlatformGlobalTempFolder => {
                     if cfg!(unix) {
@@ -230,6 +279,15 @@ impl SandboxPolicy {
         self.has_full_disk_read_access()
             && self.has_full_disk_write_access()
             && self.has_full_network_access()
+    }
+
+    /// Returns `true` when the policy includes write access to the
+    /// platform-specific *user* temporary directory (e.g. `$TMPDIR` on macOS,
+    /// `$XDG_RUNTIME_DIR` or `$HOME/.user_tmp` on Linux).
+    pub fn allows_platform_user_temp_write(&self) -> bool {
+        self.permissions
+            .iter()
+            .any(|perm| matches!(perm, SandboxPermission::DiskWritePlatformUserTempFolder))
     }
 }
 

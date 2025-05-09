@@ -86,6 +86,10 @@ pub async fn process_exec_tool_call(
     ctrl_c: Arc<Notify>,
     sandbox_policy: &SandboxPolicy,
 ) -> Result<ExecToolCallOutput> {
+    // Before doing anything else, ensure the child processes will use a
+    // writable user-specific temp directory when the sandbox policy allows it.
+    prepare_user_temp_env(sandbox_policy);
+
     let start = Instant::now();
 
     let raw_output_result = match sandbox_type {
@@ -353,4 +357,77 @@ fn synthetic_exit_status(code: i32) -> ExitStatus {
     use std::os::windows::process::ExitStatusExt;
     #[expect(clippy::unwrap_used)]
     std::process::ExitStatus::from_raw(code.try_into().unwrap())
+}
+
+/// Prepare `TMPDIR` (and `CARGO_TARGET_DIR`) so child processes spawned under
+/// a sandbox that blocks writes to `/tmp` still have a writable scratch
+/// location.  Only runs when the active `SandboxPolicy` contains the
+/// `disk-write-platform-user-temp-folder` permission.
+fn prepare_user_temp_env(policy: &SandboxPolicy) {
+    use std::env;
+    use std::path::PathBuf;
+
+
+    if !policy.allows_platform_user_temp_write() {
+        return;
+    }
+
+    // Helper to check writability by trying to create and delete a file.
+    fn is_writable(dir: &PathBuf) -> bool {
+        let test_path = dir.join(".codex_tmp_test");
+        match std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&test_path)
+        {
+            Ok(_) => {
+                let _ = std::fs::remove_file(test_path);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    // Build candidate list in priority order.
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    if let Ok(tmpdir) = env::var("TMPDIR") {
+        candidates.push(PathBuf::from(tmpdir));
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(xdg_dir) = env::var("XDG_RUNTIME_DIR") {
+            candidates.push(PathBuf::from(xdg_dir));
+        }
+
+        // Standard per-uid runtime directory.
+        candidates.push(PathBuf::from(format!("/run/user/{}", unsafe { libc::getuid() })));
+    }
+
+    if let Some(home) = dirs::home_dir() {
+        candidates.push(home.join(".user_tmp"));
+    }
+
+    // Fallback – shared /tmp (may still be blocked, but nothing better).
+    candidates.push(PathBuf::from("/tmp"));
+
+    for dir in candidates {
+        // Best-effort create.
+        let _ = std::fs::create_dir_all(&dir);
+        if dir.is_dir() && is_writable(&dir) {
+            unsafe {
+                env::set_var("TMPDIR", &dir);
+            }
+
+            // Same location for Cargo build artefacts, to avoid `/tmp`.
+            let cargo_target = dir.join("cargo_target");
+            let _ = std::fs::create_dir_all(&cargo_target);
+            unsafe {
+                env::set_var("CARGO_TARGET_DIR", cargo_target);
+            }
+            break;
+        }
+    }
 }
