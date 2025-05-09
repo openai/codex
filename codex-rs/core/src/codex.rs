@@ -32,7 +32,6 @@ use tracing::trace;
 use tracing::warn;
 
 use crate::WireApi;
-use crate::chat_completions::AggregateStreamExt;
 use crate::client::ModelClient;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
@@ -864,7 +863,7 @@ async fn try_run_turn(
     sub_id: &str,
     prompt: &Prompt,
 ) -> CodexResult<Vec<ProcessedResponseItem>> {
-    let mut stream = sess.client.clone().stream(prompt).await?.aggregate();
+    let mut stream = sess.client.clone().stream(prompt).await?;
 
     // Buffer all the incoming messages from the stream first, then execute them.
     // If we execute a function call in the middle of handling the stream, it can time out.
