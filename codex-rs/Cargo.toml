@@ -13,7 +13,6 @@ members = [
     "mcp-types",
     "tui",
 ]
-
 [workspace.package]
 version = "0.0.0"
 # Track the edition for all workspace crates in one place. Individual
@@ -21,13 +20,10 @@ version = "0.0.0"
 # crates created with `cargo new -w ...` automatically inherit the 2024
 # edition.
 edition = "2024"
-
 [workspace.lints]
 rust = { }
-
 [workspace.lints.clippy]
 unwrap_used = "deny"
-
 [profile.release]
 lto = "fat"
 # Because we bundle some of these executables with the TypeScript CLI, we
