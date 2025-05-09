@@ -8,7 +8,7 @@
 ---
 
 <details>
-<summary><strong>Table&nbsp;of&nbsp;Contents</strong></summary>
+<summary><strong>Table of contents</strong></summary>
 
 <!-- Begin ToC -->
 

@@ -2,15 +2,15 @@ use multimap::MultiMap;
 use regex::Error as RegexError;
 use regex::Regex;
 
-use crate::error::Error;
-use crate::error::Result;
-use crate::policy_parser::ForbiddenProgramRegex;
-use crate::program::PositiveExampleFailedCheck;
 use crate::ExecCall;
 use crate::Forbidden;
 use crate::MatchedExec;
 use crate::NegativeExamplePassedCheck;
 use crate::ProgramSpec;
+use crate::error::Error;
+use crate::error::Result;
+use crate::policy_parser::ForbiddenProgramRegex;
+use crate::program::PositiveExampleFailedCheck;
 
 pub struct Policy {
     programs: MultiMap<String, ProgramSpec>,

@@ -2,10 +2,10 @@ use mcp_types::ClientCapabilities;
 use mcp_types::ClientRequest;
 use mcp_types::Implementation;
 use mcp_types::InitializeRequestParams;
+use mcp_types::JSONRPC_VERSION;
 use mcp_types::JSONRPCMessage;
 use mcp_types::JSONRPCRequest;
 use mcp_types::RequestId;
-use mcp_types::JSONRPC_VERSION;
 use serde_json::json;
 
 #[test]

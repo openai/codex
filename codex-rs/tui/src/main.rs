@@ -1,6 +1,6 @@
 use clap::Parser;
-use codex_tui::run_main;
 use codex_tui::Cli;
+use codex_tui::run_main;
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {

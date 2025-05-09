@@ -16,8 +16,6 @@ use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::util::is_inside_git_repo;
 use event_processor::EventProcessor;
-use owo_colors::OwoColorize;
-use owo_colors::Style;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -45,8 +43,6 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
         ),
     };
 
-    assert_api_key(stderr_with_ansi);
-
     let sandbox_policy = if full_auto {
         Some(SandboxPolicy::new_full_auto_policy())
     } else {
@@ -66,6 +62,7 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
             None
         },
         cwd: cwd.map(|p| p.canonicalize().unwrap_or(p)),
+        provider: None,
     };
     let config = Config::load_with_overrides(overrides)?;
 
@@ -77,10 +74,12 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
     // TODO(mbolin): Take a more thoughtful approach to logging.
     let default_level = "error";
     let _ = tracing_subscriber::fmt()
+        // Fallback to the `default_level` log filter if the environment
+        // variable is not set _or_ contains an invalid value
         .with_env_filter(
             EnvFilter::try_from_default_env()
                 .or_else(|_| EnvFilter::try_new(default_level))
-                .unwrap(),
+                .unwrap_or_else(|_| EnvFilter::new(default_level)),
         )
         .with_ansi(stderr_with_ansi)
         .with_writer(std::io::stderr)
@@ -159,39 +158,4 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
     }
 
     Ok(())
-}
-
-/// If a valid API key is not present in the environment, print an error to
-/// stderr and exits with 1; otherwise, does nothing.
-fn assert_api_key(stderr_with_ansi: bool) {
-    if !has_api_key() {
-        let (msg_style, var_style, url_style) = if stderr_with_ansi {
-            (
-                Style::new().red(),
-                Style::new().bold(),
-                Style::new().bold().underline(),
-            )
-        } else {
-            (Style::new(), Style::new(), Style::new())
-        };
-
-        eprintln!(
-            "\n{msg}\n\nSet the environment variable {var} and re-run this command.\nYou can create a key here: {url}\n",
-            msg = "Missing OpenAI API key.".style(msg_style),
-            var = "OPENAI_API_KEY".style(var_style),
-            url = "https://platform.openai.com/account/api-keys".style(url_style),
-        );
-        std::process::exit(1);
-    }
-}
-
-/// Returns `true` if a recognized API key is present in the environment.
-///
-/// At present we only support `OPENAI_API_KEY`, mirroring the behavior of the
-/// Node-based `codex-cli`. Additional providers can be added here when the
-/// Rust implementation gains first-class support for them.
-fn has_api_key() -> bool {
-    std::env::var("OPENAI_API_KEY")
-        .map(|s| !s.trim().is_empty())
-        .unwrap_or(false)
 }
