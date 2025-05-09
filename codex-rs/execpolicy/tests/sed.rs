@@ -47,7 +47,10 @@ fn test_sed_print_specific_lines_with_e_flag() -> Result<()> {
             exec: ValidExec {
                 program: "sed".to_string(),
                 flags: vec![MatchedFlag::new("-n")],
-                opts: vec![MatchedOpt::new("-e", "122,202p", ArgType::SedCommand).unwrap()],
+                opts: vec![
+                    MatchedOpt::new("-e", "122,202p", ArgType::SedCommand)
+                        .expect("should validate")
+                ],
                 args: vec![MatchedArg::new(3, ArgType::ReadableFile, "hello.txt")?],
                 system_path: vec!["/usr/bin/sed".to_string()],
             }

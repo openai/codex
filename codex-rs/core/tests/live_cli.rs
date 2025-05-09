@@ -15,6 +15,7 @@ fn require_api_key() -> String {
 
 /// Helper that spawns the binary inside a TempDir with minimal flags. Returns (Assert, TempDir).
 fn run_live(prompt: &str) -> (assert_cmd::assert::Assert, TempDir) {
+    #![allow(clippy::unwrap_used)]
     use std::io::Read;
     use std::io::Write;
     use std::thread;
@@ -110,6 +111,7 @@ fn run_live(prompt: &str) -> (assert_cmd::assert::Assert, TempDir) {
 #[ignore]
 #[test]
 fn live_create_file_hello_txt() {
+    #![allow(clippy::unwrap_used)]
     if std::env::var("OPENAI_API_KEY").is_err() {
         eprintln!("skipping live_create_file_hello_txt – OPENAI_API_KEY not set");
         return;

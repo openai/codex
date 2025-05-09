@@ -48,6 +48,8 @@ data: {{\"type\":\"response.completed\",\"response\":{{\"id\":\"{}\",\"output\":
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn keeps_previous_response_id_between_tasks() {
+    #![allow(clippy::unwrap_used)]
+
     // Mock server
     let server = MockServer::start().await;
 
