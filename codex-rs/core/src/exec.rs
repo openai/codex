@@ -12,6 +12,7 @@ use std::time::Instant;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncReadExt;
 use tokio::io::BufReader;
+use tokio::process::Child;
 use tokio::process::Command;
 use tokio::sync::Notify;
 
@@ -236,32 +237,42 @@ pub async fn exec(
     }: ExecParams,
     ctrl_c: Arc<Notify>,
 ) -> Result<RawExecToolCallOutput> {
-    let mut child = {
-        if command.is_empty() {
-            return Err(CodexErr::Io(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "command args are empty",
-            )));
-        }
+    let child = spawn_child(command, cwd).await?;
+    consume_truncated_output(child, ctrl_c, timeout_ms).await
+}
 
-        let mut cmd = Command::new(&command[0]);
-        if command.len() > 1 {
-            cmd.args(&command[1..]);
-        }
-        cmd.current_dir(cwd);
+/// Spawns the appropriate child process for the ExecParams.
+async fn spawn_child(command: Vec<String>, cwd: PathBuf) -> std::io::Result<Child> {
+    if command.is_empty() {
+        return Err(std::io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "command args are empty",
+        ));
+    }
 
-        // Do not create a file descriptor for stdin because otherwise some
-        // commands may hang forever waiting for input. For example, ripgrep has
-        // a heuristic where it may try to read from stdin as explained here:
-        // https://github.com/BurntSushi/ripgrep/blob/e2362d4d5185d02fa857bf381e7bd52e66fafc73/crates/core/flags/hiargs.rs#L1101-L1103
-        cmd.stdin(Stdio::null());
+    let mut cmd = Command::new(&command[0]);
+    cmd.args(&command[1..]);
+    cmd.current_dir(cwd);
 
-        cmd.stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()?
-    };
+    // Do not create a file descriptor for stdin because otherwise some
+    // commands may hang forever waiting for input. For example, ripgrep has
+    // a heuristic where it may try to read from stdin as explained here:
+    // https://github.com/BurntSushi/ripgrep/blob/e2362d4d5185d02fa857bf381e7bd52e66fafc73/crates/core/flags/hiargs.rs#L1101-L1103
+    cmd.stdin(Stdio::null());
 
+    cmd.stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+}
+
+/// Consumes the output of a child process, truncating it so it is suitable for
+/// use as the output of a `shell` tool call. Also enforces specified timeout.
+async fn consume_truncated_output(
+    mut child: Child,
+    ctrl_c: Arc<Notify>,
+    timeout_ms: Option<u64>,
+) -> Result<RawExecToolCallOutput> {
     let stdout_handle = tokio::spawn(read_capped(
         BufReader::new(child.stdout.take().expect("stdout is not piped")),
         MAX_STREAM_OUTPUT,
