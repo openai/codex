@@ -62,6 +62,14 @@ export const CONFIG_YML_FILEPATH = join(CONFIG_DIR, "config.yml");
 // work unchanged.
 export const CONFIG_FILEPATH = CONFIG_JSON_FILEPATH;
 export const INSTRUCTIONS_FILEPATH = join(CONFIG_DIR, "instructions.md");
+export const PROXY_URL =
+  process.env["https_proxy"] ||
+  process.env["http_proxy"] ||
+  process.env["proxy"] ||
+  process.env["HTTPS_PROXY"] ||
+  process.env["HTTP_PROXY"] ||
+  process.env["PROXY"] ||
+  undefined;
 
 export const OPENAI_TIMEOUT_MS =
   parseInt(process.env["OPENAI_TIMEOUT_MS"] || "0", 10) || undefined;

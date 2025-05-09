@@ -11,6 +11,7 @@ import {
   OPENAI_PROJECT,
   getBaseUrl,
   getApiKey,
+  PROXY_URL,
 } from "../utils/config";
 import {
   generateDiffSummary,
@@ -25,6 +26,7 @@ import {
 import { EditedFilesSchema } from "../utils/singlepass/file_ops";
 import * as fsSync from "fs";
 import * as fsPromises from "fs/promises";
+import { HttpsProxyAgent } from "https-proxy-agent";
 import { Box, Text, useApp, useInput } from "ink";
 import OpenAI from "openai";
 import { zodResponseFormat } from "openai/helpers/zod";
@@ -412,6 +414,7 @@ export function SinglePassApp({
         baseURL: getBaseUrl(config.provider),
         timeout: OPENAI_TIMEOUT_MS,
         defaultHeaders: headers,
+        httpAgent: PROXY_URL ? new HttpsProxyAgent(PROXY_URL) : undefined,
       });
       const chatResp = await openai.beta.chat.completions.parse({
         model: config.model,

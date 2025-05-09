@@ -1,7 +1,8 @@
 import type { AppConfig } from "./config.js";
 import type { ResponseItem } from "openai/resources/responses/responses.mjs";
 
-import { getBaseUrl, getApiKey } from "./config.js";
+import { getBaseUrl, getApiKey, PROXY_URL } from "./config.js";
+import { HttpsProxyAgent } from "https-proxy-agent";
 import OpenAI from "openai";
 /**
  * Generate a condensed summary of the conversation items.
@@ -26,6 +27,7 @@ export async function generateCompactSummary(
   const oai = new OpenAI({
     apiKey: getApiKey(config.provider),
     baseURL: getBaseUrl(config.provider),
+    httpAgent: PROXY_URL ? new HttpsProxyAgent(PROXY_URL) : undefined,
   });
 
   const conversationText = items

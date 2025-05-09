@@ -6,8 +6,10 @@ import {
   OPENAI_PROJECT,
   getBaseUrl,
   getApiKey,
+  PROXY_URL,
 } from "./config";
 import { type SupportedModelId, openAiModelInfo } from "./model-info.js";
+import { HttpsProxyAgent } from "https-proxy-agent";
 import OpenAI from "openai";
 
 const MODEL_LIST_TIMEOUT_MS = 2_000; // 2 seconds
@@ -39,6 +41,7 @@ async function fetchModels(provider: string): Promise<Array<string>> {
       apiKey: getApiKey(provider),
       baseURL: getBaseUrl(provider),
       defaultHeaders: headers,
+      httpAgent: PROXY_URL ? new HttpsProxyAgent(PROXY_URL) : undefined,
     });
     const list = await openai.models.list();
     const models: Array<string> = [];

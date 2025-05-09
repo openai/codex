@@ -13,7 +13,12 @@ import { useTerminalSize } from "../../hooks/use-terminal-size.js";
 import { AgentLoop } from "../../utils/agent/agent-loop.js";
 import { ReviewDecision } from "../../utils/agent/review.js";
 import { generateCompactSummary } from "../../utils/compact-summary.js";
-import { getBaseUrl, getApiKey, saveConfig } from "../../utils/config.js";
+import {
+  getBaseUrl,
+  getApiKey,
+  saveConfig,
+  PROXY_URL,
+} from "../../utils/config.js";
 import { extractAppliedPatches as _extractAppliedPatches } from "../../utils/extract-applied-patches.js";
 import { getGitDiff } from "../../utils/get-diff.js";
 import { createInputItem } from "../../utils/input-utils.js";
@@ -32,6 +37,7 @@ import HelpOverlay from "../help-overlay.js";
 import HistoryOverlay from "../history-overlay.js";
 import ModelOverlay from "../model-overlay.js";
 import chalk from "chalk";
+import { HttpsProxyAgent } from "https-proxy-agent";
 import { Box, Text } from "ink";
 import { spawn } from "node:child_process";
 import OpenAI from "openai";
@@ -81,6 +87,7 @@ async function generateCommandExplanation(
     const oai = new OpenAI({
       apiKey: getApiKey(config.provider),
       baseURL: getBaseUrl(config.provider),
+      httpAgent: PROXY_URL ? new HttpsProxyAgent(PROXY_URL) : undefined,
     });
 
     // Format the command for display
