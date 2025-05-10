@@ -36,10 +36,8 @@ rec {
     '';
   };
   app = {
-    codex = {
-      type    = "app";
-      program = "${package}/bin/codex";
-    };
+    type    = "app";
+    program = "${package}/bin/codex";
   };
 }
 
