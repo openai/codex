@@ -1,15 +1,10 @@
 use std::collections::BTreeMap;
-use std::io;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use crate::error::CodexErr;
 use crate::error::Result;
 use crate::error::SandboxErr;
-use crate::exec::ExecParams;
-use crate::exec::RawExecToolCallOutput;
-use crate::exec::exec;
 use crate::protocol::SandboxPolicy;
 
 use landlock::ABI;
@@ -29,46 +24,11 @@ use seccompiler::SeccompFilter;
 use seccompiler::SeccompRule;
 use seccompiler::TargetArch;
 use seccompiler::apply_filter;
-use tokio::sync::Notify;
-
-pub async fn exec_linux(
-    params: ExecParams,
-    ctrl_c: Arc<Notify>,
-    sandbox_policy: &SandboxPolicy,
-) -> Result<RawExecToolCallOutput> {
-    // Allow READ on /
-    // Allow WRITE on /dev/null
-    let ctrl_c_copy = ctrl_c.clone();
-    let sandbox_policy = sandbox_policy.clone();
-
-    // Isolate thread to run the sandbox from
-    let tool_call_output = std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("Failed to create runtime");
-
-        rt.block_on(async {
-            apply_sandbox_policy_to_current_thread(sandbox_policy, &params.cwd)?;
-            exec(params, ctrl_c_copy).await
-        })
-    })
-    .join();
-
-    match tool_call_output {
-        Ok(Ok(output)) => Ok(output),
-        Ok(Err(e)) => Err(e),
-        Err(e) => Err(CodexErr::Io(io::Error::new(
-            io::ErrorKind::Other,
-            format!("thread join failed: {e:?}"),
-        ))),
-    }
-}
 
 /// Apply sandbox policies inside this thread so only the child inherits
 /// them, not the entire CLI process.
-pub fn apply_sandbox_policy_to_current_thread(
-    sandbox_policy: SandboxPolicy,
+pub(crate) fn apply_sandbox_policy_to_current_thread(
+    sandbox_policy: &SandboxPolicy,
     cwd: &Path,
 ) -> Result<()> {
     if !sandbox_policy.has_full_network_access() {
