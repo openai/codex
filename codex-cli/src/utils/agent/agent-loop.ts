@@ -764,7 +764,13 @@ export class AgentLoop {
             const errCtx = error as any;
             const status =
               errCtx?.status ?? errCtx?.httpStatus ?? errCtx?.statusCode;
-            const isServerError = typeof status === "number" && status >= 500;
+            // Treat classical 5xx *and* explicit OpenAI `server_error` types
+            // as transient server-side failures that qualify for a retry. The
+            // SDK often omits the numeric status for these, reporting only
+            // the `type` field.
+            const isServerError =
+              (typeof status === "number" && status >= 500) ||
+              errCtx?.type === "server_error";
             if (
               (isTimeout || isServerError || isConnectionError) &&
               attempt < MAX_RETRIES
