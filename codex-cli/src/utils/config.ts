@@ -198,7 +198,7 @@ export const PRETTY_PRINT = Boolean(process.env["PRETTY_PRINT"] || "");
 export const PROJECT_DOC_MAX_BYTES = 32 * 1024; // 32 kB
 
 // We support multiple filenames for project-level agent instructions.  As of
-// mid-2024 the recommended convention is to use `AGENTS.md`, however we keep
+// 2025 the recommended convention is to use `AGENTS.md`, however we keep
 // the legacy `codex.md` variants for backwards-compatibility so that existing
 // repositories continue to work without changes.  The list is ordered so that
 // the first match wins – newer conventions first, older fallbacks later.
