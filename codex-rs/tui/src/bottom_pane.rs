@@ -24,6 +24,7 @@ use tui_textarea::Key;
 use tui_textarea::TextArea;
 
 use crate::app_event::AppEvent;
+use crate::slash_command_overlay::SlashCommandOverlay;
 use crate::status_indicator_widget::StatusIndicatorWidget;
 use crate::user_approval_widget::ApprovalRequest;
 use crate::user_approval_widget::UserApprovalWidget;
@@ -39,6 +40,8 @@ pub enum InputResult {
     /// should be forwarded to the agent and appended to the conversation
     /// history.
     Submitted(String),
+    /// The user selected a slash command from the overlay.
+    ExecuteCommand(String),
     None,
 }
 
@@ -72,6 +75,15 @@ pub(crate) struct BottomPane<'a> {
     has_input_focus: bool,
 
     is_task_running: bool,
+
+    /// Whether the slash command overlay is currently shown.
+    pub show_slash_overlay: bool,
+    /// The current filter string for slash commands (after the '/').
+    pub slash_filter: String,
+    pub slash_selected: usize,
+    pub slash_scroll_offset: usize,
+    pub slash_overlay_height: Option<u16>,
+    pub slash_overlay_locked: bool,
 }
 
 pub(crate) struct BottomPaneParams {
@@ -97,6 +109,12 @@ impl BottomPane<'_> {
             app_event_tx,
             has_input_focus,
             is_task_running: false,
+            show_slash_overlay: false,
+            slash_filter: String::new(),
+            slash_selected: 0,
+            slash_scroll_offset: 0,
+            slash_overlay_height: None,
+            slash_overlay_locked: false,
         }
     }
 
@@ -161,6 +179,55 @@ impl BottomPane<'_> {
                 Ok(InputResult::None)
             }
             PaneState::TextInput => {
+                if self.show_slash_overlay {
+                    let filtered = self.filtered_slash_commands();
+                    let overlay_height = filtered.len().min(12);
+                    match key_event.code {
+                        crossterm::event::KeyCode::Up => {
+                            if !filtered.is_empty() {
+                                if self.slash_selected == 0 {
+                                    self.slash_selected = filtered.len() - 1;
+                                } else {
+                                    self.slash_selected -= 1;
+                                }
+                                if self.slash_selected < self.slash_scroll_offset {
+                                    self.slash_scroll_offset = self.slash_selected;
+                                }
+                            }
+                            self.request_redraw()?;
+                            return Ok(InputResult::None);
+                        }
+                        crossterm::event::KeyCode::Down => {
+                            if !filtered.is_empty() {
+                                if self.slash_selected + 1 >= filtered.len() {
+                                    self.slash_selected = 0;
+                                } else {
+                                    self.slash_selected += 1;
+                                }
+                                if self.slash_selected >= self.slash_scroll_offset + overlay_height
+                                {
+                                    self.slash_scroll_offset =
+                                        self.slash_selected + 1 - overlay_height;
+                                }
+                            }
+                            self.request_redraw()?;
+                            return Ok(InputResult::None);
+                        }
+                        crossterm::event::KeyCode::Enter => {
+                            if let Some(cmd) = filtered.get(self.slash_selected) {
+                                self.textarea.select_all();
+                                self.textarea.cut();
+                                self.show_slash_overlay = false;
+                                self.slash_filter.clear();
+                                self.slash_selected = 0;
+                                self.slash_scroll_offset = 0;
+                                self.request_redraw()?;
+                                return Ok(InputResult::ExecuteCommand(cmd.name.to_string()));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
                 match key_event.into() {
                     Input {
                         key: Key::Enter,
@@ -169,14 +236,43 @@ impl BottomPane<'_> {
                         ctrl: false,
                     } => {
                         let text = self.textarea.lines().join("\n");
-                        // Clear the textarea (there is no dedicated clear API).
                         self.textarea.select_all();
                         self.textarea.cut();
+                        self.show_slash_overlay = false;
+                        self.slash_filter.clear();
+                        self.slash_selected = 0;
+                        self.slash_scroll_offset = 0;
                         self.request_redraw()?;
                         Ok(InputResult::Submitted(text))
                     }
                     input => {
                         self.textarea.input(input);
+                        let current_input = self.textarea.lines().join("\n");
+                        if let Some(stripped) = current_input.strip_prefix('/') {
+                            self.slash_filter = stripped.to_string();
+                            let filter_trimmed = self.slash_filter.trim();
+                            let filtered = self.filtered_slash_commands();
+                            if filter_trimmed.is_empty() || !filtered.is_empty() {
+                                self.lock_overlay_height(80);
+                                self.show_slash_overlay = true;
+                            } else {
+                                self.show_slash_overlay = false;
+                                self.reset_overlay_height_lock();
+                            }
+                            // Clamp selected index to filtered length
+                            if self.slash_selected >= filtered.len() && !filtered.is_empty() {
+                                self.slash_selected = filtered.len() - 1;
+                            } else {
+                                self.slash_selected = 0;
+                            }
+                            self.slash_scroll_offset = 0;
+                        } else {
+                            self.show_slash_overlay = false;
+                            self.slash_filter.clear();
+                            self.slash_selected = 0;
+                            self.slash_scroll_offset = 0;
+                            self.reset_overlay_height_lock();
+                        }
                         self.request_redraw()?;
                         Ok(InputResult::None)
                     }
@@ -261,9 +357,87 @@ impl BottomPane<'_> {
             PaneState::ApprovalModal { current, .. } => current.get_height(area),
             PaneState::TextInput => {
                 let text_rows = self.textarea.lines().len();
-                std::cmp::max(text_rows, MIN_TEXTAREA_ROWS) as u16 + TEXTAREA_BORDER_LINES
+                let input_height =
+                    std::cmp::max(text_rows, MIN_TEXTAREA_ROWS) as u16 + TEXTAREA_BORDER_LINES;
+                let overlay_height = self.calc_overlay_height(area);
+                let total = input_height + overlay_height;
+                total.min(area.height)
             }
         }
+    }
+
+    /// Returns the current input value from the textarea.
+    #[allow(dead_code)]
+    pub fn current_input(&self) -> String {
+        self.textarea.lines().join("\n")
+    }
+
+    fn filtered_slash_commands(&self) -> Vec<&'static crate::slash_commands::CommandInfo> {
+        // Use the unified filter and rank logic from SlashCommandOverlay
+        crate::slash_command_overlay::SlashCommandOverlay::filter_and_rank_commands(
+            &self.slash_filter,
+        )
+    }
+
+    fn calc_overlay_height(&self, area: &Rect) -> u16 {
+        let filtered = self.filtered_slash_commands();
+        if !self.show_slash_overlay || filtered.is_empty() {
+            return 0;
+        }
+        if let Some(h) = self.slash_overlay_height {
+            // Use locked height if set
+            let available_height = area.height.saturating_sub(5);
+            return h.min(available_height);
+        }
+        // Fallback: calculate as before
+        let available_height = area.height.saturating_sub(5);
+        let chevron_width = 2;
+        let all_cmds = crate::slash_commands::COMMANDS;
+        let cmd_max_len = all_cmds.iter().map(|c| c.name.len()).max().unwrap_or(0);
+        let desc_start_x = 1 + chevron_width + cmd_max_len + 1;
+        let desc_width = area.width.saturating_sub(desc_start_x as u16) as usize;
+        let mut total_lines = 0;
+        for cmd in all_cmds {
+            let desc_lines = crate::slash_command_overlay::SlashCommandOverlay::wrap_text(
+                cmd.description,
+                desc_width,
+            );
+            total_lines += 1.max(desc_lines.len());
+        }
+        total_lines.min(available_height as usize) as u16
+    }
+
+    /// Calculate the height needed to display all commands, given a width.
+    fn calculate_overlay_height_for_all_commands(&self, area_width: u16) -> u16 {
+        let all_cmds = crate::slash_commands::COMMANDS;
+        let chevron_width = 2;
+        let cmd_max_len = all_cmds.iter().map(|c| c.name.len()).max().unwrap_or(0);
+        let desc_start_x = 1 + chevron_width + cmd_max_len + 1;
+        let desc_width = area_width.saturating_sub(desc_start_x as u16) as usize;
+        let mut total_lines = 0;
+        for cmd in all_cmds {
+            let desc_lines = crate::slash_command_overlay::SlashCommandOverlay::wrap_text(
+                cmd.description,
+                desc_width,
+            );
+            total_lines += 1.max(desc_lines.len());
+        }
+        total_lines.min(20_usize) as u16
+    }
+
+    /// Lock the overlay height if not already locked.
+    fn lock_overlay_height(&mut self, area_width: u16) {
+        if !self.slash_overlay_locked {
+            self.slash_overlay_height =
+                Some(self.calculate_overlay_height_for_all_commands(area_width));
+            self.slash_overlay_locked = true;
+        }
+    }
+
+    /// Reset the overlay height lock.
+    pub fn reset_overlay_height_lock(&mut self) {
+        self.slash_overlay_height = None;
+        self.slash_overlay_locked = false;
     }
 }
 
@@ -272,7 +446,50 @@ impl WidgetRef for &BottomPane<'_> {
         match &self.state {
             PaneState::StatusIndicator { view } => view.render_ref(area, buf),
             PaneState::ApprovalModal { current, .. } => current.render(area, buf),
-            PaneState::TextInput => self.textarea.render(area, buf),
+            PaneState::TextInput => {
+                let textarea_height = std::cmp::max(self.textarea.lines().len(), MIN_TEXTAREA_ROWS)
+                    as u16
+                    + TEXTAREA_BORDER_LINES;
+                let filtered = self.filtered_slash_commands();
+                let overlay_height = if self.show_slash_overlay && !filtered.is_empty() {
+                    self.calc_overlay_height(&area)
+                } else {
+                    0
+                };
+                let total_height = textarea_height + overlay_height;
+                let input_area = Rect {
+                    x: area.x,
+                    y: area.y + area.height - total_height,
+                    width: area.width,
+                    height: textarea_height,
+                };
+                let overlay_area =
+                    if self.show_slash_overlay && overlay_height > 0 && !filtered.is_empty() {
+                        Rect {
+                            x: area.x,
+                            y: input_area.y + input_area.height,
+                            width: area.width,
+                            height: overlay_height,
+                        }
+                    } else {
+                        Rect {
+                            x: 0,
+                            y: 0,
+                            width: 0,
+                            height: 0,
+                        }
+                    };
+                self.textarea.render(input_area, buf);
+                if self.show_slash_overlay && overlay_height > 0 && !filtered.is_empty() {
+                    let overlay = SlashCommandOverlay {
+                        filter: &self.slash_filter,
+                        selected: self.slash_selected,
+                        scroll_offset: self.slash_scroll_offset,
+                        max_height: overlay_height as usize,
+                    };
+                    overlay.render(overlay_area, buf);
+                }
+            }
         }
     }
 }
