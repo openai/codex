@@ -10,6 +10,7 @@ import TerminalMessageHistory from "./terminal-message-history.js";
 import { formatCommandForDisplay } from "../../format-command.js";
 import { useConfirmation } from "../../hooks/use-confirmation.js";
 import { useTerminalSize } from "../../hooks/use-terminal-size.js";
+import { useWatchMode } from "../../hooks/use-watch-mode.js";
 import { AgentLoop } from "../../utils/agent/agent-loop.js";
 import { ReviewDecision } from "../../utils/agent/review.js";
 import { generateCompactSummary } from "../../utils/compact-summary.js";
@@ -53,6 +54,7 @@ type Props = {
   approvalPolicy: ApprovalPolicy;
   additionalWritableRoots: ReadonlyArray<string>;
   fullStdout: boolean;
+  watchMode?: boolean;
 };
 
 const colorsByPolicy: Record<ApprovalPolicy, ColorName | undefined> = {
@@ -138,6 +140,7 @@ export default function TerminalChat({
   approvalPolicy: initialApprovalPolicy,
   additionalWritableRoots,
   fullStdout,
+  watchMode = false,
 }: Props): React.ReactElement {
   const notify = Boolean(config.notify);
   const [model, setModel] = useState<string>(config.model);
@@ -442,7 +445,17 @@ export default function TerminalChat({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Just render every item in order, no grouping/collapse.
+  // ────────────────────────────────────────────────────────────────
+  // Watch mode functionality (using the extracted hook)
+  // ────────────────────────────────────────────────────────────────
+  useWatchMode({
+    enabled: watchMode,
+    agent,
+    lastResponseId,
+    setItems,
+  });
+
+  // Just render every item in order, no grouping/collapse
   const lastMessageBatch = items.map((item) => ({ item }));
   const groupCounts: Record<string, number> = {};
   const userMsgCount = items.filter(
