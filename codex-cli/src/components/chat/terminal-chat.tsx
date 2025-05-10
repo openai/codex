@@ -22,7 +22,10 @@ import {
   getAvailableModels,
   calculateContextPercentRemaining,
   uniqueById,
+  maxTokensForModel,
 } from "../../utils/model-utils.js";
+import { approximateTokensUsed } from "../../utils/approximate-tokens-used.js";
+import { calculateTokenCost } from "../../utils/model-cost.js";
 import { CLI_VERSION } from "../../utils/session.js";
 import { shortCwd } from "../../utils/short-path.js";
 import { saveRollout } from "../../utils/storage/save-rollout.js";
@@ -452,6 +455,18 @@ export default function TerminalChat({
     (i) => i.type === "message" && i.role === "user",
   ).length;
 
+  const usedTokens = useMemo(
+    () => approximateTokensUsed(items),
+    [items]
+  );
+  const maxTokens = useMemo(
+    () => maxTokensForModel(model),
+    [model]
+  );
+  const tokenCost = useMemo(
+    () => calculateTokenCost(usedTokens, model, provider),
+    [usedTokens, model, provider]
+  );
   const contextLeftPercent = useMemo(
     () => calculateContextPercentRemaining(items, model),
     [items, model],
@@ -506,6 +521,9 @@ export default function TerminalChat({
                 customDenyMessage,
               })
             }
+            usedTokens={usedTokens}
+            maxTokens={maxTokens}
+            tokenCost={tokenCost}
             contextLeftPercent={contextLeftPercent}
             openOverlay={() => setOverlayMode("history")}
             openModelOverlay={() => setOverlayMode("model")}

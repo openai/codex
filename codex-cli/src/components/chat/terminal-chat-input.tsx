@@ -72,6 +72,9 @@ export default function TerminalChatInput({
   setLastResponseId: (lastResponseId: string) => void;
   setItems: React.Dispatch<React.SetStateAction<Array<ResponseItem>>>;
   contextLeftPercent: number;
+  usedTokens: number;
+  maxTokens: number;
+  tokenCost: number;
   openOverlay: () => void;
   openModelOverlay: () => void;
   openApprovalOverlay: () => void;
@@ -845,23 +848,11 @@ export default function TerminalChatInput({
         ) : (
           <Text dimColor>
             ctrl+c to exit | "/" to see commands | enter to send
-            {contextLeftPercent > 25 && (
-              <>
-                {" — "}
-                <Text color={contextLeftPercent > 40 ? "green" : "yellow"}>
-                  {Math.round(contextLeftPercent)}% context left
-                </Text>
-              </>
-            )}
-            {contextLeftPercent <= 25 && (
-              <>
-                {" — "}
-                <Text color="red">
-                  {Math.round(contextLeftPercent)}% context left — send
-                  "/compact" to condense context
-                </Text>
-              </>
-            )}
+            {" — "}
+            <Text color={contextLeftPercent > 40 ? "green" : contextLeftPercent > 25 ? "yellow" : "red"}>
+              {usedTokens}/{maxTokens} tokens used ({Math.round(contextLeftPercent)}% left) ≈ ${tokenCost.toFixed(5)}
+              {contextLeftPercent <= 25 && " — send \"/compact\" to condense context"}
+            </Text>
           </Text>
         )}
       </Box>
