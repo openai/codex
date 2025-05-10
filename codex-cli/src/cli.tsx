@@ -68,7 +68,7 @@ const cli = meow(
     --auto-edit                Automatically approve file edits; still prompt for commands
     --full-auto                Automatically approve edits and commands when executed in the sandbox
 
-    --no-project-doc           Do not automatically include the repository's 'codex.md'
+    --no-project-doc           Do not automatically include the repository's 'AGENTS.md'
     --project-doc <file>       Include an additional markdown file at <file> as context
     --full-stdout              Do not truncate stdout/stderr from command outputs
     --notify                   Enable desktop notifications for responses
@@ -144,7 +144,7 @@ const cli = meow(
       },
       noProjectDoc: {
         type: "boolean",
-        description: "Disable automatic inclusion of project-level codex.md",
+        description: "Disable automatic inclusion of project-level AGENTS.md",
       },
       projectDoc: {
         type: "string",
