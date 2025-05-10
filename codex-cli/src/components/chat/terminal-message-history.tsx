@@ -59,7 +59,10 @@ const TerminalMessageHistory: React.FC<TerminalMessageHistoryProps> = ({
               key={`${message.id}-${index}`}
               flexDirection="column"
               marginLeft={
-                message.type === "message" && message.role === "user" ? 0 : 4
+                message.type === "message" &&
+                (message.role === "user" || message.role === "assistant")
+                  ? 0
+                  : 4
               }
               marginTop={
                 message.type === "message" && message.role === "user" ? 0 : 1

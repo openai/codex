@@ -128,6 +128,9 @@ function TerminalChatResponseMessage({
     <Box flexDirection="column">
       <Text bold color={colorsByRole[message.role] || "gray"}>
         {message.role === "assistant" ? "codex" : message.role}
+        {message.role === "assistant" && (message as any).duration_s != null && (
+          <Text dimColor> ({(message as any).duration_s}s)</Text>
+        )}
       </Text>
       <Markdown>
         {message.content

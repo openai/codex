@@ -62,10 +62,14 @@ const MessageHistory: React.FC<MessageHistoryProps> = ({
                   : undefined
               }
               marginLeft={
-                message.type === "message" && message.role === "user" ? 0 : 4
+                0
+                // message.type === "message" &&
+                // (message.role === "user" || message.role === "assistant")
+                //   ? 0
+                //   : 4
               }
               marginTop={
-                message.type === "message" && message.role === "user" ? 0 : 1
+                message.type === "message" && message.role === "user" ? 2 : 1
               }
             >
               <TerminalChatResponseItem item={message} />

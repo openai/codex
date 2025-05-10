@@ -696,7 +696,7 @@ export class AgentLoop {
         let stream;
 
         // Retry loop for transient errors. Up to MAX_RETRIES attempts.
-        const MAX_RETRIES = 8;
+        const MAX_RETRIES = 20;
         for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
           try {
             let reasoning: Reasoning | undefined;
@@ -965,6 +965,10 @@ export class AgentLoop {
                     this.pendingAborts.add(callId);
                   }
                 } else {
+                  // attach per-turn elapsed time (in seconds) to the assistant message
+                  if (item.type === "message" && item.role === "assistant") {
+                    (item as any).duration_s = Math.round((Date.now() - thinkingStart) / 1000);
+                  }
                   stageItem(item as ResponseItem);
                 }
               }
@@ -1203,42 +1207,6 @@ export class AgentLoop {
         // satisfied, so we can safely clear the set that tracks pending aborts
         // to avoid emitting duplicate synthetic outputs in subsequent runs.
         this.pendingAborts.clear();
-        // Now emit system messages recording the per‑turn *and* cumulative
-        // thinking times so UIs and tests can surface/verify them.
-        // const thinkingEnd = Date.now();
-
-        // 1) Per‑turn measurement – exact time spent between request and
-        //    response for *this* command.
-        // this.onItem({
-        //   id: `thinking-${thinkingEnd}`,
-        //   type: "message",
-        //   role: "system",
-        //   content: [
-        //     {
-        //       type: "input_text",
-        //       text: `🤔  Thinking time: ${Math.round(
-        //         (thinkingEnd - thinkingStart) / 1000
-        //       )} s`,
-        //     },
-        //   ],
-        // });
-
-        // 2) Session‑wide cumulative counter so users can track overall wait
-        //    time across multiple turns.
-        // this.cumulativeThinkingMs += thinkingEnd - thinkingStart;
-        // this.onItem({
-        //   id: `thinking-total-${thinkingEnd}`,
-        //   type: "message",
-        //   role: "system",
-        //   content: [
-        //     {
-        //       type: "input_text",
-        //       text: `⏱  Total thinking time: ${Math.round(
-        //         this.cumulativeThinkingMs / 1000
-        //       )} s`,
-        //     },
-        //   ],
-        // });
 
         this.onLoading(false);
       };
@@ -1363,7 +1331,7 @@ export class AgentLoop {
       if (isNetworkOrServerError) {
         try {
           const msgText =
-            "⚠️  Network error while contacting OpenAI. Please check your connection and try again.";
+            "⚠️  Network error while contacting OpenAI. Please check your connection and try again. Send 'continue' to resume the session.";
           this.onItem({
             id: `error-${Date.now()}`,
             type: "message",

@@ -108,8 +108,8 @@ describe("AgentLoop – rate‑limit handling", () => {
       await vi.advanceTimersByTimeAsync(20);
 
       // The OpenAI client should have been called the maximum number of retry
-      // attempts (8).
-      expect(openAiState.createSpy).toHaveBeenCalledTimes(8);
+      // attempts (20).
+      expect(openAiState.createSpy).toHaveBeenCalledTimes(20);
 
       // Finally, verify that the user sees a helpful system message.
       const sysMsg = received.find(
