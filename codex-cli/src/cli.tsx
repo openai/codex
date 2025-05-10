@@ -79,6 +79,8 @@ const cli = meow(
     --flex-mode               Use "flex-mode" processing mode for the request (only supported
                               with models o3 and o4-mini)
 
+    --reasoning <effort>      Set the reasoning effort level (low, medium, high) (default: high)
+
   Dangerous options
     --dangerously-auto-approve-everything
                                Skip all confirmation prompts and execute commands without
