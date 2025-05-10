@@ -33,6 +33,61 @@ The model that Codex should use.
 model = "o3"  # overrides the default of "o4-mini"
 ```
 
+### model_provider
+
+Codex comes bundled with a number of "model providers" predefined. This config value is a string that indicates which provider to use. You can also define your own providers via `model_providers`.
+
+For example, if you are running ollama with Mistral locally, then you would need to add the following to your config:
+
+```toml
+model = "mistral"
+model_provider = "ollama"
+```
+
+because the following definition for `ollama` is included in Codex:
+
+```toml
+[model_providers.ollama]
+name = "Ollama"
+base_url = "http://localhost:11434/v1"
+wire_api = "chat"
+```
+
+This option defaults to `"openai"` and the corresponding provider is defined as follows:
+
+```toml
+[model_providers.openai]
+name = "OpenAI"
+base_url = "https://api.openai.com/v1"
+env_key = "OPENAI_API_KEY"
+wire_api = "responses"
+```
+
+### model_providers
+
+This option lets you override and amend the default set of model providers bundled with Codex. This value is a map where the key is the value to use with `model_provider` to select the correspodning provider.
+
+For example, if you wanted to add a provider that uses the OpenAI 4o model via the chat completions API, then you
+
+```toml
+# Recall that in TOML, root keys must be listed before tables.
+model = "gpt-4o"
+model_provider = "openai-chat-completions"
+
+[model_providers.openai-chat-completions]
+# Name of the provider that will be displayed in the Codex UI.
+name = "OpenAI using Chat Completions"
+# The path `/chat/completions` will be amended to this URL to make the POST
+# request for the chat completions.
+base_url = "https://api.openai.com/v1"
+# If `env_key` is set, identifies an environment variable that must be set when
+# using Codex with this provider. The value of the environment variable must be
+# non-empty and will be used in the `Bearer TOKEN` HTTP header for the POST request.
+env_key = "OPENAI_API_KEY"
+# valid values for wire_api are "chat" and "responses".
+wire_api = "chat"
+```
+
 ### approval_policy
 
 Determines when the user should be prompted to approve whether Codex can execute a command:
@@ -77,6 +132,38 @@ sandbox_permissions = [
     # ...
     "disk-write-folder=/Users/mbolin/.pyenv/shims",
 ]
+```
+
+### mcp_servers
+
+Defines the list of MCP servers that Codex can consult for tool use. Currently, only servers that are launched by executing a program that communicate over stdio are supported. For servers that use the SSE transport, consider an adapter like [mcp-proxy](https://github.com/sparfenyuk/mcp-proxy).
+
+**Note:** Codex may cache the list of tools and resources from an MCP server so that Codex can include this information in context at startup without spawning all the servers. This is designed to save resources by loading MCP servers lazily.
+
+This config option is comparable to how Claude and Cursor define `mcpServers` in their respective JSON config files, though because Codex uses TOML for its config language, the format is slightly different. For example, the following config in JSON:
+
+```json
+{
+  "mcpServers": {
+    "server-name": {
+      "command": "npx",
+      "args": ["-y", "mcp-server"],
+      "env": {
+        "API_KEY": "value"
+      }
+    }
+  }
+}
+```
+
+Should be represented as follows in `~/.codex/config.toml`:
+
+```toml
+# IMPORTANT: the top-level key is `mcp_servers` rather than `mcpServers`.
+[mcp_servers.server-name]
+command = "npx"
+args = ["-y", "mcp-server"]
+env = { "API_KEY" = "value" }
 ```
 
 ### disable_response_storage

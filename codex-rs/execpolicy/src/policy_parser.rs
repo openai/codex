@@ -1,10 +1,10 @@
 #![allow(clippy::needless_lifetimes)]
 
-use crate::arg_matcher::ArgMatcher;
-use crate::opt::OptMeta;
 use crate::Opt;
 use crate::Policy;
 use crate::ProgramSpec;
+use crate::arg_matcher::ArgMatcher;
+use crate::opt::OptMeta;
 use log::info;
 use multimap::MultiMap;
 use regex::Regex;
@@ -15,9 +15,9 @@ use starlark::environment::Module;
 use starlark::eval::Evaluator;
 use starlark::syntax::AstModule;
 use starlark::syntax::Dialect;
+use starlark::values::Heap;
 use starlark::values::list::UnpackList;
 use starlark::values::none::NoneType;
-use starlark::values::Heap;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -168,6 +168,8 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
                 .map(|v| v.items.to_vec())
                 .collect(),
         );
+
+        #[expect(clippy::unwrap_used)]
         let policy_builder = eval
             .extra
             .as_ref()
@@ -182,6 +184,7 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
         strings: UnpackList<String>,
         eval: &mut Evaluator,
     ) -> anyhow::Result<NoneType> {
+        #[expect(clippy::unwrap_used)]
         let policy_builder = eval
             .extra
             .as_ref()
@@ -197,6 +200,7 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
         reason: String,
         eval: &mut Evaluator,
     ) -> anyhow::Result<NoneType> {
+        #[expect(clippy::unwrap_used)]
         let policy_builder = eval
             .extra
             .as_ref()

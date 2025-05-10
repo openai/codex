@@ -8,6 +8,7 @@ use crossterm::event::KeyEvent;
 use ratatui::prelude::*;
 use ratatui::style::Style;
 use ratatui::widgets::*;
+use serde_json::Value as JsonValue;
 use std::cell::Cell as StdCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -161,6 +162,10 @@ impl ConversationHistoryWidget {
         self.scroll_position = usize::MAX;
     }
 
+    pub fn add_welcome_message(&mut self, config: &Config) {
+        self.add_to_history(HistoryCell::new_welcome_message(config));
+    }
+
     pub fn add_user_message(&mut self, message: String) {
         self.add_to_history(HistoryCell::new_user_prompt(message));
     }
@@ -171,6 +176,10 @@ impl ConversationHistoryWidget {
 
     pub fn add_background_event(&mut self, message: String) {
         self.add_to_history(HistoryCell::new_background_event(message));
+    }
+
+    pub fn add_error(&mut self, message: String) {
+        self.add_to_history(HistoryCell::new_error_event(message));
     }
 
     /// Add a pending patch entry (before user approval).
@@ -190,6 +199,18 @@ impl ConversationHistoryWidget {
 
     pub fn add_active_exec_command(&mut self, call_id: String, command: Vec<String>) {
         self.add_to_history(HistoryCell::new_active_exec_command(call_id, command));
+    }
+
+    pub fn add_active_mcp_tool_call(
+        &mut self,
+        call_id: String,
+        server: String,
+        tool: String,
+        arguments: Option<JsonValue>,
+    ) {
+        self.add_to_history(HistoryCell::new_active_mcp_tool_call(
+            call_id, server, tool, arguments,
+        ));
     }
 
     fn add_to_history(&mut self, cell: HistoryCell) {
@@ -227,6 +248,43 @@ impl ConversationHistoryWidget {
                             duration: start.elapsed(),
                         },
                     );
+                    break;
+                }
+            }
+        }
+    }
+
+    pub fn record_completed_mcp_tool_call(
+        &mut self,
+        call_id: String,
+        success: bool,
+        result: Option<mcp_types::CallToolResult>,
+    ) {
+        // Convert result into serde_json::Value early so we don't have to
+        // worry about lifetimes inside the match arm.
+        let result_val = result.map(|r| {
+            serde_json::to_value(r)
+                .unwrap_or_else(|_| serde_json::Value::String("<serialization error>".into()))
+        });
+
+        for cell in self.history.iter_mut() {
+            if let HistoryCell::ActiveMcpToolCall {
+                call_id: history_id,
+                fq_tool_name,
+                invocation,
+                start,
+                ..
+            } = cell
+            {
+                if &call_id == history_id {
+                    let completed = HistoryCell::new_completed_mcp_tool_call(
+                        fq_tool_name.clone(),
+                        invocation.clone(),
+                        *start,
+                        success,
+                        result_val,
+                    );
+                    *cell = completed;
                     break;
                 }
             }
@@ -327,9 +385,12 @@ impl WidgetRef for ConversationHistoryWidget {
         // second time by the widget – which manifested as the entire block
         // drifting off‑screen when the user attempted to scroll.
 
-        let paragraph = Paragraph::new(visible_lines)
-            .block(block)
-            .wrap(Wrap { trim: false });
+        // Currently, we do not use the `wrap` method on the `Paragraph` widget
+        // because it messes up our scrolling math above that assumes each Line
+        // contributes one line of height to the widget. Admittedly, this is
+        // bad because users cannot see content that is clipped without
+        // resizing the terminal.
+        let paragraph = Paragraph::new(visible_lines).block(block);
         paragraph.render(area, buf);
 
         let needs_scrollbar = num_lines > viewport_height;

@@ -4,8 +4,8 @@ use std::path::PathBuf;
 
 use mcp_types::Tool;
 use mcp_types::ToolInputSchema;
-use schemars::r#gen::SchemaSettings;
 use schemars::JsonSchema;
+use schemars::r#gen::SchemaSettings;
 use serde::Deserialize;
 
 use codex_core::protocol::AskForApproval;
@@ -158,6 +158,7 @@ impl CodexToolCallParam {
             approval_policy: approval_policy.map(Into::into),
             sandbox_policy,
             disable_response_storage,
+            provider: None,
         };
 
         let cfg = codex_core::config::Config::load_with_overrides(overrides)?;

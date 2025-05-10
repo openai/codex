@@ -1,5 +1,5 @@
-use codex_execpolicy::get_default_policy;
 use codex_execpolicy::NegativeExamplePassedCheck;
+use codex_execpolicy::get_default_policy;
 
 #[test]
 fn verify_everything_in_bad_list_is_rejected() {

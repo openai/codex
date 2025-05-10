@@ -1,9 +1,9 @@
 use clap::Parser;
+use codex_cli::LandlockCommand;
+use codex_cli::SeatbeltCommand;
 use codex_cli::create_sandbox_policy;
 use codex_cli::proto;
 use codex_cli::seatbelt;
-use codex_cli::LandlockCommand;
-use codex_cli::SeatbeltCommand;
 use codex_exec::Cli as ExecCli;
 use codex_tui::Cli as TuiCli;
 
@@ -82,7 +82,7 @@ async fn main() -> anyhow::Result<()> {
                 let sandbox_policy = create_sandbox_policy(full_auto, sandbox);
                 seatbelt::run_seatbelt(command, sandbox_policy).await?;
             }
-            #[cfg(target_os = "linux")]
+            #[cfg(unix)]
             DebugCommand::Landlock(LandlockCommand {
                 command,
                 sandbox,
@@ -91,7 +91,7 @@ async fn main() -> anyhow::Result<()> {
                 let sandbox_policy = create_sandbox_policy(full_auto, sandbox);
                 codex_cli::landlock::run_landlock(command, sandbox_policy)?;
             }
-            #[cfg(not(target_os = "linux"))]
+            #[cfg(not(unix))]
             DebugCommand::Landlock(_) => {
                 anyhow::bail!("Landlock is only supported on Linux.");
             }

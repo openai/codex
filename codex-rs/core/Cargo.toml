@@ -1,24 +1,28 @@
 [package]
 name = "codex-core"
-version = "0.1.0"
-edition = "2021"
+version = { workspace = true }
+edition = "2024"
 
 [lib]
 name = "codex_core"
 path = "src/lib.rs"
+
+[lints]
+workspace = true
 
 [dependencies]
 anyhow = "1"
 async-channel = "2.3.1"
 base64 = "0.21"
 bytes = "1.10.1"
-clap = { version = "4", features = ["derive", "wrap_help"], optional = true }
 codex-apply-patch = { path = "../apply-patch" }
+codex-mcp-client = { path = "../mcp-client" }
 dirs = "6"
 env-flags = "0.1.1"
 eventsource-stream = "0.2.3"
 fs-err = "3.1.0"
 futures = "0.3"
+mcp-types = { path = "../mcp-types" }
 mime_guess = "2.0"
 patch = "0.7"
 path-absolutize = "3.1.1"
@@ -27,6 +31,7 @@ reqwest = { version = "0.12", features = ["json", "stream"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2.0.12"
+time = { version = "0.3", features = ["formatting", "macros"] }
 tokio = { version = "1", features = [
     "io-std",
     "macros",
@@ -39,6 +44,7 @@ toml = "0.8.20"
 tracing = { version = "0.1.41", features = ["log"] }
 tree-sitter = "0.25.3"
 tree-sitter-bash = "0.23.3"
+uuid = { version = "1", features = ["v4"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2.172"
@@ -54,9 +60,3 @@ assert_cmd = "2"
 predicates = "3"
 tempfile = "3"
 wiremock = "0.6"
-
-[features]
-default = []
-
-# Separate feature so that `clap` is not a mandatory dependency.
-cli = ["clap"]
