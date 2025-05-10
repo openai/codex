@@ -24,13 +24,7 @@ import {
 import { clearTerminal, onExit } from "../../utils/terminal.js";
 import { Box, Text, useApp, useInput, useStdin } from "ink";
 import { fileURLToPath } from "node:url";
-import React, {
-  useCallback,
-  useState,
-  Fragment,
-  useEffect,
-  useRef,
-} from "react";
+import React, { useCallback, useState, useEffect, useRef } from "react";
 import { useInterval } from "use-interval";
 
 const suggestions = [
@@ -795,48 +789,16 @@ export default function TerminalChatInput({
                 setInput("");
                 setHistoryIndex(null);
                 setDraftInput("");
+                setSelectedSuggestion(0);
+                setFsSuggestions([]);
+                setSelectedCompletion(-1);
               }}
             />
           </Box>
         )}
       </Box>
-      {/* Slash command autocomplete suggestions */}
-      {input.trim().startsWith("/") && (
-        <Box flexDirection="column" paddingX={2} marginBottom={1}>
-          {SLASH_COMMANDS.filter((cmd: SlashCommand) =>
-            cmd.command.startsWith(input.trim()),
-          ).map((cmd: SlashCommand, idx: number) => (
-            <Box key={cmd.command}>
-              <Text
-                backgroundColor={
-                  idx === selectedSlashSuggestion ? "blackBright" : undefined
-                }
-              >
-                <Text color="blueBright">{cmd.command}</Text>
-                <Text> {cmd.description}</Text>
-              </Text>
-            </Box>
-          ))}
-        </Box>
-      )}
-      <Box paddingX={2} marginBottom={1}>
-        {isNew && !input ? (
-          <Text dimColor>
-            try:{" "}
-            {suggestions.map((m, key) => (
-              <Fragment key={key}>
-                {key !== 0 ? " | " : ""}
-                <Text
-                  backgroundColor={
-                    key + 1 === selectedSuggestion ? "blackBright" : ""
-                  }
-                >
-                  {m}
-                </Text>
-              </Fragment>
-            ))}
-          </Text>
-        ) : fsSuggestions.length > 0 ? (
+      <Box marginTop={1}>
+        {fsSuggestions.length > 0 ? (
           <TextCompletions
             completions={fsSuggestions.map((suggestion) => suggestion.path)}
             selectedCompletion={selectedCompletion}
