@@ -20,15 +20,17 @@
           inherit system;
           overlays = [ rust-overlay.overlays.default ];
         };
-        monorepo-dep = with pkgs; [
-          pnpm # for precommit hook
+        monorepo-deps = with pkgs; [
+          # for precommit hook
+          pnpm
+          husky
         ];
         codex-cli = import ./codex-cli {
-          inherit pkgs monorepo-dep;
+          inherit pkgs monorepo-deps;
         };
         codex-rs = import ./codex-rs {
           pkgs = pkgsWithRust;
-          inherit monorepo-dep;
+          inherit monorepo-deps;
         };
       in
       rec {
