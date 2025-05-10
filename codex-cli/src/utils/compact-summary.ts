@@ -1,12 +1,14 @@
 import type { AppConfig } from "./config.js";
 import type { ResponseItem } from "openai/resources/responses/responses.mjs";
 
-import { getBaseUrl, getApiKey } from "./config.js";
-import OpenAI from "openai";
+import { createOpenAIClient } from "./openai-client.js";
+
 /**
  * Generate a condensed summary of the conversation items.
  * @param items The list of conversation items to summarize
  * @param model The model to use for generating the summary
+ * @param flexMode Whether to use the flex-mode service tier
+ * @param config The configuration object
  * @returns A concise structured summary string
  */
 /**
@@ -23,10 +25,7 @@ export async function generateCompactSummary(
   flexMode = false,
   config: AppConfig,
 ): Promise<string> {
-  const oai = new OpenAI({
-    apiKey: getApiKey(config.provider),
-    baseURL: getBaseUrl(config.provider),
-  });
+  const oai = createOpenAIClient(config);
 
   const conversationText = items
     .filter(
