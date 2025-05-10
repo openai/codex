@@ -1,6 +1,11 @@
 import type * as fsType from "fs";
 
-import { loadConfig, saveConfig } from "../src/utils/config.js"; // parent import first
+import {
+  loadConfig,
+  saveConfig,
+  DEFAULT_SHELL_MAX_BYTES,
+  DEFAULT_SHELL_MAX_LINES,
+} from "../src/utils/config.js";
 import { AutoApprovalMode } from "../src/utils/auto-approval-mode.js";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -274,4 +279,85 @@ test("handles empty user instructions when saving with project doc separator", (
     disableProjectDoc: true,
   });
   expect(loadedConfig.instructions).toBe("");
+});
+
+test("loads default shell config when not specified", () => {
+  // Setup config without shell settings
+  memfs[testConfigPath] = JSON.stringify(
+    {
+      model: "mymodel",
+    },
+    null,
+    2,
+  );
+  memfs[testInstructionsPath] = "test instructions";
+
+  // Load config and verify default shell settings
+  const loadedConfig = loadConfig(testConfigPath, testInstructionsPath, {
+    disableProjectDoc: true,
+  });
+
+  // Check shell settings were loaded with defaults
+  expect(loadedConfig.tools).toBeDefined();
+  expect(loadedConfig.tools?.shell).toBeDefined();
+  expect(loadedConfig.tools?.shell?.maxBytes).toBe(DEFAULT_SHELL_MAX_BYTES);
+  expect(loadedConfig.tools?.shell?.maxLines).toBe(DEFAULT_SHELL_MAX_LINES);
+});
+
+test("loads and saves custom shell config", () => {
+  // Setup config with custom shell settings
+  const customMaxBytes = 12_410;
+  const customMaxLines = 500;
+
+  memfs[testConfigPath] = JSON.stringify(
+    {
+      model: "mymodel",
+      tools: {
+        shell: {
+          maxBytes: customMaxBytes,
+          maxLines: customMaxLines,
+        },
+      },
+    },
+    null,
+    2,
+  );
+  memfs[testInstructionsPath] = "test instructions";
+
+  // Load config and verify custom shell settings
+  const loadedConfig = loadConfig(testConfigPath, testInstructionsPath, {
+    disableProjectDoc: true,
+  });
+
+  // Check shell settings were loaded correctly
+  expect(loadedConfig.tools?.shell?.maxBytes).toBe(customMaxBytes);
+  expect(loadedConfig.tools?.shell?.maxLines).toBe(customMaxLines);
+
+  // Modify shell settings and save
+  const updatedMaxBytes = 20_000;
+  const updatedMaxLines = 1_000;
+
+  const updatedConfig = {
+    ...loadedConfig,
+    tools: {
+      shell: {
+        maxBytes: updatedMaxBytes,
+        maxLines: updatedMaxLines,
+      },
+    },
+  };
+
+  saveConfig(updatedConfig, testConfigPath, testInstructionsPath);
+
+  // Verify saved config contains updated shell settings
+  expect(memfs[testConfigPath]).toContain(`"maxBytes": ${updatedMaxBytes}`);
+  expect(memfs[testConfigPath]).toContain(`"maxLines": ${updatedMaxLines}`);
+
+  // Load again and verify updated values
+  const reloadedConfig = loadConfig(testConfigPath, testInstructionsPath, {
+    disableProjectDoc: true,
+  });
+
+  expect(reloadedConfig.tools?.shell?.maxBytes).toBe(updatedMaxBytes);
+  expect(reloadedConfig.tools?.shell?.maxLines).toBe(updatedMaxLines);
 });

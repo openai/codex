@@ -1,10 +1,13 @@
-use crate::approval_mode_cli_arg::parse_sandbox_permission_with_base_path;
 use crate::flags::OPENAI_DEFAULT_MODEL;
+use crate::mcp_server_config::McpServerConfig;
+use crate::model_provider_info::ModelProviderInfo;
+use crate::model_provider_info::built_in_model_providers;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPermission;
 use crate::protocol::SandboxPolicy;
 use dirs::home_dir;
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// Embedded fallback instructions that mirror the TypeScript CLI’s default
@@ -18,6 +21,12 @@ pub struct Config {
     /// Optional override of model selection.
     pub model: String,
 
+    /// Key into the model_providers map that specifies which provider to use.
+    pub model_provider_id: String,
+
+    /// Info needed to make an API request to the model.
+    pub model_provider: ModelProviderInfo,
+
     /// Approval policy for executing commands.
     pub approval_policy: AskForApproval,
 
@@ -30,6 +39,39 @@ pub struct Config {
 
     /// System instructions.
     pub instructions: Option<String>,
+
+    /// Optional external notifier command. When set, Codex will spawn this
+    /// program after each completed *turn* (i.e. when the agent finishes
+    /// processing a user submission). The value must be the full command
+    /// broken into argv tokens **without** the trailing JSON argument - Codex
+    /// appends one extra argument containing a JSON payload describing the
+    /// event.
+    ///
+    /// Example `~/.codex/config.toml` snippet:
+    ///
+    /// ```toml
+    /// notify = ["notify-send", "Codex"]
+    /// ```
+    ///
+    /// which will be invoked as:
+    ///
+    /// ```shell
+    /// notify-send Codex '{"type":"agent-turn-complete","turn-id":"12345"}'
+    /// ```
+    ///
+    /// If unset the feature is disabled.
+    pub notify: Option<Vec<String>>,
+
+    /// The directory that should be treated as the current working directory
+    /// for the session. All relative paths inside the business-logic layer are
+    /// resolved against this path.
+    pub cwd: PathBuf,
+
+    /// Definition for MCP servers that Codex can reach out to for tool calls.
+    pub mcp_servers: HashMap<String, McpServerConfig>,
+
+    /// Combined provider map (defaults merged with user-defined overrides).
+    pub model_providers: HashMap<String, ModelProviderInfo>,
 }
 
 /// Base config deserialized from ~/.codex/config.toml.
@@ -37,6 +79,9 @@ pub struct Config {
 pub struct ConfigToml {
     /// Optional override of model selection.
     pub model: Option<String>,
+
+    /// Provider to use from the model_providers map.
+    pub model_provider: Option<String>,
 
     /// Default approval policy for executing commands.
     pub approval_policy: Option<AskForApproval>,
@@ -52,8 +97,20 @@ pub struct ConfigToml {
     /// who have opted into Zero Data Retention (ZDR).
     pub disable_response_storage: Option<bool>,
 
+    /// Optional external command to spawn for end-user notifications.
+    #[serde(default)]
+    pub notify: Option<Vec<String>>,
+
     /// System instructions.
     pub instructions: Option<String>,
+
+    /// Definition for MCP servers that Codex can reach out to for tool calls.
+    #[serde(default)]
+    pub mcp_servers: HashMap<String, McpServerConfig>,
+
+    /// User-defined provider entries that extend/override the built-in list.
+    #[serde(default)]
+    pub model_providers: HashMap<String, ModelProviderInfo>,
 }
 
 impl ConfigToml {
@@ -109,9 +166,11 @@ where
 #[derive(Default, Debug, Clone)]
 pub struct ConfigOverrides {
     pub model: Option<String>,
+    pub cwd: Option<PathBuf>,
     pub approval_policy: Option<AskForApproval>,
     pub sandbox_policy: Option<SandboxPolicy>,
     pub disable_response_storage: Option<bool>,
+    pub provider: Option<String>,
 }
 
 impl Config {
@@ -121,10 +180,13 @@ impl Config {
     pub fn load_with_overrides(overrides: ConfigOverrides) -> std::io::Result<Self> {
         let cfg: ConfigToml = ConfigToml::load_from_toml()?;
         tracing::warn!("Config parsed from config.toml: {cfg:?}");
-        Ok(Self::load_from_base_config_with_overrides(cfg, overrides))
+        Self::load_from_base_config_with_overrides(cfg, overrides)
     }
 
-    fn load_from_base_config_with_overrides(cfg: ConfigToml, overrides: ConfigOverrides) -> Self {
+    fn load_from_base_config_with_overrides(
+        cfg: ConfigToml,
+        overrides: ConfigOverrides,
+    ) -> std::io::Result<Self> {
         // Instructions: user-provided instructions.md > embedded default.
         let instructions =
             Self::load_instructions().or_else(|| Some(EMBEDDED_INSTRUCTIONS.to_string()));
@@ -132,9 +194,11 @@ impl Config {
         // Destructure ConfigOverrides fully to ensure all overrides are applied.
         let ConfigOverrides {
             model,
+            cwd,
             approval_policy,
             sandbox_policy,
             disable_response_storage,
+            provider,
         } = overrides;
 
         let sandbox_policy = match sandbox_policy {
@@ -152,8 +216,46 @@ impl Config {
             }
         };
 
-        Self {
+        let mut model_providers = built_in_model_providers();
+        // Merge user-defined providers into the built-in list.
+        for (key, provider) in cfg.model_providers.into_iter() {
+            model_providers.entry(key).or_insert(provider);
+        }
+
+        let model_provider_id = provider
+            .or(cfg.model_provider)
+            .unwrap_or_else(|| "openai".to_string());
+        let model_provider = model_providers
+            .get(&model_provider_id)
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("Model provider `{model_provider_id}` not found"),
+                )
+            })?
+            .clone();
+
+        let config = Self {
             model: model.or(cfg.model).unwrap_or_else(default_model),
+            model_provider_id,
+            model_provider,
+            cwd: cwd.map_or_else(
+                || {
+                    tracing::info!("cwd not set, using current dir");
+                    std::env::current_dir().expect("cannot determine current dir")
+                },
+                |p| {
+                    if p.is_absolute() {
+                        p
+                    } else {
+                        // Resolve relative paths against the current working directory.
+                        tracing::info!("cwd is relative, resolving against current dir");
+                        let mut cwd = std::env::current_dir().expect("cannot determine cwd");
+                        cwd.push(p);
+                        cwd
+                    }
+                },
+            ),
             approval_policy: approval_policy
                 .or(cfg.approval_policy)
                 .unwrap_or_else(AskForApproval::default),
@@ -161,8 +263,12 @@ impl Config {
             disable_response_storage: disable_response_storage
                 .or(cfg.disable_response_storage)
                 .unwrap_or(false),
+            notify: cfg.notify,
             instructions,
-        }
+            mcp_servers: cfg.mcp_servers,
+            model_providers,
+        };
+        Ok(config)
     }
 
     fn load_instructions() -> Option<String> {
@@ -178,6 +284,7 @@ impl Config {
             ConfigToml::default(),
             ConfigOverrides::default(),
         )
+        .expect("defaults for test should always succeed")
     }
 }
 
@@ -204,6 +311,50 @@ pub fn log_dir() -> std::io::Result<PathBuf> {
     let mut p = codex_dir()?;
     p.push("log");
     Ok(p)
+}
+
+pub fn parse_sandbox_permission_with_base_path(
+    raw: &str,
+    base_path: PathBuf,
+) -> std::io::Result<SandboxPermission> {
+    use SandboxPermission::*;
+
+    if let Some(path) = raw.strip_prefix("disk-write-folder=") {
+        return if path.is_empty() {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "--sandbox-permission disk-write-folder=<PATH> requires a non-empty PATH",
+            ))
+        } else {
+            use path_absolutize::*;
+
+            let file = PathBuf::from(path);
+            let absolute_path = if file.is_relative() {
+                file.absolutize_from(base_path)
+            } else {
+                file.absolutize()
+            }
+            .map(|path| path.into_owned())?;
+            Ok(DiskWriteFolder {
+                folder: absolute_path,
+            })
+        };
+    }
+
+    match raw {
+        "disk-full-read-access" => Ok(DiskFullReadAccess),
+        "disk-write-platform-user-temp-folder" => Ok(DiskWritePlatformUserTempFolder),
+        "disk-write-platform-global-temp-folder" => Ok(DiskWritePlatformGlobalTempFolder),
+        "disk-write-cwd" => Ok(DiskWriteCwd),
+        "disk-full-write-access" => Ok(DiskFullWriteAccess),
+        "network-full-access" => Ok(NetworkFullAccess),
+        _ => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "`{raw}` is not a recognised permission.\nRun with `--help` to see the accepted values."
+            ),
+        )),
+    }
 }
 
 #[cfg(test)]

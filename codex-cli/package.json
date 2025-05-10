@@ -20,10 +20,7 @@
     "typecheck": "tsc --noEmit",
     "build": "node build.mjs",
     "build:dev": "NODE_ENV=development node build.mjs --dev && NODE_OPTIONS=--enable-source-maps node dist/cli-dev.js",
-    "release:readme": "cp ../README.md ./README.md",
-    "release:version": "TS=$(date +%y%m%d%H%M) && sed -E -i'' -e \"s/\\\"0\\.1\\.[0-9]{10}\\\"/\\\"0.1.${TS}\\\"/g\" package.json",
-    "release:build-and-publish": "pnpm run build && npm publish",
-    "release": "pnpm run release:readme && pnpm run release:version && pnpm install && pnpm run release:build-and-publish"
+    "stage-release": "./scripts/stage_release.sh"
   },
   "files": [
     "dist"
@@ -37,6 +34,7 @@
     "fast-npm-meta": "^0.4.2",
     "figures": "^6.1.0",
     "file-type": "^20.1.0",
+    "https-proxy-agent": "^7.0.6",
     "ink": "^5.2.0",
     "js-yaml": "^4.1.0",
     "marked": "^15.0.7",
@@ -76,7 +74,8 @@
     "semver": "^7.7.1",
     "ts-node": "^10.9.1",
     "typescript": "^5.0.3",
-    "vitest": "^3.0.9",
+    "vite": "^6.3.4",
+    "vitest": "^3.1.2",
     "whatwg-url": "^14.2.0",
     "which": "^5.0.0"
   },

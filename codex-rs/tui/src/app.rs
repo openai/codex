@@ -12,9 +12,9 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::MouseEvent;
 use crossterm::event::MouseEventKind;
-use std::sync::mpsc::channel;
 use std::sync::mpsc::Receiver;
 use std::sync::mpsc::Sender;
+use std::sync::mpsc::channel;
 
 /// Top‑level application state – which full‑screen view is currently active.
 enum AppState {
@@ -47,29 +47,52 @@ impl App<'_> {
             let app_event_tx = app_event_tx.clone();
             std::thread::spawn(move || {
                 while let Ok(event) = crossterm::event::read() {
-                    let app_event = match event {
-                        crossterm::event::Event::Key(key_event) => AppEvent::KeyEvent(key_event),
-                        crossterm::event::Event::Resize(_, _) => AppEvent::Redraw,
+                    match event {
+                        crossterm::event::Event::Key(key_event) => {
+                            if let Err(e) = app_event_tx.send(AppEvent::KeyEvent(key_event)) {
+                                tracing::error!("failed to send key event: {e}");
+                            }
+                        }
+                        crossterm::event::Event::Resize(_, _) => {
+                            if let Err(e) = app_event_tx.send(AppEvent::Redraw) {
+                                tracing::error!("failed to send resize event: {e}");
+                            }
+                        }
                         crossterm::event::Event::Mouse(MouseEvent {
                             kind: MouseEventKind::ScrollUp,
                             ..
                         }) => {
                             scroll_event_helper.scroll_up();
-                            continue;
                         }
                         crossterm::event::Event::Mouse(MouseEvent {
                             kind: MouseEventKind::ScrollDown,
                             ..
                         }) => {
                             scroll_event_helper.scroll_down();
-                            continue;
+                        }
+                        crossterm::event::Event::Paste(pasted) => {
+                            use crossterm::event::KeyModifiers;
+
+                            for ch in pasted.chars() {
+                                let key_event = match ch {
+                                    '\n' | '\r' => {
+                                        // Represent newline as <Shift+Enter> so that the bottom
+                                        // pane treats it as a literal newline instead of a submit
+                                        // action (submission is only triggered on Enter *without*
+                                        // any modifiers).
+                                        KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT)
+                                    }
+                                    _ => KeyEvent::new(KeyCode::Char(ch), KeyModifiers::empty()),
+                                };
+                                if let Err(e) = app_event_tx.send(AppEvent::KeyEvent(key_event)) {
+                                    tracing::error!("failed to send pasted key event: {e}");
+                                    break;
+                                }
+                            }
                         }
                         _ => {
-                            continue;
+                            // Ignore any other events.
                         }
-                    };
-                    if let Err(e) = app_event_tx.send(app_event) {
-                        tracing::error!("failed to send event: {e}");
                     }
                 }
             });
@@ -107,7 +130,7 @@ impl App<'_> {
     pub(crate) fn run(&mut self, terminal: &mut tui::Tui) -> Result<()> {
         // Insert an event to trigger the first render.
         let app_event_tx = self.app_event_tx.clone();
-        app_event_tx.send(AppEvent::Redraw).unwrap();
+        app_event_tx.send(AppEvent::Redraw)?;
 
         while let Ok(event) = self.app_event_rx.recv() {
             match event {
@@ -128,7 +151,7 @@ impl App<'_> {
                             modifiers: crossterm::event::KeyModifiers::CONTROL,
                             ..
                         } => {
-                            self.app_event_tx.send(AppEvent::ExitRequest).unwrap();
+                            self.app_event_tx.send(AppEvent::ExitRequest)?;
                         }
                         _ => {
                             self.dispatch_key_event(key_event);
