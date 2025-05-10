@@ -62,7 +62,13 @@ fi
 
 cd "run_$new_run_number"
 
-# Launch Codex
+# Launch Codex (prefer local build)
 echo "Launching..."
 description=$(yq -o=json '.' ../../task.yaml | jq -r '.description')
-codex "$description"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+CLI="$SCRIPT_DIR/../../dist/cli.js"
+if [ -f "$CLI" ]; then
+  node "$CLI" --full-context "$description"
+else
+  codex --full-context "$description"
+fi

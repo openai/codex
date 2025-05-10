@@ -1,6 +1,6 @@
 import type { EditedFiles, FileOperation } from "./file_ops";
 
-import { createTwoFilesPatch } from "diff";
+import { createTwoFilesPatch, diffLines } from "diff";
 
 /**************************************
  * ANSI color codes for output styling
@@ -79,6 +79,71 @@ export function generateDiffStats(diffContent: string): [number, number] {
 
   return [linesAdded, linesRemoved];
 }
+ 
+// ******************************************************
+// Generate a side-by-side diff of two file contents
+// ******************************************************
+export function generateSideBySideDiff(
+  originalContent: string,
+  updatedContent: string,
+): string {
+  const changes = diffLines(originalContent, updatedContent);
+  const width = process.stdout?.columns ?? 80;
+  const sep = " | ";
+  const leftWidth = Math.floor((width - sep.length) / 2);
+  const rightWidth = width - sep.length - leftWidth;
+  const rows: string[] = [];
+  let i = 0;
+  while (i < changes.length) {
+    const part = changes[i];
+    if (!part.added && !part.removed) {
+      const lines = part.value.split(/\r?\n/);
+      for (const line of lines) {
+        if (line === "" && lines[lines.length - 1] === line) break;
+        const leftPad = line.padEnd(leftWidth);
+        const rightPad = line.padEnd(rightWidth);
+        rows.push(`${leftPad}${sep}${rightPad}`);
+      }
+    } else if (part.removed) {
+      const next = changes[i + 1];
+      if (next && next.added) {
+        const removedLines = part.value.split(/\r?\n/);
+        const addedLines = next.value.split(/\r?\n/);
+        const maxLen = Math.max(removedLines.length, addedLines.length);
+        for (let j = 0; j < maxLen; j++) {
+          const remLine = removedLines[j] ?? "";
+          const addLine = addedLines[j] ?? "";
+          const leftPad = remLine.padEnd(leftWidth);
+          const rightPad = addLine.padEnd(rightWidth);
+          const left = remLine ? RED + leftPad + RESET : leftPad;
+          const right = addLine ? GREEN + rightPad + RESET : rightPad;
+          rows.push(`${left}${sep}${right}`);
+        }
+        i++;
+      } else {
+        const removedLines = part.value.split(/\r?\n/);
+        for (const line of removedLines) {
+          if (line === "" && removedLines[removedLines.length - 1] === line) break;
+          const leftPad = line.padEnd(leftWidth);
+          const left = RED + leftPad + RESET;
+          const rightPad = "".padEnd(rightWidth);
+          rows.push(`${left}${sep}${rightPad}`);
+        }
+      }
+    } else if (part.added) {
+      const addedLines = part.value.split(/\r?\n/);
+      for (const line of addedLines) {
+        if (line === "" && addedLines[addedLines.length - 1] === line) break;
+        const leftPad = "".padEnd(leftWidth);
+        const rightPad = line.padEnd(rightWidth);
+        const right = GREEN + rightPad + RESET;
+        rows.push(`${leftPad}${sep}${right}`);
+      }
+    }
+    i++;
+  }
+  return rows.join("\n");
+}
 
 /************************************************
  * Helper for generating a short header block
@@ -126,16 +191,10 @@ export function generateDiffSummary(
       continue;
     }
 
-    const diffOutput = generateFileDiff(
-      originalContent,
-      updatedContent,
-      fileOp.path,
-    );
-    if (diffOutput.trim()) {
-      const coloredDiff = generateColoredDiff(diffOutput);
-      combinedDiffs += diffHeader + coloredDiff + "\n";
-      opsToApply.push(fileOp);
-    }
+    // Generate side-by-side diff for easier comparison
+    const sideBySide = generateSideBySideDiff(originalContent, updatedContent);
+    combinedDiffs += diffHeader + sideBySide + "\n";
+    opsToApply.push(fileOp);
   }
 
   return [combinedDiffs, opsToApply];
