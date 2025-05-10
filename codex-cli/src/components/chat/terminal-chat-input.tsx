@@ -81,7 +81,6 @@ export default function TerminalChatInput({
   interruptAgent: () => void;
   active: boolean;
   thinkingSeconds: number;
-  // New: current conversation items so we can include them in bug reports
   items?: Array<ResponseItem>;
 }): React.ReactElement {
   // Slash command suggestion index
@@ -734,6 +733,27 @@ export default function TerminalChatInput({
       items,
     ],
   );
+
+  // Add effect to ensure input state is properly reset
+  useEffect(() => {
+    if (!loading && active) {
+      setInput("");
+      setEditorState((s) => ({ key: s.key + 1 }));
+    }
+  }, [loading, active]);
+
+  // Add effect to handle stdin mode
+  const { setRawMode } = useStdin();
+  useEffect(() => {
+    if (active) {
+      setRawMode?.(true);
+    }
+    return () => {
+      if (active) {
+        setRawMode?.(false);
+      }
+    };
+  }, [active, setRawMode]);
 
   if (confirmationPrompt) {
     return (

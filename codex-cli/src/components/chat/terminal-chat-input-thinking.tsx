@@ -1,7 +1,8 @@
 import { log } from "../../utils/logger/log.js";
 import { Box, Text, useInput, useStdin } from "ink";
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useInterval } from "use-interval";
+import type { Buffer } from "node:buffer";
 
 // Retaining a single static placeholder text for potential future use.  The
 // more elaborate randomised thinking prompts were removed to streamline the
@@ -18,20 +19,30 @@ export default function TerminalChatInputThinking({
 }): React.ReactElement {
   const [awaitingConfirm, setAwaitingConfirm] = useState(false);
   const [dots, setDots] = useState("");
+  const { stdin, setRawMode } = useStdin();
 
   // Animate the ellipsis
   useInterval(() => {
-    setDots((prev) => (prev.length < 3 ? prev + "." : ""));
+    setDots((prev: string) => (prev.length < 3 ? prev + "." : ""));
   }, 500);
 
-  const { stdin, setRawMode } = useStdin();
+  // Handle stdin mode
+  useEffect(() => {
+    if (active) {
+      setRawMode?.(true);
+    }
+    return () => {
+      if (active) {
+        setRawMode?.(false);
+      }
+    };
+  }, [active, setRawMode]);
 
-  React.useEffect(() => {
+  // Handle input
+  useEffect(() => {
     if (!active) {
       return;
     }
-
-    setRawMode?.(true);
 
     const onData = (data: Buffer | string) => {
       if (awaitingConfirm) {
@@ -40,9 +51,7 @@ export default function TerminalChatInputThinking({
 
       const str = Buffer.isBuffer(data) ? data.toString("utf8") : data;
       if (str === "\x1b\x1b") {
-        log(
-          "raw stdin: received collapsed ESC ESC – starting confirmation timer",
-        );
+        log("raw stdin: received collapsed ESC ESC – starting confirmation timer");
         setAwaitingConfirm(true);
         setTimeout(() => setAwaitingConfirm(false), 1500);
       }
@@ -52,7 +61,7 @@ export default function TerminalChatInputThinking({
     return () => {
       stdin?.off("data", onData);
     };
-  }, [stdin, awaitingConfirm, onInterrupt, active, setRawMode]);
+  }, [stdin, awaitingConfirm, active]);
 
   // No timers required beyond tracking the elapsed seconds supplied via props.
 
@@ -115,12 +124,18 @@ export default function TerminalChatInputThinking({
           </Text>
         </Box>
         <Text>
-          Press <Text bold>Esc</Text> twice to interrupt
+          Press <Text bold>ESC</Text>{" "}
+          {awaitingConfirm ? (
+            <Text bold>again</Text>
+          ) : (
+            <Text dimColor>twice</Text>
+          )}{" "}
+          <Text dimColor>to interrupt</Text>
         </Text>
       </Box>
       {awaitingConfirm && (
         <Text dimColor>
-          Press <Text bold>Esc</Text> again to interrupt and enter a new
+          Press <Text bold>ESC</Text> again to interrupt and enter a new
           instruction
         </Text>
       )}
