@@ -52,6 +52,7 @@ use crate::models::FunctionCallOutputPayload;
 use crate::models::ResponseInputItem;
 use crate::models::ResponseItem;
 use crate::models::ShellToolCallParams;
+use crate::project_doc::find_project_doc;
 use crate::protocol::AskForApproval;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
@@ -83,10 +84,12 @@ impl Codex {
     pub async fn spawn(config: Config, ctrl_c: Arc<Notify>) -> CodexResult<(Codex, String)> {
         let (tx_sub, rx_sub) = async_channel::bounded(64);
         let (tx_event, rx_event) = async_channel::bounded(64);
+
+        let instructions = create_full_instructions(&config).await;
         let configure_session = Op::ConfigureSession {
             provider: config.model_provider.clone(),
             model: config.model.clone(),
-            instructions: config.instructions.clone(),
+            instructions,
             approval_policy: config.approval_policy,
             sandbox_policy: config.sandbox_policy.clone(),
             disable_response_storage: config.disable_response_storage,
@@ -133,6 +136,23 @@ impl Codex {
             .await
             .map_err(|_| CodexErr::InternalAgentDied)?;
         Ok(event)
+    }
+}
+
+async fn create_full_instructions(config: &Config) -> Option<String> {
+    match find_project_doc(config).await {
+        Ok(Some(project_doc)) => {
+            let original_instructions = config.instructions.clone();
+            match original_instructions {
+                Some(instructions) => Some(format!("{instructions}{project_doc}")),
+                None => Some(project_doc),
+            }
+        }
+        Ok(None) => config.instructions.clone(),
+        Err(e) => {
+            error!("error trying to find project doc: {e:#}");
+            config.instructions.clone()
+        }
     }
 }
 
