@@ -2,6 +2,13 @@
 
 You can install any of these versions: `npm install -g codex@version`
 
+## `0.1.2505021246`
+
+### 🚀 Features
+
+- Use Landlock for sandboxing on Linux in TypeScript CLI (#763)
+- Configure HTTPS agent for proxies (#775)
+
 ## `0.1.2504301751`
 
 ### 🚀 Features
