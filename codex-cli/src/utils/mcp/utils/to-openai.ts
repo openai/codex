@@ -87,16 +87,65 @@ function setAdditionalPropertiesFalse(
   return schemaCopy;
 }
 
-function ensureBaseSchema(
-  parameters: Record<string, unknown>,
+// Helper function 1 for ensureBaseSchema: Ensures 'properties' field is a valid object.
+function processSchemaProperties(
+  schema: Record<string, unknown>,
 ): Record<string, unknown> {
+  const currentProperties = schema["properties"];
+  const newProperties =
+    currentProperties &&
+    typeof currentProperties === "object" &&
+    !Array.isArray(currentProperties)
+      ? currentProperties
+      : {};
   return {
-    ...parameters,
-    required: Object.keys(parameters["properties"] || {}),
+    ...schema,
+    properties: newProperties as Record<string, unknown>,
+  };
+}
+
+// // Helper function 2 for ensureBaseSchema: Determines the 'required' array.
+function determineSchemaRequired(
+  schema: Record<string, unknown>,
+): Record<string, unknown> {
+  // Assumes schema.properties is correctly set by a previous step (e.g., processSchemaProperties)
+  const properties = (schema["properties"] as Record<string, unknown>) || {};
+  const originalRequired = schema["required"]; // Uses 'required' from the schema passed into this step
+  let finalRequired: Array<string> = [];
+  if (Array.isArray(originalRequired)) {
+    finalRequired = (originalRequired as Array<unknown>).filter(
+      (key): key is string =>
+        typeof key === "string" &&
+        Object.prototype.hasOwnProperty.call(properties, key),
+    );
+  }
+  return {
+    ...schema,
+    required: finalRequired,
+  };
+}
+
+// Helper function 3 for ensureBaseSchema: Applies the base schema attributes.
+function applySchemaBaseStructure(
+  schema: Record<string, unknown>,
+): Record<string, unknown> {
+  // The 'properties' and 'required' fields from the input 'schema' (output of previous pipe stages)
+  // are preserved because '...schema' is spread first.
+  return {
+    ...schema,
+    type: "object",
     $schema: "http://json-schema.org/draft-07/schema#",
     additionalProperties: false,
   };
 }
+
+const fixInputSchema = pipe(
+  removeUnsupportedKeysFromJsonSchemaParametersRecursive,
+  setAdditionalPropertiesFalse,
+  processSchemaProperties,
+  determineSchemaRequired,
+  applySchemaBaseStructure,
+);
 
 // function piping
 function pipe<T>(...fns: Array<(arg: T) => T>): (arg: T) => T {
@@ -109,11 +158,7 @@ export function mcpToOpenaiTools(
   tools: Array<MCPTool>,
 ): Array<OpenAIFunctionTool> {
   return tools.map((tool: MCPTool): OpenAIFunctionTool => {
-    const inputSchema = pipe(
-      removeUnsupportedKeysFromJsonSchemaParametersRecursive,
-      setAdditionalPropertiesFalse,
-      ensureBaseSchema,
-    )(tool.inputSchema);
+    const inputSchema = fixInputSchema(tool.inputSchema);
 
     // Sanitize the tool name to ensure it complies with OpenAI's pattern
     const sanitizedName = sanitizeToolName(tool.name);
