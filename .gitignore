@@ -18,6 +18,9 @@ codex-cli/README.md
 
 # ignore Nix derivation results
 result
+# an direnv file
+.envrc
+.direnv
 
 # editor
 .vscode/
