@@ -98,6 +98,7 @@ export OPENAI_API_KEY="your-api-key-here"
 >
 > - openai (default)
 > - openrouter
+> - azure
 > - gemini
 > - ollama
 > - mistral
@@ -394,6 +395,11 @@ Below is a comprehensive example of `config.json` with multiple custom providers
       "baseURL": "https://api.openai.com/v1",
       "envKey": "OPENAI_API_KEY"
     },
+    "azure": {
+      "name": "AzureOpenAI",
+      "baseURL": "https://YOUR_PROJECT_NAME.openai.azure.com/openai",
+      "envKey": "AZURE_OPENAI_API_KEY"
+    },
     "openrouter": {
       "name": "OpenRouter",
       "baseURL": "https://openrouter.ai/api/v1",
@@ -454,6 +460,10 @@ For each AI provider, you need to set the corresponding API key in your environm
 ```bash
 # OpenAI
 export OPENAI_API_KEY="your-api-key-here"
+
+# Azure OpenAI
+export AZURE_OPENAI_API_KEY="your-azure-api-key-here"
+export AZURE_OPENAI_API_VERSION="2025-03-01-preview" (Optional)
 
 # OpenRouter
 export OPENROUTER_API_KEY="your-openrouter-key-here"

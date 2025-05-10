@@ -68,6 +68,9 @@ export const OPENAI_TIMEOUT_MS =
 export const OPENAI_BASE_URL = process.env["OPENAI_BASE_URL"] || "";
 export let OPENAI_API_KEY = process.env["OPENAI_API_KEY"] || "";
 
+export const AZURE_OPENAI_API_VERSION =
+  process.env["AZURE_OPENAI_API_VERSION"] || "2025-03-01-preview";
+
 export const DEFAULT_REASONING_EFFORT = "high";
 export const OPENAI_ORGANIZATION = process.env["OPENAI_ORGANIZATION"] || "";
 export const OPENAI_PROJECT = process.env["OPENAI_PROJECT"] || "";
