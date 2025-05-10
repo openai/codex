@@ -1,0 +1,26 @@
+[package]
+name = "codex-mcp-client"
+version = { workspace = true }
+edition = "2024"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = "1"
+mcp-types = { path = "../mcp-types" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = { version = "0.1.41", features = ["log"] }
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+tokio = { version = "1", features = [
+    "io-util",
+    "macros",
+    "process",
+    "rt-multi-thread",
+    "sync",
+    "time",
+] }
+
+[dev-dependencies]
+pretty_assertions = "1.4.1"

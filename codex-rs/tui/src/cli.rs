@@ -1,6 +1,6 @@
 use clap::Parser;
-use codex_core::ApprovalModeCliArg;
-use codex_core::SandboxPermissionOption;
+use codex_common::ApprovalModeCliArg;
+use codex_common::SandboxPermissionOption;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -27,6 +27,10 @@ pub struct Cli {
 
     #[clap(flatten)]
     pub sandbox: SandboxPermissionOption,
+
+    /// Tell the agent to use the specified directory as its working root.
+    #[clap(long = "cd", short = 'C', value_name = "DIR")]
+    pub cwd: Option<PathBuf>,
 
     /// Allow running Codex outside a Git repository.
     #[arg(long = "skip-git-repo-check", default_value_t = false)]

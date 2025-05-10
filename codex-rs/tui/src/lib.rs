@@ -2,7 +2,6 @@
 // The standalone `codex-tui` binary prints a short help message before the
 // alternate‑screen mode starts; that file opts‑out locally via `allow`.
 #![deny(clippy::print_stdout, clippy::print_stderr)]
-
 use app::App;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -12,8 +11,8 @@ use codex_core::util::is_inside_git_repo;
 use log_layer::TuiLogLayer;
 use std::fs::OpenOptions;
 use tracing_appender::non_blocking;
-use tracing_subscriber::prelude::*;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::prelude::*;
 
 mod app;
 mod app_event;
@@ -25,6 +24,7 @@ mod exec_command;
 mod git_warning_screen;
 mod history_cell;
 mod log_layer;
+mod markdown;
 mod scroll_event_helper;
 mod status_indicator_widget;
 mod tui;
@@ -33,8 +33,6 @@ mod user_approval_widget;
 pub use cli::Cli;
 
 pub fn run_main(cli: Cli) -> std::io::Result<()> {
-    assert_env_var_set();
-
     let (sandbox_policy, approval_policy) = if cli.full_auto {
         (
             Some(SandboxPolicy::new_full_auto_policy()),
@@ -56,6 +54,8 @@ pub fn run_main(cli: Cli) -> std::io::Result<()> {
             } else {
                 None
             },
+            cwd: cli.cwd.clone().map(|p| p.canonicalize().unwrap_or(p)),
+            provider: None,
         };
         #[allow(clippy::print_stderr)]
         match Config::load_with_overrides(overrides) {
@@ -113,7 +113,7 @@ pub fn run_main(cli: Cli) -> std::io::Result<()> {
     // modal. The flag is shown when the current working directory is *not*
     // inside a Git repository **and** the user did *not* pass the
     // `--allow-no-git-exec` flag.
-    let show_git_warning = !cli.skip_git_repo_check && !is_inside_git_repo();
+    let show_git_warning = !cli.skip_git_repo_check && !is_inside_git_repo(&config);
 
     try_run_ratatui_app(cli, config, show_git_warning, log_rx);
     Ok(())
@@ -168,20 +168,6 @@ fn run_ratatui_app(
 
     restore();
     app_result
-}
-
-#[expect(
-    clippy::print_stderr,
-    reason = "TUI should not have been displayed yet, so we can write to stderr."
-)]
-fn assert_env_var_set() {
-    if std::env::var("OPENAI_API_KEY").is_err() {
-        eprintln!("Welcome to codex! It looks like you're missing: `OPENAI_API_KEY`");
-        eprintln!(
-            "Create an API key (https://platform.openai.com) and export as an environment variable"
-        );
-        std::process::exit(1);
-    }
 }
 
 #[expect(

@@ -2,7 +2,6 @@ extern crate codex_execpolicy;
 
 use std::vec;
 
-use codex_execpolicy::get_default_policy;
 use codex_execpolicy::Error;
 use codex_execpolicy::ExecCall;
 use codex_execpolicy::MatchedExec;
@@ -10,6 +9,7 @@ use codex_execpolicy::MatchedFlag;
 use codex_execpolicy::Policy;
 use codex_execpolicy::PositionalArg;
 use codex_execpolicy::ValidExec;
+use codex_execpolicy::get_default_policy;
 
 fn setup() -> Policy {
     get_default_policy().expect("failed to load default policy")

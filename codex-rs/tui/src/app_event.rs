@@ -1,6 +1,7 @@
 use codex_core::protocol::Event;
 use crossterm::event::KeyEvent;
 
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum AppEvent {
     CodexEvent(Event),
 

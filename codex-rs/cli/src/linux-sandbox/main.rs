@@ -7,9 +7,9 @@ fn main() -> anyhow::Result<()> {
 #[cfg(target_os = "linux")]
 fn main() -> anyhow::Result<()> {
     use clap::Parser;
+    use codex_cli::LandlockCommand;
     use codex_cli::create_sandbox_policy;
     use codex_cli::landlock;
-    use codex_cli::LandlockCommand;
 
     let LandlockCommand {
         full_auto,

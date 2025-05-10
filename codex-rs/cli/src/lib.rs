@@ -1,11 +1,12 @@
-#[cfg(target_os = "linux")]
+mod exit_status;
+#[cfg(unix)]
 pub mod landlock;
 pub mod proto;
 pub mod seatbelt;
 
 use clap::Parser;
+use codex_common::SandboxPermissionOption;
 use codex_core::protocol::SandboxPolicy;
-use codex_core::SandboxPermissionOption;
 
 #[derive(Debug, Parser)]
 pub struct SeatbeltCommand {
