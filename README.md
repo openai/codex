@@ -679,7 +679,7 @@ nix run .#codex-cli # For running codex-cli
 nix run .#codex-rs # For running codex-rs
 ```
 
-##### Use direnv with flakes
+#### Use direnv with flakes
 
 If you have direnv installed, you can use the following `.envrc` to automatically enter the Nix shell when you `cd` into the project directory:
 
@@ -688,6 +688,7 @@ cd codex-rs
 echo "use flake ../flake.nix#codex-cli" >> .envrc && direnv allow
 cd codex-cli
 echo "use flake ../flake.nix#codex-rs" >> .envrc && direnv allow
+```
 
 ---
 
@@ -700,4 +701,3 @@ Have you discovered a vulnerability or have concerns about model output? Please 
 ## License
 
 This repository is licensed under the [Apache-2.0 License](LICENSE).
-```
