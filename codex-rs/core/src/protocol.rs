@@ -317,6 +317,11 @@ pub enum EventMsg {
         message: String,
     },
 
+    /// Reasoning event from agent.
+    AgentReasoning {
+        text: String,
+    },
+
     /// Ack the client's configure message.
     SessionConfigured {
         /// Tell the client what model is being queried.

@@ -225,6 +225,10 @@ impl ChatWidget<'_> {
                 self.conversation_history.add_agent_message(message);
                 self.request_redraw()?;
             }
+            EventMsg::AgentReasoning { text } => {
+                self.conversation_history.add_agent_reasoning(text);
+                self.request_redraw()?;
+            }
             EventMsg::TaskStarted => {
                 self.bottom_pane.set_task_running(true)?;
                 self.request_redraw()?;

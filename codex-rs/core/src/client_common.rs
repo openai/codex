@@ -36,7 +36,19 @@ pub enum ResponseEvent {
 pub(crate) struct Reasoning {
     pub(crate) effort: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) generate_summary: Option<bool>,
+    pub(crate) summary: Option<Summary>,
+}
+
+/// A summary of the reasoning performed by the model. This can be useful for
+/// debugging and understanding the model's reasoning process.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum Summary {
+    Auto,
+    #[allow(dead_code)] // Will go away once this is configurable.
+    Concise,
+    #[allow(dead_code)] // Will go away once this is configurable.
+    Detailed,
 }
 
 #[derive(Debug, Serialize)]

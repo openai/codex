@@ -49,6 +49,7 @@ use crate::mcp_connection_manager::try_parse_fully_qualified_tool_name;
 use crate::mcp_tool_call::handle_mcp_tool_call;
 use crate::models::ContentItem;
 use crate::models::FunctionCallOutputPayload;
+use crate::models::ReasoningItemReasoningSummary;
 use crate::models::ResponseInputItem;
 use crate::models::ResponseItem;
 use crate::models::ShellToolCallParams;
@@ -932,6 +933,18 @@ async fn handle_response_item(
                     };
                     sess.tx_event.send(event).await.ok();
                 }
+            }
+        }
+        ResponseItem::Reasoning { id: _, summary } => {
+            for item in summary {
+                let text = match item {
+                    ReasoningItemReasoningSummary::SummaryText { text } => text,
+                };
+                let event = Event {
+                    id: sub_id.to_string(),
+                    msg: EventMsg::AgentReasoning { text },
+                };
+                sess.tx_event.send(event).await.ok();
             }
         }
         ResponseItem::FunctionCall {

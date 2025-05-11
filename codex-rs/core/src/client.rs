@@ -26,6 +26,7 @@ use crate::client_common::Prompt;
 use crate::client_common::Reasoning;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
+use crate::client_common::Summary;
 use crate::error::CodexErr;
 use crate::error::Result;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
@@ -173,7 +174,7 @@ impl ModelClient {
             parallel_tool_calls: false,
             reasoning: Some(Reasoning {
                 effort: "high",
-                generate_summary: None,
+                summary: Some(Summary::Auto),
             }),
             previous_response_id: prompt.prev_id.clone(),
             store: prompt.store,
