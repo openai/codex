@@ -252,10 +252,7 @@ impl ChatWidget<'_> {
                     cwd,
                     reason,
                 };
-                let needs_redraw = self.bottom_pane.push_approval_request(request);
-                if needs_redraw {
-                    self.request_redraw()?;
-                }
+                self.bottom_pane.push_approval_request(request)?;
             }
             EventMsg::ApplyPatchApprovalRequest {
                 changes,
@@ -284,8 +281,7 @@ impl ChatWidget<'_> {
                     reason,
                     grant_root,
                 };
-                let _needs_redraw = self.bottom_pane.push_approval_request(request);
-                // Redraw is always need because the history has changed.
+                self.bottom_pane.push_approval_request(request)?;
                 self.request_redraw()?;
             }
             EventMsg::ExecCommandBegin {
