@@ -81,6 +81,7 @@ impl McpClient {
     ) -> std::io::Result<Self> {
         let mut child = Command::new(program)
             .args(args)
+            .env_clear()
             .envs(create_env_for_mcp_server(env))
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())

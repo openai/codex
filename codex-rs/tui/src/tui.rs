@@ -2,7 +2,9 @@ use std::io::Stdout;
 use std::io::stdout;
 use std::io::{self};
 
+use crossterm::event::DisableBracketedPaste;
 use crossterm::event::DisableMouseCapture;
+use crossterm::event::EnableBracketedPaste;
 use crossterm::event::EnableMouseCapture;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
@@ -19,6 +21,7 @@ pub type Tui = Terminal<CrosstermBackend<Stdout>>;
 pub fn init() -> io::Result<Tui> {
     execute!(stdout(), EnterAlternateScreen)?;
     execute!(stdout(), EnableMouseCapture)?;
+    execute!(stdout(), EnableBracketedPaste)?;
     enable_raw_mode()?;
     set_panic_hook();
     Terminal::new(CrosstermBackend::new(stdout()))
@@ -35,6 +38,7 @@ fn set_panic_hook() {
 /// Restore the terminal to its original state
 pub fn restore() -> io::Result<()> {
     execute!(stdout(), DisableMouseCapture)?;
+    execute!(stdout(), DisableBracketedPaste)?;
     execute!(stdout(), LeaveAlternateScreen)?;
     disable_raw_mode()?;
     Ok(())
