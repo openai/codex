@@ -120,7 +120,7 @@ impl WidgetRef for StatusIndicatorWidget {
             .padding(Padding::new(1, 0, 0, 0))
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(widget_style);
+            .border_style(widget_style.dim());
         // Animated 3‑dot pattern inside brackets. The *active* dot is bold
         // white, the others are dim.
         const DOT_COUNT: usize = 3;
