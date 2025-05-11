@@ -40,6 +40,7 @@
     "marked": "^15.0.7",
     "marked-terminal": "^7.3.0",
     "meow": "^13.2.0",
+    "minimatch": "^10.0.1",
     "open": "^10.1.0",
     "openai": "^4.95.1",
     "package-manager-detector": "^1.2.0",
