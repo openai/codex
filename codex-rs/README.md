@@ -250,3 +250,7 @@ To have Codex use this script for notifications, you would configure it via `not
 ```toml
 notify = ["python3", "/Users/mbolin/.codex/notify.py"]
 ```
+
+### project_doc_max_bytes
+
+Maximum number of bytes to read from an `AGENTS.md` file to include in the instructions sent with the first turn of a session. Defaults to 32 KiB.
