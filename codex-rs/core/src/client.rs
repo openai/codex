@@ -28,6 +28,7 @@ use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
 use crate::client_common::Summary;
 use crate::error::CodexErr;
+use crate::error::EnvVarError;
 use crate::error::Result;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::flags::OPENAI_REQUEST_MAX_RETRIES;
@@ -151,10 +152,10 @@ impl ModelClient {
         }
 
         // Assemble tool list: built-in tools + any extra tools from the prompt.
-        let mut tools_json: Vec<serde_json::Value> = DEFAULT_TOOLS
-            .iter()
-            .map(|t| serde_json::to_value(t).expect("serialize builtin tool"))
-            .collect();
+        let mut tools_json = Vec::with_capacity(DEFAULT_TOOLS.len() + prompt.extra_tools.len());
+        for t in DEFAULT_TOOLS.iter() {
+            tools_json.push(serde_json::to_value(t)?);
+        }
         tools_json.extend(
             prompt
                 .extra_tools
@@ -191,10 +192,12 @@ impl ModelClient {
         loop {
             attempt += 1;
 
-            let api_key = self
-                .provider
-                .api_key()?
-                .expect("Repsones API requires an API key");
+            let api_key = self.provider.api_key()?.ok_or_else(|| {
+                CodexErr::EnvVar(EnvVarError {
+                    var: self.provider.env_key.clone().unwrap_or_default(),
+                    instructions: None,
+                })
+            })?;
             let res = self
                 .client
                 .post(&url)

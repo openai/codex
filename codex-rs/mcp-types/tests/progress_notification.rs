@@ -1,3 +1,4 @@
+#![expect(clippy::expect_used)]
 use mcp_types::JSONRPCMessage;
 use mcp_types::ProgressNotificationParams;
 use mcp_types::ProgressToken;

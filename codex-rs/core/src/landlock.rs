@@ -140,7 +140,7 @@ fn install_network_seccomp_filter_on_current_thread() -> std::result::Result<(),
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
+    #![expect(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
     use crate::exec::ExecParams;

@@ -1654,6 +1654,7 @@ fn format_exec_output(output: &str, exit_code: i32, duration: std::time::Duratio
         },
     };
 
+    #[expect(clippy::expect_used)]
     serde_json::to_string(&payload).expect("serialize ExecOutput")
 }
 
