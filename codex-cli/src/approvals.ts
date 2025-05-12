@@ -281,12 +281,14 @@ export function resolvePathAgainstWorkdir(
   candidatePath: string,
   workdir: string | undefined,
 ): string {
-  if (path.isAbsolute(candidatePath)) {
-    return candidatePath;
+  // Normalize candidatePath to prevent path traversal attacks
+  const normalizedCandidatePath = path.normalize(candidatePath);
+  if (path.isAbsolute(normalizedCandidatePath)) {
+    return normalizedCandidatePath;
   } else if (workdir != null) {
-    return path.resolve(workdir, candidatePath);
+    return path.resolve(workdir, normalizedCandidatePath);
   } else {
-    return path.resolve(candidatePath);
+    return path.resolve(normalizedCandidatePath);
   }
 }
 
