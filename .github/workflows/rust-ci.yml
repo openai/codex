@@ -77,11 +77,10 @@ jobs:
         run: |
           sudo apt install -y musl-tools pkg-config
 
-      - name: Initialize failure flag
-        run: echo "FAILED=" >> $GITHUB_ENV
-
       - name: cargo clippy
-        run: cargo clippy --target ${{ matrix.target }} --all-features -- -D warnings || echo "FAILED=${FAILED:+$FAILED, }cargo clippy" >> $GITHUB_ENV
+        id: clippy
+        continue-on-error: true
+        run: cargo clippy --target ${{ matrix.target }} --all-features --tests -- -D warnings
 
       # Running `cargo build` from the workspace root builds the workspace using
       # the union of all features from third-party crates. This can mask errors
@@ -89,15 +88,22 @@ jobs:
       # run `cargo build` for each crate individually, though because this is
       # slower, we only do this for the x86_64-unknown-linux-gnu target.
       - name: cargo build individual crates
+        id: build
         if: ${{ matrix.target == 'x86_64-unknown-linux-gnu' }}
-        run: find . -name Cargo.toml -mindepth 2 -maxdepth 2 -print0 | xargs -0 -n1 -I{} bash -c 'cd "$(dirname "{}")" && cargo build' || echo "FAILED=${FAILED:+$FAILED, }cargo build individual crates" >> $GITHUB_ENV
+        continue-on-error: true
+        run: find . -name Cargo.toml -mindepth 2 -maxdepth 2 -print0 | xargs -0 -n1 -I{} bash -c 'cd "$(dirname "{}")" && cargo build'
 
       - name: cargo test
-        run: cargo test --all-features --target ${{ matrix.target }} || echo "FAILED=${FAILED:+$FAILED, }cargo test" >> $GITHUB_ENV
+        id: test
+        continue-on-error: true
+        run: cargo test --all-features --target ${{ matrix.target }}
 
-      - name: Fail if any step failed
-        if: env.FAILED != ''
+      # Fail the job if any of the previous steps failed.
+      - name: verify all steps passed
+        if: |
+          steps.clippy.outcome == 'failure' ||
+          steps.build.outcome == 'failure' ||
+          steps.test.outcome == 'failure'
         run: |
-          echo "See logs above, as the following steps failed:"
-          echo "$FAILED"
+          echo "One or more checks failed (clippy, build, or test). See logs for details."
           exit 1

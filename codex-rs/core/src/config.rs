@@ -15,11 +15,19 @@ use std::path::PathBuf;
 /// correctly even if the user has not created `~/.codex/instructions.md`.
 const EMBEDDED_INSTRUCTIONS: &str = include_str!("../prompt.md");
 
+/// Maximum number of bytes of the documentation that will be embedded. Larger
+/// files are *silently truncated* to this size so we do not take up too much of
+/// the context window.
+pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
+
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone)]
 pub struct Config {
     /// Optional override of model selection.
     pub model: String,
+
+    /// Key into the model_providers map that specifies which provider to use.
+    pub model_provider_id: String,
 
     /// Info needed to make an API request to the model.
     pub model_provider: ModelProviderInfo,
@@ -69,6 +77,9 @@ pub struct Config {
 
     /// Combined provider map (defaults merged with user-defined overrides).
     pub model_providers: HashMap<String, ModelProviderInfo>,
+
+    /// Maximum number of bytes to include from an AGENTS.md project doc file.
+    pub project_doc_max_bytes: usize,
 }
 
 /// Base config deserialized from ~/.codex/config.toml.
@@ -108,6 +119,9 @@ pub struct ConfigToml {
     /// User-defined provider entries that extend/override the built-in list.
     #[serde(default)]
     pub model_providers: HashMap<String, ModelProviderInfo>,
+
+    /// Maximum number of bytes to include from an AGENTS.md project doc file.
+    pub project_doc_max_bytes: Option<usize>,
 }
 
 impl ConfigToml {
@@ -219,39 +233,43 @@ impl Config {
             model_providers.entry(key).or_insert(provider);
         }
 
-        let model_provider_name = provider
+        let model_provider_id = provider
             .or(cfg.model_provider)
             .unwrap_or_else(|| "openai".to_string());
         let model_provider = model_providers
-            .get(&model_provider_name)
+            .get(&model_provider_id)
             .ok_or_else(|| {
                 std::io::Error::new(
                     std::io::ErrorKind::NotFound,
-                    format!("Model provider `{model_provider_name}` not found"),
+                    format!("Model provider `{model_provider_id}` not found"),
                 )
             })?
             .clone();
 
+        let resolved_cwd = {
+            use std::env;
+
+            match cwd {
+                None => {
+                    tracing::info!("cwd not set, using current dir");
+                    env::current_dir()?
+                }
+                Some(p) if p.is_absolute() => p,
+                Some(p) => {
+                    // Resolve relative path against the current working directory.
+                    tracing::info!("cwd is relative, resolving against current dir");
+                    let mut current = env::current_dir()?;
+                    current.push(p);
+                    current
+                }
+            }
+        };
+
         let config = Self {
             model: model.or(cfg.model).unwrap_or_else(default_model),
+            model_provider_id,
             model_provider,
-            cwd: cwd.map_or_else(
-                || {
-                    tracing::info!("cwd not set, using current dir");
-                    std::env::current_dir().expect("cannot determine current dir")
-                },
-                |p| {
-                    if p.is_absolute() {
-                        p
-                    } else {
-                        // Resolve relative paths against the current working directory.
-                        tracing::info!("cwd is relative, resolving against current dir");
-                        let mut cwd = std::env::current_dir().expect("cannot determine cwd");
-                        cwd.push(p);
-                        cwd
-                    }
-                },
-            ),
+            cwd: resolved_cwd,
             approval_policy: approval_policy
                 .or(cfg.approval_policy)
                 .unwrap_or_else(AskForApproval::default),
@@ -263,6 +281,7 @@ impl Config {
             instructions,
             mcp_servers: cfg.mcp_servers,
             model_providers,
+            project_doc_max_bytes: cfg.project_doc_max_bytes.unwrap_or(PROJECT_DOC_MAX_BYTES),
         };
         Ok(config)
     }
@@ -276,6 +295,7 @@ impl Config {
     /// Meant to be used exclusively for tests: `load_with_overrides()` should
     /// be used in all other cases.
     pub fn load_default_config_for_test() -> Self {
+        #[expect(clippy::expect_used)]
         Self::load_from_base_config_with_overrides(
             ConfigToml::default(),
             ConfigOverrides::default(),
@@ -355,6 +375,7 @@ pub fn parse_sandbox_permission_with_base_path(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used)]
     use super::*;
 
     /// Verify that the `sandbox_permissions` field on `ConfigToml` correctly

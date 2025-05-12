@@ -25,6 +25,7 @@ pub struct Submission {
 /// Submission operation
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
 #[non_exhaustive]
 pub enum Op {
     /// Configure the model session.
@@ -314,6 +315,11 @@ pub enum EventMsg {
     /// Agent text output message
     AgentMessage {
         message: String,
+    },
+
+    /// Reasoning event from agent.
+    AgentReasoning {
+        text: String,
     },
 
     /// Ack the client's configure message.

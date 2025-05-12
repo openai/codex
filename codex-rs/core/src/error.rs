@@ -55,7 +55,7 @@ pub enum CodexErr {
 
     /// Returned by run_command_stream when the user pressed Ctrl‑C (SIGINT). Session uses this to
     /// surface a polite FunctionCallOutput back to the model instead of crashing the CLI.
-    #[error("interrupted (Ctrl‑C)")]
+    #[error("interrupted (Ctrl-C)")]
     Interrupted,
 
     /// Unexpected HTTP status code.
@@ -97,8 +97,28 @@ pub enum CodexErr {
     #[error(transparent)]
     TokioJoin(#[from] JoinError),
 
-    #[error("missing environment variable {0}")]
-    EnvVar(&'static str),
+    #[error("{0}")]
+    EnvVar(EnvVarError),
+}
+
+#[derive(Debug)]
+pub struct EnvVarError {
+    /// Name of the environment variable that is missing.
+    pub var: String,
+
+    /// Optional instructions to help the user get a valid value for the
+    /// variable and set it.
+    pub instructions: Option<String>,
+}
+
+impl std::fmt::Display for EnvVarError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Missing environment variable: `{}`.", self.var)?;
+        if let Some(instructions) = &self.instructions {
+            write!(f, " {instructions}")?;
+        }
+        Ok(())
+    }
 }
 
 impl CodexErr {

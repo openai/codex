@@ -1,3 +1,5 @@
+#![expect(clippy::unwrap_used, clippy::expect_used)]
+
 //! Live integration tests that exercise the full [`Agent`] stack **against the real
 //! OpenAI `/v1/responses` API**.  These tests complement the lightweight mock‑based
 //! unit tests by verifying that the agent can drive an end‑to‑end conversation,
@@ -19,6 +21,7 @@ use std::time::Duration;
 
 use codex_core::Codex;
 use codex_core::config::Config;
+use codex_core::error::CodexErr;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
@@ -32,7 +35,7 @@ fn api_key_available() -> bool {
 /// Helper that spawns a fresh Agent and sends the mandatory *ConfigureSession*
 /// submission.  The caller receives the constructed [`Agent`] plus the unique
 /// submission id used for the initialization message.
-async fn spawn_codex() -> Codex {
+async fn spawn_codex() -> Result<Codex, CodexErr> {
     assert!(
         api_key_available(),
         "OPENAI_API_KEY must be set for live tests"
@@ -53,11 +56,9 @@ async fn spawn_codex() -> Codex {
     }
 
     let config = Config::load_default_config_for_test();
-    let (agent, _init_id) = Codex::spawn(config, std::sync::Arc::new(Notify::new()))
-        .await
-        .unwrap();
+    let (agent, _init_id) = Codex::spawn(config, std::sync::Arc::new(Notify::new())).await?;
 
-    agent
+    Ok(agent)
 }
 
 /// Verifies that the agent streams incremental *AgentMessage* events **before**
@@ -71,7 +72,7 @@ async fn live_streaming_and_prev_id_reset() {
         return;
     }
 
-    let codex = spawn_codex().await;
+    let codex = spawn_codex().await.unwrap();
 
     // ---------- Task 1 ----------
     codex
@@ -145,7 +146,7 @@ async fn live_shell_function_call() {
         return;
     }
 
-    let codex = spawn_codex().await;
+    let codex = spawn_codex().await.unwrap();
 
     const MARKER: &str = "codex_live_echo_ok";
 

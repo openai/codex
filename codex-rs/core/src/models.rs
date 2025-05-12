@@ -33,6 +33,10 @@ pub enum ResponseItem {
         role: String,
         content: Vec<ContentItem>,
     },
+    Reasoning {
+        id: String,
+        summary: Vec<ReasoningItemReasoningSummary>,
+    },
     FunctionCall {
         name: String,
         // The Responses API returns the function call arguments as a *string* that contains
@@ -65,6 +69,12 @@ impl From<ResponseInputItem> for ResponseItem {
             }
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ReasoningItemReasoningSummary {
+    SummaryText { text: String },
 }
 
 impl From<Vec<InputItem>> for ResponseInputItem {
@@ -116,10 +126,10 @@ pub struct ShellToolCallParams {
     pub timeout_ms: Option<u64>,
 }
 
-#[expect(dead_code)]
 #[derive(Deserialize, Debug, Clone)]
 pub struct FunctionCallOutputPayload {
     pub content: String,
+    #[expect(dead_code)]
     pub success: Option<bool>,
 }
 
@@ -163,6 +173,7 @@ impl std::ops::Deref for FunctionCallOutputPayload {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
     use super::*;
 
     #[test]

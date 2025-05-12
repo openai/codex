@@ -114,7 +114,7 @@ impl RolloutRecorder {
                 ResponseItem::Message { .. }
                 | ResponseItem::FunctionCall { .. }
                 | ResponseItem::FunctionCallOutput { .. } => {}
-                ResponseItem::Other => {
+                ResponseItem::Reasoning { .. } | ResponseItem::Other => {
                     // These should never be serialized.
                     continue;
                 }

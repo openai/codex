@@ -1,6 +1,7 @@
-use std::io;
-#[cfg(target_family = "unix")]
+#[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
+
+use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::ExitStatus;
@@ -12,12 +13,14 @@ use std::time::Instant;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncReadExt;
 use tokio::io::BufReader;
+use tokio::process::Child;
 use tokio::process::Command;
 use tokio::sync::Notify;
 
 use crate::error::CodexErr;
 use crate::error::Result;
 use crate::error::SandboxErr;
+use crate::exec_linux::exec_linux;
 use crate::protocol::SandboxPolicy;
 
 // Maximum we send for each stream, which is either:
@@ -41,6 +44,16 @@ const MACOS_SEATBELT_BASE_POLICY: &str = include_str!("seatbelt_base_policy.sbpl
 /// already has root access.
 const MACOS_PATH_TO_SEATBELT_EXECUTABLE: &str = "/usr/bin/sandbox-exec";
 
+/// Experimental environment variable that will be set to some non-empty value
+/// if both of the following are true:
+///
+/// 1. The process was spawned by Codex as part of a shell tool call.
+/// 2. SandboxPolicy.has_full_network_access() was false for the tool call.
+///
+/// We may try to have just one environment variable for all sandboxing
+/// attributes, so this may change in the future.
+pub const CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR: &str = "CODEX_SANDBOX_NETWORK_DISABLED";
+
 #[derive(Debug, Clone)]
 pub struct ExecParams {
     pub command: Vec<String>,
@@ -59,27 +72,6 @@ pub enum SandboxType {
     LinuxSeccomp,
 }
 
-#[cfg(target_os = "linux")]
-async fn exec_linux(
-    params: ExecParams,
-    ctrl_c: Arc<Notify>,
-    sandbox_policy: &SandboxPolicy,
-) -> Result<RawExecToolCallOutput> {
-    crate::linux::exec_linux(params, ctrl_c, sandbox_policy).await
-}
-
-#[cfg(not(target_os = "linux"))]
-async fn exec_linux(
-    _params: ExecParams,
-    _ctrl_c: Arc<Notify>,
-    _sandbox_policy: &SandboxPolicy,
-) -> Result<RawExecToolCallOutput> {
-    Err(CodexErr::Io(io::Error::new(
-        io::ErrorKind::InvalidInput,
-        "linux sandbox is not supported on this platform",
-    )))
-}
-
 pub async fn process_exec_tool_call(
     params: ExecParams,
     sandbox_type: SandboxType,
@@ -89,25 +81,23 @@ pub async fn process_exec_tool_call(
     let start = Instant::now();
 
     let raw_output_result = match sandbox_type {
-        SandboxType::None => exec(params, ctrl_c).await,
+        SandboxType::None => exec(params, sandbox_policy, ctrl_c).await,
         SandboxType::MacosSeatbelt => {
             let ExecParams {
                 command,
                 cwd,
                 timeout_ms,
             } = params;
-            let seatbelt_command = create_seatbelt_command(command, sandbox_policy, &cwd);
-            exec(
-                ExecParams {
-                    command: seatbelt_command,
-                    cwd,
-                    timeout_ms,
-                },
-                ctrl_c,
+            let child = spawn_command_under_seatbelt(
+                command,
+                sandbox_policy,
+                cwd,
+                StdioPolicy::RedirectForShellTool,
             )
-            .await
+            .await?;
+            consume_truncated_output(child, ctrl_c, timeout_ms).await
         }
-        SandboxType::LinuxSeccomp => exec_linux(params, ctrl_c, sandbox_policy).await,
+        SandboxType::LinuxSeccomp => exec_linux(params, ctrl_c, sandbox_policy),
     };
     let duration = start.elapsed();
     match raw_output_result {
@@ -150,7 +140,17 @@ pub async fn process_exec_tool_call(
     }
 }
 
-pub fn create_seatbelt_command(
+pub async fn spawn_command_under_seatbelt(
+    command: Vec<String>,
+    sandbox_policy: &SandboxPolicy,
+    cwd: PathBuf,
+    stdio_policy: StdioPolicy,
+) -> std::io::Result<Child> {
+    let seatbelt_command = create_seatbelt_command(command, sandbox_policy, &cwd);
+    spawn_child_async(seatbelt_command, cwd, sandbox_policy, stdio_policy).await
+}
+
+fn create_seatbelt_command(
     command: Vec<String>,
     sandbox_policy: &SandboxPolicy,
     cwd: &Path,
@@ -228,47 +228,146 @@ pub struct ExecToolCallOutput {
     pub duration: Duration,
 }
 
-pub async fn exec(
+async fn exec(
     ExecParams {
         command,
         cwd,
         timeout_ms,
     }: ExecParams,
+    sandbox_policy: &SandboxPolicy,
     ctrl_c: Arc<Notify>,
 ) -> Result<RawExecToolCallOutput> {
-    let mut child = {
-        if command.is_empty() {
-            return Err(CodexErr::Io(io::Error::new(
+    let child = spawn_child_async(
+        command,
+        cwd,
+        sandbox_policy,
+        StdioPolicy::RedirectForShellTool,
+    )
+    .await?;
+    consume_truncated_output(child, ctrl_c, timeout_ms).await
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum StdioPolicy {
+    RedirectForShellTool,
+    Inherit,
+}
+
+macro_rules! configure_command {
+    (
+        $cmd_type: path,
+        $command: expr,
+        $cwd: expr,
+        $sandbox_policy: expr,
+        $stdio_policy: expr
+    ) => {{
+        // For now, we take `SandboxPolicy` as a parameter to spawn_child() because
+        // we need to determine whether to set the
+        // `CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR` environment variable.
+        // Ultimately, we should be stricter about the environment variables that
+        // are set for the command (as we are when spawning an MCP server), so
+        // instead of SandboxPolicy, we should take the exact env to use for the
+        // Command (i.e., `env_clear().envs(env)`).
+        if $command.is_empty() {
+            return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "command args are empty",
-            )));
+            ));
         }
 
-        let mut cmd = Command::new(&command[0]);
-        if command.len() > 1 {
-            cmd.args(&command[1..]);
+        let mut cmd = <$cmd_type>::new(&$command[0]);
+        cmd.args(&$command[1..]);
+        cmd.current_dir($cwd);
+
+        if !$sandbox_policy.has_full_network_access() {
+            cmd.env(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR, "1");
         }
-        cmd.current_dir(cwd);
 
-        // Do not create a file descriptor for stdin because otherwise some
-        // commands may hang forever waiting for input. For example, ripgrep has
-        // a heuristic where it may try to read from stdin as explained here:
-        // https://github.com/BurntSushi/ripgrep/blob/e2362d4d5185d02fa857bf381e7bd52e66fafc73/crates/core/flags/hiargs.rs#L1101-L1103
-        cmd.stdin(Stdio::null());
+        match $stdio_policy {
+            StdioPolicy::RedirectForShellTool => {
+                // Do not create a file descriptor for stdin because otherwise some
+                // commands may hang forever waiting for input. For example, ripgrep has
+                // a heuristic where it may try to read from stdin as explained here:
+                // https://github.com/BurntSushi/ripgrep/blob/e2362d4d5185d02fa857bf381e7bd52e66fafc73/crates/core/flags/hiargs.rs#L1101-L1103
+                cmd.stdin(Stdio::null());
 
-        cmd.stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()?
-    };
+                cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+            }
+            StdioPolicy::Inherit => {
+                // Inherit stdin, stdout, and stderr from the parent process.
+                cmd.stdin(Stdio::inherit())
+                    .stdout(Stdio::inherit())
+                    .stderr(Stdio::inherit());
+            }
+        }
+
+        std::io::Result::<$cmd_type>::Ok(cmd)
+    }};
+}
+
+/// Spawns the appropriate child process for the ExecParams and SandboxPolicy,
+/// ensuring the args and environment variables used to create the `Command`
+/// (and `Child`) honor the configuration.
+pub(crate) async fn spawn_child_async(
+    command: Vec<String>,
+    cwd: PathBuf,
+    sandbox_policy: &SandboxPolicy,
+    stdio_policy: StdioPolicy,
+) -> std::io::Result<Child> {
+    let mut cmd = configure_command!(Command, command, cwd, sandbox_policy, stdio_policy)?;
+    cmd.kill_on_drop(true).spawn()
+}
+
+/// Alternative verison of `spawn_child_async()` that returns
+/// `std::process::Child` instead of `tokio::process::Child`. This is useful for
+/// spawning a child process in a thread that is not running a Tokio runtime.
+pub fn spawn_child_sync(
+    command: Vec<String>,
+    cwd: PathBuf,
+    sandbox_policy: &SandboxPolicy,
+    stdio_policy: StdioPolicy,
+) -> std::io::Result<std::process::Child> {
+    let mut cmd = configure_command!(
+        std::process::Command,
+        command,
+        cwd,
+        sandbox_policy,
+        stdio_policy
+    )?;
+    cmd.spawn()
+}
+
+/// Consumes the output of a child process, truncating it so it is suitable for
+/// use as the output of a `shell` tool call. Also enforces specified timeout.
+pub(crate) async fn consume_truncated_output(
+    mut child: Child,
+    ctrl_c: Arc<Notify>,
+    timeout_ms: Option<u64>,
+) -> Result<RawExecToolCallOutput> {
+    // Both stdout and stderr were configured with `Stdio::piped()`
+    // above, therefore `take()` should normally return `Some`.  If it doesn't
+    // we treat it as an exceptional I/O error
+
+    let stdout_reader = child.stdout.take().ok_or_else(|| {
+        CodexErr::Io(io::Error::new(
+            io::ErrorKind::Other,
+            "stdout pipe was unexpectedly not available",
+        ))
+    })?;
+    let stderr_reader = child.stderr.take().ok_or_else(|| {
+        CodexErr::Io(io::Error::new(
+            io::ErrorKind::Other,
+            "stderr pipe was unexpectedly not available",
+        ))
+    })?;
 
     let stdout_handle = tokio::spawn(read_capped(
-        BufReader::new(child.stdout.take().expect("stdout is not piped")),
+        BufReader::new(stdout_reader),
         MAX_STREAM_OUTPUT,
         MAX_STREAM_OUTPUT_LINES,
     ));
     let stderr_handle = tokio::spawn(read_capped(
-        BufReader::new(child.stderr.take().expect("stderr is not piped")),
+        BufReader::new(stderr_reader),
         MAX_STREAM_OUTPUT,
         MAX_STREAM_OUTPUT_LINES,
     ));

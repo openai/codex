@@ -162,6 +162,10 @@ impl ConversationHistoryWidget {
         self.scroll_position = usize::MAX;
     }
 
+    pub fn add_welcome_message(&mut self, config: &Config) {
+        self.add_to_history(HistoryCell::new_welcome_message(config));
+    }
+
     pub fn add_user_message(&mut self, message: String) {
         self.add_to_history(HistoryCell::new_user_prompt(message));
     }
@@ -170,8 +174,16 @@ impl ConversationHistoryWidget {
         self.add_to_history(HistoryCell::new_agent_message(message));
     }
 
+    pub fn add_agent_reasoning(&mut self, text: String) {
+        self.add_to_history(HistoryCell::new_agent_reasoning(text));
+    }
+
     pub fn add_background_event(&mut self, message: String) {
         self.add_to_history(HistoryCell::new_background_event(message));
+    }
+
+    pub fn add_error(&mut self, message: String) {
+        self.add_to_history(HistoryCell::new_error_event(message));
     }
 
     /// Add a pending patch entry (before user approval).
@@ -377,9 +389,12 @@ impl WidgetRef for ConversationHistoryWidget {
         // second time by the widget – which manifested as the entire block
         // drifting off‑screen when the user attempted to scroll.
 
-        let paragraph = Paragraph::new(visible_lines)
-            .block(block)
-            .wrap(Wrap { trim: false });
+        // Currently, we do not use the `wrap` method on the `Paragraph` widget
+        // because it messes up our scrolling math above that assumes each Line
+        // contributes one line of height to the widget. Admittedly, this is
+        // bad because users cannot see content that is clipped without
+        // resizing the terminal.
+        let paragraph = Paragraph::new(visible_lines).block(block);
         paragraph.render(area, buf);
 
         let needs_scrollbar = num_lines > viewport_height;

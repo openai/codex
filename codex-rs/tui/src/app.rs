@@ -47,29 +47,52 @@ impl App<'_> {
             let app_event_tx = app_event_tx.clone();
             std::thread::spawn(move || {
                 while let Ok(event) = crossterm::event::read() {
-                    let app_event = match event {
-                        crossterm::event::Event::Key(key_event) => AppEvent::KeyEvent(key_event),
-                        crossterm::event::Event::Resize(_, _) => AppEvent::Redraw,
+                    match event {
+                        crossterm::event::Event::Key(key_event) => {
+                            if let Err(e) = app_event_tx.send(AppEvent::KeyEvent(key_event)) {
+                                tracing::error!("failed to send key event: {e}");
+                            }
+                        }
+                        crossterm::event::Event::Resize(_, _) => {
+                            if let Err(e) = app_event_tx.send(AppEvent::Redraw) {
+                                tracing::error!("failed to send resize event: {e}");
+                            }
+                        }
                         crossterm::event::Event::Mouse(MouseEvent {
                             kind: MouseEventKind::ScrollUp,
                             ..
                         }) => {
                             scroll_event_helper.scroll_up();
-                            continue;
                         }
                         crossterm::event::Event::Mouse(MouseEvent {
                             kind: MouseEventKind::ScrollDown,
                             ..
                         }) => {
                             scroll_event_helper.scroll_down();
-                            continue;
+                        }
+                        crossterm::event::Event::Paste(pasted) => {
+                            use crossterm::event::KeyModifiers;
+
+                            for ch in pasted.chars() {
+                                let key_event = match ch {
+                                    '\n' | '\r' => {
+                                        // Represent newline as <Shift+Enter> so that the bottom
+                                        // pane treats it as a literal newline instead of a submit
+                                        // action (submission is only triggered on Enter *without*
+                                        // any modifiers).
+                                        KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT)
+                                    }
+                                    _ => KeyEvent::new(KeyCode::Char(ch), KeyModifiers::empty()),
+                                };
+                                if let Err(e) = app_event_tx.send(AppEvent::KeyEvent(key_event)) {
+                                    tracing::error!("failed to send pasted key event: {e}");
+                                    break;
+                                }
+                            }
                         }
                         _ => {
-                            continue;
+                            // Ignore any other events.
                         }
-                    };
-                    if let Err(e) = app_event_tx.send(app_event) {
-                        tracing::error!("failed to send event: {e}");
                     }
                 }
             });
