@@ -318,7 +318,7 @@ pub(crate) async fn spawn_child_async(
     cmd.kill_on_drop(true).spawn()
 }
 
-/// Alternative verison of `spawn_child_async()` that returns
+/// Alternative version of `spawn_child_async()` that returns
 /// `std::process::Child` instead of `tokio::process::Child`. This is useful for
 /// spawning a child process in a thread that is not running a Tokio runtime.
 pub fn spawn_child_sync(
