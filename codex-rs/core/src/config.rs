@@ -15,6 +15,11 @@ use std::path::PathBuf;
 /// correctly even if the user has not created `~/.codex/instructions.md`.
 const EMBEDDED_INSTRUCTIONS: &str = include_str!("../prompt.md");
 
+/// Maximum number of bytes of the documentation that will be embedded. Larger
+/// files are *silently truncated* to this size so we do not take up too much of
+/// the context window.
+pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
+
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -72,6 +77,9 @@ pub struct Config {
 
     /// Combined provider map (defaults merged with user-defined overrides).
     pub model_providers: HashMap<String, ModelProviderInfo>,
+
+    /// Maximum number of bytes to include from an AGENTS.md project doc file.
+    pub project_doc_max_bytes: usize,
 }
 
 /// Base config deserialized from ~/.codex/config.toml.
@@ -111,6 +119,9 @@ pub struct ConfigToml {
     /// User-defined provider entries that extend/override the built-in list.
     #[serde(default)]
     pub model_providers: HashMap<String, ModelProviderInfo>,
+
+    /// Maximum number of bytes to include from an AGENTS.md project doc file.
+    pub project_doc_max_bytes: Option<usize>,
 }
 
 impl ConfigToml {
@@ -267,6 +278,7 @@ impl Config {
             instructions,
             mcp_servers: cfg.mcp_servers,
             model_providers,
+            project_doc_max_bytes: cfg.project_doc_max_bytes.unwrap_or(PROJECT_DOC_MAX_BYTES),
         };
         Ok(config)
     }

@@ -309,7 +309,7 @@ config = {
   notify: Boolean(cli.flags.notify),
   reasoningEffort:
     (cli.flags.reasoning as ReasoningEffort | undefined) ?? "high",
-  flexMode: Boolean(cli.flags.flexMode),
+  flexMode: cli.flags.flexMode || (config.flexMode ?? false),
   provider,
   disableResponseStorage,
 };
@@ -323,15 +323,19 @@ try {
 }
 
 // For --flex-mode, validate and exit if incorrect.
-if (cli.flags.flexMode) {
+if (config.flexMode) {
   const allowedFlexModels = new Set(["o3", "o4-mini"]);
   if (!allowedFlexModels.has(config.model)) {
-    // eslint-disable-next-line no-console
-    console.error(
-      `The --flex-mode option is only supported when using the 'o3' or 'o4-mini' models. ` +
-        `Current model: '${config.model}'.`,
-    );
-    process.exit(1);
+    if (cli.flags.flexMode) {
+      // eslint-disable-next-line no-console
+      console.error(
+        `The --flex-mode option is only supported when using the 'o3' or 'o4-mini' models. ` +
+          `Current model: '${config.model}'.`,
+      );
+      process.exit(1);
+    } else {
+      config.flexMode = false;
+    }
   }
 }
 
