@@ -246,27 +246,30 @@ impl Config {
             })?
             .clone();
 
+        let resolved_cwd = {
+            use std::env;
+
+            match cwd {
+                None => {
+                    tracing::info!("cwd not set, using current dir");
+                    env::current_dir()?
+                }
+                Some(p) if p.is_absolute() => p,
+                Some(p) => {
+                    // Resolve relative path against the current working directory.
+                    tracing::info!("cwd is relative, resolving against current dir");
+                    let mut current = env::current_dir()?;
+                    current.push(p);
+                    current
+                }
+            }
+        };
+
         let config = Self {
             model: model.or(cfg.model).unwrap_or_else(default_model),
             model_provider_id,
             model_provider,
-            cwd: cwd.map_or_else(
-                || {
-                    tracing::info!("cwd not set, using current dir");
-                    std::env::current_dir().expect("cannot determine current dir")
-                },
-                |p| {
-                    if p.is_absolute() {
-                        p
-                    } else {
-                        // Resolve relative paths against the current working directory.
-                        tracing::info!("cwd is relative, resolving against current dir");
-                        let mut cwd = std::env::current_dir().expect("cannot determine cwd");
-                        cwd.push(p);
-                        cwd
-                    }
-                },
-            ),
+            cwd: resolved_cwd,
             approval_policy: approval_policy
                 .or(cfg.approval_policy)
                 .unwrap_or_else(AskForApproval::default),
@@ -292,6 +295,7 @@ impl Config {
     /// Meant to be used exclusively for tests: `load_with_overrides()` should
     /// be used in all other cases.
     pub fn load_default_config_for_test() -> Self {
+        #[expect(clippy::expect_used)]
         Self::load_from_base_config_with_overrides(
             ConfigToml::default(),
             ConfigOverrides::default(),
@@ -371,6 +375,7 @@ pub fn parse_sandbox_permission_with_base_path(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used)]
     use super::*;
 
     /// Verify that the `sandbox_permissions` field on `ConfigToml` correctly

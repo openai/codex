@@ -1,3 +1,4 @@
+#![expect(clippy::expect_used)]
 extern crate codex_execpolicy;
 
 use std::vec;

@@ -344,13 +344,30 @@ pub(crate) async fn consume_truncated_output(
     ctrl_c: Arc<Notify>,
     timeout_ms: Option<u64>,
 ) -> Result<RawExecToolCallOutput> {
+    // Both stdout and stderr were configured with `Stdio::piped()`
+    // above, therefore `take()` should normally return `Some`.  If it doesn't
+    // we treat it as an exceptional I/O error
+
+    let stdout_reader = child.stdout.take().ok_or_else(|| {
+        CodexErr::Io(io::Error::new(
+            io::ErrorKind::Other,
+            "stdout pipe was unexpectedly not available",
+        ))
+    })?;
+    let stderr_reader = child.stderr.take().ok_or_else(|| {
+        CodexErr::Io(io::Error::new(
+            io::ErrorKind::Other,
+            "stderr pipe was unexpectedly not available",
+        ))
+    })?;
+
     let stdout_handle = tokio::spawn(read_capped(
-        BufReader::new(child.stdout.take().expect("stdout is not piped")),
+        BufReader::new(stdout_reader),
         MAX_STREAM_OUTPUT,
         MAX_STREAM_OUTPUT_LINES,
     ));
     let stderr_handle = tokio::spawn(read_capped(
-        BufReader::new(child.stderr.take().expect("stderr is not piped")),
+        BufReader::new(stderr_reader),
         MAX_STREAM_OUTPUT,
         MAX_STREAM_OUTPUT_LINES,
     ));
