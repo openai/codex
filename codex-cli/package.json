@@ -23,6 +23,7 @@
     "stage-release": "./scripts/stage_release.sh"
   },
   "files": [
+    "bin",
     "dist"
   ],
   "dependencies": {

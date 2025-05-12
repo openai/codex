@@ -225,6 +225,10 @@ impl ChatWidget<'_> {
                 self.conversation_history.add_agent_message(message);
                 self.request_redraw()?;
             }
+            EventMsg::AgentReasoning { text } => {
+                self.conversation_history.add_agent_reasoning(text);
+                self.request_redraw()?;
+            }
             EventMsg::TaskStarted => {
                 self.bottom_pane.set_task_running(true)?;
                 self.request_redraw()?;
@@ -248,10 +252,7 @@ impl ChatWidget<'_> {
                     cwd,
                     reason,
                 };
-                let needs_redraw = self.bottom_pane.push_approval_request(request);
-                if needs_redraw {
-                    self.request_redraw()?;
-                }
+                self.bottom_pane.push_approval_request(request)?;
             }
             EventMsg::ApplyPatchApprovalRequest {
                 changes,
@@ -280,8 +281,7 @@ impl ChatWidget<'_> {
                     reason,
                     grant_root,
                 };
-                let _needs_redraw = self.bottom_pane.push_approval_request(request);
-                // Redraw is always need because the history has changed.
+                self.bottom_pane.push_approval_request(request)?;
                 self.request_redraw()?;
             }
             EventMsg::ExecCommandBegin {

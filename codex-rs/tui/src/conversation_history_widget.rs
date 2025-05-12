@@ -174,6 +174,10 @@ impl ConversationHistoryWidget {
         self.add_to_history(HistoryCell::new_agent_message(message));
     }
 
+    pub fn add_agent_reasoning(&mut self, text: String) {
+        self.add_to_history(HistoryCell::new_agent_reasoning(text));
+    }
+
     pub fn add_background_event(&mut self, message: String) {
         self.add_to_history(HistoryCell::new_background_event(message));
     }
