@@ -652,17 +652,21 @@ The **DCO check** blocks merges until every commit in the PR carries the footer 
 
 ### Releasing `codex`
 
-To publish a new version of the CLI, run the following in the `codex-cli` folder to stage the release in a temporary directory:
+To publish a new version of the CLI you first need to stage the npm package. A
+helper script in `codex-cli/scripts/` does all the heavy lifting. Inside the
+`codex-cli` folder run:
 
-```
+```bash
+# Classic, JS implementation that includes small, native binaries for Linux sandboxing.
 pnpm stage-release
-```
 
-Note you can specify the folder for the staged release:
-
-```
+# Optionally specify the temp directory to reuse between runs.
 RELEASE_DIR=$(mktemp -d)
-pnpm stage-release "$RELEASE_DIR"
+pnpm stage-release --tmp "$RELEASE_DIR"
+
+# "Fat" package that additionally bundles the native Rust CLI binaries for
+# Linux. End-users can then opt-in at runtime by setting CODEX_RUST=1.
+pnpm stage-release --native
 ```
 
 Go to the folder where the release is staged and verify that it works as intended. If so, run the following from the temp folder:
