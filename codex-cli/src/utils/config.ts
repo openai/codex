@@ -146,6 +146,7 @@ export type StoredConfig = {
   notify?: boolean;
   /** Disable server-side response storage (send full transcript each request) */
   disableResponseStorage?: boolean;
+  flexMode?: boolean;
   providers?: Record<string, { name: string; baseURL: string; envKey: string }>;
   history?: {
     maxSize?: number;
@@ -211,12 +212,22 @@ export type AppConfig = {
 export const PRETTY_PRINT = Boolean(process.env["PRETTY_PRINT"] || "");
 
 // ---------------------------------------------------------------------------
-// Project doc support (codex.md)
+// Project doc support (AGENTS.md / codex.md)
 // ---------------------------------------------------------------------------
 
 export const PROJECT_DOC_MAX_BYTES = 32 * 1024; // 32 kB
 
-const PROJECT_DOC_FILENAMES = ["codex.md", ".codex.md", "CODEX.md"];
+// We support multiple filenames for project-level agent instructions.  As of
+// 2025 the recommended convention is to use `AGENTS.md`, however we keep
+// the legacy `codex.md` variants for backwards-compatibility so that existing
+// repositories continue to work without changes.  The list is ordered so that
+// the first match wins – newer conventions first, older fallbacks later.
+const PROJECT_DOC_FILENAMES = [
+  "AGENTS.md", // preferred
+  "codex.md", // legacy
+  ".codex.md",
+  "CODEX.md",
+];
 const PROJECT_DOC_SEPARATOR = "\n\n--- project-doc ---\n\n";
 
 export function discoverProjectDocPath(startDir: string): string | null {
@@ -257,7 +268,8 @@ export function discoverProjectDocPath(startDir: string): string | null {
 }
 
 /**
- * Load the project documentation markdown (codex.md) if present. If the file
+ * Load the project documentation markdown (`AGENTS.md` – or the legacy
+ * `codex.md`) if present. If the file
  * exceeds {@link PROJECT_DOC_MAX_BYTES} it will be truncated and a warning is
  * logged.
  *
@@ -478,6 +490,10 @@ export const loadConfig = (
   }
   // Notification setting: enable desktop notifications when set in config
   config.notify = storedConfig.notify === true;
+  // Flex-mode setting: enable the flex-mode service tier when set in config
+  if (storedConfig.flexMode !== undefined) {
+    config.flexMode = storedConfig.flexMode;
+  }
 
   // Add default history config if not provided
   if (storedConfig.history !== undefined) {
@@ -532,6 +548,7 @@ export const saveConfig = (
     providers: config.providers,
     approvalMode: config.approvalMode,
     disableResponseStorage: config.disableResponseStorage,
+    flexMode: config.flexMode,
     reasoningEffort: config.reasoningEffort,
   };
 

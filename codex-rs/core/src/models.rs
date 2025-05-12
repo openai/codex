@@ -33,6 +33,10 @@ pub enum ResponseItem {
         role: String,
         content: Vec<ContentItem>,
     },
+    Reasoning {
+        id: String,
+        summary: Vec<ReasoningItemReasoningSummary>,
+    },
     FunctionCall {
         name: String,
         // The Responses API returns the function call arguments as a *string* that contains
@@ -65,6 +69,12 @@ impl From<ResponseInputItem> for ResponseItem {
             }
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ReasoningItemReasoningSummary {
+    SummaryText { text: String },
 }
 
 impl From<Vec<InputItem>> for ResponseInputItem {

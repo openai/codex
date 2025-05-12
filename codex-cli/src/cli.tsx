@@ -68,7 +68,7 @@ const cli = meow(
     --auto-edit                Automatically approve file edits; still prompt for commands
     --full-auto                Automatically approve edits and commands when executed in the sandbox
 
-    --no-project-doc           Do not automatically include the repository's 'codex.md'
+    --no-project-doc           Do not automatically include the repository's 'AGENTS.md'
     --project-doc <file>       Include an additional markdown file at <file> as context
     --full-stdout              Do not truncate stdout/stderr from command outputs
     --notify                   Enable desktop notifications for responses
@@ -78,6 +78,8 @@ const cli = meow(
 
     --flex-mode               Use "flex-mode" processing mode for the request (only supported
                               with models o3 and o4-mini)
+
+    --reasoning <effort>      Set the reasoning effort level (low, medium, high) (default: high)
 
   Dangerous options
     --dangerously-auto-approve-everything
@@ -144,7 +146,7 @@ const cli = meow(
       },
       noProjectDoc: {
         type: "boolean",
-        description: "Disable automatic inclusion of project-level codex.md",
+        description: "Disable automatic inclusion of project-level AGENTS.md",
       },
       projectDoc: {
         type: "string",
@@ -307,7 +309,7 @@ config = {
   notify: Boolean(cli.flags.notify),
   reasoningEffort:
     (cli.flags.reasoning as ReasoningEffort | undefined) ?? "high",
-  flexMode: Boolean(cli.flags.flexMode),
+  flexMode: cli.flags.flexMode || (config.flexMode ?? false),
   provider,
   disableResponseStorage,
 };
@@ -321,15 +323,19 @@ try {
 }
 
 // For --flex-mode, validate and exit if incorrect.
-if (cli.flags.flexMode) {
+if (config.flexMode) {
   const allowedFlexModels = new Set(["o3", "o4-mini"]);
   if (!allowedFlexModels.has(config.model)) {
-    // eslint-disable-next-line no-console
-    console.error(
-      `The --flex-mode option is only supported when using the 'o3' or 'o4-mini' models. ` +
-        `Current model: '${config.model}'.`,
-    );
-    process.exit(1);
+    if (cli.flags.flexMode) {
+      // eslint-disable-next-line no-console
+      console.error(
+        `The --flex-mode option is only supported when using the 'o3' or 'o4-mini' models. ` +
+          `Current model: '${config.model}'.`,
+      );
+      process.exit(1);
+    } else {
+      config.flexMode = false;
+    }
   }
 }
 

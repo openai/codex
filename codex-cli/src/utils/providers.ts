@@ -47,4 +47,9 @@ export const providers: Record<
     baseURL: "https://api.groq.com/openai/v1",
     envKey: "GROQ_API_KEY",
   },
+  arceeai: {
+    name: "ArceeAI",
+    baseURL: "https://conductor.arcee.ai/v1",
+    envKey: "ARCEEAI_API_KEY",
+  },
 };

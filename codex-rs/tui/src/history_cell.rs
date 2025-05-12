@@ -41,6 +41,9 @@ pub(crate) enum HistoryCell {
     /// Message from the agent.
     AgentMessage { lines: Vec<Line<'static>> },
 
+    /// Reasoning event from the agent.
+    AgentReasoning { lines: Vec<Line<'static>> },
+
     /// An exec tool call that has not finished yet.
     ActiveExecCommand {
         call_id: String,
@@ -132,6 +135,15 @@ impl HistoryCell {
         lines.push(Line::from(""));
 
         HistoryCell::AgentMessage { lines }
+    }
+
+    pub(crate) fn new_agent_reasoning(text: String) -> Self {
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        lines.push(Line::from("codex reasoning".magenta().italic()));
+        append_markdown(&text, &mut lines);
+        lines.push(Line::from(""));
+
+        HistoryCell::AgentReasoning { lines }
     }
 
     pub(crate) fn new_active_exec_command(call_id: String, command: Vec<String>) -> Self {
@@ -363,6 +375,7 @@ impl HistoryCell {
             HistoryCell::WelcomeMessage { lines, .. }
             | HistoryCell::UserPrompt { lines, .. }
             | HistoryCell::AgentMessage { lines, .. }
+            | HistoryCell::AgentReasoning { lines, .. }
             | HistoryCell::BackgroundEvent { lines, .. }
             | HistoryCell::ErrorEvent { lines, .. }
             | HistoryCell::SessionInfo { lines, .. }
