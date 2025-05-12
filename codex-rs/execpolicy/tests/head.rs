@@ -1,3 +1,4 @@
+#![expect(clippy::expect_used)]
 use codex_execpolicy::ArgMatcher;
 use codex_execpolicy::ArgType;
 use codex_execpolicy::Error;
