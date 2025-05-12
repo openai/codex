@@ -17,6 +17,7 @@ import {
   OPENAI_PROJECT,
   getApiKey,
   getBaseUrl,
+  AZURE_OPENAI_API_VERSION,
 } from "../config.js";
 import { detectShell } from "../detect-shell.js";
 import { log } from "../logger/log.js";
@@ -32,7 +33,7 @@ import {
 import { handleExecCommand } from "./handle-exec-command.js";
 import { HttpsProxyAgent } from "https-proxy-agent";
 import { randomUUID } from "node:crypto";
-import OpenAI, { APIConnectionTimeoutError } from "openai";
+import OpenAI, { APIConnectionTimeoutError, AzureOpenAI } from "openai";
 
 // Wait time before retrying after rate limit errors (ms).
 const RATE_LIMIT_RETRY_WAIT_MS = parseInt(
@@ -322,6 +323,25 @@ export class AgentLoop {
       httpAgent: PROXY_URL ? new HttpsProxyAgent(PROXY_URL) : undefined,
       ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
     });
+
+    if (this.provider.toLowerCase() === "azure") {
+      this.oai = new AzureOpenAI({
+        apiKey,
+        baseURL,
+        apiVersion: AZURE_OPENAI_API_VERSION,
+        defaultHeaders: {
+          originator: ORIGIN,
+          version: CLI_VERSION,
+          session_id: this.sessionId,
+          ...(OPENAI_ORGANIZATION
+            ? { "OpenAI-Organization": OPENAI_ORGANIZATION }
+            : {}),
+          ...(OPENAI_PROJECT ? { "OpenAI-Project": OPENAI_PROJECT } : {}),
+        },
+        httpAgent: PROXY_URL ? new HttpsProxyAgent(PROXY_URL) : undefined,
+        ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
+      });
+    }
 
     setSessionId(this.sessionId);
     setCurrentModel(this.model);
@@ -745,7 +765,13 @@ export class AgentLoop {
             const errCtx = error as any;
             const status =
               errCtx?.status ?? errCtx?.httpStatus ?? errCtx?.statusCode;
-            const isServerError = typeof status === "number" && status >= 500;
+            // Treat classical 5xx *and* explicit OpenAI `server_error` types
+            // as transient server-side failures that qualify for a retry. The
+            // SDK often omits the numeric status for these, reporting only
+            // the `type` field.
+            const isServerError =
+              (typeof status === "number" && status >= 500) ||
+              errCtx?.type === "server_error";
             if (
               (isTimeout || isServerError || isConnectionError) &&
               attempt < MAX_RETRIES

@@ -1,16 +1,13 @@
 use std::collections::BTreeMap;
-use std::io;
+use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use crate::error::CodexErr;
 use crate::error::Result;
 use crate::error::SandboxErr;
-use crate::exec::exec;
-use crate::exec::ExecParams;
-use crate::exec::RawExecToolCallOutput;
 use crate::protocol::SandboxPolicy;
 
+use landlock::ABI;
 use landlock::Access;
 use landlock::AccessFs;
 use landlock::CompatLevel;
@@ -18,8 +15,6 @@ use landlock::Compatible;
 use landlock::Ruleset;
 use landlock::RulesetAttr;
 use landlock::RulesetCreatedAttr;
-use landlock::ABI;
-use seccompiler::apply_filter;
 use seccompiler::BpfProgram;
 use seccompiler::SeccompAction;
 use seccompiler::SeccompCmpArgLen;
@@ -28,51 +23,20 @@ use seccompiler::SeccompCondition;
 use seccompiler::SeccompFilter;
 use seccompiler::SeccompRule;
 use seccompiler::TargetArch;
-use tokio::sync::Notify;
-
-pub async fn exec_linux(
-    params: ExecParams,
-    ctrl_c: Arc<Notify>,
-    sandbox_policy: &SandboxPolicy,
-) -> Result<RawExecToolCallOutput> {
-    // Allow READ on /
-    // Allow WRITE on /dev/null
-    let ctrl_c_copy = ctrl_c.clone();
-    let sandbox_policy = sandbox_policy.clone();
-
-    // Isolate thread to run the sandbox from
-    let tool_call_output = std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("Failed to create runtime");
-
-        rt.block_on(async {
-            apply_sandbox_policy_to_current_thread(sandbox_policy)?;
-            exec(params, ctrl_c_copy).await
-        })
-    })
-    .join();
-
-    match tool_call_output {
-        Ok(Ok(output)) => Ok(output),
-        Ok(Err(e)) => Err(e),
-        Err(e) => Err(CodexErr::Io(io::Error::new(
-            io::ErrorKind::Other,
-            format!("thread join failed: {e:?}"),
-        ))),
-    }
-}
+use seccompiler::apply_filter;
 
 /// Apply sandbox policies inside this thread so only the child inherits
 /// them, not the entire CLI process.
-pub fn apply_sandbox_policy_to_current_thread(sandbox_policy: SandboxPolicy) -> Result<()> {
+pub(crate) fn apply_sandbox_policy_to_current_thread(
+    sandbox_policy: &SandboxPolicy,
+    cwd: &Path,
+) -> Result<()> {
     if !sandbox_policy.has_full_network_access() {
         install_network_seccomp_filter_on_current_thread()?;
     }
 
     if !sandbox_policy.has_full_disk_write_access() {
-        let writable_roots = sandbox_policy.get_writable_roots();
+        let writable_roots = sandbox_policy.get_writable_roots_with_cwd(cwd);
         install_filesystem_landlock_rules_on_current_thread(writable_roots)?;
     }
 
@@ -175,11 +139,13 @@ fn install_network_seccomp_filter_on_current_thread() -> std::result::Result<(),
 }
 
 #[cfg(test)]
-mod tests_linux {
+mod tests {
+    #![expect(clippy::unwrap_used, clippy::expect_used)]
+
     use super::*;
-    use crate::exec::process_exec_tool_call;
     use crate::exec::ExecParams;
     use crate::exec::SandboxType;
+    use crate::exec::process_exec_tool_call;
     use crate::protocol::SandboxPolicy;
     use std::sync::Arc;
     use tempfile::NamedTempFile;
@@ -189,7 +155,7 @@ mod tests_linux {
     async fn run_cmd(cmd: &[&str], writable_roots: &[PathBuf], timeout_ms: u64) {
         let params = ExecParams {
             command: cmd.iter().map(|elm| elm.to_string()).collect(),
-            workdir: None,
+            cwd: std::env::current_dir().expect("cwd should exist"),
             timeout_ms: Some(timeout_ms),
         };
 
@@ -262,7 +228,7 @@ mod tests_linux {
     async fn assert_network_blocked(cmd: &[&str]) {
         let params = ExecParams {
             command: cmd.iter().map(|s| s.to_string()).collect(),
-            workdir: None,
+            cwd: std::env::current_dir().expect("cwd should exist"),
             // Give the tool a generous 2‑second timeout so even slow DNS timeouts
             // do not stall the suite.
             timeout_ms: Some(2_000),

@@ -45,7 +45,12 @@ pub fn resolve_observed_args_with_patterns(
     let prefix = get_range_checked(&args, 0..num_prefix_args)?;
     let mut prefix_arg_index = 0;
     for pattern in prefix_patterns {
-        let n = pattern.cardinality().is_exact().unwrap();
+        let n = pattern
+            .cardinality()
+            .is_exact()
+            .ok_or(Error::InternalInvariantViolation {
+                message: "expected exact cardinality".to_string(),
+            })?;
         for positional_arg in &prefix[prefix_arg_index..prefix_arg_index + n] {
             let matched_arg = MatchedArg::new(
                 positional_arg.index,
@@ -111,7 +116,12 @@ pub fn resolve_observed_args_with_patterns(
     let suffix = get_range_checked(&args, initial_suffix_args_index..args.len())?;
     let mut suffix_arg_index = 0;
     for pattern in suffix_patterns {
-        let n = pattern.cardinality().is_exact().unwrap();
+        let n = pattern
+            .cardinality()
+            .is_exact()
+            .ok_or(Error::InternalInvariantViolation {
+                message: "expected exact cardinality".to_string(),
+            })?;
         for positional_arg in &suffix[suffix_arg_index..suffix_arg_index + n] {
             let matched_arg = MatchedArg::new(
                 positional_arg.index,

@@ -5,10 +5,13 @@
 // ```shell
 // ./generate_mcp_types.py
 // ```
-use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::convert::TryFrom;
+
+pub const MCP_SCHEMA_VERSION: &str = "2025-03-26";
+pub const JSONRPC_VERSION: &str = "2.0";
 
 /// Paired request/response types for the Model Context Protocol (MCP).
 pub trait ModelContextProtocolRequest {
@@ -23,16 +26,23 @@ pub trait ModelContextProtocolNotification {
     type Params: DeserializeOwned + Serialize + Send + Sync + 'static;
 }
 
+fn default_jsonrpc() -> String {
+    JSONRPC_VERSION.to_owned()
+}
+
 /// Optional annotations for the client. The client can use annotations to inform how objects are used or displayed
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct Annotations {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audience: Option<Vec<Role>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub priority: Option<f64>,
 }
 
 /// Audio provided to or from an LLM.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct AudioContent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub annotations: Option<Annotations>,
     pub data: String,
     #[serde(rename = "mimeType")]
@@ -43,7 +53,7 @@ pub struct AudioContent {
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct BlobResourceContents {
     pub blob: String,
-    #[serde(rename = "mimeType")]
+    #[serde(rename = "mimeType", default, skip_serializing_if = "Option::is_none")]
     pub mime_type: Option<String>,
     pub uri: String,
 }
@@ -59,6 +69,7 @@ impl ModelContextProtocolRequest for CallToolRequest {
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct CallToolRequestParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arguments: Option<serde_json::Value>,
     pub name: String,
 }
@@ -76,16 +87,25 @@ pub struct CallToolRequestParams {
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct CallToolResult {
     pub content: Vec<CallToolResultContent>,
-    #[serde(rename = "isError")]
+    #[serde(rename = "isError", default, skip_serializing_if = "Option::is_none")]
     pub is_error: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(untagged)]
 pub enum CallToolResultContent {
     TextContent(TextContent),
     ImageContent(ImageContent),
     AudioContent(AudioContent),
     EmbeddedResource(EmbeddedResource),
+}
+
+impl From<CallToolResult> for serde_json::Value {
+    fn from(value: CallToolResult) -> Self {
+        // Leave this as it should never fail
+        #[expect(clippy::unwrap_used)]
+        serde_json::to_value(value).unwrap()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -98,6 +118,7 @@ impl ModelContextProtocolNotification for CancelledNotification {
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct CancelledNotificationParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     #[serde(rename = "requestId")]
     pub request_id: RequestId,
@@ -106,19 +127,27 @@ pub struct CancelledNotificationParams {
 /// Capabilities a client may support. Known capabilities are defined here, in this schema, but this is not a closed set: any client can define its own, additional capabilities.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct ClientCapabilities {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub experimental: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub roots: Option<ClientCapabilitiesRoots>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sampling: Option<serde_json::Value>,
 }
 
 /// Present if the client supports listing roots.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct ClientCapabilitiesRoots {
-    #[serde(rename = "listChanged")]
+    #[serde(
+        rename = "listChanged",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub list_changed: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(untagged)]
 pub enum ClientNotification {
     CancelledNotification(CancelledNotification),
     InitializedNotification(InitializedNotification),
@@ -160,6 +189,7 @@ pub enum ClientRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(untagged)]
 pub enum ClientResult {
     Result(Result),
     CreateMessageResult(CreateMessageResult),
@@ -189,6 +219,7 @@ pub struct CompleteRequestParamsArgument {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(untagged)]
 pub enum CompleteRequestParamsRef {
     PromptReference(PromptReference),
     ResourceReference(ResourceReference),
@@ -202,10 +233,19 @@ pub struct CompleteResult {
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct CompleteResultCompletion {
-    #[serde(rename = "hasMore")]
+    #[serde(rename = "hasMore", default, skip_serializing_if = "Option::is_none")]
     pub has_more: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total: Option<i64>,
     pub values: Vec<String>,
+}
+
+impl From<CompleteResult> for serde_json::Value {
+    fn from(value: CompleteResult) -> Self {
+        // Leave this as it should never fail
+        #[expect(clippy::unwrap_used)]
+        serde_json::to_value(value).unwrap()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -219,18 +259,36 @@ impl ModelContextProtocolRequest for CreateMessageRequest {
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct CreateMessageRequestParams {
-    #[serde(rename = "includeContext")]
+    #[serde(
+        rename = "includeContext",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub include_context: Option<String>,
     #[serde(rename = "maxTokens")]
     pub max_tokens: i64,
     pub messages: Vec<SamplingMessage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<serde_json::Value>,
-    #[serde(rename = "modelPreferences")]
+    #[serde(
+        rename = "modelPreferences",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub model_preferences: Option<ModelPreferences>,
-    #[serde(rename = "stopSequences")]
+    #[serde(
+        rename = "stopSequences",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub stop_sequences: Option<Vec<String>>,
-    #[serde(rename = "systemPrompt")]
+    #[serde(
+        rename = "systemPrompt",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub system_prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f64>,
 }
 
@@ -240,15 +298,28 @@ pub struct CreateMessageResult {
     pub content: CreateMessageResultContent,
     pub model: String,
     pub role: Role,
-    #[serde(rename = "stopReason")]
+    #[serde(
+        rename = "stopReason",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub stop_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(untagged)]
 pub enum CreateMessageResultContent {
     TextContent(TextContent),
     ImageContent(ImageContent),
     AudioContent(AudioContent),
+}
+
+impl From<CreateMessageResult> for serde_json::Value {
+    fn from(value: CreateMessageResult) -> Self {
+        // Leave this as it should never fail
+        #[expect(clippy::unwrap_used)]
+        serde_json::to_value(value).unwrap()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -260,12 +331,14 @@ pub struct Cursor(String);
 /// of the LLM and/or the user.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct EmbeddedResource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub annotations: Option<Annotations>,
     pub resource: EmbeddedResourceResource,
     pub r#type: String, // &'static str = "resource"
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(untagged)]
 pub enum EmbeddedResourceResource {
     TextResourceContents(TextResourceContents),
     BlobResourceContents(BlobResourceContents),
@@ -284,6 +357,7 @@ impl ModelContextProtocolRequest for GetPromptRequest {
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct GetPromptRequestParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arguments: Option<serde_json::Value>,
     pub name: String,
 }
@@ -291,13 +365,23 @@ pub struct GetPromptRequestParams {
 /// The server's response to a prompts/get request from the client.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct GetPromptResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub messages: Vec<PromptMessage>,
+}
+
+impl From<GetPromptResult> for serde_json::Value {
+    fn from(value: GetPromptResult) -> Self {
+        // Leave this as it should never fail
+        #[expect(clippy::unwrap_used)]
+        serde_json::to_value(value).unwrap()
+    }
 }
 
 /// An image provided to or from an LLM.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct ImageContent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub annotations: Option<Annotations>,
     pub data: String,
     #[serde(rename = "mimeType")]
@@ -334,11 +418,20 @@ pub struct InitializeRequestParams {
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct InitializeResult {
     pub capabilities: ServerCapabilities,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instructions: Option<String>,
     #[serde(rename = "protocolVersion")]
     pub protocol_version: String,
     #[serde(rename = "serverInfo")]
     pub server_info: Implementation,
+}
+
+impl From<InitializeResult> for serde_json::Value {
+    fn from(value: InitializeResult) -> Self {
+        // Leave this as it should never fail
+        #[expect(clippy::unwrap_used)]
+        serde_json::to_value(value).unwrap()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -350,6 +443,7 @@ impl ModelContextProtocolNotification for InitializedNotification {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(untagged)]
 pub enum JSONRPCBatchRequestItem {
     JSONRPCRequest(JSONRPCRequest),
     JSONRPCNotification(JSONRPCNotification),
@@ -358,6 +452,7 @@ pub enum JSONRPCBatchRequestItem {
 pub type JSONRPCBatchRequest = Vec<JSONRPCBatchRequestItem>;
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(untagged)]
 pub enum JSONRPCBatchResponseItem {
     JSONRPCResponse(JSONRPCResponse),
     JSONRPCError(JSONRPCError),
@@ -370,11 +465,14 @@ pub type JSONRPCBatchResponse = Vec<JSONRPCBatchResponseItem>;
 pub struct JSONRPCError {
     pub error: JSONRPCErrorError,
     pub id: RequestId,
+    #[serde(rename = "jsonrpc", default = "default_jsonrpc")]
+    pub jsonrpc: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct JSONRPCErrorError {
     pub code: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<serde_json::Value>,
     pub message: String,
 }
@@ -394,7 +492,10 @@ pub enum JSONRPCMessage {
 /// A notification which does not expect a response.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct JSONRPCNotification {
+    #[serde(rename = "jsonrpc", default = "default_jsonrpc")]
+    pub jsonrpc: String,
     pub method: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub params: Option<serde_json::Value>,
 }
 
@@ -402,7 +503,10 @@ pub struct JSONRPCNotification {
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct JSONRPCRequest {
     pub id: RequestId,
+    #[serde(rename = "jsonrpc", default = "default_jsonrpc")]
+    pub jsonrpc: String,
     pub method: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub params: Option<serde_json::Value>,
 }
 
@@ -410,6 +514,8 @@ pub struct JSONRPCRequest {
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct JSONRPCResponse {
     pub id: RequestId,
+    #[serde(rename = "jsonrpc", default = "default_jsonrpc")]
+    pub jsonrpc: String,
     pub result: Result,
 }
 
@@ -424,15 +530,28 @@ impl ModelContextProtocolRequest for ListPromptsRequest {
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct ListPromptsRequestParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
 }
 
 /// The server's response to a prompts/list request from the client.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct ListPromptsResult {
-    #[serde(rename = "nextCursor")]
+    #[serde(
+        rename = "nextCursor",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub next_cursor: Option<String>,
     pub prompts: Vec<Prompt>,
+}
+
+impl From<ListPromptsResult> for serde_json::Value {
+    fn from(value: ListPromptsResult) -> Self {
+        // Leave this as it should never fail
+        #[expect(clippy::unwrap_used)]
+        serde_json::to_value(value).unwrap()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -446,16 +565,29 @@ impl ModelContextProtocolRequest for ListResourceTemplatesRequest {
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct ListResourceTemplatesRequestParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
 }
 
 /// The server's response to a resources/templates/list request from the client.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct ListResourceTemplatesResult {
-    #[serde(rename = "nextCursor")]
+    #[serde(
+        rename = "nextCursor",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub next_cursor: Option<String>,
     #[serde(rename = "resourceTemplates")]
     pub resource_templates: Vec<ResourceTemplate>,
+}
+
+impl From<ListResourceTemplatesResult> for serde_json::Value {
+    fn from(value: ListResourceTemplatesResult) -> Self {
+        // Leave this as it should never fail
+        #[expect(clippy::unwrap_used)]
+        serde_json::to_value(value).unwrap()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -469,15 +601,28 @@ impl ModelContextProtocolRequest for ListResourcesRequest {
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct ListResourcesRequestParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
 }
 
 /// The server's response to a resources/list request from the client.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct ListResourcesResult {
-    #[serde(rename = "nextCursor")]
+    #[serde(
+        rename = "nextCursor",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub next_cursor: Option<String>,
     pub resources: Vec<Resource>,
+}
+
+impl From<ListResourcesResult> for serde_json::Value {
+    fn from(value: ListResourcesResult) -> Self {
+        // Leave this as it should never fail
+        #[expect(clippy::unwrap_used)]
+        serde_json::to_value(value).unwrap()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -497,6 +642,14 @@ pub struct ListRootsResult {
     pub roots: Vec<Root>,
 }
 
+impl From<ListRootsResult> for serde_json::Value {
+    fn from(value: ListRootsResult) -> Self {
+        // Leave this as it should never fail
+        #[expect(clippy::unwrap_used)]
+        serde_json::to_value(value).unwrap()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub enum ListToolsRequest {}
 
@@ -508,15 +661,28 @@ impl ModelContextProtocolRequest for ListToolsRequest {
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct ListToolsRequestParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
 }
 
 /// The server's response to a tools/list request from the client.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct ListToolsResult {
-    #[serde(rename = "nextCursor")]
+    #[serde(
+        rename = "nextCursor",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub next_cursor: Option<String>,
     pub tools: Vec<Tool>,
+}
+
+impl From<ListToolsResult> for serde_json::Value {
+    fn from(value: ListToolsResult) -> Self {
+        // Leave this as it should never fail
+        #[expect(clippy::unwrap_used)]
+        serde_json::to_value(value).unwrap()
+    }
 }
 
 /// The severity of a log message.
@@ -555,6 +721,7 @@ impl ModelContextProtocolNotification for LoggingMessageNotification {
 pub struct LoggingMessageNotificationParams {
     pub data: serde_json::Value,
     pub level: LoggingLevel,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub logger: Option<String>,
 }
 
@@ -564,6 +731,7 @@ pub struct LoggingMessageNotificationParams {
 /// to the client to interpret.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct ModelHint {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 }
 
@@ -580,36 +748,64 @@ pub struct ModelHint {
 /// balance them against other considerations.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct ModelPreferences {
-    #[serde(rename = "costPriority")]
+    #[serde(
+        rename = "costPriority",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub cost_priority: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hints: Option<Vec<ModelHint>>,
-    #[serde(rename = "intelligencePriority")]
+    #[serde(
+        rename = "intelligencePriority",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub intelligence_priority: Option<f64>,
-    #[serde(rename = "speedPriority")]
+    #[serde(
+        rename = "speedPriority",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub speed_priority: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct Notification {
     pub method: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub params: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct PaginatedRequest {
     pub method: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub params: Option<PaginatedRequestParams>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct PaginatedRequestParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct PaginatedResult {
-    #[serde(rename = "nextCursor")]
+    #[serde(
+        rename = "nextCursor",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub next_cursor: Option<String>,
+}
+
+impl From<PaginatedResult> for serde_json::Value {
+    fn from(value: PaginatedResult) -> Self {
+        // Leave this as it should never fail
+        #[expect(clippy::unwrap_used)]
+        serde_json::to_value(value).unwrap()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -631,10 +827,12 @@ impl ModelContextProtocolNotification for ProgressNotification {
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct ProgressNotificationParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
     pub progress: f64,
     #[serde(rename = "progressToken")]
     pub progress_token: ProgressToken,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total: Option<f64>,
 }
 
@@ -648,7 +846,9 @@ pub enum ProgressToken {
 /// A prompt or prompt template that the server offers.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct Prompt {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arguments: Option<Vec<PromptArgument>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub name: String,
 }
@@ -656,8 +856,10 @@ pub struct Prompt {
 /// Describes an argument that a prompt can accept.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct PromptArgument {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub required: Option<bool>,
 }
 
@@ -680,6 +882,7 @@ pub struct PromptMessage {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(untagged)]
 pub enum PromptMessageContent {
     TextContent(TextContent),
     ImageContent(ImageContent),
@@ -715,14 +918,24 @@ pub struct ReadResourceResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(untagged)]
 pub enum ReadResourceResultContents {
     TextResourceContents(TextResourceContents),
     BlobResourceContents(BlobResourceContents),
 }
 
+impl From<ReadResourceResult> for serde_json::Value {
+    fn from(value: ReadResourceResult) -> Self {
+        // Leave this as it should never fail
+        #[expect(clippy::unwrap_used)]
+        serde_json::to_value(value).unwrap()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct Request {
     pub method: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub params: Option<serde_json::Value>,
 }
 
@@ -736,11 +949,14 @@ pub enum RequestId {
 /// A known resource that the server is capable of reading.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct Resource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub annotations: Option<Annotations>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    #[serde(rename = "mimeType")]
+    #[serde(rename = "mimeType", default, skip_serializing_if = "Option::is_none")]
     pub mime_type: Option<String>,
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size: Option<i64>,
     pub uri: String,
 }
@@ -748,7 +964,7 @@ pub struct Resource {
 /// The contents of a specific resource or sub-resource.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct ResourceContents {
-    #[serde(rename = "mimeType")]
+    #[serde(rename = "mimeType", default, skip_serializing_if = "Option::is_none")]
     pub mime_type: Option<String>,
     pub uri: String,
 }
@@ -771,9 +987,11 @@ pub struct ResourceReference {
 /// A template description for resources available on the server.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct ResourceTemplate {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub annotations: Option<Annotations>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    #[serde(rename = "mimeType")]
+    #[serde(rename = "mimeType", default, skip_serializing_if = "Option::is_none")]
     pub mime_type: Option<String>,
     pub name: String,
     #[serde(rename = "uriTemplate")]
@@ -793,8 +1011,7 @@ pub struct ResourceUpdatedNotificationParams {
     pub uri: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
-pub struct Result {}
+pub type Result = serde_json::Value;
 
 /// The sender or recipient of messages and data in a conversation.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -808,6 +1025,7 @@ pub enum Role {
 /// Represents a root directory or file that the server can operate on.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct Root {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     pub uri: String,
 }
@@ -828,6 +1046,7 @@ pub struct SamplingMessage {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(untagged)]
 pub enum SamplingMessageContent {
     TextContent(TextContent),
     ImageContent(ImageContent),
@@ -837,33 +1056,52 @@ pub enum SamplingMessageContent {
 /// Capabilities that a server may support. Known capabilities are defined here, in this schema, but this is not a closed set: any server can define its own, additional capabilities.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct ServerCapabilities {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completions: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub experimental: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub logging: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompts: Option<ServerCapabilitiesPrompts>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resources: Option<ServerCapabilitiesResources>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tools: Option<ServerCapabilitiesTools>,
 }
 
 /// Present if the server offers any tools to call.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct ServerCapabilitiesTools {
-    #[serde(rename = "listChanged")]
+    #[serde(
+        rename = "listChanged",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub list_changed: Option<bool>,
 }
 
 /// Present if the server offers any resources to read.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct ServerCapabilitiesResources {
-    #[serde(rename = "listChanged")]
+    #[serde(
+        rename = "listChanged",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub list_changed: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subscribe: Option<bool>,
 }
 
 /// Present if the server offers any prompt templates.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct ServerCapabilitiesPrompts {
-    #[serde(rename = "listChanged")]
+    #[serde(
+        rename = "listChanged",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub list_changed: Option<bool>,
 }
 
@@ -897,6 +1135,7 @@ pub enum ServerNotification {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(untagged)]
 pub enum ServerRequest {
     PingRequest(PingRequest),
     CreateMessageRequest(CreateMessageRequest),
@@ -904,6 +1143,7 @@ pub enum ServerRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(untagged)]
 pub enum ServerResult {
     Result(Result),
     InitializeResult(InitializeResult),
@@ -948,6 +1188,7 @@ pub struct SubscribeRequestParams {
 /// Text provided to or from an LLM.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct TextContent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub annotations: Option<Annotations>,
     pub text: String,
     pub r#type: String, // &'static str = "text"
@@ -955,7 +1196,7 @@ pub struct TextContent {
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct TextResourceContents {
-    #[serde(rename = "mimeType")]
+    #[serde(rename = "mimeType", default, skip_serializing_if = "Option::is_none")]
     pub mime_type: Option<String>,
     pub text: String,
     pub uri: String,
@@ -964,7 +1205,9 @@ pub struct TextResourceContents {
 /// Definition for a tool the client can call.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct Tool {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub annotations: Option<ToolAnnotations>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(rename = "inputSchema")]
     pub input_schema: ToolInputSchema,
@@ -974,7 +1217,9 @@ pub struct Tool {
 /// A JSON Schema object defining the expected parameters for the tool.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct ToolInputSchema {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub properties: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub required: Option<Vec<String>>,
     pub r#type: String, // &'static str = "object"
 }
@@ -989,14 +1234,31 @@ pub struct ToolInputSchema {
 /// received from untrusted servers.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct ToolAnnotations {
-    #[serde(rename = "destructiveHint")]
+    #[serde(
+        rename = "destructiveHint",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub destructive_hint: Option<bool>,
-    #[serde(rename = "idempotentHint")]
+    #[serde(
+        rename = "idempotentHint",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub idempotent_hint: Option<bool>,
-    #[serde(rename = "openWorldHint")]
+    #[serde(
+        rename = "openWorldHint",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub open_world_hint: Option<bool>,
-    #[serde(rename = "readOnlyHint")]
+    #[serde(
+        rename = "readOnlyHint",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub read_only_hint: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
 }
 

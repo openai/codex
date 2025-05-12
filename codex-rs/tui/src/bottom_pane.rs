@@ -79,7 +79,7 @@ pub(crate) struct BottomPaneParams {
     pub(crate) has_input_focus: bool,
 }
 
-impl BottomPane<'_> {
+impl<'a> BottomPane<'a> {
     pub fn new(
         BottomPaneParams {
             app_event_tx,
@@ -89,11 +89,12 @@ impl BottomPane<'_> {
         let mut textarea = TextArea::default();
         textarea.set_placeholder_text("send a message");
         textarea.set_cursor_line_style(Style::default());
-        update_border_for_input_focus(&mut textarea, has_input_focus);
+        let state = PaneState::TextInput;
+        update_border_for_input_focus(&mut textarea, &state, has_input_focus);
 
         Self {
             textarea,
-            state: PaneState::TextInput,
+            state,
             app_event_tx,
             has_input_focus,
             is_task_running: false,
@@ -112,7 +113,7 @@ impl BottomPane<'_> {
 
     pub(crate) fn set_input_focus(&mut self, has_input_focus: bool) {
         self.has_input_focus = has_input_focus;
-        update_border_for_input_focus(&mut self.textarea, has_input_focus);
+        update_border_for_input_focus(&mut self.textarea, &self.state, has_input_focus);
     }
 
     /// Forward a key event to the appropriate child widget.
@@ -144,14 +145,14 @@ impl BottomPane<'_> {
                             text_rows as u16 + TEXTAREA_BORDER_LINES
                         };
 
-                        self.state = PaneState::StatusIndicator {
+                        self.set_state(PaneState::StatusIndicator {
                             view: StatusIndicatorWidget::new(
                                 self.app_event_tx.clone(),
                                 desired_height,
                             ),
-                        };
+                        })?;
                     } else {
-                        self.state = PaneState::TextInput;
+                        self.set_state(PaneState::TextInput)?;
                     }
                 }
 
@@ -191,13 +192,13 @@ impl BottomPane<'_> {
         match self.state {
             PaneState::TextInput => {
                 if is_task_running {
-                    self.state = PaneState::StatusIndicator {
+                    self.set_state(PaneState::StatusIndicator {
                         view: StatusIndicatorWidget::new(self.app_event_tx.clone(), {
                             let text_rows =
                                 self.textarea.lines().len().max(MIN_TEXTAREA_ROWS) as u16;
                             text_rows + TEXTAREA_BORDER_LINES
                         }),
-                    };
+                    })?;
                 } else {
                     return Ok(());
                 }
@@ -206,7 +207,7 @@ impl BottomPane<'_> {
                 if is_task_running {
                     return Ok(());
                 } else {
-                    self.state = PaneState::TextInput;
+                    self.set_state(PaneState::TextInput)?;
                 }
             }
             PaneState::ApprovalModal { .. } => {
@@ -220,33 +221,35 @@ impl BottomPane<'_> {
     }
 
     /// Enqueue a new approval request coming from the agent.
-    ///
-    /// Returns `true` when this is the *first* modal - in that case the caller
-    /// should trigger a redraw so that the modal becomes visible.
-    pub fn push_approval_request(&mut self, request: ApprovalRequest) -> bool {
+    pub fn push_approval_request(
+        &mut self,
+        request: ApprovalRequest,
+    ) -> Result<(), SendError<AppEvent>> {
         let widget = UserApprovalWidget::new(request, self.app_event_tx.clone());
 
         match &mut self.state {
-            PaneState::StatusIndicator { .. } => {
-                self.state = PaneState::ApprovalModal {
-                    current: widget,
-                    queue: Vec::new(),
-                };
-                true // Needs redraw so the modal appears.
-            }
+            PaneState::StatusIndicator { .. } => self.set_state(PaneState::ApprovalModal {
+                current: widget,
+                queue: Vec::new(),
+            }),
             PaneState::TextInput => {
                 // Transition to modal state with an empty queue.
-                self.state = PaneState::ApprovalModal {
+                self.set_state(PaneState::ApprovalModal {
                     current: widget,
                     queue: Vec::new(),
-                };
-                true // Needs redraw so the modal appears.
+                })
             }
             PaneState::ApprovalModal { queue, .. } => {
                 queue.push(widget);
-                false // Already in modal mode - no redraw required.
+                Ok(())
             }
         }
+    }
+
+    fn set_state(&mut self, state: PaneState<'a>) -> Result<(), SendError<AppEvent>> {
+        self.state = state;
+        update_border_for_input_focus(&mut self.textarea, &self.state, self.has_input_focus);
+        self.request_redraw()
     }
 
     fn request_redraw(&self) -> Result<(), SendError<AppEvent>> {
@@ -277,21 +280,40 @@ impl WidgetRef for &BottomPane<'_> {
     }
 }
 
-fn update_border_for_input_focus(textarea: &mut TextArea, has_input_focus: bool) {
-    let (title, border_style) = if has_input_focus {
-        (
-            "use Enter to send for now (Ctrl‑D to quit)",
-            Style::default().dim(),
-        )
-    } else {
-        ("", Style::default())
-    };
-    let right_title = if has_input_focus {
-        Line::from("press enter to send").alignment(Alignment::Right)
-    } else {
-        Line::from("")
+// Note this sets the border for the TextArea, but the TextArea is not visible
+// for all variants of PaneState.
+fn update_border_for_input_focus(textarea: &mut TextArea, state: &PaneState, has_focus: bool) {
+    struct BlockState {
+        title: &'static str,
+        right_title: Line<'static>,
+        border_style: Style,
+    }
+
+    let accepting_input = match state {
+        PaneState::TextInput => true,
+        PaneState::ApprovalModal { .. } => true,
+        PaneState::StatusIndicator { .. } => false,
     };
 
+    let block_state = if has_focus && accepting_input {
+        BlockState {
+            title: "use Enter to send for now (Ctrl-D to quit)",
+            right_title: Line::from("press enter to send").alignment(Alignment::Right),
+            border_style: Style::default(),
+        }
+    } else {
+        BlockState {
+            title: "",
+            right_title: Line::from(""),
+            border_style: Style::default().dim(),
+        }
+    };
+
+    let BlockState {
+        title,
+        right_title,
+        border_style,
+    } = block_state;
     textarea.set_block(
         ratatui::widgets::Block::default()
             .title_bottom(title)

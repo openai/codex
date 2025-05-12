@@ -20,3 +20,237 @@ This folder is the root of a Cargo workspace. It contains quite a bit of experim
 - [`exec/`](./exec) "headless" CLI for use in automation.
 - [`tui/`](./tui) CLI that launches a fullscreen TUI built with [Ratatui](https://ratatui.rs/).
 - [`cli/`](./cli) CLI multitool that provides the aforementioned CLIs via subcommands.
+
+## Config
+
+The CLI can be configured via `~/.codex/config.toml`. It supports the following options:
+
+### model
+
+The model that Codex should use.
+
+```toml
+model = "o3"  # overrides the default of "o4-mini"
+```
+
+### model_provider
+
+Codex comes bundled with a number of "model providers" predefined. This config value is a string that indicates which provider to use. You can also define your own providers via `model_providers`.
+
+For example, if you are running ollama with Mistral locally, then you would need to add the following to your config:
+
+```toml
+model = "mistral"
+model_provider = "ollama"
+```
+
+because the following definition for `ollama` is included in Codex:
+
+```toml
+[model_providers.ollama]
+name = "Ollama"
+base_url = "http://localhost:11434/v1"
+wire_api = "chat"
+```
+
+This option defaults to `"openai"` and the corresponding provider is defined as follows:
+
+```toml
+[model_providers.openai]
+name = "OpenAI"
+base_url = "https://api.openai.com/v1"
+env_key = "OPENAI_API_KEY"
+wire_api = "responses"
+```
+
+### model_providers
+
+This option lets you override and amend the default set of model providers bundled with Codex. This value is a map where the key is the value to use with `model_provider` to select the correspodning provider.
+
+For example, if you wanted to add a provider that uses the OpenAI 4o model via the chat completions API, then you
+
+```toml
+# Recall that in TOML, root keys must be listed before tables.
+model = "gpt-4o"
+model_provider = "openai-chat-completions"
+
+[model_providers.openai-chat-completions]
+# Name of the provider that will be displayed in the Codex UI.
+name = "OpenAI using Chat Completions"
+# The path `/chat/completions` will be amended to this URL to make the POST
+# request for the chat completions.
+base_url = "https://api.openai.com/v1"
+# If `env_key` is set, identifies an environment variable that must be set when
+# using Codex with this provider. The value of the environment variable must be
+# non-empty and will be used in the `Bearer TOKEN` HTTP header for the POST request.
+env_key = "OPENAI_API_KEY"
+# valid values for wire_api are "chat" and "responses".
+wire_api = "chat"
+```
+
+### approval_policy
+
+Determines when the user should be prompted to approve whether Codex can execute a command:
+
+```toml
+# This is analogous to --suggest in the TypeScript Codex CLI
+approval_policy = "unless-allow-listed"
+```
+
+```toml
+# If the command fails when run in the sandbox, Codex asks for permission to
+# retry the command outside the sandbox.
+approval_policy = "on-failure"
+```
+
+```toml
+# User is never prompted: if the command fails, Codex will automatically try
+# something out. Note the `exec` subcommand always uses this mode.
+approval_policy = "never"
+```
+
+### sandbox_permissions
+
+List of permissions to grant to the sandbox that Codex uses to execute untrusted commands:
+
+```toml
+# This is comparable to --full-auto in the TypeScript Codex CLI, though
+# specifying `disk-write-platform-global-temp-folder` adds /tmp as a writable
+# folder in addition to $TMPDIR.
+sandbox_permissions = [
+    "disk-full-read-access",
+    "disk-write-platform-user-temp-folder",
+    "disk-write-platform-global-temp-folder",
+    "disk-write-cwd",
+]
+```
+
+To add additional writable folders, use `disk-write-folder`, which takes a parameter (this can be specified multiple times):
+
+```toml
+sandbox_permissions = [
+    # ...
+    "disk-write-folder=/Users/mbolin/.pyenv/shims",
+]
+```
+
+### mcp_servers
+
+Defines the list of MCP servers that Codex can consult for tool use. Currently, only servers that are launched by executing a program that communicate over stdio are supported. For servers that use the SSE transport, consider an adapter like [mcp-proxy](https://github.com/sparfenyuk/mcp-proxy).
+
+**Note:** Codex may cache the list of tools and resources from an MCP server so that Codex can include this information in context at startup without spawning all the servers. This is designed to save resources by loading MCP servers lazily.
+
+This config option is comparable to how Claude and Cursor define `mcpServers` in their respective JSON config files, though because Codex uses TOML for its config language, the format is slightly different. For example, the following config in JSON:
+
+```json
+{
+  "mcpServers": {
+    "server-name": {
+      "command": "npx",
+      "args": ["-y", "mcp-server"],
+      "env": {
+        "API_KEY": "value"
+      }
+    }
+  }
+}
+```
+
+Should be represented as follows in `~/.codex/config.toml`:
+
+```toml
+# IMPORTANT: the top-level key is `mcp_servers` rather than `mcpServers`.
+[mcp_servers.server-name]
+command = "npx"
+args = ["-y", "mcp-server"]
+env = { "API_KEY" = "value" }
+```
+
+### disable_response_storage
+
+Currently, customers whose accounts are set to use Zero Data Retention (ZDR) must set `disable_response_storage` to `true` so that Codex uses an alternative to the Responses API that works with ZDR:
+
+```toml
+disable_response_storage = true
+```
+
+### notify
+
+Specify a program that will be executed to get notified about events generated by Codex. Note that the program will receive the notification argument as a string of JSON, e.g.:
+
+```json
+{
+  "type": "agent-turn-complete",
+  "turn-id": "12345",
+  "input-messages": ["Rename `foo` to `bar` and update the callsites."],
+  "last-assistant-message": "Rename complete and verified `cargo build` succeeds."
+}
+```
+
+The `"type"` property will always be set. Currently, `"agent-turn-complete"` is the only notification type that is supported.
+
+As an example, here is a Python script that parses the JSON and decides whether to show a desktop push notification using [terminal-notifier](https://github.com/julienXX/terminal-notifier) on macOS:
+
+```python
+#!/usr/bin/env python3
+
+import json
+import subprocess
+import sys
+
+
+def main() -> int:
+    if len(sys.argv) != 2:
+        print("Usage: notify.py <NOTIFICATION_JSON>")
+        return 1
+
+    try:
+        notification = json.loads(sys.argv[1])
+    except json.JSONDecodeError:
+        return 1
+
+    match notification_type := notification.get("type"):
+        case "agent-turn-complete":
+            assistant_message = notification.get("last-assistant-message")
+            if assistant_message:
+                title = f"Codex: {assistant_message}"
+            else:
+                title = "Codex: Turn Complete!"
+            input_messages = notification.get("input_messages", [])
+            message = " ".join(input_messages)
+            title += message
+        case _:
+            print(f"not sending a push notification for: {notification_type}")
+            return 0
+
+    subprocess.check_output(
+        [
+            "terminal-notifier",
+            "-title",
+            title,
+            "-message",
+            message,
+            "-group",
+            "codex",
+            "-ignoreDnD",
+            "-activate",
+            "com.googlecode.iterm2",
+        ]
+    )
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+```
+
+To have Codex use this script for notifications, you would configure it via `notify` in `~/.codex/config.toml` using the appropriate path to `notify.py` on your computer:
+
+```toml
+notify = ["python3", "/Users/mbolin/.codex/notify.py"]
+```
+
+### project_doc_max_bytes
+
+Maximum number of bytes to read from an `AGENTS.md` file to include in the instructions sent with the first turn of a session. Defaults to 32 KiB.

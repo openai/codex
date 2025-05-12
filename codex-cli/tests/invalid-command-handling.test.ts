@@ -5,12 +5,12 @@ import { describe, it, expect, vi } from "vitest";
 // ---------------------------------------------------------------------------
 
 import { exec as rawExec } from "../src/utils/agent/sandbox/raw-exec.js";
-
+import type { AppConfig } from "../src/utils/config.js";
 describe("rawExec – invalid command handling", () => {
   it("resolves with non‑zero exit code when executable is missing", async () => {
     const cmd = ["definitely-not-a-command-1234567890"];
-
-    const result = await rawExec(cmd, {});
+    const config = { model: "any", instructions: "" } as AppConfig;
+    const result = await rawExec(cmd, {}, config);
 
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr.length).toBeGreaterThan(0);

@@ -4,10 +4,14 @@
 //! between user and agent.
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
 
+use mcp_types::CallToolResult;
 use serde::Deserialize;
 use serde::Serialize;
+
+use crate::model_provider_info::ModelProviderInfo;
 
 /// Submission Queue Entry - requests from user
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -21,10 +25,14 @@ pub struct Submission {
 /// Submission operation
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
 #[non_exhaustive]
 pub enum Op {
     /// Configure the model session.
     ConfigureSession {
+        /// Provider identifier ("openai", "openrouter", ...).
+        provider: ModelProviderInfo,
+
         /// If not specified, server will use its default model.
         model: String,
         /// Model instructions
@@ -36,6 +44,22 @@ pub enum Op {
         /// Disable server-side response storage (send full context each request)
         #[serde(default)]
         disable_response_storage: bool,
+
+        /// Optional external notifier command tokens. Present only when the
+        /// client wants the agent to spawn a program after each completed
+        /// turn.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default)]
+        notify: Option<Vec<String>>,
+
+        /// Working directory that should be treated as the *root* of the
+        /// session. All relative paths supplied by the model as well as the
+        /// execution sandbox are resolved against this directory **instead**
+        /// of the process-wide current working directory. CLI front-ends are
+        /// expected to expand this to an absolute path before sending the
+        /// `ConfigureSession` operation so that the business-logic layer can
+        /// operate deterministically.
+        cwd: std::path::PathBuf,
     },
 
     /// Abort current task.
@@ -150,7 +174,7 @@ impl SandboxPolicy {
             .any(|perm| matches!(perm, SandboxPermission::NetworkFullAccess))
     }
 
-    pub fn get_writable_roots(&self) -> Vec<PathBuf> {
+    pub fn get_writable_roots_with_cwd(&self, cwd: &Path) -> Vec<PathBuf> {
         let mut writable_roots = Vec::<PathBuf>::new();
         for perm in &self.permissions {
             use SandboxPermission::*;
@@ -186,12 +210,9 @@ impl SandboxPolicy {
                         writable_roots.push(PathBuf::from("/tmp"));
                     }
                 }
-                DiskWriteCwd => match std::env::current_dir() {
-                    Ok(cwd) => writable_roots.push(cwd),
-                    Err(err) => {
-                        tracing::error!("Failed to get current working directory: {err}");
-                    }
-                },
+                DiskWriteCwd => {
+                    writable_roots.push(cwd.to_path_buf());
+                }
                 DiskWriteFolder { folder } => {
                     writable_roots.push(folder.clone());
                 }
@@ -296,10 +317,41 @@ pub enum EventMsg {
         message: String,
     },
 
+    /// Reasoning event from agent.
+    AgentReasoning {
+        text: String,
+    },
+
     /// Ack the client's configure message.
     SessionConfigured {
         /// Tell the client what model is being queried.
         model: String,
+    },
+
+    McpToolCallBegin {
+        /// Identifier so this can be paired with the McpToolCallEnd event.
+        call_id: String,
+
+        /// Name of the MCP server as defined in the config.
+        server: String,
+
+        /// Name of the tool as given by the MCP server.
+        tool: String,
+
+        /// Arguments to the tool call.
+        arguments: Option<serde_json::Value>,
+    },
+
+    McpToolCallEnd {
+        /// Identifier for the McpToolCallBegin that finished.
+        call_id: String,
+
+        /// Whether the tool call was successful. If `false`, `result` might
+        /// not be present.
+        success: bool,
+
+        /// Result of the tool call. Note this could be an error.
+        result: Option<CallToolResult>,
     },
 
     /// Notification that the server is about to execute a command.
@@ -310,7 +362,7 @@ pub enum EventMsg {
         command: Vec<String>,
         /// The command's working directory if not the default cwd for the
         /// agent.
-        cwd: String,
+        cwd: PathBuf,
     },
 
     ExecCommandEnd {

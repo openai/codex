@@ -1,7 +1,9 @@
+#![expect(clippy::expect_used)]
 use mcp_types::ClientCapabilities;
 use mcp_types::ClientRequest;
 use mcp_types::Implementation;
 use mcp_types::InitializeRequestParams;
+use mcp_types::JSONRPC_VERSION;
 use mcp_types::JSONRPCMessage;
 use mcp_types::JSONRPCRequest;
 use mcp_types::RequestId;
@@ -30,6 +32,7 @@ fn deserialize_initialize_request() {
     };
 
     let expected_req = JSONRPCRequest {
+        jsonrpc: JSONRPC_VERSION.into(),
         id: RequestId::Integer(1),
         method: "initialize".into(),
         params: Some(json!({

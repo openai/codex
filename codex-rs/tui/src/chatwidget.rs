@@ -1,6 +1,7 @@
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::mpsc::SendError;
 use std::sync::mpsc::Sender;
-use std::sync::Arc;
 
 use codex_core::codex_wrapper::init_codex;
 use codex_core::config::Config;
@@ -16,8 +17,8 @@ use ratatui::layout::Layout;
 use ratatui::layout::Rect;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
-use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::unbounded_channel;
 
 use crate::app_event::AppEvent;
 use crate::bottom_pane::BottomPane;
@@ -34,7 +35,6 @@ pub(crate) struct ChatWidget<'a> {
     bottom_pane: BottomPane<'a>,
     input_focus: InputFocus,
     config: Config,
-    cwd: std::path::PathBuf,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -48,14 +48,9 @@ impl ChatWidget<'_> {
         config: Config,
         app_event_tx: Sender<AppEvent>,
         initial_prompt: Option<String>,
-        initial_images: Vec<std::path::PathBuf>,
+        initial_images: Vec<PathBuf>,
     ) -> Self {
         let (codex_op_tx, mut codex_op_rx) = unbounded_channel::<Op>();
-
-        // Determine the current working directory up‑front so we can display
-        // it alongside the Session information when the session is
-        // initialised.
-        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
 
         let app_event_tx_clone = app_event_tx.clone();
         // Create the Codex asynchronously so the UI loads as quickly as possible.
@@ -105,7 +100,6 @@ impl ChatWidget<'_> {
             }),
             input_focus: InputFocus::BottomPane,
             config,
-            cwd: cwd.clone(),
         };
 
         let _ = chat_widget.submit_welcome_message();
@@ -149,12 +143,7 @@ impl ChatWidget<'_> {
                     InputResult::Submitted(text) => {
                         // Special client‑side commands start with a leading slash.
                         let trimmed = text.trim();
-
                         match trimmed {
-                            "q" => {
-                                // Gracefully request application shutdown.
-                                let _ = self.app_event_tx.send(AppEvent::ExitRequest);
-                            }
                             "/clear" => {
                                 // Clear the current conversation history without exiting.
                                 self.conversation_history.clear();
@@ -173,12 +162,8 @@ impl ChatWidget<'_> {
     }
 
     fn submit_welcome_message(&mut self) -> std::result::Result<(), SendError<AppEvent>> {
-        self.handle_codex_event(Event {
-            id: "welcome".to_string(),
-            msg: EventMsg::AgentMessage {
-                message: "Welcome to codex!".to_string(),
-            },
-        })?;
+        self.conversation_history.add_welcome_message(&self.config);
+        self.request_redraw()?;
         Ok(())
     }
 
@@ -193,7 +178,7 @@ impl ChatWidget<'_> {
     fn submit_user_message_with_images(
         &mut self,
         text: String,
-        image_paths: Vec<std::path::PathBuf>,
+        image_paths: Vec<PathBuf>,
     ) -> std::result::Result<(), SendError<AppEvent>> {
         let mut items: Vec<InputItem> = Vec::new();
 
@@ -233,17 +218,19 @@ impl ChatWidget<'_> {
             EventMsg::SessionConfigured { model } => {
                 // Record session information at the top of the conversation.
                 self.conversation_history
-                    .add_session_info(&self.config, model, self.cwd.clone());
+                    .add_session_info(&self.config, model);
                 self.request_redraw()?;
             }
             EventMsg::AgentMessage { message } => {
                 self.conversation_history.add_agent_message(message);
                 self.request_redraw()?;
             }
+            EventMsg::AgentReasoning { text } => {
+                self.conversation_history.add_agent_reasoning(text);
+                self.request_redraw()?;
+            }
             EventMsg::TaskStarted => {
                 self.bottom_pane.set_task_running(true)?;
-                self.conversation_history
-                    .add_background_event(format!("task {id} started"));
                 self.request_redraw()?;
             }
             EventMsg::TaskComplete => {
@@ -251,8 +238,7 @@ impl ChatWidget<'_> {
                 self.request_redraw()?;
             }
             EventMsg::Error { message } => {
-                self.conversation_history
-                    .add_background_event(format!("Error: {message}"));
+                self.conversation_history.add_error(message);
                 self.bottom_pane.set_task_running(false)?;
             }
             EventMsg::ExecApprovalRequest {
@@ -266,10 +252,7 @@ impl ChatWidget<'_> {
                     cwd,
                     reason,
                 };
-                let needs_redraw = self.bottom_pane.push_approval_request(request);
-                if needs_redraw {
-                    self.request_redraw()?;
-                }
+                self.bottom_pane.push_approval_request(request)?;
             }
             EventMsg::ApplyPatchApprovalRequest {
                 changes,
@@ -298,8 +281,7 @@ impl ChatWidget<'_> {
                     reason,
                     grant_root,
                 };
-                let _needs_redraw = self.bottom_pane.push_approval_request(request);
-                // Redraw is always need because the history has changed.
+                self.bottom_pane.push_approval_request(request)?;
                 self.request_redraw()?;
             }
             EventMsg::ExecCommandBegin {
@@ -332,6 +314,25 @@ impl ChatWidget<'_> {
             } => {
                 self.conversation_history
                     .record_completed_exec_command(call_id, stdout, stderr, exit_code);
+                self.request_redraw()?;
+            }
+            EventMsg::McpToolCallBegin {
+                call_id,
+                server,
+                tool,
+                arguments,
+            } => {
+                self.conversation_history
+                    .add_active_mcp_tool_call(call_id, server, tool, arguments);
+                self.request_redraw()?;
+            }
+            EventMsg::McpToolCallEnd {
+                call_id,
+                success,
+                result,
+            } => {
+                self.conversation_history
+                    .record_completed_mcp_tool_call(call_id, success, result);
                 self.request_redraw()?;
             }
             event => {
