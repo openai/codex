@@ -679,7 +679,7 @@ nix run .#codex-cli # For running codex-cli
 nix run .#codex-rs # For running codex-rs
 ```
 
-#### Use direnv with flakes
+Use direnv with flakes
 
 If you have direnv installed, you can use the following `.envrc` to automatically enter the Nix shell when you `cd` into the project directory:
 
