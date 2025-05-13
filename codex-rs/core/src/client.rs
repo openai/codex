@@ -166,9 +166,10 @@ impl ModelClient {
 
         debug!("tools_json: {}", serde_json::to_string_pretty(&tools_json)?);
 
+        let full_instructions = prompt.get_full_instructions();
         let payload = Payload {
             model: &self.model,
-            instructions: prompt.instructions.as_ref(),
+            instructions: &full_instructions,
             input: &prompt.input,
             tools: &tools_json,
             tool_choice: "auto",
