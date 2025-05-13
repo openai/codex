@@ -50,6 +50,7 @@ export default function App({
       <TerminalChatPastRollout
         session={rollout.session}
         items={rollout.items}
+        fileOpener={config.fileOpener}
       />
     );
   }

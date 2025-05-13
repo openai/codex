@@ -135,6 +135,8 @@ export function getApiKey(provider: string = "openai"): string | undefined {
   return undefined;
 }
 
+export type FileOpenerScheme = "vscode" | "cursor" | "windsurf";
+
 // Represents config as persisted in config.json.
 export type StoredConfig = {
   model?: string;
@@ -162,6 +164,12 @@ export type StoredConfig = {
   /** User-defined safe commands */
   safeCommands?: Array<string>;
   reasoningEffort?: ReasoningEffort;
+
+  /**
+   * URI-based file opener. This is used when linking code references in
+   * terminal output.
+   */
+  fileOpener?: FileOpenerScheme;
 };
 
 // Minimal config written on first run.  An *empty* model string ensures that
@@ -206,6 +214,7 @@ export type AppConfig = {
       maxLines: number;
     };
   };
+  fileOpener?: FileOpenerScheme;
 };
 
 // Formatting (quiet mode-only).
@@ -429,6 +438,7 @@ export const loadConfig = (
     },
     disableResponseStorage: storedConfig.disableResponseStorage === true,
     reasoningEffort: storedConfig.reasoningEffort,
+    fileOpener: storedConfig.fileOpener,
   };
 
   // -----------------------------------------------------------------------
