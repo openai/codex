@@ -531,6 +531,7 @@ dependencies = [
  "patch",
  "path-absolutize",
  "predicates",
+ "pretty_assertions",
  "rand",
  "reqwest",
  "seccompiler",
