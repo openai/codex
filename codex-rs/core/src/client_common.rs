@@ -2,11 +2,16 @@ use crate::error::Result;
 use crate::models::ResponseItem;
 use futures::Stream;
 use serde::Serialize;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::task::Context;
 use std::task::Poll;
 use tokio::sync::mpsc;
+
+/// The `instructions` field in the payload sent to a model should always start
+/// with this content.
+const BASE_INSTRUCTIONS: &str = include_str!("../prompt.md");
 
 /// API request payload for a single model turn.
 #[derive(Default, Debug, Clone)]
@@ -15,7 +20,8 @@ pub struct Prompt {
     pub input: Vec<ResponseItem>,
     /// Optional previous response ID (when storage is enabled).
     pub prev_id: Option<String>,
-    /// Optional initial instructions (only sent on first turn).
+    /// Optional instructions from the user to amend to the built-in agent
+    /// instructions.
     pub instructions: Option<String>,
     /// Whether to store response on server side (disable_response_storage = !store).
     pub store: bool,
@@ -24,6 +30,18 @@ pub struct Prompt {
     /// the "fully qualified" tool name (i.e., prefixed with the server name),
     /// which should be reported to the model in place of Tool::name.
     pub extra_tools: HashMap<String, mcp_types::Tool>,
+}
+
+impl Prompt {
+    pub(crate) fn get_full_instructions(&self) -> Cow<str> {
+        match &self.instructions {
+            Some(instructions) => {
+                let instructions = format!("{BASE_INSTRUCTIONS}\n{instructions}");
+                Cow::Owned(instructions)
+            }
+            None => Cow::Borrowed(BASE_INSTRUCTIONS),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -54,8 +72,7 @@ pub(crate) enum Summary {
 #[derive(Debug, Serialize)]
 pub(crate) struct Payload<'a> {
     pub(crate) model: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) instructions: Option<&'a String>,
+    pub(crate) instructions: &'a str,
     // TODO(mbolin): ResponseItem::Other should not be serialized. Currently,
     // we code defensively to avoid this case, but perhaps we should use a
     // separate enum for serialization.
