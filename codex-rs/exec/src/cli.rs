@@ -14,6 +14,10 @@ pub struct Cli {
     #[arg(long, short = 'm')]
     pub model: Option<String>,
 
+    /// Configuration profile from config.toml to specify default options.
+    #[arg(long = "profile", short = 'p')]
+    pub config_profile: Option<String>,
+
     /// Convenience alias for low-friction sandboxed automatic execution (network-disabled sandbox that can write to cwd and TMPDIR)
     #[arg(long = "full-auto", default_value_t = false)]
     pub full_auto: bool,

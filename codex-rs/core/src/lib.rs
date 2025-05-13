@@ -13,6 +13,7 @@ pub mod codex;
 pub use codex::Codex;
 pub mod codex_wrapper;
 pub mod config;
+pub mod config_profile;
 mod conversation_history;
 pub mod error;
 pub mod exec;
