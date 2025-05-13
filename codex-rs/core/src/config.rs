@@ -10,11 +10,6 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-/// Embedded fallback instructions that mirror the TypeScript CLI’s default
-/// system prompt. These are compiled into the binary so a clean install behaves
-/// correctly even if the user has not created `~/.codex/instructions.md`.
-const EMBEDDED_INSTRUCTIONS: &str = include_str!("../prompt.md");
-
 /// Maximum number of bytes of the documentation that will be embedded. Larger
 /// files are *silently truncated* to this size so we do not take up too much of
 /// the context window.
@@ -42,7 +37,7 @@ pub struct Config {
     /// who have opted into Zero Data Retention (ZDR).
     pub disable_response_storage: bool,
 
-    /// System instructions.
+    /// User-provided instructions from instructions.md.
     pub instructions: Option<String>,
 
     /// Optional external notifier command. When set, Codex will spawn this
@@ -198,9 +193,7 @@ impl Config {
         cfg: ConfigToml,
         overrides: ConfigOverrides,
     ) -> std::io::Result<Self> {
-        // Instructions: user-provided instructions.md > embedded default.
-        let instructions =
-            Self::load_instructions().or_else(|| Some(EMBEDDED_INSTRUCTIONS.to_string()));
+        let instructions = Self::load_instructions();
 
         // Destructure ConfigOverrides fully to ensure all overrides are applied.
         let ConfigOverrides {
@@ -289,7 +282,14 @@ impl Config {
     fn load_instructions() -> Option<String> {
         let mut p = codex_dir().ok()?;
         p.push("instructions.md");
-        std::fs::read_to_string(&p).ok()
+        std::fs::read_to_string(&p).ok().and_then(|s| {
+            let s = s.trim();
+            if s.is_empty() {
+                None
+            } else {
+                Some(s.to_string())
+            }
+        })
     }
 
     /// Meant to be used exclusively for tests: `load_with_overrides()` should

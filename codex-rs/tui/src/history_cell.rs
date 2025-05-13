@@ -139,7 +139,7 @@ impl HistoryCell {
 
     pub(crate) fn new_agent_reasoning(text: String) -> Self {
         let mut lines: Vec<Line<'static>> = Vec::new();
-        lines.push(Line::from("codex reasoning".magenta().italic()));
+        lines.push(Line::from("thinking".magenta().italic()));
         append_markdown(&text, &mut lines);
         lines.push(Line::from(""));
 

@@ -15,6 +15,7 @@ import {
   getToolHandler,
   getRegisteredToolDefinitions,
 } from "../../tools/tool-registry.js";
+import { CLI_VERSION } from "../../version.js";
 import {
   OPENAI_TIMEOUT_MS,
   OPENAI_ORGANIZATION,
@@ -28,7 +29,6 @@ import { parseToolCallArguments } from "../parsers.js";
 import { responsesCreateViaChatCompletions } from "../responses.js";
 import {
   ORIGIN,
-  CLI_VERSION,
   getSessionId,
   setCurrentModel,
   setSessionId,
