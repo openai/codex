@@ -257,14 +257,18 @@ export default function TerminalChat({
         setItems((prev) => {
           const updated = uniqueById([...prev, item as ResponseItem]);
           saveRollout(sessionId, updated);
-          // Persist memory if enabled: record assistant outputs
-          if (config.memory?.enabled) {
+          // Persist memory if enabled: record assistant outputs (only items with content)
+          if (config.memory?.enabled && "content" in item) {
             try {
-              // Record assistant (codex) output
-              const content = (item as ResponseItem).content || [];
-              const texts = content
-                .filter((c) => c.type === "output_text")
-                .map((c) => (c as { text: string }).text)
+              const contentItems = item.content ?? [];
+              const texts = (
+                contentItems as Array<{ type: "output_text"; text: string }>
+              )
+                .filter(
+                  (c): c is { type: "output_text"; text: string } =>
+                    c.type === "output_text",
+                )
+                .map((c) => c.text)
                 .join(" ");
               if (texts) {
                 appendMemoryFile(process.cwd(), `codex: ${texts}`);
