@@ -584,7 +584,7 @@ export default function TerminalChatInput({
 
         try {
           const os = await import("node:os");
-          const { CLI_VERSION } = await import("../../utils/session.js");
+          const { CLI_VERSION } = await import("../../version.js");
           const { buildBugReportUrl } = await import(
             "../../utils/bug-report.js"
           );
