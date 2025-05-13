@@ -330,6 +330,7 @@ function rewriteFileCitations(
     return markdown;
   }
 
+  citationRegex.lastIndex = 0;
   return markdown.replace(citationRegex, (_match, file, start, _end) => {
     const absPath = path.resolve(cwd, file);
     const uri = `${fileOpener}://file${absPath}:${start}`;
