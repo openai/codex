@@ -137,14 +137,16 @@ orchestration is:
 ${GREEN}${BOLD}### ${YELLOW}src/cli.tsx${COLOR_OFF}${BOLD_OFF}
 
     * Uses ${BOLD}meow${BOLD_OFF} for flags/subcommands and prints the built-in help/usage:
-      ${BLUE}src/cli.tsx (${LINK_ON}vscode://file/home/user/codex/src/cli.tsx:49${LINK_OFF})src/cli.tsx ${COLOR_OFF}
+      ${BLUE}src/cli.tsx:49 (${LINK_ON}vscode://file/home/user/codex/src/cli.tsx:49${LINK_OFF})${COLOR_OFF} ${BLUE}src/cli.tsx:55 ${COLOR_OFF}
 ${BLUE}(${LINK_ON}vscode://file/home/user/codex/src/cli.tsx:55${LINK_OFF})${COLOR_OFF}
     * Handles special subcommands (e.g. ${YELLOW}codex completion …${COLOR_OFF}), ${YELLOW}--config${COLOR_OFF}, API-key validation, then
 either:
         * Spawns the ${BOLD}AgentLoop${BOLD_OFF} for the normal multi-step prompting/edits flow, or
         * Runs ${BOLD}single-pass${BOLD_OFF} mode if ${YELLOW}--full-context${COLOR_OFF} is set.`;
 
-    expect(outputWithAnsi).toBe(expectedNestedList);
+    expect(toDiffableString(outputWithAnsi)).toBe(
+      toDiffableString(expectedNestedList),
+    );
   });
 
   it("citations should get converted to hyperlinks when stdout supports them", () => {
@@ -154,8 +156,17 @@ either:
       </Markdown>,
     );
 
-    const expected = `File with TODO: ${BLUE}src/approvals.ts (${LINK_ON}vscode://file/foo/bar/src/approvals.ts:40${LINK_OFF})${COLOR_OFF}`;
+    const expected = `File with TODO: ${BLUE}src/approvals.ts:40 (${LINK_ON}vscode://file/foo/bar/src/approvals.ts:40${LINK_OFF})${COLOR_OFF}`;
     const outputWithAnsi = lastFrame();
     expect(outputWithAnsi).toBe(expected);
   });
 });
+
+function toDiffableString(str: string) {
+  // The test harness is not able to handle ANSI codes, so we need to escape
+  // them, but still give it line-based input so that it can diff the output.
+  return str
+    .split("\n")
+    .map((line) => JSON.stringify(line))
+    .join("\n");
+}
