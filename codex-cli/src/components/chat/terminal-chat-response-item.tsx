@@ -334,6 +334,11 @@ function rewriteFileCitations(
   return markdown.replace(citationRegex, (_match, file, start, _end) => {
     const absPath = path.resolve(cwd, file);
     const uri = `${fileOpener}://file${absPath}:${start}`;
-    return `[${file}](${uri})`;
+    const label = `${file}:${start}`;
+    // In practice, sometimes multiple citations for the same file, but with a
+    // different line number, are shown sequentially, so we:
+    // - include the line number in the label to disambiguate them
+    // - add a space after the link to make it easier to read
+    return `[${label}](${uri}) `;
   });
 }
