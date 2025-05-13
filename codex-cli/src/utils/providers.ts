@@ -1,6 +1,6 @@
 export const providers: Record<
   string,
-  { name: string; baseURL: string; envKey: string }
+  { name: string; baseURL: string; envKey?: string }
 > = {
   openai: {
     name: "OpenAI",
@@ -25,7 +25,6 @@ export const providers: Record<
   ollama: {
     name: "Ollama",
     baseURL: "http://localhost:11434/v1",
-    envKey: "OLLAMA_API_KEY",
   },
   mistral: {
     name: "Mistral",

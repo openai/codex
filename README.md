@@ -344,11 +344,13 @@ Codex configuration files can be placed in the `~/.codex/` directory, supporting
 
 In the `providers` object, you can configure multiple AI service providers. Each provider requires the following parameters:
 
-| Parameter | Type   | Description                             | Example                       |
-| --------- | ------ | --------------------------------------- | ----------------------------- |
-| `name`    | string | Display name of the provider            | `"OpenAI"`                    |
-| `baseURL` | string | API service URL                         | `"https://api.openai.com/v1"` |
-| `envKey`  | string | Environment variable name (for API key) | `"OPENAI_API_KEY"`            |
+| Parameter | Type   | Description                                      | Example                       |
+| --------- | ------ | ------------------------------------------------ | ----------------------------- |
+| `name`    | string | Display name of the provider                     | `"OpenAI"`                    |
+| `baseURL` | string | API service URL                                  | `"https://api.openai.com/v1"` |
+| `envKey`  | string | Environment variable name for API key (optional) | `"OPENAI_API_KEY"`            |
+
+If `envKey` is not set, the provider is exempt from requiring an API key.
 
 ### History configuration
 
@@ -413,8 +415,7 @@ Below is a comprehensive example of `config.json` with multiple custom providers
     },
     "ollama": {
       "name": "Ollama",
-      "baseURL": "http://localhost:11434/v1",
-      "envKey": "OLLAMA_API_KEY"
+      "baseURL": "http://localhost:11434/v1"
     },
     "mistral": {
       "name": "Mistral",

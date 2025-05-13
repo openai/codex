@@ -1,3 +1,5 @@
+import type { providers } from "src/utils/providers.js";
+
 import TypeaheadOverlay from "./typeahead-overlay.js";
 import {
   getAvailableModels,
@@ -18,7 +20,7 @@ type Props = {
   currentModel: string;
   currentProvider?: string;
   hasLastResponse: boolean;
-  providers?: Record<string, { name: string; baseURL: string; envKey: string }>;
+  providers?: typeof providers;
   onSelect: (allModels: Array<string>, model: string) => void;
   onSelectProvider?: (provider: string) => void;
   onExit: () => void;

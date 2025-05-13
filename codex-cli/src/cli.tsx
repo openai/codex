@@ -305,8 +305,14 @@ if (!apiKey) {
 // Ensure the API key is available as an environment variable for legacy code
 process.env["OPENAI_API_KEY"] = apiKey;
 
-// Set of providers that don't require API keys
-const NO_API_KEY_REQUIRED = new Set(["ollama"]);
+// Set of providers that don't require API keys, "ollama" for backwards compat
+// and those providers which don't provide `envKey` in configuration are exempt
+const NO_API_KEY_REQUIRED = new Set([
+  "ollama",
+  ...Object.entries(config.providers ?? [])
+    .filter(([_, providerConfg]) => !providerConfg.envKey)
+    .map((entry) => entry[0]),
+]);
 
 // Skip API key validation for providers that don't require an API key
 if (!apiKey && !NO_API_KEY_REQUIRED.has(provider.toLowerCase())) {

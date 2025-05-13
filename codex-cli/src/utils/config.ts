@@ -114,8 +114,8 @@ export function getApiKey(provider: string = "openai"): string | undefined {
   const providersConfig = config.providers ?? providers;
   const providerInfo = providersConfig[provider.toLowerCase()];
   if (providerInfo) {
-    if (providerInfo.name === "Ollama") {
-      return process.env[providerInfo.envKey] ?? "dummy";
+    if (!providerInfo.envKey || providerInfo.name === "Ollama") {
+      return "dummy";
     }
     return process.env[providerInfo.envKey];
   }
@@ -202,7 +202,7 @@ export type AppConfig = {
 
   /** Enable the "flex-mode" processing mode for supported models (o3, o4-mini) */
   flexMode?: boolean;
-  providers?: Record<string, { name: string; baseURL: string; envKey: string }>;
+  providers?: typeof providers;
   history?: {
     maxSize: number;
     saveHistory: boolean;
