@@ -10,7 +10,7 @@ import type {
 import MultilineTextEditor from "./multiline-editor";
 import { TerminalChatCommandReview } from "./terminal-chat-command-review.js";
 import TextCompletions from "./terminal-chat-completions.js";
-import { loadConfig } from "../../utils/config.js";
+import { loadConfig, appendMemoryFile } from "../../utils/config.js";
 import { getFileSystemSuggestions } from "../../utils/file-system-suggestions.js";
 import { expandFileTags } from "../../utils/file-tag-utils";
 import { createInputItem } from "../../utils/input-utils.js";
@@ -485,7 +485,20 @@ export default function TerminalChatInput({
 
       if (!inputValue) {
         return;
-      } else if (inputValue === "/history") {
+      }
+      // Capture user input to memory if enabled
+      // Record user input in memory
+      try {
+        const cfg = loadConfig();
+        if (cfg.memory?.enabled) {
+          const cwd = process.cwd();
+          const entry = `user: ${inputValue}`;
+          appendMemoryFile(cwd, entry);
+        }
+      } catch {
+        // ignore any memory errors
+      }
+      if (inputValue === "/history") {
         setInput("");
         openOverlay();
         return;

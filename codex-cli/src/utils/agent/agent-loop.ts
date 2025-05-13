@@ -18,6 +18,7 @@ import {
   getApiKey,
   getBaseUrl,
   AZURE_OPENAI_API_VERSION,
+  appendMemoryFile,
 } from "../config.js";
 import { log } from "../logger/log.js";
 import { parseToolCallArguments } from "../parsers.js";
@@ -448,6 +449,16 @@ export class AgentLoop {
         this.getCommandConfirmation,
         this.execAbortController?.signal,
       );
+      // Record command and its stdout in memory
+      try {
+        if (this.config.memory?.enabled) {
+          const cwd = args.workdir || process.cwd();
+          appendMemoryFile(cwd, `command: ${args.cmd.join(" ")}`);
+          appendMemoryFile(cwd, `command.stdout: ${outputText}`);
+        }
+      } catch (err) {
+        log(`Error writing memory file: ${err}`);
+      }
       outputItem.output = JSON.stringify({ output: outputText, metadata });
 
       if (additionalItemsFromExec) {

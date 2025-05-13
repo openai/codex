@@ -260,14 +260,14 @@ export default function TerminalChat({
           // Persist memory if enabled: record assistant outputs
           if (config.memory?.enabled) {
             try {
-              // Collect any output_text from the item
+              // Record assistant (codex) output
               const content = (item as ResponseItem).content || [];
               const texts = content
                 .filter((c) => c.type === "output_text")
                 .map((c) => (c as { text: string }).text)
                 .join(" ");
               if (texts) {
-                appendMemoryFile(process.cwd(), texts);
+                appendMemoryFile(process.cwd(), `codex: ${texts}`);
               }
             } catch (err) {
               log(`Error writing memory file: ${err}`);
