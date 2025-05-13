@@ -1,12 +1,13 @@
 import type { ApprovalPolicy } from "./approvals";
 import type { AppConfig } from "./utils/config";
+import type { TerminalChatSession } from "./utils/session.js";
 import type { ResponseItem } from "openai/resources/responses/responses";
 
 import TerminalChat from "./components/chat/terminal-chat";
 import TerminalChatPastRollout from "./components/chat/terminal-chat-past-rollout";
 import { checkInGit } from "./utils/check-in-git";
-import { CLI_VERSION, type TerminalChatSession } from "./utils/session.js";
 import { onExit } from "./utils/terminal";
+import { CLI_VERSION } from "./version";
 import { ConfirmInput } from "@inkjs/ui";
 import { Box, Text, useApp, useStdin } from "ink";
 import React, { useMemo, useState } from "react";

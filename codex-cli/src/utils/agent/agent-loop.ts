@@ -11,6 +11,7 @@ import type {
 } from "openai/resources/responses/responses.mjs";
 import type { Reasoning } from "openai/resources.mjs";
 
+import { CLI_VERSION } from "../../version.js";
 import {
   OPENAI_TIMEOUT_MS,
   OPENAI_ORGANIZATION,
@@ -24,7 +25,6 @@ import { parseToolCallArguments } from "../parsers.js";
 import { responsesCreateViaChatCompletions } from "../responses.js";
 import {
   ORIGIN,
-  CLI_VERSION,
   getSessionId,
   setCurrentModel,
   setSessionId,
