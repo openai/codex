@@ -21,6 +21,7 @@ describe("TerminalChatInput compact command", () => {
       openModelOverlay: () => {},
       openApprovalOverlay: () => {},
       openHelpOverlay: () => {},
+      openMcpOverlay: () => {},
       onCompact: () => {},
       interruptAgent: () => {},
       active: true,

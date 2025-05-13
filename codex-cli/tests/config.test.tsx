@@ -76,6 +76,13 @@ test("saves and loads config correctly", () => {
     model: "test-model",
     instructions: "test instructions",
     notify: false,
+    mcpServers: {
+      "test-server": {
+        name: "test-server",
+        command: "test-command",
+        args: ["test-arg"],
+      },
+    },
   };
   saveConfig(testConfig, testConfigPath, testInstructionsPath);
 
@@ -89,6 +96,7 @@ test("saves and loads config correctly", () => {
   // Check just the specified properties that were saved
   expect(loadedConfig.model).toBe(testConfig.model);
   expect(loadedConfig.instructions).toBe(testConfig.instructions);
+  expect(loadedConfig.mcpServers).toEqual(testConfig.mcpServers);
 });
 
 test("loads user instructions + project doc when codex.md is present", () => {
@@ -360,4 +368,24 @@ test("loads and saves custom shell config", () => {
 
   expect(reloadedConfig.tools?.shell?.maxBytes).toBe(updatedMaxBytes);
   expect(reloadedConfig.tools?.shell?.maxLines).toBe(updatedMaxLines);
+});
+
+test("loads MCP servers correctly from user config", () => {
+  const mcpServers = {
+    "test-server": {
+      name: "test-server",
+      command: "test-command",
+      args: ["test-arg"],
+    },
+  };
+  memfs[testConfigPath] = JSON.stringify(
+    { model: "mymodel", mcpServers },
+    null,
+    2,
+  );
+
+  const loadedConfig = loadConfig(testConfigPath, testInstructionsPath, {
+    disableProjectDoc: true,
+  });
+  expect(loadedConfig.mcpServers).toEqual(mcpServers);
 });
