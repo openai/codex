@@ -12,6 +12,7 @@ import type { ReasoningEffort } from "openai/resources.mjs";
 import { AutoApprovalMode } from "./auto-approval-mode.js";
 import { log } from "./logger/log.js";
 import { providers } from "./providers.js";
+import crypto from "crypto";
 import { config as loadDotenv } from "dotenv";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { load as loadYaml, dump as dumpYaml } from "js-yaml";
@@ -62,6 +63,38 @@ export const CONFIG_YML_FILEPATH = join(CONFIG_DIR, "config.yml");
 // work unchanged.
 export const CONFIG_FILEPATH = CONFIG_JSON_FILEPATH;
 export const INSTRUCTIONS_FILEPATH = join(CONFIG_DIR, "instructions.md");
+/** Directory for per-repository memory files */
+export const MEMORY_DIR = join(CONFIG_DIR, "memory");
+
+/**
+ * Compute the filepath for a repository-specific memory file, based on cwd.
+ */
+export function getMemoryFilePath(cwd: string): string {
+  // Ensure memory directory exists
+  if (!existsSync(MEMORY_DIR)) {
+    mkdirSync(MEMORY_DIR, { recursive: true });
+  }
+  const hash = crypto
+    .createHash("sha256")
+    .update(resolvePath(cwd))
+    .digest("hex");
+  // Use .memory.md extension for clarity
+  return join(MEMORY_DIR, `${hash}.memory.md`);
+}
+/**
+ * Append a line of text to the repository-specific memory file.
+ */
+export function appendMemoryFile(cwd: string, text: string): void {
+  try {
+    const memPath = getMemoryFilePath(cwd);
+    // Ensure directory exists (getMemoryFilePath does this via mkdirSync)
+    // Append the text with a newline
+    writeFileSync(memPath, text + "\n", { flag: "a" });
+    log(`[codex] Appended to memory file ${memPath}: ${text}`);
+  } catch (err) {
+    log(`[codex] Error appending to memory file: ${err}`);
+  }
+}
 
 export const OPENAI_TIMEOUT_MS =
   parseInt(process.env["OPENAI_TIMEOUT_MS"] || "0", 10) || undefined;
@@ -376,6 +409,28 @@ export const loadConfig = (
     ? readFileSync(instructionsFilePathResolved, "utf-8")
     : DEFAULT_INSTRUCTIONS;
 
+  // -----------------------------------------------------------------------
+  // Memory file support: load repository-specific memory into instructions.
+  // -----------------------------------------------------------------------
+  const memoryEnabled = storedConfig.memory?.enabled === true;
+  let memoryContent = "";
+  if (memoryEnabled) {
+    try {
+      const cwd = options.cwd ?? process.cwd();
+      const memPath = getMemoryFilePath(cwd);
+      if (existsSync(memPath)) {
+        const buf = readFileSync(memPath, "utf-8");
+        memoryContent = buf;
+        log(`[codex] Loaded memory from ${memPath} (${buf.length} bytes)`);
+      } else {
+        log(
+          `[codex] No memory file found at ${getMemoryFilePath(options.cwd ?? process.cwd())}`,
+        );
+      }
+    } catch (err) {
+      log(`[codex] Error loading memory file: ${err}`);
+    }
+  }
   // Project doc support.
   const shouldLoadProjectDoc =
     !options.disableProjectDoc &&
@@ -398,9 +453,21 @@ export const loadConfig = (
     }
   }
 
-  const combinedInstructions = [userInstructions, projectDoc]
-    .filter((s) => s && s.trim() !== "")
-    .join(PROJECT_DOC_SEPARATOR);
+  // Assemble instructions: memory (if enabled), user instructions, then project doc
+  const MEMORY_SEPARATOR = "\n\n--- memory ---\n\n";
+  const parts: Array<string> = [];
+  if (memoryContent.trim() !== "") {
+    parts.push(memoryContent.trim());
+  }
+  if (userInstructions.trim() !== "") {
+    parts.push(userInstructions.trim());
+  }
+  if (projectDoc.trim() !== "") {
+    parts.push(projectDoc);
+  }
+  const combinedInstructions = parts.join(
+    memoryContent.trim() !== "" ? MEMORY_SEPARATOR : PROJECT_DOC_SEPARATOR,
+  );
 
   // Treat empty string ("" or whitespace) as absence so we can fall back to
   // the latest DEFAULT_MODEL.
@@ -417,6 +484,8 @@ export const loadConfig = (
         : DEFAULT_AGENTIC_MODEL),
     provider: storedConfig.provider,
     instructions: combinedInstructions,
+    // Memory file configuration
+    memory: { enabled: memoryEnabled },
     notify: storedConfig.notify === true,
     approvalMode: storedConfig.approvalMode,
     tools: {
@@ -551,6 +620,10 @@ export const saveConfig = (
     flexMode: config.flexMode,
     reasoningEffort: config.reasoningEffort,
   };
+  // Include memory setting if configured
+  if (config.memory) {
+    configToSave.memory = { enabled: Boolean(config.memory.enabled) };
+  }
 
   // Add history settings if they exist
   if (config.history) {

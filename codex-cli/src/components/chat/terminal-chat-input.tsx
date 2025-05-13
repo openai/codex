@@ -54,6 +54,7 @@ export default function TerminalChatInput({
   openApprovalOverlay,
   openHelpOverlay,
   openDiffOverlay,
+  openSettingsOverlay,
   onCompact,
   interruptAgent,
   active,
@@ -77,6 +78,7 @@ export default function TerminalChatInput({
   openApprovalOverlay: () => void;
   openHelpOverlay: () => void;
   openDiffOverlay: () => void;
+  openSettingsOverlay: () => void;
   onCompact: () => void;
   interruptAgent: () => void;
   active: boolean;
@@ -294,6 +296,9 @@ export default function TerminalChatInput({
                   break;
                 case "/diff":
                   openDiffOverlay();
+                  break;
+                case "/settings":
+                  openSettingsOverlay();
                   break;
                 case "/bug":
                   onSubmit(cmd);
