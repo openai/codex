@@ -365,6 +365,11 @@ export function isSafeCommand(
         reason: "View file contents",
         group: "Reading files",
       };
+    case "nl":
+      return {
+        reason: "View file with line numbers",
+        group: "Reading files",
+      };
     case "rg":
       return {
         reason: "Ripgrep search",
@@ -448,11 +453,15 @@ export function isSafeCommand(
       }
       break;
     case "sed":
+      // We allow two types of sed invocations:
+      // 1. `sed -n 1,200p FILE`
+      // 2. `sed -n 1,200p` because the file is passed via stdin, e.g.,
+      //    `nl -ba README.md | sed -n '1,200p'`
       if (
         cmd1 === "-n" &&
         isValidSedNArg(cmd2) &&
-        typeof cmd3 === "string" &&
-        command.length === 4
+        (command.length === 3 ||
+          (typeof cmd3 === "string" && command.length === 4))
       ) {
         return {
           reason: "Sed print subset",
