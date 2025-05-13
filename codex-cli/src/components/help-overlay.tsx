@@ -43,6 +43,9 @@ export default function HelpOverlay({
           <Text color="cyan">/approval</Text> – switch auto‑approval mode
         </Text>
         <Text>
+          <Text color="cyan">/settings</Text> – open settings menu
+        </Text>
+        <Text>
           <Text color="cyan">/history</Text> – show command &amp; file history
           for this session
         </Text>
