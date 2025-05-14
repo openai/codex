@@ -31,8 +31,10 @@ import {
 } from "../session.js";
 import { handleExecCommand } from "./handle-exec-command.js";
 import { HttpsProxyAgent } from "https-proxy-agent";
+import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import OpenAI, { APIConnectionTimeoutError, AzureOpenAI } from "openai";
+import os from "os";
 
 // Wait time before retrying after rate limit errors (ms).
 const RATE_LIMIT_RETRY_WAIT_MS = parseInt(
@@ -1490,6 +1492,19 @@ export class AgentLoop {
   }
 }
 
+// Dynamic developer message prefix: includes user, workdir, and rg suggestion.
+const userName = os.userInfo().username;
+const workdir = process.cwd();
+const dynamicLines: Array<string> = [
+  `User: ${userName}`,
+  `Workdir: ${workdir}`,
+];
+if (spawnSync("rg", ["--version"], { stdio: "ignore" }).status === 0) {
+  dynamicLines.push(
+    "- Always use rg instead of grep/ls -R because it is much faster and respects gitignore",
+  );
+}
+const dynamicPrefix = dynamicLines.join("\n") + "\n\n";
 const prefix = `You are operating as and within the Codex CLI, a terminal-based agentic coding assistant built by OpenAI. It wraps OpenAI models to enable natural language interaction with a local codebase. You are expected to be precise, safe, and helpful.
 
 You can:
@@ -1535,7 +1550,9 @@ You MUST adhere to the following criteria when executing the task:
     - Respond in a friendly tone as a remote teammate, who is knowledgeable, capable and eager to help with coding.
 - When your task involves writing or modifying files:
     - Do NOT tell the user to "save the file" or "copy the code into a file" if you already created or modified the file using \`apply_patch\`. Instead, reference the file as already saved.
-    - Do NOT show the full contents of large files you have already written, unless the user explicitly asks for them.`;
+    - Do NOT show the full contents of large files you have already written, unless the user explicitly asks for them.
+
+${dynamicPrefix}`;
 
 function filterToApiMessages(
   items: Array<ResponseInputItem>,
