@@ -4,6 +4,7 @@
 
 use codex_core::codex_wrapper::init_codex;
 use codex_core::config::Config as CodexConfig;
+use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
@@ -85,10 +86,10 @@ pub async fn run_codex_tool_session(
                 let _ = outgoing.send(codex_event_to_notification(&event)).await;
 
                 match &event.msg {
-                    EventMsg::AgentMessage { message } => {
+                    EventMsg::AgentMessage(AgentMessageEvent { message }) => {
                         last_agent_message = Some(message.clone());
                     }
-                    EventMsg::ExecApprovalRequest { .. } => {
+                    EventMsg::ExecApprovalRequest(_) => {
                         let result = CallToolResult {
                             content: vec![CallToolResultContent::TextContent(TextContent {
                                 r#type: "text".to_string(),
@@ -106,7 +107,7 @@ pub async fn run_codex_tool_session(
                             .await;
                         break;
                     }
-                    EventMsg::ApplyPatchApprovalRequest { .. } => {
+                    EventMsg::ApplyPatchApprovalRequest(_) => {
                         let result = CallToolResult {
                             content: vec![CallToolResultContent::TextContent(TextContent {
                                 r#type: "text".to_string(),
@@ -153,7 +154,7 @@ pub async fn run_codex_tool_session(
                             .await;
                         break;
                     }
-                    EventMsg::SessionConfigured { .. } => {
+                    EventMsg::SessionConfigured(_) => {
                         tracing::error!("unexpected SessionConfigured event");
                     }
                     _ => {}

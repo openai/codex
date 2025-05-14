@@ -685,7 +685,9 @@ Prerequisite: Nix >= 2.4 with flakes enabled (`experimental-features = nix-comma
 Enter a Nix development shell:
 
 ```bash
-nix develop
+# Use either one of the commands according to which implementation you want to work with
+nix develop .#codex-cli # For entering codex-cli specific shell
+nix develop .#codex-rs # For entering codex-rs specific shell
 ```
 
 This shell includes Node.js, installs dependencies, builds the CLI, and provides a `codex` command alias.
@@ -693,14 +695,29 @@ This shell includes Node.js, installs dependencies, builds the CLI, and provides
 Build and run the CLI directly:
 
 ```bash
-nix build
+# Use either one of the commands according to which implementation you want to work with
+nix build .#codex-cli # For building codex-cli
+nix build .#codex-rs # For building codex-rs
 ./result/bin/codex --help
 ```
 
 Run the CLI via the flake app:
 
 ```bash
-nix run .#codex
+# Use either one of the commands according to which implementation you want to work with
+nix run .#codex-cli # For running codex-cli
+nix run .#codex-rs # For running codex-rs
+```
+
+Use direnv with flakes
+
+If you have direnv installed, you can use the following `.envrc` to automatically enter the Nix shell when you `cd` into the project directory:
+
+```bash
+cd codex-rs
+echo "use flake ../flake.nix#codex-cli" >> .envrc && direnv allow
+cd codex-cli
+echo "use flake ../flake.nix#codex-rs" >> .envrc && direnv allow
 ```
 
 ---

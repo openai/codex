@@ -37,8 +37,8 @@ struct SessionMeta {
 /// Rollouts are recorded as JSONL and can be inspected with tools such as:
 ///
 /// ```ignore
-/// $ jq -C . ~/.codex/sessions/rollout-2025-05-07-5973b6c0-94b8-487b-a530-2aeb6098ae0e.jsonl
-/// $ fx ~/.codex/sessions/rollout-2025-05-07-5973b6c0-94b8-487b-a530-2aeb6098ae0e.jsonl
+/// $ jq -C . ~/.codex/sessions/rollout-2025-05-07T17-24-21-5973b6c0-94b8-487b-a530-2aeb6098ae0e.jsonl
+/// $ fx ~/.codex/sessions/rollout-2025-05-07T17-24-21-5973b6c0-94b8-487b-a530-2aeb6098ae0e.jsonl
 /// ```
 #[derive(Clone)]
 pub(crate) struct RolloutRecorder {
@@ -49,12 +49,12 @@ impl RolloutRecorder {
     /// Attempt to create a new [`RolloutRecorder`]. If the sessions directory
     /// cannot be created or the rollout file cannot be opened we return the
     /// error so the caller can decide whether to disable persistence.
-    pub async fn new(instructions: Option<String>) -> std::io::Result<Self> {
+    pub async fn new(uuid: Uuid, instructions: Option<String>) -> std::io::Result<Self> {
         let LogFileInfo {
             file,
             session_id,
             timestamp,
-        } = create_log_file()?;
+        } = create_log_file(uuid)?;
 
         // Build the static session metadata JSON first.
         let timestamp_format: &[FormatItem] = format_description!(
@@ -154,18 +154,19 @@ struct LogFileInfo {
     timestamp: OffsetDateTime,
 }
 
-fn create_log_file() -> std::io::Result<LogFileInfo> {
+fn create_log_file(session_id: Uuid) -> std::io::Result<LogFileInfo> {
     // Resolve ~/.codex/sessions and create it if missing.
     let mut dir = codex_dir()?;
     dir.push(SESSIONS_SUBDIR);
     fs::create_dir_all(&dir)?;
 
-    // Generate a v4 UUID – matches the JS CLI implementation.
-    let session_id = Uuid::new_v4();
-    let timestamp = OffsetDateTime::now_utc();
+    let timestamp = OffsetDateTime::now_local()
+        .map_err(|e| IoError::new(ErrorKind::Other, format!("failed to get local time: {e}")))?;
 
-    // Custom format for YYYY-MM-DD.
-    let format: &[FormatItem] = format_description!("[year]-[month]-[day]");
+    // Custom format for YYYY-MM-DDThh-mm-ss. Use `-` instead of `:` for
+    // compatibility with filesystems that do not allow colons in filenames.
+    let format: &[FormatItem] =
+        format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
     let date_str = timestamp
         .format(format)
         .map_err(|e| IoError::new(ErrorKind::Other, format!("failed to format timestamp: {e}")))?;

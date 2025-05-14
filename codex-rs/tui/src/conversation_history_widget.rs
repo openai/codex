@@ -3,6 +3,7 @@ use crate::history_cell::HistoryCell;
 use crate::history_cell::PatchEventType;
 use codex_core::config::Config;
 use codex_core::protocol::FileChange;
+use codex_core::protocol::SessionConfiguredEvent;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use ratatui::prelude::*;
@@ -162,8 +163,11 @@ impl ConversationHistoryWidget {
         self.scroll_position = usize::MAX;
     }
 
-    pub fn add_welcome_message(&mut self, config: &Config) {
-        self.add_to_history(HistoryCell::new_welcome_message(config));
+    /// Note `model` could differ from `config.model` if the agent decided to
+    /// use a different model than the one requested by the user.
+    pub fn add_session_info(&mut self, config: &Config, event: SessionConfiguredEvent) {
+        let is_first_event = self.history.is_empty();
+        self.add_to_history(HistoryCell::new_session_info(config, event, is_first_event));
     }
 
     pub fn add_user_message(&mut self, message: String) {
@@ -193,12 +197,6 @@ impl ConversationHistoryWidget {
         changes: HashMap<PathBuf, FileChange>,
     ) {
         self.add_to_history(HistoryCell::new_patch_event(event_type, changes));
-    }
-
-    /// Note `model` could differ from `config.model` if the agent decided to
-    /// use a different model than the one requested by the user.
-    pub fn add_session_info(&mut self, config: &Config, model: String) {
-        self.add_to_history(HistoryCell::new_session_info(config, model));
     }
 
     pub fn add_active_exec_command(&mut self, call_id: String, command: Vec<String>) {
