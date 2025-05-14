@@ -155,7 +155,9 @@ async fn keeps_previous_response_id_between_tasks() {
             EventMsg::Error(ErrorEvent { message }) => {
                 panic!("unexpected error: {message}")
             }
-            _ => (),
+            _ => {
+                // Ignore other events.
+            }
         }
     }
 }

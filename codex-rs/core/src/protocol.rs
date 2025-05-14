@@ -298,7 +298,6 @@ pub struct Event {
 }
 
 /// Response event from the agent
-#[non_exhaustive]
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum EventMsg {

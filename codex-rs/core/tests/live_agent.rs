@@ -99,7 +99,9 @@ async fn live_streaming_and_prev_id_reset() {
             EventMsg::Error(ErrorEvent { message }) => {
                 panic!("agent reported error in task1: {message}")
             }
-            _ => (),
+            _ => {
+                // Ignore other events.
+            }
         }
     }
 
@@ -135,7 +137,9 @@ async fn live_streaming_and_prev_id_reset() {
             EventMsg::Error(ErrorEvent { message }) => {
                 panic!("agent reported error in task2: {message}")
             }
-            _ => (),
+            _ => {
+                // Ignore other events.
+            }
         }
     }
 
@@ -201,7 +205,9 @@ async fn live_shell_function_call() {
             EventMsg::Error(codex_core::protocol::ErrorEvent { message }) => {
                 panic!("agent error during shell test: {message}")
             }
-            _ => (),
+            _ => {
+                // Ignore other events.
+            }
         }
     }
 
