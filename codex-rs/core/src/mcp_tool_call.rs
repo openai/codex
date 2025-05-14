@@ -86,7 +86,10 @@ pub(crate) async fn handle_mcp_tool_call(
         call_id,
         output: FunctionCallOutputPayload {
             content: result.map_or_else(
-                || format!("err: {tool_call_err:?}"),
+                || format!("err: {}", tool_call_err.map_or_else(
+                    || "Unknown error".to_string(), 
+                    |e| format!("{:#}", e)
+                )),
                 |result| {
                     serde_json::to_string(&result)
                         .unwrap_or_else(|e| format!("JSON serialization error: {e}"))
