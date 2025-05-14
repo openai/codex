@@ -308,7 +308,7 @@ config = {
   model: model ?? config.model,
   notify: Boolean(cli.flags.notify),
   reasoningEffort:
-    (cli.flags.reasoning as ReasoningEffort | undefined) ?? "high",
+    (cli.flags.reasoning as ReasoningEffort | undefined) ?? "medium",
   flexMode: cli.flags.flexMode || (config.flexMode ?? false),
   provider,
   disableResponseStorage,
