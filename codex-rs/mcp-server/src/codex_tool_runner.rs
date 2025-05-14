@@ -157,7 +157,23 @@ pub async fn run_codex_tool_session(
                     EventMsg::SessionConfigured(_) => {
                         tracing::error!("unexpected SessionConfigured event");
                     }
-                    _ => {}
+                    EventMsg::Error(_)
+                    | EventMsg::TaskStarted
+                    | EventMsg::AgentReasoning(_)
+                    | EventMsg::McpToolCallBegin(_)
+                    | EventMsg::McpToolCallEnd(_)
+                    | EventMsg::ExecCommandBegin(_)
+                    | EventMsg::ExecCommandEnd(_)
+                    | EventMsg::BackgroundEvent(_)
+                    | EventMsg::PatchApplyBegin(_)
+                    | EventMsg::PatchApplyEnd(_) => {
+                        // For now, we do not do anything extra for these
+                        // events. Note that
+                        // send(codex_event_to_notification(&event)) above has
+                        // already dispatched these events as notifications,
+                        // though we may want to do give different treatment to
+                        // individual events in the future.
+                    }
                 }
             }
             Err(e) => {

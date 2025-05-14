@@ -12,6 +12,7 @@ use codex_core::protocol::McpToolCallBeginEvent;
 use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
+use codex_core::protocol::SessionConfiguredEvent;
 use owo_colors::OwoColorize;
 use owo_colors::Style;
 use shlex::try_join;
@@ -180,8 +181,6 @@ impl EventProcessor {
                 }
                 println!("{}", truncated_output.style(self.dimmed));
             }
-
-            // Handle MCP tool calls (e.g. calling external functions via MCP).
             EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
                 call_id,
                 server,
@@ -372,8 +371,12 @@ impl EventProcessor {
             EventMsg::ApplyPatchApprovalRequest(_) => {
                 // Should we exit?
             }
-            _ => {
-                // Ignore event.
+            EventMsg::AgentReasoning(agent_reasoning_event) => {
+                println!("thinking: {}", agent_reasoning_event.text);
+            }
+            EventMsg::SessionConfigured(session_configured_event) => {
+                let SessionConfiguredEvent { session_id, model } = session_configured_event;
+                println!("session {session_id} with model {model}");
             }
         }
     }
