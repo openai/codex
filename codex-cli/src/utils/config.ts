@@ -114,7 +114,7 @@ export function getApiKey(provider: string = "openai"): string | undefined {
   const providersConfig = config.providers ?? providers;
   const providerInfo = providersConfig[provider.toLowerCase()];
   if (providerInfo) {
-    if (!providerInfo.envKey || providerInfo.name === "Ollama") {
+    if (!providerInfo.envKey) {
       return "dummy";
     }
     return process.env[providerInfo.envKey];
@@ -149,7 +149,7 @@ export type StoredConfig = {
   /** Disable server-side response storage (send full transcript each request) */
   disableResponseStorage?: boolean;
   flexMode?: boolean;
-  providers?: Record<string, { name: string; baseURL: string; envKey: string }>;
+  providers?: typeof providers;
   history?: {
     maxSize?: number;
     saveHistory?: boolean;
@@ -361,6 +361,14 @@ export const loadConfig = (
       // If parsing fails, fall back to empty config to avoid crashing.
       storedConfig = {};
     }
+  }
+  // Remove `envKey` from Ollama provider if it exists. This was previously hardcoded
+  // so removing it is necessary from old stored configs
+  if (storedConfig.providers?.["ollama"]?.envKey != null) {
+    log(
+      `[codex] Warning: 'envKey' for Ollama provider is not supported, use a custom provider instead. Ignoring this value.`,
+    );
+    delete storedConfig.providers["ollama"].envKey;
   }
 
   if (

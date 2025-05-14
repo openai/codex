@@ -305,23 +305,14 @@ if (!apiKey) {
 // Ensure the API key is available as an environment variable for legacy code
 process.env["OPENAI_API_KEY"] = apiKey;
 
-// Set of providers that don't require API keys, "ollama" for backwards compat
-// and those providers which don't provide `envKey` in configuration are exempt
-const NO_API_KEY_REQUIRED = new Set([
-  "ollama",
-  ...Object.entries(config.providers ?? [])
-    .filter(([_, providerConfg]) => !providerConfg.envKey)
-    .map((entry) => entry[0]),
-]);
-
 // Skip API key validation for providers that don't require an API key
-if (!apiKey && !NO_API_KEY_REQUIRED.has(provider.toLowerCase())) {
+if (!apiKey && !config.providers?.[provider]?.envKey != null) {
+  const apiKeyEnvVarName =
+    config.providers?.[provider]?.envKey ?? `${provider.toUpperCase()}_API_KEY`;
   // eslint-disable-next-line no-console
   console.error(
     `\n${chalk.red(`Missing ${provider} API key.`)}\n\n` +
-      `Set the environment variable ${chalk.bold(
-        `${provider.toUpperCase()}_API_KEY`,
-      )} ` +
+      `Set the environment variable ${chalk.bold(`${apiKeyEnvVarName}`)} ` +
       `and re-run this command.\n` +
       `${
         provider.toLowerCase() === "openai"
@@ -329,12 +320,10 @@ if (!apiKey && !NO_API_KEY_REQUIRED.has(provider.toLowerCase())) {
               chalk.underline("https://platform.openai.com/account/api-keys"),
             )}\n`
           : provider.toLowerCase() === "gemini"
-            ? `You can create a ${chalk.bold(
-                `${provider.toUpperCase()}_API_KEY`,
-              )} ` + `in the ${chalk.bold(`Google AI Studio`)}.\n`
-            : `You can create a ${chalk.bold(
-                `${provider.toUpperCase()}_API_KEY`,
-              )} ` + `in the ${chalk.bold(`${provider}`)} dashboard.\n`
+            ? `You can create a ${chalk.bold(`${apiKeyEnvVarName}`)} ` +
+              `in the ${chalk.bold(`Google AI Studio`)}.\n`
+            : `You can create a ${chalk.bold(`${apiKeyEnvVarName}`)} ` +
+              `in the ${chalk.bold(`${provider}`)} dashboard.\n`
       }`,
   );
   process.exit(1);
