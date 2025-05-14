@@ -124,8 +124,12 @@ impl ChatWidget<'_> {
         &mut self,
         key_event: KeyEvent,
     ) -> std::result::Result<(), SendError<AppEvent>> {
-        // Special-case <tab>: does not get dispatched to child components.
-        if matches!(key_event.code, crossterm::event::KeyCode::Tab) {
+        // Special-case <Tab>: normally toggles focus between history and bottom panes.
+        // However, when the slash-command popup is visible we forward the key
+        // to the bottom pane so it can handle auto-completion.
+        if matches!(key_event.code, crossterm::event::KeyCode::Tab)
+            && !self.bottom_pane.is_command_popup_visible()
+        {
             self.input_focus = match self.input_focus {
                 InputFocus::HistoryPane => InputFocus::BottomPane,
                 InputFocus::BottomPane => InputFocus::HistoryPane,
@@ -149,18 +153,7 @@ impl ChatWidget<'_> {
             InputFocus::BottomPane => {
                 match self.bottom_pane.handle_key_event(key_event)? {
                     InputResult::Submitted(text) => {
-                        // Special client‑side commands start with a leading slash.
-                        let trimmed = text.trim();
-                        match trimmed {
-                            "/clear" => {
-                                // Clear the current conversation history without exiting.
-                                self.conversation_history.clear();
-                                self.request_redraw()?;
-                            }
-                            _ => {
-                                self.submit_user_message(text)?;
-                            }
-                        }
+                        self.submit_user_message(text)?;
                     }
                     InputResult::None => {}
                 }
@@ -209,6 +202,13 @@ impl ChatWidget<'_> {
         self.conversation_history.scroll_to_bottom();
 
         Ok(())
+    }
+
+    pub(crate) fn clear_conversation_history(
+        &mut self,
+    ) -> std::result::Result<(), SendError<AppEvent>> {
+        self.conversation_history.clear();
+        self.request_redraw()
     }
 
     pub(crate) fn handle_codex_event(

@@ -13,6 +13,12 @@ use tui_textarea::Input;
 use tui_textarea::Key;
 use tui_textarea::TextArea;
 
+use std::sync::mpsc::Sender;
+
+use crate::app_event::AppEvent;
+
+use super::command_popup::CommandPopup;
+
 /// Minimum number of visible text rows inside the textarea.
 const MIN_TEXTAREA_ROWS: usize = 1;
 /// Rows consumed by the border.
@@ -26,15 +32,21 @@ pub enum InputResult {
 
 pub(crate) struct ChatComposer<'a> {
     textarea: TextArea<'a>,
+    command_popup: Option<CommandPopup>,
+    app_event_tx: Sender<AppEvent>,
 }
 
 impl ChatComposer<'_> {
-    pub fn new(has_input_focus: bool) -> Self {
+    pub fn new(has_input_focus: bool, app_event_tx: Sender<AppEvent>) -> Self {
         let mut textarea = TextArea::default();
         textarea.set_placeholder_text("send a message");
         textarea.set_cursor_line_style(ratatui::style::Style::default());
 
-        let mut this = Self { textarea };
+        let mut this = Self {
+            textarea,
+            command_popup: None,
+            app_event_tx,
+        };
         this.update_border(has_input_focus);
         this
     }
@@ -43,9 +55,87 @@ impl ChatComposer<'_> {
         self.update_border(has_focus);
     }
 
-    /// Handle key event when no overlay is present.
+    /// Handle a key event coming from the main UI.
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
+        let result = match self.command_popup {
+            Some(_) => self.handle_key_event_with_popup(key_event),
+            None => self.handle_key_event_without_popup(key_event),
+        };
+
+        // Update (or hide/show) popup after processing the key.
+        self.sync_command_popup();
+
+        result
+    }
+
+    /// Handle key event when the slash-command popup is visible.
+    fn handle_key_event_with_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
+        let Some(popup) = self.command_popup.as_mut() else {
+            tracing::error!("handle_key_event_with_popup called without an active popup");
+            return (InputResult::None, false);
+        };
+
         match key_event.into() {
+            Input { key: Key::Up, .. } => {
+                popup.move_up();
+                (InputResult::None, true)
+            }
+            Input { key: Key::Down, .. } => {
+                popup.move_down();
+                (InputResult::None, true)
+            }
+            Input { key: Key::Tab, .. } => {
+                if let Some(cmd) = popup.selected_command() {
+                    let first_line = self
+                        .textarea
+                        .lines()
+                        .first()
+                        .map(|s| s.as_str())
+                        .unwrap_or("");
+
+                    let starts_with_cmd = first_line
+                        .trim_start()
+                        .starts_with(&format!("/{}", cmd.command()));
+
+                    if !starts_with_cmd {
+                        self.textarea.select_all();
+                        self.textarea.cut();
+                        let _ = self.textarea.insert_str(format!("/{} ", cmd.command()));
+                    }
+                }
+                (InputResult::None, true)
+            }
+            Input {
+                key: Key::Enter,
+                shift: false,
+                alt: false,
+                ctrl: false,
+            } => {
+                if let Some(cmd) = popup.selected_command() {
+                    // Send command to the app layer.
+                    if let Err(e) = self.app_event_tx.send(AppEvent::DispatchCommand(*cmd)) {
+                        tracing::error!("failed to send DispatchCommand event: {e}");
+                    }
+
+                    // Clear textarea so no residual text remains.
+                    self.textarea.select_all();
+                    self.textarea.cut();
+
+                    // Hide popup since the command has been dispatched.
+                    self.command_popup = None;
+                    return (InputResult::None, true);
+                }
+                // Fallback to default newline handling if no command selected.
+                self.handle_key_event_without_popup(key_event)
+            }
+            input => self.handle_input_basic(input),
+        }
+    }
+
+    /// Handle key event when no popup is visible.
+    fn handle_key_event_without_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
+        let input: Input = key_event.into();
+        match input {
             Input {
                 key: Key::Enter,
                 shift: false,
@@ -69,16 +159,52 @@ impl ChatComposer<'_> {
                 self.textarea.insert_newline();
                 (InputResult::None, true)
             }
-            input => {
-                self.textarea.input(input);
-                (InputResult::None, true)
-            }
+            input => self.handle_input_basic(input),
         }
     }
 
-    pub fn calculate_required_height(&self, _area: &Rect) -> u16 {
+    /// Handle generic Input events that modify the textarea content.
+    fn handle_input_basic(&mut self, input: Input) -> (InputResult, bool) {
+        self.textarea.input(input);
+        (InputResult::None, true)
+    }
+
+    /// Synchronize `self.command_popup` with the current text in the
+    /// textarea. This must be called after every modification that can change
+    /// the text so the popup is shown/updated/hidden as appropriate.
+    fn sync_command_popup(&mut self) {
+        // Inspect only the first line to decide whether to show the popup. In
+        // the common case (no leading slash) we avoid copying the entire
+        // textarea contents.
+        let first_line = self
+            .textarea
+            .lines()
+            .first()
+            .map(|s| s.as_str())
+            .unwrap_or("");
+
+        if first_line.starts_with('/') {
+            // Create popup lazily when the user starts a slash command.
+            let popup = self.command_popup.get_or_insert_with(CommandPopup::new);
+
+            // Forward *only* the first line since `CommandPopup` only needs
+            // the command token.
+            popup.on_composer_text_change(first_line.to_string());
+        } else if self.command_popup.is_some() {
+            // Remove popup when '/' is no longer the first character.
+            self.command_popup = None;
+        }
+    }
+
+    pub fn calculate_required_height(&self, area: &Rect) -> u16 {
         let rows = self.textarea.lines().len().max(MIN_TEXTAREA_ROWS);
-        rows as u16 + BORDER_LINES
+        let num_popup_rows = if let Some(popup) = &self.command_popup {
+            popup.calculate_required_height(area)
+        } else {
+            0
+        };
+
+        rows as u16 + BORDER_LINES + num_popup_rows
     }
 
     fn update_border(&mut self, has_focus: bool) {
@@ -108,10 +234,37 @@ impl ChatComposer<'_> {
                 .border_style(bs.border_style),
         );
     }
+
+    pub(crate) fn is_command_popup_visible(&self) -> bool {
+        self.command_popup.is_some()
+    }
 }
 
 impl WidgetRef for &ChatComposer<'_> {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        self.textarea.render(area, buf);
+        if let Some(popup) = &self.command_popup {
+            let popup_height = popup.calculate_required_height(&area);
+
+            // Split the provided rect so that the popup is rendered at the
+            // *top* and the textarea occupies the remaining space below.
+            let popup_rect = Rect {
+                x: area.x,
+                y: area.y,
+                width: area.width,
+                height: popup_height.min(area.height),
+            };
+
+            let textarea_rect = Rect {
+                x: area.x,
+                y: area.y + popup_rect.height,
+                width: area.width,
+                height: area.height.saturating_sub(popup_rect.height),
+            };
+
+            popup.render(popup_rect, buf);
+            self.textarea.render(textarea_rect, buf);
+        } else {
+            self.textarea.render(area, buf);
+        }
     }
 }

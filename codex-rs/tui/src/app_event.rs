@@ -1,6 +1,8 @@
 use codex_core::protocol::Event;
 use crossterm::event::KeyEvent;
 
+use crate::slash_command::SlashCommand;
+
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum AppEvent {
     CodexEvent(Event),
@@ -22,4 +24,8 @@ pub(crate) enum AppEvent {
 
     /// Latest formatted log line emitted by `tracing`.
     LatestLog(String),
+
+    /// Dispatch a recognized slash command from the UI (composer) to the app
+    /// layer so it can be handled centrally.
+    DispatchCommand(SlashCommand),
 }
