@@ -29,6 +29,7 @@ import {
   setCurrentModel,
   setSessionId,
 } from "../session.js";
+import { applyPatchToolInstructions } from "./apply-patch.js";
 import { handleExecCommand } from "./handle-exec-command.js";
 import { HttpsProxyAgent } from "https-proxy-agent";
 import { spawnSync } from "node:child_process";
@@ -702,13 +703,19 @@ export class AgentLoop {
         for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
           try {
             let reasoning: Reasoning | undefined;
-            if (this.model.startsWith("o")) {
-              reasoning = { effort: this.config.reasoningEffort ?? "high" };
-              if (this.model === "o3" || this.model === "o4-mini") {
-                reasoning.summary = "auto";
-              }
+            let modelSpecificInstructions: string | undefined;
+            if (this.model.startsWith("o") || this.model.startsWith("codex")) {
+              reasoning = { effort: this.config.reasoningEffort ?? "medium" };
+              reasoning.summary = "auto";
             }
-            const mergedInstructions = [prefix, this.instructions]
+            if (this.model.startsWith("gpt-4.1")) {
+              modelSpecificInstructions = applyPatchToolInstructions;
+            }
+            const mergedInstructions = [
+              prefix,
+              modelSpecificInstructions,
+              this.instructions,
+            ]
               .filter(Boolean)
               .join("\n");
 
@@ -1504,7 +1511,7 @@ if (spawnSync("rg", ["--version"], { stdio: "ignore" }).status === 0) {
     "- Always use rg instead of grep/ls -R because it is much faster and respects gitignore",
   );
 }
-const dynamicPrefix = dynamicLines.join("\n") + "\n\n";
+const dynamicPrefix = dynamicLines.join("\n");
 const prefix = `You are operating as and within the Codex CLI, a terminal-based agentic coding assistant built by OpenAI. It wraps OpenAI models to enable natural language interaction with a local codebase. You are expected to be precise, safe, and helpful.
 
 You can:
