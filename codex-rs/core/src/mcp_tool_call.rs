@@ -7,6 +7,8 @@ use crate::models::FunctionCallOutputPayload;
 use crate::models::ResponseInputItem;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
+use crate::protocol::McpToolCallBeginEvent;
+use crate::protocol::McpToolCallEndEvent;
 
 /// Handles the specified tool call dispatches the appropriate
 /// `McpToolCallBegin` and `McpToolCallEnd` events to the `Session`.
@@ -39,12 +41,12 @@ pub(crate) async fn handle_mcp_tool_call(
         }
     };
 
-    let tool_call_begin_event = EventMsg::McpToolCallBegin {
+    let tool_call_begin_event = EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
         call_id: call_id.clone(),
         server: server.clone(),
         tool: tool_name.clone(),
         arguments: arguments_value.clone(),
-    };
+    });
     notify_mcp_tool_call_event(sess, sub_id, tool_call_begin_event).await;
 
     // Perform the tool call.
@@ -53,29 +55,29 @@ pub(crate) async fn handle_mcp_tool_call(
         .await
     {
         Ok(result) => (
-            EventMsg::McpToolCallEnd {
+            EventMsg::McpToolCallEnd(McpToolCallEndEvent {
                 call_id,
                 success: !result.is_error.unwrap_or(false),
                 result: Some(result),
-            },
+            }),
             None,
         ),
         Err(e) => (
-            EventMsg::McpToolCallEnd {
+            EventMsg::McpToolCallEnd(McpToolCallEndEvent {
                 call_id,
                 success: false,
                 result: None,
-            },
+            }),
             Some(e),
         ),
     };
 
     notify_mcp_tool_call_event(sess, sub_id, tool_call_end_event.clone()).await;
-    let EventMsg::McpToolCallEnd {
+    let EventMsg::McpToolCallEnd(McpToolCallEndEvent {
         call_id,
         success,
         result,
-    } = tool_call_end_event
+    }) = tool_call_end_event
     else {
         unimplemented!("unexpected event type");
     };

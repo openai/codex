@@ -55,12 +55,22 @@ use crate::models::ResponseInputItem;
 use crate::models::ResponseItem;
 use crate::models::ShellToolCallParams;
 use crate::project_doc::create_full_instructions;
+use crate::protocol::AgentMessageEvent;
+use crate::protocol::AgentReasoningEvent;
+use crate::protocol::ApplyPatchApprovalRequestEvent;
 use crate::protocol::AskForApproval;
+use crate::protocol::BackgroundEventEvent;
+use crate::protocol::ErrorEvent;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
+use crate::protocol::ExecApprovalRequestEvent;
+use crate::protocol::ExecCommandBeginEvent;
+use crate::protocol::ExecCommandEndEvent;
 use crate::protocol::FileChange;
 use crate::protocol::InputItem;
 use crate::protocol::Op;
+use crate::protocol::PatchApplyBeginEvent;
+use crate::protocol::PatchApplyEndEvent;
 use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::SessionConfiguredEvent;
@@ -227,11 +237,11 @@ impl Session {
         let (tx_approve, rx_approve) = oneshot::channel();
         let event = Event {
             id: sub_id.clone(),
-            msg: EventMsg::ExecApprovalRequest {
+            msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
                 command,
                 cwd,
                 reason,
-            },
+            }),
         };
         let _ = self.tx_event.send(event).await;
         {
@@ -251,11 +261,11 @@ impl Session {
         let (tx_approve, rx_approve) = oneshot::channel();
         let event = Event {
             id: sub_id.clone(),
-            msg: EventMsg::ApplyPatchApprovalRequest {
+            msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
                 changes: convert_apply_patch_to_protocol(action),
                 reason,
                 grant_root,
-            },
+            }),
         };
         let _ = self.tx_event.send(event).await;
         {
@@ -297,11 +307,11 @@ impl Session {
     async fn notify_exec_command_begin(&self, sub_id: &str, call_id: &str, params: &ExecParams) {
         let event = Event {
             id: sub_id.to_string(),
-            msg: EventMsg::ExecCommandBegin {
+            msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
                 call_id: call_id.to_string(),
                 command: params.command.clone(),
                 cwd: params.cwd.clone(),
-            },
+            }),
         };
         let _ = self.tx_event.send(event).await;
     }
@@ -319,12 +329,12 @@ impl Session {
             id: sub_id.to_string(),
             // Because stdout and stderr could each be up to 100 KiB, we send
             // truncated versions.
-            msg: EventMsg::ExecCommandEnd {
+            msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                 call_id: call_id.to_string(),
                 stdout: stdout.chars().take(MAX_STREAM_OUTPUT).collect(),
                 stderr: stderr.chars().take(MAX_STREAM_OUTPUT).collect(),
                 exit_code,
-            },
+            }),
         };
         let _ = self.tx_event.send(event).await;
     }
@@ -335,9 +345,9 @@ impl Session {
     async fn notify_background_event(&self, sub_id: &str, message: impl Into<String>) {
         let event = Event {
             id: sub_id.to_string(),
-            msg: EventMsg::BackgroundEvent {
+            msg: EventMsg::BackgroundEvent(BackgroundEventEvent {
                 message: message.into(),
-            },
+            }),
         };
         let _ = self.tx_event.send(event).await;
     }
@@ -460,9 +470,9 @@ impl AgentTask {
             self.handle.abort();
             let event = Event {
                 id: self.sub_id,
-                msg: EventMsg::Error {
+                msg: EventMsg::Error(ErrorEvent {
                     message: "Turn interrupted".to_string(),
-                },
+                }),
             };
             let tx_event = self.sess.tx_event.clone();
             tokio::spawn(async move {
@@ -483,10 +493,10 @@ async fn submission_loop(
     let send_no_session_event = |sub_id: String| async {
         let event = Event {
             id: sub_id,
-            msg: EventMsg::Error {
+            msg: EventMsg::Error(ErrorEvent {
                 message: "No session initialized, expected 'ConfigureSession' as first Op"
                     .to_string(),
-            },
+            }),
         };
         tx_event.send(event).await.ok();
     };
@@ -534,7 +544,7 @@ async fn submission_loop(
                     error!(message);
                     let event = Event {
                         id: sub.id,
-                        msg: EventMsg::Error { message },
+                        msg: EventMsg::Error(ErrorEvent { message }),
                     };
                     if let Err(e) = tx_event.send(event).await {
                         error!("failed to send error message: {e:?}");
@@ -577,7 +587,7 @@ async fn submission_loop(
                             error!("{message}");
                             mcp_connection_errors.push(Event {
                                 id: sub.id.clone(),
-                                msg: EventMsg::Error { message },
+                                msg: EventMsg::Error(ErrorEvent { message }),
                             });
                             (McpConnectionManager::default(), Default::default())
                         }
@@ -591,7 +601,7 @@ async fn submission_loop(
                         error!("{message}");
                         mcp_connection_errors.push(Event {
                             id: sub.id.clone(),
-                            msg: EventMsg::Error { message },
+                            msg: EventMsg::Error(ErrorEvent { message }),
                         });
                     }
                 }
@@ -792,9 +802,9 @@ async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
                 info!("Turn error: {e:#}");
                 let event = Event {
                     id: sub_id.clone(),
-                    msg: EventMsg::Error {
+                    msg: EventMsg::Error(ErrorEvent {
                         message: e.to_string(),
-                    },
+                    }),
                 };
                 sess.tx_event.send(event).await.ok();
                 return;
@@ -933,7 +943,7 @@ async fn handle_response_item(
                 if let ContentItem::OutputText { text } = item {
                     let event = Event {
                         id: sub_id.to_string(),
-                        msg: EventMsg::AgentMessage { message: text },
+                        msg: EventMsg::AgentMessage(AgentMessageEvent { message: text }),
                     };
                     sess.tx_event.send(event).await.ok();
                 }
@@ -946,7 +956,7 @@ async fn handle_response_item(
                 };
                 let event = Event {
                     id: sub_id.to_string(),
-                    msg: EventMsg::AgentReasoning { text },
+                    msg: EventMsg::AgentReasoning(AgentReasoningEvent { text }),
                 };
                 sess.tx_event.send(event).await.ok();
             }
@@ -1346,11 +1356,11 @@ async fn apply_patch(
         .tx_event
         .send(Event {
             id: sub_id.clone(),
-            msg: EventMsg::PatchApplyBegin {
+            msg: EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
                 call_id: call_id.clone(),
                 auto_approved,
                 changes: convert_apply_patch_to_protocol(&action),
-            },
+            }),
         })
         .await;
 
@@ -1435,12 +1445,12 @@ async fn apply_patch(
         .tx_event
         .send(Event {
             id: sub_id.clone(),
-            msg: EventMsg::PatchApplyEnd {
+            msg: EventMsg::PatchApplyEnd(PatchApplyEndEvent {
                 call_id: call_id.clone(),
                 stdout: String::from_utf8_lossy(&stdout).to_string(),
                 stderr: String::from_utf8_lossy(&stderr).to_string(),
                 success: success_flag,
-            },
+            }),
         })
         .await;
 

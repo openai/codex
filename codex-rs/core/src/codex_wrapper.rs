@@ -24,7 +24,7 @@ pub async fn init_codex(config: Config) -> anyhow::Result<(Codex, Event, Arc<Not
             &event,
             Event {
                 id: _id,
-                msg: EventMsg::SessionConfigured { .. },
+                msg: EventMsg::SessionConfigured(_),
             }
         )
     {

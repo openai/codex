@@ -4,6 +4,8 @@ use codex_core::Codex;
 use codex_core::ModelProviderInfo;
 use codex_core::config::Config;
 use codex_core::exec::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use codex_core::protocol::ErrorEvent;
+use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use serde_json::Value;
@@ -127,7 +129,7 @@ async fn keeps_previous_response_id_between_tasks() {
             .await
             .unwrap()
             .unwrap();
-        if matches!(ev.msg, codex_core::protocol::EventMsg::TaskComplete) {
+        if matches!(ev.msg, EventMsg::TaskComplete) {
             break;
         }
     }
@@ -149,8 +151,8 @@ async fn keeps_previous_response_id_between_tasks() {
             .unwrap()
             .unwrap();
         match ev.msg {
-            codex_core::protocol::EventMsg::TaskComplete => break,
-            codex_core::protocol::EventMsg::Error { message } => {
+            EventMsg::TaskComplete => break,
+            EventMsg::Error(ErrorEvent { message }) => {
                 panic!("unexpected error: {message}")
             }
             _ => (),
