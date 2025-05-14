@@ -1,3 +1,4 @@
+use crate::config_profile::ConfigProfile;
 use crate::flags::OPENAI_DEFAULT_MODEL;
 use crate::mcp_server_config::McpServerConfig;
 use crate::model_provider_info::ModelProviderInfo;
@@ -8,12 +9,8 @@ use crate::protocol::SandboxPolicy;
 use dirs::home_dir;
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
-
-/// Embedded fallback instructions that mirror the TypeScript CLI’s default
-/// system prompt. These are compiled into the binary so a clean install behaves
-/// correctly even if the user has not created `~/.codex/instructions.md`.
-const EMBEDDED_INSTRUCTIONS: &str = include_str!("../prompt.md");
 
 /// Maximum number of bytes of the documentation that will be embedded. Larger
 /// files are *silently truncated* to this size so we do not take up too much of
@@ -21,7 +18,7 @@ const EMBEDDED_INSTRUCTIONS: &str = include_str!("../prompt.md");
 pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 
 /// Application configuration loaded from disk and merged with overrides.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Config {
     /// Optional override of model selection.
     pub model: String,
@@ -42,7 +39,7 @@ pub struct Config {
     /// who have opted into Zero Data Retention (ZDR).
     pub disable_response_storage: bool,
 
-    /// System instructions.
+    /// User-provided instructions from instructions.md.
     pub instructions: Option<String>,
 
     /// Optional external notifier command. When set, Codex will spawn this
@@ -122,6 +119,13 @@ pub struct ConfigToml {
 
     /// Maximum number of bytes to include from an AGENTS.md project doc file.
     pub project_doc_max_bytes: Option<usize>,
+
+    /// Profile to use from the `profiles` map.
+    pub profile: Option<String>,
+
+    /// Named profiles to facilitate switching between different configurations.
+    #[serde(default)]
+    pub profiles: HashMap<String, ConfigProfile>,
 }
 
 impl ConfigToml {
@@ -181,7 +185,8 @@ pub struct ConfigOverrides {
     pub approval_policy: Option<AskForApproval>,
     pub sandbox_policy: Option<SandboxPolicy>,
     pub disable_response_storage: Option<bool>,
-    pub provider: Option<String>,
+    pub model_provider: Option<String>,
+    pub config_profile: Option<String>,
 }
 
 impl Config {
@@ -191,16 +196,16 @@ impl Config {
     pub fn load_with_overrides(overrides: ConfigOverrides) -> std::io::Result<Self> {
         let cfg: ConfigToml = ConfigToml::load_from_toml()?;
         tracing::warn!("Config parsed from config.toml: {cfg:?}");
-        Self::load_from_base_config_with_overrides(cfg, overrides)
+        let codex_dir = codex_dir().ok();
+        Self::load_from_base_config_with_overrides(cfg, overrides, codex_dir.as_deref())
     }
 
     fn load_from_base_config_with_overrides(
         cfg: ConfigToml,
         overrides: ConfigOverrides,
+        codex_dir: Option<&Path>,
     ) -> std::io::Result<Self> {
-        // Instructions: user-provided instructions.md > embedded default.
-        let instructions =
-            Self::load_instructions().or_else(|| Some(EMBEDDED_INSTRUCTIONS.to_string()));
+        let instructions = Self::load_instructions(codex_dir);
 
         // Destructure ConfigOverrides fully to ensure all overrides are applied.
         let ConfigOverrides {
@@ -209,8 +214,23 @@ impl Config {
             approval_policy,
             sandbox_policy,
             disable_response_storage,
-            provider,
+            model_provider,
+            config_profile: config_profile_key,
         } = overrides;
+
+        let config_profile = match config_profile_key.or(cfg.profile) {
+            Some(key) => cfg
+                .profiles
+                .get(&key)
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        format!("config profile `{key}` not found"),
+                    )
+                })?
+                .clone(),
+            None => ConfigProfile::default(),
+        };
 
         let sandbox_policy = match sandbox_policy {
             Some(sandbox_policy) => sandbox_policy,
@@ -233,7 +253,8 @@ impl Config {
             model_providers.entry(key).or_insert(provider);
         }
 
-        let model_provider_id = provider
+        let model_provider_id = model_provider
+            .or(config_profile.model_provider)
             .or(cfg.model_provider)
             .unwrap_or_else(|| "openai".to_string());
         let model_provider = model_providers
@@ -246,32 +267,40 @@ impl Config {
             })?
             .clone();
 
+        let resolved_cwd = {
+            use std::env;
+
+            match cwd {
+                None => {
+                    tracing::info!("cwd not set, using current dir");
+                    env::current_dir()?
+                }
+                Some(p) if p.is_absolute() => p,
+                Some(p) => {
+                    // Resolve relative path against the current working directory.
+                    tracing::info!("cwd is relative, resolving against current dir");
+                    let mut current = env::current_dir()?;
+                    current.push(p);
+                    current
+                }
+            }
+        };
+
         let config = Self {
-            model: model.or(cfg.model).unwrap_or_else(default_model),
+            model: model
+                .or(config_profile.model)
+                .or(cfg.model)
+                .unwrap_or_else(default_model),
             model_provider_id,
             model_provider,
-            cwd: cwd.map_or_else(
-                || {
-                    tracing::info!("cwd not set, using current dir");
-                    std::env::current_dir().expect("cannot determine current dir")
-                },
-                |p| {
-                    if p.is_absolute() {
-                        p
-                    } else {
-                        // Resolve relative paths against the current working directory.
-                        tracing::info!("cwd is relative, resolving against current dir");
-                        let mut cwd = std::env::current_dir().expect("cannot determine cwd");
-                        cwd.push(p);
-                        cwd
-                    }
-                },
-            ),
+            cwd: resolved_cwd,
             approval_policy: approval_policy
+                .or(config_profile.approval_policy)
                 .or(cfg.approval_policy)
                 .unwrap_or_else(AskForApproval::default),
             sandbox_policy,
             disable_response_storage: disable_response_storage
+                .or(config_profile.disable_response_storage)
                 .or(cfg.disable_response_storage)
                 .unwrap_or(false),
             notify: cfg.notify,
@@ -283,18 +312,31 @@ impl Config {
         Ok(config)
     }
 
-    fn load_instructions() -> Option<String> {
-        let mut p = codex_dir().ok()?;
+    fn load_instructions(codex_dir: Option<&Path>) -> Option<String> {
+        let mut p = match codex_dir {
+            Some(p) => p.to_path_buf(),
+            None => return None,
+        };
+
         p.push("instructions.md");
-        std::fs::read_to_string(&p).ok()
+        std::fs::read_to_string(&p).ok().and_then(|s| {
+            let s = s.trim();
+            if s.is_empty() {
+                None
+            } else {
+                Some(s.to_string())
+            }
+        })
     }
 
     /// Meant to be used exclusively for tests: `load_with_overrides()` should
     /// be used in all other cases.
     pub fn load_default_config_for_test() -> Self {
+        #[expect(clippy::expect_used)]
         Self::load_from_base_config_with_overrides(
             ConfigToml::default(),
             ConfigOverrides::default(),
+            None,
         )
         .expect("defaults for test should always succeed")
     }
@@ -371,7 +413,10 @@ pub fn parse_sandbox_permission_with_base_path(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used)]
     use super::*;
+    use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
 
     /// Verify that the `sandbox_permissions` field on `ConfigToml` correctly
     /// differentiates between a value that is completely absent in the
@@ -423,5 +468,174 @@ mod tests {
         // useful feedback.
         let msg = err.to_string();
         assert!(msg.contains("not-a-real-permission"));
+    }
+
+    /// Users can specify config values at multiple levels that have the
+    /// following precedence:
+    ///
+    /// 1. custom command-line argument, e.g. `--model o3`
+    /// 2. as part of a profile, where the `--profile` is specified via a CLI
+    ///    (or in the config file itelf)
+    /// 3. as an entry in `config.toml`, e.g. `model = "o3"`
+    /// 4. the default value for a required field defined in code, e.g.,
+    ///    `crate::flags::OPENAI_DEFAULT_MODEL`
+    ///
+    /// Note that profiles are the recommended way to specify a group of
+    /// configuration options together.
+    #[test]
+    fn test_precedence_overrides_then_profile_then_config_toml() -> std::io::Result<()> {
+        let toml = r#"
+model = "o3"
+approval_policy = "unless-allow-listed"
+sandbox_permissions = ["disk-full-read-access"]
+disable_response_storage = false
+
+# Can be used to determine which profile to use if not specified by
+# `ConfigOverrides`.
+profile = "gpt3"
+
+[model_providers.openai-chat-completions]
+name = "OpenAI using Chat Completions"
+base_url = "https://api.openai.com/v1"
+env_key = "OPENAI_API_KEY"
+wire_api = "chat"
+
+[profiles.o3]
+model = "o3"
+model_provider = "openai"
+approval_policy = "never"
+
+[profiles.gpt3]
+model = "gpt-3.5-turbo"
+model_provider = "openai-chat-completions"
+
+[profiles.zdr]
+model = "o3"
+model_provider = "openai"
+approval_policy = "on-failure"
+disable_response_storage = true
+"#;
+
+        let cfg: ConfigToml = toml::from_str(toml).expect("TOML deserialization should succeed");
+
+        // Use a temporary directory for the cwd so it does not contain an
+        // AGENTS.md file.
+        let cwd_temp_dir = TempDir::new().unwrap();
+        let cwd = cwd_temp_dir.path().to_path_buf();
+        // Make it look like a Git repo so it does not search for AGENTS.md in
+        // a parent folder, either.
+        std::fs::write(cwd.join(".git"), "gitdir: nowhere")?;
+
+        let openai_chat_completions_provider = ModelProviderInfo {
+            name: "OpenAI using Chat Completions".to_string(),
+            base_url: "https://api.openai.com/v1".to_string(),
+            env_key: Some("OPENAI_API_KEY".to_string()),
+            wire_api: crate::WireApi::Chat,
+            env_key_instructions: None,
+        };
+        let model_provider_map = {
+            let mut model_provider_map = built_in_model_providers();
+            model_provider_map.insert(
+                "openai-chat-completions".to_string(),
+                openai_chat_completions_provider.clone(),
+            );
+            model_provider_map
+        };
+
+        let openai_provider = model_provider_map
+            .get("openai")
+            .expect("openai provider should exist")
+            .clone();
+
+        let o3_profile_overrides = ConfigOverrides {
+            config_profile: Some("o3".to_string()),
+            cwd: Some(cwd.clone()),
+            ..Default::default()
+        };
+        let o3_profile_config =
+            Config::load_from_base_config_with_overrides(cfg.clone(), o3_profile_overrides, None)?;
+        assert_eq!(
+            Config {
+                model: "o3".to_string(),
+                model_provider_id: "openai".to_string(),
+                model_provider: openai_provider.clone(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                disable_response_storage: false,
+                instructions: None,
+                notify: None,
+                cwd: cwd.clone(),
+                mcp_servers: HashMap::new(),
+                model_providers: model_provider_map.clone(),
+                project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
+            },
+            o3_profile_config
+        );
+
+        let gpt3_profile_overrides = ConfigOverrides {
+            config_profile: Some("gpt3".to_string()),
+            cwd: Some(cwd.clone()),
+            ..Default::default()
+        };
+        let gpt3_profile_config = Config::load_from_base_config_with_overrides(
+            cfg.clone(),
+            gpt3_profile_overrides,
+            None,
+        )?;
+        let expected_gpt3_profile_config = Config {
+            model: "gpt-3.5-turbo".to_string(),
+            model_provider_id: "openai-chat-completions".to_string(),
+            model_provider: openai_chat_completions_provider,
+            approval_policy: AskForApproval::UnlessAllowListed,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            disable_response_storage: false,
+            instructions: None,
+            notify: None,
+            cwd: cwd.clone(),
+            mcp_servers: HashMap::new(),
+            model_providers: model_provider_map.clone(),
+            project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
+        };
+        assert_eq!(expected_gpt3_profile_config.clone(), gpt3_profile_config);
+
+        // Verify that loading without specifying a profile in ConfigOverrides
+        // uses the default profile from the config file.
+        let default_profile_overrides = ConfigOverrides {
+            cwd: Some(cwd.clone()),
+            ..Default::default()
+        };
+        let default_profile_config = Config::load_from_base_config_with_overrides(
+            cfg.clone(),
+            default_profile_overrides,
+            None,
+        )?;
+        assert_eq!(expected_gpt3_profile_config, default_profile_config);
+
+        let zdr_profile_overrides = ConfigOverrides {
+            config_profile: Some("zdr".to_string()),
+            cwd: Some(cwd.clone()),
+            ..Default::default()
+        };
+        let zdr_profile_config =
+            Config::load_from_base_config_with_overrides(cfg.clone(), zdr_profile_overrides, None)?;
+        assert_eq!(
+            Config {
+                model: "o3".to_string(),
+                model_provider_id: "openai".to_string(),
+                model_provider: openai_provider.clone(),
+                approval_policy: AskForApproval::OnFailure,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                disable_response_storage: true,
+                instructions: None,
+                notify: None,
+                cwd: cwd.clone(),
+                mcp_servers: HashMap::new(),
+                model_providers: model_provider_map.clone(),
+                project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
+            },
+            zdr_profile_config
+        );
+
+        Ok(())
     }
 }

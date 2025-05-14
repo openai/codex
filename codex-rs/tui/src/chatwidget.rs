@@ -5,10 +5,20 @@ use std::sync::mpsc::Sender;
 
 use codex_core::codex_wrapper::init_codex;
 use codex_core::config::Config;
+use codex_core::protocol::AgentMessageEvent;
+use codex_core::protocol::AgentReasoningEvent;
+use codex_core::protocol::ApplyPatchApprovalRequestEvent;
+use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
+use codex_core::protocol::ExecApprovalRequestEvent;
+use codex_core::protocol::ExecCommandBeginEvent;
+use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::InputItem;
+use codex_core::protocol::McpToolCallBeginEvent;
+use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::Op;
+use codex_core::protocol::PatchApplyBeginEvent;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
@@ -102,8 +112,6 @@ impl ChatWidget<'_> {
             config,
         };
 
-        let _ = chat_widget.submit_welcome_message();
-
         if initial_prompt.is_some() || !initial_images.is_empty() {
             let text = initial_prompt.unwrap_or_default();
             let _ = chat_widget.submit_user_message_with_images(text, initial_images);
@@ -116,8 +124,12 @@ impl ChatWidget<'_> {
         &mut self,
         key_event: KeyEvent,
     ) -> std::result::Result<(), SendError<AppEvent>> {
-        // Special-case <tab>: does not get dispatched to child components.
-        if matches!(key_event.code, crossterm::event::KeyCode::Tab) {
+        // Special-case <Tab>: normally toggles focus between history and bottom panes.
+        // However, when the slash-command popup is visible we forward the key
+        // to the bottom pane so it can handle auto-completion.
+        if matches!(key_event.code, crossterm::event::KeyCode::Tab)
+            && !self.bottom_pane.is_command_popup_visible()
+        {
             self.input_focus = match self.input_focus {
                 InputFocus::HistoryPane => InputFocus::BottomPane,
                 InputFocus::BottomPane => InputFocus::HistoryPane,
@@ -141,30 +153,13 @@ impl ChatWidget<'_> {
             InputFocus::BottomPane => {
                 match self.bottom_pane.handle_key_event(key_event)? {
                     InputResult::Submitted(text) => {
-                        // Special client‑side commands start with a leading slash.
-                        let trimmed = text.trim();
-                        match trimmed {
-                            "/clear" => {
-                                // Clear the current conversation history without exiting.
-                                self.conversation_history.clear();
-                                self.request_redraw()?;
-                            }
-                            _ => {
-                                self.submit_user_message(text)?;
-                            }
-                        }
+                        self.submit_user_message(text)?;
                     }
                     InputResult::None => {}
                 }
                 Ok(())
             }
         }
-    }
-
-    fn submit_welcome_message(&mut self) -> std::result::Result<(), SendError<AppEvent>> {
-        self.conversation_history.add_welcome_message(&self.config);
-        self.request_redraw()?;
-        Ok(())
     }
 
     fn submit_user_message(
@@ -209,23 +204,30 @@ impl ChatWidget<'_> {
         Ok(())
     }
 
+    pub(crate) fn clear_conversation_history(
+        &mut self,
+    ) -> std::result::Result<(), SendError<AppEvent>> {
+        self.conversation_history.clear();
+        self.request_redraw()
+    }
+
     pub(crate) fn handle_codex_event(
         &mut self,
         event: Event,
     ) -> std::result::Result<(), SendError<AppEvent>> {
         let Event { id, msg } = event;
         match msg {
-            EventMsg::SessionConfigured { model } => {
+            EventMsg::SessionConfigured(event) => {
                 // Record session information at the top of the conversation.
                 self.conversation_history
-                    .add_session_info(&self.config, model);
+                    .add_session_info(&self.config, event);
                 self.request_redraw()?;
             }
-            EventMsg::AgentMessage { message } => {
+            EventMsg::AgentMessage(AgentMessageEvent { message }) => {
                 self.conversation_history.add_agent_message(message);
                 self.request_redraw()?;
             }
-            EventMsg::AgentReasoning { text } => {
+            EventMsg::AgentReasoning(AgentReasoningEvent { text }) => {
                 self.conversation_history.add_agent_reasoning(text);
                 self.request_redraw()?;
             }
@@ -237,15 +239,15 @@ impl ChatWidget<'_> {
                 self.bottom_pane.set_task_running(false)?;
                 self.request_redraw()?;
             }
-            EventMsg::Error { message } => {
+            EventMsg::Error(ErrorEvent { message }) => {
                 self.conversation_history.add_error(message);
                 self.bottom_pane.set_task_running(false)?;
             }
-            EventMsg::ExecApprovalRequest {
+            EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
                 command,
                 cwd,
                 reason,
-            } => {
+            }) => {
                 let request = ApprovalRequest::Exec {
                     id,
                     command,
@@ -254,11 +256,11 @@ impl ChatWidget<'_> {
                 };
                 self.bottom_pane.push_approval_request(request)?;
             }
-            EventMsg::ApplyPatchApprovalRequest {
+            EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
                 changes,
                 reason,
                 grant_root,
-            } => {
+            }) => {
                 // ------------------------------------------------------------------
                 // Before we even prompt the user for approval we surface the patch
                 // summary in the main conversation so that the dialog appears in a
@@ -284,18 +286,20 @@ impl ChatWidget<'_> {
                 self.bottom_pane.push_approval_request(request)?;
                 self.request_redraw()?;
             }
-            EventMsg::ExecCommandBegin {
-                call_id, command, ..
-            } => {
+            EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+                call_id,
+                command,
+                cwd: _,
+            }) => {
                 self.conversation_history
                     .add_active_exec_command(call_id, command);
                 self.request_redraw()?;
             }
-            EventMsg::PatchApplyBegin {
+            EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
                 call_id: _,
                 auto_approved,
                 changes,
-            } => {
+            }) => {
                 // Even when a patch is auto‑approved we still display the
                 // summary so the user can follow along.
                 self.conversation_history
@@ -305,32 +309,31 @@ impl ChatWidget<'_> {
                 }
                 self.request_redraw()?;
             }
-            EventMsg::ExecCommandEnd {
+            EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                 call_id,
                 exit_code,
                 stdout,
                 stderr,
-                ..
-            } => {
+            }) => {
                 self.conversation_history
                     .record_completed_exec_command(call_id, stdout, stderr, exit_code);
                 self.request_redraw()?;
             }
-            EventMsg::McpToolCallBegin {
+            EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
                 call_id,
                 server,
                 tool,
                 arguments,
-            } => {
+            }) => {
                 self.conversation_history
                     .add_active_mcp_tool_call(call_id, server, tool, arguments);
                 self.request_redraw()?;
             }
-            EventMsg::McpToolCallEnd {
+            EventMsg::McpToolCallEnd(McpToolCallEndEvent {
                 call_id,
                 success,
                 result,
-            } => {
+            }) => {
                 self.conversation_history
                     .record_completed_mcp_tool_call(call_id, success, result);
                 self.request_redraw()?;
@@ -348,7 +351,7 @@ impl ChatWidget<'_> {
     pub(crate) fn update_latest_log(
         &mut self,
         line: String,
-    ) -> std::result::Result<(), std::sync::mpsc::SendError<AppEvent>> {
+    ) -> std::result::Result<(), SendError<AppEvent>> {
         // Forward only if we are currently showing the status indicator.
         self.bottom_pane.update_status_text(line)?;
         Ok(())
@@ -362,7 +365,7 @@ impl ChatWidget<'_> {
     pub(crate) fn handle_scroll_delta(
         &mut self,
         scroll_delta: i32,
-    ) -> std::result::Result<(), std::sync::mpsc::SendError<AppEvent>> {
+    ) -> std::result::Result<(), SendError<AppEvent>> {
         // If the user is trying to scroll exactly one line, we let them, but
         // otherwise we assume they are trying to scroll in larger increments.
         let magnified_scroll_delta = if scroll_delta == 1 {
@@ -386,7 +389,7 @@ impl ChatWidget<'_> {
 
 impl WidgetRef for &ChatWidget<'_> {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        let bottom_height = self.bottom_pane.required_height(&area);
+        let bottom_height = self.bottom_pane.calculate_required_height(&area);
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)

@@ -10,7 +10,7 @@ To that end, we are moving forward with a Rust implementation of Codex CLI conta
 - Can make direct, native calls to [seccomp](https://man7.org/linux/man-pages/man2/seccomp.2.html) and [landlock](https://man7.org/linux/man-pages/man7/landlock.7.html) in order to support sandboxing on Linux.
 - No runtime garbage collection, resulting in lower memory consumption and better, more predictable performance.
 
-Currently, the Rust implementation is materially behind the TypeScript implementation in functionality, so continue to use the TypeScript implmentation for the time being. We will publish native executables via GitHub Releases as soon as we feel the Rust version is usable.
+Currently, the Rust implementation is materially behind the TypeScript implementation in functionality, so continue to use the TypeScript implementation for the time being. We will publish native executables via GitHub Releases as soon as we feel the Rust version is usable.
 
 ## Code Organization
 
@@ -108,6 +108,52 @@ approval_policy = "on-failure"
 # something out. Note the `exec` subcommand always uses this mode.
 approval_policy = "never"
 ```
+
+### profiles
+
+A _profile_ is a collection of configuration values that can be set together. Multiple profiles can be defined in `config.toml` and you can specify the one you
+want to use at runtime via the `--profile` flag.
+
+Here is an example of a `config.toml` that defines multiple profiles:
+
+```toml
+model = "o3"
+approval_policy = "unless-allow-listed"
+sandbox_permissions = ["disk-full-read-access"]
+disable_response_storage = false
+
+# Setting `profile` is equivalent to specifying `--profile o3` on the command
+# line, though the `--profile` flag can still be used to override this value.
+profile = "o3"
+
+[model_providers.openai-chat-completions]
+name = "OpenAI using Chat Completions"
+base_url = "https://api.openai.com/v1"
+env_key = "OPENAI_API_KEY"
+wire_api = "chat"
+
+[profiles.o3]
+model = "o3"
+model_provider = "openai"
+approval_policy = "never"
+
+[profiles.gpt3]
+model = "gpt-3.5-turbo"
+model_provider = "openai-chat-completions"
+
+[profiles.zdr]
+model = "o3"
+model_provider = "openai"
+approval_policy = "on-failure"
+disable_response_storage = true
+```
+
+Users can specify config values at multiple levels. Order of precedence is as follows:
+
+1. custom command-line argument, e.g., `--model o3`
+2. as part of a profile, where the `--profile` is specified via a CLI (or in the config file itself)
+3. as an entry in `config.toml`, e.g., `model = "o3"`
+4. the default value that comes with Codex CLI (i.e., Codex CLI defaults to `o4-mini`)
 
 ### sandbox_permissions
 

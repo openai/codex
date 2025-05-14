@@ -26,6 +26,7 @@ mod history_cell;
 mod log_layer;
 mod markdown;
 mod scroll_event_helper;
+mod slash_command;
 mod status_indicator_widget;
 mod tui;
 mod user_approval_widget;
@@ -55,7 +56,8 @@ pub fn run_main(cli: Cli) -> std::io::Result<()> {
                 None
             },
             cwd: cli.cwd.clone().map(|p| p.canonicalize().unwrap_or(p)),
-            provider: None,
+            model_provider: None,
+            config_profile: cli.config_profile.clone(),
         };
         #[allow(clippy::print_stderr)]
         match Config::load_with_overrides(overrides) {

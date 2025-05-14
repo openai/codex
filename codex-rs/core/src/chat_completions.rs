@@ -38,9 +38,8 @@ pub(crate) async fn stream_chat_completions(
     // Build messages array
     let mut messages = Vec::<serde_json::Value>::new();
 
-    if let Some(instr) = &prompt.instructions {
-        messages.push(json!({"role": "system", "content": instr}));
-    }
+    let full_instructions = prompt.get_full_instructions();
+    messages.push(json!({"role": "system", "content": full_instructions}));
 
     for item in &prompt.input {
         if let ResponseItem::Message { role, content } = item {

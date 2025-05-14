@@ -140,7 +140,7 @@ fn install_network_seccomp_filter_on_current_thread() -> std::result::Result<(),
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
+    #![expect(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
     use crate::exec::ExecParams;
@@ -194,7 +194,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_dev_null_write() {
-        run_cmd(&["echo", "blah", ">", "/dev/null"], &[], 200).await;
+        run_cmd(
+            &["bash", "-lc", "echo blah > /dev/null"],
+            &[],
+            // We have seen timeouts when running this test in CI on GitHub,
+            // so we are using a generous timeout until we can diagnose further.
+            1_000,
+        )
+        .await;
     }
 
     #[tokio::test]

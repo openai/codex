@@ -27,8 +27,7 @@ pub fn exec_linux(
     let tool_call_output = std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
-            .build()
-            .expect("Failed to create runtime");
+            .build()?;
 
         rt.block_on(async {
             let ExecParams {

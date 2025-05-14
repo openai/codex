@@ -3,6 +3,7 @@ use crate::chatwidget::ChatWidget;
 use crate::git_warning_screen::GitWarningOutcome;
 use crate::git_warning_screen::GitWarningScreen;
 use crate::scroll_event_helper::ScrollEventHelper;
+use crate::slash_command::SlashCommand;
 use crate::tui;
 use codex_core::config::Config;
 use codex_core::protocol::Event;
@@ -177,6 +178,14 @@ impl App<'_> {
                         let _ = self.chat_widget.update_latest_log(line);
                     }
                 }
+                AppEvent::DispatchCommand(command) => match command {
+                    SlashCommand::Clear => {
+                        let _ = self.chat_widget.clear_conversation_history();
+                    }
+                    SlashCommand::Quit => {
+                        break;
+                    }
+                },
             }
         }
         terminal.clear()?;

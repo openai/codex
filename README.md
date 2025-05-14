@@ -652,17 +652,21 @@ The **DCO check** blocks merges until every commit in the PR carries the footer 
 
 ### Releasing `codex`
 
-To publish a new version of the CLI, run the following in the `codex-cli` folder to stage the release in a temporary directory:
+To publish a new version of the CLI you first need to stage the npm package. A
+helper script in `codex-cli/scripts/` does all the heavy lifting. Inside the
+`codex-cli` folder run:
 
-```
+```bash
+# Classic, JS implementation that includes small, native binaries for Linux sandboxing.
 pnpm stage-release
-```
 
-Note you can specify the folder for the staged release:
-
-```
+# Optionally specify the temp directory to reuse between runs.
 RELEASE_DIR=$(mktemp -d)
-pnpm stage-release "$RELEASE_DIR"
+pnpm stage-release --tmp "$RELEASE_DIR"
+
+# "Fat" package that additionally bundles the native Rust CLI binaries for
+# Linux. End-users can then opt-in at runtime by setting CODEX_RUST=1.
+pnpm stage-release --native
 ```
 
 Go to the folder where the release is staged and verify that it works as intended. If so, run the following from the temp folder:
@@ -681,7 +685,9 @@ Prerequisite: Nix >= 2.4 with flakes enabled (`experimental-features = nix-comma
 Enter a Nix development shell:
 
 ```bash
-nix develop
+# Use either one of the commands according to which implementation you want to work with
+nix develop .#codex-cli # For entering codex-cli specific shell
+nix develop .#codex-rs # For entering codex-rs specific shell
 ```
 
 This shell includes Node.js, installs dependencies, builds the CLI, and provides a `codex` command alias.
@@ -689,14 +695,29 @@ This shell includes Node.js, installs dependencies, builds the CLI, and provides
 Build and run the CLI directly:
 
 ```bash
-nix build
+# Use either one of the commands according to which implementation you want to work with
+nix build .#codex-cli # For building codex-cli
+nix build .#codex-rs # For building codex-rs
 ./result/bin/codex --help
 ```
 
 Run the CLI via the flake app:
 
 ```bash
-nix run .#codex
+# Use either one of the commands according to which implementation you want to work with
+nix run .#codex-cli # For running codex-cli
+nix run .#codex-rs # For running codex-rs
+```
+
+Use direnv with flakes
+
+If you have direnv installed, you can use the following `.envrc` to automatically enter the Nix shell when you `cd` into the project directory:
+
+```bash
+cd codex-rs
+echo "use flake ../flake.nix#codex-cli" >> .envrc && direnv allow
+cd codex-cli
+echo "use flake ../flake.nix#codex-rs" >> .envrc && direnv allow
 ```
 
 ---

@@ -17,10 +17,14 @@ use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use mcp_types::CallToolRequest;
 use mcp_types::CallToolRequestParams;
+use mcp_types::InitializeRequest;
+use mcp_types::InitializeRequestParams;
+use mcp_types::InitializedNotification;
 use mcp_types::JSONRPC_VERSION;
 use mcp_types::JSONRPCMessage;
 use mcp_types::JSONRPCNotification;
@@ -29,6 +33,7 @@ use mcp_types::JSONRPCResponse;
 use mcp_types::ListToolsRequest;
 use mcp_types::ListToolsRequestParams;
 use mcp_types::ListToolsResult;
+use mcp_types::ModelContextProtocolNotification;
 use mcp_types::ModelContextProtocolRequest;
 use mcp_types::RequestId;
 use serde::Serialize;
@@ -74,6 +79,8 @@ pub struct McpClient {
 
 impl McpClient {
     /// Spawn the given command and establish an MCP session over its STDIO.
+    /// Caller is responsible for sending the `initialize` request. See
+    /// [`initialize`](Self::initialize) for details.
     pub async fn new_stdio_client(
         program: String,
         args: Vec<String>,
@@ -271,6 +278,52 @@ impl McpClient {
                 other
             ))),
         }
+    }
+
+    pub async fn send_notification<N>(&self, params: N::Params) -> Result<()>
+    where
+        N: ModelContextProtocolNotification,
+        N::Params: Serialize,
+    {
+        // Serialize params -> JSON. For many request types `Params` is
+        // `Option<T>` and `None` should be encoded as *absence* of the field.
+        let params_json = serde_json::to_value(&params)?;
+        let params_field = if params_json.is_null() {
+            None
+        } else {
+            Some(params_json)
+        };
+
+        let method = N::METHOD.to_string();
+        let jsonrpc_notification = JSONRPCNotification {
+            jsonrpc: JSONRPC_VERSION.to_string(),
+            method: method.clone(),
+            params: params_field,
+        };
+
+        let notification = JSONRPCMessage::Notification(jsonrpc_notification);
+        self.outgoing_tx
+            .send(notification)
+            .await
+            .with_context(|| format!("failed to send notification `{method}` to writer task"))
+    }
+
+    /// Negotiates the initialization with the MCP server. Sends an `initialize`
+    /// request with the specified `initialize_params` and then the
+    /// `notifications/initialized` notification once the response has been
+    /// received. Returns the response to the `initialize` request.
+    pub async fn initialize(
+        &self,
+        initialize_params: InitializeRequestParams,
+        initialize_notification_params: Option<serde_json::Value>,
+        timeout: Option<Duration>,
+    ) -> Result<mcp_types::InitializeResult> {
+        let response = self
+            .send_request::<InitializeRequest>(initialize_params, timeout)
+            .await?;
+        self.send_notification::<InitializedNotification>(initialize_notification_params)
+            .await?;
+        Ok(response)
     }
 
     /// Convenience wrapper around `tools/list`.

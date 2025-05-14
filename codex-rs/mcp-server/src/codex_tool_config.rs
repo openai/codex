@@ -22,6 +22,10 @@ pub(crate) struct CodexToolCallParam {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
 
+    /// Configuration profile from config.toml to specify default options.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+
     /// Working directory for the session. If relative, it is resolved against
     /// the server process's current working directory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -117,6 +121,8 @@ pub(crate) fn create_tool_for_codex_tool_call_param() -> Tool {
         })
         .into_generator()
         .into_root_schema_for::<CodexToolCallParam>();
+
+    #[expect(clippy::expect_used)]
     let schema_value =
         serde_json::to_value(&schema).expect("Codex tool schema should serialise to JSON");
 
@@ -142,6 +148,7 @@ impl CodexToolCallParam {
         let Self {
             prompt,
             model,
+            profile,
             cwd,
             approval_policy,
             sandbox_permissions,
@@ -154,11 +161,12 @@ impl CodexToolCallParam {
         // Build ConfigOverrides recognised by codex-core.
         let overrides = codex_core::config::ConfigOverrides {
             model,
+            config_profile: profile,
             cwd: cwd.map(PathBuf::from),
             approval_policy: approval_policy.map(Into::into),
             sandbox_policy,
             disable_response_storage,
-            provider: None,
+            model_provider: None,
         };
 
         let cfg = codex_core::config::Config::load_with_overrides(overrides)?;
@@ -186,6 +194,7 @@ mod tests {
     #[test]
     fn verify_codex_tool_json_schema() {
         let tool = create_tool_for_codex_tool_call_param();
+        #[expect(clippy::expect_used)]
         let tool_json = serde_json::to_value(&tool).expect("tool serializes");
         let expected_tool_json = serde_json::json!({
           "name": "codex",
@@ -213,6 +222,10 @@ mod tests {
               },
               "model": {
                 "description": "Optional override for the model name (e.g. \"o3\", \"o4-mini\")",
+                "type": "string"
+              },
+              "profile": {
+                "description": "Configuration profile from config.toml to specify default options.",
                 "type": "string"
               },
               "prompt": {
