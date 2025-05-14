@@ -194,7 +194,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_dev_null_write() {
-        run_cmd(&["echo", "blah", ">", "/dev/null"], &[], 200).await;
+        run_cmd(&["bash", "-lc", "echo blah > /dev/null"], &[], 200).await;
     }
 
     #[tokio::test]
