@@ -26,6 +26,7 @@ mod history_cell;
 mod log_layer;
 mod markdown;
 mod scroll_event_helper;
+mod slash_command;
 mod status_indicator_widget;
 mod tui;
 mod user_approval_widget;
