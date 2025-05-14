@@ -33,6 +33,9 @@ enum Subcommand {
     #[clap(visible_alias = "e")]
     Exec(ExecCli),
 
+    /// Experimental: run Codex as an MCP server.
+    Mcp,
+
     /// Run the Protocol stream via stdin/stdout
     #[clap(visible_alias = "p")]
     Proto(ProtoCli),
@@ -69,6 +72,9 @@ async fn main() -> anyhow::Result<()> {
         }
         Some(Subcommand::Exec(exec_cli)) => {
             codex_exec::run_main(exec_cli).await?;
+        }
+        Some(Subcommand::Mcp) => {
+            codex_mcp_server::run_main().await?;
         }
         Some(Subcommand::Proto(proto_cli)) => {
             proto::run_main(proto_cli).await?;

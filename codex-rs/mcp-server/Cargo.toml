@@ -3,6 +3,14 @@ name = "codex-mcp-server"
 version = { workspace = true }
 edition = "2024"
 
+[[bin]]
+name = "codex-mcp-server"
+path = "src/main.rs"
+
+[lib]
+name = "codex_mcp_server"
+path = "src/lib.rs"
+
 [lints]
 workspace = true
 

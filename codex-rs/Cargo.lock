@@ -491,6 +491,7 @@ dependencies = [
  "codex-common",
  "codex-core",
  "codex-exec",
+ "codex-mcp-server",
  "codex-tui",
  "serde_json",
  "tokio",

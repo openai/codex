@@ -7,7 +7,9 @@ use strum_macros::EnumString;
 use strum_macros::IntoStaticStr;
 
 /// Commands that can be invoked by starting a message with a leading slash.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString, EnumIter, AsRefStr, IntoStaticStr)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString, EnumIter, AsRefStr, IntoStaticStr,
+)]
 #[strum(serialize_all = "kebab-case")]
 pub enum SlashCommand {
     Clear,
