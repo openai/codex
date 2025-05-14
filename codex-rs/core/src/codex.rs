@@ -832,7 +832,7 @@ async fn run_turn(
         let prev_id = if store {
             state.previous_response_id.clone()
         } else {
-            // When using ZDR, the Reponses API may send previous_response_id
+            // When using ZDR, the Responses API may send previous_response_id
             // back, but trying to use it results in a 400.
             None
         };
