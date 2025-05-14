@@ -24,6 +24,7 @@ clap = { version = "4", features = ["derive"] }
 codex-core = { path = "../core" }
 codex-common = { path = "../common", features = ["cli"] }
 codex-exec = { path = "../exec" }
+codex-mcp-server = { path = "../mcp-server" }
 codex-tui = { path = "../tui" }
 serde_json = "1"
 tokio = { version = "1", features = [
