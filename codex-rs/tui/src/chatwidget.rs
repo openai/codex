@@ -102,8 +102,6 @@ impl ChatWidget<'_> {
             config,
         };
 
-        let _ = chat_widget.submit_welcome_message();
-
         if initial_prompt.is_some() || !initial_images.is_empty() {
             let text = initial_prompt.unwrap_or_default();
             let _ = chat_widget.submit_user_message_with_images(text, initial_images);
@@ -161,12 +159,6 @@ impl ChatWidget<'_> {
         }
     }
 
-    fn submit_welcome_message(&mut self) -> std::result::Result<(), SendError<AppEvent>> {
-        self.conversation_history.add_welcome_message(&self.config);
-        self.request_redraw()?;
-        Ok(())
-    }
-
     fn submit_user_message(
         &mut self,
         text: String,
@@ -215,10 +207,10 @@ impl ChatWidget<'_> {
     ) -> std::result::Result<(), SendError<AppEvent>> {
         let Event { id, msg } = event;
         match msg {
-            EventMsg::SessionConfigured { model } => {
+            EventMsg::SessionConfigured(event) => {
                 // Record session information at the top of the conversation.
                 self.conversation_history
-                    .add_session_info(&self.config, model);
+                    .add_session_info(&self.config, event);
                 self.request_redraw()?;
             }
             EventMsg::AgentMessage { message } => {

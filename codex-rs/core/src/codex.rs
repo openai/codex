@@ -30,6 +30,7 @@ use tracing::error;
 use tracing::info;
 use tracing::trace;
 use tracing::warn;
+use uuid::Uuid;
 
 use crate::WireApi;
 use crate::client::ModelClient;
@@ -62,6 +63,7 @@ use crate::protocol::InputItem;
 use crate::protocol::Op;
 use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
+use crate::protocol::SessionConfiguredEvent;
 use crate::protocol::Submission;
 use crate::rollout::RolloutRecorder;
 use crate::safety::SafetyCheck;
@@ -596,13 +598,15 @@ async fn submission_loop(
 
                 // Attempt to create a RolloutRecorder *before* moving the
                 // `instructions` value into the Session struct.
-                let rollout_recorder = match RolloutRecorder::new(instructions.clone()).await {
-                    Ok(r) => Some(r),
-                    Err(e) => {
-                        tracing::warn!("failed to initialise rollout recorder: {e}");
-                        None
-                    }
-                };
+                let session_id = Uuid::new_v4();
+                let rollout_recorder =
+                    match RolloutRecorder::new(session_id, instructions.clone()).await {
+                        Ok(r) => Some(r),
+                        Err(e) => {
+                            tracing::warn!("failed to initialise rollout recorder: {e}");
+                            None
+                        }
+                    };
 
                 sess = Some(Arc::new(Session {
                     client,
@@ -622,7 +626,7 @@ async fn submission_loop(
                 // ack
                 let events = std::iter::once(Event {
                     id: sub.id.clone(),
-                    msg: EventMsg::SessionConfigured { model },
+                    msg: EventMsg::SessionConfigured(SessionConfiguredEvent { session_id, model }),
                 })
                 .chain(mcp_connection_errors.into_iter());
                 for event in events {
