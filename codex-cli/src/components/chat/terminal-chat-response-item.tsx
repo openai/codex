@@ -173,6 +173,11 @@ function TerminalChatResponseToolCall({
     <Box flexDirection="column" gap={1}>
       <Text color="magentaBright" bold>
         command
+        {details?.workdir ? (
+          <Text dimColor>{` (${details?.workdir})`}</Text>
+        ) : (
+          ""
+        )}
       </Text>
       <Text>
         <Text dimColor>$</Text> {details?.cmdReadableText}
