@@ -351,7 +351,7 @@ impl ChatWidget<'_> {
     pub(crate) fn update_latest_log(
         &mut self,
         line: String,
-    ) -> std::result::Result<(), std::sync::mpsc::SendError<AppEvent>> {
+    ) -> std::result::Result<(), SendError<AppEvent>> {
         // Forward only if we are currently showing the status indicator.
         self.bottom_pane.update_status_text(line)?;
         Ok(())
@@ -365,7 +365,7 @@ impl ChatWidget<'_> {
     pub(crate) fn handle_scroll_delta(
         &mut self,
         scroll_delta: i32,
-    ) -> std::result::Result<(), std::sync::mpsc::SendError<AppEvent>> {
+    ) -> std::result::Result<(), SendError<AppEvent>> {
         // If the user is trying to scroll exactly one line, we let them, but
         // otherwise we assume they are trying to scroll in larger increments.
         let magnified_scroll_delta = if scroll_delta == 1 {
@@ -389,7 +389,7 @@ impl ChatWidget<'_> {
 
 impl WidgetRef for &ChatWidget<'_> {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        let bottom_height = self.bottom_pane.required_height(&area);
+        let bottom_height = self.bottom_pane.calculate_required_height(&area);
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)

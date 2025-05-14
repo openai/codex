@@ -1,10 +1,5 @@
 //! A live status indicator that shows the *latest* log line emitted by the
 //! application while the agent is processing a long‑running task.
-//!
-//! It replaces the old spinner animation with real log feedback so users can
-//! watch Codex “think” in real‑time. Whenever new text is provided via
-//! [`StatusIndicatorWidget::update_text`], the parent widget triggers a
-//! redraw so the change is visible immediately.
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -14,7 +9,6 @@ use std::sync::mpsc::Sender;
 use std::thread;
 use std::time::Duration;
 
-use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Alignment;
 use ratatui::layout::Rect;
@@ -45,8 +39,8 @@ pub(crate) struct StatusIndicatorWidget {
     /// input mode and loading mode.
     height: u16,
 
-    frame_idx: std::sync::Arc<AtomicUsize>,
-    running: std::sync::Arc<AtomicBool>,
+    frame_idx: Arc<AtomicUsize>,
+    running: Arc<AtomicBool>,
     // Keep one sender alive to prevent the channel from closing while the
     // animation thread is still running. The field itself is currently not
     // accessed anywhere, therefore the leading underscore silences the
@@ -85,14 +79,6 @@ impl StatusIndicatorWidget {
             running,
             _app_event_tx: app_event_tx,
         }
-    }
-
-    pub(crate) fn handle_key_event(
-        &mut self,
-        _key: KeyEvent,
-    ) -> Result<bool, std::sync::mpsc::SendError<AppEvent>> {
-        // The indicator does not handle any input – always return `false`.
-        Ok(false)
     }
 
     /// Preferred height in terminal rows.
