@@ -159,17 +159,18 @@ pub fn maybe_parse_apply_patch_verified(argv: &[String], cwd: &Path) -> MaybeApp
                         move_path,
                         chunks,
                     } => {
+                        let absolute_path = cwd.join(path);
                         let ApplyPatchFileUpdate {
                             unified_diff,
                             content: contents,
-                        } = match unified_diff_from_chunks(&path, &chunks) {
+                        } = match unified_diff_from_chunks(&absolute_path, &chunks) {
                             Ok(diff) => diff,
                             Err(e) => {
                                 return MaybeApplyPatchVerified::CorrectnessError(e);
                             }
                         };
                         changes.insert(
-                            cwd.join(path),
+                            absolute_path,
                             ApplyPatchFileChange::Update {
                                 unified_diff,
                                 move_path: move_path.map(|p| cwd.join(p)),
