@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use mcp_types::CallToolResult;
 use serde::Deserialize;
 use serde::Serialize;
+use uuid::Uuid;
 
 use crate::model_provider_info::ModelProviderInfo;
 
@@ -323,10 +324,7 @@ pub enum EventMsg {
     },
 
     /// Ack the client's configure message.
-    SessionConfigured {
-        /// Tell the client what model is being queried.
-        model: String,
-    },
+    SessionConfigured(SessionConfiguredEvent),
 
     McpToolCallBegin {
         /// Identifier so this can be paired with the McpToolCallEnd event.
@@ -427,6 +425,15 @@ pub enum EventMsg {
         /// Whether the patch was applied successfully.
         success: bool,
     },
+}
+
+#[derive(Debug, Default, Clone, Deserialize, Serialize)]
+pub struct SessionConfiguredEvent {
+    /// Unique id for this session.
+    pub session_id: Uuid,
+
+    /// Tell the client what model is being queried.
+    pub model: String,
 }
 
 /// User's decision in response to an ExecApprovalRequest.
