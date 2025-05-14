@@ -10,7 +10,7 @@ To that end, we are moving forward with a Rust implementation of Codex CLI conta
 - Can make direct, native calls to [seccomp](https://man7.org/linux/man-pages/man2/seccomp.2.html) and [landlock](https://man7.org/linux/man-pages/man7/landlock.7.html) in order to support sandboxing on Linux.
 - No runtime garbage collection, resulting in lower memory consumption and better, more predictable performance.
 
-Currently, the Rust implementation is materially behind the TypeScript implementation in functionality, so continue to use the TypeScript implmentation for the time being. We will publish native executables via GitHub Releases as soon as we feel the Rust version is usable.
+Currently, the Rust implementation is materially behind the TypeScript implementation in functionality, so continue to use the TypeScript implementation for the time being. We will publish native executables via GitHub Releases as soon as we feel the Rust version is usable.
 
 ## Code Organization
 
