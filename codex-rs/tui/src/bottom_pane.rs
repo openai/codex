@@ -72,6 +72,11 @@ pub(crate) struct BottomPane<'a> {
     has_input_focus: bool,
 
     is_task_running: bool,
+
+    /// Command history
+    command_history: Vec<String>,
+    /// Current position in command history
+    history_position: usize,
 }
 
 pub(crate) struct BottomPaneParams {
@@ -98,6 +103,8 @@ impl<'a> BottomPane<'a> {
             app_event_tx,
             has_input_focus,
             is_task_running: false,
+            command_history: Vec::new(),
+            history_position: 0,
         }
     }
 
@@ -170,11 +177,53 @@ impl<'a> BottomPane<'a> {
                         ctrl: false,
                     } => {
                         let text = self.textarea.lines().join("\n");
-                        // Clear the textarea (there is no dedicated clear API).
+                        if !text.trim().is_empty() {
+                            self.command_history.push(text.clone());
+                            self.history_position = self.command_history.len();
+                        }
+                        
                         self.textarea.select_all();
                         self.textarea.cut();
                         self.request_redraw()?;
                         Ok(InputResult::Submitted(text))
+                    }
+                    Input {
+                        key: Key::Up,
+                        shift: false,
+                        alt: false,
+                        ctrl: false,
+                    } => {
+                        if !self.command_history.is_empty() && self.history_position > 0 {
+                            self.history_position -= 1;
+                            let command = &self.command_history[self.history_position];
+                            self.textarea.select_all();
+                            self.textarea.cut();
+                            self.textarea.insert_str(command);
+                            self.request_redraw()?;
+                        }
+                        Ok(InputResult::None)
+                    }
+                    Input {
+                        key: Key::Down,
+                        shift: false,
+                        alt: false,
+                        ctrl: false,
+                    } => {
+                        if self.history_position < self.command_history.len() {
+                            self.history_position += 1;
+                            if self.history_position < self.command_history.len() {
+                                let command = &self.command_history[self.history_position];
+                                self.textarea.select_all();
+                                self.textarea.cut();
+                                self.textarea.insert_str(command);
+                            } else {
+                                // Clear textarea when reaching the end of history
+                                self.textarea.select_all();
+                                self.textarea.cut();
+                            }
+                            self.request_redraw()?;
+                        }
+                        Ok(InputResult::None)
                     }
                     input => {
                         self.textarea.input(input);
