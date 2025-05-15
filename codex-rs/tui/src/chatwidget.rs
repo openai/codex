@@ -149,6 +149,19 @@ impl ChatWidget<'_> {
                                 self.conversation_history.clear();
                                 self.request_redraw()?;
                             }
+                            "/history" => {
+                                // Show command history
+                                let commands = self.bottom_pane.get_command_history();
+                                let history_text = commands.join("\n");
+                                self.conversation_history.add_background_event(format!("Command History:\n{}", history_text));
+                                self.request_redraw()?;
+                            }
+                            "/clearhistory" => {
+                                // Clear command history
+                                self.bottom_pane.clear_command_history()?;
+                                self.conversation_history.add_background_event("Command history cleared".to_string());
+                                self.request_redraw()?;
+                            }
                             _ => {
                                 self.submit_user_message(text)?;
                             }

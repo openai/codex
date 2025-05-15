@@ -29,6 +29,7 @@ mod scroll_event_helper;
 mod status_indicator_widget;
 mod tui;
 mod user_approval_widget;
+mod command_history;
 
 pub use cli::Cli;
 

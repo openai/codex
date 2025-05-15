@@ -27,6 +27,7 @@ use crate::app_event::AppEvent;
 use crate::status_indicator_widget::StatusIndicatorWidget;
 use crate::user_approval_widget::ApprovalRequest;
 use crate::user_approval_widget::UserApprovalWidget;
+use crate::command_history::CommandHistory;
 
 /// Minimum number of visible text rows inside the textarea.
 const MIN_TEXTAREA_ROWS: usize = 3;
@@ -73,8 +74,8 @@ pub(crate) struct BottomPane<'a> {
 
     is_task_running: bool,
 
-    /// Command history
-    command_history: Vec<String>,
+    /// Command history manager
+    command_history: CommandHistory,
     /// Current position in command history
     history_position: usize,
 }
@@ -97,13 +98,18 @@ impl<'a> BottomPane<'a> {
         let state = PaneState::TextInput;
         update_border_for_input_focus(&mut textarea, &state, has_input_focus);
 
+        let command_history = CommandHistory::new().unwrap_or_else(|e| {
+            tracing::error!("Failed to initialize command history: {}", e);
+            CommandHistory::new().unwrap()
+        });
+
         Self {
             textarea,
             state,
             app_event_tx,
             has_input_focus,
             is_task_running: false,
-            command_history: Vec::new(),
+            command_history,
             history_position: 0,
         }
     }
@@ -178,8 +184,10 @@ impl<'a> BottomPane<'a> {
                     } => {
                         let text = self.textarea.lines().join("\n");
                         if !text.trim().is_empty() {
-                            self.command_history.push(text.clone());
-                            self.history_position = self.command_history.len();
+                            if let Err(e) = self.command_history.add_command(text.clone()) {
+                                tracing::error!("Failed to add command to history: {}", e);
+                            }
+                            self.history_position = self.command_history.get_commands().len();
                         }
                         
                         self.textarea.select_all();
@@ -193,9 +201,10 @@ impl<'a> BottomPane<'a> {
                         alt: false,
                         ctrl: false,
                     } => {
-                        if !self.command_history.is_empty() && self.history_position > 0 {
+                        let commands = self.command_history.get_commands();
+                        if !commands.is_empty() && self.history_position > 0 {
                             self.history_position -= 1;
-                            let command = &self.command_history[self.history_position];
+                            let command = &commands[self.history_position];
                             self.textarea.select_all();
                             self.textarea.cut();
                             self.textarea.insert_str(command);
@@ -209,10 +218,11 @@ impl<'a> BottomPane<'a> {
                         alt: false,
                         ctrl: false,
                     } => {
-                        if self.history_position < self.command_history.len() {
+                        let commands = self.command_history.get_commands();
+                        if self.history_position < commands.len() {
                             self.history_position += 1;
-                            if self.history_position < self.command_history.len() {
-                                let command = &self.command_history[self.history_position];
+                            if self.history_position < commands.len() {
+                                let command = &commands[self.history_position];
                                 self.textarea.select_all();
                                 self.textarea.cut();
                                 self.textarea.insert_str(command);
@@ -316,6 +326,18 @@ impl<'a> BottomPane<'a> {
                 std::cmp::max(text_rows, MIN_TEXTAREA_ROWS) as u16 + TEXTAREA_BORDER_LINES
             }
         }
+    }
+
+    pub(crate) fn get_command_history(&self) -> Vec<String> {
+        self.command_history.get_commands()
+    }
+
+    pub(crate) fn clear_command_history(&mut self) -> Result<(), SendError<AppEvent>> {
+        if let Err(e) = self.command_history.clear() {
+            tracing::error!("Failed to clear command history: {}", e);
+        }
+        self.request_redraw()?;
+        Ok(())
     }
 }
 
