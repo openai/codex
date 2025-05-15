@@ -13,9 +13,8 @@ use tui_textarea::Input;
 use tui_textarea::Key;
 use tui_textarea::TextArea;
 
-use std::sync::mpsc::Sender;
-
 use crate::app_event::AppEvent;
+use crate::app_event_sender::AppEventSender;
 
 use super::command_popup::CommandPopup;
 
@@ -33,11 +32,11 @@ pub enum InputResult {
 pub(crate) struct ChatComposer<'a> {
     textarea: TextArea<'a>,
     command_popup: Option<CommandPopup>,
-    app_event_tx: Sender<AppEvent>,
+    app_event_tx: AppEventSender,
 }
 
 impl ChatComposer<'_> {
-    pub fn new(has_input_focus: bool, app_event_tx: Sender<AppEvent>) -> Self {
+    pub fn new(has_input_focus: bool, app_event_tx: AppEventSender) -> Self {
         let mut textarea = TextArea::default();
         textarea.set_placeholder_text("send a message");
         textarea.set_cursor_line_style(ratatui::style::Style::default());
@@ -113,9 +112,7 @@ impl ChatComposer<'_> {
             } => {
                 if let Some(cmd) = popup.selected_command() {
                     // Send command to the app layer.
-                    if let Err(e) = self.app_event_tx.send(AppEvent::DispatchCommand(*cmd)) {
-                        tracing::error!("failed to send DispatchCommand event: {e}");
-                    }
+                    self.app_event_tx.send(AppEvent::DispatchCommand(*cmd));
 
                     // Clear textarea so no residual text remains.
                     self.textarea.select_all();

@@ -1,10 +1,7 @@
+use crate::user_approval_widget::ApprovalRequest;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use std::sync::mpsc::SendError;
-
-use crate::app_event::AppEvent;
-use crate::user_approval_widget::ApprovalRequest;
 
 use super::BottomPane;
 
@@ -18,11 +15,7 @@ pub(crate) enum ConditionalUpdate {
 pub(crate) trait BottomPaneView<'a> {
     /// Handle a key event while the view is active. A redraw is always
     /// scheduled after this call.
-    fn handle_key_event(
-        &mut self,
-        pane: &mut BottomPane<'a>,
-        key_event: KeyEvent,
-    ) -> Result<(), SendError<AppEvent>>;
+    fn handle_key_event(&mut self, _pane: &mut BottomPane<'a>, _key_event: KeyEvent) {}
 
     /// Return `true` if the view has finished and should be removed.
     fn is_complete(&self) -> bool {

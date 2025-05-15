@@ -1,15 +1,10 @@
-use std::sync::mpsc::SendError;
-use std::sync::mpsc::Sender;
-
-use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::widgets::WidgetRef;
 
-use crate::app_event::AppEvent;
+use crate::app_event_sender::AppEventSender;
 use crate::status_indicator_widget::StatusIndicatorWidget;
 
-use super::BottomPane;
 use super::BottomPaneView;
 use super::bottom_pane_view::ConditionalUpdate;
 
@@ -18,7 +13,7 @@ pub(crate) struct StatusIndicatorView {
 }
 
 impl StatusIndicatorView {
-    pub fn new(app_event_tx: Sender<AppEvent>, height: u16) -> Self {
+    pub fn new(app_event_tx: AppEventSender, height: u16) -> Self {
         Self {
             view: StatusIndicatorWidget::new(app_event_tx, height),
         }
@@ -30,14 +25,6 @@ impl StatusIndicatorView {
 }
 
 impl<'a> BottomPaneView<'a> for StatusIndicatorView {
-    fn handle_key_event(
-        &mut self,
-        _pane: &mut BottomPane<'a>,
-        _key_event: KeyEvent,
-    ) -> Result<(), SendError<AppEvent>> {
-        Ok(())
-    }
-
     fn update_status_text(&mut self, text: String) -> ConditionalUpdate {
         self.update_text(text);
         ConditionalUpdate::NeedsRedraw

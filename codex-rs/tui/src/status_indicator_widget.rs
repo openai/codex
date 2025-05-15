@@ -5,7 +5,6 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
-use std::sync::mpsc::Sender;
 use std::thread;
 use std::time::Duration;
 
@@ -26,6 +25,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 
 use crate::app_event::AppEvent;
+use crate::app_event_sender::AppEventSender;
 
 use codex_ansi_escape::ansi_escape_line;
 
@@ -45,12 +45,12 @@ pub(crate) struct StatusIndicatorWidget {
     // animation thread is still running. The field itself is currently not
     // accessed anywhere, therefore the leading underscore silences the
     // `dead_code` warning without affecting behavior.
-    _app_event_tx: Sender<AppEvent>,
+    _app_event_tx: AppEventSender,
 }
 
 impl StatusIndicatorWidget {
     /// Create a new status indicator and start the animation timer.
-    pub(crate) fn new(app_event_tx: Sender<AppEvent>, height: u16) -> Self {
+    pub(crate) fn new(app_event_tx: AppEventSender, height: u16) -> Self {
         let frame_idx = Arc::new(AtomicUsize::new(0));
         let running = Arc::new(AtomicBool::new(true));
 
@@ -65,9 +65,7 @@ impl StatusIndicatorWidget {
                     std::thread::sleep(Duration::from_millis(200));
                     counter = counter.wrapping_add(1);
                     frame_idx_clone.store(counter, Ordering::Relaxed);
-                    if app_event_tx_clone.send(AppEvent::Redraw).is_err() {
-                        break;
-                    }
+                    app_event_tx_clone.send(AppEvent::Redraw);
                 }
             });
         }

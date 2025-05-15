@@ -1,4 +1,5 @@
 use crate::app_event::AppEvent;
+use crate::app_event_sender::AppEventSender;
 use crate::chatwidget::ChatWidget;
 use crate::git_warning_screen::GitWarningOutcome;
 use crate::git_warning_screen::GitWarningScreen;
@@ -14,7 +15,6 @@ use crossterm::event::KeyEvent;
 use crossterm::event::MouseEvent;
 use crossterm::event::MouseEventKind;
 use std::sync::mpsc::Receiver;
-use std::sync::mpsc::Sender;
 use std::sync::mpsc::channel;
 
 /// Top‑level application state – which full‑screen view is currently active.
@@ -26,7 +26,7 @@ enum AppState {
 }
 
 pub(crate) struct App<'a> {
-    app_event_tx: Sender<AppEvent>,
+    app_event_tx: AppEventSender,
     app_event_rx: Receiver<AppEvent>,
     chat_widget: ChatWidget<'a>,
     app_state: AppState,
@@ -40,6 +40,7 @@ impl App<'_> {
         initial_images: Vec<std::path::PathBuf>,
     ) -> Self {
         let (app_event_tx, app_event_rx) = channel();
+        let app_event_tx = AppEventSender::new(app_event_tx);
         let scroll_event_helper = ScrollEventHelper::new(app_event_tx.clone());
 
         // Spawn a dedicated thread for reading the crossterm event loop and
@@ -50,14 +51,10 @@ impl App<'_> {
                 while let Ok(event) = crossterm::event::read() {
                     match event {
                         crossterm::event::Event::Key(key_event) => {
-                            if let Err(e) = app_event_tx.send(AppEvent::KeyEvent(key_event)) {
-                                tracing::error!("failed to send key event: {e}");
-                            }
+                            app_event_tx.send(AppEvent::KeyEvent(key_event));
                         }
                         crossterm::event::Event::Resize(_, _) => {
-                            if let Err(e) = app_event_tx.send(AppEvent::Redraw) {
-                                tracing::error!("failed to send resize event: {e}");
-                            }
+                            app_event_tx.send(AppEvent::Redraw);
                         }
                         crossterm::event::Event::Mouse(MouseEvent {
                             kind: MouseEventKind::ScrollUp,
@@ -85,10 +82,7 @@ impl App<'_> {
                                     }
                                     _ => KeyEvent::new(KeyCode::Char(ch), KeyModifiers::empty()),
                                 };
-                                if let Err(e) = app_event_tx.send(AppEvent::KeyEvent(key_event)) {
-                                    tracing::error!("failed to send pasted key event: {e}");
-                                    break;
-                                }
+                                app_event_tx.send(AppEvent::KeyEvent(key_event));
                             }
                         }
                         _ => {
@@ -124,14 +118,14 @@ impl App<'_> {
 
     /// Clone of the internal event sender so external tasks (e.g. log bridge)
     /// can inject `AppEvent`s.
-    pub fn event_sender(&self) -> Sender<AppEvent> {
+    pub fn event_sender(&self) -> AppEventSender {
         self.app_event_tx.clone()
     }
 
     pub(crate) fn run(&mut self, terminal: &mut tui::Tui) -> Result<()> {
         // Insert an event to trigger the first render.
         let app_event_tx = self.app_event_tx.clone();
-        app_event_tx.send(AppEvent::Redraw)?;
+        app_event_tx.send(AppEvent::Redraw);
 
         while let Ok(event) = self.app_event_rx.recv() {
             match event {
@@ -152,7 +146,7 @@ impl App<'_> {
                             modifiers: crossterm::event::KeyModifiers::CONTROL,
                             ..
                         } => {
-                            self.app_event_tx.send(AppEvent::ExitRequest)?;
+                            self.app_event_tx.send(AppEvent::ExitRequest);
                         }
                         _ => {
                             self.dispatch_key_event(key_event);
@@ -175,12 +169,12 @@ impl App<'_> {
                 }
                 AppEvent::LatestLog(line) => {
                     if matches!(self.app_state, AppState::Chat) {
-                        let _ = self.chat_widget.update_latest_log(line);
+                        self.chat_widget.update_latest_log(line);
                     }
                 }
                 AppEvent::DispatchCommand(command) => match command {
                     SlashCommand::Clear => {
-                        let _ = self.chat_widget.clear_conversation_history();
+                        self.chat_widget.clear_conversation_history();
                     }
                     SlashCommand::Quit => {
                         break;
@@ -210,17 +204,15 @@ impl App<'_> {
     fn dispatch_key_event(&mut self, key_event: KeyEvent) {
         match &mut self.app_state {
             AppState::Chat => {
-                if let Err(e) = self.chat_widget.handle_key_event(key_event) {
-                    tracing::error!("SendError: {e}");
-                }
+                self.chat_widget.handle_key_event(key_event);
             }
             AppState::GitWarning { screen } => match screen.handle_key_event(key_event) {
                 GitWarningOutcome::Continue => {
                     self.app_state = AppState::Chat;
-                    let _ = self.app_event_tx.send(AppEvent::Redraw);
+                    self.app_event_tx.send(AppEvent::Redraw);
                 }
                 GitWarningOutcome::Quit => {
-                    let _ = self.app_event_tx.send(AppEvent::ExitRequest);
+                    self.app_event_tx.send(AppEvent::ExitRequest);
                 }
                 GitWarningOutcome::None => {
                     // do nothing
@@ -231,17 +223,13 @@ impl App<'_> {
 
     fn dispatch_scroll_event(&mut self, scroll_delta: i32) {
         if matches!(self.app_state, AppState::Chat) {
-            if let Err(e) = self.chat_widget.handle_scroll_delta(scroll_delta) {
-                tracing::error!("SendError: {e}");
-            }
+            self.chat_widget.handle_scroll_delta(scroll_delta);
         }
     }
 
     fn dispatch_codex_event(&mut self, event: Event) {
         if matches!(self.app_state, AppState::Chat) {
-            if let Err(e) = self.chat_widget.handle_codex_event(event) {
-                tracing::error!("SendError: {e}");
-            }
+            self.chat_widget.handle_codex_event(event);
         }
     }
 }

@@ -1,12 +1,9 @@
-use std::sync::mpsc::SendError;
-use std::sync::mpsc::Sender;
-
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::widgets::WidgetRef;
 
-use crate::app_event::AppEvent;
+use crate::app_event_sender::AppEventSender;
 use crate::user_approval_widget::ApprovalRequest;
 use crate::user_approval_widget::UserApprovalWidget;
 
@@ -17,11 +14,11 @@ use super::BottomPaneView;
 pub(crate) struct ApprovalModalView<'a> {
     current: UserApprovalWidget<'a>,
     queue: Vec<ApprovalRequest>,
-    app_event_tx: Sender<AppEvent>,
+    app_event_tx: AppEventSender,
 }
 
 impl ApprovalModalView<'_> {
-    pub fn new(request: ApprovalRequest, app_event_tx: Sender<AppEvent>) -> Self {
+    pub fn new(request: ApprovalRequest, app_event_tx: AppEventSender) -> Self {
         Self {
             current: UserApprovalWidget::new(request, app_event_tx.clone()),
             queue: Vec::new(),
@@ -44,14 +41,9 @@ impl ApprovalModalView<'_> {
 }
 
 impl<'a> BottomPaneView<'a> for ApprovalModalView<'a> {
-    fn handle_key_event(
-        &mut self,
-        _pane: &mut BottomPane<'a>,
-        key_event: KeyEvent,
-    ) -> Result<(), SendError<AppEvent>> {
-        self.current.handle_key_event(key_event)?;
+    fn handle_key_event(&mut self, _pane: &mut BottomPane<'a>, key_event: KeyEvent) {
+        self.current.handle_key_event(key_event);
         self.maybe_advance();
-        Ok(())
     }
 
     fn is_complete(&self) -> bool {
