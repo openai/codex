@@ -1,12 +1,11 @@
 //! Root of the `codex-core` library.
 
 // Prevent accidental direct writes to stdout/stderr in library code. All
-// user‑visible output must go through the appropriate abstraction (e.g.,
+// user-visible output must go through the appropriate abstraction (e.g.,
 // the TUI or the tracing stack).
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
 mod chat_completions;
-
 mod client;
 mod client_common;
 pub mod codex;

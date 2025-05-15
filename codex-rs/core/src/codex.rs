@@ -610,7 +610,7 @@ async fn submission_loop(
                 // `instructions` value into the Session struct.
                 let session_id = Uuid::new_v4();
                 let rollout_recorder =
-                    match RolloutRecorder::new(session_id, instructions.clone()).await {
+                    match RolloutRecorder::new(&config, session_id, instructions.clone()).await {
                         Ok(r) => Some(r),
                         Err(e) => {
                             tracing::warn!("failed to initialise rollout recorder: {e}");
