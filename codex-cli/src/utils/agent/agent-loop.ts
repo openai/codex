@@ -466,6 +466,73 @@ export class AgentLoop {
     return [outputItem, ...additionalItems];
   }
 
+  private async handleLocalShellCall(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    item: any,
+  ): Promise<Array<ResponseInputItem>> {
+    // If the agent has been canceled in the meantime we should not perform any
+    // additional work. Returning an empty array ensures that we neither execute
+    // the requested tool call nor enqueue any follow‑up input items. This keeps
+    // the cancellation semantics intuitive for users – once they interrupt a
+    // task no further actions related to that task should be taken.
+    if (this.canceled) {
+      return [];
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const outputItem: any = {
+      type: "local_shell_call_output",
+      // `call_id` is mandatory – ensure we never send `undefined` which would
+      // trigger the "No tool output found…" 400 from the API.
+      call_id: item.call_id,
+      output: "no function found",
+    };
+
+    // We intentionally *do not* remove this `callId` from the `pendingAborts`
+    // set right away.  The output produced below is only queued up for the
+    // *next* request to the OpenAI API – it has not been delivered yet.  If
+    // the user presses ESC‑ESC (i.e. invokes `cancel()`) in the small window
+    // between queuing the result and the actual network call, we need to be
+    // able to surface a synthetic `function_call_output` marked as
+    // "aborted".  Keeping the ID in the set until the run concludes
+    // successfully lets the next `run()` differentiate between an aborted
+    // tool call (needs the synthetic output) and a completed one (cleared
+    // below in the `flush()` helper).
+
+    // used to tell model to stop if needed
+    const additionalItems: Array<ResponseInputItem> = [];
+
+    if (item.action.type !== "exec") {
+      throw new Error("Invalid action type");
+    }
+
+    const args = {
+      cmd: item.action.command,
+      workdir: item.action.working_directory,
+      timeoutInMillis: item.action.timeout_ms,
+    };
+
+    const {
+      outputText,
+      metadata,
+      additionalItems: additionalItemsFromExec,
+    } = await handleExecCommand(
+      args,
+      this.config,
+      this.approvalPolicy,
+      this.additionalWritableRoots,
+      this.getCommandConfirmation,
+      this.execAbortController?.signal,
+    );
+    outputItem.output = JSON.stringify({ output: outputText, metadata });
+
+    if (additionalItemsFromExec) {
+      additionalItems.push(...additionalItemsFromExec);
+    }
+
+    return [outputItem, ...additionalItems];
+  }
+
   public async run(
     input: Array<ResponseInputItem>,
     previousResponseId: string = "",
@@ -658,6 +725,7 @@ export class AgentLoop {
                 if (
                   (item as ResponseInputItem).type === "function_call" ||
                   (item as ResponseInputItem).type === "reasoning" ||
+                  (item as ResponseInputItem).type === "local_shell_call" ||
                   ((item as ResponseInputItem).type === "message" &&
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     (item as any).role === "user")
@@ -978,7 +1046,10 @@ export class AgentLoop {
                 if (maybeReasoning.type === "reasoning") {
                   maybeReasoning.duration_ms = Date.now() - thinkingStart;
                 }
-                if (item.type === "function_call") {
+                if (
+                  item.type === "function_call" ||
+                  item.type === "local_shell_call"
+                ) {
                   // Track outstanding tool call so we can abort later if needed.
                   // The item comes from the streaming response, therefore it has
                   // either `id` (chat) or `call_id` (responses) – we normalise
@@ -1501,6 +1572,14 @@ export class AgentLoop {
         alreadyProcessedResponses.add(item.id);
         // eslint-disable-next-line no-await-in-loop
         const result = await this.handleFunctionCall(item);
+        turnInput.push(...result);
+      } else if (item.type === "local_shell_call") {
+        if (alreadyProcessedResponses.has(item.id)) {
+          continue;
+        }
+        alreadyProcessedResponses.add(item.id);
+        // eslint-disable-next-line no-await-in-loop
+        const result = await this.handleLocalShellCall(item);
         turnInput.push(...result);
       }
       emitItem(item as ResponseItem);
