@@ -8,6 +8,7 @@ import type {
   ResponseItem,
   ResponseCreateParams,
   FunctionTool,
+  Tool,
 } from "openai/resources/responses/responses.mjs";
 import type { Reasoning } from "openai/resources.mjs";
 
@@ -84,7 +85,7 @@ type AgentLoopParams = {
   onLastResponseId: (lastResponseId: string) => void;
 };
 
-const shellTool: FunctionTool = {
+const shellFunctionTool: FunctionTool = {
   type: "function",
   name: "shell",
   description: "Runs a shell command, and returns its output.",
@@ -106,6 +107,10 @@ const shellTool: FunctionTool = {
     required: ["command"],
     additionalProperties: false,
   },
+};
+
+const localShellTool: Tool = {
+  type: "local_shell",
 };
 
 export class AgentLoop {
@@ -545,6 +550,11 @@ export class AgentLoop {
       // `disableResponseStorage === true`.
       let transcriptPrefixLen = 0;
 
+      let tools: Array<Tool> = [shellFunctionTool];
+      if (this.model.startsWith("codex")) {
+        tools = [localShellTool];
+      }
+
       const stripInternalFields = (
         item: ResponseInputItem,
       ): ResponseInputItem => {
@@ -748,7 +758,7 @@ export class AgentLoop {
                     store: true,
                     previous_response_id: lastResponseId || undefined,
                   }),
-              tools: [shellTool],
+              tools: tools,
               // Explicitly tell the model it is allowed to pick whatever
               // tool it deems appropriate.  Omitting this sometimes leads to
               // the model ignoring the available tools and responding with
@@ -1130,7 +1140,7 @@ export class AgentLoop {
                       store: true,
                       previous_response_id: lastResponseId || undefined,
                     }),
-                tools: [shellTool],
+                tools: tools,
                 tool_choice: "auto",
               });
 
