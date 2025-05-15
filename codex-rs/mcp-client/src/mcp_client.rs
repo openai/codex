@@ -99,12 +99,14 @@ impl McpClient {
             .kill_on_drop(true)
             .spawn()?;
 
-        let stdin = child.stdin.take().ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::Other, "failed to capture child stdin")
-        })?;
-        let stdout = child.stdout.take().ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::Other, "failed to capture child stdout")
-        })?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| std::io::Error::other("failed to capture child stdin"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| std::io::Error::other("failed to capture child stdout"))?;
 
         let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<JSONRPCMessage>(CHANNEL_CAPACITY);
         let pending: Arc<Mutex<HashMap<i64, PendingSender>>> = Arc::new(Mutex::new(HashMap::new()));
