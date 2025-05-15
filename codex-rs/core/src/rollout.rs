@@ -6,7 +6,6 @@
 use std::fs::File;
 use std::fs::{self};
 use std::io::Error as IoError;
-use std::io::ErrorKind;
 
 use serde::Serialize;
 use time::OffsetDateTime;
@@ -64,9 +63,9 @@ impl RolloutRecorder {
         let timestamp_format: &[FormatItem] = format_description!(
             "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z"
         );
-        let timestamp = timestamp.format(timestamp_format).map_err(|e| {
-            IoError::new(ErrorKind::Other, format!("failed to format timestamp: {e}"))
-        })?;
+        let timestamp = timestamp
+            .format(timestamp_format)
+            .map_err(|e| IoError::other(format!("failed to format timestamp: {e}")))?;
 
         let meta = SessionMeta {
             timestamp,
@@ -131,19 +130,13 @@ impl RolloutRecorder {
     async fn record_item(&self, item: &impl Serialize) -> std::io::Result<()> {
         // Serialize the item to JSON first so that the writer thread only has
         // to perform the actual write.
-        let json = serde_json::to_string(item).map_err(|e| {
-            IoError::new(
-                ErrorKind::Other,
-                format!("failed to serialize response items: {e}"),
-            )
-        })?;
+        let json = serde_json::to_string(item)
+            .map_err(|e| IoError::other(format!("failed to serialize response items: {e}")))?;
 
-        self.tx.send(json).await.map_err(|e| {
-            IoError::new(
-                ErrorKind::Other,
-                format!("failed to queue rollout item: {e}"),
-            )
-        })
+        self.tx
+            .send(json)
+            .await
+            .map_err(|e| IoError::other(format!("failed to queue rollout item: {e}")))
     }
 }
 
@@ -165,7 +158,7 @@ fn create_log_file(config: &Config, session_id: Uuid) -> std::io::Result<LogFile
     fs::create_dir_all(&dir)?;
 
     let timestamp = OffsetDateTime::now_local()
-        .map_err(|e| IoError::new(ErrorKind::Other, format!("failed to get local time: {e}")))?;
+        .map_err(|e| IoError::other(format!("failed to get local time: {e}")))?;
 
     // Custom format for YYYY-MM-DDThh-mm-ss. Use `-` instead of `:` for
     // compatibility with filesystems that do not allow colons in filenames.
@@ -173,7 +166,7 @@ fn create_log_file(config: &Config, session_id: Uuid) -> std::io::Result<LogFile
         format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
     let date_str = timestamp
         .format(format)
-        .map_err(|e| IoError::new(ErrorKind::Other, format!("failed to format timestamp: {e}")))?;
+        .map_err(|e| IoError::other(format!("failed to format timestamp: {e}")))?;
 
     let filename = format!("rollout-{date_str}-{session_id}.jsonl");
 
