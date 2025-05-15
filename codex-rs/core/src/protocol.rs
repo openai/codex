@@ -12,6 +12,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use uuid::Uuid;
 
+use crate::message_history::HistoryEntry;
 use crate::model_provider_info::ModelProviderInfo;
 
 /// Submission Queue Entry - requests from user
@@ -24,7 +25,7 @@ pub struct Submission {
 }
 
 /// Submission operation
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[allow(clippy::large_enum_variant)]
 #[non_exhaustive]
@@ -88,6 +89,18 @@ pub enum Op {
         /// The user's decision in response to the request.
         decision: ReviewDecision,
     },
+
+    /// Append an entry to the persistent cross-session message history.
+    ///
+    /// Note the entry is not guaranteed to be logged if the user has
+    /// history disabled, it matches the list of "sensitive" patterns, etc.
+    AddToHistory {
+        /// The message text to be stored.
+        text: String,
+    },
+
+    /// Request a single history entry identified by `log_id` + `offset`.
+    GetHistoryEntryRequest { offset: usize, log_id: u64 },
 }
 
 /// Determines how liberally commands are auto‑approved by the system.
@@ -270,7 +283,7 @@ pub enum SandboxPermission {
 
 /// User input
 #[non_exhaustive]
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum InputItem {
     Text {
@@ -340,6 +353,9 @@ pub enum EventMsg {
 
     /// Notification that a patch application has finished.
     PatchApplyEnd(PatchApplyEndEvent),
+
+    /// Response to GetHistoryEntryRequest.
+    GetHistoryEntryResponse(GetHistoryEntryResponseEvent),
 }
 
 // Individual event payload types matching each `EventMsg` variant.
@@ -452,6 +468,15 @@ pub struct PatchApplyEndEvent {
     pub success: bool,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GetHistoryEntryResponseEvent {
+    pub offset: usize,
+    pub log_id: u64,
+    /// The entry at the requested offset, if available and parseable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry: Option<HistoryEntry>,
+}
+
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
 pub struct SessionConfiguredEvent {
     /// Unique id for this session.
@@ -459,10 +484,16 @@ pub struct SessionConfiguredEvent {
 
     /// Tell the client what model is being queried.
     pub model: String,
+
+    /// Identifier of the history log file (inode on Unix, 0 otherwise).
+    pub history_log_id: u64,
+
+    /// Current number of entries in the history log.
+    pub history_entry_count: usize,
 }
 
 /// User's decision in response to an ExecApprovalRequest.
-#[derive(Debug, Default, Clone, Copy, Deserialize, Serialize)]
+#[derive(Debug, Default, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ReviewDecision {
     /// User has approved this command and the agent should execute it.
@@ -519,12 +550,14 @@ mod tests {
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id,
                 model: "o4-mini".to_string(),
+                history_log_id: 0,
+                history_entry_count: 0,
             }),
         };
         let serialized = serde_json::to_string(&event).unwrap();
         assert_eq!(
             serialized,
-            r#"{"id":"1234","msg":{"type":"session_configured","session_id":"67e55044-10b1-426f-9247-bb680e5fe0c8","model":"o4-mini"}}"#
+            r#"{"id":"1234","msg":{"type":"session_configured","session_id":"67e55044-10b1-426f-9247-bb680e5fe0c8","model":"o4-mini","history_log_id":0,"history_entry_count":0}}"#
         );
     }
 }

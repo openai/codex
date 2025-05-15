@@ -20,6 +20,7 @@ codex-mcp-client = { path = "../mcp-client" }
 dirs = "6"
 env-flags = "0.1.1"
 eventsource-stream = "0.2.3"
+fs2 = "0.4.3"
 fs-err = "3.1.0"
 futures = "0.3"
 mcp-types = { path = "../mcp-types" }

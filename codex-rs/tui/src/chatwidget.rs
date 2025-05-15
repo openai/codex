@@ -173,6 +173,15 @@ impl ChatWidget<'_> {
                 tracing::error!("failed to send message: {e}");
             });
 
+        // Persist the text to cross-session message history.
+        if !text.is_empty() {
+            self.codex_op_tx
+                .send(Op::AddToHistory { text: text.clone() })
+                .unwrap_or_else(|e| {
+                    tracing::error!("failed to send AddHistory op: {e}");
+                });
+        }
+
         // Only show text portion in conversation history for now.
         if !text.is_empty() {
             self.conversation_history.add_user_message(text);
@@ -191,7 +200,12 @@ impl ChatWidget<'_> {
             EventMsg::SessionConfigured(event) => {
                 // Record session information at the top of the conversation.
                 self.conversation_history
-                    .add_session_info(&self.config, event);
+                    .add_session_info(&self.config, event.clone());
+
+                // Forward history metadata to the bottom pane so the chat
+                // composer can navigate through past messages.
+                self.bottom_pane
+                    .set_history_metadata(event.history_log_id, event.history_entry_count);
                 self.request_redraw();
             }
             EventMsg::AgentMessage(AgentMessageEvent { message }) => {
@@ -308,6 +322,17 @@ impl ChatWidget<'_> {
                 self.conversation_history
                     .record_completed_mcp_tool_call(call_id, success, result);
                 self.request_redraw();
+            }
+            EventMsg::GetHistoryEntryResponse(event) => {
+                let codex_core::protocol::GetHistoryEntryResponseEvent {
+                    offset,
+                    log_id,
+                    entry,
+                } = event;
+
+                // Inform bottom pane / composer.
+                self.bottom_pane
+                    .on_history_entry_response(log_id, offset, entry.map(|e| e.text));
             }
             event => {
                 self.conversation_history

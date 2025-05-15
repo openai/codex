@@ -100,7 +100,12 @@ impl HistoryCell {
         event: SessionConfiguredEvent,
         is_first_event: bool,
     ) -> Self {
-        let SessionConfiguredEvent { model, session_id } = event;
+        let SessionConfiguredEvent {
+            model,
+            session_id,
+            history_log_id: _,
+            history_entry_count: _,
+        } = event;
         if is_first_event {
             let mut lines: Vec<Line<'static>> = vec![
                 Line::from(vec![

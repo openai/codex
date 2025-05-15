@@ -24,6 +24,7 @@ pub mod landlock;
 mod mcp_connection_manager;
 pub mod mcp_server_config;
 mod mcp_tool_call;
+mod message_history;
 mod model_provider_info;
 pub use model_provider_info::ModelProviderInfo;
 pub use model_provider_info::WireApi;

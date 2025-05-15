@@ -23,7 +23,9 @@ This folder is the root of a Cargo workspace. It contains quite a bit of experim
 
 ## Config
 
-The CLI can be configured via `~/.codex/config.toml`. It supports the following options:
+The CLI can be configured via a file named `config.toml`. By default, configuration is read from `~/.codex/config.toml`, though the `CODEX_HOME` environment variable can be used to specify a directory other than `~/.codex`.
+
+The `config.toml` file supports the following options:
 
 ### model
 
@@ -295,6 +297,17 @@ To have Codex use this script for notifications, you would configure it via `not
 
 ```toml
 notify = ["python3", "/Users/mbolin/.codex/notify.py"]
+```
+
+### history
+
+By default, Codex CLI records messages sent to the model in `$CODEX_HOME/history.jsonl`. Note that on UNIX, the file permissions are set to `o600`, so it should only be readable and writable by the owner.
+
+To disable this behavior, configure `[history]` as follows:
+
+```toml
+[history]
+persistence = "none"  # "save-all" is the default value
 ```
 
 ### project_doc_max_bytes
