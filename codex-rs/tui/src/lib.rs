@@ -69,7 +69,7 @@ pub fn run_main(cli: Cli) -> std::io::Result<()> {
         }
     };
 
-    let log_dir = codex_core::config::log_dir()?;
+    let log_dir = codex_core::config::log_dir(&config)?;
     std::fs::create_dir_all(&log_dir)?;
     // Open (or create) your log file, appending to it.
     let mut log_file_opts = OpenOptions::new();

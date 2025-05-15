@@ -20,13 +20,15 @@
 use std::time::Duration;
 
 use codex_core::Codex;
-use codex_core::config::Config;
 use codex_core::error::CodexErr;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
+mod test_support;
+use tempfile::TempDir;
+use test_support::load_default_config_for_test;
 use tokio::sync::Notify;
 use tokio::time::timeout;
 
@@ -57,7 +59,8 @@ async fn spawn_codex() -> Result<Codex, CodexErr> {
         std::env::set_var("OPENAI_STREAM_MAX_RETRIES", "2");
     }
 
-    let config = Config::load_default_config_for_test();
+    let codex_home = TempDir::new().unwrap();
+    let config = load_default_config_for_test(&codex_home);
     let (agent, _init_id) = Codex::spawn(config, std::sync::Arc::new(Notify::new())).await?;
 
     Ok(agent)
