@@ -1138,4 +1138,55 @@ g
 "#
         );
     }
+
+    #[test]
+    fn test_apply_patch_should_resolve_absolute_paths_in_cwd() {
+        let session_dir = tempdir().unwrap();
+        let relative_path = "source.txt";
+
+        // Note that we need this file to exists for the patch to be "verified"
+        // and parsed correctly.
+        let session_file_path = session_dir.path().join(relative_path);
+        fs::write(&session_file_path, "session directory content\n").unwrap();
+
+        let argv = vec![
+            "apply_patch".to_string(),
+            r#"*** Begin Patch
+*** Update File: source.txt
+@@
+-session directory content
++updated session directory content
+*** End Patch"#
+                .to_string(),
+        ];
+
+        let result = maybe_parse_apply_patch_verified(&argv, session_dir.path());
+        assert!(matches!(result, MaybeApplyPatchVerified::Body(_)));
+        let MaybeApplyPatchVerified::Body(action) = result else {
+            panic!("Expected MaybeApplyPatchVerified::Body");
+        };
+
+        let changes = action.changes();
+        assert_eq!(changes.len(), 1);
+
+        // Ensure that we are targeting the correct file
+        assert!(changes.contains_key(&session_file_path));
+
+        // Verify the patch contents - as otherwise we may have pulled contents
+        // from the wrong file (as we're using relative paths)
+        let ApplyPatchFileChange::Update { new_content, .. } = changes.get(&session_file_path).unwrap() else {
+            panic!("Expected Update file change for session file");
+        };
+        assert_eq!(
+            new_content, "updated session directory content\n",
+            "File content was not updated correctly"
+        );
+
+        // Check that the actual file hasn't been modified yet
+        let session_content = fs::read_to_string(&session_file_path).unwrap();
+        assert_eq!(
+            session_content, "session directory content\n",
+            "Session file should not be modified yet until apply_hunks is called"
+        );
+    }
 }
