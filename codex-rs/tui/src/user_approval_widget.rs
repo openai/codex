@@ -7,8 +7,6 @@
 //! driven workflow – a fully‑fledged visual match is not required.
 
 use std::path::PathBuf;
-use std::sync::mpsc::SendError;
-use std::sync::mpsc::Sender;
 
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
@@ -30,6 +28,7 @@ use tui_input::Input;
 use tui_input::backend::crossterm::EventHandler;
 
 use crate::app_event::AppEvent;
+use crate::app_event_sender::AppEventSender;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
 
@@ -47,8 +46,6 @@ pub(crate) enum ApprovalRequest {
         grant_root: Option<PathBuf>,
     },
 }
-
-// ──────────────────────────────────────────────────────────────────────────
 
 /// Options displayed in the *select* mode.
 struct SelectOption {
@@ -102,7 +99,7 @@ enum Mode {
 /// A modal prompting the user to approve or deny the pending request.
 pub(crate) struct UserApprovalWidget<'a> {
     approval_request: ApprovalRequest,
-    app_event_tx: Sender<AppEvent>,
+    app_event_tx: AppEventSender,
     confirmation_prompt: Paragraph<'a>,
 
     /// Currently selected index in *select* mode.
@@ -124,7 +121,7 @@ pub(crate) struct UserApprovalWidget<'a> {
 const BORDER_LINES: u16 = 2;
 
 impl UserApprovalWidget<'_> {
-    pub(crate) fn new(approval_request: ApprovalRequest, app_event_tx: Sender<AppEvent>) -> Self {
+    pub(crate) fn new(approval_request: ApprovalRequest, app_event_tx: AppEventSender) -> Self {
         let input = Input::default();
         let confirmation_prompt = match &approval_request {
             ApprovalRequest::Exec {
@@ -225,15 +222,14 @@ impl UserApprovalWidget<'_> {
     /// Process a key event originating from crossterm. As the modal fully
     /// captures input while visible, we don’t need to report whether the event
     /// was consumed—callers can assume it always is.
-    pub(crate) fn handle_key_event(&mut self, key: KeyEvent) -> Result<(), SendError<AppEvent>> {
+    pub(crate) fn handle_key_event(&mut self, key: KeyEvent) {
         match self.mode {
-            Mode::Select => self.handle_select_key(key)?,
-            Mode::Input => self.handle_input_key(key)?,
+            Mode::Select => self.handle_select_key(key),
+            Mode::Input => self.handle_input_key(key),
         }
-        Ok(())
     }
 
-    fn handle_select_key(&mut self, key_event: KeyEvent) -> Result<(), SendError<AppEvent>> {
+    fn handle_select_key(&mut self, key_event: KeyEvent) {
         match key_event.code {
             KeyCode::Up => {
                 if self.selected_option == 0 {
@@ -241,77 +237,61 @@ impl UserApprovalWidget<'_> {
                 } else {
                     self.selected_option -= 1;
                 }
-                return Ok(());
             }
             KeyCode::Down => {
                 self.selected_option = (self.selected_option + 1) % SELECT_OPTIONS.len();
-                return Ok(());
             }
             KeyCode::Char('y') => {
-                self.send_decision(ReviewDecision::Approved)?;
-                return Ok(());
+                self.send_decision(ReviewDecision::Approved);
             }
             KeyCode::Char('a') => {
-                self.send_decision(ReviewDecision::ApprovedForSession)?;
-                return Ok(());
+                self.send_decision(ReviewDecision::ApprovedForSession);
             }
             KeyCode::Char('n') => {
-                self.send_decision(ReviewDecision::Denied)?;
-                return Ok(());
+                self.send_decision(ReviewDecision::Denied);
             }
             KeyCode::Char('e') => {
                 self.mode = Mode::Input;
-                return Ok(());
             }
             KeyCode::Enter => {
                 let opt = &SELECT_OPTIONS[self.selected_option];
                 if opt.enters_input_mode {
                     self.mode = Mode::Input;
                 } else if let Some(decision) = opt.decision {
-                    self.send_decision(decision)?;
+                    self.send_decision(decision);
                 }
-                return Ok(());
             }
             KeyCode::Esc => {
-                self.send_decision(ReviewDecision::Abort)?;
-                return Ok(());
+                self.send_decision(ReviewDecision::Abort);
             }
             _ => {}
         }
-        Ok(())
     }
 
-    fn handle_input_key(&mut self, key_event: KeyEvent) -> Result<(), SendError<AppEvent>> {
+    fn handle_input_key(&mut self, key_event: KeyEvent) {
         // Handle special keys first.
         match key_event.code {
             KeyCode::Enter => {
                 let feedback = self.input.value().to_string();
-                self.send_decision_with_feedback(ReviewDecision::Denied, feedback)?;
-                return Ok(());
+                self.send_decision_with_feedback(ReviewDecision::Denied, feedback);
             }
             KeyCode::Esc => {
                 // Cancel input – treat as deny without feedback.
-                self.send_decision(ReviewDecision::Denied)?;
-                return Ok(());
+                self.send_decision(ReviewDecision::Denied);
             }
-            _ => {}
+            _ => {
+                // Feed into input widget for normal editing.
+                let ct_event = crossterm::event::Event::Key(key_event);
+                self.input.handle_event(&ct_event);
+            }
         }
-
-        // Feed into input widget for normal editing.
-        let ct_event = crossterm::event::Event::Key(key_event);
-        self.input.handle_event(&ct_event);
-        Ok(())
     }
 
-    fn send_decision(&mut self, decision: ReviewDecision) -> Result<(), SendError<AppEvent>> {
+    fn send_decision(&mut self, decision: ReviewDecision) {
         self.send_decision_with_feedback(decision, String::new())
     }
 
-    fn send_decision_with_feedback(
-        &mut self,
-        decision: ReviewDecision,
-        _feedback: String,
-    ) -> Result<(), SendError<AppEvent>> {
+    fn send_decision_with_feedback(&mut self, decision: ReviewDecision, _feedback: String) {
         let op = match &self.approval_request {
             ApprovalRequest::Exec { id, .. } => Op::ExecApproval {
                 id: id.clone(),
@@ -329,9 +309,8 @@ impl UserApprovalWidget<'_> {
         // redraw after it processes the resulting state change, so we avoid
         // issuing an extra Redraw here to prevent a transient frame where the
         // modal is still visible.
-        self.app_event_tx.send(AppEvent::CodexOp(op))?;
+        self.app_event_tx.send(AppEvent::CodexOp(op));
         self.done = true;
-        Ok(())
     }
 
     /// Returns `true` once the user has made a decision and the widget no
@@ -339,8 +318,6 @@ impl UserApprovalWidget<'_> {
     pub(crate) fn is_complete(&self) -> bool {
         self.done
     }
-
-    // ──────────────────────────────────────────────────────────────────────
 }
 
 const PLAIN: Style = Style::new();

@@ -6,10 +6,9 @@ use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::widgets::WidgetRef;
-use std::sync::mpsc::SendError;
-use std::sync::mpsc::Sender;
 
 use crate::app_event::AppEvent;
+use crate::app_event_sender::AppEventSender;
 use crate::user_approval_widget::ApprovalRequest;
 
 mod approval_modal_view;
@@ -33,13 +32,13 @@ pub(crate) struct BottomPane<'a> {
     /// If present, this is displayed instead of the `composer`.
     active_view: Option<Box<dyn BottomPaneView<'a> + 'a>>,
 
-    app_event_tx: Sender<AppEvent>,
+    app_event_tx: AppEventSender,
     has_input_focus: bool,
     is_task_running: bool,
 }
 
 pub(crate) struct BottomPaneParams {
-    pub(crate) app_event_tx: Sender<AppEvent>,
+    pub(crate) app_event_tx: AppEventSender,
     pub(crate) has_input_focus: bool,
 }
 
@@ -55,12 +54,9 @@ impl BottomPane<'_> {
     }
 
     /// Forward a key event to the active view or the composer.
-    pub fn handle_key_event(
-        &mut self,
-        key_event: KeyEvent,
-    ) -> Result<InputResult, SendError<AppEvent>> {
+    pub fn handle_key_event(&mut self, key_event: KeyEvent) -> InputResult {
         if let Some(mut view) = self.active_view.take() {
-            view.handle_key_event(self, key_event)?;
+            view.handle_key_event(self, key_event);
             if !view.is_complete() {
                 self.active_view = Some(view);
             } else if self.is_task_running {
@@ -70,31 +66,30 @@ impl BottomPane<'_> {
                     height,
                 )));
             }
-            self.request_redraw()?;
-            Ok(InputResult::None)
+            self.request_redraw();
+            InputResult::None
         } else {
             let (input_result, needs_redraw) = self.composer.handle_key_event(key_event);
             if needs_redraw {
-                self.request_redraw()?;
+                self.request_redraw();
             }
-            Ok(input_result)
+            input_result
         }
     }
 
     /// Update the status indicator text (only when the `StatusIndicatorView` is
     /// active).
-    pub(crate) fn update_status_text(&mut self, text: String) -> Result<(), SendError<AppEvent>> {
+    pub(crate) fn update_status_text(&mut self, text: String) {
         if let Some(view) = &mut self.active_view {
             match view.update_status_text(text) {
                 ConditionalUpdate::NeedsRedraw => {
-                    self.request_redraw()?;
+                    self.request_redraw();
                 }
                 ConditionalUpdate::NoRedraw => {
                     // No redraw needed.
                 }
             }
         }
-        Ok(())
     }
 
     /// Update the UI to reflect whether this `BottomPane` has input focus.
@@ -103,7 +98,7 @@ impl BottomPane<'_> {
         self.composer.set_input_focus(has_focus);
     }
 
-    pub fn set_task_running(&mut self, running: bool) -> Result<(), SendError<AppEvent>> {
+    pub fn set_task_running(&mut self, running: bool) {
         self.is_task_running = running;
 
         match (running, self.active_view.is_some()) {
@@ -114,13 +109,13 @@ impl BottomPane<'_> {
                     self.app_event_tx.clone(),
                     height,
                 )));
-                self.request_redraw()?;
+                self.request_redraw();
             }
             (false, true) => {
                 if let Some(mut view) = self.active_view.take() {
                     if view.should_hide_when_task_is_done() {
                         // Leave self.active_view as None.
-                        self.request_redraw()?;
+                        self.request_redraw();
                     } else {
                         // Preserve the view.
                         self.active_view = Some(view);
@@ -131,20 +126,16 @@ impl BottomPane<'_> {
                 // No change.
             }
         }
-        Ok(())
     }
 
     /// Called when the agent requests user approval.
-    pub fn push_approval_request(
-        &mut self,
-        request: ApprovalRequest,
-    ) -> Result<(), SendError<AppEvent>> {
+    pub fn push_approval_request(&mut self, request: ApprovalRequest) {
         let request = if let Some(view) = self.active_view.as_mut() {
             match view.try_consume_approval_request(request) {
                 Some(request) => request,
                 None => {
-                    self.request_redraw()?;
-                    return Ok(());
+                    self.request_redraw();
+                    return;
                 }
             }
         } else {
@@ -166,7 +157,7 @@ impl BottomPane<'_> {
         }
     }
 
-    pub(crate) fn request_redraw(&self) -> Result<(), SendError<AppEvent>> {
+    pub(crate) fn request_redraw(&self) {
         self.app_event_tx.send(AppEvent::Redraw)
     }
 

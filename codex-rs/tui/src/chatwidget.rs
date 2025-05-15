@@ -1,7 +1,5 @@
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::mpsc::SendError;
-use std::sync::mpsc::Sender;
 
 use codex_core::codex_wrapper::init_codex;
 use codex_core::config::Config;
@@ -31,6 +29,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::mpsc::unbounded_channel;
 
 use crate::app_event::AppEvent;
+use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
 use crate::bottom_pane::InputResult;
@@ -39,7 +38,7 @@ use crate::history_cell::PatchEventType;
 use crate::user_approval_widget::ApprovalRequest;
 
 pub(crate) struct ChatWidget<'a> {
-    app_event_tx: Sender<AppEvent>,
+    app_event_tx: AppEventSender,
     codex_op_tx: UnboundedSender<Op>,
     conversation_history: ConversationHistoryWidget,
     bottom_pane: BottomPane<'a>,
@@ -56,7 +55,7 @@ enum InputFocus {
 impl ChatWidget<'_> {
     pub(crate) fn new(
         config: Config,
-        app_event_tx: Sender<AppEvent>,
+        app_event_tx: AppEventSender,
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
     ) -> Self {
@@ -77,9 +76,7 @@ impl ChatWidget<'_> {
 
             // Forward the captured `SessionInitialized` event that was consumed
             // inside `init_codex()` so it can be rendered in the UI.
-            if let Err(e) = app_event_tx_clone.send(AppEvent::CodexEvent(session_event.clone())) {
-                tracing::error!("failed to send SessionInitialized event: {e}");
-            }
+            app_event_tx_clone.send(AppEvent::CodexEvent(session_event.clone()));
             let codex = Arc::new(codex);
             let codex_clone = codex.clone();
             tokio::spawn(async move {
@@ -92,11 +89,7 @@ impl ChatWidget<'_> {
             });
 
             while let Ok(event) = codex.next_event().await {
-                app_event_tx_clone
-                    .send(AppEvent::CodexEvent(event))
-                    .unwrap_or_else(|e| {
-                        tracing::error!("failed to send event: {e}");
-                    });
+                app_event_tx_clone.send(AppEvent::CodexEvent(event));
             }
         });
 
@@ -114,16 +107,13 @@ impl ChatWidget<'_> {
 
         if initial_prompt.is_some() || !initial_images.is_empty() {
             let text = initial_prompt.unwrap_or_default();
-            let _ = chat_widget.submit_user_message_with_images(text, initial_images);
+            chat_widget.submit_user_message_with_images(text, initial_images);
         }
 
         chat_widget
     }
 
-    pub(crate) fn handle_key_event(
-        &mut self,
-        key_event: KeyEvent,
-    ) -> std::result::Result<(), SendError<AppEvent>> {
+    pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
         // Special-case <Tab>: normally toggles focus between history and bottom panes.
         // However, when the slash-command popup is visible we forward the key
         // to the bottom pane so it can handle auto-completion.
@@ -138,43 +128,31 @@ impl ChatWidget<'_> {
                 .set_input_focus(self.input_focus == InputFocus::HistoryPane);
             self.bottom_pane
                 .set_input_focus(self.input_focus == InputFocus::BottomPane);
-            self.request_redraw()?;
-            return Ok(());
+            self.request_redraw();
         }
 
         match self.input_focus {
             InputFocus::HistoryPane => {
                 let needs_redraw = self.conversation_history.handle_key_event(key_event);
                 if needs_redraw {
-                    self.request_redraw()?;
+                    self.request_redraw();
                 }
-                Ok(())
             }
-            InputFocus::BottomPane => {
-                match self.bottom_pane.handle_key_event(key_event)? {
-                    InputResult::Submitted(text) => {
-                        self.submit_user_message(text)?;
-                    }
-                    InputResult::None => {}
+            InputFocus::BottomPane => match self.bottom_pane.handle_key_event(key_event) {
+                InputResult::Submitted(text) => {
+                    self.submit_user_message(text);
                 }
-                Ok(())
-            }
+                InputResult::None => {}
+            },
         }
     }
 
-    fn submit_user_message(
-        &mut self,
-        text: String,
-    ) -> std::result::Result<(), SendError<AppEvent>> {
+    fn submit_user_message(&mut self, text: String) {
         // Forward to codex and update conversation history.
-        self.submit_user_message_with_images(text, vec![])
+        self.submit_user_message_with_images(text, vec![]);
     }
 
-    fn submit_user_message_with_images(
-        &mut self,
-        text: String,
-        image_paths: Vec<PathBuf>,
-    ) -> std::result::Result<(), SendError<AppEvent>> {
+    fn submit_user_message_with_images(&mut self, text: String, image_paths: Vec<PathBuf>) {
         let mut items: Vec<InputItem> = Vec::new();
 
         if !text.is_empty() {
@@ -186,7 +164,7 @@ impl ChatWidget<'_> {
         }
 
         if items.is_empty() {
-            return Ok(());
+            return;
         }
 
         self.codex_op_tx
@@ -200,48 +178,41 @@ impl ChatWidget<'_> {
             self.conversation_history.add_user_message(text);
         }
         self.conversation_history.scroll_to_bottom();
-
-        Ok(())
     }
 
-    pub(crate) fn clear_conversation_history(
-        &mut self,
-    ) -> std::result::Result<(), SendError<AppEvent>> {
+    pub(crate) fn clear_conversation_history(&mut self) {
         self.conversation_history.clear();
-        self.request_redraw()
+        self.request_redraw();
     }
 
-    pub(crate) fn handle_codex_event(
-        &mut self,
-        event: Event,
-    ) -> std::result::Result<(), SendError<AppEvent>> {
+    pub(crate) fn handle_codex_event(&mut self, event: Event) {
         let Event { id, msg } = event;
         match msg {
             EventMsg::SessionConfigured(event) => {
                 // Record session information at the top of the conversation.
                 self.conversation_history
                     .add_session_info(&self.config, event);
-                self.request_redraw()?;
+                self.request_redraw();
             }
             EventMsg::AgentMessage(AgentMessageEvent { message }) => {
                 self.conversation_history.add_agent_message(message);
-                self.request_redraw()?;
+                self.request_redraw();
             }
             EventMsg::AgentReasoning(AgentReasoningEvent { text }) => {
                 self.conversation_history.add_agent_reasoning(text);
-                self.request_redraw()?;
+                self.request_redraw();
             }
             EventMsg::TaskStarted => {
-                self.bottom_pane.set_task_running(true)?;
-                self.request_redraw()?;
+                self.bottom_pane.set_task_running(true);
+                self.request_redraw();
             }
             EventMsg::TaskComplete => {
-                self.bottom_pane.set_task_running(false)?;
-                self.request_redraw()?;
+                self.bottom_pane.set_task_running(false);
+                self.request_redraw();
             }
             EventMsg::Error(ErrorEvent { message }) => {
                 self.conversation_history.add_error(message);
-                self.bottom_pane.set_task_running(false)?;
+                self.bottom_pane.set_task_running(false);
             }
             EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
                 command,
@@ -254,7 +225,7 @@ impl ChatWidget<'_> {
                     cwd,
                     reason,
                 };
-                self.bottom_pane.push_approval_request(request)?;
+                self.bottom_pane.push_approval_request(request);
             }
             EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
                 changes,
@@ -283,8 +254,8 @@ impl ChatWidget<'_> {
                     reason,
                     grant_root,
                 };
-                self.bottom_pane.push_approval_request(request)?;
-                self.request_redraw()?;
+                self.bottom_pane.push_approval_request(request);
+                self.request_redraw();
             }
             EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
                 call_id,
@@ -293,7 +264,7 @@ impl ChatWidget<'_> {
             }) => {
                 self.conversation_history
                     .add_active_exec_command(call_id, command);
-                self.request_redraw()?;
+                self.request_redraw();
             }
             EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
                 call_id: _,
@@ -307,7 +278,7 @@ impl ChatWidget<'_> {
                 if !auto_approved {
                     self.conversation_history.scroll_to_bottom();
                 }
-                self.request_redraw()?;
+                self.request_redraw();
             }
             EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                 call_id,
@@ -317,7 +288,7 @@ impl ChatWidget<'_> {
             }) => {
                 self.conversation_history
                     .record_completed_exec_command(call_id, stdout, stderr, exit_code);
-                self.request_redraw()?;
+                self.request_redraw();
             }
             EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
                 call_id,
@@ -327,7 +298,7 @@ impl ChatWidget<'_> {
             }) => {
                 self.conversation_history
                     .add_active_mcp_tool_call(call_id, server, tool, arguments);
-                self.request_redraw()?;
+                self.request_redraw();
             }
             EventMsg::McpToolCallEnd(McpToolCallEndEvent {
                 call_id,
@@ -336,36 +307,27 @@ impl ChatWidget<'_> {
             }) => {
                 self.conversation_history
                     .record_completed_mcp_tool_call(call_id, success, result);
-                self.request_redraw()?;
+                self.request_redraw();
             }
             event => {
                 self.conversation_history
                     .add_background_event(format!("{event:?}"));
-                self.request_redraw()?;
+                self.request_redraw();
             }
         }
-        Ok(())
     }
 
     /// Update the live log preview while a task is running.
-    pub(crate) fn update_latest_log(
-        &mut self,
-        line: String,
-    ) -> std::result::Result<(), SendError<AppEvent>> {
+    pub(crate) fn update_latest_log(&mut self, line: String) {
         // Forward only if we are currently showing the status indicator.
-        self.bottom_pane.update_status_text(line)?;
-        Ok(())
+        self.bottom_pane.update_status_text(line);
     }
 
-    fn request_redraw(&mut self) -> std::result::Result<(), SendError<AppEvent>> {
-        self.app_event_tx.send(AppEvent::Redraw)?;
-        Ok(())
+    fn request_redraw(&mut self) {
+        self.app_event_tx.send(AppEvent::Redraw);
     }
 
-    pub(crate) fn handle_scroll_delta(
-        &mut self,
-        scroll_delta: i32,
-    ) -> std::result::Result<(), SendError<AppEvent>> {
+    pub(crate) fn handle_scroll_delta(&mut self, scroll_delta: i32) {
         // If the user is trying to scroll exactly one line, we let them, but
         // otherwise we assume they are trying to scroll in larger increments.
         let magnified_scroll_delta = if scroll_delta == 1 {
@@ -375,8 +337,7 @@ impl ChatWidget<'_> {
             scroll_delta * 2
         };
         self.conversation_history.scroll(magnified_scroll_delta);
-        self.request_redraw()?;
-        Ok(())
+        self.request_redraw();
     }
 
     /// Forward an `Op` directly to codex.

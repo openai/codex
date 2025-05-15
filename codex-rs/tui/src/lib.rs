@@ -16,6 +16,7 @@ use tracing_subscriber::prelude::*;
 
 mod app;
 mod app_event;
+mod app_event_sender;
 mod bottom_pane;
 mod chatwidget;
 mod cli;
@@ -161,7 +162,7 @@ fn run_ratatui_app(
         let app_event_tx = app.event_sender();
         tokio::spawn(async move {
             while let Some(line) = log_rx.recv().await {
-                let _ = app_event_tx.send(crate::app_event::AppEvent::LatestLog(line));
+                app_event_tx.send(crate::app_event::AppEvent::LatestLog(line));
             }
         });
     }

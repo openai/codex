@@ -26,7 +26,7 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.86
+      - uses: dtolnay/rust-toolchain@1.87
         with:
           components: rustfmt
       - name: cargo fmt
@@ -60,7 +60,7 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.86
+      - uses: dtolnay/rust-toolchain@1.87
         with:
           targets: ${{ matrix.target }}
           components: clippy
