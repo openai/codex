@@ -375,8 +375,16 @@ impl EventProcessor {
                 println!("thinking: {}", agent_reasoning_event.text);
             }
             EventMsg::SessionConfigured(session_configured_event) => {
-                let SessionConfiguredEvent { session_id, model } = session_configured_event;
+                let SessionConfiguredEvent {
+                    session_id,
+                    model,
+                    history_log_id: _,
+                    history_entry_count: _,
+                } = session_configured_event;
                 println!("session {session_id} with model {model}");
+            }
+            EventMsg::GetHistoryEntryResponse(_) => {
+                // Currently ignored in exec output.
             }
         }
     }

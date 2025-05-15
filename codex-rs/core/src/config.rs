@@ -81,6 +81,30 @@ pub struct Config {
     /// Directory containing all Codex state (defaults to `~/.codex` but can be
     /// overridden by the `CODEX_HOME` environment variable).
     pub codex_home: PathBuf,
+
+    /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
+    pub history: History,
+}
+
+/// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
+#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct History {
+    /// If true, history entries will not be written to disk.
+    pub persistence: HistoryPersistence,
+
+    /// If set, the maximum size of the history file in bytes.
+    /// TODO(mbolin): Not currently honored.
+    pub max_bytes: Option<usize>,
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum HistoryPersistence {
+    /// Save all history entries to disk.
+    #[default]
+    SaveAll,
+    /// Do not write history to disk.
+    None,
 }
 
 /// Base config deserialized from ~/.codex/config.toml.
@@ -130,6 +154,10 @@ pub struct ConfigToml {
     /// Named profiles to facilitate switching between different configurations.
     #[serde(default)]
     pub profiles: HashMap<String, ConfigProfile>,
+
+    /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
+    #[serde(default)]
+    pub history: Option<History>,
 }
 
 impl ConfigToml {
@@ -297,6 +325,8 @@ impl Config {
             }
         };
 
+        let history = cfg.history.unwrap_or_default();
+
         let config = Self {
             model: model
                 .or(config_profile.model)
@@ -320,6 +350,7 @@ impl Config {
             model_providers,
             project_doc_max_bytes: cfg.project_doc_max_bytes.unwrap_or(PROJECT_DOC_MAX_BYTES),
             codex_home,
+            history,
         };
         Ok(config)
     }
@@ -465,6 +496,40 @@ mod tests {
                 SandboxPermission::NetworkFullAccess
             ]),
             cfg_with_values.sandbox_permissions
+        );
+    }
+
+    #[test]
+    fn test_toml_parsing() {
+        let history_with_persistence = r#"
+[history]
+persistence = "save-all"
+"#;
+        let history_with_persistence_cfg: ConfigToml =
+            toml::from_str::<ConfigToml>(history_with_persistence)
+                .expect("TOML deserialization should succeed");
+        assert_eq!(
+            Some(History {
+                persistence: HistoryPersistence::SaveAll,
+                max_bytes: None,
+            }),
+            history_with_persistence_cfg.history
+        );
+
+        let history_no_persistence = r#"
+[history]
+persistence = "none"
+"#;
+
+        let history_no_persistence_cfg: ConfigToml =
+            toml::from_str::<ConfigToml>(history_no_persistence)
+                .expect("TOML deserialization should succeed");
+        assert_eq!(
+            Some(History {
+                persistence: HistoryPersistence::None,
+                max_bytes: None,
+            }),
+            history_no_persistence_cfg.history
         );
     }
 
@@ -620,6 +685,7 @@ disable_response_storage = true
                 model_providers: fixture.model_provider_map.clone(),
                 project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
                 codex_home: fixture.codex_home(),
+                history: History::default(),
             },
             o3_profile_config
         );
@@ -654,6 +720,7 @@ disable_response_storage = true
             model_providers: fixture.model_provider_map.clone(),
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             codex_home: fixture.codex_home(),
+            history: History::default(),
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -703,6 +770,7 @@ disable_response_storage = true
             model_providers: fixture.model_provider_map.clone(),
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             codex_home: fixture.codex_home(),
+            history: History::default(),
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);
