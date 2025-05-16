@@ -3,6 +3,7 @@ import type { Request, Response } from "express";
 
 import { ApiKeyPrompt, WaitingForAuth } from "./get-api-key-components";
 import { clearTerminal } from "./terminal";
+import chalk from "chalk";
 import express from "express";
 import fs from "fs/promises";
 import { render } from "ink";
@@ -228,6 +229,58 @@ async function handleCallback(
   } catch (err) {
     // eslint-disable-next-line no-console
     console.warn("Unable to save auth file:", err);
+  }
+
+  if (
+    !needsSetup &&
+    (chatgptPlanType === "plus" || chatgptPlanType === "pro")
+  ) {
+    const apiHost =
+      issuer === "https://auth.openai.com"
+        ? "https://api.openai.com"
+        : "https://api.openai.org";
+
+    try {
+      const redeemRes = await fetch(`${apiHost}/v1/billing/redeem_credits`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ id_token: tokenData.id_token }),
+      });
+
+      if (!redeemRes.ok) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `Credit redemption request failed: ${redeemRes.status} ${redeemRes.statusText}`,
+        );
+      } else {
+        // Attempt to parse the JSON response and surface a success message
+        try {
+          const redeemData = (await redeemRes.json()) as {
+            granted_chatgpt_subscriber_api_credits?: number;
+          };
+          const granted =
+            redeemData?.granted_chatgpt_subscriber_api_credits ?? 0;
+          if (granted > 0) {
+            // eslint-disable-next-line no-console
+            console.log(
+              chalk.green(
+                `\u2728  Granted ${chatgptPlanType === "plus" ? "$5" : "$50"} in API credits for being a ChatGPT ${
+                  chatgptPlanType === "plus" ? "Plus" : "Pro"
+                } subscriber!`,
+              ),
+            );
+          }
+        } catch (parseErr) {
+          // eslint-disable-next-line no-console
+          console.warn("Unable to parse credit redemption response:", parseErr);
+        }
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("Unable to redeem ChatGPT subscriber API credits:", err);
+    }
   }
 
   return {
