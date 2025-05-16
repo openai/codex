@@ -43,7 +43,7 @@ if (!isVitest) {
   loadDotenv({ path: USER_WIDE_CONFIG_PATH });
 }
 
-export const DEFAULT_AGENTIC_MODEL = "o4-mini";
+export const DEFAULT_AGENTIC_MODEL = "codex-mini-latest";
 export const DEFAULT_FULL_CONTEXT_MODEL = "gpt-4.1";
 export const DEFAULT_APPROVAL_MODE = AutoApprovalMode.SUGGEST;
 export const DEFAULT_INSTRUCTIONS = "";
@@ -76,7 +76,7 @@ export const OPENAI_ORGANIZATION = process.env["OPENAI_ORGANIZATION"] || "";
 export const OPENAI_PROJECT = process.env["OPENAI_PROJECT"] || "";
 
 // Can be set `true` when Codex is running in an environment that is marked as already
-// considered sufficiently locked-down so that we allow running wihtout an explicit sandbox.
+// considered sufficiently locked-down so that we allow running without an explicit sandbox.
 export const CODEX_UNSAFE_ALLOW_NO_SANDBOX = Boolean(
   process.env["CODEX_UNSAFE_ALLOW_NO_SANDBOX"] || "",
 );
@@ -135,6 +135,8 @@ export function getApiKey(provider: string = "openai"): string | undefined {
   return undefined;
 }
 
+export type FileOpenerScheme = "vscode" | "cursor" | "windsurf";
+
 // Represents config as persisted in config.json.
 export type StoredConfig = {
   model?: string;
@@ -162,6 +164,12 @@ export type StoredConfig = {
   /** User-defined safe commands */
   safeCommands?: Array<string>;
   reasoningEffort?: ReasoningEffort;
+
+  /**
+   * URI-based file opener. This is used when linking code references in
+   * terminal output.
+   */
+  fileOpener?: FileOpenerScheme;
 };
 
 // Minimal config written on first run.  An *empty* model string ensures that
@@ -206,6 +214,7 @@ export type AppConfig = {
       maxLines: number;
     };
   };
+  fileOpener?: FileOpenerScheme;
 };
 
 // Formatting (quiet mode-only).
@@ -429,6 +438,7 @@ export const loadConfig = (
     },
     disableResponseStorage: storedConfig.disableResponseStorage === true,
     reasoningEffort: storedConfig.reasoningEffort,
+    fileOpener: storedConfig.fileOpener,
   };
 
   // -----------------------------------------------------------------------

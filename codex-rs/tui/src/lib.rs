@@ -16,8 +16,10 @@ use tracing_subscriber::prelude::*;
 
 mod app;
 mod app_event;
+mod app_event_sender;
 mod bottom_pane;
 mod chatwidget;
+mod citation_regex;
 mod cli;
 mod conversation_history_widget;
 mod exec_command;
@@ -26,6 +28,7 @@ mod history_cell;
 mod log_layer;
 mod markdown;
 mod scroll_event_helper;
+mod slash_command;
 mod status_indicator_widget;
 mod tui;
 mod user_approval_widget;
@@ -55,7 +58,8 @@ pub fn run_main(cli: Cli) -> std::io::Result<()> {
                 None
             },
             cwd: cli.cwd.clone().map(|p| p.canonicalize().unwrap_or(p)),
-            provider: None,
+            model_provider: None,
+            config_profile: cli.config_profile.clone(),
         };
         #[allow(clippy::print_stderr)]
         match Config::load_with_overrides(overrides) {
@@ -67,7 +71,7 @@ pub fn run_main(cli: Cli) -> std::io::Result<()> {
         }
     };
 
-    let log_dir = codex_core::config::log_dir()?;
+    let log_dir = codex_core::config::log_dir(&config)?;
     std::fs::create_dir_all(&log_dir)?;
     // Open (or create) your log file, appending to it.
     let mut log_file_opts = OpenOptions::new();
@@ -159,7 +163,7 @@ fn run_ratatui_app(
         let app_event_tx = app.event_sender();
         tokio::spawn(async move {
             while let Some(line) = log_rx.recv().await {
-                let _ = app_event_tx.send(crate::app_event::AppEvent::LatestLog(line));
+                app_event_tx.send(crate::app_event::AppEvent::LatestLog(line));
             }
         });
     }

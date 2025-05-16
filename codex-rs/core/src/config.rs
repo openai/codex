@@ -1,3 +1,4 @@
+use crate::config_profile::ConfigProfile;
 use crate::flags::OPENAI_DEFAULT_MODEL;
 use crate::mcp_server_config::McpServerConfig;
 use crate::model_provider_info::ModelProviderInfo;
@@ -8,6 +9,7 @@ use crate::protocol::SandboxPolicy;
 use dirs::home_dir;
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
 
 /// Maximum number of bytes of the documentation that will be embedded. Larger
@@ -16,7 +18,7 @@ use std::path::PathBuf;
 pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 
 /// Application configuration loaded from disk and merged with overrides.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Config {
     /// Optional override of model selection.
     pub model: String,
@@ -75,6 +77,69 @@ pub struct Config {
 
     /// Maximum number of bytes to include from an AGENTS.md project doc file.
     pub project_doc_max_bytes: usize,
+
+    /// Directory containing all Codex state (defaults to `~/.codex` but can be
+    /// overridden by the `CODEX_HOME` environment variable).
+    pub codex_home: PathBuf,
+
+    /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
+    pub history: History,
+
+    /// Optional URI-based file opener. If set, citations to files in the model
+    /// output will be hyperlinked using the specified URI scheme.
+    pub file_opener: UriBasedFileOpener,
+}
+
+/// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
+#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct History {
+    /// If true, history entries will not be written to disk.
+    pub persistence: HistoryPersistence,
+
+    /// If set, the maximum size of the history file in bytes.
+    /// TODO(mbolin): Not currently honored.
+    pub max_bytes: Option<usize>,
+}
+
+#[derive(Deserialize, Debug, Copy, Clone, PartialEq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum HistoryPersistence {
+    /// Save all history entries to disk.
+    #[default]
+    SaveAll,
+    /// Do not write history to disk.
+    None,
+}
+
+#[derive(Deserialize, Debug, Copy, Clone, PartialEq)]
+pub enum UriBasedFileOpener {
+    #[serde(rename = "vscode")]
+    VsCode,
+
+    #[serde(rename = "vscode-insiders")]
+    VsCodeInsiders,
+
+    #[serde(rename = "windsurf")]
+    Windsurf,
+
+    #[serde(rename = "cursor")]
+    Cursor,
+
+    /// Option to disable the URI-based file opener.
+    #[serde(rename = "none")]
+    None,
+}
+
+impl UriBasedFileOpener {
+    pub fn get_scheme(&self) -> Option<&str> {
+        match self {
+            UriBasedFileOpener::VsCode => Some("vscode"),
+            UriBasedFileOpener::VsCodeInsiders => Some("vscode-insiders"),
+            UriBasedFileOpener::Windsurf => Some("windsurf"),
+            UriBasedFileOpener::Cursor => Some("cursor"),
+            UriBasedFileOpener::None => None,
+        }
+    }
 }
 
 /// Base config deserialized from ~/.codex/config.toml.
@@ -117,14 +182,29 @@ pub struct ConfigToml {
 
     /// Maximum number of bytes to include from an AGENTS.md project doc file.
     pub project_doc_max_bytes: Option<usize>,
+
+    /// Profile to use from the `profiles` map.
+    pub profile: Option<String>,
+
+    /// Named profiles to facilitate switching between different configurations.
+    #[serde(default)]
+    pub profiles: HashMap<String, ConfigProfile>,
+
+    /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
+    #[serde(default)]
+    pub history: Option<History>,
+
+    /// Optional URI-based file opener. If set, citations to files in the model
+    /// output will be hyperlinked using the specified URI scheme.
+    pub file_opener: Option<UriBasedFileOpener>,
 }
 
 impl ConfigToml {
     /// Attempt to parse the file at `~/.codex/config.toml`. If it does not
     /// exist, return a default config. Though if it exists and cannot be
     /// parsed, report that to the user and force them to fix it.
-    fn load_from_toml() -> std::io::Result<Self> {
-        let config_toml_path = codex_dir()?.join("config.toml");
+    fn load_from_toml(codex_home: &Path) -> std::io::Result<Self> {
+        let config_toml_path = codex_home.join("config.toml");
         match std::fs::read_to_string(&config_toml_path) {
             Ok(contents) => toml::from_str::<Self>(&contents).map_err(|e| {
                 tracing::error!("Failed to parse config.toml: {e}");
@@ -152,7 +232,7 @@ where
 
     match permissions {
         Some(raw_permissions) => {
-            let base_path = codex_dir().map_err(serde::de::Error::custom)?;
+            let base_path = find_codex_home().map_err(serde::de::Error::custom)?;
 
             let converted = raw_permissions
                 .into_iter()
@@ -176,7 +256,8 @@ pub struct ConfigOverrides {
     pub approval_policy: Option<AskForApproval>,
     pub sandbox_policy: Option<SandboxPolicy>,
     pub disable_response_storage: Option<bool>,
-    pub provider: Option<String>,
+    pub model_provider: Option<String>,
+    pub config_profile: Option<String>,
 }
 
 impl Config {
@@ -184,16 +265,25 @@ impl Config {
     /// ~/.codex/config.toml, ~/.codex/instructions.md, embedded defaults, and
     /// any values provided in `overrides` (highest precedence).
     pub fn load_with_overrides(overrides: ConfigOverrides) -> std::io::Result<Self> {
-        let cfg: ConfigToml = ConfigToml::load_from_toml()?;
+        // Resolve the directory that stores Codex state (e.g. ~/.codex or the
+        // value of $CODEX_HOME) so we can embed it into the resulting
+        // `Config` instance.
+        let codex_home = find_codex_home()?;
+
+        let cfg: ConfigToml = ConfigToml::load_from_toml(&codex_home)?;
         tracing::warn!("Config parsed from config.toml: {cfg:?}");
-        Self::load_from_base_config_with_overrides(cfg, overrides)
+
+        Self::load_from_base_config_with_overrides(cfg, overrides, codex_home)
     }
 
-    fn load_from_base_config_with_overrides(
+    /// Meant to be used exclusively for tests: `load_with_overrides()` should
+    /// be used in all other cases.
+    pub fn load_from_base_config_with_overrides(
         cfg: ConfigToml,
         overrides: ConfigOverrides,
+        codex_home: PathBuf,
     ) -> std::io::Result<Self> {
-        let instructions = Self::load_instructions();
+        let instructions = Self::load_instructions(Some(&codex_home));
 
         // Destructure ConfigOverrides fully to ensure all overrides are applied.
         let ConfigOverrides {
@@ -202,8 +292,23 @@ impl Config {
             approval_policy,
             sandbox_policy,
             disable_response_storage,
-            provider,
+            model_provider,
+            config_profile: config_profile_key,
         } = overrides;
+
+        let config_profile = match config_profile_key.or(cfg.profile) {
+            Some(key) => cfg
+                .profiles
+                .get(&key)
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        format!("config profile `{key}` not found"),
+                    )
+                })?
+                .clone(),
+            None => ConfigProfile::default(),
+        };
 
         let sandbox_policy = match sandbox_policy {
             Some(sandbox_policy) => sandbox_policy,
@@ -226,7 +331,8 @@ impl Config {
             model_providers.entry(key).or_insert(provider);
         }
 
-        let model_provider_id = provider
+        let model_provider_id = model_provider
+            .or(config_profile.model_provider)
             .or(cfg.model_provider)
             .unwrap_or_else(|| "openai".to_string());
         let model_provider = model_providers
@@ -258,16 +364,23 @@ impl Config {
             }
         };
 
+        let history = cfg.history.unwrap_or_default();
+
         let config = Self {
-            model: model.or(cfg.model).unwrap_or_else(default_model),
+            model: model
+                .or(config_profile.model)
+                .or(cfg.model)
+                .unwrap_or_else(default_model),
             model_provider_id,
             model_provider,
             cwd: resolved_cwd,
             approval_policy: approval_policy
+                .or(config_profile.approval_policy)
                 .or(cfg.approval_policy)
                 .unwrap_or_else(AskForApproval::default),
             sandbox_policy,
             disable_response_storage: disable_response_storage
+                .or(config_profile.disable_response_storage)
                 .or(cfg.disable_response_storage)
                 .unwrap_or(false),
             notify: cfg.notify,
@@ -275,12 +388,19 @@ impl Config {
             mcp_servers: cfg.mcp_servers,
             model_providers,
             project_doc_max_bytes: cfg.project_doc_max_bytes.unwrap_or(PROJECT_DOC_MAX_BYTES),
+            codex_home,
+            history,
+            file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
         };
         Ok(config)
     }
 
-    fn load_instructions() -> Option<String> {
-        let mut p = codex_dir().ok()?;
+    fn load_instructions(codex_dir: Option<&Path>) -> Option<String> {
+        let mut p = match codex_dir {
+            Some(p) => p.to_path_buf(),
+            None => return None,
+        };
+
         p.push("instructions.md");
         std::fs::read_to_string(&p).ok().and_then(|s| {
             let s = s.trim();
@@ -291,26 +411,29 @@ impl Config {
             }
         })
     }
-
-    /// Meant to be used exclusively for tests: `load_with_overrides()` should
-    /// be used in all other cases.
-    pub fn load_default_config_for_test() -> Self {
-        #[expect(clippy::expect_used)]
-        Self::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            ConfigOverrides::default(),
-        )
-        .expect("defaults for test should always succeed")
-    }
 }
 
 fn default_model() -> String {
     OPENAI_DEFAULT_MODEL.to_string()
 }
 
-/// Returns the path to the Codex configuration directory, which is `~/.codex`.
-/// Does not verify that the directory exists.
-pub fn codex_dir() -> std::io::Result<PathBuf> {
+/// Returns the path to the Codex configuration directory, which can be
+/// specified by the `CODEX_HOME` environment variable. If not set, defaults to
+/// `~/.codex`.
+///
+/// - If `CODEX_HOME` is set, the value will be canonicalized and this
+///   function will Err if the path does not exist.
+/// - If `CODEX_HOME` is not set, this function does not verify that the
+///   directory exists.
+fn find_codex_home() -> std::io::Result<PathBuf> {
+    // Honor the `CODEX_HOME` environment variable when it is set to allow users
+    // (and tests) to override the default location.
+    if let Ok(val) = std::env::var("CODEX_HOME") {
+        if !val.is_empty() {
+            return PathBuf::from(val).canonicalize();
+        }
+    }
+
     let mut p = home_dir().ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::NotFound,
@@ -323,8 +446,8 @@ pub fn codex_dir() -> std::io::Result<PathBuf> {
 
 /// Returns the path to the folder where Codex logs are stored. Does not verify
 /// that the directory exists.
-pub fn log_dir() -> std::io::Result<PathBuf> {
-    let mut p = codex_dir()?;
+pub fn log_dir(cfg: &Config) -> std::io::Result<PathBuf> {
+    let mut p = cfg.codex_home.clone();
     p.push("log");
     Ok(p)
 }
@@ -377,6 +500,8 @@ pub fn parse_sandbox_permission_with_base_path(
 mod tests {
     #![allow(clippy::expect_used, clippy::unwrap_used)]
     use super::*;
+    use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
 
     /// Verify that the `sandbox_permissions` field on `ConfigToml` correctly
     /// differentiates between a value that is completely absent in the
@@ -414,6 +539,40 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_toml_parsing() {
+        let history_with_persistence = r#"
+[history]
+persistence = "save-all"
+"#;
+        let history_with_persistence_cfg: ConfigToml =
+            toml::from_str::<ConfigToml>(history_with_persistence)
+                .expect("TOML deserialization should succeed");
+        assert_eq!(
+            Some(History {
+                persistence: HistoryPersistence::SaveAll,
+                max_bytes: None,
+            }),
+            history_with_persistence_cfg.history
+        );
+
+        let history_no_persistence = r#"
+[history]
+persistence = "none"
+"#;
+
+        let history_no_persistence_cfg: ConfigToml =
+            toml::from_str::<ConfigToml>(history_no_persistence)
+                .expect("TOML deserialization should succeed");
+        assert_eq!(
+            Some(History {
+                persistence: HistoryPersistence::None,
+                max_bytes: None,
+            }),
+            history_no_persistence_cfg.history
+        );
+    }
+
     /// Deserializing a TOML string containing an *invalid* permission should
     /// fail with a helpful error rather than silently defaulting or
     /// succeeding.
@@ -428,5 +587,237 @@ mod tests {
         // useful feedback.
         let msg = err.to_string();
         assert!(msg.contains("not-a-real-permission"));
+    }
+
+    struct PrecedenceTestFixture {
+        cwd: TempDir,
+        codex_home: TempDir,
+        cfg: ConfigToml,
+        model_provider_map: HashMap<String, ModelProviderInfo>,
+        openai_provider: ModelProviderInfo,
+        openai_chat_completions_provider: ModelProviderInfo,
+    }
+
+    impl PrecedenceTestFixture {
+        fn cwd(&self) -> PathBuf {
+            self.cwd.path().to_path_buf()
+        }
+
+        fn codex_home(&self) -> PathBuf {
+            self.codex_home.path().to_path_buf()
+        }
+    }
+
+    fn create_test_fixture() -> std::io::Result<PrecedenceTestFixture> {
+        let toml = r#"
+model = "o3"
+approval_policy = "unless-allow-listed"
+sandbox_permissions = ["disk-full-read-access"]
+disable_response_storage = false
+
+# Can be used to determine which profile to use if not specified by
+# `ConfigOverrides`.
+profile = "gpt3"
+
+[model_providers.openai-chat-completions]
+name = "OpenAI using Chat Completions"
+base_url = "https://api.openai.com/v1"
+env_key = "OPENAI_API_KEY"
+wire_api = "chat"
+
+[profiles.o3]
+model = "o3"
+model_provider = "openai"
+approval_policy = "never"
+
+[profiles.gpt3]
+model = "gpt-3.5-turbo"
+model_provider = "openai-chat-completions"
+
+[profiles.zdr]
+model = "o3"
+model_provider = "openai"
+approval_policy = "on-failure"
+disable_response_storage = true
+"#;
+
+        let cfg: ConfigToml = toml::from_str(toml).expect("TOML deserialization should succeed");
+
+        // Use a temporary directory for the cwd so it does not contain an
+        // AGENTS.md file.
+        let cwd_temp_dir = TempDir::new().unwrap();
+        let cwd = cwd_temp_dir.path().to_path_buf();
+        // Make it look like a Git repo so it does not search for AGENTS.md in
+        // a parent folder, either.
+        std::fs::write(cwd.join(".git"), "gitdir: nowhere")?;
+
+        let codex_home_temp_dir = TempDir::new().unwrap();
+
+        let openai_chat_completions_provider = ModelProviderInfo {
+            name: "OpenAI using Chat Completions".to_string(),
+            base_url: "https://api.openai.com/v1".to_string(),
+            env_key: Some("OPENAI_API_KEY".to_string()),
+            wire_api: crate::WireApi::Chat,
+            env_key_instructions: None,
+        };
+        let model_provider_map = {
+            let mut model_provider_map = built_in_model_providers();
+            model_provider_map.insert(
+                "openai-chat-completions".to_string(),
+                openai_chat_completions_provider.clone(),
+            );
+            model_provider_map
+        };
+
+        let openai_provider = model_provider_map
+            .get("openai")
+            .expect("openai provider should exist")
+            .clone();
+
+        Ok(PrecedenceTestFixture {
+            cwd: cwd_temp_dir,
+            codex_home: codex_home_temp_dir,
+            cfg,
+            model_provider_map,
+            openai_provider,
+            openai_chat_completions_provider,
+        })
+    }
+
+    /// Users can specify config values at multiple levels that have the
+    /// following precedence:
+    ///
+    /// 1. custom command-line argument, e.g. `--model o3`
+    /// 2. as part of a profile, where the `--profile` is specified via a CLI
+    ///    (or in the config file itelf)
+    /// 3. as an entry in `config.toml`, e.g. `model = "o3"`
+    /// 4. the default value for a required field defined in code, e.g.,
+    ///    `crate::flags::OPENAI_DEFAULT_MODEL`
+    ///
+    /// Note that profiles are the recommended way to specify a group of
+    /// configuration options together.
+    #[test]
+    fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
+        let fixture = create_test_fixture()?;
+
+        let o3_profile_overrides = ConfigOverrides {
+            config_profile: Some("o3".to_string()),
+            cwd: Some(fixture.cwd()),
+            ..Default::default()
+        };
+        let o3_profile_config: Config = Config::load_from_base_config_with_overrides(
+            fixture.cfg.clone(),
+            o3_profile_overrides,
+            fixture.codex_home(),
+        )?;
+        assert_eq!(
+            Config {
+                model: "o3".to_string(),
+                model_provider_id: "openai".to_string(),
+                model_provider: fixture.openai_provider.clone(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                disable_response_storage: false,
+                instructions: None,
+                notify: None,
+                cwd: fixture.cwd(),
+                mcp_servers: HashMap::new(),
+                model_providers: fixture.model_provider_map.clone(),
+                project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
+                codex_home: fixture.codex_home(),
+                history: History::default(),
+                file_opener: UriBasedFileOpener::VsCode,
+            },
+            o3_profile_config
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
+        let fixture = create_test_fixture()?;
+
+        let gpt3_profile_overrides = ConfigOverrides {
+            config_profile: Some("gpt3".to_string()),
+            cwd: Some(fixture.cwd()),
+            ..Default::default()
+        };
+        let gpt3_profile_config = Config::load_from_base_config_with_overrides(
+            fixture.cfg.clone(),
+            gpt3_profile_overrides,
+            fixture.codex_home(),
+        )?;
+        let expected_gpt3_profile_config = Config {
+            model: "gpt-3.5-turbo".to_string(),
+            model_provider_id: "openai-chat-completions".to_string(),
+            model_provider: fixture.openai_chat_completions_provider.clone(),
+            approval_policy: AskForApproval::UnlessAllowListed,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            disable_response_storage: false,
+            instructions: None,
+            notify: None,
+            cwd: fixture.cwd(),
+            mcp_servers: HashMap::new(),
+            model_providers: fixture.model_provider_map.clone(),
+            project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
+            codex_home: fixture.codex_home(),
+            history: History::default(),
+            file_opener: UriBasedFileOpener::VsCode,
+        };
+
+        assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
+
+        // Verify that loading without specifying a profile in ConfigOverrides
+        // uses the default profile from the config file (which is "gpt3").
+        let default_profile_overrides = ConfigOverrides {
+            cwd: Some(fixture.cwd()),
+            ..Default::default()
+        };
+
+        let default_profile_config = Config::load_from_base_config_with_overrides(
+            fixture.cfg.clone(),
+            default_profile_overrides,
+            fixture.codex_home(),
+        )?;
+
+        assert_eq!(expected_gpt3_profile_config, default_profile_config);
+        Ok(())
+    }
+
+    #[test]
+    fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
+        let fixture = create_test_fixture()?;
+
+        let zdr_profile_overrides = ConfigOverrides {
+            config_profile: Some("zdr".to_string()),
+            cwd: Some(fixture.cwd()),
+            ..Default::default()
+        };
+        let zdr_profile_config = Config::load_from_base_config_with_overrides(
+            fixture.cfg.clone(),
+            zdr_profile_overrides,
+            fixture.codex_home(),
+        )?;
+        let expected_zdr_profile_config = Config {
+            model: "o3".to_string(),
+            model_provider_id: "openai".to_string(),
+            model_provider: fixture.openai_provider.clone(),
+            approval_policy: AskForApproval::OnFailure,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            disable_response_storage: true,
+            instructions: None,
+            notify: None,
+            cwd: fixture.cwd(),
+            mcp_servers: HashMap::new(),
+            model_providers: fixture.model_provider_map.clone(),
+            project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
+            codex_home: fixture.codex_home(),
+            history: History::default(),
+            file_opener: UriBasedFileOpener::VsCode,
+        };
+
+        assert_eq!(expected_zdr_profile_config, zdr_profile_config);
+
+        Ok(())
     }
 }

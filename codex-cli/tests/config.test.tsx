@@ -67,7 +67,7 @@ test("loads default config if files don't exist", () => {
   });
   // Keep the test focused on just checking that default model and instructions are loaded
   // so we need to make sure we check just these properties
-  expect(config.model).toBe("o4-mini");
+  expect(config.model).toBe("codex-mini-latest");
   expect(config.instructions).toBe("");
 });
 

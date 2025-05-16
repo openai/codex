@@ -318,7 +318,7 @@ pub(crate) async fn spawn_child_async(
     cmd.kill_on_drop(true).spawn()
 }
 
-/// Alternative verison of `spawn_child_async()` that returns
+/// Alternative version of `spawn_child_async()` that returns
 /// `std::process::Child` instead of `tokio::process::Child`. This is useful for
 /// spawning a child process in a thread that is not running a Tokio runtime.
 pub fn spawn_child_sync(
@@ -349,14 +349,12 @@ pub(crate) async fn consume_truncated_output(
     // we treat it as an exceptional I/O error
 
     let stdout_reader = child.stdout.take().ok_or_else(|| {
-        CodexErr::Io(io::Error::new(
-            io::ErrorKind::Other,
+        CodexErr::Io(io::Error::other(
             "stdout pipe was unexpectedly not available",
         ))
     })?;
     let stderr_reader = child.stderr.take().ok_or_else(|| {
-        CodexErr::Io(io::Error::new(
-            io::ErrorKind::Other,
+        CodexErr::Io(io::Error::other(
             "stderr pipe was unexpectedly not available",
         ))
     })?;

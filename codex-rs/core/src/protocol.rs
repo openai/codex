@@ -10,7 +10,9 @@ use std::path::PathBuf;
 use mcp_types::CallToolResult;
 use serde::Deserialize;
 use serde::Serialize;
+use uuid::Uuid;
 
+use crate::message_history::HistoryEntry;
 use crate::model_provider_info::ModelProviderInfo;
 
 /// Submission Queue Entry - requests from user
@@ -23,7 +25,7 @@ pub struct Submission {
 }
 
 /// Submission operation
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[allow(clippy::large_enum_variant)]
 #[non_exhaustive]
@@ -87,6 +89,18 @@ pub enum Op {
         /// The user's decision in response to the request.
         decision: ReviewDecision,
     },
+
+    /// Append an entry to the persistent cross-session message history.
+    ///
+    /// Note the entry is not guaranteed to be logged if the user has
+    /// history disabled, it matches the list of "sensitive" patterns, etc.
+    AddToHistory {
+        /// The message text to be stored.
+        text: String,
+    },
+
+    /// Request a single history entry identified by `log_id` + `offset`.
+    GetHistoryEntryRequest { offset: usize, log_id: u64 },
 }
 
 /// Determines how liberally commands are auto‑approved by the system.
@@ -269,7 +283,7 @@ pub enum SandboxPermission {
 
 /// User input
 #[non_exhaustive]
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum InputItem {
     Text {
@@ -297,14 +311,11 @@ pub struct Event {
 }
 
 /// Response event from the agent
-#[non_exhaustive]
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum EventMsg {
     /// Error while executing a submission
-    Error {
-        message: String,
-    },
+    Error(ErrorEvent),
 
     /// Agent has started a task
     TaskStarted,
@@ -313,124 +324,176 @@ pub enum EventMsg {
     TaskComplete,
 
     /// Agent text output message
-    AgentMessage {
-        message: String,
-    },
+    AgentMessage(AgentMessageEvent),
 
     /// Reasoning event from agent.
-    AgentReasoning {
-        text: String,
-    },
+    AgentReasoning(AgentReasoningEvent),
 
     /// Ack the client's configure message.
-    SessionConfigured {
-        /// Tell the client what model is being queried.
-        model: String,
-    },
+    SessionConfigured(SessionConfiguredEvent),
 
-    McpToolCallBegin {
-        /// Identifier so this can be paired with the McpToolCallEnd event.
-        call_id: String,
+    McpToolCallBegin(McpToolCallBeginEvent),
 
-        /// Name of the MCP server as defined in the config.
-        server: String,
-
-        /// Name of the tool as given by the MCP server.
-        tool: String,
-
-        /// Arguments to the tool call.
-        arguments: Option<serde_json::Value>,
-    },
-
-    McpToolCallEnd {
-        /// Identifier for the McpToolCallBegin that finished.
-        call_id: String,
-
-        /// Whether the tool call was successful. If `false`, `result` might
-        /// not be present.
-        success: bool,
-
-        /// Result of the tool call. Note this could be an error.
-        result: Option<CallToolResult>,
-    },
+    McpToolCallEnd(McpToolCallEndEvent),
 
     /// Notification that the server is about to execute a command.
-    ExecCommandBegin {
-        /// Identifier so this can be paired with the ExecCommandEnd event.
-        call_id: String,
-        /// The command to be executed.
-        command: Vec<String>,
-        /// The command's working directory if not the default cwd for the
-        /// agent.
-        cwd: PathBuf,
-    },
+    ExecCommandBegin(ExecCommandBeginEvent),
 
-    ExecCommandEnd {
-        /// Identifier for the ExecCommandBegin that finished.
-        call_id: String,
-        /// Captured stdout
-        stdout: String,
-        /// Captured stderr
-        stderr: String,
-        /// The command's exit code.
-        exit_code: i32,
-    },
+    ExecCommandEnd(ExecCommandEndEvent),
 
-    ExecApprovalRequest {
-        /// The command to be executed.
-        command: Vec<String>,
-        /// The command's working directory.
-        cwd: PathBuf,
-        /// Optional human‑readable reason for the approval (e.g. retry without
-        /// sandbox).
-        #[serde(skip_serializing_if = "Option::is_none")]
-        reason: Option<String>,
-    },
+    ExecApprovalRequest(ExecApprovalRequestEvent),
 
-    ApplyPatchApprovalRequest {
-        changes: HashMap<PathBuf, FileChange>,
-        /// Optional explanatory reason (e.g. request for extra write access).
-        #[serde(skip_serializing_if = "Option::is_none")]
-        reason: Option<String>,
+    ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent),
 
-        /// When set, the agent is asking the user to allow writes under this
-        /// root for the remainder of the session.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        grant_root: Option<PathBuf>,
-    },
-
-    BackgroundEvent {
-        message: String,
-    },
+    BackgroundEvent(BackgroundEventEvent),
 
     /// Notification that the agent is about to apply a code patch. Mirrors
     /// `ExecCommandBegin` so front‑ends can show progress indicators.
-    PatchApplyBegin {
-        /// Identifier so this can be paired with the PatchApplyEnd event.
-        call_id: String,
-
-        /// If true, there was no ApplyPatchApprovalRequest for this patch.
-        auto_approved: bool,
-
-        /// The changes to be applied.
-        changes: HashMap<PathBuf, FileChange>,
-    },
+    PatchApplyBegin(PatchApplyBeginEvent),
 
     /// Notification that a patch application has finished.
-    PatchApplyEnd {
-        /// Identifier for the PatchApplyBegin that finished.
-        call_id: String,
-        /// Captured stdout (summary printed by apply_patch).
-        stdout: String,
-        /// Captured stderr (parser errors, IO failures, etc.).
-        stderr: String,
-        /// Whether the patch was applied successfully.
-        success: bool,
-    },
+    PatchApplyEnd(PatchApplyEndEvent),
+
+    /// Response to GetHistoryEntryRequest.
+    GetHistoryEntryResponse(GetHistoryEntryResponseEvent),
+}
+
+// Individual event payload types matching each `EventMsg` variant.
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ErrorEvent {
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AgentMessageEvent {
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AgentReasoningEvent {
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct McpToolCallBeginEvent {
+    /// Identifier so this can be paired with the McpToolCallEnd event.
+    pub call_id: String,
+    /// Name of the MCP server as defined in the config.
+    pub server: String,
+    /// Name of the tool as given by the MCP server.
+    pub tool: String,
+    /// Arguments to the tool call.
+    pub arguments: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct McpToolCallEndEvent {
+    /// Identifier for the corresponding McpToolCallBegin that finished.
+    pub call_id: String,
+    /// Whether the tool call was successful. If `false`, `result` might not be present.
+    pub success: bool,
+    /// Result of the tool call. Note this could be an error.
+    pub result: Option<CallToolResult>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ExecCommandBeginEvent {
+    /// Identifier so this can be paired with the ExecCommandEnd event.
+    pub call_id: String,
+    /// The command to be executed.
+    pub command: Vec<String>,
+    /// The command's working directory if not the default cwd for the agent.
+    pub cwd: PathBuf,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ExecCommandEndEvent {
+    /// Identifier for the ExecCommandBegin that finished.
+    pub call_id: String,
+    /// Captured stdout
+    pub stdout: String,
+    /// Captured stderr
+    pub stderr: String,
+    /// The command's exit code.
+    pub exit_code: i32,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ExecApprovalRequestEvent {
+    /// The command to be executed.
+    pub command: Vec<String>,
+    /// The command's working directory.
+    pub cwd: PathBuf,
+    /// Optional human-readable reason for the approval (e.g. retry without sandbox).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ApplyPatchApprovalRequestEvent {
+    pub changes: HashMap<PathBuf, FileChange>,
+    /// Optional explanatory reason (e.g. request for extra write access).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// When set, the agent is asking the user to allow writes under this root for the remainder of the session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grant_root: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct BackgroundEventEvent {
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PatchApplyBeginEvent {
+    /// Identifier so this can be paired with the PatchApplyEnd event.
+    pub call_id: String,
+    /// If true, there was no ApplyPatchApprovalRequest for this patch.
+    pub auto_approved: bool,
+    /// The changes to be applied.
+    pub changes: HashMap<PathBuf, FileChange>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PatchApplyEndEvent {
+    /// Identifier for the PatchApplyBegin that finished.
+    pub call_id: String,
+    /// Captured stdout (summary printed by apply_patch).
+    pub stdout: String,
+    /// Captured stderr (parser errors, IO failures, etc.).
+    pub stderr: String,
+    /// Whether the patch was applied successfully.
+    pub success: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GetHistoryEntryResponseEvent {
+    pub offset: usize,
+    pub log_id: u64,
+    /// The entry at the requested offset, if available and parseable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry: Option<HistoryEntry>,
+}
+
+#[derive(Debug, Default, Clone, Deserialize, Serialize)]
+pub struct SessionConfiguredEvent {
+    /// Unique id for this session.
+    pub session_id: Uuid,
+
+    /// Tell the client what model is being queried.
+    pub model: String,
+
+    /// Identifier of the history log file (inode on Unix, 0 otherwise).
+    pub history_log_id: u64,
+
+    /// Current number of entries in the history log.
+    pub history_entry_count: usize,
 }
 
 /// User's decision in response to an ExecApprovalRequest.
-#[derive(Debug, Default, Clone, Copy, Deserialize, Serialize)]
+#[derive(Debug, Default, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ReviewDecision {
     /// User has approved this command and the agent should execute it.
@@ -470,4 +533,31 @@ pub struct Chunk {
     pub orig_index: u32,
     pub deleted_lines: Vec<String>,
     pub inserted_lines: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    /// Serialize Event to verify that its JSON representation has the expected
+    /// amount of nesting.
+    #[test]
+    fn serialize_event() {
+        let session_id: Uuid = uuid::uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8");
+        let event = Event {
+            id: "1234".to_string(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id,
+                model: "o4-mini".to_string(),
+                history_log_id: 0,
+                history_entry_count: 0,
+            }),
+        };
+        let serialized = serde_json::to_string(&event).unwrap();
+        assert_eq!(
+            serialized,
+            r#"{"id":"1234","msg":{"type":"session_configured","session_id":"67e55044-10b1-426f-9247-bb680e5fe0c8","model":"o4-mini","history_log_id":0,"history_entry_count":0}}"#
+        );
+    }
 }

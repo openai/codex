@@ -25,6 +25,7 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
     let Cli {
         images,
         model,
+        config_profile,
         full_auto,
         sandbox,
         cwd,
@@ -52,6 +53,7 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
     // Load configuration and determine approval policy
     let overrides = ConfigOverrides {
         model,
+        config_profile,
         // This CLI is intended to be headless and has no affordances for asking
         // the user for approval.
         approval_policy: Some(AskForApproval::Never),
@@ -62,7 +64,7 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
             None
         },
         cwd: cwd.map(|p| p.canonicalize().unwrap_or(p)),
-        provider: None,
+        model_provider: None,
     };
     let config = Config::load_with_overrides(overrides)?;
 

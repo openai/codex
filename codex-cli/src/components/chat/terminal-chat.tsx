@@ -495,6 +495,7 @@ export default function TerminalChat({
               initialImagePaths,
               flexModeEnabled: Boolean(config.flexMode),
             }}
+            fileOpener={config.fileOpener}
           />
         ) : (
           <Box>
