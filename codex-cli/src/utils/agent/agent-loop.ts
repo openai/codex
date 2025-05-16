@@ -8,6 +8,7 @@ import type {
   ResponseItem,
   ResponseCreateParams,
   FunctionTool,
+  Tool,
 } from "openai/resources/responses/responses.mjs";
 import type { Reasoning } from "openai/resources.mjs";
 
@@ -84,7 +85,7 @@ type AgentLoopParams = {
   onLastResponseId: (lastResponseId: string) => void;
 };
 
-const shellTool: FunctionTool = {
+const shellFunctionTool: FunctionTool = {
   type: "function",
   name: "shell",
   description: "Runs a shell command, and returns its output.",
@@ -106,6 +107,11 @@ const shellTool: FunctionTool = {
     required: ["command"],
     additionalProperties: false,
   },
+};
+
+const localShellTool: Tool = {
+  //@ts-expect-error - waiting on sdk
+  type: "local_shell",
 };
 
 export class AgentLoop {
@@ -461,6 +467,73 @@ export class AgentLoop {
     return [outputItem, ...additionalItems];
   }
 
+  private async handleLocalShellCall(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    item: any,
+  ): Promise<Array<ResponseInputItem>> {
+    // If the agent has been canceled in the meantime we should not perform any
+    // additional work. Returning an empty array ensures that we neither execute
+    // the requested tool call nor enqueue any follow‑up input items. This keeps
+    // the cancellation semantics intuitive for users – once they interrupt a
+    // task no further actions related to that task should be taken.
+    if (this.canceled) {
+      return [];
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const outputItem: any = {
+      type: "local_shell_call_output",
+      // `call_id` is mandatory – ensure we never send `undefined` which would
+      // trigger the "No tool output found…" 400 from the API.
+      call_id: item.call_id,
+      output: "no function found",
+    };
+
+    // We intentionally *do not* remove this `callId` from the `pendingAborts`
+    // set right away.  The output produced below is only queued up for the
+    // *next* request to the OpenAI API – it has not been delivered yet.  If
+    // the user presses ESC‑ESC (i.e. invokes `cancel()`) in the small window
+    // between queuing the result and the actual network call, we need to be
+    // able to surface a synthetic `function_call_output` marked as
+    // "aborted".  Keeping the ID in the set until the run concludes
+    // successfully lets the next `run()` differentiate between an aborted
+    // tool call (needs the synthetic output) and a completed one (cleared
+    // below in the `flush()` helper).
+
+    // used to tell model to stop if needed
+    const additionalItems: Array<ResponseInputItem> = [];
+
+    if (item.action.type !== "exec") {
+      throw new Error("Invalid action type");
+    }
+
+    const args = {
+      cmd: item.action.command,
+      workdir: item.action.working_directory,
+      timeoutInMillis: item.action.timeout_ms,
+    };
+
+    const {
+      outputText,
+      metadata,
+      additionalItems: additionalItemsFromExec,
+    } = await handleExecCommand(
+      args,
+      this.config,
+      this.approvalPolicy,
+      this.additionalWritableRoots,
+      this.getCommandConfirmation,
+      this.execAbortController?.signal,
+    );
+    outputItem.output = JSON.stringify({ output: outputText, metadata });
+
+    if (additionalItemsFromExec) {
+      additionalItems.push(...additionalItemsFromExec);
+    }
+
+    return [outputItem, ...additionalItems];
+  }
+
   public async run(
     input: Array<ResponseInputItem>,
     previousResponseId: string = "",
@@ -544,6 +617,11 @@ export class AgentLoop {
       // transcript so we can avoid re‑emitting them to the UI. Only used when
       // `disableResponseStorage === true`.
       let transcriptPrefixLen = 0;
+
+      let tools: Array<Tool> = [shellFunctionTool];
+      if (this.model.startsWith("codex")) {
+        tools = [localShellTool];
+      }
 
       const stripInternalFields = (
         item: ResponseInputItem,
@@ -648,6 +726,8 @@ export class AgentLoop {
                 if (
                   (item as ResponseInputItem).type === "function_call" ||
                   (item as ResponseInputItem).type === "reasoning" ||
+                  //@ts-expect-error - waiting on sdk
+                  (item as ResponseInputItem).type === "local_shell_call" ||
                   ((item as ResponseInputItem).type === "message" &&
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     (item as any).role === "user")
@@ -748,7 +828,7 @@ export class AgentLoop {
                     store: true,
                     previous_response_id: lastResponseId || undefined,
                   }),
-              tools: [shellTool],
+              tools: tools,
               // Explicitly tell the model it is allowed to pick whatever
               // tool it deems appropriate.  Omitting this sometimes leads to
               // the model ignoring the available tools and responding with
@@ -968,7 +1048,10 @@ export class AgentLoop {
                 if (maybeReasoning.type === "reasoning") {
                   maybeReasoning.duration_ms = Date.now() - thinkingStart;
                 }
-                if (item.type === "function_call") {
+                if (
+                  item.type === "function_call" ||
+                  item.type === "local_shell_call"
+                ) {
                   // Track outstanding tool call so we can abort later if needed.
                   // The item comes from the streaming response, therefore it has
                   // either `id` (chat) or `call_id` (responses) – we normalise
@@ -1091,7 +1174,11 @@ export class AgentLoop {
               let reasoning: Reasoning | undefined;
               if (this.model.startsWith("o")) {
                 reasoning = { effort: "high" };
-                if (this.model === "o3" || this.model === "o4-mini") {
+                if (
+                  this.model === "o3" ||
+                  this.model === "o4-mini" ||
+                  this.model === "codex-mini-latest"
+                ) {
                   reasoning.summary = "auto";
                 }
               }
@@ -1130,7 +1217,7 @@ export class AgentLoop {
                       store: true,
                       previous_response_id: lastResponseId || undefined,
                     }),
-                tools: [shellTool],
+                tools: tools,
                 tool_choice: "auto",
               });
 
@@ -1491,6 +1578,17 @@ export class AgentLoop {
         alreadyProcessedResponses.add(item.id);
         // eslint-disable-next-line no-await-in-loop
         const result = await this.handleFunctionCall(item);
+        turnInput.push(...result);
+        //@ts-expect-error - waiting on sdk
+      } else if (item.type === "local_shell_call") {
+        //@ts-expect-error - waiting on sdk
+        if (alreadyProcessedResponses.has(item.id)) {
+          continue;
+        }
+        //@ts-expect-error - waiting on sdk
+        alreadyProcessedResponses.add(item.id);
+        // eslint-disable-next-line no-await-in-loop
+        const result = await this.handleLocalShellCall(item);
         turnInput.push(...result);
       }
       emitItem(item as ResponseItem);
