@@ -18,7 +18,7 @@ use thiserror::Error;
 use tree_sitter::Parser;
 use tree_sitter_bash::LANGUAGE as BASH;
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, PartialEq)]
 pub enum ApplyPatchError {
     #[error(transparent)]
     ParseError(#[from] ParseError),
@@ -44,6 +44,12 @@ pub struct IoError {
     context: String,
     #[source]
     source: std::io::Error,
+}
+
+impl PartialEq for IoError {
+    fn eq(&self, other: &Self) -> bool {
+        self.context == other.context && self.source.to_string() == other.source.to_string()
+    }
 }
 
 #[derive(Debug)]
@@ -77,7 +83,7 @@ pub fn maybe_parse_apply_patch(argv: &[String]) -> MaybeApplyPatch {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum ApplyPatchFileChange {
     Add {
         content: String,
@@ -106,7 +112,27 @@ pub enum MaybeApplyPatchVerified {
     NotApplyPatch,
 }
 
-#[derive(Debug)]
+impl PartialEq for MaybeApplyPatchVerified {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (MaybeApplyPatchVerified::Body(a), MaybeApplyPatchVerified::Body(b)) => a == b,
+            (
+                MaybeApplyPatchVerified::ShellParseError(a),
+                MaybeApplyPatchVerified::ShellParseError(b),
+            ) => a.to_string() == b.to_string(),
+            (
+                MaybeApplyPatchVerified::CorrectnessError(a),
+                MaybeApplyPatchVerified::CorrectnessError(b),
+            ) => a == b,
+            (MaybeApplyPatchVerified::NotApplyPatch, MaybeApplyPatchVerified::NotApplyPatch) => {
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
 /// ApplyPatchAction is the result of parsing an `apply_patch` command. By
 /// construction, all paths should be absolute paths.
 pub struct ApplyPatchAction {
@@ -142,22 +168,16 @@ pub fn maybe_parse_apply_patch_verified(argv: &[String], cwd: &Path) -> MaybeApp
         MaybeApplyPatch::Body(hunks) => {
             let mut changes = HashMap::new();
             for hunk in hunks {
+                let path = hunk.resolve_path(cwd);
                 match hunk {
-                    Hunk::AddFile { path, contents } => {
-                        changes.insert(
-                            cwd.join(path),
-                            ApplyPatchFileChange::Add {
-                                content: contents.clone(),
-                            },
-                        );
+                    Hunk::AddFile { contents, .. } => {
+                        changes.insert(path, ApplyPatchFileChange::Add { content: contents });
                     }
-                    Hunk::DeleteFile { path } => {
-                        changes.insert(cwd.join(path), ApplyPatchFileChange::Delete);
+                    Hunk::DeleteFile { .. } => {
+                        changes.insert(path, ApplyPatchFileChange::Delete);
                     }
                     Hunk::UpdateFile {
-                        path,
-                        move_path,
-                        chunks,
+                        move_path, chunks, ..
                     } => {
                         let ApplyPatchFileUpdate {
                             unified_diff,
@@ -169,7 +189,7 @@ pub fn maybe_parse_apply_patch_verified(argv: &[String], cwd: &Path) -> MaybeApp
                             }
                         };
                         changes.insert(
-                            cwd.join(path),
+                            path,
                             ApplyPatchFileChange::Update {
                                 unified_diff,
                                 move_path: move_path.map(|p| cwd.join(p)),
@@ -1135,6 +1155,50 @@ E
 f
 g
 "#
+        );
+    }
+
+    #[test]
+    fn test_apply_patch_should_resolve_absolute_paths_in_cwd() {
+        let session_dir = tempdir().unwrap();
+        let relative_path = "source.txt";
+
+        // Note that we need this file to exist for the patch to be "verified"
+        // and parsed correctly.
+        let session_file_path = session_dir.path().join(relative_path);
+        fs::write(&session_file_path, "session directory content\n").unwrap();
+
+        let argv = vec![
+            "apply_patch".to_string(),
+            r#"*** Begin Patch
+*** Update File: source.txt
+@@
+-session directory content
++updated session directory content
+*** End Patch"#
+                .to_string(),
+        ];
+
+        let result = maybe_parse_apply_patch_verified(&argv, session_dir.path());
+
+        // Verify the patch contents - as otherwise we may have pulled contents
+        // from the wrong file (as we're using relative paths)
+        assert_eq!(
+            result,
+            MaybeApplyPatchVerified::Body(ApplyPatchAction {
+                changes: HashMap::from([(
+                    session_dir.path().join(relative_path),
+                    ApplyPatchFileChange::Update {
+                        unified_diff: r#"@@ -1 +1 @@
+-session directory content
++updated session directory content
+"#
+                        .to_string(),
+                        move_path: None,
+                        new_content: "updated session directory content\n".to_string(),
+                    },
+                )]),
+            })
         );
     }
 }
