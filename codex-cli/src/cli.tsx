@@ -20,11 +20,11 @@ import { ReviewDecision } from "./utils/agent/review";
 import { AutoApprovalMode } from "./utils/auto-approval-mode";
 import { checkForUpdates } from "./utils/check-updates";
 import {
-  getApiKey,
   loadConfig,
   PRETTY_PRINT,
   INSTRUCTIONS_FILEPATH,
 } from "./utils/config";
+import { getApiKey as fetchApiKey } from "./utils/get-api-key";
 import { createInputItem } from "./utils/input-utils";
 import { initLogger } from "./utils/logger/log";
 import { isModelSupportedForResponses } from "./utils/model-utils.js";
@@ -35,6 +35,7 @@ import { spawnSync } from "child_process";
 import fs from "fs";
 import { render } from "ink";
 import meow from "meow";
+import os from "os";
 import path from "path";
 import React from "react";
 
@@ -271,7 +272,38 @@ let prompt = cli.input[0];
 const model = cli.flags.model ?? config.model;
 const imagePaths = cli.flags.image;
 const provider = cli.flags.provider ?? config.provider ?? "openai";
-const apiKey = getApiKey(provider);
+
+const client = {
+  issuer: "https://auth.openai.com",
+  client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
+};
+
+let apiKey = "";
+
+// Try to load existing auth file if present
+try {
+  const home = os.homedir();
+  const authDir = path.join(home, ".codex");
+  const authFile = path.join(authDir, "auth.json");
+  if (fs.existsSync(authFile)) {
+    const data = JSON.parse(fs.readFileSync(authFile, "utf-8"));
+    const lastRefreshTime = data.last_refresh
+      ? new Date(data.last_refresh).getTime()
+      : 0;
+    const expired = Date.now() - lastRefreshTime > 28 * 24 * 60 * 60 * 1000;
+    if (data.OPENAI_API_KEY && !expired) {
+      apiKey = data.OPENAI_API_KEY;
+    }
+  }
+} catch {
+  // ignore errors
+}
+
+if (!apiKey) {
+  apiKey = await fetchApiKey(client.issuer, client.client_id);
+}
+// Ensure the API key is available as an environment variable for legacy code
+process.env["OPENAI_API_KEY"] = apiKey;
 
 // Set of providers that don't require API keys
 const NO_API_KEY_REQUIRED = new Set(["ollama"]);
