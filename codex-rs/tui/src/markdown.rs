@@ -130,12 +130,12 @@ mod tests {
 
     #[test]
     fn citation_followed_by_space_so_they_do_not_run_together() {
-        let markdown = "TODOs on lines 【F:src/foo.rs†L24】【F:src/foo.rs†L42】";
+        let markdown = "References on lines 【F:src/foo.rs†L24】【F:src/foo.rs†L42】";
         let cwd = Path::new("/home/user/project");
         let result = rewrite_file_citations(markdown, UriBasedFileOpener::VsCode, cwd);
 
         assert_eq!(
-            "TODOs on lines [src/foo.rs:24](vscode://file/home/user/project/src/foo.rs:24) [src/foo.rs:42](vscode://file/home/user/project/src/foo.rs:42) ",
+            "References on lines [src/foo.rs:24](vscode://file/home/user/project/src/foo.rs:24) [src/foo.rs:42](vscode://file/home/user/project/src/foo.rs:42) ",
             result
         );
     }
