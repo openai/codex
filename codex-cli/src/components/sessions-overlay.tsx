@@ -85,7 +85,12 @@ export default function SessionsOverlay({
     (async () => {
       const sessions = await loadSessions();
       const formatted = sessions.map((s) => {
-        const ts = s.timestamp ? new Date(s.timestamp).toLocaleString() : "";
+        const ts = s.timestamp
+          ? new Date(s.timestamp).toLocaleString(undefined, {
+              dateStyle: "short",
+              timeStyle: "short",
+            })
+          : "";
         const first = s.firstMessage?.slice(0, 50);
         const label = `${ts} · ${s.userMessages} msgs/${s.toolCalls} tools · ${first}`;
         return { label, value: s.path } as TypeaheadItem;
