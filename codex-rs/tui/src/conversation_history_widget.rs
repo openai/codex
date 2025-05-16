@@ -183,12 +183,12 @@ impl ConversationHistoryWidget {
         self.add_to_history(HistoryCell::new_user_prompt(message));
     }
 
-    pub fn add_agent_message(&mut self, message: String) {
-        self.add_to_history(HistoryCell::new_agent_message(message));
+    pub fn add_agent_message(&mut self, config: &Config, message: String) {
+        self.add_to_history(HistoryCell::new_agent_message(config, message));
     }
 
-    pub fn add_agent_reasoning(&mut self, text: String) {
-        self.add_to_history(HistoryCell::new_agent_reasoning(text));
+    pub fn add_agent_reasoning(&mut self, config: &Config, text: String) {
+        self.add_to_history(HistoryCell::new_agent_reasoning(config, text));
     }
 
     pub fn add_background_event(&mut self, message: String) {

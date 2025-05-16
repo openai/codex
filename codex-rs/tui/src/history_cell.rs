@@ -155,19 +155,19 @@ impl HistoryCell {
         HistoryCell::UserPrompt { lines }
     }
 
-    pub(crate) fn new_agent_message(message: String) -> Self {
+    pub(crate) fn new_agent_message(config: &Config, message: String) -> Self {
         let mut lines: Vec<Line<'static>> = Vec::new();
         lines.push(Line::from("codex".magenta().bold()));
-        append_markdown(&message, &mut lines);
+        append_markdown(&message, &mut lines, config);
         lines.push(Line::from(""));
 
         HistoryCell::AgentMessage { lines }
     }
 
-    pub(crate) fn new_agent_reasoning(text: String) -> Self {
+    pub(crate) fn new_agent_reasoning(config: &Config, text: String) -> Self {
         let mut lines: Vec<Line<'static>> = Vec::new();
         lines.push(Line::from("thinking".magenta().italic()));
-        append_markdown(&text, &mut lines);
+        append_markdown(&text, &mut lines, config);
         lines.push(Line::from(""));
 
         HistoryCell::AgentReasoning { lines }
