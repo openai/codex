@@ -2,6 +2,10 @@
 
 You can install any of these versions: `npm install -g codex@version`
 
+## `0.1.2505160811`
+
+- `codex-mini-latest` (#951)
+
 ## `0.1.2505140839`
 
 ### 🪲 Bug Fixes
