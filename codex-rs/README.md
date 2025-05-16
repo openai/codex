@@ -310,6 +310,22 @@ To disable this behavior, configure `[history]` as follows:
 persistence = "none"  # "save-all" is the default value
 ```
 
+### file_opener
+
+Identifies the editor/URI scheme to use for hyperlinking citations in model output. If set, citations to files in the model output will be hyperlinked using the specified URI scheme so they can be ctrl/cmd-clicked from the terminal to open them.
+
+For example, if the model output includes a reference such as `【F:/home/user/project/main.py†L42-L50】`, then this would be rewritten to link to the URI `vscode://file/home/user/project/main.py:42`.
+
+Note this is **not** a general editor setting (like `$EDITOR`), as it only accepts a fixed set of values:
+
+- `"vscode"` (default)
+- `"vscode-insiders"`
+- `"windsurf"`
+- `"cursor"`
+- `"none"` to explicitly disable this feature
+
+Currently, `"vscode"` is the default, though Codex does not verify VS Code is installed. As such, `file_opener` may default to `"none"` or something else in the future.
+
 ### project_doc_max_bytes
 
 Maximum number of bytes to read from an `AGENTS.md` file to include in the instructions sent with the first turn of a session. Defaults to 32 KiB.

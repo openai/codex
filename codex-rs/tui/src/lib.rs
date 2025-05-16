@@ -19,6 +19,7 @@ mod app_event;
 mod app_event_sender;
 mod bottom_pane;
 mod chatwidget;
+mod citation_regex;
 mod cli;
 mod conversation_history_widget;
 mod exec_command;

@@ -209,11 +209,13 @@ impl ChatWidget<'_> {
                 self.request_redraw();
             }
             EventMsg::AgentMessage(AgentMessageEvent { message }) => {
-                self.conversation_history.add_agent_message(message);
+                self.conversation_history
+                    .add_agent_message(&self.config, message);
                 self.request_redraw();
             }
             EventMsg::AgentReasoning(AgentReasoningEvent { text }) => {
-                self.conversation_history.add_agent_reasoning(text);
+                self.conversation_history
+                    .add_agent_reasoning(&self.config, text);
                 self.request_redraw();
             }
             EventMsg::TaskStarted => {
