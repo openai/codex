@@ -171,12 +171,7 @@ pub fn maybe_parse_apply_patch_verified(argv: &[String], cwd: &Path) -> MaybeApp
                 let path = hunk.resolve_path(cwd);
                 match hunk {
                     Hunk::AddFile { contents, .. } => {
-                        changes.insert(
-                            path,
-                            ApplyPatchFileChange::Add {
-                                content: contents.clone(),
-                            },
-                        );
+                        changes.insert(path, ApplyPatchFileChange::Add { content: contents });
                     }
                     Hunk::DeleteFile { .. } => {
                         changes.insert(path, ApplyPatchFileChange::Delete);
@@ -1168,7 +1163,7 @@ g
         let session_dir = tempdir().unwrap();
         let relative_path = "source.txt";
 
-        // Note that we need this file to exists for the patch to be "verified"
+        // Note that we need this file to exist for the patch to be "verified"
         // and parsed correctly.
         let session_file_path = session_dir.path().join(relative_path);
         fs::write(&session_file_path, "session directory content\n").unwrap();
@@ -1189,17 +1184,21 @@ g
         // Verify the patch contents - as otherwise we may have pulled contents
         // from the wrong file (as we're using relative paths)
         assert_eq!(
-            result, 
-            MaybeApplyPatchVerified::Body(
-                ApplyPatchAction {
-                    changes: HashMap::from([(
-                        session_dir.path().join(relative_path),
-                        ApplyPatchFileChange::Update {
-                            unified_diff: "@@ -1 +1 @@\n-session directory content\n+updated session directory content\n".to_string(),
-                            move_path: None,
-                            new_content: "updated session directory content\n".to_string(),
-                        },
-                    )]),
-                }));
+            result,
+            MaybeApplyPatchVerified::Body(ApplyPatchAction {
+                changes: HashMap::from([(
+                    session_dir.path().join(relative_path),
+                    ApplyPatchFileChange::Update {
+                        unified_diff: r#"@@ -1 +1 @@
+-session directory content
++updated session directory content
+"#
+                        .to_string(),
+                        move_path: None,
+                        new_content: "updated session directory content\n".to_string(),
+                    },
+                )]),
+            })
+        );
     }
 }
