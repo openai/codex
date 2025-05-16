@@ -463,6 +463,7 @@ export default function TerminalChat({
   if (viewRollout) {
     return (
       <TerminalChatPastRollout
+        fileOpener={config.fileOpener}
         session={viewRollout.session}
         items={viewRollout.items}
       />
