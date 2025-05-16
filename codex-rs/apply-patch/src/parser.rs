@@ -64,6 +64,17 @@ pub enum Hunk {
         chunks: Vec<UpdateFileChunk>,
     },
 }
+
+impl Hunk {
+    pub fn resolve_path(&self, cwd: &PathBuf) -> PathBuf {
+        match self {
+            Hunk::AddFile { path, .. } => cwd.join(path),
+            Hunk::DeleteFile { path } => cwd.join(path),
+            Hunk::UpdateFile { path, .. } => cwd.join(path),
+        }
+    }
+}
+
 use Hunk::*;
 
 #[derive(Debug, PartialEq)]

@@ -142,35 +142,35 @@ pub fn maybe_parse_apply_patch_verified(argv: &[String], cwd: &Path) -> MaybeApp
         MaybeApplyPatch::Body(hunks) => {
             let mut changes = HashMap::new();
             for hunk in hunks {
+                let path = hunk.resolve_path(cwd);
                 match hunk {
-                    Hunk::AddFile { path, contents } => {
+                    Hunk::AddFile { contents, .. } => {
                         changes.insert(
-                            cwd.join(path),
+                            path,
                             ApplyPatchFileChange::Add {
                                 content: contents.clone(),
                             },
                         );
                     }
-                    Hunk::DeleteFile { path } => {
-                        changes.insert(cwd.join(path), ApplyPatchFileChange::Delete);
+                    Hunk::DeleteFile { .. } => {
+                        changes.insert(path, ApplyPatchFileChange::Delete);
                     }
                     Hunk::UpdateFile {
-                        path,
                         move_path,
                         chunks,
+                        ..
                     } => {
-                        let absolute_path = cwd.join(path);
                         let ApplyPatchFileUpdate {
                             unified_diff,
                             content: contents,
-                        } = match unified_diff_from_chunks(&absolute_path, &chunks) {
+                        } = match unified_diff_from_chunks(&path, &chunks) {
                             Ok(diff) => diff,
                             Err(e) => {
                                 return MaybeApplyPatchVerified::CorrectnessError(e);
                             }
                         };
                         changes.insert(
-                            absolute_path,
+                            path,
                             ApplyPatchFileChange::Update {
                                 unified_diff,
                                 move_path: move_path.map(|p| cwd.join(p)),
