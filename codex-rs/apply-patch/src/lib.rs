@@ -18,7 +18,7 @@ use thiserror::Error;
 use tree_sitter::Parser;
 use tree_sitter_bash::LANGUAGE as BASH;
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, PartialEq)]
 pub enum ApplyPatchError {
     #[error(transparent)]
     ParseError(#[from] ParseError),
@@ -44,6 +44,12 @@ pub struct IoError {
     context: String,
     #[source]
     source: std::io::Error,
+}
+
+impl PartialEq for IoError {
+    fn eq(&self, other: &Self) -> bool {
+        self.context == other.context && self.source.to_string() == other.source.to_string()
+    }
 }
 
 #[derive(Debug)]
@@ -77,7 +83,7 @@ pub fn maybe_parse_apply_patch(argv: &[String]) -> MaybeApplyPatch {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum ApplyPatchFileChange {
     Add {
         content: String,
@@ -106,7 +112,27 @@ pub enum MaybeApplyPatchVerified {
     NotApplyPatch,
 }
 
-#[derive(Debug)]
+impl PartialEq for MaybeApplyPatchVerified {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (MaybeApplyPatchVerified::Body(a), MaybeApplyPatchVerified::Body(b)) => a == b,
+            (
+                MaybeApplyPatchVerified::ShellParseError(a),
+                MaybeApplyPatchVerified::ShellParseError(b),
+            ) => a.to_string() == b.to_string(),
+            (
+                MaybeApplyPatchVerified::CorrectnessError(a),
+                MaybeApplyPatchVerified::CorrectnessError(b),
+            ) => a == b,
+            (MaybeApplyPatchVerified::NotApplyPatch, MaybeApplyPatchVerified::NotApplyPatch) => {
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
 /// ApplyPatchAction is the result of parsing an `apply_patch` command. By
 /// construction, all paths should be absolute paths.
 pub struct ApplyPatchAction {
@@ -156,9 +182,7 @@ pub fn maybe_parse_apply_patch_verified(argv: &[String], cwd: &Path) -> MaybeApp
                         changes.insert(path, ApplyPatchFileChange::Delete);
                     }
                     Hunk::UpdateFile {
-                        move_path,
-                        chunks,
-                        ..
+                        move_path, chunks, ..
                     } => {
                         let ApplyPatchFileUpdate {
                             unified_diff,
@@ -1161,32 +1185,21 @@ g
         ];
 
         let result = maybe_parse_apply_patch_verified(&argv, session_dir.path());
-        assert!(matches!(result, MaybeApplyPatchVerified::Body(_)));
-        let MaybeApplyPatchVerified::Body(action) = result else {
-            panic!("Expected MaybeApplyPatchVerified::Body");
-        };
-
-        let changes = action.changes();
-        assert_eq!(changes.len(), 1);
-
-        // Ensure that we are targeting the correct file
-        assert!(changes.contains_key(&session_file_path));
 
         // Verify the patch contents - as otherwise we may have pulled contents
         // from the wrong file (as we're using relative paths)
-        let ApplyPatchFileChange::Update { new_content, .. } = changes.get(&session_file_path).unwrap() else {
-            panic!("Expected Update file change for session file");
-        };
         assert_eq!(
-            new_content, "updated session directory content\n",
-            "File content was not updated correctly"
-        );
-
-        // Check that the actual file hasn't been modified yet
-        let session_content = fs::read_to_string(&session_file_path).unwrap();
-        assert_eq!(
-            session_content, "session directory content\n",
-            "Session file should not be modified yet until apply_hunks is called"
-        );
+            result, 
+            MaybeApplyPatchVerified::Body(
+                ApplyPatchAction {
+                    changes: HashMap::from([(
+                        session_dir.path().join(relative_path),
+                        ApplyPatchFileChange::Update {
+                            unified_diff: "@@ -1 +1 @@\n-session directory content\n+updated session directory content\n".to_string(),
+                            move_path: None,
+                            new_content: "updated session directory content\n".to_string(),
+                        },
+                    )]),
+                }));
     }
 }
