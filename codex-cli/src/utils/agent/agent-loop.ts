@@ -17,7 +17,6 @@ import {
   OPENAI_TIMEOUT_MS,
   OPENAI_ORGANIZATION,
   OPENAI_PROJECT,
-  getApiKey,
   getBaseUrl,
   AZURE_OPENAI_API_VERSION,
 } from "../config.js";
@@ -307,7 +306,7 @@ export class AgentLoop {
     this.sessionId = getSessionId() || randomUUID().replaceAll("-", "");
     // Configure OpenAI client with optional timeout (ms) from environment
     const timeoutMs = OPENAI_TIMEOUT_MS;
-    const apiKey = getApiKey(this.provider);
+    const apiKey = this.config.apiKey ?? process.env["OPENAI_API_KEY"] ?? "";
     const baseURL = getBaseUrl(this.provider);
 
     this.oai = new OpenAI({
@@ -766,7 +765,7 @@ export class AgentLoop {
         // prompts) and so that freshly generated `function_call_output`s are
         // shown immediately.
         // Figure out what subset of `turnInput` constitutes *new* information
-        // for the UI so that we don’t spam the interface with repeats of the
+        // for the UI so that we don't spam the interface with repeats of the
         // entire transcript on every iteration when response storage is
         // disabled.
         const deltaInput = this.disableResponseStorage
@@ -1645,7 +1644,6 @@ You MUST adhere to the following criteria when executing the task:
         - If there is a .pre-commit-config.yaml, use \`pre-commit run --files ...\` to check that your changes pass the pre-commit checks. However, do not fix pre-existing errors on lines you didn't touch.
             - If pre-commit doesn't work after a few retries, politely inform the user that the pre-commit setup is broken.
         - Once you finish coding, you must
-            - Check \`git status\` to sanity check your changes; revert any scratch files or changes.
             - Remove all inline comments you added as much as possible, even if they look normal. Check using \`git diff\`. Inline comments must be generally avoided, unless active maintainers of the repo, after long careful study of the code and the issue, will still misinterpret the code without the comments.
             - Check if you accidentally add copyright or license headers. If so, remove them.
             - Try to run pre-commit if it is available.
