@@ -110,6 +110,7 @@ const shellFunctionTool: FunctionTool = {
 };
 
 const localShellTool: Tool = {
+  //@ts-expect-error - waiting on sdk
   type: "local_shell",
 };
 
@@ -725,6 +726,7 @@ export class AgentLoop {
                 if (
                   (item as ResponseInputItem).type === "function_call" ||
                   (item as ResponseInputItem).type === "reasoning" ||
+                  //@ts-expect-error - waiting on sdk
                   (item as ResponseInputItem).type === "local_shell_call" ||
                   ((item as ResponseInputItem).type === "message" &&
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1577,10 +1579,13 @@ export class AgentLoop {
         // eslint-disable-next-line no-await-in-loop
         const result = await this.handleFunctionCall(item);
         turnInput.push(...result);
+        //@ts-expect-error - waiting on sdk
       } else if (item.type === "local_shell_call") {
+        //@ts-expect-error - waiting on sdk
         if (alreadyProcessedResponses.has(item.id)) {
           continue;
         }
+        //@ts-expect-error - waiting on sdk
         alreadyProcessedResponses.add(item.id);
         // eslint-disable-next-line no-await-in-loop
         const result = await this.handleLocalShellCall(item);
