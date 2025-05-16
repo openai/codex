@@ -54,6 +54,7 @@ export default function TerminalChatInput({
   openApprovalOverlay,
   openHelpOverlay,
   openDiffOverlay,
+  openSessionsOverlay,
   onCompact,
   interruptAgent,
   active,
@@ -77,6 +78,7 @@ export default function TerminalChatInput({
   openApprovalOverlay: () => void;
   openHelpOverlay: () => void;
   openDiffOverlay: () => void;
+  openSessionsOverlay: () => void;
   onCompact: () => void;
   interruptAgent: () => void;
   active: boolean;
@@ -279,6 +281,9 @@ export default function TerminalChatInput({
               switch (cmd) {
                 case "/history":
                   openOverlay();
+                  break;
+                case "/sessions":
+                  openSessionsOverlay();
                   break;
                 case "/help":
                   openHelpOverlay();
@@ -483,6 +488,10 @@ export default function TerminalChatInput({
       } else if (inputValue === "/history") {
         setInput("");
         openOverlay();
+        return;
+      } else if (inputValue === "/sessions") {
+        setInput("");
+        openSessionsOverlay();
         return;
       } else if (inputValue === "/help") {
         setInput("");
@@ -728,6 +737,7 @@ export default function TerminalChatInput({
       openModelOverlay,
       openHelpOverlay,
       openDiffOverlay,
+      openSessionsOverlay,
       history,
       onCompact,
       skipNextSubmit,
