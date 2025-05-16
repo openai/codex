@@ -4,9 +4,9 @@ mod seek_sequence;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
+use std::str::Utf8Error;
 
 use anyhow::Context;
-use anyhow::Error;
 use anyhow::Result;
 pub use parser::Hunk;
 pub use parser::ParseError;
@@ -15,6 +15,7 @@ use parser::UpdateFileChunk;
 pub use parser::parse_patch;
 use similar::TextDiff;
 use thiserror::Error;
+use tree_sitter::LanguageError;
 use tree_sitter::Parser;
 use tree_sitter_bash::LANGUAGE as BASH;
 
@@ -52,10 +53,10 @@ impl PartialEq for IoError {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum MaybeApplyPatch {
     Body(Vec<Hunk>),
-    ShellParseError(Error),
+    ShellParseError(ExtractHeredocError),
     PatchParseError(ParseError),
     NotApplyPatch,
 }
@@ -97,39 +98,19 @@ pub enum ApplyPatchFileChange {
     },
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum MaybeApplyPatchVerified {
     /// `argv` corresponded to an `apply_patch` invocation, and these are the
     /// resulting proposed file changes.
     Body(ApplyPatchAction),
     /// `argv` could not be parsed to determine whether it corresponds to an
     /// `apply_patch` invocation.
-    ShellParseError(Error),
+    ShellParseError(ExtractHeredocError),
     /// `argv` corresponded to an `apply_patch` invocation, but it could not
     /// be fulfilled due to the specified error.
     CorrectnessError(ApplyPatchError),
     /// `argv` decidedly did not correspond to an `apply_patch` invocation.
     NotApplyPatch,
-}
-
-impl PartialEq for MaybeApplyPatchVerified {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (MaybeApplyPatchVerified::Body(a), MaybeApplyPatchVerified::Body(b)) => a == b,
-            (
-                MaybeApplyPatchVerified::ShellParseError(a),
-                MaybeApplyPatchVerified::ShellParseError(b),
-            ) => a.to_string() == b.to_string(),
-            (
-                MaybeApplyPatchVerified::CorrectnessError(a),
-                MaybeApplyPatchVerified::CorrectnessError(b),
-            ) => a == b,
-            (MaybeApplyPatchVerified::NotApplyPatch, MaybeApplyPatchVerified::NotApplyPatch) => {
-                true
-            }
-            _ => false,
-        }
-    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -225,19 +206,21 @@ pub fn maybe_parse_apply_patch_verified(argv: &[String], cwd: &Path) -> MaybeApp
 /// * `Ok(String)` - The heredoc body if the extraction is successful.
 /// * `Err(anyhow::Error)` - An error if the extraction fails.
 ///
-fn extract_heredoc_body_from_apply_patch_command(src: &str) -> anyhow::Result<String> {
+fn extract_heredoc_body_from_apply_patch_command(
+    src: &str,
+) -> std::result::Result<String, ExtractHeredocError> {
     if !src.trim_start().starts_with("apply_patch") {
-        anyhow::bail!("expected command to start with 'apply_patch'");
+        return Err(ExtractHeredocError::CommandDidNotStartWithApplyPatch);
     }
 
     let lang = BASH.into();
     let mut parser = Parser::new();
     parser
         .set_language(&lang)
-        .context("failed to load bash grammar")?;
+        .map_err(ExtractHeredocError::FailedToLoadBashGrammar)?;
     let tree = parser
         .parse(src, None)
-        .ok_or_else(|| anyhow::anyhow!("failed to parse patch into AST"))?;
+        .ok_or(ExtractHeredocError::FailedToParsePatchIntoAst)?;
 
     let bytes = src.as_bytes();
     let mut c = tree.root_node().walk();
@@ -247,7 +230,7 @@ fn extract_heredoc_body_from_apply_patch_command(src: &str) -> anyhow::Result<St
         if node.kind() == "heredoc_body" {
             let text = node
                 .utf8_text(bytes)
-                .context("failed to interpret heredoc body as UTF-8")?;
+                .map_err(ExtractHeredocError::HeredocNotUtf8)?;
             return Ok(text.trim_end_matches('\n').to_owned());
         }
 
@@ -256,10 +239,19 @@ fn extract_heredoc_body_from_apply_patch_command(src: &str) -> anyhow::Result<St
         }
         while !c.goto_next_sibling() {
             if !c.goto_parent() {
-                anyhow::bail!("expected to find heredoc_body in patch candidate");
+                return Err(ExtractHeredocError::FailedToFindHeredocBody);
             }
         }
     }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum ExtractHeredocError {
+    CommandDidNotStartWithApplyPatch,
+    FailedToLoadBashGrammar(LanguageError),
+    HeredocNotUtf8(Utf8Error),
+    FailedToParsePatchIntoAst,
+    FailedToFindHeredocBody,
 }
 
 /// Applies the patch and prints the result to stdout/stderr.

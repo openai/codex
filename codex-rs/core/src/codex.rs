@@ -1080,7 +1080,7 @@ async fn handle_function_call(
                     };
                 }
                 MaybeApplyPatchVerified::ShellParseError(error) => {
-                    trace!("Failed to parse shell command, {error}");
+                    trace!("Failed to parse shell command, {error:?}");
                 }
                 MaybeApplyPatchVerified::NotApplyPatch => (),
             }
