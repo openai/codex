@@ -40,10 +40,18 @@ use crate::util::backoff;
 
 /// When serialized as JSON, this produces a valid "Tool" in the OpenAI
 /// Responses API.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type")]
+enum OpenAiTool {
+    #[serde(rename = "function")]
+    Function(ResponsesApiTool),
+    #[serde(rename = "local_shell")]
+    LocalShell {},
+}
+
+#[derive(Debug, Clone, Serialize)]
 struct ResponsesApiTool {
     name: &'static str,
-    r#type: &'static str, // "function"
     description: &'static str,
     strict: bool,
     parameters: JsonSchema,
@@ -67,7 +75,7 @@ enum JsonSchema {
 }
 
 /// Tool usage specification
-static DEFAULT_TOOLS: LazyLock<Vec<ResponsesApiTool>> = LazyLock::new(|| {
+static DEFAULT_TOOLS: LazyLock<Vec<OpenAiTool>> = LazyLock::new(|| {
     let mut properties = BTreeMap::new();
     properties.insert(
         "command".to_string(),
@@ -78,9 +86,8 @@ static DEFAULT_TOOLS: LazyLock<Vec<ResponsesApiTool>> = LazyLock::new(|| {
     properties.insert("workdir".to_string(), JsonSchema::String);
     properties.insert("timeout".to_string(), JsonSchema::Number);
 
-    vec![ResponsesApiTool {
+    vec![OpenAiTool::Function(ResponsesApiTool {
         name: "shell",
-        r#type: "function",
         description: "Runs a shell command, and returns its output.",
         strict: false,
         parameters: JsonSchema::Object {
@@ -88,8 +95,11 @@ static DEFAULT_TOOLS: LazyLock<Vec<ResponsesApiTool>> = LazyLock::new(|| {
             required: &["command"],
             additional_properties: false,
         },
-    }]
+    })]
 });
+
+static DEFAULT_CODEX_MODEL_TOOLS: LazyLock<Vec<OpenAiTool>> =
+    LazyLock::new(|| vec![OpenAiTool::LocalShell {}]);
 
 #[derive(Clone)]
 pub struct ModelClient {
@@ -152,8 +162,13 @@ impl ModelClient {
         }
 
         // Assemble tool list: built-in tools + any extra tools from the prompt.
-        let mut tools_json = Vec::with_capacity(DEFAULT_TOOLS.len() + prompt.extra_tools.len());
-        for t in DEFAULT_TOOLS.iter() {
+        let default_tools = if self.model.starts_with("codex") {
+            &DEFAULT_CODEX_MODEL_TOOLS
+        } else {
+            &DEFAULT_TOOLS
+        };
+        let mut tools_json = Vec::with_capacity(default_tools.len() + prompt.extra_tools.len());
+        for t in default_tools.iter() {
             tools_json.push(serde_json::to_value(t)?);
         }
         tools_json.extend(

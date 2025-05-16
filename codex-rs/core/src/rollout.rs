@@ -115,6 +115,7 @@ impl RolloutRecorder {
                 // "fully qualified MCP tool calls," so we could consider
                 // reformatting them in that case.
                 ResponseItem::Message { .. }
+                | ResponseItem::LocalShellCall { .. }
                 | ResponseItem::FunctionCall { .. }
                 | ResponseItem::FunctionCallOutput { .. } => {}
                 ResponseItem::Reasoning { .. } | ResponseItem::Other => {

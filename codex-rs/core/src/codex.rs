@@ -51,6 +51,7 @@ use crate::mcp_connection_manager::try_parse_fully_qualified_tool_name;
 use crate::mcp_tool_call::handle_mcp_tool_call;
 use crate::models::ContentItem;
 use crate::models::FunctionCallOutputPayload;
+use crate::models::LocalShellAction;
 use crate::models::ReasoningItemReasoningSummary;
 use crate::models::ResponseInputItem;
 use crate::models::ResponseItem;
@@ -992,8 +993,7 @@ async fn handle_response_item(
     item: ResponseItem,
 ) -> CodexResult<Option<ResponseInputItem>> {
     debug!(?item, "Output item");
-    let mut output = None;
-    match item {
+    let output = match item {
         ResponseItem::Message { content, .. } => {
             for item in content {
                 if let ContentItem::OutputText { text } = item {
@@ -1004,6 +1004,7 @@ async fn handle_response_item(
                     sess.tx_event.send(event).await.ok();
                 }
             }
+            None
         }
         ResponseItem::Reasoning { id: _, summary } => {
             for item in summary {
@@ -1016,21 +1017,61 @@ async fn handle_response_item(
                 };
                 sess.tx_event.send(event).await.ok();
             }
+            None
         }
         ResponseItem::FunctionCall {
             name,
             arguments,
             call_id,
         } => {
-            output = Some(
-                handle_function_call(sess, sub_id.to_string(), name, arguments, call_id).await,
-            );
+            tracing::info!("FunctionCall: {arguments}");
+            Some(handle_function_call(sess, sub_id.to_string(), name, arguments, call_id).await)
+        }
+        ResponseItem::LocalShellCall {
+            id,
+            call_id,
+            status: _,
+            action,
+        } => {
+            let LocalShellAction::Exec(action) = action;
+            tracing::info!("LocalShellCall: {action:?}");
+            let params = ShellToolCallParams {
+                command: action.command,
+                workdir: action.working_directory,
+                timeout_ms: action.timeout_ms,
+            };
+            let effective_call_id = match (call_id, id) {
+                (Some(call_id), _) => call_id,
+                (None, Some(id)) => id,
+                (None, None) => {
+                    error!("LocalShellCall without call_id or id");
+                    return Ok(Some(ResponseInputItem::FunctionCallOutput {
+                        call_id: "".to_string(),
+                        output: FunctionCallOutputPayload {
+                            content: "LocalShellCall without call_id or id".to_string(),
+                            success: None,
+                        },
+                    }));
+                }
+            };
+
+            let exec_params = to_exec_params(params, sess);
+            Some(
+                handle_container_exec_with_params(
+                    exec_params,
+                    sess,
+                    sub_id.to_string(),
+                    effective_call_id,
+                )
+                .await,
+            )
         }
         ResponseItem::FunctionCallOutput { .. } => {
             debug!("unexpected FunctionCallOutput from stream");
+            None
         }
-        ResponseItem::Other => (),
-    }
+        ResponseItem::Other => None,
+    };
     Ok(output)
 }
 
