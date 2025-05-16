@@ -1,3 +1,4 @@
+import type { AppRollout } from "../../app.js";
 import type { ApplyPatchCommand, ApprovalPolicy } from "../../approvals.js";
 import type { CommandConfirmation } from "../../utils/agent/agent-loop.js";
 import type { AppConfig } from "../../utils/config.js";
@@ -5,6 +6,7 @@ import type { ColorName } from "chalk";
 import type { ResponseItem } from "openai/resources/responses/responses.mjs";
 
 import TerminalChatInput from "./terminal-chat-input.js";
+import TerminalChatPastRollout from "./terminal-chat-past-rollout.js";
 import { TerminalChatToolCallCommand } from "./terminal-chat-tool-call-command.js";
 import TerminalMessageHistory from "./terminal-message-history.js";
 import { formatCommandForDisplay } from "../../format-command.js";
@@ -32,7 +34,9 @@ import DiffOverlay from "../diff-overlay.js";
 import HelpOverlay from "../help-overlay.js";
 import HistoryOverlay from "../history-overlay.js";
 import ModelOverlay from "../model-overlay.js";
+import SessionsOverlay from "../sessions-overlay.js";
 import chalk from "chalk";
+import fs from "fs/promises";
 import { Box, Text } from "ink";
 import { spawn } from "node:child_process";
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -41,6 +45,7 @@ import { inspect } from "util";
 export type OverlayModeType =
   | "none"
   | "history"
+  | "sessions"
   | "model"
   | "approval"
   | "help"
@@ -191,6 +196,7 @@ export default function TerminalChat({
     submitConfirmation,
   } = useConfirmation();
   const [overlayMode, setOverlayMode] = useState<OverlayModeType>("none");
+  const [viewRollout, setViewRollout] = useState<AppRollout | null>(null);
 
   // Store the diff text when opening the diff overlay so the view isn’t
   // recomputed on every re‑render while it is open.
@@ -454,6 +460,16 @@ export default function TerminalChat({
     [items, model],
   );
 
+  if (viewRollout) {
+    return (
+      <TerminalChatPastRollout
+        fileOpener={config.fileOpener}
+        session={viewRollout.session}
+        items={viewRollout.items}
+      />
+    );
+  }
+
   return (
     <Box flexDirection="column">
       <Box flexDirection="column">
@@ -509,6 +525,7 @@ export default function TerminalChat({
             openModelOverlay={() => setOverlayMode("model")}
             openApprovalOverlay={() => setOverlayMode("approval")}
             openHelpOverlay={() => setOverlayMode("help")}
+            openSessionsOverlay={() => setOverlayMode("sessions")}
             openDiffOverlay={() => {
               const { isGitRepo, diff } = getGitDiff();
               let text: string;
@@ -567,6 +584,25 @@ export default function TerminalChat({
         )}
         {overlayMode === "history" && (
           <HistoryOverlay items={items} onExit={() => setOverlayMode("none")} />
+        )}
+        {overlayMode === "sessions" && (
+          <SessionsOverlay
+            onView={async (p) => {
+              try {
+                const txt = await fs.readFile(p, "utf-8");
+                const data = JSON.parse(txt) as AppRollout;
+                setViewRollout(data);
+                setOverlayMode("none");
+              } catch {
+                setOverlayMode("none");
+              }
+            }}
+            onResume={(p) => {
+              setOverlayMode("none");
+              setInitialPrompt(`Resume this session: ${p}`);
+            }}
+            onExit={() => setOverlayMode("none")}
+          />
         )}
         {overlayMode === "model" && (
           <ModelOverlay

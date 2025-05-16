@@ -14,6 +14,7 @@ import type { ReasoningEffort } from "openai/resources.mjs";
 
 import App from "./app";
 import { runSinglePass } from "./cli-singlepass";
+import SessionsOverlay from "./components/sessions-overlay.js";
 import { AgentLoop } from "./utils/agent/agent-loop";
 import { ReviewDecision } from "./utils/agent/review";
 import { AutoApprovalMode } from "./utils/auto-approval-mode";
@@ -60,6 +61,7 @@ const cli = meow(
     -p, --provider <provider>       Provider to use for completions (default: openai)
     -i, --image <path>              Path(s) to image files to include as input
     -v, --view <rollout>            Inspect a previously saved rollout instead of starting a session
+    --history                       Browse previous sessions
     -q, --quiet                     Non-interactive mode that only prints the assistant's final output
     -c, --config                    Open the instructions file in your editor
     -w, --writable-root <path>      Writable folder for sandbox in full-auto mode (can be specified multiple times)
@@ -104,6 +106,7 @@ const cli = meow(
       help: { type: "boolean", aliases: ["h"] },
       version: { type: "boolean", description: "Print version and exit" },
       view: { type: "string" },
+      history: { type: "boolean", description: "Browse previous sessions" },
       model: { type: "string", aliases: ["m"] },
       provider: { type: "string", aliases: ["p"] },
       image: { type: "string", isMultiple: true, aliases: ["i"] },
@@ -261,7 +264,10 @@ let config = loadConfig(undefined, undefined, {
   isFullContext: fullContextMode,
 });
 
-const prompt = cli.input[0];
+// `prompt` can be updated later when the user resumes a previous session
+// via the `--history` flag. Therefore it must be declared with `let` rather
+// than `const`.
+let prompt = cli.input[0];
 const model = cli.flags.model ?? config.model;
 const imagePaths = cli.flags.image;
 const provider = cli.flags.provider ?? config.provider ?? "openai";
@@ -354,6 +360,46 @@ if (
 }
 
 let rollout: AppRollout | undefined;
+
+// For --history, show session selector and optionally update prompt or rollout.
+if (cli.flags.history) {
+  const result: { path: string; mode: "view" | "resume" } | null =
+    await new Promise((resolve) => {
+      const instance = render(
+        React.createElement(SessionsOverlay, {
+          onView: (p: string) => {
+            instance.unmount();
+            resolve({ path: p, mode: "view" });
+          },
+          onResume: (p: string) => {
+            instance.unmount();
+            resolve({ path: p, mode: "resume" });
+          },
+          onExit: () => {
+            instance.unmount();
+            resolve(null);
+          },
+        }),
+      );
+    });
+
+  if (!result) {
+    process.exit(0);
+  }
+
+  if (result.mode === "view") {
+    try {
+      const content = fs.readFileSync(result.path, "utf-8");
+      rollout = JSON.parse(content) as AppRollout;
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error("Error reading session file:", error);
+      process.exit(1);
+    }
+  } else {
+    prompt = `Resume this session: ${result.path}`;
+  }
+}
 
 // For --view, optionally load an existing rollout from disk, display it and exit.
 if (cli.flags.view) {
