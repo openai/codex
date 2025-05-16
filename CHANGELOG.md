@@ -2,6 +2,13 @@
 
 You can install any of these versions: `npm install -g codex@version`
 
+## `0.1.2505161243`
+
+- Sign in with chatgpt (#963)
+- Session history viewer (#912)
+- Apply patch issue when using different cwd (#942)
+- Diff command for filenames with special characters (#954)
+
 ## `0.1.2505160811`
 
 - `codex-mini-latest` (#951)
