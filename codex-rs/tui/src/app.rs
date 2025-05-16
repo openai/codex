@@ -3,6 +3,7 @@ use crate::app_event_sender::AppEventSender;
 use crate::chatwidget::ChatWidget;
 use crate::git_warning_screen::GitWarningOutcome;
 use crate::git_warning_screen::GitWarningScreen;
+use crate::mouse_capture::MouseCapture;
 use crate::scroll_event_helper::ScrollEventHelper;
 use crate::slash_command::SlashCommand;
 use crate::tui;
@@ -122,7 +123,11 @@ impl App<'_> {
         self.app_event_tx.clone()
     }
 
-    pub(crate) fn run(&mut self, terminal: &mut tui::Tui) -> Result<()> {
+    pub(crate) fn run(
+        &mut self,
+        terminal: &mut tui::Tui,
+        mouse_capture: &mut MouseCapture,
+    ) -> Result<()> {
         // Insert an event to trigger the first render.
         let app_event_tx = self.app_event_tx.clone();
         app_event_tx.send(AppEvent::Redraw);
@@ -175,6 +180,11 @@ impl App<'_> {
                 AppEvent::DispatchCommand(command) => match command {
                     SlashCommand::Clear => {
                         self.chat_widget.clear_conversation_history();
+                    }
+                    SlashCommand::ToggleMouseMode => {
+                        if let Err(e) = mouse_capture.toggle() {
+                            tracing::error!("Failed to toggle mouse mode: {e}");
+                        }
                     }
                     SlashCommand::Quit => {
                         break;

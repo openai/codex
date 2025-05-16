@@ -88,6 +88,9 @@ pub struct Config {
     /// Optional URI-based file opener. If set, citations to files in the model
     /// output will be hyperlinked using the specified URI scheme.
     pub file_opener: UriBasedFileOpener,
+
+    /// Collection of settings that are specific to the TUI.
+    pub tui: Tui,
 }
 
 /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
@@ -109,6 +112,23 @@ pub enum HistoryPersistence {
     SaveAll,
     /// Do not write history to disk.
     None,
+}
+
+/// Collection of settings that are specific to the TUI.
+#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct Tui {
+    /// By default, mouse capture is enabled in the TUI so that it is possible
+    /// to scroll the conversation history with a mouse. This comes at the cost
+    /// of not being able to use the mouse to select text in the TUI.
+    /// (Most terminals support a modifier key to allow this. For example,
+    /// text selection works in iTerm if you hold down the `Option` key while
+    /// clicking and dragging.)
+    ///
+    /// Setting this option to `true` disables mouse capture, so scrolling with
+    /// the mouse is not possible, though the keyboard shortcuts e.g. `b` and
+    /// `space` still work. This allows the user to select text in the TUI
+    /// using the mouse without needing to hold down a modifier key.
+    pub disable_mouse_capture: bool,
 }
 
 #[derive(Deserialize, Debug, Copy, Clone, PartialEq)]
@@ -197,6 +217,9 @@ pub struct ConfigToml {
     /// Optional URI-based file opener. If set, citations to files in the model
     /// output will be hyperlinked using the specified URI scheme.
     pub file_opener: Option<UriBasedFileOpener>,
+
+    /// Collection of settings that are specific to the TUI.
+    pub tui: Option<Tui>,
 }
 
 impl ConfigToml {
@@ -391,6 +414,7 @@ impl Config {
             codex_home,
             history,
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
+            tui: cfg.tui.unwrap_or_default(),
         };
         Ok(config)
     }
@@ -727,6 +751,7 @@ disable_response_storage = true
                 codex_home: fixture.codex_home(),
                 history: History::default(),
                 file_opener: UriBasedFileOpener::VsCode,
+                tui: Tui::default(),
             },
             o3_profile_config
         );
@@ -763,6 +788,7 @@ disable_response_storage = true
             codex_home: fixture.codex_home(),
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
+            tui: Tui::default(),
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -814,6 +840,7 @@ disable_response_storage = true
             codex_home: fixture.codex_home(),
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
+            tui: Tui::default(),
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);
