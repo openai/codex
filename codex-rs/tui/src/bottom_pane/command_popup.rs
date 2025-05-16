@@ -17,6 +17,8 @@ use crate::slash_command::SlashCommand;
 use crate::slash_command::built_in_slash_commands;
 
 const MAX_POPUP_ROWS: usize = 5;
+/// Ideally this is enough to show the longest command name.
+const FIRST_COLUMN_WIDTH: u16 = 20;
 
 use ratatui::style::Modifier;
 
@@ -176,15 +178,18 @@ impl WidgetRef for CommandPopup {
 
         use ratatui::layout::Constraint;
 
-        let table = Table::new(rows, [Constraint::Length(15), Constraint::Min(10)])
-            .style(style)
-            .column_spacing(1)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded)
-                    .style(style),
-            );
+        let table = Table::new(
+            rows,
+            [Constraint::Length(FIRST_COLUMN_WIDTH), Constraint::Min(10)],
+        )
+        .style(style)
+        .column_spacing(1)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .style(style),
+        );
 
         table.render(area, buf);
     }
