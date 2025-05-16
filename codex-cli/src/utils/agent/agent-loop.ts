@@ -1172,7 +1172,11 @@ export class AgentLoop {
               let reasoning: Reasoning | undefined;
               if (this.model.startsWith("o")) {
                 reasoning = { effort: "high" };
-                if (this.model === "o3" || this.model === "o4-mini") {
+                if (
+                  this.model === "o3" ||
+                  this.model === "o4-mini" ||
+                  this.model === "codex-mini-latest"
+                ) {
                   reasoning.summary = "auto";
                 }
               }
