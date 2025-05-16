@@ -503,7 +503,6 @@ dependencies = [
 name = "codex-common"
 version = "0.0.0"
 dependencies = [
- "chrono",
  "clap",
  "codex-core",
 ]
