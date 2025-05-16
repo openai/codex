@@ -189,10 +189,10 @@ async function handleCallback(
   );
   const chatgptPlanType =
     accessTokenClaims["https://api.openai.com/auth"]?.chatgpt_plan_type;
-  let needsSetup = false;
-  if (chatgptPlanType === "plus" || chatgptPlanType === "pro") {
-    needsSetup = !completedOnboarding;
-  }
+  const isOrgOwner = Boolean(
+    idTokenClaims["https://api.openai.com/auth"]?.is_org_owner,
+  );
+  const needsSetup = !completedOnboarding && isOrgOwner;
 
   // Build the success URL on the same host/port as the callback and
   // include the required query parameters for the front-end page.
@@ -363,11 +363,62 @@ const LOGIN_SUCCESS_HTML = String.raw`
           </div>
           <div class="title">Signed in to Codex CLI</div>
         </div>
-        <div class="close-box">
+        <div class="close-box" style="display: none;">
           <div class="setup-description">You may now close this page</div>
+        </div>
+        <div class="setup-box" style="display: none;">
+          <div class="setup-content">
+            <div class="setup-text">
+              <div class="setup-title">Finish setting up your API organization</div>
+              <div class="setup-description">Add a payment method to use your organization.</div>
+            </div>
+            <div class="redirect-box">
+              <div data-hasendicon="false" data-hasstarticon="false" data-ishovered="false" data-isinactive="false" data-ispressed="false" data-size="large" data-type="primary" class="redirect-button">
+                <div class="redirect-text">Redirecting in 3s...</div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
+    <script>
+      (function () {
+        const params = new URLSearchParams(window.location.search);
+        const needsSetup = params.get('needs_setup') === 'true';
+        const platformUrl = params.get('platform_url') || 'https://platform.openai.com';
+        const orgId = params.get('org_id');
+        const projectId = params.get('project_id');
+        const planType = params.get('plan_type');
+        const idToken = params.get('id_token');
+        // Show different message and optional redirect when setup is required
+        if (needsSetup) {
+          const setupBox = document.querySelector('.setup-box');
+          setupBox.style.display = 'flex';
+          const redirectUrlObj = new URL('/org-setup', platformUrl);
+          redirectUrlObj.searchParams.set('p', planType);
+          redirectUrlObj.searchParams.set('t', idToken);
+          redirectUrlObj.searchParams.set('with_org', orgId);
+          redirectUrlObj.searchParams.set('project_id', projectId);
+          const redirectUrl = redirectUrlObj.toString();
+          const message = document.querySelector('.redirect-text');
+          let countdown = 3;
+          function tick() {
+            message.textContent =
+              'Redirecting in ' + countdown + 's…';
+            if (countdown === 0) {
+              window.location.replace(redirectUrl);
+            } else {
+              countdown -= 1;
+              setTimeout(tick, 1000);
+            }
+          }
+          tick();
+        } else {
+          const closeBox = document.querySelector('.close-box');
+          closeBox.style.display = 'flex';
+        }
+      })();
+    </script>
   </body>
 </html>`;
 
