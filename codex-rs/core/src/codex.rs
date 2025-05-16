@@ -40,6 +40,7 @@ use crate::config::Config;
 use crate::conversation_history::ConversationHistory;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
+use crate::error::SandboxErr;
 use crate::exec::ExecParams;
 use crate::exec::ExecToolCallOutput;
 use crate::exec::SandboxType;
@@ -1042,265 +1043,13 @@ async fn handle_function_call(
 ) -> ResponseInputItem {
     match name.as_str() {
         "container.exec" | "shell" => {
-            // parse command
-            let params: ExecParams = match serde_json::from_str::<ShellToolCallParams>(&arguments) {
-                Ok(shell_tool_call_params) => ExecParams {
-                    command: shell_tool_call_params.command,
-                    cwd: sess.resolve_path(shell_tool_call_params.workdir.clone()),
-                    timeout_ms: shell_tool_call_params.timeout_ms,
-                },
-                Err(e) => {
-                    // allow model to re-sample
-                    let output = ResponseInputItem::FunctionCallOutput {
-                        call_id,
-                        output: crate::models::FunctionCallOutputPayload {
-                            content: format!("failed to parse function arguments: {e}"),
-                            success: None,
-                        },
-                    };
+            let params = match parse_container_exec_arguments(arguments, sess, &call_id) {
+                Ok(params) => params,
+                Err(output) => {
                     return output;
                 }
             };
-
-            // check if this was a patch, and apply it if so
-            match maybe_parse_apply_patch_verified(&params.command, &params.cwd) {
-                MaybeApplyPatchVerified::Body(changes) => {
-                    return apply_patch(sess, sub_id, call_id, changes).await;
-                }
-                MaybeApplyPatchVerified::CorrectnessError(parse_error) => {
-                    // It looks like an invocation of `apply_patch`, but we
-                    // could not resolve it into a patch that would apply
-                    // cleanly. Return to model for resample.
-                    return ResponseInputItem::FunctionCallOutput {
-                        call_id,
-                        output: FunctionCallOutputPayload {
-                            content: format!("error: {parse_error:#}"),
-                            success: None,
-                        },
-                    };
-                }
-                MaybeApplyPatchVerified::ShellParseError(error) => {
-                    trace!("Failed to parse shell command, {error:?}");
-                }
-                MaybeApplyPatchVerified::NotApplyPatch => (),
-            }
-
-            // safety checks
-            let safety = {
-                let state = sess.state.lock().unwrap();
-                assess_command_safety(
-                    &params.command,
-                    sess.approval_policy,
-                    &sess.sandbox_policy,
-                    &state.approved_commands,
-                )
-            };
-            let sandbox_type = match safety {
-                SafetyCheck::AutoApprove { sandbox_type } => sandbox_type,
-                SafetyCheck::AskUser => {
-                    let rx_approve = sess
-                        .request_command_approval(
-                            sub_id.clone(),
-                            params.command.clone(),
-                            params.cwd.clone(),
-                            None,
-                        )
-                        .await;
-                    match rx_approve.await.unwrap_or_default() {
-                        ReviewDecision::Approved => (),
-                        ReviewDecision::ApprovedForSession => {
-                            sess.add_approved_command(params.command.clone());
-                        }
-                        ReviewDecision::Denied | ReviewDecision::Abort => {
-                            return ResponseInputItem::FunctionCallOutput {
-                                call_id,
-                                output: crate::models::FunctionCallOutputPayload {
-                                    content: "exec command rejected by user".to_string(),
-                                    success: None,
-                                },
-                            };
-                        }
-                    }
-                    // No sandboxing is applied because the user has given
-                    // explicit approval. Often, we end up in this case because
-                    // the command cannot be run in a sandbox, such as
-                    // installing a new dependency that requires network access.
-                    SandboxType::None
-                }
-                SafetyCheck::Reject { reason } => {
-                    return ResponseInputItem::FunctionCallOutput {
-                        call_id,
-                        output: crate::models::FunctionCallOutputPayload {
-                            content: format!("exec command rejected: {reason}"),
-                            success: None,
-                        },
-                    };
-                }
-            };
-
-            sess.notify_exec_command_begin(&sub_id, &call_id, &params)
-                .await;
-
-            let output_result = process_exec_tool_call(
-                params.clone(),
-                sandbox_type,
-                sess.ctrl_c.clone(),
-                &sess.sandbox_policy,
-            )
-            .await;
-
-            match output_result {
-                Ok(output) => {
-                    let ExecToolCallOutput {
-                        exit_code,
-                        stdout,
-                        stderr,
-                        duration,
-                    } = output;
-
-                    sess.notify_exec_command_end(&sub_id, &call_id, &stdout, &stderr, exit_code)
-                        .await;
-
-                    let is_success = exit_code == 0;
-                    let content = format_exec_output(
-                        if is_success { &stdout } else { &stderr },
-                        exit_code,
-                        duration,
-                    );
-
-                    ResponseInputItem::FunctionCallOutput {
-                        call_id,
-                        output: FunctionCallOutputPayload {
-                            content,
-                            success: Some(is_success),
-                        },
-                    }
-                }
-                Err(CodexErr::Sandbox(e)) => {
-                    // Early out if the user never wants to be asked for approval; just return to the model immediately
-                    if sess.approval_policy == AskForApproval::Never {
-                        return ResponseInputItem::FunctionCallOutput {
-                            call_id,
-                            output: FunctionCallOutputPayload {
-                                content: format!(
-                                    "failed in sandbox {:?} with execution error: {e}",
-                                    sandbox_type
-                                ),
-                                success: Some(false),
-                            },
-                        };
-                    }
-
-                    // Ask the user to retry without sandbox
-                    sess.notify_background_event(&sub_id, format!("Execution failed: {e}"))
-                        .await;
-
-                    let rx_approve = sess
-                        .request_command_approval(
-                            sub_id.clone(),
-                            params.command.clone(),
-                            params.cwd.clone(),
-                            Some("command failed; retry without sandbox?".to_string()),
-                        )
-                        .await;
-
-                    match rx_approve.await.unwrap_or_default() {
-                        ReviewDecision::Approved | ReviewDecision::ApprovedForSession => {
-                            // Persist this command as pre‑approved for the
-                            // remainder of the session so future
-                            // executions skip the sandbox directly.
-                            // TODO(ragona): Isn't this a bug? It always saves the command in an | fork?
-                            sess.add_approved_command(params.command.clone());
-                            // Inform UI we are retrying without sandbox.
-                            sess.notify_background_event(
-                                &sub_id,
-                                "retrying command without sandbox",
-                            )
-                            .await;
-
-                            // Emit a fresh Begin event so progress bars reset.
-                            let retry_call_id = format!("{call_id}-retry");
-                            sess.notify_exec_command_begin(&sub_id, &retry_call_id, &params)
-                                .await;
-
-                            // This is an escalated retry; the policy will not be
-                            // examined and the sandbox has been set to `None`.
-                            let retry_output_result = process_exec_tool_call(
-                                params,
-                                SandboxType::None,
-                                sess.ctrl_c.clone(),
-                                &sess.sandbox_policy,
-                            )
-                            .await;
-
-                            match retry_output_result {
-                                Ok(retry_output) => {
-                                    let ExecToolCallOutput {
-                                        exit_code,
-                                        stdout,
-                                        stderr,
-                                        duration,
-                                    } = retry_output;
-
-                                    sess.notify_exec_command_end(
-                                        &sub_id,
-                                        &retry_call_id,
-                                        &stdout,
-                                        &stderr,
-                                        exit_code,
-                                    )
-                                    .await;
-
-                                    let is_success = exit_code == 0;
-                                    let content = format_exec_output(
-                                        if is_success { &stdout } else { &stderr },
-                                        exit_code,
-                                        duration,
-                                    );
-
-                                    ResponseInputItem::FunctionCallOutput {
-                                        call_id,
-                                        output: FunctionCallOutputPayload {
-                                            content,
-                                            success: Some(is_success),
-                                        },
-                                    }
-                                }
-                                Err(e) => {
-                                    // Handle retry failure
-                                    ResponseInputItem::FunctionCallOutput {
-                                        call_id,
-                                        output: FunctionCallOutputPayload {
-                                            content: format!("retry failed: {e}"),
-                                            success: None,
-                                        },
-                                    }
-                                }
-                            }
-                        }
-                        ReviewDecision::Denied | ReviewDecision::Abort => {
-                            // Fall through to original failure handling.
-                            ResponseInputItem::FunctionCallOutput {
-                                call_id,
-                                output: FunctionCallOutputPayload {
-                                    content: "exec command rejected by user".to_string(),
-                                    success: None,
-                                },
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    // Handle non-sandbox errors
-                    ResponseInputItem::FunctionCallOutput {
-                        call_id,
-                        output: FunctionCallOutputPayload {
-                            content: format!("execution error: {e}"),
-                            success: None,
-                        },
-                    }
-                }
-            }
+            handle_container_exec_with_params(params, sess, sub_id, call_id).await
         }
         _ => {
             match try_parse_fully_qualified_tool_name(&name) {
@@ -1322,6 +1071,291 @@ async fn handle_function_call(
                         },
                     }
                 }
+            }
+        }
+    }
+}
+
+fn to_exec_params(params: ShellToolCallParams, sess: &Session) -> ExecParams {
+    ExecParams {
+        command: params.command,
+        cwd: sess.resolve_path(params.workdir.clone()),
+        timeout_ms: params.timeout_ms,
+    }
+}
+
+fn parse_container_exec_arguments(
+    arguments: String,
+    sess: &Session,
+    call_id: &str,
+) -> Result<ExecParams, ResponseInputItem> {
+    // parse command
+    match serde_json::from_str::<ShellToolCallParams>(&arguments) {
+        Ok(shell_tool_call_params) => Ok(to_exec_params(shell_tool_call_params, sess)),
+        Err(e) => {
+            // allow model to re-sample
+            let output = ResponseInputItem::FunctionCallOutput {
+                call_id: call_id.to_string(),
+                output: crate::models::FunctionCallOutputPayload {
+                    content: format!("failed to parse function arguments: {e}"),
+                    success: None,
+                },
+            };
+            Err(output)
+        }
+    }
+}
+
+async fn handle_container_exec_with_params(
+    params: ExecParams,
+    sess: &Session,
+    sub_id: String,
+    call_id: String,
+) -> ResponseInputItem {
+    // check if this was a patch, and apply it if so
+    match maybe_parse_apply_patch_verified(&params.command, &params.cwd) {
+        MaybeApplyPatchVerified::Body(changes) => {
+            return apply_patch(sess, sub_id, call_id, changes).await;
+        }
+        MaybeApplyPatchVerified::CorrectnessError(parse_error) => {
+            // It looks like an invocation of `apply_patch`, but we
+            // could not resolve it into a patch that would apply
+            // cleanly. Return to model for resample.
+            return ResponseInputItem::FunctionCallOutput {
+                call_id,
+                output: FunctionCallOutputPayload {
+                    content: format!("error: {parse_error:#}"),
+                    success: None,
+                },
+            };
+        }
+        MaybeApplyPatchVerified::ShellParseError(error) => {
+            trace!("Failed to parse shell command, {error:?}");
+        }
+        MaybeApplyPatchVerified::NotApplyPatch => (),
+    }
+
+    // safety checks
+    let safety = {
+        let state = sess.state.lock().unwrap();
+        assess_command_safety(
+            &params.command,
+            sess.approval_policy,
+            &sess.sandbox_policy,
+            &state.approved_commands,
+        )
+    };
+    let sandbox_type = match safety {
+        SafetyCheck::AutoApprove { sandbox_type } => sandbox_type,
+        SafetyCheck::AskUser => {
+            let rx_approve = sess
+                .request_command_approval(
+                    sub_id.clone(),
+                    params.command.clone(),
+                    params.cwd.clone(),
+                    None,
+                )
+                .await;
+            match rx_approve.await.unwrap_or_default() {
+                ReviewDecision::Approved => (),
+                ReviewDecision::ApprovedForSession => {
+                    sess.add_approved_command(params.command.clone());
+                }
+                ReviewDecision::Denied | ReviewDecision::Abort => {
+                    return ResponseInputItem::FunctionCallOutput {
+                        call_id,
+                        output: crate::models::FunctionCallOutputPayload {
+                            content: "exec command rejected by user".to_string(),
+                            success: None,
+                        },
+                    };
+                }
+            }
+            // No sandboxing is applied because the user has given
+            // explicit approval. Often, we end up in this case because
+            // the command cannot be run in a sandbox, such as
+            // installing a new dependency that requires network access.
+            SandboxType::None
+        }
+        SafetyCheck::Reject { reason } => {
+            return ResponseInputItem::FunctionCallOutput {
+                call_id,
+                output: crate::models::FunctionCallOutputPayload {
+                    content: format!("exec command rejected: {reason}"),
+                    success: None,
+                },
+            };
+        }
+    };
+
+    sess.notify_exec_command_begin(&sub_id, &call_id, &params)
+        .await;
+
+    let output_result = process_exec_tool_call(
+        params.clone(),
+        sandbox_type,
+        sess.ctrl_c.clone(),
+        &sess.sandbox_policy,
+    )
+    .await;
+
+    match output_result {
+        Ok(output) => {
+            let ExecToolCallOutput {
+                exit_code,
+                stdout,
+                stderr,
+                duration,
+            } = output;
+
+            sess.notify_exec_command_end(&sub_id, &call_id, &stdout, &stderr, exit_code)
+                .await;
+
+            let is_success = exit_code == 0;
+            let content = format_exec_output(
+                if is_success { &stdout } else { &stderr },
+                exit_code,
+                duration,
+            );
+
+            ResponseInputItem::FunctionCallOutput {
+                call_id,
+                output: FunctionCallOutputPayload {
+                    content,
+                    success: Some(is_success),
+                },
+            }
+        }
+        Err(CodexErr::Sandbox(error)) => {
+            handle_sanbox_error(error, sandbox_type, params, sess, sub_id, call_id).await
+        }
+        Err(e) => {
+            // Handle non-sandbox errors
+            ResponseInputItem::FunctionCallOutput {
+                call_id,
+                output: FunctionCallOutputPayload {
+                    content: format!("execution error: {e}"),
+                    success: None,
+                },
+            }
+        }
+    }
+}
+
+async fn handle_sanbox_error(
+    error: SandboxErr,
+    sandbox_type: SandboxType,
+    params: ExecParams,
+    sess: &Session,
+    sub_id: String,
+    call_id: String,
+) -> ResponseInputItem {
+    // Early out if the user never wants to be asked for approval; just return to the model immediately
+    if sess.approval_policy == AskForApproval::Never {
+        return ResponseInputItem::FunctionCallOutput {
+            call_id,
+            output: FunctionCallOutputPayload {
+                content: format!(
+                    "failed in sandbox {:?} with execution error: {error}",
+                    sandbox_type
+                ),
+                success: Some(false),
+            },
+        };
+    }
+
+    // Ask the user to retry without sandbox
+    sess.notify_background_event(&sub_id, format!("Execution failed: {error}"))
+        .await;
+
+    let rx_approve = sess
+        .request_command_approval(
+            sub_id.clone(),
+            params.command.clone(),
+            params.cwd.clone(),
+            Some("command failed; retry without sandbox?".to_string()),
+        )
+        .await;
+
+    match rx_approve.await.unwrap_or_default() {
+        ReviewDecision::Approved | ReviewDecision::ApprovedForSession => {
+            // Persist this command as pre‑approved for the
+            // remainder of the session so future
+            // executions skip the sandbox directly.
+            // TODO(ragona): Isn't this a bug? It always saves the command in an | fork?
+            sess.add_approved_command(params.command.clone());
+            // Inform UI we are retrying without sandbox.
+            sess.notify_background_event(&sub_id, "retrying command without sandbox")
+                .await;
+
+            // Emit a fresh Begin event so progress bars reset.
+            let retry_call_id = format!("{call_id}-retry");
+            sess.notify_exec_command_begin(&sub_id, &retry_call_id, &params)
+                .await;
+
+            // This is an escalated retry; the policy will not be
+            // examined and the sandbox has been set to `None`.
+            let retry_output_result = process_exec_tool_call(
+                params,
+                SandboxType::None,
+                sess.ctrl_c.clone(),
+                &sess.sandbox_policy,
+            )
+            .await;
+
+            match retry_output_result {
+                Ok(retry_output) => {
+                    let ExecToolCallOutput {
+                        exit_code,
+                        stdout,
+                        stderr,
+                        duration,
+                    } = retry_output;
+
+                    sess.notify_exec_command_end(
+                        &sub_id,
+                        &retry_call_id,
+                        &stdout,
+                        &stderr,
+                        exit_code,
+                    )
+                    .await;
+
+                    let is_success = exit_code == 0;
+                    let content = format_exec_output(
+                        if is_success { &stdout } else { &stderr },
+                        exit_code,
+                        duration,
+                    );
+
+                    ResponseInputItem::FunctionCallOutput {
+                        call_id,
+                        output: FunctionCallOutputPayload {
+                            content,
+                            success: Some(is_success),
+                        },
+                    }
+                }
+                Err(e) => {
+                    // Handle retry failure
+                    ResponseInputItem::FunctionCallOutput {
+                        call_id,
+                        output: FunctionCallOutputPayload {
+                            content: format!("retry failed: {e}"),
+                            success: None,
+                        },
+                    }
+                }
+            }
+        }
+        ReviewDecision::Denied | ReviewDecision::Abort => {
+            // Fall through to original failure handling.
+            ResponseInputItem::FunctionCallOutput {
+                call_id,
+                output: FunctionCallOutputPayload {
+                    content: "exec command rejected by user".to_string(),
+                    success: None,
+                },
             }
         }
     }
