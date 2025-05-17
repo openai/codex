@@ -156,14 +156,18 @@ async function maybeRedeemCredits(
     ) {
       // eslint-disable-next-line no-console
       console.warn(
-        "Sorry, your subscription must be active for more than 7 days to redeem credits.\nMore info: https://help.openai.com/en/articles/11381614\nPlease try again on: " +
-          new Date(
-            new Date(subStart).getTime() + 7 * 24 * 60 * 60 * 1000,
-          ).toLocaleDateString() +
-          " " +
-          new Date(
-            new Date(subStart).getTime() + 7 * 24 * 60 * 60 * 1000,
-          ).toLocaleTimeString(),
+        "Sorry, your subscription must be active for more than 7 days to redeem credits.\nMore info: " +
+          chalk.dim("https://help.openai.com/en/articles/11381614") +
+          chalk.bold(
+            "\nPlease try again on " +
+              new Date(
+                new Date(subStart).getTime() + 7 * 24 * 60 * 60 * 1000,
+              ).toLocaleDateString() +
+              " " +
+              new Date(
+                new Date(subStart).getTime() + 7 * 24 * 60 * 60 * 1000,
+              ).toLocaleTimeString(),
+          ),
       );
       return;
     }
@@ -180,6 +184,11 @@ async function maybeRedeemCredits(
       ?.chatgpt_plan_type as string | undefined;
 
     if (needsSetup || !(planType === "plus" || planType === "pro")) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        "Users with Plus or Pro subscriptions can redeem free API credits.\nMore info: " +
+          chalk.dim("https://help.openai.com/en/articles/11381614"),
+      );
       return;
     }
 
@@ -716,10 +725,12 @@ export async function getApiKey(
   const spinner = render(<WaitingForAuth />);
   try {
     const key = await signInFlow(issuer, clientId);
+    spinner.clear();
     spinner.unmount();
     process.env["OPENAI_API_KEY"] = key;
     return key;
   } catch (err) {
+    spinner.clear();
     spinner.unmount();
     throw err;
   }
