@@ -5,9 +5,12 @@ use std::time::Duration;
 
 use codex_core::Codex;
 use codex_core::ModelProviderInfo;
-use codex_core::config::Config;
+use codex_core::exec::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
+mod test_support;
+use tempfile::TempDir;
+use test_support::load_default_config_for_test;
 use tokio::time::timeout;
 use wiremock::Mock;
 use wiremock::MockServer;
@@ -33,6 +36,13 @@ data: {{\"type\":\"response.completed\",\"response\":{{\"id\":\"{}\",\"output\":
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn retries_on_early_close() {
     #![allow(clippy::unwrap_used)]
+
+    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+        println!(
+            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+        );
+        return;
+    }
 
     let server = MockServer::start().await;
 
@@ -88,7 +98,8 @@ async fn retries_on_early_close() {
     };
 
     let ctrl_c = std::sync::Arc::new(tokio::sync::Notify::new());
-    let mut config = Config::load_default_config_for_test();
+    let codex_home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&codex_home);
     config.model_provider = model_provider;
     let (codex, _init_id) = Codex::spawn(config, ctrl_c).await.unwrap();
 

@@ -33,6 +33,9 @@ enum Subcommand {
     #[clap(visible_alias = "e")]
     Exec(ExecCli),
 
+    /// Experimental: run Codex as an MCP server.
+    Mcp,
+
     /// Run the Protocol stream via stdin/stdout
     #[clap(visible_alias = "p")]
     Proto(ProtoCli),
@@ -70,6 +73,9 @@ async fn main() -> anyhow::Result<()> {
         Some(Subcommand::Exec(exec_cli)) => {
             codex_exec::run_main(exec_cli).await?;
         }
+        Some(Subcommand::Mcp) => {
+            codex_mcp_server::run_main().await?;
+        }
         Some(Subcommand::Proto(proto_cli)) => {
             proto::run_main(proto_cli).await?;
         }
@@ -82,7 +88,7 @@ async fn main() -> anyhow::Result<()> {
                 let sandbox_policy = create_sandbox_policy(full_auto, sandbox);
                 seatbelt::run_seatbelt(command, sandbox_policy).await?;
             }
-            #[cfg(target_os = "linux")]
+            #[cfg(unix)]
             DebugCommand::Landlock(LandlockCommand {
                 command,
                 sandbox,
@@ -91,7 +97,7 @@ async fn main() -> anyhow::Result<()> {
                 let sandbox_policy = create_sandbox_policy(full_auto, sandbox);
                 codex_cli::landlock::run_landlock(command, sandbox_policy)?;
             }
-            #[cfg(not(target_os = "linux"))]
+            #[cfg(not(unix))]
             DebugCommand::Landlock(_) => {
                 anyhow::bail!("Landlock is only supported on Linux.");
             }

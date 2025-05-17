@@ -13,6 +13,8 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use codex_mcp_client::McpClient;
+use mcp_types::ClientCapabilities;
+use mcp_types::Implementation;
 use mcp_types::Tool;
 use tokio::task::JoinSet;
 use tracing::info;
@@ -83,7 +85,33 @@ impl McpConnectionManager {
             join_set.spawn(async move {
                 let McpServerConfig { command, args, env } = cfg;
                 let client_res = McpClient::new_stdio_client(command, args, env).await;
-                (server_name, client_res)
+                match client_res {
+                    Ok(client) => {
+                        // Initialize the client.
+                        let params = mcp_types::InitializeRequestParams {
+                            capabilities: ClientCapabilities {
+                                experimental: None,
+                                roots: None,
+                                sampling: None,
+                            },
+                            client_info: Implementation {
+                                name: "codex-mcp-client".to_owned(),
+                                version: env!("CARGO_PKG_VERSION").to_owned(),
+                            },
+                            protocol_version: mcp_types::MCP_SCHEMA_VERSION.to_owned(),
+                        };
+                        let initialize_notification_params = None;
+                        let timeout = Some(Duration::from_secs(10));
+                        match client
+                            .initialize(params, initialize_notification_params, timeout)
+                            .await
+                        {
+                            Ok(_response) => (server_name, Ok(client)),
+                            Err(e) => (server_name, Err(e)),
+                        }
+                    }
+                    Err(e) => (server_name, Err(e.into())),
+                }
             });
         }
 
@@ -99,7 +127,7 @@ impl McpConnectionManager {
                     clients.insert(server_name, std::sync::Arc::new(client));
                 }
                 Err(e) => {
-                    errors.insert(server_name, e.into());
+                    errors.insert(server_name, e);
                 }
             }
         }

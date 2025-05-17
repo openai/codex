@@ -1,18 +1,19 @@
-use chrono::Utc;
+use std::time::Duration;
+use std::time::Instant;
 
 /// Returns a string representing the elapsed time since `start_time` like
 /// "1m15s" or "1.50s".
-pub fn format_elapsed(start_time: chrono::DateTime<Utc>) -> String {
-    let elapsed = Utc::now().signed_duration_since(start_time);
-    format_time_delta(elapsed)
+pub fn format_elapsed(start_time: Instant) -> String {
+    format_duration(start_time.elapsed())
 }
 
-fn format_time_delta(elapsed: chrono::TimeDelta) -> String {
-    let millis = elapsed.num_milliseconds();
-    format_elapsed_millis(millis)
-}
-
-pub fn format_duration(duration: std::time::Duration) -> String {
+/// Convert a [`std::time::Duration`] into a human-readable, compact string.
+///
+/// Formatting rules:
+/// * < 1 s  ->  "{milli}ms"
+/// * < 60 s ->  "{sec:.2}s" (two decimal places)
+/// * >= 60 s ->  "{min}m{sec:02}s"
+pub fn format_duration(duration: Duration) -> String {
     let millis = duration.as_millis() as i64;
     format_elapsed_millis(millis)
 }
@@ -32,41 +33,40 @@ fn format_elapsed_millis(millis: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Duration;
 
     #[test]
-    fn test_format_time_delta_subsecond() {
+    fn test_format_duration_subsecond() {
         // Durations < 1s should be rendered in milliseconds with no decimals.
-        let dur = Duration::milliseconds(250);
-        assert_eq!(format_time_delta(dur), "250ms");
+        let dur = Duration::from_millis(250);
+        assert_eq!(format_duration(dur), "250ms");
 
         // Exactly zero should still work.
-        let dur_zero = Duration::milliseconds(0);
-        assert_eq!(format_time_delta(dur_zero), "0ms");
+        let dur_zero = Duration::from_millis(0);
+        assert_eq!(format_duration(dur_zero), "0ms");
     }
 
     #[test]
-    fn test_format_time_delta_seconds() {
+    fn test_format_duration_seconds() {
         // Durations between 1s (inclusive) and 60s (exclusive) should be
         // printed with 2-decimal-place seconds.
-        let dur = Duration::milliseconds(1_500); // 1.5s
-        assert_eq!(format_time_delta(dur), "1.50s");
+        let dur = Duration::from_millis(1_500); // 1.5s
+        assert_eq!(format_duration(dur), "1.50s");
 
         // 59.999s rounds to 60.00s
-        let dur2 = Duration::milliseconds(59_999);
-        assert_eq!(format_time_delta(dur2), "60.00s");
+        let dur2 = Duration::from_millis(59_999);
+        assert_eq!(format_duration(dur2), "60.00s");
     }
 
     #[test]
-    fn test_format_time_delta_minutes() {
+    fn test_format_duration_minutes() {
         // Durations ≥ 1 minute should be printed mmss.
-        let dur = Duration::milliseconds(75_000); // 1m15s
-        assert_eq!(format_time_delta(dur), "1m15s");
+        let dur = Duration::from_millis(75_000); // 1m15s
+        assert_eq!(format_duration(dur), "1m15s");
 
-        let dur_exact = Duration::milliseconds(60_000); // 1m0s
-        assert_eq!(format_time_delta(dur_exact), "1m00s");
+        let dur_exact = Duration::from_millis(60_000); // 1m0s
+        assert_eq!(format_duration(dur_exact), "1m00s");
 
-        let dur_long = Duration::milliseconds(3_601_000);
-        assert_eq!(format_time_delta(dur_long), "60m01s");
+        let dur_long = Duration::from_millis(3_601_000);
+        assert_eq!(format_duration(dur_long), "60m01s");
     }
 }

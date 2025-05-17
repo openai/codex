@@ -9,11 +9,13 @@ import { execWithLandlock } from "./sandbox/landlock.js";
 import { execWithSeatbelt } from "./sandbox/macos-seatbelt.js";
 import { exec as rawExec } from "./sandbox/raw-exec.js";
 import { formatCommandForDisplay } from "../../format-command.js";
+import { log } from "../logger/log.js";
 import fs from "fs";
 import os from "os";
 import path from "path";
 import { parse } from "shell-quote";
 import { resolvePathAgainstWorkdir } from "src/approvals.js";
+import { PATCH_SUFFIX } from "src/parse-apply-patch.js";
 
 const DEFAULT_TIMEOUT_MS = 10_000; // 10 seconds
 
@@ -81,12 +83,22 @@ export function execApplyPatch(
   patchText: string,
   workdir: string | undefined = undefined,
 ): ExecResult {
-  // This is a temporary measure to understand what are the common base commands
-  // until we start persisting and uploading rollouts
+  // This find/replace is required from some models like 4.1 where the patch
+  // text is wrapped in quotes that breaks the apply_patch command.
+  let applyPatchInput = patchText
+    .replace(/('|")?<<('|")EOF('|")/, "")
+    .replace(/\*\*\* End Patch\nEOF('|")?/, "*** End Patch")
+    .trim();
+
+  if (!applyPatchInput.endsWith(PATCH_SUFFIX)) {
+    applyPatchInput += "\n" + PATCH_SUFFIX;
+  }
+
+  log(`Applying patch: \`\`\`${applyPatchInput}\`\`\`\n\n`);
 
   try {
     const result = process_patch(
-      patchText,
+      applyPatchInput,
       (p) => fs.readFileSync(resolvePathAgainstWorkdir(p, workdir), "utf8"),
       (p, c) => {
         const resolvedPath = resolvePathAgainstWorkdir(p, workdir);

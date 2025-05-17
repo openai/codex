@@ -30,7 +30,7 @@ pub fn resolve_observed_args_with_patterns(
     // `suffix_patterns` and use that to determine how many args are left to
     // be matched by `vararg_pattern` (which could be zero).
     //
-    // After assocating positional args with `vararg_pattern`, we match the
+    // After associating positional args with `vararg_pattern`, we match the
     // `suffix_patterns` with the remaining args.
     let ParitionedArgs {
         num_prefix_args,

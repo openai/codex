@@ -54,6 +54,7 @@ export default function TerminalChatInput({
   openApprovalOverlay,
   openHelpOverlay,
   openDiffOverlay,
+  openSessionsOverlay,
   onCompact,
   interruptAgent,
   active,
@@ -77,6 +78,7 @@ export default function TerminalChatInput({
   openApprovalOverlay: () => void;
   openHelpOverlay: () => void;
   openDiffOverlay: () => void;
+  openSessionsOverlay: () => void;
   onCompact: () => void;
   interruptAgent: () => void;
   active: boolean;
@@ -278,6 +280,9 @@ export default function TerminalChatInput({
               switch (cmd) {
                 case "/history":
                   openOverlay();
+                  break;
+                case "/sessions":
+                  openSessionsOverlay();
                   break;
                 case "/help":
                   openHelpOverlay();
@@ -483,6 +488,10 @@ export default function TerminalChatInput({
         setInput("");
         openOverlay();
         return;
+      } else if (inputValue === "/sessions") {
+        setInput("");
+        openSessionsOverlay();
+        return;
       } else if (inputValue === "/help") {
         setInput("");
         openHelpOverlay();
@@ -583,7 +592,7 @@ export default function TerminalChatInput({
 
         try {
           const os = await import("node:os");
-          const { CLI_VERSION } = await import("../../utils/session.js");
+          const { CLI_VERSION } = await import("../../version.js");
           const { buildBugReportUrl } = await import(
             "../../utils/bug-report.js"
           );
@@ -727,6 +736,7 @@ export default function TerminalChatInput({
       openModelOverlay,
       openHelpOverlay,
       openDiffOverlay,
+      openSessionsOverlay,
       history,
       onCompact,
       skipNextSubmit,

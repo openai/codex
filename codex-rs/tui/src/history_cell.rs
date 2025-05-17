@@ -2,6 +2,7 @@ use codex_ansi_escape::ansi_escape_line;
 use codex_common::elapsed::format_duration;
 use codex_core::config::Config;
 use codex_core::protocol::FileChange;
+use codex_core::protocol::SessionConfiguredEvent;
 use ratatui::prelude::*;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
@@ -40,6 +41,9 @@ pub(crate) enum HistoryCell {
 
     /// Message from the agent.
     AgentMessage { lines: Vec<Line<'static>> },
+
+    /// Reasoning event from the agent.
+    AgentReasoning { lines: Vec<Line<'static>> },
 
     /// An exec tool call that has not finished yet.
     ActiveExecCommand {
@@ -91,29 +95,55 @@ pub(crate) enum HistoryCell {
 const TOOL_CALL_MAX_LINES: usize = 5;
 
 impl HistoryCell {
-    pub(crate) fn new_welcome_message(config: &Config) -> Self {
-        let mut lines: Vec<Line<'static>> = vec![
-            Line::from(vec![
-                "OpenAI ".into(),
-                "Codex".bold(),
-                " (research preview)".dim(),
-            ]),
-            Line::from(""),
-            Line::from("codex session:".magenta().bold()),
-        ];
+    pub(crate) fn new_session_info(
+        config: &Config,
+        event: SessionConfiguredEvent,
+        is_first_event: bool,
+    ) -> Self {
+        let SessionConfiguredEvent {
+            model,
+            session_id,
+            history_log_id: _,
+            history_entry_count: _,
+        } = event;
+        if is_first_event {
+            let mut lines: Vec<Line<'static>> = vec![
+                Line::from(vec![
+                    "OpenAI ".into(),
+                    "Codex".bold(),
+                    " (research preview)".dim(),
+                ]),
+                Line::from(""),
+                Line::from(vec![
+                    "codex session".magenta().bold(),
+                    " ".into(),
+                    session_id.to_string().dim(),
+                ]),
+            ];
 
-        let entries = vec![
-            ("workdir", config.cwd.display().to_string()),
-            ("model", config.model.clone()),
-            ("provider", config.model_provider_id.clone()),
-            ("approval", format!("{:?}", config.approval_policy)),
-            ("sandbox", format!("{:?}", config.sandbox_policy)),
-        ];
-        for (key, value) in entries {
-            lines.push(Line::from(vec![format!("{key}: ").bold(), value.into()]));
+            let entries = vec![
+                ("workdir", config.cwd.display().to_string()),
+                ("model", config.model.clone()),
+                ("provider", config.model_provider_id.clone()),
+                ("approval", format!("{:?}", config.approval_policy)),
+                ("sandbox", format!("{:?}", config.sandbox_policy)),
+            ];
+            for (key, value) in entries {
+                lines.push(Line::from(vec![format!("{key}: ").bold(), value.into()]));
+            }
+            lines.push(Line::from(""));
+            HistoryCell::WelcomeMessage { lines }
+        } else if config.model == model {
+            HistoryCell::SessionInfo { lines: vec![] }
+        } else {
+            let lines = vec![
+                Line::from("model changed:".magenta().bold()),
+                Line::from(format!("requested: {}", config.model)),
+                Line::from(format!("used: {}", model)),
+                Line::from(""),
+            ];
+            HistoryCell::SessionInfo { lines }
         }
-        lines.push(Line::from(""));
-        HistoryCell::WelcomeMessage { lines }
     }
 
     pub(crate) fn new_user_prompt(message: String) -> Self {
@@ -125,13 +155,22 @@ impl HistoryCell {
         HistoryCell::UserPrompt { lines }
     }
 
-    pub(crate) fn new_agent_message(message: String) -> Self {
+    pub(crate) fn new_agent_message(config: &Config, message: String) -> Self {
         let mut lines: Vec<Line<'static>> = Vec::new();
         lines.push(Line::from("codex".magenta().bold()));
-        append_markdown(&message, &mut lines);
+        append_markdown(&message, &mut lines, config);
         lines.push(Line::from(""));
 
         HistoryCell::AgentMessage { lines }
+    }
+
+    pub(crate) fn new_agent_reasoning(config: &Config, text: String) -> Self {
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        lines.push(Line::from("thinking".magenta().italic()));
+        append_markdown(&text, &mut lines, config);
+        lines.push(Line::from(""));
+
+        HistoryCell::AgentReasoning { lines }
     }
 
     pub(crate) fn new_active_exec_command(call_id: String, command: Vec<String>) -> Self {
@@ -284,20 +323,6 @@ impl HistoryCell {
         HistoryCell::ErrorEvent { lines }
     }
 
-    pub(crate) fn new_session_info(config: &Config, model: String) -> Self {
-        if config.model == model {
-            HistoryCell::SessionInfo { lines: vec![] }
-        } else {
-            let lines = vec![
-                Line::from("model changed:".magenta().bold()),
-                Line::from(format!("requested: {}", config.model)),
-                Line::from(format!("used: {}", model)),
-                Line::from(""),
-            ];
-            HistoryCell::SessionInfo { lines }
-        }
-    }
-
     /// Create a new `PendingPatch` cell that lists the file‑level summary of
     /// a proposed patch. The summary lines should already be formatted (e.g.
     /// "A path/to/file.rs").
@@ -363,6 +388,7 @@ impl HistoryCell {
             HistoryCell::WelcomeMessage { lines, .. }
             | HistoryCell::UserPrompt { lines, .. }
             | HistoryCell::AgentMessage { lines, .. }
+            | HistoryCell::AgentReasoning { lines, .. }
             | HistoryCell::BackgroundEvent { lines, .. }
             | HistoryCell::ErrorEvent { lines, .. }
             | HistoryCell::SessionInfo { lines, .. }

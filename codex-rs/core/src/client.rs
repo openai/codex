@@ -26,7 +26,9 @@ use crate::client_common::Prompt;
 use crate::client_common::Reasoning;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
+use crate::client_common::Summary;
 use crate::error::CodexErr;
+use crate::error::EnvVarError;
 use crate::error::Result;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::flags::OPENAI_REQUEST_MAX_RETRIES;
@@ -38,10 +40,18 @@ use crate::util::backoff;
 
 /// When serialized as JSON, this produces a valid "Tool" in the OpenAI
 /// Responses API.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type")]
+enum OpenAiTool {
+    #[serde(rename = "function")]
+    Function(ResponsesApiTool),
+    #[serde(rename = "local_shell")]
+    LocalShell {},
+}
+
+#[derive(Debug, Clone, Serialize)]
 struct ResponsesApiTool {
     name: &'static str,
-    r#type: &'static str, // "function"
     description: &'static str,
     strict: bool,
     parameters: JsonSchema,
@@ -65,7 +75,7 @@ enum JsonSchema {
 }
 
 /// Tool usage specification
-static DEFAULT_TOOLS: LazyLock<Vec<ResponsesApiTool>> = LazyLock::new(|| {
+static DEFAULT_TOOLS: LazyLock<Vec<OpenAiTool>> = LazyLock::new(|| {
     let mut properties = BTreeMap::new();
     properties.insert(
         "command".to_string(),
@@ -76,9 +86,8 @@ static DEFAULT_TOOLS: LazyLock<Vec<ResponsesApiTool>> = LazyLock::new(|| {
     properties.insert("workdir".to_string(), JsonSchema::String);
     properties.insert("timeout".to_string(), JsonSchema::Number);
 
-    vec![ResponsesApiTool {
+    vec![OpenAiTool::Function(ResponsesApiTool {
         name: "shell",
-        r#type: "function",
         description: "Runs a shell command, and returns its output.",
         strict: false,
         parameters: JsonSchema::Object {
@@ -86,8 +95,11 @@ static DEFAULT_TOOLS: LazyLock<Vec<ResponsesApiTool>> = LazyLock::new(|| {
             required: &["command"],
             additional_properties: false,
         },
-    }]
+    })]
 });
+
+static DEFAULT_CODEX_MODEL_TOOLS: LazyLock<Vec<OpenAiTool>> =
+    LazyLock::new(|| vec![OpenAiTool::LocalShell {}]);
 
 #[derive(Clone)]
 pub struct ModelClient {
@@ -150,10 +162,15 @@ impl ModelClient {
         }
 
         // Assemble tool list: built-in tools + any extra tools from the prompt.
-        let mut tools_json: Vec<serde_json::Value> = DEFAULT_TOOLS
-            .iter()
-            .map(|t| serde_json::to_value(t).expect("serialize builtin tool"))
-            .collect();
+        let default_tools = if self.model.starts_with("codex") {
+            &DEFAULT_CODEX_MODEL_TOOLS
+        } else {
+            &DEFAULT_TOOLS
+        };
+        let mut tools_json = Vec::with_capacity(default_tools.len() + prompt.extra_tools.len());
+        for t in default_tools.iter() {
+            tools_json.push(serde_json::to_value(t)?);
+        }
         tools_json.extend(
             prompt
                 .extra_tools
@@ -164,16 +181,17 @@ impl ModelClient {
 
         debug!("tools_json: {}", serde_json::to_string_pretty(&tools_json)?);
 
+        let full_instructions = prompt.get_full_instructions();
         let payload = Payload {
             model: &self.model,
-            instructions: prompt.instructions.as_ref(),
+            instructions: &full_instructions,
             input: &prompt.input,
             tools: &tools_json,
             tool_choice: "auto",
             parallel_tool_calls: false,
             reasoning: Some(Reasoning {
                 effort: "high",
-                generate_summary: None,
+                summary: Some(Summary::Auto),
             }),
             previous_response_id: prompt.prev_id.clone(),
             store: prompt.store,
@@ -190,10 +208,12 @@ impl ModelClient {
         loop {
             attempt += 1;
 
-            let api_key = self
-                .provider
-                .api_key()?
-                .expect("Repsones API requires an API key");
+            let api_key = self.provider.api_key()?.ok_or_else(|| {
+                CodexErr::EnvVar(EnvVarError {
+                    var: self.provider.env_key.clone().unwrap_or_default(),
+                    instructions: None,
+                })
+            })?;
             let res = self
                 .client
                 .post(&url)

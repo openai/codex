@@ -43,7 +43,7 @@ if (!isVitest) {
   loadDotenv({ path: USER_WIDE_CONFIG_PATH });
 }
 
-export const DEFAULT_AGENTIC_MODEL = "o4-mini";
+export const DEFAULT_AGENTIC_MODEL = "codex-mini-latest";
 export const DEFAULT_FULL_CONTEXT_MODEL = "gpt-4.1";
 export const DEFAULT_APPROVAL_MODE = AutoApprovalMode.SUGGEST;
 export const DEFAULT_INSTRUCTIONS = "";
@@ -68,12 +68,15 @@ export const OPENAI_TIMEOUT_MS =
 export const OPENAI_BASE_URL = process.env["OPENAI_BASE_URL"] || "";
 export let OPENAI_API_KEY = process.env["OPENAI_API_KEY"] || "";
 
+export const AZURE_OPENAI_API_VERSION =
+  process.env["AZURE_OPENAI_API_VERSION"] || "2025-03-01-preview";
+
 export const DEFAULT_REASONING_EFFORT = "high";
 export const OPENAI_ORGANIZATION = process.env["OPENAI_ORGANIZATION"] || "";
 export const OPENAI_PROJECT = process.env["OPENAI_PROJECT"] || "";
 
 // Can be set `true` when Codex is running in an environment that is marked as already
-// considered sufficiently locked-down so that we allow running wihtout an explicit sandbox.
+// considered sufficiently locked-down so that we allow running without an explicit sandbox.
 export const CODEX_UNSAFE_ALLOW_NO_SANDBOX = Boolean(
   process.env["CODEX_UNSAFE_ALLOW_NO_SANDBOX"] || "",
 );
@@ -117,7 +120,7 @@ export function getApiKey(provider: string = "openai"): string | undefined {
     return process.env[providerInfo.envKey];
   }
 
-  // Checking `PROVIDER_API_KEY feels more intuitive with a custom provider.
+  // Checking `PROVIDER_API_KEY` feels more intuitive with a custom provider.
   const customApiKey = process.env[`${provider.toUpperCase()}_API_KEY`];
   if (customApiKey) {
     return customApiKey;
@@ -132,6 +135,8 @@ export function getApiKey(provider: string = "openai"): string | undefined {
   return undefined;
 }
 
+export type FileOpenerScheme = "vscode" | "cursor" | "windsurf";
+
 // Represents config as persisted in config.json.
 export type StoredConfig = {
   model?: string;
@@ -143,6 +148,7 @@ export type StoredConfig = {
   notify?: boolean;
   /** Disable server-side response storage (send full transcript each request) */
   disableResponseStorage?: boolean;
+  flexMode?: boolean;
   providers?: Record<string, { name: string; baseURL: string; envKey: string }>;
   history?: {
     maxSize?: number;
@@ -158,6 +164,12 @@ export type StoredConfig = {
   /** User-defined safe commands */
   safeCommands?: Array<string>;
   reasoningEffort?: ReasoningEffort;
+
+  /**
+   * URI-based file opener. This is used when linking code references in
+   * terminal output.
+   */
+  fileOpener?: FileOpenerScheme;
 };
 
 // Minimal config written on first run.  An *empty* model string ensures that
@@ -202,18 +214,29 @@ export type AppConfig = {
       maxLines: number;
     };
   };
+  fileOpener?: FileOpenerScheme;
 };
 
 // Formatting (quiet mode-only).
 export const PRETTY_PRINT = Boolean(process.env["PRETTY_PRINT"] || "");
 
 // ---------------------------------------------------------------------------
-// Project doc support (codex.md)
+// Project doc support (AGENTS.md / codex.md)
 // ---------------------------------------------------------------------------
 
 export const PROJECT_DOC_MAX_BYTES = 32 * 1024; // 32 kB
 
-const PROJECT_DOC_FILENAMES = ["codex.md", ".codex.md", "CODEX.md"];
+// We support multiple filenames for project-level agent instructions.  As of
+// 2025 the recommended convention is to use `AGENTS.md`, however we keep
+// the legacy `codex.md` variants for backwards-compatibility so that existing
+// repositories continue to work without changes.  The list is ordered so that
+// the first match wins – newer conventions first, older fallbacks later.
+const PROJECT_DOC_FILENAMES = [
+  "AGENTS.md", // preferred
+  "codex.md", // legacy
+  ".codex.md",
+  "CODEX.md",
+];
 const PROJECT_DOC_SEPARATOR = "\n\n--- project-doc ---\n\n";
 
 export function discoverProjectDocPath(startDir: string): string | null {
@@ -254,7 +277,8 @@ export function discoverProjectDocPath(startDir: string): string | null {
 }
 
 /**
- * Load the project documentation markdown (codex.md) if present. If the file
+ * Load the project documentation markdown (`AGENTS.md` – or the legacy
+ * `codex.md`) if present. If the file
  * exceeds {@link PROJECT_DOC_MAX_BYTES} it will be truncated and a warning is
  * logged.
  *
@@ -414,6 +438,7 @@ export const loadConfig = (
     },
     disableResponseStorage: storedConfig.disableResponseStorage === true,
     reasoningEffort: storedConfig.reasoningEffort,
+    fileOpener: storedConfig.fileOpener,
   };
 
   // -----------------------------------------------------------------------
@@ -475,6 +500,10 @@ export const loadConfig = (
   }
   // Notification setting: enable desktop notifications when set in config
   config.notify = storedConfig.notify === true;
+  // Flex-mode setting: enable the flex-mode service tier when set in config
+  if (storedConfig.flexMode !== undefined) {
+    config.flexMode = storedConfig.flexMode;
+  }
 
   // Add default history config if not provided
   if (storedConfig.history !== undefined) {
@@ -529,6 +558,7 @@ export const saveConfig = (
     providers: config.providers,
     approvalMode: config.approvalMode,
     disableResponseStorage: config.disableResponseStorage,
+    flexMode: config.flexMode,
     reasoningEffort: config.reasoningEffort,
   };
 
