@@ -2,6 +2,10 @@
 
 You can install any of these versions: `npm install -g codex@version`
 
+## `0.1.2505171619`
+
+- `codex --login` + `codex --free` (#998)
+
 ## `0.1.2505161800`
 
 - Sign in with chatgpt credits (#974)
