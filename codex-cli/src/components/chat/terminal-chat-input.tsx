@@ -734,26 +734,46 @@ export default function TerminalChatInput({
     ],
   );
 
-  // Add effect to ensure input state is properly reset
-  useEffect(() => {
-    if (!loading && active) {
-      setInput("");
-      setEditorState((s) => ({ key: s.key + 1 }));
-    }
-  }, [loading, active]);
-
   // Add effect to handle stdin mode
-  const { setRawMode } = useStdin();
+  const { setRawMode, stdin } = useStdin();
   useEffect(() => {
     if (active) {
-      setRawMode?.(true);
+      try {
+        // Make sure raw mode is properly set
+        setRawMode?.(true);
+        
+        // Force stdin to be a TTY if not already
+        if (stdin && typeof stdin.isTTY === 'boolean') {
+          stdin.isTTY = true;
+        }
+      } catch (e) {
+        console.error("Failed to set raw mode:", e);
+      }
     }
     return () => {
       if (active) {
-        setRawMode?.(false);
+        try {
+          setRawMode?.(false);
+        } catch (e) {
+          console.error("Failed to unset raw mode:", e);
+        }
       }
     };
-  }, [active, setRawMode]);
+  }, [active, setRawMode, stdin]);
+
+  // Ensure the input field is visible and focused when active
+  useEffect(() => {
+    if (!loading && active) {
+      // Reset input state
+      setInput("");
+      setEditorState((s) => ({ key: s.key + 1 }));
+      
+      // Ensure terminal is properly configured for input
+      if (process.stdout.isTTY) {
+        process.stdout.write("\x1b[?25h"); // Show cursor
+      }
+    }
+  }, [loading, active]);
 
   if (confirmationPrompt) {
     return (

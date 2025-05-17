@@ -27,10 +27,16 @@ import React, { useRef, useState } from "react";
 const proto: any = EventEmitter.prototype;
 
 if (typeof proto["ref"] !== "function") {
-  proto["ref"] = function ref() {};
+  proto["ref"] = function ref() {
+    // 确保ref方法能在Node环境中正常工作
+    return this;
+  };
 }
 if (typeof proto["unref"] !== "function") {
-  proto["unref"] = function unref() {};
+  proto["unref"] = function unref() {
+    // 确保unref方法能在Node环境中正常工作
+    return this;
+  };
 }
 
 /*
@@ -61,14 +67,19 @@ proto["emit"] = function patchedEmit(
       // eslint-disable-next-line no-console
       console.log("[MultilineTextEditor:stdin] data", JSON.stringify(chunk));
     }
-    // Store carriage returns as‑is so that Ink can distinguish between plain
-    // <Enter> ("\r") and a bare line‑feed ("\n").  This matters because Ink's
-    // `parseKeypress` treats "\r" as key.name === "return", whereas "\n" maps
-    // to "enter" – allowing us to differentiate between plain Enter (submit)
-    // and Shift+Enter (insert newline) inside `useInput`.
 
-    // Identify the lightweight testing stub: lacks `.read()` but exposes
-    // `.setRawMode()` and `isTTY` similar to the real TTY stream.
+    // 增强在Darwin (macOS)环境下的终端支持
+    const isMacOS = process.platform === 'darwin';
+
+    // 确保在Darwin系统上stdin正确处理
+    if (isMacOS) {
+      // 强制启用TTY模式以确保输入可见
+      if (typeof (this as any).isTTY === 'boolean') {
+        (this as any).isTTY = true;
+      }
+    }
+
+    // 识别轻量级测试存根：缺少`.read()`但暴露`.setRawMode()`和`isTTY`，类似于真实的TTY流
     if (
       !(this as any)._inkIsStub &&
       typeof (this as any).setRawMode === "function" &&
@@ -77,7 +88,7 @@ proto["emit"] = function patchedEmit(
     ) {
       (this as any)._inkIsStub = true;
 
-      // Provide a minimal `read()` shim so Ink can pull queued chunks.
+      // 提供最小的`read()`垫片，以便Ink可以拉取排队的块
       (this as any).read = function read() {
         const ret = (this as any)._inkBuffered ?? null;
         (this as any)._inkBuffered = null;
@@ -240,7 +251,7 @@ const MultilineTextEditorInner = (
       //     modifyOtherKeys=1 is configured, emit this legacy sequence.  We
       //     translate it to the same behaviour as the mode‑2 variant above so
       //     that Shift+Enter (newline) / Ctrl+Enter (submit) work regardless
-      //     of the user’s terminal settings.
+      //     of the user's terminal settings.
       if (input.startsWith("[27;") && input.endsWith("~")) {
         const m = input.match(/^\[27;([0-9]+);13~$/);
         if (m) {

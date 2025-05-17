@@ -166,4 +166,9 @@ You can install any of these versions: `npm install -g codex@version`
 - Typos in prompts and comments (#195)
 - Check workdir before spawn (#221)
 
+## [Unreleased]
+
+### Fixed
+- Fixed issue #861: Message box wasn't displayed in the terminal on macOS/Darwin systems. Enhanced terminal input handling to ensure proper display of the input box in all terminal environments.
+
 <!-- generated - do not edit -->
