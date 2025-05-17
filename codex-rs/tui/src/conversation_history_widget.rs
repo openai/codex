@@ -175,8 +175,18 @@ impl ConversationHistoryWidget {
     /// Note `model` could differ from `config.model` if the agent decided to
     /// use a different model than the one requested by the user.
     pub fn add_session_info(&mut self, config: &Config, event: SessionConfiguredEvent) {
-        let is_first_event = self.entries.is_empty();
-        self.add_to_history(HistoryCell::new_session_info(config, event, is_first_event));
+        // In practice, SessionConfiguredEvent should always be the first entry
+        // in the history, but it is possible that an error could be sent
+        // before the session info.
+        let has_welcome_message = self
+            .entries
+            .iter()
+            .any(|entry| matches!(entry.cell, HistoryCell::WelcomeMessage { .. }));
+        self.add_to_history(HistoryCell::new_session_info(
+            config,
+            event,
+            !has_welcome_message,
+        ));
     }
 
     pub fn add_user_message(&mut self, message: String) {
