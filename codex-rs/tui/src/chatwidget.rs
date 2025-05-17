@@ -129,6 +129,7 @@ impl ChatWidget<'_> {
             self.bottom_pane
                 .set_input_focus(self.input_focus == InputFocus::BottomPane);
             self.request_redraw();
+            return;
         }
 
         match self.input_focus {
