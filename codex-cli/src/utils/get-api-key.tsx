@@ -57,6 +57,9 @@ interface IDTokenClaims {
     project_id: string;
     completed_platform_onboarding: boolean;
     is_org_owner: boolean;
+    chatgpt_subscription_active_start: string;
+    chatgpt_subscription_active_until: string;
+    chatgpt_plan_type: string;
   };
 }
 
@@ -76,6 +79,102 @@ function generatePKCECodes(): {
     .update(code_verifier)
     .digest("base64url");
   return { code_verifier, code_challenge };
+}
+
+async function maybeRedeemCredits(
+  issuer: string,
+  idToken: string,
+  accessToken: string,
+): Promise<void> {
+  try {
+    const idClaims = JSON.parse(
+      Buffer.from(idToken.split(".")[1]!, "base64url").toString("utf8"),
+    ) as IDTokenClaims;
+    const accessClaims = JSON.parse(
+      Buffer.from(accessToken.split(".")[1]!, "base64url").toString("utf8"),
+    ) as AccessTokenClaims;
+
+    // Validate expiration
+    const exp =
+      idClaims["https://api.openai.com/auth"].chatgpt_subscription_active_until;
+    if (typeof exp === "string" && Date.now() >= new Date(exp).getTime()) {
+      // eslint-disable-next-line no-console
+      console.warn("ID token expired; please sign in again to redeem credits.");
+      return;
+    }
+
+    // Confirm the subscription is active for more than 7 days
+    const subStart =
+      idClaims["https://api.openai.com/auth"]
+        ?.chatgpt_subscription_active_start;
+    if (
+      typeof subStart === "string" &&
+      Date.now() >= new Date(subStart).getTime()
+    ) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        "Subscription must be active for more than 7 days to redeem credits.",
+      );
+      return;
+    }
+
+    const completed = Boolean(
+      idClaims["https://api.openai.com/auth"]?.completed_platform_onboarding,
+    );
+    const isOwner = Boolean(
+      idClaims["https://api.openai.com/auth"]?.is_org_owner,
+    );
+    const needsSetup = !completed && isOwner;
+
+    const planType = accessClaims["https://api.openai.com/auth"]
+      ?.chatgpt_plan_type as string | undefined;
+
+    if (needsSetup || !(planType === "plus" || planType === "pro")) {
+      return;
+    }
+
+    const apiHost =
+      issuer === "https://auth.openai.com"
+        ? "https://api.openai.com"
+        : "https://api.openai.org";
+
+    const redeemRes = await fetch(`${apiHost}/v1/billing/redeem_credits`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id_token: idToken }),
+    });
+
+    if (!redeemRes.ok) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `Credit redemption request failed: ${redeemRes.status} ${redeemRes.statusText}`,
+      );
+      return;
+    }
+
+    try {
+      const redeemData = (await redeemRes.json()) as {
+        granted_chatgpt_subscriber_api_credits?: number;
+      };
+      const granted = redeemData?.granted_chatgpt_subscriber_api_credits ?? 0;
+      if (granted > 0) {
+        // eslint-disable-next-line no-console
+        console.log(
+          chalk.green(
+            `\u2728  Granted ${planType === "plus" ? "$5" : "$50"} in API credits for being a ChatGPT ${
+              planType === "plus" ? "Plus" : "Pro"
+            } subscriber!`,
+          ),
+        );
+      }
+    } catch (parseErr) {
+      // eslint-disable-next-line no-console
+      console.warn("Unable to parse credit redemption response:", parseErr);
+    }
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn("Unable to redeem ChatGPT subscriber API credits:", err);
+  }
 }
 
 async function handleCallback(
@@ -231,57 +330,7 @@ async function handleCallback(
     console.warn("Unable to save auth file:", err);
   }
 
-  if (
-    !needsSetup &&
-    (chatgptPlanType === "plus" || chatgptPlanType === "pro")
-  ) {
-    const apiHost =
-      issuer === "https://auth.openai.com"
-        ? "https://api.openai.com"
-        : "https://api.openai.org";
-
-    try {
-      const redeemRes = await fetch(`${apiHost}/v1/billing/redeem_credits`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ id_token: tokenData.id_token }),
-      });
-
-      if (!redeemRes.ok) {
-        // eslint-disable-next-line no-console
-        console.warn(
-          `Credit redemption request failed: ${redeemRes.status} ${redeemRes.statusText}`,
-        );
-      } else {
-        // Attempt to parse the JSON response and surface a success message
-        try {
-          const redeemData = (await redeemRes.json()) as {
-            granted_chatgpt_subscriber_api_credits?: number;
-          };
-          const granted =
-            redeemData?.granted_chatgpt_subscriber_api_credits ?? 0;
-          if (granted > 0) {
-            // eslint-disable-next-line no-console
-            console.log(
-              chalk.green(
-                `\u2728  Granted ${chatgptPlanType === "plus" ? "$5" : "$50"} in API credits for being a ChatGPT ${
-                  chatgptPlanType === "plus" ? "Plus" : "Pro"
-                } subscriber!`,
-              ),
-            );
-          }
-        } catch (parseErr) {
-          // eslint-disable-next-line no-console
-          console.warn("Unable to parse credit redemption response:", parseErr);
-        }
-      }
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn("Unable to redeem ChatGPT subscriber API credits:", err);
-    }
-  }
+  await maybeRedeemCredits(issuer, tokenData.id_token, tokenData.access_token);
 
   return {
     access_token: exchanged.access_token,
@@ -600,3 +649,5 @@ export async function getApiKey(
     throw err;
   }
 }
+
+export { maybeRedeemCredits };
