@@ -9,6 +9,7 @@ import type { AppRollout } from "./app";
 import type { ApprovalPolicy } from "./approvals";
 import type { CommandConfirmation } from "./utils/agent/agent-loop";
 import type { AppConfig } from "./utils/config";
+import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import type { ResponseItem } from "openai/resources/responses/responses";
 import type { ReasoningEffort } from "openai/resources.mjs";
 
@@ -26,7 +27,8 @@ import {
 } from "./utils/config";
 import { getApiKey as fetchApiKey } from "./utils/get-api-key";
 import { createInputItem } from "./utils/input-utils";
-import { initLogger } from "./utils/logger/log";
+import { initLogger, log } from "./utils/logger/log";
+import { MCPManager } from "./utils/mcp";
 import { isModelSupportedForResponses } from "./utils/model-utils.js";
 import { parseToolCall } from "./utils/parsers";
 import { onExit, setInkRenderer } from "./utils/terminal";
@@ -593,6 +595,21 @@ async function runQuietMode({
   additionalWritableRoots: ReadonlyArray<string>;
   config: AppConfig;
 }): Promise<void> {
+  // Initialize MCP Manager for quiet mode
+  const mcpManager = new MCPManager();
+  let mcpTools: Array<Tool> = [];
+
+  try {
+    // Initialize MCP connections
+    await mcpManager.initialize();
+    mcpTools = await mcpManager.getFlattendTools();
+    // eslint-disable-next-line no-console
+    console.log(`Initialized MCP Manager with ${mcpTools.length} tools`);
+  } catch (error) {
+    // Log error but continue execution
+    log(`Failed to initialize MCP Manager: ${error}`);
+  }
+
   const agent = new AgentLoop({
     model: config.model,
     config: config,
@@ -600,6 +617,8 @@ async function runQuietMode({
     provider: config.provider,
     approvalPolicy,
     additionalWritableRoots,
+    mcpTools,
+    mcpManager,
     disableResponseStorage: config.disableResponseStorage,
     onItem: (item: ResponseItem) => {
       // eslint-disable-next-line no-console
@@ -625,6 +644,9 @@ async function runQuietMode({
 
   const inputItem = await createInputItem(prompt, imagePaths);
   await agent.run([inputItem]);
+
+  // Cleanup MCP resources
+  mcpManager.disconnectAll();
 }
 
 const exit = () => {

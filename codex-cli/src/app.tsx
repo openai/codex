@@ -6,6 +6,7 @@ import type { ResponseItem } from "openai/resources/responses/responses";
 import TerminalChat from "./components/chat/terminal-chat";
 import TerminalChatPastRollout from "./components/chat/terminal-chat-past-rollout";
 import { checkInGit } from "./utils/check-in-git";
+import { MCPProvider } from "./utils/mcp";
 import { onExit } from "./utils/terminal";
 import { CLI_VERSION } from "./version";
 import { ConfirmInput } from "@inkjs/ui";
@@ -96,13 +97,15 @@ export default function App({
   }
 
   return (
-    <TerminalChat
-      config={config}
-      prompt={prompt}
-      imagePaths={imagePaths}
-      approvalPolicy={approvalPolicy}
-      additionalWritableRoots={additionalWritableRoots}
-      fullStdout={fullStdout}
-    />
+    <MCPProvider>
+      <TerminalChat
+        config={config}
+        prompt={prompt}
+        imagePaths={imagePaths}
+        approvalPolicy={approvalPolicy}
+        additionalWritableRoots={additionalWritableRoots}
+        fullStdout={fullStdout}
+      />
+    </MCPProvider>
   );
 }
