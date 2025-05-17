@@ -2,7 +2,6 @@ import type { Choice } from "./get-api-key-components";
 import type { Request, Response } from "express";
 
 import { ApiKeyPrompt, WaitingForAuth } from "./get-api-key-components";
-import { clearTerminal } from "./terminal";
 import chalk from "chalk";
 import express from "express";
 import fs from "fs/promises";
@@ -212,9 +211,30 @@ async function maybeRedeemCredits(
         // eslint-disable-next-line no-console
         console.log(
           chalk.green(
-            `\u2728  Granted ${planType === "plus" ? "$5" : "$50"} in API credits for being a ChatGPT ${
-              planType === "plus" ? "Plus" : "Pro"
-            } subscriber!`,
+            `${chalk.bold(
+              `Thanks for being a ChatGPT ${
+                planType === "plus" ? "Plus" : "Pro"
+              } subscriber!`,
+            )}\nIf you haven't already redeemed, you should receive ${
+              planType === "plus" ? "$5" : "$50"
+            } in API credits\nCredits: ${chalk.dim(chalk.underline("https://platform.openai.com/settings/organization/billing/credit-grants"))}\nMore info: ${chalk.dim(chalk.underline("https://help.openai.com/en/articles/11381614"))}`,
+          ),
+        );
+      } else {
+        // eslint-disable-next-line no-console
+        console.log(
+          chalk.green(
+            `It looks like no credits were granted:\n${JSON.stringify(
+              redeemData,
+              null,
+              2,
+            )}\nCredits: ${chalk.dim(
+              chalk.underline(
+                "https://platform.openai.com/settings/organization/billing/credit-grants",
+              ),
+            )}\nMore info: ${chalk.dim(
+              chalk.underline("https://help.openai.com/en/articles/11381614"),
+            )}`,
           ),
         );
       }
@@ -697,7 +717,6 @@ export async function getApiKey(
   try {
     const key = await signInFlow(issuer, clientId);
     spinner.unmount();
-    clearTerminal();
     process.env["OPENAI_API_KEY"] = key;
     return key;
   } catch (err) {
