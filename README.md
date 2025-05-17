@@ -321,6 +321,9 @@ node ./dist/cli.js
 
 # Or link the command globally for convenience
 pnpm link
+
+# Enable running the WSL-installed 'codex' CLI directly from PowerShell (if on windows)
+Add-Content $PROFILE 'function codex { wsl bash -i -c "codex $Args" }'
 ```
 
 </details>
