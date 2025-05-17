@@ -333,13 +333,14 @@ if (cli.flags.login) {
 // Ensure the API key is available as an environment variable for legacy code
 process.env["OPENAI_API_KEY"] = apiKey;
 
-if (cli.flags.free && savedTokens?.id_token && savedTokens?.access_token) {
+if (cli.flags.free && savedTokens?.refresh_token) {
+  // eslint-disable-next-line no-console
+  console.log(`${chalk.bold("codex --free")} attempting to redeem credits...`);
   await maybeRedeemCredits(
     client.issuer,
-    savedTokens.id_token,
-    savedTokens.refresh_token,
-    savedTokens.access_token,
     client.client_id,
+    savedTokens.refresh_token,
+    savedTokens.id_token,
   );
 }
 

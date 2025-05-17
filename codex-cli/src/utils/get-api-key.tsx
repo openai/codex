@@ -84,22 +84,33 @@ function generatePKCECodes(): {
 
 async function maybeRedeemCredits(
   issuer: string,
-  idToken: string,
-  refreshToken: string,
-  accessToken: string,
   clientId: string,
+  refreshToken: string,
+  idToken?: string,
 ): Promise<void> {
   try {
     let currentIdToken = idToken;
-    let idClaims = JSON.parse(
-      Buffer.from(currentIdToken.split(".")[1]!, "base64url").toString("utf8"),
-    ) as IDTokenClaims;
-    const accessClaims = JSON.parse(
-      Buffer.from(accessToken.split(".")[1]!, "base64url").toString("utf8"),
-    ) as AccessTokenClaims;
+    let idClaims: IDTokenClaims | undefined;
 
-    // Validate ID token expiration; if expired, attempt token-exchange for a fresh ID token
-    if (Date.now() >= idClaims.exp * 1000) {
+    if (
+      currentIdToken &&
+      typeof currentIdToken === "string" &&
+      currentIdToken.split(".")[1]
+    ) {
+      idClaims = JSON.parse(
+        Buffer.from(currentIdToken.split(".")[1]!, "base64url").toString(
+          "utf8",
+        ),
+      ) as IDTokenClaims;
+    } else {
+      currentIdToken = "";
+    }
+
+    // Validate idToken expiration
+    // if expired, attempt token-exchange for a fresh idToken
+    if (!idClaims || !idClaims.exp || Date.now() >= idClaims.exp * 1000) {
+      // eslint-disable-next-line no-console
+      console.log(chalk.dim("Refreshing credentials..."));
       try {
         const refreshRes = await fetch("https://auth.openai.com/oauth/token", {
           method: "POST",
@@ -114,10 +125,12 @@ async function maybeRedeemCredits(
         if (!refreshRes.ok) {
           // eslint-disable-next-line no-console
           console.warn(
-            `Failed to exchange ID token for a new one: ${refreshRes.status} ${refreshRes.statusText}`,
+            `Failed to refresh credentials: ${refreshRes.status} ${refreshRes.statusText}\n${chalk.dim(await refreshRes.text())}`,
           );
           // eslint-disable-next-line no-console
-          console.warn("Please sign in again to redeem credits: codex --login");
+          console.warn(
+            `Please sign in again to redeem credits: ${chalk.bold("codex --login")}`,
+          );
           return;
         }
         const refreshData = (await refreshRes.json()) as { id_token: string };
@@ -140,11 +153,18 @@ async function maybeRedeemCredits(
         ?.chatgpt_subscription_active_start;
     if (
       typeof subStart === "string" &&
-      Date.now() >= new Date(subStart).getTime()
+      Date.now() - new Date(subStart).getTime() < 7 * 24 * 60 * 60 * 1000
     ) {
       // eslint-disable-next-line no-console
       console.warn(
-        "Subscription must be active for more than 7 days to redeem credits.",
+        "Sorry, your subscription must be active for more than 7 days to redeem credits.\nMore info: https://help.openai.com/en/articles/11381614\nPlease try again on: " +
+          new Date(
+            new Date(subStart).getTime() + 7 * 24 * 60 * 60 * 1000,
+          ).toLocaleDateString() +
+          " " +
+          new Date(
+            new Date(subStart).getTime() + 7 * 24 * 60 * 60 * 1000,
+          ).toLocaleTimeString(),
       );
       return;
     }
@@ -157,7 +177,7 @@ async function maybeRedeemCredits(
     );
     const needsSetup = !completed && isOwner;
 
-    const planType = accessClaims["https://api.openai.com/auth"]
+    const planType = idClaims["https://api.openai.com/auth"]
       ?.chatgpt_plan_type as string | undefined;
 
     if (needsSetup || !(planType === "plus" || planType === "pro")) {
@@ -363,10 +383,9 @@ async function handleCallback(
 
   await maybeRedeemCredits(
     issuer,
-    tokenData.id_token,
-    tokenData.refresh_token,
-    tokenData.access_token,
     clientId,
+    tokenData.refresh_token,
+    tokenData.id_token,
   );
 
   return {
