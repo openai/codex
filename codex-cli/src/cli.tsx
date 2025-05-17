@@ -286,7 +286,13 @@ const client = {
 };
 
 let apiKey = "";
-let savedTokens: { id_token?: string; access_token?: string } | undefined;
+let savedTokens:
+  | {
+      id_token?: string;
+      access_token?: string;
+      refresh_token: string;
+    }
+  | undefined;
 
 // Try to load existing auth file if present
 try {
@@ -331,7 +337,9 @@ if (cli.flags.free && savedTokens?.id_token && savedTokens?.access_token) {
   await maybeRedeemCredits(
     client.issuer,
     savedTokens.id_token,
+    savedTokens.refresh_token,
     savedTokens.access_token,
+    client.client_id,
   );
 }
 

@@ -52,6 +52,7 @@ async function getOidcConfiguration(
 }
 
 interface IDTokenClaims {
+  "exp": number;
   "https://api.openai.com/auth": {
     organization_id: string;
     project_id: string;
@@ -84,6 +85,7 @@ function generatePKCECodes(): {
 async function maybeRedeemCredits(
   issuer: string,
   idToken: string,
+  refreshToken: string,
   accessToken: string,
   clientId: string,
 ): Promise<void> {
@@ -96,21 +98,15 @@ async function maybeRedeemCredits(
       Buffer.from(accessToken.split(".")[1]!, "base64url").toString("utf8"),
     ) as AccessTokenClaims;
 
-    // Validate subscription expiration; if expired, attempt token-exchange for a fresh ID token
-    const exp =
-      idClaims["https://api.openai.com/auth"].chatgpt_subscription_active_until;
-    if (typeof exp === "string" && Date.now() >= new Date(exp).getTime()) {
-      // eslint-disable-next-line no-console
-      console.warn(
-        "Subscription expired; attempting to refresh ID token for updated subscription status…",
-      );
+    // Validate ID token expiration; if expired, attempt token-exchange for a fresh ID token
+    if (Date.now() >= idClaims.exp * 1000) {
       try {
         const oidcConfig = await getOidcConfiguration(issuer);
         const exchangeParams = new URLSearchParams({
           grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
           client_id: clientId,
-          subject_token: currentIdToken,
-          subject_token_type: "urn:ietf:params:oauth:token-type:id_token",
+          subject_token: refreshToken,
+          subject_token_type: "urn:ietf:params:oauth:token-type:refresh_token",
           requested_token_type: "urn:ietf:params:oauth:token-type:id_token",
         });
         const refreshRes = await fetch(oidcConfig.token_endpoint, {
@@ -124,7 +120,7 @@ async function maybeRedeemCredits(
             `Failed to exchange ID token for a new one: ${refreshRes.status} ${refreshRes.statusText}`,
           );
           // eslint-disable-next-line no-console
-          console.warn("Please sign in again to redeem credits.");
+          console.warn("Please sign in again to redeem credits: codex --login");
           return;
         }
         const refreshData = (await refreshRes.json()) as { id_token: string };
@@ -179,7 +175,7 @@ async function maybeRedeemCredits(
     const redeemRes = await fetch(`${apiHost}/v1/billing/redeem_credits`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id_token: currentIdToken }),
+      body: JSON.stringify({ id_token: idToken }),
     });
 
     if (!redeemRes.ok) {
@@ -259,9 +255,9 @@ async function handleCallback(
   }
 
   const tokenData = (await tokenRes.json()) as {
-    access_token: string;
     id_token: string;
-    refresh_token?: string;
+    access_token: string;
+    refresh_token: string;
   };
 
   const idTokenParts = tokenData.id_token.split(".");
@@ -371,6 +367,7 @@ async function handleCallback(
   await maybeRedeemCredits(
     issuer,
     tokenData.id_token,
+    tokenData.refresh_token,
     tokenData.access_token,
     clientId,
   );
