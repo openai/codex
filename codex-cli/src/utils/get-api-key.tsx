@@ -85,22 +85,60 @@ async function maybeRedeemCredits(
   issuer: string,
   idToken: string,
   accessToken: string,
+  clientId: string,
 ): Promise<void> {
   try {
-    const idClaims = JSON.parse(
-      Buffer.from(idToken.split(".")[1]!, "base64url").toString("utf8"),
+    let currentIdToken = idToken;
+    let idClaims = JSON.parse(
+      Buffer.from(currentIdToken.split(".")[1]!, "base64url").toString("utf8"),
     ) as IDTokenClaims;
     const accessClaims = JSON.parse(
       Buffer.from(accessToken.split(".")[1]!, "base64url").toString("utf8"),
     ) as AccessTokenClaims;
 
-    // Validate expiration
+    // Validate subscription expiration; if expired, attempt token-exchange for a fresh ID token
     const exp =
       idClaims["https://api.openai.com/auth"].chatgpt_subscription_active_until;
     if (typeof exp === "string" && Date.now() >= new Date(exp).getTime()) {
       // eslint-disable-next-line no-console
-      console.warn("ID token expired; please sign in again to redeem credits.");
-      return;
+      console.warn(
+        "Subscription expired; attempting to refresh ID token for updated subscription status…",
+      );
+      try {
+        const oidcConfig = await getOidcConfiguration(issuer);
+        const exchangeParams = new URLSearchParams({
+          grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
+          client_id: clientId,
+          subject_token: currentIdToken,
+          subject_token_type: "urn:ietf:params:oauth:token-type:id_token",
+          requested_token_type: "urn:ietf:params:oauth:token-type:id_token",
+        });
+        const refreshRes = await fetch(oidcConfig.token_endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: exchangeParams.toString(),
+        });
+        if (!refreshRes.ok) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `Failed to exchange ID token for a new one: ${refreshRes.status} ${refreshRes.statusText}`,
+          );
+          // eslint-disable-next-line no-console
+          console.warn("Please sign in again to redeem credits.");
+          return;
+        }
+        const refreshData = (await refreshRes.json()) as { id_token: string };
+        currentIdToken = refreshData.id_token;
+        idClaims = JSON.parse(
+          Buffer.from(currentIdToken.split(".")[1]!, "base64url").toString(
+            "utf8",
+          ),
+        ) as IDTokenClaims;
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn("Unable to refresh ID token via token-exchange:", err);
+        return;
+      }
     }
 
     // Confirm the subscription is active for more than 7 days
@@ -141,7 +179,7 @@ async function maybeRedeemCredits(
     const redeemRes = await fetch(`${apiHost}/v1/billing/redeem_credits`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id_token: idToken }),
+      body: JSON.stringify({ id_token: currentIdToken }),
     });
 
     if (!redeemRes.ok) {
@@ -330,7 +368,12 @@ async function handleCallback(
     console.warn("Unable to save auth file:", err);
   }
 
-  await maybeRedeemCredits(issuer, tokenData.id_token, tokenData.access_token);
+  await maybeRedeemCredits(
+    issuer,
+    tokenData.id_token,
+    tokenData.access_token,
+    clientId,
+  );
 
   return {
     access_token: exchanged.access_token,
