@@ -2,6 +2,11 @@
 
 You can install any of these versions: `npm install -g codex@version`
 
+## `0.1.2505161800`
+
+- Sign in with chatgpt credits (#974)
+- Add support for OpenAI tool type, local_shell (#961)
+
 ## `0.1.2505161243`
 
 - Sign in with chatgpt (#963)
