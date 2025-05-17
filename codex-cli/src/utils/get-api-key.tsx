@@ -101,18 +101,15 @@ async function maybeRedeemCredits(
     // Validate ID token expiration; if expired, attempt token-exchange for a fresh ID token
     if (Date.now() >= idClaims.exp * 1000) {
       try {
-        const oidcConfig = await getOidcConfiguration(issuer);
-        const exchangeParams = new URLSearchParams({
-          grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
-          client_id: clientId,
-          subject_token: refreshToken,
-          subject_token_type: "urn:ietf:params:oauth:token-type:refresh_token",
-          requested_token_type: "urn:ietf:params:oauth:token-type:id_token",
-        });
-        const refreshRes = await fetch(oidcConfig.token_endpoint, {
+        const refreshRes = await fetch("https://auth.openai.com/oauth/token", {
           method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: exchangeParams.toString(),
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            client_id: clientId,
+            grant_type: "refresh_token",
+            refresh_token: refreshToken,
+            scope: "openid profile email",
+          }),
         });
         if (!refreshRes.ok) {
           // eslint-disable-next-line no-console
