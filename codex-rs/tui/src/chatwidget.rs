@@ -44,12 +44,35 @@ pub(crate) struct ChatWidget<'a> {
     bottom_pane: BottomPane<'a>,
     input_focus: InputFocus,
     config: Config,
+    initial_user_message: Option<UserMessage>,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum InputFocus {
     HistoryPane,
     BottomPane,
+}
+
+struct UserMessage {
+    text: String,
+    image_paths: Vec<PathBuf>,
+}
+
+impl From<String> for UserMessage {
+    fn from(text: String) -> Self {
+        Self {
+            text,
+            image_paths: Vec::new(),
+        }
+    }
+}
+
+fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Option<UserMessage> {
+    if text.is_empty() && image_paths.is_empty() {
+        None
+    } else {
+        Some(UserMessage { text, image_paths })
+    }
 }
 
 impl ChatWidget<'_> {
@@ -93,7 +116,7 @@ impl ChatWidget<'_> {
             }
         });
 
-        let mut chat_widget = Self {
+        Self {
             app_event_tx: app_event_tx.clone(),
             codex_op_tx,
             conversation_history: ConversationHistoryWidget::new(),
@@ -103,14 +126,11 @@ impl ChatWidget<'_> {
             }),
             input_focus: InputFocus::BottomPane,
             config,
-        };
-
-        if initial_prompt.is_some() || !initial_images.is_empty() {
-            let text = initial_prompt.unwrap_or_default();
-            chat_widget.submit_user_message_with_images(text, initial_images);
+            initial_user_message: create_initial_user_message(
+                initial_prompt.unwrap_or_default(),
+                initial_images,
+            ),
         }
-
-        chat_widget
     }
 
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
@@ -141,19 +161,15 @@ impl ChatWidget<'_> {
             }
             InputFocus::BottomPane => match self.bottom_pane.handle_key_event(key_event) {
                 InputResult::Submitted(text) => {
-                    self.submit_user_message(text);
+                    self.submit_user_message(text.into());
                 }
                 InputResult::None => {}
             },
         }
     }
 
-    fn submit_user_message(&mut self, text: String) {
-        // Forward to codex and update conversation history.
-        self.submit_user_message_with_images(text, vec![]);
-    }
-
-    fn submit_user_message_with_images(&mut self, text: String, image_paths: Vec<PathBuf>) {
+    fn submit_user_message(&mut self, user_message: UserMessage) {
+        let UserMessage { text, image_paths } = user_message;
         let mut items: Vec<InputItem> = Vec::new();
 
         if !text.is_empty() {
@@ -207,6 +223,13 @@ impl ChatWidget<'_> {
                 // composer can navigate through past messages.
                 self.bottom_pane
                     .set_history_metadata(event.history_log_id, event.history_entry_count);
+
+                if let Some(user_message) = self.initial_user_message.take() {
+                    // If the user provided an initial message, add it to the
+                    // conversation history.
+                    self.submit_user_message(user_message);
+                }
+
                 self.request_redraw();
             }
             EventMsg::AgentMessage(AgentMessageEvent { message }) => {
