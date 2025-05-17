@@ -54,7 +54,6 @@ export default function TerminalChatInput({
   openApprovalOverlay,
   openHelpOverlay,
   openDiffOverlay,
-  openSessionsOverlay,
   onCompact,
   interruptAgent,
   active,
@@ -78,7 +77,6 @@ export default function TerminalChatInput({
   openApprovalOverlay: () => void;
   openHelpOverlay: () => void;
   openDiffOverlay: () => void;
-  openSessionsOverlay: () => void;
   onCompact: () => void;
   interruptAgent: () => void;
   active: boolean;
@@ -280,9 +278,6 @@ export default function TerminalChatInput({
               switch (cmd) {
                 case "/history":
                   openOverlay();
-                  break;
-                case "/sessions":
-                  openSessionsOverlay();
                   break;
                 case "/help":
                   openHelpOverlay();
@@ -487,10 +482,6 @@ export default function TerminalChatInput({
       } else if (inputValue === "/history") {
         setInput("");
         openOverlay();
-        return;
-      } else if (inputValue === "/sessions") {
-        setInput("");
-        openSessionsOverlay();
         return;
       } else if (inputValue === "/help") {
         setInput("");
@@ -736,7 +727,6 @@ export default function TerminalChatInput({
       openModelOverlay,
       openHelpOverlay,
       openDiffOverlay,
-      openSessionsOverlay,
       history,
       onCompact,
       skipNextSubmit,
@@ -749,7 +739,6 @@ export default function TerminalChatInput({
   useEffect(() => {
     if (active) {
       try {
-        // Make sure raw mode is properly set
         setRawMode?.(true);
         
         // Force stdin to be a TTY if not already
@@ -757,7 +746,7 @@ export default function TerminalChatInput({
           stdin.isTTY = true;
         }
       } catch (e) {
-        console.error("Failed to set raw mode:", e);
+        log(`Failed to set raw mode: ${e}`);
       }
     }
     return () => {
@@ -765,7 +754,7 @@ export default function TerminalChatInput({
         try {
           setRawMode?.(false);
         } catch (e) {
-          console.error("Failed to unset raw mode:", e);
+          log(`Failed to unset raw mode: ${e}`);
         }
       }
     };

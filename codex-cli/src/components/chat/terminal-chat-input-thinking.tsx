@@ -1,8 +1,9 @@
-import { log } from "../../utils/logger/log.js";
-import { Box, Text, useInput, useStdin } from "ink";
+import { Buffer } from "node:buffer";
 import React, { useState, useEffect } from "react";
+import { Box, Text, useInput, useStdin } from "ink";
 import { useInterval } from "use-interval";
-import type { Buffer } from "node:buffer";
+
+import { log } from "../../utils/logger/log.js";
 
 // Retaining a single static placeholder text for potential future use.  The
 // more elaborate randomised thinking prompts were removed to streamline the
