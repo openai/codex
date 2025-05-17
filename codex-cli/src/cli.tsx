@@ -21,9 +21,9 @@ import { AutoApprovalMode } from "./utils/auto-approval-mode";
 import { checkForUpdates } from "./utils/check-updates";
 import {
   loadConfig,
+  getApiKey,
   PRETTY_PRINT,
   INSTRUCTIONS_FILEPATH,
-  getApiKey,
 } from "./utils/config";
 import { getApiKey as fetchApiKey } from "./utils/get-api-key";
 import { createInputItem } from "./utils/input-utils";
