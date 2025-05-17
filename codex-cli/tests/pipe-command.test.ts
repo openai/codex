@@ -16,4 +16,28 @@ describe("shell-quote parse with pipes", () => {
 
     expect(hasOpToken).toBe(true);
   });
+
+  it("should parse multiple pipes in a command", () => {
+    const cmd = "cat a.txt | grep foo | sort | uniq";
+    const tokens = parse(cmd);
+    const opTokens = tokens.filter((t) => typeof t === "object" && "op" in t);
+    expect(opTokens.length).toBe(3);
+    expect(opTokens.every((t) => t.op === "|")).toBe(true);
+  });
+
+  it("should parse pipes with or without spaces", () => {
+    const cmd = "echo foo|grep foo";
+    const tokens = parse(cmd);
+    const opToken = tokens.find((t) => typeof t === "object" && "op" in t);
+    expect(opToken && opToken.op).toBe("|");
+  });
+
+  it("should parse pipe and other operators together", () => {
+    const cmd = "echo foo && cat bar | grep baz || echo done";
+    const tokens = parse(cmd);
+    const ops = tokens
+      .filter((t) => typeof t === "object" && "op" in t)
+      .map((t) => t.op);
+    expect(ops).toEqual(["&&", "|", "||"]);
+  });
 });
