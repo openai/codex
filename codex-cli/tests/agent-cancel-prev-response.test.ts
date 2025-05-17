@@ -132,10 +132,6 @@ describe("cancel clears previous_response_id", () => {
     ] as any);
 
     const bodies = _test.getBodies();
-    if (process.env["DEBUG"] === "true") {
-      // eslint-disable-next-line no-console
-      console.log(JSON.stringify(bodies, null, 2));
-    }
     expect(bodies.length).toBeGreaterThanOrEqual(2);
 
     // The *last* invocation belongs to the second run (after cancellation).
