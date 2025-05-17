@@ -23,6 +23,7 @@ import {
   loadConfig,
   PRETTY_PRINT,
   INSTRUCTIONS_FILEPATH,
+  getApiKey,
 } from "./utils/config";
 import { getApiKey as fetchApiKey } from "./utils/get-api-key";
 import { createInputItem } from "./utils/input-utils";
@@ -291,8 +292,9 @@ try {
       ? new Date(data.last_refresh).getTime()
       : 0;
     const expired = Date.now() - lastRefreshTime > 28 * 24 * 60 * 60 * 1000;
-    if (data.OPENAI_API_KEY && !expired) {
-      apiKey = data.OPENAI_API_KEY;
+    const providerApiKey = data[`${provider.toUpperCase()}_API_KEY`];
+    if (providerApiKey && !expired) {
+      apiKey = providerApiKey;
     }
   }
 } catch {
@@ -300,7 +302,11 @@ try {
 }
 
 if (!apiKey) {
-  apiKey = await fetchApiKey(client.issuer, client.client_id);
+  if (provider.toLowerCase() === "openai") {
+    apiKey = await fetchApiKey(client.issuer, client.client_id);
+  } else {
+    apiKey = getApiKey(provider) ?? "";
+  }
 }
 // Ensure the API key is available as an environment variable for legacy code
 process.env["OPENAI_API_KEY"] = apiKey;
