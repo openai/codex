@@ -362,21 +362,23 @@ impl WidgetRef for ConversationHistoryWidget {
         let inner = block.inner(area);
         let viewport_height = inner.height as usize;
 
-        // Cache (and if necessary recalculate) the wrapped line counts for
-        // every [`HistoryCell`] so that our scrolling math accounts for text
-        // wrapping.
-        let width = inner.width; // Width of the viewport in terminal cells.
-        if width == 0 {
+        // Cache (and if necessary recalculate) the wrapped line counts for every
+        // [`HistoryCell`] so that our scrolling math accounts for text
+        // wrapping.  We always reserve one column on the right-hand side for the
+        // scrollbar so that the content never renders "under" the scrollbar.
+        let effective_width = inner.width.saturating_sub(1);
+
+        if effective_width == 0 {
             return; // Nothing to draw – avoid division by zero.
         }
 
-        // Recompute cache if the width changed.
-        let num_lines: usize = if self.cached_width.get() != width {
-            self.cached_width.set(width);
+        // Recompute cache if the effective width changed.
+        let num_lines: usize = if self.cached_width.get() != effective_width {
+            self.cached_width.set(effective_width);
 
             let mut num_lines: usize = 0;
             for entry in &self.entries {
-                let count = wrapped_line_count_for_cell(&entry.cell, width);
+                let count = wrapped_line_count_for_cell(&entry.cell, effective_width);
                 num_lines += count;
                 entry.line_count.set(count);
             }
@@ -433,25 +435,54 @@ impl WidgetRef for ConversationHistoryWidget {
         // Build the Paragraph with wrapping enabled so long lines are not
         // clipped. Apply vertical scroll so that `offset_into_first` wrapped
         // lines are hidden at the top.
+        // ------------------------------------------------------------------
+        // Render order:
+        //   1. Clear the whole widget area so we do not leave behind any glyphs
+        //      from the previous frame.
+        //   2. Draw the surrounding Block (border and title).
+        //   3. Draw the Paragraph inside the Block, **leaving the right-most
+        //      column free** for the scrollbar.
+        //   4. Finally draw the scrollbar (if needed).
+        // ------------------------------------------------------------------
+
+        // Clear the widget area to avoid visual artifacts from previous frames.
+        Clear.render(area, buf);
+
+        // Draw the outer border and title first so the Paragraph does not
+        // overwrite it.
+        block.render(area, buf);
+
+        // Area available for text after accounting for the scrollbar.
+        let text_area = Rect {
+            x: inner.x,
+            y: inner.y,
+            width: effective_width,
+            height: inner.height,
+        };
+
         let paragraph = Paragraph::new(visible_lines)
-            .block(block)
             .wrap(wrap_cfg())
             .scroll((offset_into_first as u16, 0));
 
-        paragraph.render(area, buf);
+        paragraph.render(text_area, buf);
 
-        // Draw scrollbar if necessary.
-        let needs_scrollbar = num_lines > viewport_height;
-        if needs_scrollbar {
-            let mut scroll_state = ScrollbarState::default()
-                // The Scrollbar widget expects the *content* height minus the
-                // viewport height, mirroring the calculation used previously.
-                .content_length(num_lines.saturating_sub(viewport_height))
-                .position(scroll_pos);
+        // Always render a scrollbar *track* so that the reserved column is
+        // visually filled, even when the content fits within the viewport.
+        // We only draw the *thumb* when the content actually overflows.
 
+        let overflow = num_lines.saturating_sub(viewport_height);
+
+        let mut scroll_state = ScrollbarState::default()
+            // The Scrollbar widget expects the *content* height minus the
+            // viewport height.  When there is no overflow we still provide 0
+            // so that the widget renders only the track without a thumb.
+            .content_length(overflow)
+            .position(scroll_pos);
+
+        {
             // Choose a thumb color that stands out only when this pane has focus so that the
             // user’s attention is naturally drawn to the active viewport. When unfocused we show
-            // a low‑contrast thumb so the scrollbar fades into the background without becoming
+            // a low-contrast thumb so the scrollbar fades into the background without becoming
             // invisible.
             let thumb_style = if self.has_input_focus {
                 Style::reset().fg(Color::LightYellow)
@@ -459,30 +490,20 @@ impl WidgetRef for ConversationHistoryWidget {
                 Style::reset().fg(Color::Gray)
             };
 
+            // By default the Scrollbar widget inherits any style that was
+            // present in the underlying buffer cells. That means if a colored
+            // line happens to be underneath the scrollbar, the track (and
+            // potentially the thumb) adopt that color. Explicitly setting the
+            // track/thumb styles ensures we always draw the scrollbar with a
+            // consistent palette regardless of what content is behind it.
             StatefulWidget::render(
-                // By default the Scrollbar widget inherits the style that was already present
-                // in the underlying buffer cells. That means if a colored line (for example a
-                // background task notification that we render in blue) happens to be underneath
-                // the scrollbar, the track and thumb adopt that color and the scrollbar appears
-                // to "change color." Explicitly setting the *track* and *thumb* styles ensures
-                // we always draw the scrollbar with the same palette regardless of what content
-                // is behind it.
-                //
-                // N.B. Only the *foreground* color matters here because the scrollbar symbols
-                // themselves are filled‐in block glyphs that completely overwrite the prior
-                // character cells. We therefore leave the background at its default value so it
-                // blends nicely with the surrounding `Block`.
                 Scrollbar::new(ScrollbarOrientation::VerticalRight)
                     .begin_symbol(Some("↑"))
                     .end_symbol(Some("↓"))
                     .begin_style(Style::reset().fg(Color::DarkGray))
                     .end_style(Style::reset().fg(Color::DarkGray))
-                    // A solid thumb so that we can color it distinctly from the track.
                     .thumb_symbol("█")
-                    // Apply the dynamic thumb color computed above. We still start from
-                    // Style::reset() to clear any inherited modifiers.
                     .thumb_style(thumb_style)
-                    // Thin vertical line for the track.
                     .track_symbol(Some("│"))
                     .track_style(Style::reset().fg(Color::DarkGray)),
                 inner,
