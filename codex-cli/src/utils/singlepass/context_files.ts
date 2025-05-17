@@ -177,25 +177,78 @@ function _read_default_patterns_file(filePath?: string): string {
 /** Loads ignore patterns from a file (or a default list) and returns a list of RegExp patterns. */
 export function loadIgnorePatterns(filePath?: string): Array<RegExp> {
   try {
-    const raw = _read_default_patterns_file(filePath);
-    const lines = raw.split(/\r?\n/);
-    const cleaned = lines
-      .map((l: string) => l.trim())
-      .filter((l: string) => l && !l.startsWith("#"));
+    const content = _read_default_patterns_file(filePath);
+    const lines = content.split("\n");
 
-    // Convert each pattern to a RegExp with a leading '*/'.
-    const regs = cleaned.map((pattern: string) => {
-      const escaped = pattern
+    // Filter comments and empty lines, then clean up
+    const cleaned = lines
+      .filter((line) => line.trim() !== "" && !line.startsWith("#"))
+      .map((line) => line.trim());
+
+    // Convert each pattern to a RegExp with proper gitignore-style semantics
+    const regs = cleaned.map((origPattern: string) => {
+      let isNegated = false;
+      let modPattern = origPattern;
+
+      // Handle negation
+      if (modPattern.startsWith("!")) {
+        isNegated = true;
+        modPattern = modPattern.substring(1);
+      }
+
+      // Handle directory-specific patterns (ending with slash)
+      const isDirectory = modPattern.endsWith("/");
+      if (isDirectory) {
+        modPattern = modPattern.slice(0, -1);
+      }
+
+      // Handle non-recursive patterns (starting with slash)
+      const isNonRecursive = modPattern.startsWith("/");
+      if (isNonRecursive) {
+        modPattern = modPattern.substring(1);
+      }
+
+      // Replace glob patterns with regex equivalents
+      const regexPattern = modPattern
         .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-        .replace(/\*/g, ".*")
-        .replace(/\?/g, ".");
-      const finalRe = `^(?:(?:(?:.*/)?)(?:${escaped}))$`;
-      return new RegExp(finalRe, "i");
+        .replace(/\*\*/g, ".*")
+        .replace(/\*/g, "[^/]*")
+        .replace(/\?/g, "[^/]");
+
+      // Build the final regex pattern
+      let finalRe: string;
+      if (isNonRecursive) {
+        finalRe = isDirectory
+          ? `^${regexPattern}(?:/.*)?$`
+          : `^${regexPattern}$`;
+      } else {
+        // Recursive pattern (can match at any level)
+        finalRe = isDirectory
+          ? `^(?:.*?/)?${regexPattern}(?:/.*)?$`
+          : `^(?:.*?/)?${regexPattern}$`;
+      }
+
+      // Store negation information in the regex object
+      const regex = new RegExp(finalRe, "i");
+      (regex as ExtendedRegExp).negated = isNegated;
+
+      return regex;
     });
+
     return regs;
   } catch {
     return [];
   }
+}
+
+export function loadAgentIgnorePatterns(workspacePath: string): Array<RegExp> {
+  const patternsFile = path.join(workspacePath, ".agentignore");
+
+  if (fsSync.existsSync(patternsFile)) {
+    const patterns = loadIgnorePatterns(patternsFile);
+    return patterns;
+  }
+  return []; // Return empty array if .agentignore doesn't exist
 }
 
 /** Checks if a given path is ignored by any of the compiled patterns. */
@@ -204,12 +257,25 @@ export function shouldIgnorePath(
   compiledPatterns: Array<RegExp>,
 ): boolean {
   const normalized = path.resolve(p);
+
+  // Track whether the file should be included due to a negated pattern
+  let excluded = false;
+
   for (const regex of compiledPatterns) {
+    const isNegated = (regex as ExtendedRegExp).negated === true;
+
     if (regex.test(normalized)) {
-      return true;
+      if (isNegated) {
+        // Negated pattern explicitly includes this file
+        return false;
+      }
+
+      // Non-negated pattern excludes this file
+      excluded = true;
     }
   }
-  return false;
+
+  return excluded;
 }
 
 /**
@@ -406,4 +472,51 @@ export async function getFileContents(
   // sort results by path
   results.sort((a, b) => a.path.localeCompare(b.path));
   return results;
+}
+
+/**
+ * Combines default ignore patterns with user-specified .agentignore patterns.
+ * This creates a comprehensive set of patterns to filter files.
+ */
+export function getMergedIgnorePatterns(workspacePath: string): Array<RegExp> {
+  // Load default patterns
+  const defaultPatterns = loadIgnorePatterns();
+
+  // Load user-specific patterns from .agentignore
+  const agentPatterns = loadAgentIgnorePatterns(workspacePath);
+
+  // Combine both sets of patterns
+  return [...defaultPatterns, ...agentPatterns];
+}
+
+/**
+ * Retrieves file contents with both default and user-specified ignore patterns.
+ * This creates a safer environment by respecting all ignores.
+ */
+export async function getSafeFileContents(
+  workspacePath: string,
+): Promise<Array<FileContent>> {
+  // Get combined patterns from default and user .agentignore
+  const mergedPatterns = getMergedIgnorePatterns(workspacePath);
+
+  // Use existing function with combined patterns
+  return getFileContents(workspacePath, mergedPatterns);
+}
+
+/**
+ * Checks if a file is explicitly mentioned in the .agentignore file.
+ * Useful for validating if a specific sensitive file is protected.
+ */
+export function isExplicitlyIgnored(
+  filePath: string,
+  workspacePath: string,
+): boolean {
+  const agentPatterns = loadAgentIgnorePatterns(workspacePath);
+  const normalized = path.resolve(filePath);
+
+  return shouldIgnorePath(normalized, agentPatterns);
+}
+
+interface ExtendedRegExp extends RegExp {
+  negated?: boolean;
 }
