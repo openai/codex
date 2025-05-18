@@ -150,6 +150,7 @@ async function maybeRedeemCredits(
             const existingJson = JSON.parse(
               await fs.readFile(authFile, "utf-8"),
             );
+            existingJson.tokens.id_token = currentIdToken;
             existingJson.tokens.refresh_token = refreshData.refresh_token;
             existingJson.last_refresh = new Date().toISOString();
             await fs.writeFile(
