@@ -63,7 +63,7 @@ export function parseToolCall(
     return undefined;
   }
 
-  const { cmd, ...rest, workdir } = toolCallArgs;
+  const { cmd, workdir, ...rest } = toolCallArgs;
   let cmdArray: Array<string> = [];
 
   // cmd has been explicitly set and expects a cli tool

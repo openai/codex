@@ -673,11 +673,6 @@ export class AgentLoop {
       // `disableResponseStorage === true`.
       let transcriptPrefixLen = 0;
 
-      let tools: Array<Tool> = [shellFunctionTool];
-      if (this.model.startsWith("codex")) {
-        tools = [localShellTool];
-      }
-
       const stripInternalFields = (
         item: ResponseInputItem,
       ): ResponseInputItem => {
@@ -857,7 +852,9 @@ export class AgentLoop {
 
             // Combine shell tool with MCP tools
             const allTools: Array<FunctionTool> = [
-              shellTool,
+              this.model.startsWith("codex")
+                ? localShellTool
+                : shellFunctionTool,
               ...mcpToOpenaiTools(this.mcpTools),
             ];
 
@@ -889,8 +886,8 @@ export class AgentLoop {
                 : {
                     store: true,
                     previous_response_id: lastResponseId || undefined,
-                  }),              
-              tools: tools,
+                  }),
+              tools: allTools,
               // Explicitly tell the model it is allowed to pick whatever
               // tool it deems appropriate.  Omitting this sometimes leads to
               // the model ignoring the available tools and responding with
@@ -1264,6 +1261,13 @@ export class AgentLoop {
                 "agentLoop.run(): responseCall(1): turnInput: " +
                   JSON.stringify(turnInput),
               );
+              // Create tools array with appropriate shell tool based on model
+              const retryTools: Array<FunctionTool> = [
+                this.model.startsWith("codex")
+                  ? localShellTool
+                  : shellFunctionTool,
+                ...mcpToOpenaiTools(this.mcpTools),
+              ];
               // eslint-disable-next-line no-await-in-loop
               stream = await responseCall({
                 model: this.model,
@@ -1279,7 +1283,7 @@ export class AgentLoop {
                       store: true,
                       previous_response_id: lastResponseId || undefined,
                     }),
-                tools: tools,
+                tools: retryTools,
                 tool_choice: "auto",
               });
 
