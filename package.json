@@ -16,6 +16,7 @@
     "husky:add": "husky add"
   },
   "devDependencies": {
+    "@upstash/context7-mcp": "^1.0.9",
     "git-cliff": "^2.8.0",
     "husky": "^9.1.7",
     "lint-staged": "^15.5.1",
