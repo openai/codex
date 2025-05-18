@@ -63,7 +63,9 @@ export function parseToolCall(
     return undefined;
   }
 
-  const { cmd, workdir, ...rest } = toolCallArgs;
+  // eslint-disable-next-line prefer-const
+  let { cmd, command, workdir, ...rest } = toolCallArgs;
+  cmd = cmd ?? command;
   let cmdArray: Array<string> = [];
 
   // cmd has been explicitly set and expects a cli tool
