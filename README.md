@@ -77,7 +77,27 @@ Install globally:
 npm install -g @openai/codex
 ```
 
-Next, set your OpenAI API key as an environment variable:
+Next, you need an OpenAI API key. You have two options:
+
+### Option 1: Sign in with ChatGPT
+
+If you have a ChatGPT Plus or Pro subscription, you can sign in directly with your ChatGPT account to generate an API key:
+
+```shell
+codex
+```
+
+When prompted, select "Sign in with ChatGPT" and follow the browser authentication flow. This will:
+
+1. Open your browser to the OpenAI login page
+2. After signing in, automatically generate an API key for Codex
+3. Store the key securely for future use
+
+> **Note:** ChatGPT Plus and Pro subscribers can receive API credits through this sign-in flow.
+
+### Option 2: Use an existing API key
+
+If you already have an OpenAI API key, you can set it as an environment variable:
 
 ```shell
 export OPENAI_API_KEY="your-api-key-here"
@@ -152,7 +172,7 @@ ChatGPT-level reasoning **plus** the power to actually run code, manipulate
 files, and iterate - all under version control. In short, it's _chat-driven
 development_ that understands and executes your repo.
 
-- **Zero setup** - bring your OpenAI API key and it just works!
+- **Zero setup** - sign in with your ChatGPT account or bring your OpenAI API key and it just works!
 - **Full auto-approval, while safe + secure** by running network-disabled and directory-sandboxed
 - **Multimodal** - pass in screenshots or diagrams to implement features ✨
 
@@ -220,6 +240,7 @@ The hardening mechanism Codex uses depends on your OS:
 | `codex`                              | Interactive REPL                    | `codex`                              |
 | `codex "..."`                        | Initial prompt for interactive REPL | `codex "fix lint errors"`            |
 | `codex -q "..."`                     | Non-interactive "quiet mode"        | `codex -q --json "explain utils.ts"` |
+| `codex --login`                      | Force ChatGPT sign-in flow          | `codex --login`                      |
 | `codex completion <bash\|zsh\|fish>` | Print shell completion script       | `codex completion bash`              |
 
 Key flags: `--model/-m`, `--approval-mode/-a`, `--quiet/-q`, and `--notify`.
@@ -498,6 +519,12 @@ Any model available with [Responses API](https://platform.openai.com/docs/api-re
 <summary>Why does <code>o3</code> or <code>o4-mini</code> not work for me?</summary>
 
 It's possible that your [API account needs to be verified](https://help.openai.com/en/articles/10910291-api-organization-verification) in order to start streaming responses and seeing chain of thought summaries from the API. If you're still running into issues, please let us know!
+
+</details>
+<details>
+<summary>How do I sign in with my ChatGPT account?</summary>
+
+Run `codex` and select "Sign in with ChatGPT" when prompted, or use `codex --login` to force the sign-in flow. This will open your browser to authenticate with OpenAI and generate an API key for Codex. ChatGPT Plus and Pro subscribers can receive API credits through this flow. The key is securely stored in `~/.codex/auth.json`.
 
 </details>
 
