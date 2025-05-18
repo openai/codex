@@ -17,6 +17,7 @@ use owo_colors::OwoColorize;
 use owo_colors::Style;
 use shlex::try_join;
 use std::collections::HashMap;
+use std::time::Instant;
 
 /// This should be configurable. When used in CI, users may not want to impose
 /// a limit so they can see the full transcript.
@@ -76,7 +77,7 @@ impl EventProcessor {
 
 struct ExecCommandBegin {
     command: Vec<String>,
-    start_time: chrono::DateTime<Utc>,
+    start_time: Instant,
 }
 
 /// Metadata captured when an `McpToolCallBegin` event is received.
@@ -84,11 +85,11 @@ struct McpToolCallBegin {
     /// Formatted invocation string, e.g. `server.tool({"city":"sf"})`.
     invocation: String,
     /// Timestamp when the call started so we can compute duration later.
-    start_time: chrono::DateTime<Utc>,
+    start_time: Instant,
 }
 
 struct PatchApplyBegin {
-    start_time: chrono::DateTime<Utc>,
+    start_time: Instant,
     auto_approved: bool,
 }
 
@@ -133,7 +134,7 @@ impl EventProcessor {
                     call_id.clone(),
                     ExecCommandBegin {
                         command: command.clone(),
-                        start_time: Utc::now(),
+                        start_time: Instant::now(),
                     },
                 );
                 ts_println!(
@@ -208,7 +209,7 @@ impl EventProcessor {
                     call_id.clone(),
                     McpToolCallBegin {
                         invocation: invocation.clone(),
-                        start_time: Utc::now(),
+                        start_time: Instant::now(),
                     },
                 );
 
@@ -263,7 +264,7 @@ impl EventProcessor {
                 self.call_id_to_patch.insert(
                     call_id.clone(),
                     PatchApplyBegin {
-                        start_time: Utc::now(),
+                        start_time: Instant::now(),
                         auto_approved,
                     },
                 );
@@ -375,8 +376,16 @@ impl EventProcessor {
                 println!("thinking: {}", agent_reasoning_event.text);
             }
             EventMsg::SessionConfigured(session_configured_event) => {
-                let SessionConfiguredEvent { session_id, model } = session_configured_event;
+                let SessionConfiguredEvent {
+                    session_id,
+                    model,
+                    history_log_id: _,
+                    history_entry_count: _,
+                } = session_configured_event;
                 println!("session {session_id} with model {model}");
+            }
+            EventMsg::GetHistoryEntryResponse(_) => {
+                // Currently ignored in exec output.
             }
         }
     }

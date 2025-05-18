@@ -137,7 +137,8 @@ mod tests {
     #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use super::*;
-    use crate::config::Config;
+    use crate::config::ConfigOverrides;
+    use crate::config::ConfigToml;
     use std::fs;
     use tempfile::TempDir;
 
@@ -147,12 +148,19 @@ mod tests {
     /// value is cleared to mimic a scenario where no system instructions have
     /// been configured.
     fn make_config(root: &TempDir, limit: usize, instructions: Option<&str>) -> Config {
-        let mut cfg = Config::load_default_config_for_test();
-        cfg.cwd = root.path().to_path_buf();
-        cfg.project_doc_max_bytes = limit;
+        let codex_home = TempDir::new().unwrap();
+        let mut config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )
+        .expect("defaults for test should always succeed");
 
-        cfg.instructions = instructions.map(ToOwned::to_owned);
-        cfg
+        config.cwd = root.path().to_path_buf();
+        config.project_doc_max_bytes = limit;
+
+        config.instructions = instructions.map(ToOwned::to_owned);
+        config
     }
 
     /// AGENTS.md missing – should yield `None`.

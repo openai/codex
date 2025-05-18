@@ -43,7 +43,7 @@ if (!isVitest) {
   loadDotenv({ path: USER_WIDE_CONFIG_PATH });
 }
 
-export const DEFAULT_AGENTIC_MODEL = "o4-mini";
+export const DEFAULT_AGENTIC_MODEL = "codex-mini-latest";
 export const DEFAULT_FULL_CONTEXT_MODEL = "gpt-4.1";
 export const DEFAULT_APPROVAL_MODE = AutoApprovalMode.SUGGEST;
 export const DEFAULT_INSTRUCTIONS = "";
@@ -120,7 +120,7 @@ export function getApiKey(provider: string = "openai"): string | undefined {
     return process.env[providerInfo.envKey];
   }
 
-  // Checking `PROVIDER_API_KEY feels more intuitive with a custom provider.
+  // Checking `PROVIDER_API_KEY` feels more intuitive with a custom provider.
   const customApiKey = process.env[`${provider.toUpperCase()}_API_KEY`];
   if (customApiKey) {
     return customApiKey;

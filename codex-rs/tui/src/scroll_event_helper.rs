@@ -2,16 +2,16 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
-use std::sync::mpsc::Sender;
 
 use tokio::runtime::Handle;
 use tokio::time::Duration;
 use tokio::time::sleep;
 
 use crate::app_event::AppEvent;
+use crate::app_event_sender::AppEventSender;
 
 pub(crate) struct ScrollEventHelper {
-    app_event_tx: Sender<AppEvent>,
+    app_event_tx: AppEventSender,
     scroll_delta: Arc<AtomicI32>,
     timer_scheduled: Arc<AtomicBool>,
     runtime: Handle,
@@ -26,7 +26,7 @@ const DEBOUNCE_WINDOW: Duration = Duration::from_millis(100);
 /// window.  The debounce timer now runs on Tokio so we avoid spinning up a new
 /// operating-system thread for every burst.
 impl ScrollEventHelper {
-    pub(crate) fn new(app_event_tx: Sender<AppEvent>) -> Self {
+    pub(crate) fn new(app_event_tx: AppEventSender) -> Self {
         Self {
             app_event_tx,
             scroll_delta: Arc::new(AtomicI32::new(0)),
@@ -68,7 +68,7 @@ impl ScrollEventHelper {
 
             let accumulated = delta.swap(0, Ordering::SeqCst);
             if accumulated != 0 {
-                let _ = tx.send(AppEvent::Scroll(accumulated));
+                tx.send(AppEvent::Scroll(accumulated));
             }
 
             timer_flag.store(false, Ordering::SeqCst);

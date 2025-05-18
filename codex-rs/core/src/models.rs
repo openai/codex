@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use base64::Engine;
 use serde::Deserialize;
 use serde::Serialize;
@@ -37,6 +39,14 @@ pub enum ResponseItem {
         id: String,
         summary: Vec<ReasoningItemReasoningSummary>,
     },
+    LocalShellCall {
+        /// Set when using the chat completions API.
+        id: Option<String>,
+        /// Set when using the Responses API.
+        call_id: Option<String>,
+        status: LocalShellStatus,
+        action: LocalShellAction,
+    },
     FunctionCall {
         name: String,
         // The Responses API returns the function call arguments as a *string* that contains
@@ -69,6 +79,29 @@ impl From<ResponseInputItem> for ResponseItem {
             }
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalShellStatus {
+    Completed,
+    InProgress,
+    Incomplete,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum LocalShellAction {
+    Exec(LocalShellExecAction),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LocalShellExecAction {
+    pub command: Vec<String>,
+    pub timeout_ms: Option<u64>,
+    pub working_directory: Option<String>,
+    pub env: Option<HashMap<String, String>>,
+    pub user: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

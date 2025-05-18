@@ -166,7 +166,8 @@ pub async fn run_codex_tool_session(
                     | EventMsg::ExecCommandEnd(_)
                     | EventMsg::BackgroundEvent(_)
                     | EventMsg::PatchApplyBegin(_)
-                    | EventMsg::PatchApplyEnd(_) => {
+                    | EventMsg::PatchApplyEnd(_)
+                    | EventMsg::GetHistoryEntryResponse(_) => {
                         // For now, we do not do anything extra for these
                         // events. Note that
                         // send(codex_event_to_notification(&event)) above has

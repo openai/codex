@@ -13,11 +13,11 @@ use tui_textarea::Input;
 use tui_textarea::Key;
 use tui_textarea::TextArea;
 
-use std::sync::mpsc::Sender;
+use super::chat_composer_history::ChatComposerHistory;
+use super::command_popup::CommandPopup;
 
 use crate::app_event::AppEvent;
-
-use super::command_popup::CommandPopup;
+use crate::app_event_sender::AppEventSender;
 
 /// Minimum number of visible text rows inside the textarea.
 const MIN_TEXTAREA_ROWS: usize = 1;
@@ -33,11 +33,12 @@ pub enum InputResult {
 pub(crate) struct ChatComposer<'a> {
     textarea: TextArea<'a>,
     command_popup: Option<CommandPopup>,
-    app_event_tx: Sender<AppEvent>,
+    app_event_tx: AppEventSender,
+    history: ChatComposerHistory,
 }
 
 impl ChatComposer<'_> {
-    pub fn new(has_input_focus: bool, app_event_tx: Sender<AppEvent>) -> Self {
+    pub fn new(has_input_focus: bool, app_event_tx: AppEventSender) -> Self {
         let mut textarea = TextArea::default();
         textarea.set_placeholder_text("send a message");
         textarea.set_cursor_line_style(ratatui::style::Style::default());
@@ -46,9 +47,29 @@ impl ChatComposer<'_> {
             textarea,
             command_popup: None,
             app_event_tx,
+            history: ChatComposerHistory::new(),
         };
         this.update_border(has_input_focus);
         this
+    }
+
+    /// Record the history metadata advertised by `SessionConfiguredEvent` so
+    /// that the composer can navigate cross-session history.
+    pub(crate) fn set_history_metadata(&mut self, log_id: u64, entry_count: usize) {
+        self.history.set_metadata(log_id, entry_count);
+    }
+
+    /// Integrate an asynchronous response to an on-demand history lookup. If
+    /// the entry is present and the offset matches the current cursor we
+    /// immediately populate the textarea.
+    pub(crate) fn on_history_entry_response(
+        &mut self,
+        log_id: u64,
+        offset: usize,
+        entry: Option<String>,
+    ) -> bool {
+        self.history
+            .on_entry_response(log_id, offset, entry, &mut self.textarea)
     }
 
     pub fn set_input_focus(&mut self, has_focus: bool) {
@@ -113,9 +134,7 @@ impl ChatComposer<'_> {
             } => {
                 if let Some(cmd) = popup.selected_command() {
                     // Send command to the app layer.
-                    if let Err(e) = self.app_event_tx.send(AppEvent::DispatchCommand(*cmd)) {
-                        tracing::error!("failed to send DispatchCommand event: {e}");
-                    }
+                    self.app_event_tx.send(AppEvent::DispatchCommand(*cmd));
 
                     // Clear textarea so no residual text remains.
                     self.textarea.select_all();
@@ -136,6 +155,33 @@ impl ChatComposer<'_> {
     fn handle_key_event_without_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
         let input: Input = key_event.into();
         match input {
+            // -------------------------------------------------------------
+            // History navigation (Up / Down) – only when the composer is not
+            // empty or when the cursor is at the correct position, to avoid
+            // interfering with normal cursor movement.
+            // -------------------------------------------------------------
+            Input { key: Key::Up, .. } => {
+                if self.history.should_handle_navigation(&self.textarea) {
+                    let consumed = self
+                        .history
+                        .navigate_up(&mut self.textarea, &self.app_event_tx);
+                    if consumed {
+                        return (InputResult::None, true);
+                    }
+                }
+                self.handle_input_basic(input)
+            }
+            Input { key: Key::Down, .. } => {
+                if self.history.should_handle_navigation(&self.textarea) {
+                    let consumed = self
+                        .history
+                        .navigate_down(&mut self.textarea, &self.app_event_tx);
+                    if consumed {
+                        return (InputResult::None, true);
+                    }
+                }
+                self.handle_input_basic(input)
+            }
             Input {
                 key: Key::Enter,
                 shift: false,
@@ -145,7 +191,13 @@ impl ChatComposer<'_> {
                 let text = self.textarea.lines().join("\n");
                 self.textarea.select_all();
                 self.textarea.cut();
-                (InputResult::Submitted(text), true)
+
+                if text.is_empty() {
+                    (InputResult::None, true)
+                } else {
+                    self.history.record_local_submission(&text);
+                    (InputResult::Submitted(text), true)
+                }
             }
             Input {
                 key: Key::Enter, ..

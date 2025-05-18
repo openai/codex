@@ -503,7 +503,6 @@ dependencies = [
 name = "codex-common"
 version = "0.0.0"
 dependencies = [
- "chrono",
  "clap",
  "codex-core",
 ]
@@ -523,6 +522,7 @@ dependencies = [
  "env-flags",
  "eventsource-stream",
  "fs-err",
+ "fs2",
  "futures",
  "landlock",
  "libc",
@@ -629,8 +629,12 @@ dependencies = [
  "codex-core",
  "color-eyre",
  "crossterm",
+ "lazy_static",
  "mcp-types",
+ "path-clean",
+ "pretty_assertions",
  "ratatui",
+ "regex",
  "serde_json",
  "shlex",
  "strum 0.27.1",
@@ -1242,6 +1246,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f89bda4c2a21204059a977ed3bfe746677dfd137b83c339e702b0ac91d482aa"
 dependencies = [
  "autocfg",
+]
+
+[[package]]
+name = "fs2"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9564fc758e15025b46aa6643b1b77d047d1a56a1aea6e01002ac0c7026876213"
+dependencies = [
+ "libc",
+ "winapi",
 ]
 
 [[package]]
@@ -2457,6 +2471,12 @@ checksum = "e4af381fe79fa195b4909485d99f73a80792331df0625188e707854f0b3383f5"
 dependencies = [
  "path-dedot",
 ]
+
+[[package]]
+name = "path-clean"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "17359afc20d7ab31fdb42bb844c8b3bb1dabd7dcf7e68428492da7f16966fcef"
 
 [[package]]
 name = "path-dedot"

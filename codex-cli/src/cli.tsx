@@ -1,6 +1,19 @@
 #!/usr/bin/env node
 import "dotenv/config";
 
+// Exit early if on an older version of Node.js (< 22)
+const major = process.versions.node.split(".").map(Number)[0]!;
+if (major < 22) {
+  // eslint-disable-next-line no-console
+  console.error(
+    "\n" +
+      "Codex CLI requires Node.js version 22 or newer.\n" +
+      `You are running Node.js v${process.versions.node}.\n` +
+      "Please upgrade Node.js: https://nodejs.org/en/download/\n",
+  );
+  process.exit(1);
+}
+
 // Hack to suppress deprecation warnings (punycode)
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (process as any).noDeprecation = true;
@@ -14,16 +27,20 @@ import type { ReasoningEffort } from "openai/resources.mjs";
 
 import App from "./app";
 import { runSinglePass } from "./cli-singlepass";
+import SessionsOverlay from "./components/sessions-overlay.js";
 import { AgentLoop } from "./utils/agent/agent-loop";
 import { ReviewDecision } from "./utils/agent/review";
 import { AutoApprovalMode } from "./utils/auto-approval-mode";
 import { checkForUpdates } from "./utils/check-updates";
 import {
-  getApiKey,
   loadConfig,
   PRETTY_PRINT,
   INSTRUCTIONS_FILEPATH,
 } from "./utils/config";
+import {
+  getApiKey as fetchApiKey,
+  maybeRedeemCredits,
+} from "./utils/get-api-key";
 import { createInputItem } from "./utils/input-utils";
 import { initLogger } from "./utils/logger/log";
 import { isModelSupportedForResponses } from "./utils/model-utils.js";
@@ -41,6 +58,7 @@ import { spawnSync } from "child_process";
 import fs from "fs";
 import { render } from "ink";
 import meow from "meow";
+import os from "os";
 import path from "path";
 import React from "react";
 
@@ -64,10 +82,13 @@ Usage
     --version                       Print version and exit
 
     -h, --help                      Show usage and exit
-    -m, --model <model>             Model to use for completions (default: o4-mini)
+    -m, --model <model>             Model to use for completions (default: codex-mini-latest)
     -p, --provider <provider>       Provider to use for completions (default: openai)
     -i, --image <path>              Path(s) to image files to include as input
     -v, --view <rollout>            Inspect a previously saved rollout instead of starting a session
+    --history                       Browse previous sessions
+    --login                         Start a new sign in flow
+    --free                          Retry redeeming free credits
     -q, --quiet                     Non-interactive mode that only prints the assistant's final output
     -c, --config                    Open the instructions file in your editor
     -w, --writable-root <path>      Writable folder for sandbox in full-auto mode (can be specified multiple times)
@@ -121,6 +142,9 @@ Usage
       help: { type: "boolean", aliases: ["h"] },
       version: { type: "boolean", description: "Print version and exit" },
       view: { type: "string" },
+      history: { type: "boolean", description: "Browse previous sessions" },
+      login: { type: "boolean", description: "Force a new sign in flow" },
+      free: { type: "boolean", description: "Retry redeeming free credits" },
       model: { type: "string", aliases: ["m"] },
       provider: { type: "string", aliases: ["p"] },
       image: { type: "string", isMultiple: true, aliases: ["i"] },
@@ -384,11 +408,82 @@ let config = loadConfig(undefined, undefined, {
   isFullContext: fullContextMode,
 });
 
-const prompt = cli.input[0];
+// `prompt` can be updated later when the user resumes a previous session
+// via the `--history` flag. Therefore it must be declared with `let` rather
+// than `const`.
+let prompt = cli.input[0];
 const model = cli.flags.model ?? config.model;
 const imagePaths = cli.flags.image;
 const provider = cli.flags.provider ?? config.provider ?? "openai";
-const apiKey = getApiKey(provider);
+
+const client = {
+  issuer: "https://auth.openai.com",
+  client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
+};
+
+let apiKey = "";
+let savedTokens:
+  | {
+      id_token?: string;
+      access_token?: string;
+      refresh_token: string;
+    }
+  | undefined;
+
+// Try to load existing auth file if present
+try {
+  const home = os.homedir();
+  const authDir = path.join(home, ".codex");
+  const authFile = path.join(authDir, "auth.json");
+  if (fs.existsSync(authFile)) {
+    const data = JSON.parse(fs.readFileSync(authFile, "utf-8"));
+    savedTokens = data.tokens;
+    const lastRefreshTime = data.last_refresh
+      ? new Date(data.last_refresh).getTime()
+      : 0;
+    const expired = Date.now() - lastRefreshTime > 28 * 24 * 60 * 60 * 1000;
+    if (data.OPENAI_API_KEY && !expired) {
+      apiKey = data.OPENAI_API_KEY;
+    }
+  }
+} catch {
+  // ignore errors
+}
+
+if (cli.flags.login) {
+  apiKey = await fetchApiKey(client.issuer, client.client_id);
+  try {
+    const home = os.homedir();
+    const authDir = path.join(home, ".codex");
+    const authFile = path.join(authDir, "auth.json");
+    if (fs.existsSync(authFile)) {
+      const data = JSON.parse(fs.readFileSync(authFile, "utf-8"));
+      savedTokens = data.tokens;
+    }
+  } catch {
+    /* ignore */
+  }
+} else if (!apiKey) {
+  apiKey = await fetchApiKey(client.issuer, client.client_id);
+}
+// Ensure the API key is available as an environment variable for legacy code
+process.env["OPENAI_API_KEY"] = apiKey;
+
+if (cli.flags.free) {
+  // eslint-disable-next-line no-console
+  console.log(`${chalk.bold("codex --free")} attempting to redeem credits...`);
+  if (!savedTokens?.refresh_token) {
+    apiKey = await fetchApiKey(client.issuer, client.client_id, true);
+    // fetchApiKey includes credit redemption as the end of the flow
+  } else {
+    await maybeRedeemCredits(
+      client.issuer,
+      client.client_id,
+      savedTokens.refresh_token,
+      savedTokens.id_token,
+    );
+  }
+}
 
 // Set of providers that don't require API keys
 const NO_API_KEY_REQUIRED = new Set(["ollama"]);
@@ -477,6 +572,46 @@ if (
 }
 
 let rollout: AppRollout | undefined;
+
+// For --history, show session selector and optionally update prompt or rollout.
+if (cli.flags.history) {
+  const result: { path: string; mode: "view" | "resume" } | null =
+    await new Promise((resolve) => {
+      const instance = render(
+        React.createElement(SessionsOverlay, {
+          onView: (p: string) => {
+            instance.unmount();
+            resolve({ path: p, mode: "view" });
+          },
+          onResume: (p: string) => {
+            instance.unmount();
+            resolve({ path: p, mode: "resume" });
+          },
+          onExit: () => {
+            instance.unmount();
+            resolve(null);
+          },
+        }),
+      );
+    });
+
+  if (!result) {
+    process.exit(0);
+  }
+
+  if (result.mode === "view") {
+    try {
+      const content = fs.readFileSync(result.path, "utf-8");
+      rollout = JSON.parse(content) as AppRollout;
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error("Error reading session file:", error);
+      process.exit(1);
+    }
+  } else {
+    prompt = `Resume this session: ${result.path}`;
+  }
+}
 
 // For --view, optionally load an existing rollout from disk, display it and exit.
 if (cli.flags.view) {

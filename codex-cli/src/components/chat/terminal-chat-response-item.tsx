@@ -19,6 +19,7 @@ import { parse, setOptions } from "marked";
 import TerminalRenderer from "marked-terminal";
 import path from "path";
 import React, { useEffect, useMemo } from "react";
+import { formatCommandForDisplay } from "src/format-command.js";
 import supportsHyperlinks from "supports-hyperlinks";
 
 export default function TerminalChatResponseItem({
@@ -41,8 +42,12 @@ export default function TerminalChatResponseItem({
           fileOpener={fileOpener}
         />
       );
+    // @ts-expect-error new item types aren't in SDK yet
+    case "local_shell_call":
     case "function_call":
       return <TerminalChatResponseToolCall message={item} />;
+    // @ts-expect-error new item types aren't in SDK yet
+    case "local_shell_call_output":
     case "function_call_output":
       return (
         <TerminalChatResponseToolCallOutput
@@ -166,21 +171,28 @@ function TerminalChatResponseMessage({
 function TerminalChatResponseToolCall({
   message,
 }: {
-  message: ResponseFunctionToolCallItem;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  message: ResponseFunctionToolCallItem | any;
 }) {
-  const details = parseToolCall(message);
+  let workdir: string | undefined;
+  let cmdReadableText: string | undefined;
+  if (message.type === "function_call") {
+    const details = parseToolCall(message);
+    workdir = details?.workdir;
+    cmdReadableText = details?.cmdReadableText;
+  } else if (message.type === "local_shell_call") {
+    const action = message.action;
+    workdir = action.working_directory;
+    cmdReadableText = formatCommandForDisplay(action.command);
+  }
   return (
     <Box flexDirection="column" gap={1}>
       <Text color="magentaBright" bold>
         command
-        {details?.workdir ? (
-          <Text dimColor>{` (${details?.workdir})`}</Text>
-        ) : (
-          ""
-        )}
+        {workdir ? <Text dimColor>{` (${workdir})`}</Text> : ""}
       </Text>
       <Text>
-        <Text dimColor>$</Text> {details?.cmdReadableText}
+        <Text dimColor>$</Text> {cmdReadableText}
       </Text>
     </Box>
   );
@@ -190,7 +202,8 @@ function TerminalChatResponseToolCallOutput({
   message,
   fullStdout,
 }: {
-  message: ResponseFunctionToolCallOutputItem;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  message: ResponseFunctionToolCallOutputItem | any;
   fullStdout: boolean;
 }) {
   const { output, metadata } = parseToolCallOutput(message.output);

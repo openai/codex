@@ -2,6 +2,33 @@
 
 You can install any of these versions: `npm install -g codex@version`
 
+## `0.1.2505172129`
+
+### 🪲 Bug Fixes
+
+- Add node version check (#1007)
+- Persist token after refresh (#1006)
+
+## `0.1.2505171619`
+
+- `codex --login` + `codex --free` (#998)
+
+## `0.1.2505161800`
+
+- Sign in with chatgpt credits (#974)
+- Add support for OpenAI tool type, local_shell (#961)
+
+## `0.1.2505161243`
+
+- Sign in with chatgpt (#963)
+- Session history viewer (#912)
+- Apply patch issue when using different cwd (#942)
+- Diff command for filenames with special characters (#954)
+
+## `0.1.2505160811`
+
+- `codex-mini-latest` (#951)
+
 ## `0.1.2505140839`
 
 ### 🪲 Bug Fixes
