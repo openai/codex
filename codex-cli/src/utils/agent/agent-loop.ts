@@ -855,8 +855,8 @@ export class AgentLoop {
               .join("\n");
 
             // Combine shell tool with MCP tools
-            const allTools: Array<FunctionTool> = [
-              localShellTool as FunctionTool,
+            const allTools: Array<Tool> = [
+              ...tools,
               ...mcpToOpenaiTools(this.mcpTools),
             ];
 
