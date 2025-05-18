@@ -36,6 +36,7 @@ import {
   loadConfig,
   PRETTY_PRINT,
   INSTRUCTIONS_FILEPATH,
+  getApiKey,
 } from "./utils/config";
 import {
   getApiKey as fetchApiKey,
@@ -307,20 +308,27 @@ let savedTokens:
     }
   | undefined;
 
-// Try to load existing auth file if present
 try {
-  const home = os.homedir();
-  const authDir = path.join(home, ".codex");
-  const authFile = path.join(authDir, "auth.json");
-  if (fs.existsSync(authFile)) {
-    const data = JSON.parse(fs.readFileSync(authFile, "utf-8"));
-    savedTokens = data.tokens;
-    const lastRefreshTime = data.last_refresh
-      ? new Date(data.last_refresh).getTime()
-      : 0;
-    const expired = Date.now() - lastRefreshTime > 28 * 24 * 60 * 60 * 1000;
-    if (data.OPENAI_API_KEY && !expired) {
-      apiKey = data.OPENAI_API_KEY;
+  if (config.provider?.toLowerCase() === "openai") {
+    // Try to load existing auth file if present
+    const home = os.homedir();
+    const authDir = path.join(home, ".codex");
+    const authFile = path.join(authDir, "auth.json");
+    if (fs.existsSync(authFile)) {
+      const data = JSON.parse(fs.readFileSync(authFile, "utf-8"));
+      savedTokens = data.tokens;
+      const lastRefreshTime = data.last_refresh
+        ? new Date(data.last_refresh).getTime()
+        : 0;
+      const expired = Date.now() - lastRefreshTime > 28 * 24 * 60 * 60 * 1000;
+      if (data.OPENAI_API_KEY && !expired) {
+        apiKey = data.OPENAI_API_KEY;
+      }
+    }
+  } else {
+    const providerApiKey = getApiKey(config.provider);
+    if (providerApiKey) {
+      apiKey = providerApiKey;
     }
   }
 } catch {
