@@ -1,6 +1,19 @@
 #!/usr/bin/env node
 import "dotenv/config";
 
+// Exit early if on an older version of Node.js (< 22)
+const major = process.versions.node.split(".").map(Number)[0]!;
+if (major < 22) {
+  // eslint-disable-next-line no-console
+  console.error(
+    "\n" +
+      "Codex CLI requires Node.js version 22 or newer.\n" +
+      `You are running Node.js v${process.versions.node}.\n` +
+      "Please upgrade Node.js: https://nodejs.org/en/download/\n",
+  );
+  process.exit(1);
+}
+
 // Hack to suppress deprecation warnings (punycode)
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (process as any).noDeprecation = true;
@@ -340,15 +353,20 @@ if (cli.flags.login) {
 // Ensure the API key is available as an environment variable for legacy code
 process.env["OPENAI_API_KEY"] = apiKey;
 
-if (cli.flags.free && savedTokens?.refresh_token) {
+if (cli.flags.free) {
   // eslint-disable-next-line no-console
   console.log(`${chalk.bold("codex --free")} attempting to redeem credits...`);
-  await maybeRedeemCredits(
-    client.issuer,
-    client.client_id,
-    savedTokens.refresh_token,
-    savedTokens.id_token,
-  );
+  if (!savedTokens?.refresh_token) {
+    apiKey = await fetchApiKey(client.issuer, client.client_id, true);
+    // fetchApiKey includes credit redemption as the end of the flow
+  } else {
+    await maybeRedeemCredits(
+      client.issuer,
+      client.client_id,
+      savedTokens.refresh_token,
+      savedTokens.id_token,
+    );
+  }
 }
 
 // Set of providers that don't require API keys
