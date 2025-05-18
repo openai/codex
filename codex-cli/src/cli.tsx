@@ -1,6 +1,19 @@
 #!/usr/bin/env node
 import "dotenv/config";
 
+// Exit early if on an older version of Node.js (< 22)
+const major = process.versions.node.split(".").map(Number)[0]!;
+if (major < 22) {
+  // eslint-disable-next-line no-console
+  console.error(
+    "\n" +
+      "Codex CLI requires Node.js version 22 or newer.\n" +
+      `You are running Node.js v${process.versions.node}.\n` +
+      "Please upgrade Node.js: https://nodejs.org/en/download/\n",
+  );
+  process.exit(1);
+}
+
 // Hack to suppress deprecation warnings (punycode)
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (process as any).noDeprecation = true;
