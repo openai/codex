@@ -132,13 +132,37 @@ async function maybeRedeemCredits(
           );
           return;
         }
-        const refreshData = (await refreshRes.json()) as { id_token: string };
+        const refreshData = (await refreshRes.json()) as {
+          id_token: string;
+          refresh_token?: string;
+        };
         currentIdToken = refreshData.id_token;
         idClaims = JSON.parse(
           Buffer.from(currentIdToken.split(".")[1]!, "base64url").toString(
             "utf8",
           ),
         ) as IDTokenClaims;
+        if (refreshData.refresh_token) {
+          try {
+            const home = os.homedir();
+            const authDir = path.join(home, ".codex");
+            const authFile = path.join(authDir, "auth.json");
+            const existingJson = JSON.parse(
+              await fs.readFile(authFile, "utf-8"),
+            );
+            existingJson.tokens.id_token = currentIdToken;
+            existingJson.tokens.refresh_token = refreshData.refresh_token;
+            existingJson.last_refresh = new Date().toISOString();
+            await fs.writeFile(
+              authFile,
+              JSON.stringify(existingJson, null, 2),
+              { mode: 0o600 },
+            );
+          } catch (err) {
+            // eslint-disable-next-line no-console
+            console.warn("Unable to update refresh token in auth file:", err);
+          }
+        }
       } catch (err) {
         // eslint-disable-next-line no-console
         console.warn("Unable to refresh ID token via token-exchange:", err);
@@ -200,7 +224,7 @@ async function maybeRedeemCredits(
     const redeemRes = await fetch(`${apiHost}/v1/billing/redeem_credits`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id_token: idToken }),
+      body: JSON.stringify({ id_token: currentIdToken }),
     });
 
     if (!redeemRes.ok) {
@@ -713,8 +737,9 @@ async function signInFlow(issuer: string, clientId: string): Promise<string> {
 export async function getApiKey(
   issuer: string,
   clientId: string,
+  forceLogin: boolean = false,
 ): Promise<string> {
-  if (process.env["OPENAI_API_KEY"]) {
+  if (!forceLogin && process.env["OPENAI_API_KEY"]) {
     return process.env["OPENAI_API_KEY"]!;
   }
   const choice = await promptUserForChoice();
