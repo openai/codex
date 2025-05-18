@@ -333,15 +333,20 @@ if (cli.flags.login) {
 // Ensure the API key is available as an environment variable for legacy code
 process.env["OPENAI_API_KEY"] = apiKey;
 
-if (cli.flags.free && savedTokens?.refresh_token) {
+if (cli.flags.free) {
   // eslint-disable-next-line no-console
   console.log(`${chalk.bold("codex --free")} attempting to redeem credits...`);
-  await maybeRedeemCredits(
-    client.issuer,
-    client.client_id,
-    savedTokens.refresh_token,
-    savedTokens.id_token,
-  );
+  if (!savedTokens?.refresh_token) {
+    apiKey = await fetchApiKey(client.issuer, client.client_id, true);
+    // fetchApiKey includes credit redemption as the end of the flow
+  } else {
+    await maybeRedeemCredits(
+      client.issuer,
+      client.client_id,
+      savedTokens.refresh_token,
+      savedTokens.id_token,
+    );
+  }
 }
 
 // Set of providers that don't require API keys
