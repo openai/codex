@@ -34,11 +34,16 @@ function removeUnsupportedKeysFromJsonSchemaParameters(
   return paramsCopy;
 }
 
+const unsupportedKeys = ["default", "minimum", "maximum"];
+
 // Recursively remove unsupported keys from JSON schema
 function removeUnsupportedKeysFromJsonSchemaParametersRecursive(
   parameters: Record<string, unknown>,
 ): Record<string, unknown> {
-  return removeUnsupportedKeysFromJsonSchemaParameters(parameters, ["default"]);
+  return removeUnsupportedKeysFromJsonSchemaParameters(
+    parameters,
+    unsupportedKeys,
+  );
 }
 
 /* 
@@ -104,25 +109,126 @@ function processSchemaProperties(
   };
 }
 
-// // Helper function 2 for ensureBaseSchema: Determines the 'required' array.
+// Helper function 2 for ensureBaseSchema: Determines the 'required' array.
+// Reason: OpenAI expects all properties to be required, so we need to include all property keys in the required array
 function determineSchemaRequired(
   schema: Record<string, unknown>,
 ): Record<string, unknown> {
   // Assumes schema.properties is correctly set by a previous step (e.g., processSchemaProperties)
   const properties = (schema["properties"] as Record<string, unknown>) || {};
-  const originalRequired = schema["required"]; // Uses 'required' from the schema passed into this step
-  let finalRequired: Array<string> = [];
-  if (Array.isArray(originalRequired)) {
-    finalRequired = (originalRequired as Array<unknown>).filter(
-      (key): key is string =>
-        typeof key === "string" &&
-        Object.prototype.hasOwnProperty.call(properties, key),
-    );
-  }
+
+  // Use all property keys for the required array
+  const finalRequired = Object.keys(properties);
+
   return {
     ...schema,
     required: finalRequired,
   };
+}
+
+/*
+Helper function to fix required fields by ensuring they only include valid properties
+and excluding fields of type "object"
+
+Reason: Really weird behaviour with OpenAI's API, it expects all the properties to be required, but if it's supplied with a property of type "object", it throws an error.
+
+  Example Error:
+  sanitizedName mcp-atlassian__MCP__TOOL__jira_create_issue
+  inputSchema {
+    type: 'object',
+    properties: {
+      project_key: {
+        description: "The JIRA project key (e.g. 'PROJ', 'DEV', 'SUPPORT'). This is the prefix of issue keys in your project. Never assume what it might be, always ask the user.",
+        title: 'Project Key',
+        type: 'string'
+      },
+      summary: {
+        description: 'Summary/title of the issue',
+        title: 'Summary',
+        type: 'string'
+      },
+      issue_type: {
+        description: "Issue type (e.g. 'Task', 'Bug', 'Story', 'Epic', 'Subtask'). The available types depend on your project configuration. For subtasks, use 'Subtask' (not 'Sub-task') and include parent in additional_fields.",
+        title: 'Issue Type',
+        type: 'string'
+      },
+      assignee: {
+        description: "(Optional) Assignee's user identifier (string): Email, display name, or account ID (e.g., 'user@example.com', 'John Doe', 'accountid:...')",
+        title: 'Assignee',
+        type: 'string'
+      },
+      description: {
+        description: 'Issue description',
+        title: 'Description',
+        type: 'string'
+      },
+      components: {
+        description: "(Optional) Comma-separated list of component names to assign (e.g., 'Frontend,API')",
+        title: 'Components',
+        type: 'string'
+      },
+      additional_fields: {
+        description: '(Optional) Dictionary of additional fields to set. Examples:\n' +
+          "- Set priority: {'priority': {'name': 'High'}}\n" +
+          "- Add labels: {'labels': ['frontend', 'urgent']}\n" +
+          "- Link to parent (for any issue type): {'parent': 'PROJ-123'}\n" +
+          "- Set Fix Version/s: {'fixVersions': [{'id': '10020'}]}\n" +
+          "- Custom fields: {'customfield_10010': 'value'}",
+        title: 'Additional Fields',
+        type: 'object',
+        additionalProperties: false
+      }
+    },
+    required: [
+      'project_key',
+      'summary',
+      'issue_type',
+      'assignee',
+      'description',
+      'components',
+      'additional_fields'
+    ],
+    additionalProperties: false,
+    '$schema': 'http://json-schema.org/draft-07/schema#'
+  }
+ system
+    ⚠️  OpenAI rejected the request (request ID: req_b5de6f4ca29a335dc1cb99298b88b4b4). Error details: Status: 400,
+    Code: invalid_function_parameters, Type: invalid_request_error, Message: 400 Invalid schema for function
+    'mcp-atlassian__MCP__TOOL__jira_create_issue': In context=(), 'required' is required to be supplied and to be an
+    array including every key in properties. Extra required key 'additional_fields' supplied.. Please verify your
+    settings and try again.
+*/
+function fixRequiredFields(
+  schema: Record<string, unknown>,
+): Record<string, unknown> {
+  const schemaCopy = { ...schema };
+
+  if (Array.isArray(schemaCopy["required"]) && schemaCopy["properties"]) {
+    const properties = schemaCopy["properties"] as Record<
+      string,
+      Record<string, unknown>
+    >;
+
+    schemaCopy["required"] = (schemaCopy["required"] as Array<unknown>).filter(
+      (key: unknown) => {
+        if (typeof key !== "string") {
+          return false;
+        }
+
+        if (!Object.prototype.hasOwnProperty.call(properties, key)) {
+          return false;
+        }
+
+        // Get the property definition
+        const property = properties[key];
+
+        // Exclude properties of type "object" from required
+        return !(property && property["type"] === "object");
+      },
+    );
+  }
+
+  return schemaCopy;
 }
 
 // Helper function 3 for ensureBaseSchema: Applies the base schema attributes.
@@ -144,6 +250,7 @@ const fixInputSchema = pipe(
   setAdditionalPropertiesFalse,
   processSchemaProperties,
   determineSchemaRequired,
+  fixRequiredFields,
   applySchemaBaseStructure,
 );
 
@@ -162,7 +269,6 @@ export function mcpToOpenaiTools(
 
     // Sanitize the tool name to ensure it complies with OpenAI's pattern
     const sanitizedName = sanitizeToolName(tool.name);
-
     return {
       type: "function",
       name: sanitizedName,
