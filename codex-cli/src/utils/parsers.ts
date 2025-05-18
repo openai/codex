@@ -72,7 +72,11 @@ export function parseToolCall(
   // If it's empty, it's a MCP tool and we should use the tool name as the command
   if (!cmd || !Array.isArray(cmd) || cmd.length === 0) {
     const { serverName, toolName } = unsanitizeToolName(toolCall.name);
-    cmdArray = [`${serverName}: ${toolName}`, `Args: ${JSON.stringify(rest)}`];
+    const validatedServerName = serverName ? `${serverName}: ` : "";
+    cmdArray = [
+      `${validatedServerName}${toolName}`,
+      `Args: ${JSON.stringify(rest)}`,
+    ];
   } else {
     cmdArray = cmd;
   }
