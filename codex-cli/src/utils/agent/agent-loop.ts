@@ -536,6 +536,7 @@ export class AgentLoop {
   public async run(
     input: Array<ResponseInputItem>,
     previousResponseId: string = "",
+    attempt: number = 1,
   ): Promise<void> {
     // ---------------------------------------------------------------------
     // Top‑level error wrapper so that known transient network issues like
@@ -1370,7 +1371,38 @@ export class AgentLoop {
         ((err as any).code === "ERR_STREAM_PREMATURE_CLOSE" ||
           err.message?.includes("Premature close"));
 
+      // Configurable retry parameters for premature-close errors
+      const maxRetries =
+        parseInt(process.env["CODEX_PREMATURE_CLOSE_RETRIES"] || "", 10) || 3;
+      const baseDelayMs =
+        parseInt(process.env["CODEX_PREMATURE_CLOSE_BASE_DELAY_MS"] || "", 10) ||
+        1000;
+
       if (isPrematureClose) {
+        if (attempt < maxRetries) {
+          const delayMs = baseDelayMs * 2 ** (attempt - 1);
+          try {
+            this.onItem({
+              id: `retry-${Date.now()}`,
+              type: "message",
+              role: "system",
+              content: [
+                {
+                  type: "input_text",
+                  text: `⚠️  Connection closed prematurely; retrying in ${Math.round(
+                    delayMs / 1000
+                  )}s… (attempt ${attempt}/${maxRetries})`,
+                },
+              ],
+            });
+          } catch {
+            /* best-effort */
+          }
+          this.onLoading(false);
+          await new Promise((res) => setTimeout(res, delayMs));
+          return this.run(input, previousResponseId, attempt + 1);
+        }
+        // Exhausted retries – show final error
         try {
           this.onItem({
             id: `error-${Date.now()}`,
@@ -1384,7 +1416,7 @@ export class AgentLoop {
             ],
           });
         } catch {
-          /* no-op – emitting the error message is best‑effort */
+          /* best-effort */
         }
         this.onLoading(false);
         return;
