@@ -442,7 +442,7 @@ if (
   console.error(
     `The model "${config.model}" does not appear in the list of models ` +
       `available to your account. Double-check the spelling (use\n` +
-      `  openai models list\n` +
+      `  openai api models.list\n` +
       `to see the full list) or choose another model with the --model flag.`,
   );
   process.exit(1);
