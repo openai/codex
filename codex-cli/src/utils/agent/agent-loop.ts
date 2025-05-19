@@ -305,7 +305,8 @@ export class AgentLoop {
     this.disableResponseStorage = disableResponseStorage ?? false;
     this.sessionId = getSessionId() || randomUUID().replaceAll("-", "");
     // Configure OpenAI client with optional timeout (ms) from environment
-    const timeoutMs = OPENAI_TIMEOUT_MS;
+    // Ensure timeout doesn't exceed max safe integer for Node.js timeouts (prevent TimeoutOverflowWarning)
+    const timeoutMs = OPENAI_TIMEOUT_MS && OPENAI_TIMEOUT_MS < 2147483647 ? OPENAI_TIMEOUT_MS : undefined;
     const apiKey = this.config.apiKey ?? process.env["OPENAI_API_KEY"] ?? "";
     const baseURL = getBaseUrl(this.provider);
 
@@ -347,6 +348,7 @@ export class AgentLoop {
         },
         httpAgent: PROXY_URL ? new HttpsProxyAgent(PROXY_URL) : undefined,
         ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
+        // Timeout is already validated above
       });
     }
 
