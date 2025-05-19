@@ -1375,8 +1375,10 @@ export class AgentLoop {
       const maxRetries =
         parseInt(process.env["CODEX_PREMATURE_CLOSE_RETRIES"] || "", 10) || 3;
       const baseDelayMs =
-        parseInt(process.env["CODEX_PREMATURE_CLOSE_BASE_DELAY_MS"] || "", 10) ||
-        1000;
+        parseInt(
+          process.env["CODEX_PREMATURE_CLOSE_BASE_DELAY_MS"] || "",
+          10,
+        ) || 1000;
 
       if (isPrematureClose) {
         if (attempt < maxRetries) {
@@ -1390,7 +1392,7 @@ export class AgentLoop {
                 {
                   type: "input_text",
                   text: `⚠️  Connection closed prematurely; retrying in ${Math.round(
-                    delayMs / 1000
+                    delayMs / 1000,
                   )}s… (attempt ${attempt}/${maxRetries})`,
                 },
               ],
