@@ -1,5 +1,7 @@
 import { HttpsProxyAgent } from "https-proxy-agent";
 
+type ConfigWithInsecure = { insecure?: boolean };
+
 /**
  * Returns an appropriate HTTP(S) agent for OpenAI/Azure clients,
  * handling insecure mode and proxy settings.
@@ -8,49 +10,21 @@ import { HttpsProxyAgent } from "https-proxy-agent";
  * @param proxyUrl - Optional proxy URL (e.g., from process.env.HTTPS_PROXY).
  * @returns An instance of HttpsProxyAgent or undefined.
  */
-export function getHttpAgent(config: unknown, proxyUrl?: string) {
+export function getHttpAgent(
+  config: unknown,
+  proxyUrl?: string,
+): HttpsProxyAgent<string> | undefined {
   const insecure =
-    typeof (config as any).insecure === "boolean"
-      ? (config as any).insecure
+    typeof (config as ConfigWithInsecure).insecure === "boolean"
+      ? (config as ConfigWithInsecure).insecure
       : process.env["OPENAI_INSECURE"] === "true";
 
   if (insecure) {
-    // If proxyUrl is set, use it and set rejectUnauthorized: false
-    if (proxyUrl) {
-      // Build AgentOptions with proxy info and rejectUnauthorized: false
-      const proxyOpts = parseProxyUrl(proxyUrl);
-      const agentOptions: Record<string, any> = {
-        rejectUnauthorized: false,
-      };
-      if (proxyOpts["host"]) {agentOptions["host"] = proxyOpts["host"];}
-      if (proxyOpts["port"] !== undefined)
-        {agentOptions["port"] = proxyOpts["port"];}
-      if (proxyOpts["auth"]) {agentOptions["auth"] = proxyOpts["auth"];}
-      return new HttpsProxyAgent(agentOptions);
-    }
-    // No proxy, just skip cert verification
-    return new HttpsProxyAgent({ rejectUnauthorized: false });
+    // In insecure mode, skip certificate verification globally
+    process.env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0";
+    // Use proxy if present
+    return proxyUrl ? new HttpsProxyAgent(proxyUrl) : undefined;
   }
   // Secure mode: use proxy if present, else undefined
-  return proxyUrl ? new HttpsProxyAgent(proxyUrl as string) : undefined;
-}
-
-/**
- * Parses a proxy URL string into an options object for HttpsProxyAgent.
- * Only includes host, port, protocol, auth if present.
- */
-function parseProxyUrl(proxyUrl: string): Record<string, any> {
-  try {
-    const url = new URL(proxyUrl);
-    const options: Record<string, any> = {};
-    if (url.hostname) {options["host"] = url.hostname;}
-    if (url.port) {options["port"] = Number(url.port);}
-    if (url.username || url.password) {
-      options["auth"] = `${url.username}:${url.password}`;
-    }
-    return options;
-  } catch {
-    // fallback: let HttpsProxyAgent handle invalid URL
-    return {};
-  }
+  return proxyUrl ? new HttpsProxyAgent(proxyUrl) : undefined;
 }
