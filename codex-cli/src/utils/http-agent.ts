@@ -22,10 +22,10 @@ export function getHttpAgent(config: unknown, proxyUrl?: string) {
       const agentOptions: Record<string, any> = {
         rejectUnauthorized: false,
       };
-      if (proxyOpts["host"]) agentOptions["host"] = proxyOpts["host"];
+      if (proxyOpts["host"]) {agentOptions["host"] = proxyOpts["host"];}
       if (proxyOpts["port"] !== undefined)
-        agentOptions["port"] = proxyOpts["port"];
-      if (proxyOpts["auth"]) agentOptions["auth"] = proxyOpts["auth"];
+        {agentOptions["port"] = proxyOpts["port"];}
+      if (proxyOpts["auth"]) {agentOptions["auth"] = proxyOpts["auth"];}
       return new HttpsProxyAgent(agentOptions);
     }
     // No proxy, just skip cert verification
@@ -43,8 +43,8 @@ function parseProxyUrl(proxyUrl: string): Record<string, any> {
   try {
     const url = new URL(proxyUrl);
     const options: Record<string, any> = {};
-    if (url.hostname) options["host"] = url.hostname;
-    if (url.port) options["port"] = Number(url.port);
+    if (url.hostname) {options["host"] = url.hostname;}
+    if (url.port) {options["port"] = Number(url.port);}
     if (url.username || url.password) {
       options["auth"] = `${url.username}:${url.password}`;
     }

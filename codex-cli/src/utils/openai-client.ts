@@ -8,8 +8,8 @@ import {
   OPENAI_ORGANIZATION,
   OPENAI_PROJECT,
 } from "./config.js";
-import OpenAI, { AzureOpenAI } from "openai";
 import { getHttpAgent } from "./http-agent.js";
+import OpenAI, { AzureOpenAI } from "openai";
 
 type OpenAIClientConfig = {
   provider: string;
