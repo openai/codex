@@ -284,18 +284,41 @@ export function Markdown({
   const size = useTerminalSize();
 
   const rendered = React.useMemo(() => {
+    // Rewrite file citations to links
     const linkifiedMarkdown = rewriteFileCitations(children, fileOpener, cwd);
 
     // Configure marked for this specific render
     setOptions({
-      // @ts-expect-error missing parser, space props
-      renderer: new TerminalRenderer({ ...options, width: size.columns }),
+      // Use marked-terminal for rich formatting (headers, links, etc.)
+      renderer: new TerminalRenderer({
+        ...options,
+        width: size.columns,
+        // Enable line wrapping and formatting
+        reflowText: true,
+        // Render links as clickable if supported
+        link: (href: string, title: string, text: string) => {
+          // If the link is a base64 image, show [Image]
+          if (/^data:image\/[a-z]+;base64,/.test(href)) {
+            return "[Image]";
+          }
+          // Otherwise, render as clickable link if supported
+          if (supportsHyperlinks.stdout) {
+            return `\u001b]8;;${href}\u0007${text}\u001b]8;;\u0007`;
+          }
+          return `${text} (${href})`;
+        },
+        // Render images as [Image] or with alt text
+        image: (href: string, title: string, text: string) => {
+          if (/^data:image\/[a-z]+;base64,/.test(href)) {
+            return `[Image: ${text || "base64"}]`;
+          }
+          return `[Image: ${text || href}]`;
+        },
+      }),
     });
+    // Parse and render markdown to ANSI
     const parsed = parse(linkifiedMarkdown, { async: false }).trim();
-
-    // Remove the truncation logic
     return parsed;
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- options is an object of primitives
   }, [
     children,
     size.columns,
