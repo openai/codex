@@ -9,9 +9,11 @@ import {
   OPENAI_PROJECT,
 } from "./config.js";
 import OpenAI, { AzureOpenAI } from "openai";
+import { getHttpAgent } from "./http-agent.js";
 
 type OpenAIClientConfig = {
   provider: string;
+  insecure?: boolean;
 };
 
 /**
@@ -32,6 +34,10 @@ export function createOpenAIClient(
     headers["OpenAI-Project"] = OPENAI_PROJECT;
   }
 
+  // Use shared getHttpAgent utility for proxy/insecure handling
+  const PROXY_URL = process.env["HTTPS_PROXY"];
+  const agent = getHttpAgent(config, PROXY_URL);
+
   if (config.provider?.toLowerCase() === "azure") {
     return new AzureOpenAI({
       apiKey: getApiKey(config.provider),
@@ -39,6 +45,7 @@ export function createOpenAIClient(
       apiVersion: AZURE_OPENAI_API_VERSION,
       timeout: OPENAI_TIMEOUT_MS,
       defaultHeaders: headers,
+      httpAgent: agent,
     });
   }
 
@@ -47,5 +54,6 @@ export function createOpenAIClient(
     baseURL: getBaseUrl(config.provider),
     timeout: OPENAI_TIMEOUT_MS,
     defaultHeaders: headers,
+    httpAgent: agent,
   });
 }
