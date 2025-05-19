@@ -77,6 +77,7 @@ use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::SessionConfiguredEvent;
 use crate::protocol::Submission;
+use crate::protocol::TaskCompleteEvent;
 use crate::rollout::RolloutRecorder;
 use crate::safety::SafetyCheck;
 use crate::safety::assess_command_safety;
@@ -766,6 +767,7 @@ async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
     }
 
     let mut pending_response_input: Vec<ResponseInputItem> = vec![ResponseInputItem::from(input)];
+    let last_agent_message: Option<String>;
     loop {
         let mut net_new_turn_input = pending_response_input
             .drain(..)
@@ -795,7 +797,7 @@ async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
 
                 // 2. Update the in-memory transcript so that future turns
                 // include these items as part of the history.
-                transcript.record_items(net_new_turn_input);
+                transcript.record_items(&net_new_turn_input);
 
                 // Note that `transcript.record_items()` does some filtering
                 // such that `full_transcript` may include items that were
@@ -830,7 +832,6 @@ async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
                     .into_iter()
                     .flatten()
                     .collect::<Vec<ResponseInputItem>>();
-                let last_assistant_message = get_last_assistant_message_from_turn(&items);
 
                 // Only attempt to take the lock if there is something to record.
                 if !items.is_empty() {
@@ -839,16 +840,17 @@ async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
 
                     // For ZDR we also need to keep a transcript clone.
                     if let Some(transcript) = sess.state.lock().unwrap().zdr_transcript.as_mut() {
-                        transcript.record_items(items);
+                        transcript.record_items(&items);
                     }
                 }
 
                 if responses.is_empty() {
                     debug!("Turn completed");
+                    last_agent_message = get_last_assistant_message_from_turn(&items);
                     sess.maybe_notify(UserNotification::AgentTurnComplete {
                         turn_id: sub_id.clone(),
                         input_messages: turn_input_messages,
-                        last_assistant_message,
+                        last_assistant_message: last_agent_message.clone(),
                     });
                     break;
                 }
@@ -871,7 +873,7 @@ async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
     sess.remove_task(&sub_id);
     let event = Event {
         id: sub_id,
-        msg: EventMsg::TaskComplete,
+        msg: EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }),
     };
     sess.tx_event.send(event).await.ok();
 }

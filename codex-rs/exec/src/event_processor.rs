@@ -13,6 +13,7 @@ use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::SessionConfiguredEvent;
+use codex_core::protocol::TaskCompleteEvent;
 use owo_colors::OwoColorize;
 use owo_colors::Style;
 use shlex::try_join;
@@ -117,7 +118,9 @@ impl EventProcessor {
                 let msg = format!("Task started: {id}");
                 ts_println!("{}", msg.style(self.dimmed));
             }
-            EventMsg::TaskComplete => {
+            EventMsg::TaskComplete(TaskCompleteEvent {
+                last_agent_message: _,
+            }) => {
                 let msg = format!("Task complete: {id}");
                 ts_println!("{}", msg.style(self.bold));
             }

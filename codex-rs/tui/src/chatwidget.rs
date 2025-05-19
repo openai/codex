@@ -17,6 +17,7 @@ use codex_core::protocol::McpToolCallBeginEvent;
 use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
+use codex_core::protocol::TaskCompleteEvent;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
@@ -246,7 +247,9 @@ impl ChatWidget<'_> {
                 self.bottom_pane.set_task_running(true);
                 self.request_redraw();
             }
-            EventMsg::TaskComplete => {
+            EventMsg::TaskComplete(TaskCompleteEvent {
+                last_agent_message: _,
+            }) => {
                 self.bottom_pane.set_task_running(false);
                 self.request_redraw();
             }

@@ -41,6 +41,10 @@ pub struct Cli {
     #[arg(long = "color", value_enum, default_value_t = Color::Auto)]
     pub color: Color,
 
+    /// Specifies file where the last message from the agent should be written.
+    #[arg(long = "output-last-message")]
+    pub last_message_file: Option<PathBuf>,
+
     /// Initial instructions for the agent.
     pub prompt: String,
 }
