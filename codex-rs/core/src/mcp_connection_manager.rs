@@ -13,6 +13,8 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use codex_mcp_client::McpClient;
+use mcp_types::ClientCapabilities;
+use mcp_types::Implementation;
 use mcp_types::Tool;
 use tokio::task::JoinSet;
 use tracing::info;
@@ -28,6 +30,10 @@ const MCP_TOOL_NAME_DELIMITER: &str = "__OAI_CODEX_MCP__";
 
 /// Timeout for the `tools/list` request.
 const LIST_TOOLS_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Map that holds a startup error for every MCP server that could **not** be
+/// spawned successfully.
+pub type ClientStartErrors = HashMap<String, anyhow::Error>;
 
 fn fully_qualified_tool_name(server: &str, tool: &str) -> String {
     format!("{server}{MCP_TOOL_NAME_DELIMITER}{tool}")
@@ -60,40 +66,75 @@ impl McpConnectionManager {
     /// * `mcp_servers` – Map loaded from the user configuration where *keys*
     ///   are human-readable server identifiers and *values* are the spawn
     ///   instructions.
-    pub async fn new(mcp_servers: HashMap<String, McpServerConfig>) -> Result<Self> {
+    ///
+    /// Servers that fail to start are reported in `ClientStartErrors`: the
+    /// user should be informed about these errors.
+    pub async fn new(
+        mcp_servers: HashMap<String, McpServerConfig>,
+    ) -> Result<(Self, ClientStartErrors)> {
         // Early exit if no servers are configured.
         if mcp_servers.is_empty() {
-            return Ok(Self::default());
+            return Ok((Self::default(), ClientStartErrors::default()));
         }
 
-        // Spin up all servers concurrently.
+        // Launch all configured servers concurrently.
         let mut join_set = JoinSet::new();
 
-        // Spawn tasks to launch each server.
         for (server_name, cfg) in mcp_servers {
             // TODO: Verify server name: require `^[a-zA-Z0-9_-]+$`?
             join_set.spawn(async move {
                 let McpServerConfig { command, args, env } = cfg;
                 let client_res = McpClient::new_stdio_client(command, args, env).await;
-
-                (server_name, client_res)
+                match client_res {
+                    Ok(client) => {
+                        // Initialize the client.
+                        let params = mcp_types::InitializeRequestParams {
+                            capabilities: ClientCapabilities {
+                                experimental: None,
+                                roots: None,
+                                sampling: None,
+                            },
+                            client_info: Implementation {
+                                name: "codex-mcp-client".to_owned(),
+                                version: env!("CARGO_PKG_VERSION").to_owned(),
+                            },
+                            protocol_version: mcp_types::MCP_SCHEMA_VERSION.to_owned(),
+                        };
+                        let initialize_notification_params = None;
+                        let timeout = Some(Duration::from_secs(10));
+                        match client
+                            .initialize(params, initialize_notification_params, timeout)
+                            .await
+                        {
+                            Ok(_response) => (server_name, Ok(client)),
+                            Err(e) => (server_name, Err(e)),
+                        }
+                    }
+                    Err(e) => (server_name, Err(e.into())),
+                }
             });
         }
 
         let mut clients: HashMap<String, std::sync::Arc<McpClient>> =
             HashMap::with_capacity(join_set.len());
+        let mut errors = ClientStartErrors::new();
+
         while let Some(res) = join_set.join_next().await {
-            let (server_name, client_res) = res?;
+            let (server_name, client_res) = res?; // JoinError propagation
 
-            let client = client_res
-                .with_context(|| format!("failed to spawn MCP server `{server_name}`"))?;
-
-            clients.insert(server_name, std::sync::Arc::new(client));
+            match client_res {
+                Ok(client) => {
+                    clients.insert(server_name, std::sync::Arc::new(client));
+                }
+                Err(e) => {
+                    errors.insert(server_name, e);
+                }
+            }
         }
 
         let tools = list_all_tools(&clients).await?;
 
-        Ok(Self { clients, tools })
+        Ok((Self { clients, tools }, errors))
     }
 
     /// Returns a single map that contains **all** tools. Each key is the

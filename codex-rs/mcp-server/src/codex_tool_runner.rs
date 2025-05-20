@@ -4,10 +4,12 @@
 
 use codex_core::codex_wrapper::init_codex;
 use codex_core::config::Config as CodexConfig;
+use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
+use codex_core::protocol::TaskCompleteEvent;
 use mcp_types::CallToolResult;
 use mcp_types::CallToolResultContent;
 use mcp_types::JSONRPC_VERSION;
@@ -19,6 +21,7 @@ use tokio::sync::mpsc::Sender;
 
 /// Convert a Codex [`Event`] to an MCP notification.
 fn codex_event_to_notification(event: &Event) -> JSONRPCMessage {
+    #[expect(clippy::expect_used)]
     JSONRPCMessage::Notification(mcp_types::JSONRPCNotification {
         jsonrpc: JSONRPC_VERSION.into(),
         method: "codex/event".into(),
@@ -84,10 +87,10 @@ pub async fn run_codex_tool_session(
                 let _ = outgoing.send(codex_event_to_notification(&event)).await;
 
                 match &event.msg {
-                    EventMsg::AgentMessage { message } => {
+                    EventMsg::AgentMessage(AgentMessageEvent { message }) => {
                         last_agent_message = Some(message.clone());
                     }
-                    EventMsg::ExecApprovalRequest { .. } => {
+                    EventMsg::ExecApprovalRequest(_) => {
                         let result = CallToolResult {
                             content: vec![CallToolResultContent::TextContent(TextContent {
                                 r#type: "text".to_string(),
@@ -105,7 +108,7 @@ pub async fn run_codex_tool_session(
                             .await;
                         break;
                     }
-                    EventMsg::ApplyPatchApprovalRequest { .. } => {
+                    EventMsg::ApplyPatchApprovalRequest(_) => {
                         let result = CallToolResult {
                             content: vec![CallToolResultContent::TextContent(TextContent {
                                 r#type: "text".to_string(),
@@ -123,7 +126,9 @@ pub async fn run_codex_tool_session(
                             .await;
                         break;
                     }
-                    EventMsg::TaskComplete => {
+                    EventMsg::TaskComplete(TaskCompleteEvent {
+                        last_agent_message: _,
+                    }) => {
                         let result = if let Some(msg) = last_agent_message {
                             CallToolResult {
                                 content: vec![CallToolResultContent::TextContent(TextContent {
@@ -152,10 +157,27 @@ pub async fn run_codex_tool_session(
                             .await;
                         break;
                     }
-                    EventMsg::SessionConfigured { .. } => {
+                    EventMsg::SessionConfigured(_) => {
                         tracing::error!("unexpected SessionConfigured event");
                     }
-                    _ => {}
+                    EventMsg::Error(_)
+                    | EventMsg::TaskStarted
+                    | EventMsg::AgentReasoning(_)
+                    | EventMsg::McpToolCallBegin(_)
+                    | EventMsg::McpToolCallEnd(_)
+                    | EventMsg::ExecCommandBegin(_)
+                    | EventMsg::ExecCommandEnd(_)
+                    | EventMsg::BackgroundEvent(_)
+                    | EventMsg::PatchApplyBegin(_)
+                    | EventMsg::PatchApplyEnd(_)
+                    | EventMsg::GetHistoryEntryResponse(_) => {
+                        // For now, we do not do anything extra for these
+                        // events. Note that
+                        // send(codex_event_to_notification(&event)) above has
+                        // already dispatched these events as notifications,
+                        // though we may want to do give different treatment to
+                        // individual events in the future.
+                    }
                 }
             }
             Err(e) => {

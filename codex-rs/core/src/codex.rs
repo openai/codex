@@ -1,3 +1,6 @@
+// Poisoned mutex should fail the program
+#![allow(clippy::unwrap_used)]
+
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
@@ -27,13 +30,17 @@ use tracing::error;
 use tracing::info;
 use tracing::trace;
 use tracing::warn;
+use uuid::Uuid;
 
+use crate::WireApi;
 use crate::client::ModelClient;
-use crate::client::Prompt;
-use crate::client::ResponseEvent;
+use crate::client_common::Prompt;
+use crate::client_common::ResponseEvent;
 use crate::config::Config;
+use crate::conversation_history::ConversationHistory;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
+use crate::error::SandboxErr;
 use crate::exec::ExecParams;
 use crate::exec::ExecToolCallOutput;
 use crate::exec::SandboxType;
@@ -44,25 +51,39 @@ use crate::mcp_connection_manager::try_parse_fully_qualified_tool_name;
 use crate::mcp_tool_call::handle_mcp_tool_call;
 use crate::models::ContentItem;
 use crate::models::FunctionCallOutputPayload;
+use crate::models::LocalShellAction;
+use crate::models::ReasoningItemReasoningSummary;
 use crate::models::ResponseInputItem;
 use crate::models::ResponseItem;
 use crate::models::ShellToolCallParams;
+use crate::project_doc::create_full_instructions;
+use crate::protocol::AgentMessageEvent;
+use crate::protocol::AgentReasoningEvent;
+use crate::protocol::ApplyPatchApprovalRequestEvent;
 use crate::protocol::AskForApproval;
+use crate::protocol::BackgroundEventEvent;
+use crate::protocol::ErrorEvent;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
+use crate::protocol::ExecApprovalRequestEvent;
+use crate::protocol::ExecCommandBeginEvent;
+use crate::protocol::ExecCommandEndEvent;
 use crate::protocol::FileChange;
 use crate::protocol::InputItem;
 use crate::protocol::Op;
+use crate::protocol::PatchApplyBeginEvent;
+use crate::protocol::PatchApplyEndEvent;
 use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
+use crate::protocol::SessionConfiguredEvent;
 use crate::protocol::Submission;
+use crate::protocol::TaskCompleteEvent;
 use crate::rollout::RolloutRecorder;
 use crate::safety::SafetyCheck;
 use crate::safety::assess_command_safety;
 use crate::safety::assess_patch_safety;
 use crate::user_notification::UserNotification;
 use crate::util::backoff;
-use crate::zdr_transcript::ZdrTranscript;
 
 /// The high-level interface to the Codex system.
 /// It operates as a queue pair where you send submissions and receive events.
@@ -79,10 +100,12 @@ impl Codex {
     pub async fn spawn(config: Config, ctrl_c: Arc<Notify>) -> CodexResult<(Codex, String)> {
         let (tx_sub, rx_sub) = async_channel::bounded(64);
         let (tx_event, rx_event) = async_channel::bounded(64);
+
+        let instructions = create_full_instructions(&config).await;
         let configure_session = Op::ConfigureSession {
             provider: config.model_provider.clone(),
             model: config.model.clone(),
-            instructions: config.instructions.clone(),
+            instructions,
             approval_policy: config.approval_policy,
             sandbox_policy: config.sandbox_policy.clone(),
             disable_response_storage: config.disable_response_storage,
@@ -90,6 +113,7 @@ impl Codex {
             cwd: config.cwd.clone(),
         };
 
+        let config = Arc::new(config);
         tokio::spawn(submission_loop(config, rx_sub, tx_event, ctrl_c));
         let codex = Codex {
             next_id: AtomicU64::new(0),
@@ -178,7 +202,7 @@ struct State {
     previous_response_id: Option<String>,
     pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
     pending_input: Vec<ResponseInputItem>,
-    zdr_transcript: Option<ZdrTranscript>,
+    zdr_transcript: Option<ConversationHistory>,
 }
 
 impl Session {
@@ -217,11 +241,11 @@ impl Session {
         let (tx_approve, rx_approve) = oneshot::channel();
         let event = Event {
             id: sub_id.clone(),
-            msg: EventMsg::ExecApprovalRequest {
+            msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
                 command,
                 cwd,
                 reason,
-            },
+            }),
         };
         let _ = self.tx_event.send(event).await;
         {
@@ -241,11 +265,11 @@ impl Session {
         let (tx_approve, rx_approve) = oneshot::channel();
         let event = Event {
             id: sub_id.clone(),
-            msg: EventMsg::ApplyPatchApprovalRequest {
+            msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
                 changes: convert_apply_patch_to_protocol(action),
                 reason,
                 grant_root,
-            },
+            }),
         };
         let _ = self.tx_event.send(event).await;
         {
@@ -287,11 +311,11 @@ impl Session {
     async fn notify_exec_command_begin(&self, sub_id: &str, call_id: &str, params: &ExecParams) {
         let event = Event {
             id: sub_id.to_string(),
-            msg: EventMsg::ExecCommandBegin {
+            msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
                 call_id: call_id.to_string(),
                 command: params.command.clone(),
                 cwd: params.cwd.clone(),
-            },
+            }),
         };
         let _ = self.tx_event.send(event).await;
     }
@@ -309,12 +333,12 @@ impl Session {
             id: sub_id.to_string(),
             // Because stdout and stderr could each be up to 100 KiB, we send
             // truncated versions.
-            msg: EventMsg::ExecCommandEnd {
+            msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                 call_id: call_id.to_string(),
                 stdout: stdout.chars().take(MAX_STREAM_OUTPUT).collect(),
                 stderr: stderr.chars().take(MAX_STREAM_OUTPUT).collect(),
                 exit_code,
-            },
+            }),
         };
         let _ = self.tx_event.send(event).await;
     }
@@ -325,9 +349,9 @@ impl Session {
     async fn notify_background_event(&self, sub_id: &str, message: impl Into<String>) {
         let event = Event {
             id: sub_id.to_string(),
-            msg: EventMsg::BackgroundEvent {
+            msg: EventMsg::BackgroundEvent(BackgroundEventEvent {
                 message: message.into(),
-            },
+            }),
         };
         let _ = self.tx_event.send(event).await;
     }
@@ -413,11 +437,15 @@ impl Drop for Session {
 }
 
 impl State {
-    pub fn partial_clone(&self) -> Self {
+    pub fn partial_clone(&self, retain_zdr_transcript: bool) -> Self {
         Self {
             approved_commands: self.approved_commands.clone(),
             previous_response_id: self.previous_response_id.clone(),
-            zdr_transcript: self.zdr_transcript.clone(),
+            zdr_transcript: if retain_zdr_transcript {
+                self.zdr_transcript.clone()
+            } else {
+                None
+            },
             ..Default::default()
         }
     }
@@ -446,9 +474,9 @@ impl AgentTask {
             self.handle.abort();
             let event = Event {
                 id: self.sub_id,
-                msg: EventMsg::Error {
+                msg: EventMsg::Error(ErrorEvent {
                     message: "Turn interrupted".to_string(),
-                },
+                }),
             };
             let tx_event = self.sess.tx_event.clone();
             tokio::spawn(async move {
@@ -459,20 +487,23 @@ impl AgentTask {
 }
 
 async fn submission_loop(
-    config: Config,
+    config: Arc<Config>,
     rx_sub: Receiver<Submission>,
     tx_event: Sender<Event>,
     ctrl_c: Arc<Notify>,
 ) {
+    // Generate a unique ID for the lifetime of this Codex session.
+    let session_id = Uuid::new_v4();
+
     let mut sess: Option<Arc<Session>> = None;
     // shorthand - send an event when there is no active session
     let send_no_session_event = |sub_id: String| async {
         let event = Event {
             id: sub_id,
-            msg: EventMsg::Error {
+            msg: EventMsg::Error(ErrorEvent {
                 message: "No session initialized, expected 'ConfigureSession' as first Op"
                     .to_string(),
-            },
+            }),
         };
         tx_event.send(event).await.ok();
     };
@@ -520,7 +551,7 @@ async fn submission_loop(
                     error!(message);
                     let event = Event {
                         id: sub.id,
-                        msg: EventMsg::Error { message },
+                        msg: EventMsg::Error(ErrorEvent { message }),
                     };
                     if let Err(e) = tx_event.send(event).await {
                         error!("failed to send error message: {e:?}");
@@ -531,14 +562,19 @@ async fn submission_loop(
                 let client = ModelClient::new(model.clone(), provider.clone());
 
                 // abort any current running session and clone its state
+                let retain_zdr_transcript =
+                    record_conversation_history(disable_response_storage, provider.wire_api);
                 let state = match sess.take() {
                     Some(sess) => {
                         sess.abort();
-                        sess.state.lock().unwrap().partial_clone()
+                        sess.state
+                            .lock()
+                            .unwrap()
+                            .partial_clone(retain_zdr_transcript)
                     }
                     None => State {
-                        zdr_transcript: if disable_response_storage {
-                            Some(ZdrTranscript::new())
+                        zdr_transcript: if retain_zdr_transcript {
+                            Some(ConversationHistory::new())
                         } else {
                             None
                         },
@@ -548,24 +584,48 @@ async fn submission_loop(
 
                 let writable_roots = Mutex::new(get_writable_roots(&cwd));
 
-                let mcp_connection_manager =
+                // Error messages to dispatch after SessionConfigured is sent.
+                let mut mcp_connection_errors = Vec::<Event>::new();
+                let (mcp_connection_manager, failed_clients) =
                     match McpConnectionManager::new(config.mcp_servers.clone()).await {
-                        Ok(mgr) => mgr,
+                        Ok((mgr, failures)) => (mgr, failures),
                         Err(e) => {
-                            error!("Failed to create MCP connection manager: {e:#}");
-                            McpConnectionManager::default()
+                            let message = format!("Failed to create MCP connection manager: {e:#}");
+                            error!("{message}");
+                            mcp_connection_errors.push(Event {
+                                id: sub.id.clone(),
+                                msg: EventMsg::Error(ErrorEvent { message }),
+                            });
+                            (McpConnectionManager::default(), Default::default())
                         }
                     };
 
+                // Surface individual client start-up failures to the user.
+                if !failed_clients.is_empty() {
+                    for (server_name, err) in failed_clients {
+                        let message =
+                            format!("MCP client for `{server_name}` failed to start: {err:#}");
+                        error!("{message}");
+                        mcp_connection_errors.push(Event {
+                            id: sub.id.clone(),
+                            msg: EventMsg::Error(ErrorEvent { message }),
+                        });
+                    }
+                }
+
                 // Attempt to create a RolloutRecorder *before* moving the
                 // `instructions` value into the Session struct.
-                let rollout_recorder = match RolloutRecorder::new(instructions.clone()).await {
-                    Ok(r) => Some(r),
-                    Err(e) => {
-                        tracing::warn!("failed to initialise rollout recorder: {e}");
-                        None
-                    }
-                };
+                // TODO: if ConfigureSession is sent twice, we will create an
+                // overlapping rollout file. Consider passing RolloutRecorder
+                // from above.
+                let rollout_recorder =
+                    match RolloutRecorder::new(&config, session_id, instructions.clone()).await {
+                        Ok(r) => Some(r),
+                        Err(e) => {
+                            tracing::warn!("failed to initialise rollout recorder: {e}");
+                            None
+                        }
+                    };
 
                 sess = Some(Arc::new(Session {
                     client,
@@ -582,13 +642,25 @@ async fn submission_loop(
                     rollout: Mutex::new(rollout_recorder),
                 }));
 
+                // Gather history metadata for SessionConfiguredEvent.
+                let (history_log_id, history_entry_count) =
+                    crate::message_history::history_metadata(&config).await;
+
                 // ack
-                let event = Event {
-                    id: sub.id,
-                    msg: EventMsg::SessionConfigured { model },
-                };
-                if tx_event.send(event).await.is_err() {
-                    return;
+                let events = std::iter::once(Event {
+                    id: sub.id.clone(),
+                    msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                        session_id,
+                        model,
+                        history_log_id,
+                        history_entry_count,
+                    }),
+                })
+                .chain(mcp_connection_errors.into_iter());
+                for event in events {
+                    if let Err(e) = tx_event.send(event).await {
+                        error!("failed to send event: {e:?}");
+                    }
                 }
             }
             Op::UserInput { items } => {
@@ -637,6 +709,46 @@ async fn submission_loop(
                     other => sess.notify_approval(&id, other),
                 }
             }
+            Op::AddToHistory { text } => {
+                let id = session_id;
+                let config = config.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = crate::message_history::append_entry(&text, &id, &config).await
+                    {
+                        tracing::warn!("failed to append to message history: {e}");
+                    }
+                });
+            }
+
+            Op::GetHistoryEntryRequest { offset, log_id } => {
+                let config = config.clone();
+                let tx_event = tx_event.clone();
+                let sub_id = sub.id.clone();
+
+                tokio::spawn(async move {
+                    // Run lookup in blocking thread because it does file IO + locking.
+                    let entry_opt = tokio::task::spawn_blocking(move || {
+                        crate::message_history::lookup(log_id, offset, &config)
+                    })
+                    .await
+                    .unwrap_or(None);
+
+                    let event = Event {
+                        id: sub_id,
+                        msg: EventMsg::GetHistoryEntryResponse(
+                            crate::protocol::GetHistoryEntryResponseEvent {
+                                offset,
+                                log_id,
+                                entry: entry_opt,
+                            },
+                        ),
+                    };
+
+                    if let Err(e) = tx_event.send(event).await {
+                        tracing::warn!("failed to send GetHistoryEntryResponse event: {e}");
+                    }
+                });
+            }
         }
     }
     debug!("Agent loop exited");
@@ -655,6 +767,7 @@ async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
     }
 
     let mut pending_response_input: Vec<ResponseInputItem> = vec![ResponseInputItem::from(input)];
+    let last_agent_message: Option<String>;
     loop {
         let mut net_new_turn_input = pending_response_input
             .drain(..)
@@ -667,20 +780,34 @@ async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
         let pending_input = sess.get_pending_input().into_iter().map(ResponseItem::from);
         net_new_turn_input.extend(pending_input);
 
+        // Persist only the net-new items of this turn to the rollout.
+        sess.record_rollout_items(&net_new_turn_input).await;
+
+        // Construct the input that we will send to the model. When using the
+        // Chat completions API (or ZDR clients), the model needs the full
+        // conversation history on each turn. The rollout file, however, should
+        // only record the new items that originated in this turn so that it
+        // represents an append-only log without duplicates.
         let turn_input: Vec<ResponseItem> =
             if let Some(transcript) = sess.state.lock().unwrap().zdr_transcript.as_mut() {
-                // If we are using ZDR, we need to send the transcript with every turn.
-                let mut full_transcript = transcript.contents();
-                full_transcript.extend(net_new_turn_input.clone());
-                transcript.record_items(net_new_turn_input);
+                // If we are using Chat/ZDR, we need to send the transcript with every turn.
+
+                // 1. Build up the conversation history for the next turn.
+                let full_transcript = [transcript.contents(), net_new_turn_input.clone()].concat();
+
+                // 2. Update the in-memory transcript so that future turns
+                // include these items as part of the history.
+                transcript.record_items(&net_new_turn_input);
+
+                // Note that `transcript.record_items()` does some filtering
+                // such that `full_transcript` may include items that were
+                // excluded from `transcript`.
                 full_transcript
             } else {
+                // Responses API path – we can just send the new items and
+                // record the same.
                 net_new_turn_input
             };
-
-        // Persist the input part of the turn to the rollout (user messages /
-        // function_call_output from previous step).
-        sess.record_rollout_items(&turn_input).await;
 
         let turn_input_messages: Vec<String> = turn_input
             .iter()
@@ -705,7 +832,6 @@ async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
                     .into_iter()
                     .flatten()
                     .collect::<Vec<ResponseInputItem>>();
-                let last_assistant_message = get_last_assistant_message_from_turn(&items);
 
                 // Only attempt to take the lock if there is something to record.
                 if !items.is_empty() {
@@ -714,16 +840,17 @@ async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
 
                     // For ZDR we also need to keep a transcript clone.
                     if let Some(transcript) = sess.state.lock().unwrap().zdr_transcript.as_mut() {
-                        transcript.record_items(items);
+                        transcript.record_items(&items);
                     }
                 }
 
                 if responses.is_empty() {
                     debug!("Turn completed");
+                    last_agent_message = get_last_assistant_message_from_turn(&items);
                     sess.maybe_notify(UserNotification::AgentTurnComplete {
                         turn_id: sub_id.clone(),
                         input_messages: turn_input_messages,
-                        last_assistant_message,
+                        last_assistant_message: last_agent_message.clone(),
                     });
                     break;
                 }
@@ -734,9 +861,9 @@ async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
                 info!("Turn error: {e:#}");
                 let event = Event {
                     id: sub_id.clone(),
-                    msg: EventMsg::Error {
+                    msg: EventMsg::Error(ErrorEvent {
                         message: e.to_string(),
-                    },
+                    }),
                 };
                 sess.tx_event.send(event).await.ok();
                 return;
@@ -746,7 +873,7 @@ async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
     sess.remove_task(&sub_id);
     let event = Event {
         id: sub_id,
-        msg: EventMsg::TaskComplete,
+        msg: EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }),
     };
     sess.tx_event.send(event).await.ok();
 }
@@ -764,7 +891,7 @@ async fn run_turn(
         let prev_id = if store {
             state.previous_response_id.clone()
         } else {
-            // When using ZDR, the Reponses API may send previous_response_id
+            // When using ZDR, the Responses API may send previous_response_id
             // back, but trying to use it results in a 400.
             None
         };
@@ -791,6 +918,7 @@ async fn run_turn(
         match try_run_turn(sess, &sub_id, &prompt).await {
             Ok(output) => return Ok(output),
             Err(CodexErr::Interrupted) => return Err(CodexErr::Interrupted),
+            Err(CodexErr::EnvVar(var)) => return Err(CodexErr::EnvVar(var)),
             Err(e) => {
                 if retries < *OPENAI_STREAM_MAX_RETRIES {
                     retries += 1;
@@ -867,33 +995,85 @@ async fn handle_response_item(
     item: ResponseItem,
 ) -> CodexResult<Option<ResponseInputItem>> {
     debug!(?item, "Output item");
-    let mut output = None;
-    match item {
+    let output = match item {
         ResponseItem::Message { content, .. } => {
             for item in content {
                 if let ContentItem::OutputText { text } = item {
                     let event = Event {
                         id: sub_id.to_string(),
-                        msg: EventMsg::AgentMessage { message: text },
+                        msg: EventMsg::AgentMessage(AgentMessageEvent { message: text }),
                     };
                     sess.tx_event.send(event).await.ok();
                 }
             }
+            None
+        }
+        ResponseItem::Reasoning { id: _, summary } => {
+            for item in summary {
+                let text = match item {
+                    ReasoningItemReasoningSummary::SummaryText { text } => text,
+                };
+                let event = Event {
+                    id: sub_id.to_string(),
+                    msg: EventMsg::AgentReasoning(AgentReasoningEvent { text }),
+                };
+                sess.tx_event.send(event).await.ok();
+            }
+            None
         }
         ResponseItem::FunctionCall {
             name,
             arguments,
             call_id,
         } => {
-            output = Some(
-                handle_function_call(sess, sub_id.to_string(), name, arguments, call_id).await,
-            );
+            tracing::info!("FunctionCall: {arguments}");
+            Some(handle_function_call(sess, sub_id.to_string(), name, arguments, call_id).await)
+        }
+        ResponseItem::LocalShellCall {
+            id,
+            call_id,
+            status: _,
+            action,
+        } => {
+            let LocalShellAction::Exec(action) = action;
+            tracing::info!("LocalShellCall: {action:?}");
+            let params = ShellToolCallParams {
+                command: action.command,
+                workdir: action.working_directory,
+                timeout_ms: action.timeout_ms,
+            };
+            let effective_call_id = match (call_id, id) {
+                (Some(call_id), _) => call_id,
+                (None, Some(id)) => id,
+                (None, None) => {
+                    error!("LocalShellCall without call_id or id");
+                    return Ok(Some(ResponseInputItem::FunctionCallOutput {
+                        call_id: "".to_string(),
+                        output: FunctionCallOutputPayload {
+                            content: "LocalShellCall without call_id or id".to_string(),
+                            success: None,
+                        },
+                    }));
+                }
+            };
+
+            let exec_params = to_exec_params(params, sess);
+            Some(
+                handle_container_exec_with_params(
+                    exec_params,
+                    sess,
+                    sub_id.to_string(),
+                    effective_call_id,
+                )
+                .await,
+            )
         }
         ResponseItem::FunctionCallOutput { .. } => {
             debug!("unexpected FunctionCallOutput from stream");
+            None
         }
-        ResponseItem::Other => (),
-    }
+        ResponseItem::Other => None,
+    };
     Ok(output)
 }
 
@@ -906,265 +1086,13 @@ async fn handle_function_call(
 ) -> ResponseInputItem {
     match name.as_str() {
         "container.exec" | "shell" => {
-            // parse command
-            let params: ExecParams = match serde_json::from_str::<ShellToolCallParams>(&arguments) {
-                Ok(shell_tool_call_params) => ExecParams {
-                    command: shell_tool_call_params.command,
-                    cwd: sess.resolve_path(shell_tool_call_params.workdir.clone()),
-                    timeout_ms: shell_tool_call_params.timeout_ms,
-                },
-                Err(e) => {
-                    // allow model to re-sample
-                    let output = ResponseInputItem::FunctionCallOutput {
-                        call_id,
-                        output: crate::models::FunctionCallOutputPayload {
-                            content: format!("failed to parse function arguments: {e}"),
-                            success: None,
-                        },
-                    };
+            let params = match parse_container_exec_arguments(arguments, sess, &call_id) {
+                Ok(params) => params,
+                Err(output) => {
                     return output;
                 }
             };
-
-            // check if this was a patch, and apply it if so
-            match maybe_parse_apply_patch_verified(&params.command, &params.cwd) {
-                MaybeApplyPatchVerified::Body(changes) => {
-                    return apply_patch(sess, sub_id, call_id, changes).await;
-                }
-                MaybeApplyPatchVerified::CorrectnessError(parse_error) => {
-                    // It looks like an invocation of `apply_patch`, but we
-                    // could not resolve it into a patch that would apply
-                    // cleanly. Return to model for resample.
-                    return ResponseInputItem::FunctionCallOutput {
-                        call_id,
-                        output: FunctionCallOutputPayload {
-                            content: format!("error: {parse_error:#}"),
-                            success: None,
-                        },
-                    };
-                }
-                MaybeApplyPatchVerified::ShellParseError(error) => {
-                    trace!("Failed to parse shell command, {error}");
-                }
-                MaybeApplyPatchVerified::NotApplyPatch => (),
-            }
-
-            // safety checks
-            let safety = {
-                let state = sess.state.lock().unwrap();
-                assess_command_safety(
-                    &params.command,
-                    sess.approval_policy,
-                    &sess.sandbox_policy,
-                    &state.approved_commands,
-                )
-            };
-            let sandbox_type = match safety {
-                SafetyCheck::AutoApprove { sandbox_type } => sandbox_type,
-                SafetyCheck::AskUser => {
-                    let rx_approve = sess
-                        .request_command_approval(
-                            sub_id.clone(),
-                            params.command.clone(),
-                            params.cwd.clone(),
-                            None,
-                        )
-                        .await;
-                    match rx_approve.await.unwrap_or_default() {
-                        ReviewDecision::Approved => (),
-                        ReviewDecision::ApprovedForSession => {
-                            sess.add_approved_command(params.command.clone());
-                        }
-                        ReviewDecision::Denied | ReviewDecision::Abort => {
-                            return ResponseInputItem::FunctionCallOutput {
-                                call_id,
-                                output: crate::models::FunctionCallOutputPayload {
-                                    content: "exec command rejected by user".to_string(),
-                                    success: None,
-                                },
-                            };
-                        }
-                    }
-                    // No sandboxing is applied because the user has given
-                    // explicit approval. Often, we end up in this case because
-                    // the command cannot be run in a sandbox, such as
-                    // installing a new dependency that requires network access.
-                    SandboxType::None
-                }
-                SafetyCheck::Reject { reason } => {
-                    return ResponseInputItem::FunctionCallOutput {
-                        call_id,
-                        output: crate::models::FunctionCallOutputPayload {
-                            content: format!("exec command rejected: {reason}"),
-                            success: None,
-                        },
-                    };
-                }
-            };
-
-            sess.notify_exec_command_begin(&sub_id, &call_id, &params)
-                .await;
-
-            let output_result = process_exec_tool_call(
-                params.clone(),
-                sandbox_type,
-                sess.ctrl_c.clone(),
-                &sess.sandbox_policy,
-            )
-            .await;
-
-            match output_result {
-                Ok(output) => {
-                    let ExecToolCallOutput {
-                        exit_code,
-                        stdout,
-                        stderr,
-                        duration,
-                    } = output;
-
-                    sess.notify_exec_command_end(&sub_id, &call_id, &stdout, &stderr, exit_code)
-                        .await;
-
-                    let is_success = exit_code == 0;
-                    let content = format_exec_output(
-                        if is_success { &stdout } else { &stderr },
-                        exit_code,
-                        duration,
-                    );
-
-                    ResponseInputItem::FunctionCallOutput {
-                        call_id,
-                        output: FunctionCallOutputPayload {
-                            content,
-                            success: Some(is_success),
-                        },
-                    }
-                }
-                Err(CodexErr::Sandbox(e)) => {
-                    // Early out if the user never wants to be asked for approval; just return to the model immediately
-                    if sess.approval_policy == AskForApproval::Never {
-                        return ResponseInputItem::FunctionCallOutput {
-                            call_id,
-                            output: FunctionCallOutputPayload {
-                                content: format!(
-                                    "failed in sandbox {:?} with execution error: {e}",
-                                    sandbox_type
-                                ),
-                                success: Some(false),
-                            },
-                        };
-                    }
-
-                    // Ask the user to retry without sandbox
-                    sess.notify_background_event(&sub_id, format!("Execution failed: {e}"))
-                        .await;
-
-                    let rx_approve = sess
-                        .request_command_approval(
-                            sub_id.clone(),
-                            params.command.clone(),
-                            params.cwd.clone(),
-                            Some("command failed; retry without sandbox?".to_string()),
-                        )
-                        .await;
-
-                    match rx_approve.await.unwrap_or_default() {
-                        ReviewDecision::Approved | ReviewDecision::ApprovedForSession => {
-                            // Persist this command as pre‑approved for the
-                            // remainder of the session so future
-                            // executions skip the sandbox directly.
-                            // TODO(ragona): Isn't this a bug? It always saves the command in an | fork?
-                            sess.add_approved_command(params.command.clone());
-                            // Inform UI we are retrying without sandbox.
-                            sess.notify_background_event(
-                                &sub_id,
-                                "retrying command without sandbox",
-                            )
-                            .await;
-
-                            // Emit a fresh Begin event so progress bars reset.
-                            let retry_call_id = format!("{call_id}-retry");
-                            sess.notify_exec_command_begin(&sub_id, &retry_call_id, &params)
-                                .await;
-
-                            // This is an escalated retry; the policy will not be
-                            // examined and the sandbox has been set to `None`.
-                            let retry_output_result = process_exec_tool_call(
-                                params,
-                                SandboxType::None,
-                                sess.ctrl_c.clone(),
-                                &sess.sandbox_policy,
-                            )
-                            .await;
-
-                            match retry_output_result {
-                                Ok(retry_output) => {
-                                    let ExecToolCallOutput {
-                                        exit_code,
-                                        stdout,
-                                        stderr,
-                                        duration,
-                                    } = retry_output;
-
-                                    sess.notify_exec_command_end(
-                                        &sub_id,
-                                        &retry_call_id,
-                                        &stdout,
-                                        &stderr,
-                                        exit_code,
-                                    )
-                                    .await;
-
-                                    let is_success = exit_code == 0;
-                                    let content = format_exec_output(
-                                        if is_success { &stdout } else { &stderr },
-                                        exit_code,
-                                        duration,
-                                    );
-
-                                    ResponseInputItem::FunctionCallOutput {
-                                        call_id,
-                                        output: FunctionCallOutputPayload {
-                                            content,
-                                            success: Some(is_success),
-                                        },
-                                    }
-                                }
-                                Err(e) => {
-                                    // Handle retry failure
-                                    ResponseInputItem::FunctionCallOutput {
-                                        call_id,
-                                        output: FunctionCallOutputPayload {
-                                            content: format!("retry failed: {e}"),
-                                            success: None,
-                                        },
-                                    }
-                                }
-                            }
-                        }
-                        ReviewDecision::Denied | ReviewDecision::Abort => {
-                            // Fall through to original failure handling.
-                            ResponseInputItem::FunctionCallOutput {
-                                call_id,
-                                output: FunctionCallOutputPayload {
-                                    content: "exec command rejected by user".to_string(),
-                                    success: None,
-                                },
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    // Handle non-sandbox errors
-                    ResponseInputItem::FunctionCallOutput {
-                        call_id,
-                        output: FunctionCallOutputPayload {
-                            content: format!("execution error: {e}"),
-                            success: None,
-                        },
-                    }
-                }
-            }
+            handle_container_exec_with_params(params, sess, sub_id, call_id).await
         }
         _ => {
             match try_parse_fully_qualified_tool_name(&name) {
@@ -1186,6 +1114,291 @@ async fn handle_function_call(
                         },
                     }
                 }
+            }
+        }
+    }
+}
+
+fn to_exec_params(params: ShellToolCallParams, sess: &Session) -> ExecParams {
+    ExecParams {
+        command: params.command,
+        cwd: sess.resolve_path(params.workdir.clone()),
+        timeout_ms: params.timeout_ms,
+    }
+}
+
+fn parse_container_exec_arguments(
+    arguments: String,
+    sess: &Session,
+    call_id: &str,
+) -> Result<ExecParams, ResponseInputItem> {
+    // parse command
+    match serde_json::from_str::<ShellToolCallParams>(&arguments) {
+        Ok(shell_tool_call_params) => Ok(to_exec_params(shell_tool_call_params, sess)),
+        Err(e) => {
+            // allow model to re-sample
+            let output = ResponseInputItem::FunctionCallOutput {
+                call_id: call_id.to_string(),
+                output: crate::models::FunctionCallOutputPayload {
+                    content: format!("failed to parse function arguments: {e}"),
+                    success: None,
+                },
+            };
+            Err(output)
+        }
+    }
+}
+
+async fn handle_container_exec_with_params(
+    params: ExecParams,
+    sess: &Session,
+    sub_id: String,
+    call_id: String,
+) -> ResponseInputItem {
+    // check if this was a patch, and apply it if so
+    match maybe_parse_apply_patch_verified(&params.command, &params.cwd) {
+        MaybeApplyPatchVerified::Body(changes) => {
+            return apply_patch(sess, sub_id, call_id, changes).await;
+        }
+        MaybeApplyPatchVerified::CorrectnessError(parse_error) => {
+            // It looks like an invocation of `apply_patch`, but we
+            // could not resolve it into a patch that would apply
+            // cleanly. Return to model for resample.
+            return ResponseInputItem::FunctionCallOutput {
+                call_id,
+                output: FunctionCallOutputPayload {
+                    content: format!("error: {parse_error:#}"),
+                    success: None,
+                },
+            };
+        }
+        MaybeApplyPatchVerified::ShellParseError(error) => {
+            trace!("Failed to parse shell command, {error:?}");
+        }
+        MaybeApplyPatchVerified::NotApplyPatch => (),
+    }
+
+    // safety checks
+    let safety = {
+        let state = sess.state.lock().unwrap();
+        assess_command_safety(
+            &params.command,
+            sess.approval_policy,
+            &sess.sandbox_policy,
+            &state.approved_commands,
+        )
+    };
+    let sandbox_type = match safety {
+        SafetyCheck::AutoApprove { sandbox_type } => sandbox_type,
+        SafetyCheck::AskUser => {
+            let rx_approve = sess
+                .request_command_approval(
+                    sub_id.clone(),
+                    params.command.clone(),
+                    params.cwd.clone(),
+                    None,
+                )
+                .await;
+            match rx_approve.await.unwrap_or_default() {
+                ReviewDecision::Approved => (),
+                ReviewDecision::ApprovedForSession => {
+                    sess.add_approved_command(params.command.clone());
+                }
+                ReviewDecision::Denied | ReviewDecision::Abort => {
+                    return ResponseInputItem::FunctionCallOutput {
+                        call_id,
+                        output: crate::models::FunctionCallOutputPayload {
+                            content: "exec command rejected by user".to_string(),
+                            success: None,
+                        },
+                    };
+                }
+            }
+            // No sandboxing is applied because the user has given
+            // explicit approval. Often, we end up in this case because
+            // the command cannot be run in a sandbox, such as
+            // installing a new dependency that requires network access.
+            SandboxType::None
+        }
+        SafetyCheck::Reject { reason } => {
+            return ResponseInputItem::FunctionCallOutput {
+                call_id,
+                output: crate::models::FunctionCallOutputPayload {
+                    content: format!("exec command rejected: {reason}"),
+                    success: None,
+                },
+            };
+        }
+    };
+
+    sess.notify_exec_command_begin(&sub_id, &call_id, &params)
+        .await;
+
+    let output_result = process_exec_tool_call(
+        params.clone(),
+        sandbox_type,
+        sess.ctrl_c.clone(),
+        &sess.sandbox_policy,
+    )
+    .await;
+
+    match output_result {
+        Ok(output) => {
+            let ExecToolCallOutput {
+                exit_code,
+                stdout,
+                stderr,
+                duration,
+            } = output;
+
+            sess.notify_exec_command_end(&sub_id, &call_id, &stdout, &stderr, exit_code)
+                .await;
+
+            let is_success = exit_code == 0;
+            let content = format_exec_output(
+                if is_success { &stdout } else { &stderr },
+                exit_code,
+                duration,
+            );
+
+            ResponseInputItem::FunctionCallOutput {
+                call_id,
+                output: FunctionCallOutputPayload {
+                    content,
+                    success: Some(is_success),
+                },
+            }
+        }
+        Err(CodexErr::Sandbox(error)) => {
+            handle_sanbox_error(error, sandbox_type, params, sess, sub_id, call_id).await
+        }
+        Err(e) => {
+            // Handle non-sandbox errors
+            ResponseInputItem::FunctionCallOutput {
+                call_id,
+                output: FunctionCallOutputPayload {
+                    content: format!("execution error: {e}"),
+                    success: None,
+                },
+            }
+        }
+    }
+}
+
+async fn handle_sanbox_error(
+    error: SandboxErr,
+    sandbox_type: SandboxType,
+    params: ExecParams,
+    sess: &Session,
+    sub_id: String,
+    call_id: String,
+) -> ResponseInputItem {
+    // Early out if the user never wants to be asked for approval; just return to the model immediately
+    if sess.approval_policy == AskForApproval::Never {
+        return ResponseInputItem::FunctionCallOutput {
+            call_id,
+            output: FunctionCallOutputPayload {
+                content: format!(
+                    "failed in sandbox {:?} with execution error: {error}",
+                    sandbox_type
+                ),
+                success: Some(false),
+            },
+        };
+    }
+
+    // Ask the user to retry without sandbox
+    sess.notify_background_event(&sub_id, format!("Execution failed: {error}"))
+        .await;
+
+    let rx_approve = sess
+        .request_command_approval(
+            sub_id.clone(),
+            params.command.clone(),
+            params.cwd.clone(),
+            Some("command failed; retry without sandbox?".to_string()),
+        )
+        .await;
+
+    match rx_approve.await.unwrap_or_default() {
+        ReviewDecision::Approved | ReviewDecision::ApprovedForSession => {
+            // Persist this command as pre‑approved for the
+            // remainder of the session so future
+            // executions skip the sandbox directly.
+            // TODO(ragona): Isn't this a bug? It always saves the command in an | fork?
+            sess.add_approved_command(params.command.clone());
+            // Inform UI we are retrying without sandbox.
+            sess.notify_background_event(&sub_id, "retrying command without sandbox")
+                .await;
+
+            // Emit a fresh Begin event so progress bars reset.
+            let retry_call_id = format!("{call_id}-retry");
+            sess.notify_exec_command_begin(&sub_id, &retry_call_id, &params)
+                .await;
+
+            // This is an escalated retry; the policy will not be
+            // examined and the sandbox has been set to `None`.
+            let retry_output_result = process_exec_tool_call(
+                params,
+                SandboxType::None,
+                sess.ctrl_c.clone(),
+                &sess.sandbox_policy,
+            )
+            .await;
+
+            match retry_output_result {
+                Ok(retry_output) => {
+                    let ExecToolCallOutput {
+                        exit_code,
+                        stdout,
+                        stderr,
+                        duration,
+                    } = retry_output;
+
+                    sess.notify_exec_command_end(
+                        &sub_id,
+                        &retry_call_id,
+                        &stdout,
+                        &stderr,
+                        exit_code,
+                    )
+                    .await;
+
+                    let is_success = exit_code == 0;
+                    let content = format_exec_output(
+                        if is_success { &stdout } else { &stderr },
+                        exit_code,
+                        duration,
+                    );
+
+                    ResponseInputItem::FunctionCallOutput {
+                        call_id,
+                        output: FunctionCallOutputPayload {
+                            content,
+                            success: Some(is_success),
+                        },
+                    }
+                }
+                Err(e) => {
+                    // Handle retry failure
+                    ResponseInputItem::FunctionCallOutput {
+                        call_id,
+                        output: FunctionCallOutputPayload {
+                            content: format!("retry failed: {e}"),
+                            success: None,
+                        },
+                    }
+                }
+            }
+        }
+        ReviewDecision::Denied | ReviewDecision::Abort => {
+            // Fall through to original failure handling.
+            ResponseInputItem::FunctionCallOutput {
+                call_id,
+                output: FunctionCallOutputPayload {
+                    content: "exec command rejected by user".to_string(),
+                    success: None,
+                },
             }
         }
     }
@@ -1275,11 +1488,11 @@ async fn apply_patch(
         .tx_event
         .send(Event {
             id: sub_id.clone(),
-            msg: EventMsg::PatchApplyBegin {
+            msg: EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
                 call_id: call_id.clone(),
                 auto_approved,
                 changes: convert_apply_patch_to_protocol(&action),
-            },
+            }),
         })
         .await;
 
@@ -1364,12 +1577,12 @@ async fn apply_patch(
         .tx_event
         .send(Event {
             id: sub_id.clone(),
-            msg: EventMsg::PatchApplyEnd {
+            msg: EventMsg::PatchApplyEnd(PatchApplyEndEvent {
                 call_id: call_id.clone(),
                 stdout: String::from_utf8_lossy(&stdout).to_string(),
                 stderr: String::from_utf8_lossy(&stderr).to_string(),
                 success: success_flag,
-            },
+            }),
         })
         .await;
 
@@ -1587,6 +1800,7 @@ fn format_exec_output(output: &str, exit_code: i32, duration: std::time::Duratio
         },
     };
 
+    #[expect(clippy::expect_used)]
     serde_json::to_string(&payload).expect("serialize ExecOutput")
 }
 
@@ -1608,4 +1822,16 @@ fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -> Option<St
             None
         }
     })
+}
+
+/// See [`ConversationHistory`] for details.
+fn record_conversation_history(disable_response_storage: bool, wire_api: WireApi) -> bool {
+    if disable_response_storage {
+        return true;
+    }
+
+    match wire_api {
+        WireApi::Responses => false,
+        WireApi::Chat => true,
+    }
 }

@@ -102,6 +102,8 @@ pub enum CallToolResultContent {
 
 impl From<CallToolResult> for serde_json::Value {
     fn from(value: CallToolResult) -> Self {
+        // Leave this as it should never fail
+        #[expect(clippy::unwrap_used)]
         serde_json::to_value(value).unwrap()
     }
 }
@@ -240,6 +242,8 @@ pub struct CompleteResultCompletion {
 
 impl From<CompleteResult> for serde_json::Value {
     fn from(value: CompleteResult) -> Self {
+        // Leave this as it should never fail
+        #[expect(clippy::unwrap_used)]
         serde_json::to_value(value).unwrap()
     }
 }
@@ -312,6 +316,8 @@ pub enum CreateMessageResultContent {
 
 impl From<CreateMessageResult> for serde_json::Value {
     fn from(value: CreateMessageResult) -> Self {
+        // Leave this as it should never fail
+        #[expect(clippy::unwrap_used)]
         serde_json::to_value(value).unwrap()
     }
 }
@@ -366,6 +372,8 @@ pub struct GetPromptResult {
 
 impl From<GetPromptResult> for serde_json::Value {
     fn from(value: GetPromptResult) -> Self {
+        // Leave this as it should never fail
+        #[expect(clippy::unwrap_used)]
         serde_json::to_value(value).unwrap()
     }
 }
@@ -420,6 +428,8 @@ pub struct InitializeResult {
 
 impl From<InitializeResult> for serde_json::Value {
     fn from(value: InitializeResult) -> Self {
+        // Leave this as it should never fail
+        #[expect(clippy::unwrap_used)]
         serde_json::to_value(value).unwrap()
     }
 }
@@ -538,6 +548,8 @@ pub struct ListPromptsResult {
 
 impl From<ListPromptsResult> for serde_json::Value {
     fn from(value: ListPromptsResult) -> Self {
+        // Leave this as it should never fail
+        #[expect(clippy::unwrap_used)]
         serde_json::to_value(value).unwrap()
     }
 }
@@ -572,6 +584,8 @@ pub struct ListResourceTemplatesResult {
 
 impl From<ListResourceTemplatesResult> for serde_json::Value {
     fn from(value: ListResourceTemplatesResult) -> Self {
+        // Leave this as it should never fail
+        #[expect(clippy::unwrap_used)]
         serde_json::to_value(value).unwrap()
     }
 }
@@ -605,6 +619,8 @@ pub struct ListResourcesResult {
 
 impl From<ListResourcesResult> for serde_json::Value {
     fn from(value: ListResourcesResult) -> Self {
+        // Leave this as it should never fail
+        #[expect(clippy::unwrap_used)]
         serde_json::to_value(value).unwrap()
     }
 }
@@ -628,6 +644,8 @@ pub struct ListRootsResult {
 
 impl From<ListRootsResult> for serde_json::Value {
     fn from(value: ListRootsResult) -> Self {
+        // Leave this as it should never fail
+        #[expect(clippy::unwrap_used)]
         serde_json::to_value(value).unwrap()
     }
 }
@@ -661,6 +679,8 @@ pub struct ListToolsResult {
 
 impl From<ListToolsResult> for serde_json::Value {
     fn from(value: ListToolsResult) -> Self {
+        // Leave this as it should never fail
+        #[expect(clippy::unwrap_used)]
         serde_json::to_value(value).unwrap()
     }
 }
@@ -782,6 +802,8 @@ pub struct PaginatedResult {
 
 impl From<PaginatedResult> for serde_json::Value {
     fn from(value: PaginatedResult) -> Self {
+        // Leave this as it should never fail
+        #[expect(clippy::unwrap_used)]
         serde_json::to_value(value).unwrap()
     }
 }
@@ -904,6 +926,8 @@ pub enum ReadResourceResultContents {
 
 impl From<ReadResourceResult> for serde_json::Value {
     fn from(value: ReadResourceResult) -> Self {
+        // Leave this as it should never fail
+        #[expect(clippy::unwrap_used)]
         serde_json::to_value(value).unwrap()
     }
 }

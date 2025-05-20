@@ -77,3 +77,7 @@ yarn.lock
 package.json-e
 session.ts-e
 CHANGELOG.ignore.md
+
+# nix related
+.direnv
+.envrc

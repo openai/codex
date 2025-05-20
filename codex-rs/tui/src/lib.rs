@@ -2,7 +2,6 @@
 // The standalone `codex-tui` binary prints a short help message before the
 // alternate‑screen mode starts; that file opts‑out locally via `allow`.
 #![deny(clippy::print_stdout, clippy::print_stderr)]
-
 use app::App;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -17,8 +16,10 @@ use tracing_subscriber::prelude::*;
 
 mod app;
 mod app_event;
+mod app_event_sender;
 mod bottom_pane;
 mod chatwidget;
+mod citation_regex;
 mod cli;
 mod conversation_history_widget;
 mod exec_command;
@@ -26,7 +27,9 @@ mod git_warning_screen;
 mod history_cell;
 mod log_layer;
 mod markdown;
+mod mouse_capture;
 mod scroll_event_helper;
+mod slash_command;
 mod status_indicator_widget;
 mod tui;
 mod user_approval_widget;
@@ -34,8 +37,6 @@ mod user_approval_widget;
 pub use cli::Cli;
 
 pub fn run_main(cli: Cli) -> std::io::Result<()> {
-    assert_env_var_set();
-
     let (sandbox_policy, approval_policy) = if cli.full_auto {
         (
             Some(SandboxPolicy::new_full_auto_policy()),
@@ -58,7 +59,8 @@ pub fn run_main(cli: Cli) -> std::io::Result<()> {
                 None
             },
             cwd: cli.cwd.clone().map(|p| p.canonicalize().unwrap_or(p)),
-            provider: None,
+            model_provider: None,
+            config_profile: cli.config_profile.clone(),
         };
         #[allow(clippy::print_stderr)]
         match Config::load_with_overrides(overrides) {
@@ -70,7 +72,7 @@ pub fn run_main(cli: Cli) -> std::io::Result<()> {
         }
     };
 
-    let log_dir = codex_core::config::log_dir()?;
+    let log_dir = codex_core::config::log_dir(&config)?;
     std::fs::create_dir_all(&log_dir)?;
     // Open (or create) your log file, appending to it.
     let mut log_file_opts = OpenOptions::new();
@@ -151,7 +153,7 @@ fn run_ratatui_app(
     std::panic::set_hook(Box::new(|info| {
         tracing::error!("panic: {info}");
     }));
-    let mut terminal = tui::init()?;
+    let (mut terminal, mut mouse_capture) = tui::init(&config)?;
     terminal.clear()?;
 
     let Cli { prompt, images, .. } = cli;
@@ -162,29 +164,15 @@ fn run_ratatui_app(
         let app_event_tx = app.event_sender();
         tokio::spawn(async move {
             while let Some(line) = log_rx.recv().await {
-                let _ = app_event_tx.send(crate::app_event::AppEvent::LatestLog(line));
+                app_event_tx.send(crate::app_event::AppEvent::LatestLog(line));
             }
         });
     }
 
-    let app_result = app.run(&mut terminal);
+    let app_result = app.run(&mut terminal, &mut mouse_capture);
 
     restore();
     app_result
-}
-
-#[expect(
-    clippy::print_stderr,
-    reason = "TUI should not have been displayed yet, so we can write to stderr."
-)]
-fn assert_env_var_set() {
-    if std::env::var("OPENAI_API_KEY").is_err() {
-        eprintln!("Welcome to codex! It looks like you're missing: `OPENAI_API_KEY`");
-        eprintln!(
-            "Create an API key (https://platform.openai.com) and export as an environment variable"
-        );
-        std::process::exit(1);
-    }
 }
 
 #[expect(

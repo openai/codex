@@ -10,7 +10,7 @@ To that end, we are moving forward with a Rust implementation of Codex CLI conta
 - Can make direct, native calls to [seccomp](https://man7.org/linux/man-pages/man2/seccomp.2.html) and [landlock](https://man7.org/linux/man-pages/man7/landlock.7.html) in order to support sandboxing on Linux.
 - No runtime garbage collection, resulting in lower memory consumption and better, more predictable performance.
 
-Currently, the Rust implementation is materially behind the TypeScript implementation in functionality, so continue to use the TypeScript implmentation for the time being. We will publish native executables via GitHub Releases as soon as we feel the Rust version is usable.
+Currently, the Rust implementation is materially behind the TypeScript implementation in functionality, so continue to use the TypeScript implementation for the time being. We will publish native executables via GitHub Releases as soon as we feel the Rust version is usable.
 
 ## Code Organization
 
@@ -23,14 +23,71 @@ This folder is the root of a Cargo workspace. It contains quite a bit of experim
 
 ## Config
 
-The CLI can be configured via `~/.codex/config.toml`. It supports the following options:
+The CLI can be configured via a file named `config.toml`. By default, configuration is read from `~/.codex/config.toml`, though the `CODEX_HOME` environment variable can be used to specify a directory other than `~/.codex`.
+
+The `config.toml` file supports the following options:
 
 ### model
 
 The model that Codex should use.
 
 ```toml
-model = "o3"  # overrides the default of "o4-mini"
+model = "o3"  # overrides the default of "codex-mini-latest"
+```
+
+### model_provider
+
+Codex comes bundled with a number of "model providers" predefined. This config value is a string that indicates which provider to use. You can also define your own providers via `model_providers`.
+
+For example, if you are running ollama with Mistral locally, then you would need to add the following to your config:
+
+```toml
+model = "mistral"
+model_provider = "ollama"
+```
+
+because the following definition for `ollama` is included in Codex:
+
+```toml
+[model_providers.ollama]
+name = "Ollama"
+base_url = "http://localhost:11434/v1"
+wire_api = "chat"
+```
+
+This option defaults to `"openai"` and the corresponding provider is defined as follows:
+
+```toml
+[model_providers.openai]
+name = "OpenAI"
+base_url = "https://api.openai.com/v1"
+env_key = "OPENAI_API_KEY"
+wire_api = "responses"
+```
+
+### model_providers
+
+This option lets you override and amend the default set of model providers bundled with Codex. This value is a map where the key is the value to use with `model_provider` to select the correspodning provider.
+
+For example, if you wanted to add a provider that uses the OpenAI 4o model via the chat completions API, then you
+
+```toml
+# Recall that in TOML, root keys must be listed before tables.
+model = "gpt-4o"
+model_provider = "openai-chat-completions"
+
+[model_providers.openai-chat-completions]
+# Name of the provider that will be displayed in the Codex UI.
+name = "OpenAI using Chat Completions"
+# The path `/chat/completions` will be amended to this URL to make the POST
+# request for the chat completions.
+base_url = "https://api.openai.com/v1"
+# If `env_key` is set, identifies an environment variable that must be set when
+# using Codex with this provider. The value of the environment variable must be
+# non-empty and will be used in the `Bearer TOKEN` HTTP header for the POST request.
+env_key = "OPENAI_API_KEY"
+# valid values for wire_api are "chat" and "responses".
+wire_api = "chat"
 ```
 
 ### approval_policy
@@ -53,6 +110,52 @@ approval_policy = "on-failure"
 # something out. Note the `exec` subcommand always uses this mode.
 approval_policy = "never"
 ```
+
+### profiles
+
+A _profile_ is a collection of configuration values that can be set together. Multiple profiles can be defined in `config.toml` and you can specify the one you
+want to use at runtime via the `--profile` flag.
+
+Here is an example of a `config.toml` that defines multiple profiles:
+
+```toml
+model = "o3"
+approval_policy = "unless-allow-listed"
+sandbox_permissions = ["disk-full-read-access"]
+disable_response_storage = false
+
+# Setting `profile` is equivalent to specifying `--profile o3` on the command
+# line, though the `--profile` flag can still be used to override this value.
+profile = "o3"
+
+[model_providers.openai-chat-completions]
+name = "OpenAI using Chat Completions"
+base_url = "https://api.openai.com/v1"
+env_key = "OPENAI_API_KEY"
+wire_api = "chat"
+
+[profiles.o3]
+model = "o3"
+model_provider = "openai"
+approval_policy = "never"
+
+[profiles.gpt3]
+model = "gpt-3.5-turbo"
+model_provider = "openai-chat-completions"
+
+[profiles.zdr]
+model = "o3"
+model_provider = "openai"
+approval_policy = "on-failure"
+disable_response_storage = true
+```
+
+Users can specify config values at multiple levels. Order of precedence is as follows:
+
+1. custom command-line argument, e.g., `--model o3`
+2. as part of a profile, where the `--profile` is specified via a CLI (or in the config file itself)
+3. as an entry in `config.toml`, e.g., `model = "o3"`
+4. the default value that comes with Codex CLI (i.e., Codex CLI defaults to `o4-mini`)
 
 ### sandbox_permissions
 
@@ -194,4 +297,53 @@ To have Codex use this script for notifications, you would configure it via `not
 
 ```toml
 notify = ["python3", "/Users/mbolin/.codex/notify.py"]
+```
+
+### history
+
+By default, Codex CLI records messages sent to the model in `$CODEX_HOME/history.jsonl`. Note that on UNIX, the file permissions are set to `o600`, so it should only be readable and writable by the owner.
+
+To disable this behavior, configure `[history]` as follows:
+
+```toml
+[history]
+persistence = "none"  # "save-all" is the default value
+```
+
+### file_opener
+
+Identifies the editor/URI scheme to use for hyperlinking citations in model output. If set, citations to files in the model output will be hyperlinked using the specified URI scheme so they can be ctrl/cmd-clicked from the terminal to open them.
+
+For example, if the model output includes a reference such as `【F:/home/user/project/main.py†L42-L50】`, then this would be rewritten to link to the URI `vscode://file/home/user/project/main.py:42`.
+
+Note this is **not** a general editor setting (like `$EDITOR`), as it only accepts a fixed set of values:
+
+- `"vscode"` (default)
+- `"vscode-insiders"`
+- `"windsurf"`
+- `"cursor"`
+- `"none"` to explicitly disable this feature
+
+Currently, `"vscode"` is the default, though Codex does not verify VS Code is installed. As such, `file_opener` may default to `"none"` or something else in the future.
+
+### project_doc_max_bytes
+
+Maximum number of bytes to read from an `AGENTS.md` file to include in the instructions sent with the first turn of a session. Defaults to 32 KiB.
+
+### tui
+
+Options that are specific to the TUI.
+
+```toml
+[tui]
+# This will make it so that Codex does not try to process mouse events, which
+# means your Terminal's native drag-to-text to text selection and copy/paste
+# should work. The tradeoff is that Codex will not receive any mouse events, so
+# it will not be possible to use the mouse to scroll conversation history.
+#
+# Note that most terminals support holding down a modifier key when using the
+# mouse to support text selection. For example, even if Codex mouse capture is
+# enabled (i.e., this is set to `false`), you can still hold down alt while
+# dragging the mouse to select text.
+disable_mouse_capture = true  # defaults to `false`
 ```

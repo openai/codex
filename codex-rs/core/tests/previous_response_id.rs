@@ -2,10 +2,15 @@ use std::time::Duration;
 
 use codex_core::Codex;
 use codex_core::ModelProviderInfo;
-use codex_core::config::Config;
+use codex_core::exec::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use codex_core::protocol::ErrorEvent;
+use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
+mod test_support;
 use serde_json::Value;
+use tempfile::TempDir;
+use test_support::load_default_config_for_test;
 use tokio::time::timeout;
 use wiremock::Match;
 use wiremock::Mock;
@@ -48,6 +53,15 @@ data: {{\"type\":\"response.completed\",\"response\":{{\"id\":\"{}\",\"output\":
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn keeps_previous_response_id_between_tasks() {
+    #![allow(clippy::unwrap_used)]
+
+    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+        println!(
+            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+        );
+        return;
+    }
+
     // Mock server
     let server = MockServer::start().await;
 
@@ -90,11 +104,14 @@ async fn keeps_previous_response_id_between_tasks() {
         // Environment variable that should exist in the test environment.
         // ModelClient will return an error if the environment variable for the
         // provider is not set.
-        env_key: "PATH".into(),
+        env_key: Some("PATH".into()),
+        env_key_instructions: None,
+        wire_api: codex_core::WireApi::Responses,
     };
 
     // Init session
-    let mut config = Config::load_default_config_for_test();
+    let codex_home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&codex_home);
     config.model_provider = model_provider;
     let ctrl_c = std::sync::Arc::new(tokio::sync::Notify::new());
     let (codex, _init_id) = Codex::spawn(config, ctrl_c.clone()).await.unwrap();
@@ -115,7 +132,7 @@ async fn keeps_previous_response_id_between_tasks() {
             .await
             .unwrap()
             .unwrap();
-        if matches!(ev.msg, codex_core::protocol::EventMsg::TaskComplete) {
+        if matches!(ev.msg, EventMsg::TaskComplete(_)) {
             break;
         }
     }
@@ -137,11 +154,13 @@ async fn keeps_previous_response_id_between_tasks() {
             .unwrap()
             .unwrap();
         match ev.msg {
-            codex_core::protocol::EventMsg::TaskComplete => break,
-            codex_core::protocol::EventMsg::Error { message } => {
+            EventMsg::TaskComplete(_) => break,
+            EventMsg::Error(ErrorEvent { message }) => {
                 panic!("unexpected error: {message}")
             }
-            _ => (),
+            _ => {
+                // Ignore other events.
+            }
         }
     }
 }

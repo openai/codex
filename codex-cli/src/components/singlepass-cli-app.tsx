@@ -5,13 +5,7 @@ import type { FileOperation } from "../utils/singlepass/file_ops";
 
 import Spinner from "./vendor/ink-spinner"; // Third‑party / vendor components
 import TextInput from "./vendor/ink-text-input";
-import {
-  OPENAI_TIMEOUT_MS,
-  OPENAI_ORGANIZATION,
-  OPENAI_PROJECT,
-  getBaseUrl,
-  getApiKey,
-} from "../utils/config";
+import { createOpenAIClient } from "../utils/openai-client";
 import {
   generateDiffSummary,
   generateEditSummary,
@@ -26,7 +20,6 @@ import { EditedFilesSchema } from "../utils/singlepass/file_ops";
 import * as fsSync from "fs";
 import * as fsPromises from "fs/promises";
 import { Box, Text, useApp, useInput } from "ink";
-import OpenAI from "openai";
 import { zodResponseFormat } from "openai/helpers/zod";
 import path from "path";
 import React, { useEffect, useState, useRef } from "react";
@@ -399,20 +392,7 @@ export function SinglePassApp({
         files,
       });
 
-      const headers: Record<string, string> = {};
-      if (OPENAI_ORGANIZATION) {
-        headers["OpenAI-Organization"] = OPENAI_ORGANIZATION;
-      }
-      if (OPENAI_PROJECT) {
-        headers["OpenAI-Project"] = OPENAI_PROJECT;
-      }
-
-      const openai = new OpenAI({
-        apiKey: getApiKey(config.provider),
-        baseURL: getBaseUrl(config.provider),
-        timeout: OPENAI_TIMEOUT_MS,
-        defaultHeaders: headers,
-      });
+      const openai = createOpenAIClient(config);
       const chatResp = await openai.beta.chat.completions.parse({
         model: config.model,
         ...(config.flexMode ? { service_tier: "flex" } : {}),

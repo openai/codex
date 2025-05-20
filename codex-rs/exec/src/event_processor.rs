@@ -1,12 +1,24 @@
 use chrono::Utc;
 use codex_common::elapsed::format_elapsed;
+use codex_core::protocol::AgentMessageEvent;
+use codex_core::protocol::BackgroundEventEvent;
+use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
+use codex_core::protocol::ExecCommandBeginEvent;
+use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::FileChange;
+use codex_core::protocol::McpToolCallBeginEvent;
+use codex_core::protocol::McpToolCallEndEvent;
+use codex_core::protocol::PatchApplyBeginEvent;
+use codex_core::protocol::PatchApplyEndEvent;
+use codex_core::protocol::SessionConfiguredEvent;
+use codex_core::protocol::TaskCompleteEvent;
 use owo_colors::OwoColorize;
 use owo_colors::Style;
 use shlex::try_join;
 use std::collections::HashMap;
+use std::time::Instant;
 
 /// This should be configurable. When used in CI, users may not want to impose
 /// a limit so they can see the full transcript.
@@ -66,7 +78,7 @@ impl EventProcessor {
 
 struct ExecCommandBegin {
     command: Vec<String>,
-    start_time: chrono::DateTime<Utc>,
+    start_time: Instant,
 }
 
 /// Metadata captured when an `McpToolCallBegin` event is received.
@@ -74,11 +86,11 @@ struct McpToolCallBegin {
     /// Formatted invocation string, e.g. `server.tool({"city":"sf"})`.
     invocation: String,
     /// Timestamp when the call started so we can compute duration later.
-    start_time: chrono::DateTime<Utc>,
+    start_time: Instant,
 }
 
 struct PatchApplyBegin {
-    start_time: chrono::DateTime<Utc>,
+    start_time: Instant,
     auto_approved: bool,
 }
 
@@ -95,35 +107,37 @@ impl EventProcessor {
     pub(crate) fn process_event(&mut self, event: Event) {
         let Event { id, msg } = event;
         match msg {
-            EventMsg::Error { message } => {
+            EventMsg::Error(ErrorEvent { message }) => {
                 let prefix = "ERROR:".style(self.red);
                 ts_println!("{prefix} {message}");
             }
-            EventMsg::BackgroundEvent { message } => {
+            EventMsg::BackgroundEvent(BackgroundEventEvent { message }) => {
                 ts_println!("{}", message.style(self.dimmed));
             }
             EventMsg::TaskStarted => {
                 let msg = format!("Task started: {id}");
                 ts_println!("{}", msg.style(self.dimmed));
             }
-            EventMsg::TaskComplete => {
+            EventMsg::TaskComplete(TaskCompleteEvent {
+                last_agent_message: _,
+            }) => {
                 let msg = format!("Task complete: {id}");
                 ts_println!("{}", msg.style(self.bold));
             }
-            EventMsg::AgentMessage { message } => {
+            EventMsg::AgentMessage(AgentMessageEvent { message }) => {
                 let prefix = "Agent message:".style(self.bold);
                 ts_println!("{prefix} {message}");
             }
-            EventMsg::ExecCommandBegin {
+            EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
                 call_id,
                 command,
                 cwd,
-            } => {
+            }) => {
                 self.call_id_to_command.insert(
                     call_id.clone(),
                     ExecCommandBegin {
                         command: command.clone(),
-                        start_time: Utc::now(),
+                        start_time: Instant::now(),
                     },
                 );
                 ts_println!(
@@ -133,12 +147,12 @@ impl EventProcessor {
                     cwd.to_string_lossy(),
                 );
             }
-            EventMsg::ExecCommandEnd {
+            EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                 call_id,
                 stdout,
                 stderr,
                 exit_code,
-            } => {
+            }) => {
                 let exec_command = self.call_id_to_command.remove(&call_id);
                 let (duration, call) = if let Some(ExecCommandBegin {
                     command,
@@ -171,21 +185,21 @@ impl EventProcessor {
                 }
                 println!("{}", truncated_output.style(self.dimmed));
             }
-
-            // Handle MCP tool calls (e.g. calling external functions via MCP).
-            EventMsg::McpToolCallBegin {
+            EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
                 call_id,
                 server,
                 tool,
                 arguments,
-            } => {
+            }) => {
                 // Build fully-qualified tool name: server.tool
                 let fq_tool_name = format!("{server}.{tool}");
 
                 // Format arguments as compact JSON so they fit on one line.
                 let args_str = arguments
                     .as_ref()
-                    .map(|v| serde_json::to_string(v).unwrap_or_else(|_| v.to_string()))
+                    .map(|v: &serde_json::Value| {
+                        serde_json::to_string(v).unwrap_or_else(|_| v.to_string())
+                    })
                     .unwrap_or_default();
 
                 let invocation = if args_str.is_empty() {
@@ -198,7 +212,7 @@ impl EventProcessor {
                     call_id.clone(),
                     McpToolCallBegin {
                         invocation: invocation.clone(),
-                        start_time: Utc::now(),
+                        start_time: Instant::now(),
                     },
                 );
 
@@ -208,11 +222,11 @@ impl EventProcessor {
                     invocation.style(self.bold),
                 );
             }
-            EventMsg::McpToolCallEnd {
+            EventMsg::McpToolCallEnd(McpToolCallEndEvent {
                 call_id,
                 success,
                 result,
-            } => {
+            }) => {
                 // Retrieve start time and invocation for duration calculation and labeling.
                 let info = self.call_id_to_tool_call.remove(&call_id);
 
@@ -243,17 +257,17 @@ impl EventProcessor {
                     }
                 }
             }
-            EventMsg::PatchApplyBegin {
+            EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
                 call_id,
                 auto_approved,
                 changes,
-            } => {
+            }) => {
                 // Store metadata so we can calculate duration later when we
                 // receive the corresponding PatchApplyEnd event.
                 self.call_id_to_patch.insert(
                     call_id.clone(),
                     PatchApplyBegin {
-                        start_time: Utc::now(),
+                        start_time: Instant::now(),
                         auto_approved,
                     },
                 );
@@ -321,12 +335,12 @@ impl EventProcessor {
                     }
                 }
             }
-            EventMsg::PatchApplyEnd {
+            EventMsg::PatchApplyEnd(PatchApplyEndEvent {
                 call_id,
                 stdout,
                 stderr,
                 success,
-            } => {
+            }) => {
                 let patch_begin = self.call_id_to_patch.remove(&call_id);
 
                 // Compute duration and summary label similar to exec commands.
@@ -355,14 +369,26 @@ impl EventProcessor {
                     println!("{}", line.style(self.dimmed));
                 }
             }
-            EventMsg::ExecApprovalRequest { .. } => {
+            EventMsg::ExecApprovalRequest(_) => {
                 // Should we exit?
             }
-            EventMsg::ApplyPatchApprovalRequest { .. } => {
+            EventMsg::ApplyPatchApprovalRequest(_) => {
                 // Should we exit?
             }
-            _ => {
-                // Ignore event.
+            EventMsg::AgentReasoning(agent_reasoning_event) => {
+                println!("thinking: {}", agent_reasoning_event.text);
+            }
+            EventMsg::SessionConfigured(session_configured_event) => {
+                let SessionConfiguredEvent {
+                    session_id,
+                    model,
+                    history_log_id: _,
+                    history_entry_count: _,
+                } = session_configured_event;
+                println!("session {session_id} with model {model}");
+            }
+            EventMsg::GetHistoryEntryResponse(_) => {
+                // Currently ignored in exec output.
             }
         }
     }

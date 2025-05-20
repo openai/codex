@@ -1,5 +1,6 @@
 import type { TerminalChatSession } from "../../utils/session.js";
 import type { ResponseItem } from "openai/resources/responses/responses";
+import type { FileOpenerScheme } from "src/utils/config.js";
 
 import TerminalChatResponseItem from "./terminal-chat-response-item";
 import { Box, Text } from "ink";
@@ -8,9 +9,11 @@ import React from "react";
 export default function TerminalChatPastRollout({
   session,
   items,
+  fileOpener,
 }: {
   session: TerminalChatSession;
   items: Array<ResponseItem>;
+  fileOpener: FileOpenerScheme | undefined;
 }): React.ReactElement {
   const { version, id: sessionId, model } = session;
   return (
@@ -51,9 +54,13 @@ export default function TerminalChatPastRollout({
         {React.useMemo(
           () =>
             items.map((item, key) => (
-              <TerminalChatResponseItem key={key} item={item} />
+              <TerminalChatResponseItem
+                key={key}
+                item={item}
+                fileOpener={fileOpener}
+              />
             )),
-          [items],
+          [items, fileOpener],
         )}
       </Box>
     </Box>

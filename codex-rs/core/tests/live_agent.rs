@@ -1,3 +1,5 @@
+#![expect(clippy::unwrap_used, clippy::expect_used)]
+
 //! Live integration tests that exercise the full [`Agent`] stack **against the real
 //! OpenAI `/v1/responses` API**.  These tests complement the lightweight mock‑based
 //! unit tests by verifying that the agent can drive an end‑to‑end conversation,
@@ -18,10 +20,15 @@
 use std::time::Duration;
 
 use codex_core::Codex;
-use codex_core::config::Config;
+use codex_core::error::CodexErr;
+use codex_core::protocol::AgentMessageEvent;
+use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
+mod test_support;
+use tempfile::TempDir;
+use test_support::load_default_config_for_test;
 use tokio::sync::Notify;
 use tokio::time::timeout;
 
@@ -32,7 +39,7 @@ fn api_key_available() -> bool {
 /// Helper that spawns a fresh Agent and sends the mandatory *ConfigureSession*
 /// submission.  The caller receives the constructed [`Agent`] plus the unique
 /// submission id used for the initialization message.
-async fn spawn_codex() -> Codex {
+async fn spawn_codex() -> Result<Codex, CodexErr> {
     assert!(
         api_key_available(),
         "OPENAI_API_KEY must be set for live tests"
@@ -52,12 +59,11 @@ async fn spawn_codex() -> Codex {
         std::env::set_var("OPENAI_STREAM_MAX_RETRIES", "2");
     }
 
-    let config = Config::load_default_config_for_test();
-    let (agent, _init_id) = Codex::spawn(config, std::sync::Arc::new(Notify::new()))
-        .await
-        .unwrap();
+    let codex_home = TempDir::new().unwrap();
+    let config = load_default_config_for_test(&codex_home);
+    let (agent, _init_id) = Codex::spawn(config, std::sync::Arc::new(Notify::new())).await?;
 
-    agent
+    Ok(agent)
 }
 
 /// Verifies that the agent streams incremental *AgentMessage* events **before**
@@ -71,7 +77,7 @@ async fn live_streaming_and_prev_id_reset() {
         return;
     }
 
-    let codex = spawn_codex().await;
+    let codex = spawn_codex().await.unwrap();
 
     // ---------- Task 1 ----------
     codex
@@ -91,10 +97,14 @@ async fn live_streaming_and_prev_id_reset() {
             .expect("agent closed");
 
         match ev.msg {
-            EventMsg::AgentMessage { .. } => saw_message_before_complete = true,
-            EventMsg::TaskComplete => break,
-            EventMsg::Error { message } => panic!("agent reported error in task1: {message}"),
-            _ => (),
+            EventMsg::AgentMessage(_) => saw_message_before_complete = true,
+            EventMsg::TaskComplete(_) => break,
+            EventMsg::Error(ErrorEvent { message }) => {
+                panic!("agent reported error in task1: {message}")
+            }
+            _ => {
+                // Ignore other events.
+            }
         }
     }
 
@@ -121,12 +131,18 @@ async fn live_streaming_and_prev_id_reset() {
             .expect("agent closed");
 
         match &ev.msg {
-            EventMsg::AgentMessage { message } if message.contains("second turn succeeded") => {
+            EventMsg::AgentMessage(AgentMessageEvent { message })
+                if message.contains("second turn succeeded") =>
+            {
                 got_expected = true;
             }
-            EventMsg::TaskComplete => break,
-            EventMsg::Error { message } => panic!("agent reported error in task2: {message}"),
-            _ => (),
+            EventMsg::TaskComplete(_) => break,
+            EventMsg::Error(ErrorEvent { message }) => {
+                panic!("agent reported error in task2: {message}")
+            }
+            _ => {
+                // Ignore other events.
+            }
         }
     }
 
@@ -145,7 +161,7 @@ async fn live_shell_function_call() {
         return;
     }
 
-    let codex = spawn_codex().await;
+    let codex = spawn_codex().await.unwrap();
 
     const MARKER: &str = "codex_live_echo_ok";
 
@@ -170,20 +186,31 @@ async fn live_shell_function_call() {
             .expect("agent closed");
 
         match ev.msg {
-            EventMsg::ExecCommandBegin { command, .. } => {
+            EventMsg::ExecCommandBegin(codex_core::protocol::ExecCommandBeginEvent {
+                command,
+                call_id: _,
+                cwd: _,
+            }) => {
                 assert_eq!(command, vec!["echo", MARKER]);
                 saw_begin = true;
             }
-            EventMsg::ExecCommandEnd {
-                stdout, exit_code, ..
-            } => {
+            EventMsg::ExecCommandEnd(codex_core::protocol::ExecCommandEndEvent {
+                stdout,
+                exit_code,
+                call_id: _,
+                stderr: _,
+            }) => {
                 assert_eq!(exit_code, 0, "echo returned non‑zero exit code");
                 assert!(stdout.contains(MARKER));
                 saw_end_with_output = true;
             }
-            EventMsg::TaskComplete => break,
-            EventMsg::Error { message } => panic!("agent error during shell test: {message}"),
-            _ => (),
+            EventMsg::TaskComplete(_) => break,
+            EventMsg::Error(codex_core::protocol::ErrorEvent { message }) => {
+                panic!("agent error during shell test: {message}")
+            }
+            _ => {
+                // Ignore other events.
+            }
         }
     }
 

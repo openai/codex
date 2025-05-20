@@ -9,7 +9,7 @@ import {
   renderUpdateCommand,
 } from "../src/utils/check-updates";
 import { detectInstallerByPath } from "../src/utils/package-manager-detector";
-import { CLI_VERSION } from "../src/utils/session";
+import { CLI_VERSION } from "../src/version";
 
 // In-memory FS mock
 let memfs: Record<string, string> = {};
@@ -37,8 +37,8 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 
 // Mock package name & CLI version
 const MOCK_PKG = "my-pkg";
+vi.mock("../src/version", () => ({ CLI_VERSION: "1.0.0" }));
 vi.mock("../package.json", () => ({ name: MOCK_PKG }));
-vi.mock("../src/utils/session", () => ({ CLI_VERSION: "1.0.0" }));
 vi.mock("../src/utils/package-manager-detector", async (importOriginal) => {
   return {
     ...(await importOriginal()),

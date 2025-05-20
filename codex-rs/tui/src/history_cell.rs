@@ -2,6 +2,7 @@ use codex_ansi_escape::ansi_escape_line;
 use codex_common::elapsed::format_duration;
 use codex_core::config::Config;
 use codex_core::protocol::FileChange;
+use codex_core::protocol::SessionConfiguredEvent;
 use ratatui::prelude::*;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
@@ -32,11 +33,17 @@ pub(crate) enum PatchEventType {
 /// `Vec<Line<'static>>` representation to make it easier to display in a
 /// scrollable list.
 pub(crate) enum HistoryCell {
+    /// Welcome message.
+    WelcomeMessage { lines: Vec<Line<'static>> },
+
     /// Message from the user.
     UserPrompt { lines: Vec<Line<'static>> },
 
     /// Message from the agent.
     AgentMessage { lines: Vec<Line<'static>> },
+
+    /// Reasoning event from the agent.
+    AgentReasoning { lines: Vec<Line<'static>> },
 
     /// An exec tool call that has not finished yet.
     ActiveExecCommand {
@@ -69,6 +76,9 @@ pub(crate) enum HistoryCell {
     /// Background event
     BackgroundEvent { lines: Vec<Line<'static>> },
 
+    /// Error event from the backend.
+    ErrorEvent { lines: Vec<Line<'static>> },
+
     /// Info describing the newly‑initialized session.
     SessionInfo { lines: Vec<Line<'static>> },
 
@@ -85,6 +95,57 @@ pub(crate) enum HistoryCell {
 const TOOL_CALL_MAX_LINES: usize = 5;
 
 impl HistoryCell {
+    pub(crate) fn new_session_info(
+        config: &Config,
+        event: SessionConfiguredEvent,
+        is_first_event: bool,
+    ) -> Self {
+        let SessionConfiguredEvent {
+            model,
+            session_id,
+            history_log_id: _,
+            history_entry_count: _,
+        } = event;
+        if is_first_event {
+            let mut lines: Vec<Line<'static>> = vec![
+                Line::from(vec![
+                    "OpenAI ".into(),
+                    "Codex".bold(),
+                    " (research preview)".dim(),
+                ]),
+                Line::from(""),
+                Line::from(vec![
+                    "codex session".magenta().bold(),
+                    " ".into(),
+                    session_id.to_string().dim(),
+                ]),
+            ];
+
+            let entries = vec![
+                ("workdir", config.cwd.display().to_string()),
+                ("model", config.model.clone()),
+                ("provider", config.model_provider_id.clone()),
+                ("approval", format!("{:?}", config.approval_policy)),
+                ("sandbox", format!("{:?}", config.sandbox_policy)),
+            ];
+            for (key, value) in entries {
+                lines.push(Line::from(vec![format!("{key}: ").bold(), value.into()]));
+            }
+            lines.push(Line::from(""));
+            HistoryCell::WelcomeMessage { lines }
+        } else if config.model == model {
+            HistoryCell::SessionInfo { lines: vec![] }
+        } else {
+            let lines = vec![
+                Line::from("model changed:".magenta().bold()),
+                Line::from(format!("requested: {}", config.model)),
+                Line::from(format!("used: {}", model)),
+                Line::from(""),
+            ];
+            HistoryCell::SessionInfo { lines }
+        }
+    }
+
     pub(crate) fn new_user_prompt(message: String) -> Self {
         let mut lines: Vec<Line<'static>> = Vec::new();
         lines.push(Line::from("user".cyan().bold()));
@@ -94,13 +155,22 @@ impl HistoryCell {
         HistoryCell::UserPrompt { lines }
     }
 
-    pub(crate) fn new_agent_message(message: String) -> Self {
+    pub(crate) fn new_agent_message(config: &Config, message: String) -> Self {
         let mut lines: Vec<Line<'static>> = Vec::new();
         lines.push(Line::from("codex".magenta().bold()));
-        append_markdown(&message, &mut lines);
+        append_markdown(&message, &mut lines, config);
         lines.push(Line::from(""));
 
         HistoryCell::AgentMessage { lines }
+    }
+
+    pub(crate) fn new_agent_reasoning(config: &Config, text: String) -> Self {
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        lines.push(Line::from("thinking".magenta().italic()));
+        append_markdown(&text, &mut lines, config);
+        lines.push(Line::from(""));
+
+        HistoryCell::AgentReasoning { lines }
     }
 
     pub(crate) fn new_active_exec_command(call_id: String, command: Vec<String>) -> Self {
@@ -245,26 +315,12 @@ impl HistoryCell {
         HistoryCell::BackgroundEvent { lines }
     }
 
-    pub(crate) fn new_session_info(config: &Config, model: String) -> Self {
-        let mut lines: Vec<Line<'static>> = Vec::new();
-
-        lines.push(Line::from("codex session:".magenta().bold()));
-        lines.push(Line::from(vec!["↳ model: ".bold(), model.into()]));
-        lines.push(Line::from(vec![
-            "↳ cwd: ".bold(),
-            config.cwd.display().to_string().into(),
-        ]));
-        lines.push(Line::from(vec![
-            "↳ approval: ".bold(),
-            format!("{:?}", config.approval_policy).into(),
-        ]));
-        lines.push(Line::from(vec![
-            "↳ sandbox: ".bold(),
-            format!("{:?}", config.sandbox_policy).into(),
-        ]));
-        lines.push(Line::from(""));
-
-        HistoryCell::SessionInfo { lines }
+    pub(crate) fn new_error_event(message: String) -> Self {
+        let lines: Vec<Line<'static>> = vec![
+            vec!["ERROR: ".red().bold(), message.into()].into(),
+            "".into(),
+        ];
+        HistoryCell::ErrorEvent { lines }
     }
 
     /// Create a new `PendingPatch` cell that lists the file‑level summary of
@@ -329,9 +385,12 @@ impl HistoryCell {
 
     pub(crate) fn lines(&self) -> &Vec<Line<'static>> {
         match self {
-            HistoryCell::UserPrompt { lines, .. }
+            HistoryCell::WelcomeMessage { lines, .. }
+            | HistoryCell::UserPrompt { lines, .. }
             | HistoryCell::AgentMessage { lines, .. }
+            | HistoryCell::AgentReasoning { lines, .. }
             | HistoryCell::BackgroundEvent { lines, .. }
+            | HistoryCell::ErrorEvent { lines, .. }
             | HistoryCell::SessionInfo { lines, .. }
             | HistoryCell::ActiveExecCommand { lines, .. }
             | HistoryCell::CompletedExecCommand { lines, .. }
