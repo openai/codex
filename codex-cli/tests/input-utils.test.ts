@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import fs from "fs/promises";
+import path from "path";
 import { createInputItem } from "../src/utils/input-utils.js";
 
 describe("createInputItem", () => {
@@ -31,6 +32,39 @@ describe("createInputItem", () => {
       detail: "auto",
       image_url: expectedUrl,
     });
+    // Verify that readFile was called with the resolved path
+    expect(readSpy).toHaveBeenCalledWith(
+      path.resolve(process.cwd(), "dummy-path"),
+    );
+    readSpy.mockRestore();
+  });
+
+  it("resolves relative paths to absolute paths", async () => {
+    const fakeBuffer = Buffer.from("fake image content");
+    const readSpy = vi
+      .spyOn(fs, "readFile")
+      .mockResolvedValue(fakeBuffer as any);
+
+    const relativePath = "./images/test.png";
+    const absolutePath = path.resolve(process.cwd(), relativePath);
+
+    await createInputItem("hello", [relativePath]);
+
+    expect(readSpy).toHaveBeenCalledWith(absolutePath);
+    readSpy.mockRestore();
+  });
+
+  it("doesn't modify absolute paths", async () => {
+    const fakeBuffer = Buffer.from("fake image content");
+    const readSpy = vi
+      .spyOn(fs, "readFile")
+      .mockResolvedValue(fakeBuffer as any);
+
+    const absolutePath = path.resolve("/absolute/path/to/image.png");
+
+    await createInputItem("hello", [absolutePath]);
+
+    expect(readSpy).toHaveBeenCalledWith(absolutePath);
     readSpy.mockRestore();
   });
 
