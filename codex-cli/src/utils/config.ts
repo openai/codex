@@ -114,24 +114,35 @@ export function getApiKey(provider: string = "openai"): string | undefined {
   const providersConfig = config.providers ?? providers;
   const providerInfo = providersConfig[provider.toLowerCase()];
   if (providerInfo) {
+    // For Ollama, allow a fallback to "dummy" if its specific envKey is not set.
     if (providerInfo.name === "Ollama") {
       return process.env[providerInfo.envKey] ?? "dummy";
     }
-    return process.env[providerInfo.envKey];
+    // For other known providers, check their specific envKey.
+    const apiKeyFromEnvKey = process.env[providerInfo.envKey];
+    if (apiKeyFromEnvKey !== undefined) {
+      return apiKeyFromEnvKey;
+    }
+    // If the specific key for a known provider (not Ollama) is not found,
+    // do not fall back to OPENAI_API_KEY here. Let it proceed to the final check.
+  } else {
+    // This 'else' branch handles providers not listed in `providersConfig`.
+    // Checking `PROVIDER_API_KEY` (e.g., MY_CUSTOM_PROVIDER_API_KEY)
+    const customApiKey = process.env[`${provider.toUpperCase()}_API_KEY`];
+    if (customApiKey !== undefined) {
+      return customApiKey;
+    }
   }
 
-  // Checking `PROVIDER_API_KEY` feels more intuitive with a custom provider.
-  const customApiKey = process.env[`${provider.toUpperCase()}_API_KEY`];
-  if (customApiKey) {
-    return customApiKey;
-  }
-
-  // If the provider not found in the providers list and `OPENAI_API_KEY` is set, use it
-  if (OPENAI_API_KEY !== "") {
+  // If, after checking specific environment variables, no key was found,
+  // then ONLY if the originally requested provider was 'openai',
+  // we consider the global OPENAI_API_KEY (which itself is from process.env.OPENAI_API_KEY
+  // or might have been set by an interactive flow).
+  if (provider.toLowerCase() === 'openai' && OPENAI_API_KEY !== "") {
     return OPENAI_API_KEY;
   }
 
-  // We tried.
+  // We tried. If we're here, no suitable key was found for the given provider.
   return undefined;
 }
 
