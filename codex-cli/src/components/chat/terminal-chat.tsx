@@ -155,7 +155,8 @@ export default function TerminalChat({
   );
   const [thinkingSeconds, setThinkingSeconds] = useState(0);
   const [cumulativeInputTokens, setCumulativeInputTokens] = useState<number>(0);
-  const [cumulativeOutputTokens, setCumulativeOutputTokens] = useState<number>(0);
+  const [cumulativeOutputTokens, setCumulativeOutputTokens] =
+    useState<number>(0);
 
   const handleCompact = async () => {
     setLoading(true);
@@ -512,7 +513,8 @@ export default function TerminalChat({
         {/* Token usage summary */}
         <Box marginY={1}>
           <Text color="gray">
-            Total Input Tokens: {cumulativeInputTokens} | Total Output Tokens: {cumulativeOutputTokens}
+            Total Input Tokens: {cumulativeInputTokens} | Total Output Tokens:{" "}
+            {cumulativeOutputTokens}
           </Text>
         </Box>
         {overlayMode === "none" && agent && (
