@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::collections::HashSet;
 
 use codex_core::codex_wrapper::init_codex;
 use codex_core::config::Config;
@@ -19,13 +20,16 @@ use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use crossterm::event::KeyEvent;
+use crossterm::event::KeyCode;
+use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Direction;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
-use ratatui::widgets::Widget;
-use ratatui::widgets::WidgetRef;
+use ratatui::style::{Color, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Paragraph, Widget, WidgetRef};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::mpsc::unbounded_channel;
 
@@ -38,6 +42,79 @@ use crate::conversation_history_widget::ConversationHistoryWidget;
 use crate::history_cell::PatchEventType;
 use crate::user_approval_widget::ApprovalRequest;
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum InputFocus {
+    HistoryPane,
+    BottomPane,
+}
+
+#[derive(PartialEq, Clone, Copy)]
+enum SearchDirection {
+    Forward,
+    Backward,
+}
+
+impl Default for SearchDirection {
+    fn default() -> Self {
+        SearchDirection::Backward
+    }
+}
+
+#[derive(Debug, Clone)]
+enum MatchSource {
+    CurrentSession(usize),
+    Historical(usize),
+}
+
+#[derive(Default)]
+struct SearchState {
+    is_active: bool,
+    search_string: String,
+    current_match_index: usize,
+    matches: Vec<MatchSource>,
+    original_input: Option<String>,
+    case_sensitive: bool,
+    direction: SearchDirection,
+    historical_entries: Vec<String>,
+    history_log_id: Option<u64>,
+    history_entry_count: usize,
+    fetched_entries: usize,
+    command_executed: bool,
+}
+
+impl SearchState {
+    fn toggle_case_sensitivity(&mut self) {
+        self.case_sensitive = !self.case_sensitive;
+    }
+
+    fn set_history_metadata(&mut self, log_id: u64, entry_count: usize) {
+        self.history_log_id = Some(log_id);
+        self.history_entry_count = entry_count;
+        self.fetched_entries = 0;
+        self.historical_entries.clear();
+    }
+
+    fn add_historical_entry(&mut self, offset: usize, text: Option<String>) {
+        if let Some(text) = text {
+            while self.historical_entries.len() <= offset {
+                self.historical_entries.push(String::new());
+            }
+            self.historical_entries[offset] = text;
+            self.fetched_entries = self.fetched_entries.max(offset + 1);
+        }
+    }
+
+    fn reset(&mut self) {
+        *self = Self {
+            history_log_id: self.history_log_id,
+            history_entry_count: self.history_entry_count,
+            historical_entries: std::mem::take(&mut self.historical_entries),
+            fetched_entries: self.fetched_entries,
+            ..Default::default()
+        };
+    }
+}
+
 pub(crate) struct ChatWidget<'a> {
     app_event_tx: AppEventSender,
     codex_op_tx: UnboundedSender<Op>,
@@ -46,12 +123,8 @@ pub(crate) struct ChatWidget<'a> {
     input_focus: InputFocus,
     config: Config,
     initial_user_message: Option<UserMessage>,
-}
-
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum InputFocus {
-    HistoryPane,
-    BottomPane,
+    search_state: SearchState,
+    current_session_commands: Vec<String>,
 }
 
 struct UserMessage {
@@ -131,13 +204,96 @@ impl ChatWidget<'_> {
                 initial_prompt.unwrap_or_default(),
                 initial_images,
             ),
+            search_state: SearchState::default(),
+            current_session_commands: Vec::new(),
         }
     }
 
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
-        // Special-case <Tab>: normally toggles focus between history and bottom panes.
-        // However, when the slash-command popup is visible we forward the key
-        // to the bottom pane so it can handle auto-completion.
+        if self.search_state.is_active {
+            match key_event.code {
+                KeyCode::Char('r') if key_event.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.search_state.toggle_case_sensitivity();
+                    self.perform_search();
+                }
+                KeyCode::Char(c) => {
+                    self.search_state.search_string.push(c);
+                    self.perform_search();
+                }
+                KeyCode::Backspace => {
+                    self.search_state.search_string.pop();
+                    self.perform_search();
+                }
+                KeyCode::Esc => {
+                    self.reset_search_state();
+                }
+                KeyCode::Enter => {
+                    if self.search_state.matches.is_empty() {
+                        self.reset_search_state();
+                    } else {
+                        let match_source = &self.search_state.matches[self.search_state.current_match_index];
+                        let matched_text = match match_source {
+                            MatchSource::CurrentSession(idx) => {
+                                self.current_session_commands[*idx].clone()
+                            }
+                            MatchSource::Historical(offset) => {
+                                self.search_state.historical_entries[*offset].clone()
+                            }
+                        };
+                        self.submit_user_message(UserMessage::from(matched_text));
+                        
+                        self.bottom_pane.composer_mut().textarea_mut().select_all();
+                        self.bottom_pane.composer_mut().textarea_mut().cut();
+                        self.search_state.command_executed = true;
+                        self.search_state.reset();
+                    }
+                }
+                KeyCode::Up => {
+                    if !self.search_state.matches.is_empty() {
+                        self.search_state.direction = SearchDirection::Backward;
+                        self.search_state.current_match_index = 
+                            if self.search_state.current_match_index == 0 {
+                                self.search_state.matches.len() - 1
+                            } else {
+                                self.search_state.current_match_index - 1
+                            };
+                        self.update_search_preview();
+                    }
+                }
+                KeyCode::Down => {
+                    if !self.search_state.matches.is_empty() {
+                        self.search_state.direction = SearchDirection::Forward;
+                        self.search_state.current_match_index = 
+                            (self.search_state.current_match_index + 1) % self.search_state.matches.len();
+                        self.update_search_preview();
+                    }
+                }
+                _ => {}
+            }
+            self.request_redraw();
+            return;
+        }
+
+        if key_event.code == KeyCode::Char('r') && key_event.modifiers.contains(KeyModifiers::CONTROL) {
+            self.search_state.is_active = true;
+            self.search_state.search_string.clear();
+            self.search_state.matches.clear();
+            self.search_state.current_match_index = 0;
+            self.search_state.case_sensitive = false;
+            self.search_state.direction = SearchDirection::Backward;
+            self.search_state.original_input = Some(self.bottom_pane.composer().textarea().lines().join("\n"));
+
+            if let Some(log_id) = self.search_state.history_log_id {
+                for offset in 0..self.search_state.history_entry_count {
+                    self.app_event_tx.send(AppEvent::GetHistoryEntry { log_id, offset });
+                }
+            }
+
+            self.perform_search();
+            self.request_redraw();
+            return;
+        }
+
         if matches!(key_event.code, crossterm::event::KeyCode::Tab)
             && !self.bottom_pane.is_command_popup_visible()
         {
@@ -198,10 +354,7 @@ impl ChatWidget<'_> {
                 .unwrap_or_else(|e| {
                     tracing::error!("failed to send AddHistory op: {e}");
                 });
-        }
-
-        // Only show text portion in conversation history for now.
-        if !text.is_empty() {
+            self.current_session_commands.push(text.clone());
             self.conversation_history.add_user_message(text);
         }
         self.conversation_history.scroll_to_bottom();
@@ -209,6 +362,7 @@ impl ChatWidget<'_> {
 
     pub(crate) fn clear_conversation_history(&mut self) {
         self.conversation_history.clear();
+        self.current_session_commands.clear();
         self.request_redraw();
     }
 
@@ -224,7 +378,7 @@ impl ChatWidget<'_> {
                 // composer can navigate through past messages.
                 self.bottom_pane
                     .set_history_metadata(event.history_log_id, event.history_entry_count);
-
+                self.search_state.set_history_metadata(event.history_log_id, event.history_entry_count);
                 if let Some(user_message) = self.initial_user_message.take() {
                     // If the user provided an initial message, add it to the
                     // conversation history.
@@ -358,10 +512,14 @@ impl ChatWidget<'_> {
                     log_id,
                     entry,
                 } = event;
-
-                // Inform bottom pane / composer.
+                let entry_text = entry.map(|e| e.text);
+                if self.search_state.is_active && Some(log_id) == self.search_state.history_log_id {
+                    self.search_state.add_historical_entry(offset, entry_text.clone());
+                    self.perform_search();
+                    self.request_redraw();
+                }
                 self.bottom_pane
-                    .on_history_entry_response(log_id, offset, entry.map(|e| e.text));
+                    .on_history_entry_response(log_id, offset, entry_text);
             }
             event => {
                 self.conversation_history
@@ -377,7 +535,7 @@ impl ChatWidget<'_> {
         self.bottom_pane.update_status_text(line);
     }
 
-    fn request_redraw(&mut self) {
+    pub(crate) fn request_redraw(&mut self) {
         self.app_event_tx.send(AppEvent::Redraw);
     }
 
@@ -400,18 +558,154 @@ impl ChatWidget<'_> {
             tracing::error!("failed to submit op: {e}");
         }
     }
+
+    fn perform_search(&mut self) {
+        self.search_state.matches.clear();
+        self.search_state.current_match_index = 0;
+
+        let search_str = if self.search_state.case_sensitive {
+            self.search_state.search_string.clone()
+        } else {
+            self.search_state.search_string.to_lowercase()
+        };
+
+        if search_str.is_empty() {
+            self.update_search_preview();
+            return;
+        }
+
+        let mut seen_commands: HashSet<String> = HashSet::new();
+
+        for (i, command) in self.current_session_commands.iter().enumerate() {
+            let command_to_compare = if self.search_state.case_sensitive {
+                command.to_string()
+            } else {
+                command.to_lowercase()
+            };
+            if command_to_compare.contains(&search_str) {
+                let original_command = command.to_string();
+                if seen_commands.insert(original_command) {
+                    self.search_state.matches.push(MatchSource::CurrentSession(i));
+                }
+            }
+        }
+
+        for offset in (0..self.search_state.historical_entries.len()).rev() {
+            let entry = &self.search_state.historical_entries[offset];
+            let entry_to_compare = if self.search_state.case_sensitive {
+                entry.to_string()
+            } else {
+                entry.to_lowercase()
+            };
+            if entry_to_compare.contains(&search_str) {
+                let original_entry = entry.to_string();
+                if seen_commands.insert(original_entry) {
+                    self.search_state.matches.push(MatchSource::Historical(offset));
+                }
+            }
+        }
+
+        self.update_search_preview();
+    }
+
+    fn update_search_preview(&mut self) {
+        if self.search_state.matches.is_empty() {
+            if let Some(ref input) = self.search_state.original_input {
+                self.bottom_pane.composer_mut().textarea_mut().select_all();
+                self.bottom_pane.composer_mut().textarea_mut().cut();
+                let _ = self.bottom_pane.composer_mut().textarea_mut().insert_str(input);
+            }
+        } else {
+            let match_source = &self.search_state.matches[self.search_state.current_match_index];
+            match match_source {
+                MatchSource::CurrentSession(idx) => {
+                    let command = &self.current_session_commands[*idx];
+                    self.bottom_pane.composer_mut().textarea_mut().select_all();
+                    self.bottom_pane.composer_mut().textarea_mut().cut();
+                    let _ = self.bottom_pane.composer_mut().textarea_mut().insert_str(command);
+                    // Scroll to the bottom since we don't have a direct line index in conversation history
+                    self.conversation_history.scroll_to_bottom();
+                }
+                MatchSource::Historical(offset) => {
+                    if let Some(line) = self.search_state.historical_entries.get(*offset) {
+                        self.bottom_pane.composer_mut().textarea_mut().select_all();
+                        self.bottom_pane.composer_mut().textarea_mut().cut();
+                        let _ = self.bottom_pane.composer_mut().textarea_mut().insert_str(line);
+                        self.conversation_history.scroll_to_bottom();
+                    }
+                }
+            }
+        }
+    }
+
+    fn reset_search_state(&mut self) {
+        if !self.search_state.command_executed {
+            if let Some(ref input) = self.search_state.original_input {
+                self.bottom_pane.composer_mut().textarea_mut().select_all();
+                self.bottom_pane.composer_mut().textarea_mut().cut();
+                let _ = self.bottom_pane.composer_mut().textarea_mut().insert_str(input);
+            }
+        }
+        self.search_state.reset();
+        self.request_redraw();
+    }
 }
 
-impl WidgetRef for &ChatWidget<'_> {
+impl<'a> WidgetRef for &ChatWidget<'a> {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        let bottom_height = self.bottom_pane.calculate_required_height(&area);
+        let mut constraints = vec![Constraint::Min(0)];
+        if self.search_state.is_active {
+            constraints.push(Constraint::Length(1));
+        }
+        let bottom_pane_height = self.bottom_pane.calculate_required_height(&area);
+        constraints.push(Constraint::Length(bottom_pane_height));
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Min(0), Constraint::Length(bottom_height)])
+            .constraints(constraints)
             .split(area);
 
-        self.conversation_history.render(chunks[0], buf);
-        (&self.bottom_pane).render(chunks[1], buf);
+        let mut idx = 0;
+        self.conversation_history.render_ref(chunks[idx], buf);
+        idx += 1;
+        if self.search_state.is_active {
+            let search_text = format!(
+                "{}search)`{}'",
+                if self.search_state.direction == SearchDirection::Backward { "(bck-i-" } else { "(fwd-i-" },
+                self.search_state.search_string
+            );
+            let search_style = Style::default().fg(if self.search_state.matches.is_empty() { Color::Red } else { Color::White });
+            let current = if !self.search_state.matches.is_empty() {
+                self.search_state.current_match_index + 1
+            } else {
+                0
+            };
+            let total = self.search_state.matches.len();
+            let search_span = {
+                let matches_text = format!(" {}/{} matches", current, total);
+                let nav_hints = format!("▲ to backward ▼ to forward ESC to quit");
+                let total_width = chunks[idx].width as usize;
+                let search_text_len = search_text.len() + matches_text.len();
+                let padding_len = total_width.saturating_sub(search_text_len + nav_hints.len());
+                let padding = " ".repeat(padding_len);
+            
+                Line::from(vec![
+                    Span::styled(search_text, search_style),
+                    Span::raw(matches_text),
+                    Span::raw(padding),
+                    Span::styled("▲", Style::default().fg(Color::Yellow)),
+                    Span::raw(" to backward | "),
+                    Span::styled("▼", Style::default().fg(Color::Yellow)),
+                    Span::raw(" to forward | "),
+                    Span::styled("ESC", Style::default().fg(Color::Yellow)),
+                    Span::raw(" to quit"),
+                ])
+            };
+            let search_paragraph = Paragraph::new(search_span)
+                .style(Style::default().bg(if self.search_state.matches.is_empty() { Color::Black } else { Color::Black }));
+            search_paragraph.render(chunks[idx], buf);
+            idx += 1;
+        }
+        self.bottom_pane.render_ref(chunks[idx], buf);
     }
 }

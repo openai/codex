@@ -28,4 +28,7 @@ pub(crate) enum AppEvent {
     /// Dispatch a recognized slash command from the UI (composer) to the app
     /// layer so it can be handled centrally.
     DispatchCommand(SlashCommand),
+
+    /// Request to get a history entry from the Agent.
+    GetHistoryEntry { log_id: u64, offset: usize },
 }
