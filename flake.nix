@@ -37,21 +37,20 @@
         packages = {
           codex-cli = codex-cli.package;
           codex-rs = codex-rs.package;
+          default = codex-cli.package;
         };
 
         devShells = {
           codex-cli = codex-cli.devShell;
           codex-rs = codex-rs.devShell;
+          default = codex-cli.devShell;
         };
 
         apps = {
           codex-cli = codex-cli.app;
           codex-rs = codex-rs.app;
+          default = codex-cli.app;
         };
-
-        defaultPackage = packages.codex-cli;
-        defaultApp = apps.codex-cli;
-        defaultDevShell = devShells.codex-cli;
       }
     );
 }
