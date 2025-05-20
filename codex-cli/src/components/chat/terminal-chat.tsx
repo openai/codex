@@ -639,11 +639,17 @@ export default function TerminalChat({
                 prev && newModel !== model ? null : prev,
               );
 
-              // Save model to config
+              // Save model to config and update the default model for this provider
+              const providerDefaultModels = {
+                ...(config.providerDefaultModels || {}),
+                [provider]: newModel,
+              };
+
               saveConfig({
                 ...config,
                 model: newModel,
                 provider: provider,
+                providerDefaultModels,
               });
 
               setItems((prev) => [
@@ -674,7 +680,8 @@ export default function TerminalChat({
               setLoading(false);
 
               // Select default model for the new provider.
-              const defaultModel = model;
+              const defaultModel =
+                config.providerDefaultModels?.[newProvider] || model;
 
               // Save provider to config.
               const updatedConfig = {
