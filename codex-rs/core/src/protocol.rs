@@ -321,7 +321,7 @@ pub enum EventMsg {
     TaskStarted,
 
     /// Agent has completed all actions
-    TaskComplete,
+    TaskComplete(TaskCompleteEvent),
 
     /// Agent text output message
     AgentMessage(AgentMessageEvent),
@@ -363,6 +363,11 @@ pub enum EventMsg {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ErrorEvent {
     pub message: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TaskCompleteEvent {
+    pub last_agent_message: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

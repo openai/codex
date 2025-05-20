@@ -9,6 +9,7 @@ use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
+use codex_core::protocol::TaskCompleteEvent;
 use mcp_types::CallToolResult;
 use mcp_types::CallToolResultContent;
 use mcp_types::JSONRPC_VERSION;
@@ -125,7 +126,9 @@ pub async fn run_codex_tool_session(
                             .await;
                         break;
                     }
-                    EventMsg::TaskComplete => {
+                    EventMsg::TaskComplete(TaskCompleteEvent {
+                        last_agent_message: _,
+                    }) => {
                         let result = if let Some(msg) = last_agent_message {
                             CallToolResult {
                                 content: vec![CallToolResultContent::TextContent(TextContent {

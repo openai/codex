@@ -25,7 +25,8 @@ impl ConversationHistory {
     /// `items` is ordered from oldest to newest.
     pub(crate) fn record_items<I>(&mut self, items: I)
     where
-        I: IntoIterator<Item = ResponseItem>,
+        I: IntoIterator,
+        I::Item: std::ops::Deref<Target = ResponseItem>,
     {
         for item in items {
             if is_api_message(&item) {

@@ -2,6 +2,7 @@ mod cli;
 mod event_processor;
 
 use std::io::IsTerminal;
+use std::path::Path;
 use std::sync::Arc;
 
 pub use cli::Cli;
@@ -14,6 +15,7 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
+use codex_core::protocol::TaskCompleteEvent;
 use codex_core::util::is_inside_git_repo;
 use event_processor::EventProcessor;
 use tracing::debug;
@@ -32,6 +34,7 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
         skip_git_repo_check,
         disable_response_storage,
         color,
+        last_message_file,
         prompt,
     } = cli;
 
@@ -137,7 +140,14 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
         let initial_images_event_id = codex.submit(Op::UserInput { items }).await?;
         info!("Sent images with event ID: {initial_images_event_id}");
         while let Ok(event) = codex.next_event().await {
-            if event.id == initial_images_event_id && matches!(event.msg, EventMsg::TaskComplete) {
+            if event.id == initial_images_event_id
+                && matches!(
+                    event.msg,
+                    EventMsg::TaskComplete(TaskCompleteEvent {
+                        last_agent_message: _,
+                    })
+                )
+            {
                 break;
             }
         }
@@ -151,13 +161,40 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
     // Run the loop until the task is complete.
     let mut event_processor = EventProcessor::create_with_ansi(stdout_with_ansi);
     while let Some(event) = rx.recv().await {
-        let last_event =
-            event.id == initial_prompt_task_id && matches!(event.msg, EventMsg::TaskComplete);
+        let (is_last_event, last_assistant_message) = match &event.msg {
+            EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) => {
+                (true, last_agent_message.clone())
+            }
+            _ => (false, None),
+        };
         event_processor.process_event(event);
-        if last_event {
+        if is_last_event {
+            handle_last_message(last_assistant_message, last_message_file.as_deref())?;
             break;
         }
     }
 
+    Ok(())
+}
+
+fn handle_last_message(
+    last_agent_message: Option<String>,
+    last_message_file: Option<&Path>,
+) -> std::io::Result<()> {
+    match (last_agent_message, last_message_file) {
+        (Some(last_agent_message), Some(last_message_file)) => {
+            // Last message and a file to write to.
+            std::fs::write(last_message_file, last_agent_message)?;
+        }
+        (None, Some(last_message_file)) => {
+            eprintln!(
+                "Warning: No last message to write to file: {}",
+                last_message_file.to_string_lossy()
+            );
+        }
+        (_, None) => {
+            // No last message and no file to write to.
+        }
+    }
     Ok(())
 }
