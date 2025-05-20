@@ -256,7 +256,7 @@ function convertTools(
       function: {
         name: tool.name,
         description: tool.description || undefined,
-        parameters: tool.parameters,
+        parameters: tool.parameters ?? undefined,
       },
     }));
 }

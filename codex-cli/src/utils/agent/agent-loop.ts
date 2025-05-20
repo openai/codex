@@ -82,6 +82,8 @@ type AgentLoopParams = {
     applyPatch: ApplyPatchCommand | undefined,
   ) => Promise<CommandConfirmation>;
   onLastResponseId: (lastResponseId: string) => void;
+  /** Called when a response completes to report token usage for the interaction */
+  onTokenUsage?: (usage: { input: number; output: number }) => void;
 };
 
 const shellFunctionTool: FunctionTool = {
@@ -137,6 +139,7 @@ export class AgentLoop {
     applyPatch: ApplyPatchCommand | undefined,
   ) => Promise<CommandConfirmation>;
   private onLastResponseId: (lastResponseId: string) => void;
+  private onTokenUsage: (usage: { input: number; output: number }) => void;
 
   /**
    * A reference to the currently active stream returned from the OpenAI
@@ -280,6 +283,7 @@ export class AgentLoop {
     onLoading,
     getCommandConfirmation,
     onLastResponseId,
+    onTokenUsage,
     additionalWritableRoots,
   }: AgentLoopParams & { config?: AppConfig }) {
     this.model = model;
@@ -301,6 +305,7 @@ export class AgentLoop {
     this.onLoading = onLoading;
     this.getCommandConfirmation = getCommandConfirmation;
     this.onLastResponseId = onLastResponseId;
+    this.onTokenUsage = onTokenUsage ?? (() => {});
 
     this.disableResponseStorage = disableResponseStorage ?? false;
     this.sessionId = getSessionId() || randomUUID().replaceAll("-", "");
@@ -1068,6 +1073,12 @@ export class AgentLoop {
 
               if (event.type === "response.completed") {
                 if (thisGeneration === this.generation && !this.canceled) {
+                  if (event.response.usage) {
+                    this.onTokenUsage({
+                      input: event.response.usage.input_tokens ?? 0,
+                      output: event.response.usage.output_tokens ?? 0,
+                    });
+                  }
                   for (const item of event.response.output) {
                     stageItem(item as ResponseItem);
                   }
