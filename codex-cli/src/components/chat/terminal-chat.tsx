@@ -2,6 +2,7 @@ import type { AppRollout } from "../../app.js";
 import type { ApplyPatchCommand, ApprovalPolicy } from "../../approvals.js";
 import type { CommandConfirmation } from "../../utils/agent/agent-loop.js";
 import type { AppConfig } from "../../utils/config.js";
+import type { UsageData } from "../../utils/responses.js";
 import type { ColorName } from "chalk";
 import type { ResponseItem } from "openai/resources/responses/responses.mjs";
 
@@ -40,7 +41,6 @@ import fs from "fs/promises";
 import { Box, Text } from "ink";
 import { spawn } from "node:child_process";
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import type { UsageData } from "../../utils/responses.js";
 import { inspect } from "util";
 
 export type OverlayModeType =
