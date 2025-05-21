@@ -143,7 +143,6 @@ export type UsageData = {
   input_tokens_details?: { cached_tokens: number };
   output_tokens?: number;
   output_tokens_details?: { reasoning_tokens: number };
-  [key: string]: unknown;
 };
 
 // Define a type for content output
