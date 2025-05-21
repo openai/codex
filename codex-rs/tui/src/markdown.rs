@@ -1,5 +1,5 @@
 use codex_core::config::Config;
-use codex_core::config::UriBasedFileOpener;
+use codex_core::config_types::UriBasedFileOpener;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use std::borrow::Cow;
