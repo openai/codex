@@ -24,6 +24,7 @@
 - [Tracing / verbose logging](#tracing--verbose-logging)
 - [Recipes](#recipes)
 - [Installation](#installation)
+  - [Docker Installation](#docker-installation)
 - [Configuration guide](#configuration-guide)
   - [Basic configuration parameters](#basic-configuration-parameters)
   - [Custom AI provider configuration](#custom-ai-provider-configuration)
@@ -292,6 +293,28 @@ bun install -g @openai/codex
 # or
 pnpm add -g @openai/codex
 ```
+
+</details>
+
+<details>
+<summary><strong>Docker Installation</strong></summary>
+
+The repository includes Docker and Docker Compose support for easy containerized usage:
+
+```bash
+# Clone the repository
+git clone https://github.com/openai/codex.git
+cd codex
+
+# Build and start with Docker Compose
+docker-compose build
+docker-compose up -d
+
+# Run a bash shell inside the container
+docker-compose exec codex-cli bash
+```
+
+For comprehensive information about Docker usage, testing, and production deployment, see our [Docker documentation](DOCKER.md).
 
 </details>
 

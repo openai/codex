@@ -1,0 +1,22 @@
+version: '3'
+
+services:
+  codex-cli:
+    build:
+      context: ./codex-cli
+      dockerfile: Dockerfile
+      args:
+        - TZ=${TZ:-UTC}
+    volumes:
+      - ./:/workspace
+    working_dir: /workspace
+    environment:
+      - CODEX_UNSAFE_ALLOW_NO_SANDBOX=1
+    init: true
+    cap_add:
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
+    command: /bin/bash
+    stdin_open: true
+    tty: true
