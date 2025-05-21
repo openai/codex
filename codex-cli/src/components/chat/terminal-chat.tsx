@@ -40,6 +40,7 @@ import fs from "fs/promises";
 import { Box, Text } from "ink";
 import { spawn } from "node:child_process";
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import type { UsageData } from "../../utils/responses.js";
 import { inspect } from "util";
 
 export type OverlayModeType =
@@ -255,9 +256,9 @@ export default function TerminalChat({
       disableResponseStorage: config.disableResponseStorage,
       additionalWritableRoots,
       onLastResponseId: setLastResponseId,
-      onTokenUsage: ({ input, output }) => {
-        setCumulativeInputTokens((prev) => prev + input);
-        setCumulativeOutputTokens((prev) => prev + output);
+      onTokenUsage: (usage: UsageData) => {
+        setCumulativeInputTokens((prev) => prev + (usage.input_tokens ?? 0));
+        setCumulativeOutputTokens((prev) => prev + (usage.output_tokens ?? 0));
       },
       onItem: (item) => {
         log(`onItem: ${JSON.stringify(item)}`);
