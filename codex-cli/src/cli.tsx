@@ -19,7 +19,7 @@ if (major < 22) {
 (process as any).noDeprecation = true;
 
 import type { AppRollout } from "./app";
-import type { ApprovalPolicy } from "./approvals";
+import type { ApplyPatchCommand, ApprovalPolicy } from "./approvals";
 import type { CommandConfirmation } from "./utils/agent/agent-loop";
 import type { AppConfig } from "./utils/config";
 import type { ResponseItem } from "openai/resources/responses/responses";
@@ -28,7 +28,9 @@ import type { ReasoningEffort } from "openai/resources.mjs";
 import App from "./app";
 import { runSinglePass } from "./cli-singlepass";
 import SessionsOverlay from "./components/sessions-overlay.js";
+import { requestRemotePermission } from "./permission-client";
 import { AgentLoop } from "./utils/agent/agent-loop";
+import { generateCommandExplanation } from "./utils/agent/generate-explanation";
 import { ReviewDecision } from "./utils/agent/review";
 import { AutoApprovalMode } from "./utils/auto-approval-mode";
 import { checkForUpdates } from "./utils/check-updates";
@@ -111,11 +113,15 @@ const cli = meow(
     -f, --full-context         Launch in "full-context" mode which loads the entire repository
                                into context and applies a batch of edits in one go. Incompatible
                                with all other flags, except for --model.
+    -r, --remote-permission    Send permission requests to a remote server.
+    --permission-server-url <url>
+                               URL of the remote server to send permission requests to.
 
   Examples
     $ codex "Write and run a python program that prints ASCII art"
     $ codex -q "fix build issues"
     $ codex completion bash
+    $ codex -r --permission-server-url http://localhost:3000 "Create a CI workflow that runs ESLint on every PR"
 `,
   {
     importMeta: import.meta,
@@ -212,6 +218,16 @@ const cli = meow(
         aliases: ["f"],
         description: `Run in full-context editing approach. The model is given the whole code
           directory as context and performs changes in one go without acting.`,
+      },
+
+      remotePermission: {
+        type: "boolean",
+        aliases: ["r"],
+        description: "Send permission requests to a remote server. ",
+      },
+      permissionServerUrl: {
+        type: "string",
+        description: "URL of the remote server to send permission requests to.",
       },
     },
   },
@@ -572,6 +588,33 @@ const approvalPolicy: ApprovalPolicy =
       ? AutoApprovalMode.AUTO_EDIT
       : config.approvalMode || AutoApprovalMode.SUGGEST;
 
+if (cli.flags.remotePermission) {
+  if (!cli.flags.permissionServerUrl) {
+    // eslint-disable-next-line no-console
+    console.error(
+      "The --remote-permission flag requires the --permission-server-url flag to be set.",
+    );
+    process.exit(1);
+  }
+  if (!prompt || prompt.trim() === "") {
+    // eslint-disable-next-line no-console
+    console.error(
+      'Remote permission mode requires a prompt string, e.g.,: codex -r http://localhost:8080 "Find and fix bugs"',
+    );
+    process.exit(1);
+  }
+  await runRemoteMode({
+    url: cli.flags.permissionServerUrl,
+    prompt,
+    imagePaths: imagePaths || [],
+    approvalPolicy,
+    additionalWritableRoots,
+    config,
+  });
+  onExit();
+  process.exit(0);
+}
+
 const instance = render(
   <App
     prompt={prompt}
@@ -677,6 +720,78 @@ async function runQuietMode({
     },
     onLastResponseId: () => {
       /* intentionally ignored in quiet mode */
+    },
+  });
+
+  const inputItem = await createInputItem(prompt, imagePaths);
+  await agent.run([inputItem]);
+}
+
+async function runRemoteMode({
+  url,
+  prompt,
+  imagePaths,
+  approvalPolicy,
+  additionalWritableRoots,
+  config,
+}: {
+  url: string;
+  prompt: string;
+  imagePaths: Array<string>;
+  approvalPolicy: ApprovalPolicy;
+  additionalWritableRoots: ReadonlyArray<string>;
+  config: AppConfig;
+}): Promise<void> {
+  const agent = new AgentLoop({
+    model: config.model,
+    config: config,
+    instructions: config.instructions,
+    provider: config.provider,
+    approvalPolicy,
+    additionalWritableRoots,
+    disableResponseStorage: config.disableResponseStorage,
+    onItem: (item: ResponseItem) => {
+      /* Could also send over the wire */
+      // eslint-disable-next-line no-console
+      console.log(formatResponseItemForQuietMode(item));
+    },
+    onLoading: () => {
+      /* intentionally ignored in socket mode */
+    },
+    onLastResponseId: () => {
+      /* intentionally ignored in socket mode */
+    },
+    getCommandConfirmation: async (
+      command: Array<string>,
+      applyPatch: ApplyPatchCommand | undefined,
+    ): Promise<CommandConfirmation> => {
+      // First request for confirmation
+      let { decision: review, customDenyMessage } =
+        await requestRemotePermission(url, `command: ${command.join(" ")}`);
+
+      // If the user wants an explanation, generate one and ask again.
+      if (review === ReviewDecision.EXPLAIN) {
+        const explanation = await generateCommandExplanation(
+          command,
+          config.model,
+          Boolean(config.flexMode),
+          config,
+        );
+        // Ask for confirmation again, but with the explanation.
+        const confirmResult = await requestRemotePermission(
+          url,
+          `command: ${command.join(" ")}}`,
+          explanation,
+        );
+
+        // Update the decision based on the second confirmation.
+        review = confirmResult.decision;
+        customDenyMessage = confirmResult.customDenyMessage;
+
+        // Return the final decision with the explanation.
+        return { review, customDenyMessage, applyPatch, explanation };
+      }
+      return { review, customDenyMessage, applyPatch };
     },
   });
 

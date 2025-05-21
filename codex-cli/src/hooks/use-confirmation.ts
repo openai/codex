@@ -3,7 +3,7 @@ import type React from "react";
 
 import { useState, useCallback, useRef } from "react";
 
-type ConfirmationResult = {
+export type ConfirmationResult = {
   decision: ReviewDecision;
   customDenyMessage?: string;
 };
