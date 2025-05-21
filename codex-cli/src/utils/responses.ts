@@ -135,7 +135,7 @@ type ToolCallData = {
 };
 
 // Define a type for usage data
-type UsageData = {
+export type UsageData = {
   prompt_tokens?: number;
   completion_tokens?: number;
   total_tokens?: number;
