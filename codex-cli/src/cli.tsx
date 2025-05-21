@@ -340,7 +340,7 @@ if (cli.flags.login) {
   } catch {
     /* ignore */
   }
-} else if (!apiKey) {
+} else if (!apiKey && provider.toLowerCase() === "openai") {
   apiKey = await fetchApiKey(client.issuer, client.client_id);
 }
 // Ensure the API key is available as an environment variable for legacy code
@@ -363,7 +363,7 @@ if (cli.flags.free) {
 }
 
 // Set of providers that don't require API keys
-const NO_API_KEY_REQUIRED = new Set(["ollama"]);
+const NO_API_KEY_REQUIRED = new Set(["ollama", "azure"]);
 
 // Skip API key validation for providers that don't require an API key
 if (!apiKey && !NO_API_KEY_REQUIRED.has(provider.toLowerCase())) {
