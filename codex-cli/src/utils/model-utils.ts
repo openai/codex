@@ -1,7 +1,6 @@
 import type { ResponseItem } from "openai/resources/responses/responses.mjs";
 
 import { approximateTokensUsed } from "./approximate-tokens-used.js";
-import { getApiKey } from "./config.js";
 import { type SupportedModelId, openAiModelInfo } from "./model-info.js";
 import { createOpenAIClient } from "./openai-client.js";
 
@@ -16,11 +15,6 @@ export const RECOMMENDED_MODELS: Array<string> = ["o4-mini", "o3"];
  * lifetime of the process and the results are cached for subsequent calls.
  */
 async function fetchModels(provider: string): Promise<Array<string>> {
-  // If the user has not configured an API key we cannot retrieve the models.
-  if (!getApiKey(provider)) {
-    throw new Error("No API key configured for provider: " + provider);
-  }
-
   try {
     const openai = createOpenAIClient({ provider });
     const list = await openai.models.list();
