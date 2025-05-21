@@ -13,13 +13,6 @@ import type {
 import type { Reasoning } from "openai/resources.mjs";
 
 import { CLI_VERSION } from "../../version.js";
-import {
-  OPENAI_TIMEOUT_MS,
-  OPENAI_ORGANIZATION,
-  OPENAI_PROJECT,
-  getBaseUrl,
-  AZURE_OPENAI_API_VERSION,
-} from "../config.js";
 import { log } from "../logger/log.js";
 import { parseToolCallArguments } from "../parsers.js";
 import { responsesCreateViaChatCompletions } from "../responses.js";
@@ -31,10 +24,10 @@ import {
 } from "../session.js";
 import { applyPatchToolInstructions } from "./apply-patch.js";
 import { handleExecCommand } from "./handle-exec-command.js";
-import { HttpsProxyAgent } from "https-proxy-agent";
+import { createOpenAIClient } from "../openai-client.js";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import OpenAI, { APIConnectionTimeoutError, AzureOpenAI } from "openai";
+import OpenAI, { APIConnectionTimeoutError } from "openai";
 import os from "os";
 
 // Wait time before retrying after rate limit errors (ms).
@@ -42,9 +35,6 @@ const RATE_LIMIT_RETRY_WAIT_MS = parseInt(
   process.env["OPENAI_RATE_LIMIT_RETRY_WAIT_MS"] || "500",
   10,
 );
-
-// See https://github.com/openai/openai-node/tree/v4?tab=readme-ov-file#configuring-an-https-agent-eg-for-proxies
-const PROXY_URL = process.env["HTTPS_PROXY"];
 
 export type CommandConfirmation = {
   review: ReviewDecision;
@@ -115,7 +105,6 @@ const localShellTool: Tool = {
 
 export class AgentLoop {
   private model: string;
-  private provider: string;
   private instructions?: string;
   private approvalPolicy: ApprovalPolicy;
   private config: AppConfig;
@@ -283,7 +272,6 @@ export class AgentLoop {
     additionalWritableRoots,
   }: AgentLoopParams & { config?: AppConfig }) {
     this.model = model;
-    this.provider = provider;
     this.instructions = instructions;
     this.approvalPolicy = approvalPolicy;
 
@@ -293,6 +281,7 @@ export class AgentLoop {
     // `instructions` that have already been passed explicitly so that
     // downstream consumers (e.g. telemetry) still observe the correct values.
     this.config = config ?? {
+      provider,
       model,
       instructions: instructions ?? "",
     };
@@ -304,51 +293,12 @@ export class AgentLoop {
 
     this.disableResponseStorage = disableResponseStorage ?? false;
     this.sessionId = getSessionId() || randomUUID().replaceAll("-", "");
-    // Configure OpenAI client with optional timeout (ms) from environment
-    const timeoutMs = OPENAI_TIMEOUT_MS;
-    const apiKey = this.config.apiKey ?? process.env["OPENAI_API_KEY"] ?? "";
-    const baseURL = getBaseUrl(this.provider);
 
-    this.oai = new OpenAI({
-      // The OpenAI JS SDK only requires `apiKey` when making requests against
-      // the official API.  When running unit‑tests we stub out all network
-      // calls so an undefined key is perfectly fine.  We therefore only set
-      // the property if we actually have a value to avoid triggering runtime
-      // errors inside the SDK (it validates that `apiKey` is a non‑empty
-      // string when the field is present).
-      ...(apiKey ? { apiKey } : {}),
-      baseURL,
-      defaultHeaders: {
-        originator: ORIGIN,
-        version: CLI_VERSION,
-        session_id: this.sessionId,
-        ...(OPENAI_ORGANIZATION
-          ? { "OpenAI-Organization": OPENAI_ORGANIZATION }
-          : {}),
-        ...(OPENAI_PROJECT ? { "OpenAI-Project": OPENAI_PROJECT } : {}),
-      },
-      httpAgent: PROXY_URL ? new HttpsProxyAgent(PROXY_URL) : undefined,
-      ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
+    this.oai = createOpenAIClient(this.config, {
+      originator: ORIGIN,
+      version: CLI_VERSION,
+      session_id: this.sessionId,
     });
-
-    if (this.provider.toLowerCase() === "azure") {
-      this.oai = new AzureOpenAI({
-        apiKey,
-        baseURL,
-        apiVersion: AZURE_OPENAI_API_VERSION,
-        defaultHeaders: {
-          originator: ORIGIN,
-          version: CLI_VERSION,
-          session_id: this.sessionId,
-          ...(OPENAI_ORGANIZATION
-            ? { "OpenAI-Organization": OPENAI_ORGANIZATION }
-            : {}),
-          ...(OPENAI_PROJECT ? { "OpenAI-Project": OPENAI_PROJECT } : {}),
-        },
-        httpAgent: PROXY_URL ? new HttpsProxyAgent(PROXY_URL) : undefined,
-        ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
-      });
-    }
 
     setSessionId(this.sessionId);
     setCurrentModel(this.model);
