@@ -4,6 +4,8 @@ use codex_cli::SeatbeltCommand;
 use codex_cli::create_sandbox_policy;
 use codex_cli::proto;
 use codex_cli::seatbelt;
+use codex_core::config::Config;
+use codex_core::config::ConfigOverrides;
 use codex_exec::Cli as ExecCli;
 use codex_tui::Cli as TuiCli;
 
@@ -86,7 +88,11 @@ async fn main() -> anyhow::Result<()> {
                 full_auto,
             }) => {
                 let sandbox_policy = create_sandbox_policy(full_auto, sandbox);
-                seatbelt::run_seatbelt(command, sandbox_policy).await?;
+                let config = Config::load_with_overrides(ConfigOverrides {
+                    sandbox_policy: Some(sandbox_policy),
+                    ..Default::default()
+                })?;
+                seatbelt::run_seatbelt(command, &config).await?;
             }
             #[cfg(unix)]
             DebugCommand::Landlock(LandlockCommand {
@@ -95,7 +101,11 @@ async fn main() -> anyhow::Result<()> {
                 full_auto,
             }) => {
                 let sandbox_policy = create_sandbox_policy(full_auto, sandbox);
-                codex_cli::landlock::run_landlock(command, sandbox_policy)?;
+                let config = Config::load_with_overrides(ConfigOverrides {
+                    sandbox_policy: Some(sandbox_policy),
+                    ..Default::default()
+                })?;
+                codex_cli::landlock::run_landlock(command, &config)?;
             }
             #[cfg(not(unix))]
             DebugCommand::Landlock(_) => {
