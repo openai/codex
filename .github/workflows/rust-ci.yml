@@ -100,6 +100,8 @@ jobs:
         id: test
         continue-on-error: true
         run: cargo test --all-features --target ${{ matrix.target }}
+        env:
+          RUST_BACKTRACE: 1
 
       # Fail the job if any of the previous steps failed.
       - name: verify all steps passed
