@@ -52,4 +52,10 @@ export const providers: Record<
     baseURL: "https://conductor.arcee.ai/v1",
     envKey: "ARCEEAI_API_KEY",
   },
+  // Support for AiHubMix provider
+  aihubmix: {
+    name: "AiHubMix",
+    baseURL: "https://aihubmix.com/v1",
+    envKey: "AIHUBMIX_API_KEY",
+  },
 };
