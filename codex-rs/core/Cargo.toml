@@ -46,6 +46,7 @@ tracing = { version = "0.1.41", features = ["log"] }
 tree-sitter = "0.25.3"
 tree-sitter-bash = "0.23.3"
 uuid = { version = "1", features = ["serde", "v4"] }
+wildmatch = "2.4.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2.172"
@@ -58,6 +59,7 @@ openssl-sys = { version = "*", features = ["vendored"] }
 
 [dev-dependencies]
 assert_cmd = "2"
+maplit = "1.0.2"
 predicates = "3"
 pretty_assertions = "1.4.1"
 tempfile = "3"

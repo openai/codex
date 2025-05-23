@@ -18,6 +18,7 @@ use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::util::is_inside_git_repo;
 use event_processor::EventProcessor;
+use event_processor::print_config_summary;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -70,6 +71,8 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
         model_provider: None,
     };
     let config = Config::load_with_overrides(overrides)?;
+    // Print the effective configuration so users can see what Codex is using.
+    print_config_summary(&config, stdout_with_ansi);
 
     if !skip_git_repo_check && !is_inside_git_repo(&config) {
         eprintln!("Not inside a Git repo and --skip-git-repo-check was not specified.");

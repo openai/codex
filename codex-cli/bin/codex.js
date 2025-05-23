@@ -16,14 +16,23 @@
  */
 
 import { spawnSync } from "child_process";
+import fs from "fs";
 import path from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 
 // Determine whether the user explicitly wants the Rust CLI.
-const wantsNative =
-  process.env.CODEX_RUST != null
+
+// __dirname equivalent in ESM
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// For the @native release of the Node module, the `use-native` file is added,
+// indicating we should default to the native binary. For other releases,
+// setting CODEX_RUST=1 will opt-in to the native binary, if included.
+const wantsNative = fs.existsSync(path.join(__dirname, "use-native")) ||
+  (process.env.CODEX_RUST != null
     ? ["1", "true", "yes"].includes(process.env.CODEX_RUST.toLowerCase())
-    : false;
+    : false);
 
 // Try native binary if requested.
 if (wantsNative) {
@@ -63,10 +72,6 @@ if (wantsNative) {
     throw new Error(`Unsupported platform: ${platform} (${arch})`);
   }
 
-  // __dirname equivalent in ESM
-  const __filename = fileURLToPath(import.meta.url);
-  const __dirname = path.dirname(__filename);
-
   const binaryPath = path.join(__dirname, "..", "bin", `codex-${targetTriple}`);
   const result = spawnSync(binaryPath, process.argv.slice(2), {
     stdio: "inherit",
@@ -77,10 +82,6 @@ if (wantsNative) {
 }
 
 // Fallback: execute the original JavaScript CLI.
-
-// Determine this script's directory
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 // Resolve the path to the compiled CLI bundle
 const cliPath = path.resolve(__dirname, "../dist/cli.js");
