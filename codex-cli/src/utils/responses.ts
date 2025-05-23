@@ -301,6 +301,11 @@ async function responsesCreateViaChatCompletions(
   openai: OpenAI,
   input: ResponseCreateInput,
 ): Promise<ResponseOutput | AsyncGenerator<ResponseEvent>> {
+  // For Azure OpenAI (has apiVersion) with chat-capable models, use the Responses API directly
+  if ((openai as any).apiVersion !== undefined && input.model.startsWith("gpt")) {
+    // @ts-ignore cast to any to satisfy params signature
+    return (openai as any).responses.create(input as any);
+  }
   const completion = await createCompletion(openai, input);
   if (input.stream) {
     return streamResponses(
@@ -493,7 +498,7 @@ async function* streamResponses(
     }
     if (
       !isToolCall &&
-      (("tool_calls" in choice.delta && choice.delta.tool_calls) ||
+      ((choice.delta && "tool_calls" in choice.delta && choice.delta.tool_calls) ||
         choice.finish_reason === "tool_calls")
     ) {
       isToolCall = true;
@@ -511,7 +516,7 @@ async function* streamResponses(
       };
     }
     if (isToolCall) {
-      for (const tcDelta of choice.delta.tool_calls || []) {
+      for (const tcDelta of choice.delta?.tool_calls || []) {
         const tcIndex = tcDelta.index;
         const content_index = textContentAdded ? tcIndex + 1 : tcIndex;
 
@@ -592,15 +597,17 @@ async function* streamResponses(
         };
         textContentAdded = true;
       }
-      if (choice.delta.content?.length) {
+      if (choice.delta?.content?.length) {
         yield {
           type: "response.output_text.delta",
           item_id: outputItemId,
           output_index: 0,
           content_index: 0,
-          delta: choice.delta.content,
+          delta: choice.delta.content ?? "",
         };
-        textContent += choice.delta.content;
+        if (choice.delta?.content) {
+          textContent += choice.delta.content;
+        }
       }
       if (choice.finish_reason) {
         yield {
