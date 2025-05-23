@@ -98,6 +98,14 @@ pub struct Config {
 
     /// Collection of settings that are specific to the TUI.
     pub tui: Tui,
+
+    /// Path to the `codex-linux-sandbox` executable. This must be set if
+    /// [`crate::exec::SandboxType::LinuxSeccomp`] is used. Note that this
+    /// cannot be set in the config file: it must be set in code via
+    /// [`ConfigOverrides`].
+    ///
+    /// When this program is invoked, arg0 will be set to `codex-linux-sandbox`.
+    pub codex_linux_sandbox_exe: Option<PathBuf>,
 }
 
 /// Base config deserialized from ~/.codex/config.toml.
@@ -222,6 +230,7 @@ pub struct ConfigOverrides {
     pub disable_response_storage: Option<bool>,
     pub model_provider: Option<String>,
     pub config_profile: Option<String>,
+    pub codex_linux_sandbox_exe: Option<PathBuf>,
 }
 
 impl Config {
@@ -258,6 +267,7 @@ impl Config {
             disable_response_storage,
             model_provider,
             config_profile: config_profile_key,
+            codex_linux_sandbox_exe,
         } = overrides;
 
         let config_profile = match config_profile_key.or(cfg.profile) {
@@ -359,6 +369,7 @@ impl Config {
             history,
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
             tui: cfg.tui.unwrap_or_default(),
+            codex_linux_sandbox_exe,
         };
         Ok(config)
     }
@@ -699,6 +710,7 @@ disable_response_storage = true
                 history: History::default(),
                 file_opener: UriBasedFileOpener::VsCode,
                 tui: Tui::default(),
+                codex_linux_sandbox_exe: None,
             },
             o3_profile_config
         );
@@ -737,6 +749,7 @@ disable_response_storage = true
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
             tui: Tui::default(),
+            codex_linux_sandbox_exe: None,
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -790,6 +803,7 @@ disable_response_storage = true
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
             tui: Tui::default(),
+            codex_linux_sandbox_exe: None,
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);

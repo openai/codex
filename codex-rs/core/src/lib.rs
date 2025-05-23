@@ -18,11 +18,8 @@ mod conversation_history;
 pub mod error;
 pub mod exec;
 pub mod exec_env;
-pub mod exec_linux;
 mod flags;
 mod is_safe_command;
-#[cfg(target_os = "linux")]
-pub mod landlock;
 mod mcp_connection_manager;
 mod mcp_tool_call;
 mod message_history;

@@ -10,6 +10,7 @@ use codex_core::protocol::SandboxPolicy;
 use codex_core::util::is_inside_git_repo;
 use log_layer::TuiLogLayer;
 use std::fs::OpenOptions;
+use std::path::PathBuf;
 use tracing_appender::non_blocking;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
@@ -36,7 +37,7 @@ mod user_approval_widget;
 
 pub use cli::Cli;
 
-pub fn run_main(cli: Cli) -> std::io::Result<()> {
+pub fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> std::io::Result<()> {
     let (sandbox_policy, approval_policy) = if cli.full_auto {
         (
             Some(SandboxPolicy::new_full_auto_policy()),
@@ -61,6 +62,7 @@ pub fn run_main(cli: Cli) -> std::io::Result<()> {
             cwd: cli.cwd.clone().map(|p| p.canonicalize().unwrap_or(p)),
             model_provider: None,
             config_profile: cli.config_profile.clone(),
+            codex_linux_sandbox_exe,
         };
         #[allow(clippy::print_stderr)]
         match Config::load_with_overrides(overrides) {
