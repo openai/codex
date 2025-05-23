@@ -385,6 +385,27 @@ export default function TerminalChat({
             `display notification "${safePreview}" with title "${title}" subtitle "${cwd}" sound name "Ping"`,
           ]);
         }
+      } else if (process.platform === "linux") {
+        // find the last assistant message
+        const assistantMessages = items.filter(
+          (i) => i.type === "message" && i.role === "assistant",
+        );
+        const last = assistantMessages[assistantMessages.length - 1];
+        if (last) {
+          const text = last.content
+            .map((c) => {
+              if (c.type === "output_text") {
+                return c.text;
+              }
+              return "";
+            })
+            .join("")
+            .trim();
+          const preview = text.replace(/\n/g, " ").slice(0, 100);
+          const safePreview = preview.replace(/"/g, '\\"');
+          const title = "Codex CLI";
+          spawn("notify-send", [title, safePreview]);
+        }
       }
     }
     prevLoadingRef.current = loading;
