@@ -15,7 +15,9 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
+anyhow = "1"
 codex-core = { path = "../core" }
+codex-linux-sandbox = { path = "../linux-sandbox" }
 mcp-types = { path = "../mcp-types" }
 schemars = "0.8.22"
 serde = { version = "1", features = ["derive"] }
