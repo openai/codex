@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use clap::Parser;
 use codex_cli::LandlockCommand;
 use codex_cli::SeatbeltCommand;
@@ -66,17 +68,23 @@ struct ReplProto {}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let codex_linux_sandbox_exe: Option<PathBuf> = if cfg!(target_os = "linux") {
+        std::env::current_exe().ok()
+    } else {
+        None
+    };
+
     let cli = MultitoolCli::parse();
 
     match cli.subcommand {
         None => {
-            codex_tui::run_main(cli.interactive)?;
+            codex_tui::run_main(cli.interactive, codex_linux_sandbox_exe)?;
         }
         Some(Subcommand::Exec(exec_cli)) => {
-            codex_exec::run_main(exec_cli).await?;
+            codex_exec::run_main(exec_cli, codex_linux_sandbox_exe).await?;
         }
         Some(Subcommand::Mcp) => {
-            codex_mcp_server::run_main().await?;
+            codex_mcp_server::run_main(codex_linux_sandbox_exe).await?;
         }
         Some(Subcommand::Proto(proto_cli)) => {
             proto::run_main(proto_cli).await?;
