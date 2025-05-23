@@ -301,9 +301,11 @@ async function responsesCreateViaChatCompletions(
   openai: OpenAI,
   input: ResponseCreateInput,
 ): Promise<ResponseOutput | AsyncGenerator<ResponseEvent>> {
-  // For Azure OpenAI (has apiVersion) with chat-capable models, use the Responses API directly
-  if ((openai as any).apiVersion !== undefined && input.model.startsWith("gpt")) {
-    // @ts-ignore cast to any to satisfy params signature
+  // Use the Responses API *only* for the official OpenAI endpoint.
+  // AzureOpenAI clients expose `apiVersion`, so they must continue via
+  // Chat-Completions.
+  if ((openai as any).apiVersion === undefined && input.model.startsWith("gpt")) {
+    // @ts-ignore – SDK typing lag
     return (openai as any).responses.create(input as any);
   }
   const completion = await createCompletion(openai, input);
