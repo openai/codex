@@ -1,0 +1,42 @@
+[package]
+name = "codex-linux-sandbox"
+version = { workspace = true }
+edition = "2024"
+
+[[bin]]
+name = "codex-linux-sandbox"
+path = "src/main.rs"
+
+[lib]
+name = "codex_linux_sandbox"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+codex-core = { path = "../core" }
+codex-common = { path = "../common", features = ["cli"] }
+
+# Used for error handling in the helper that unifies runtime dispatch across
+# binaries.
+anyhow = "1"
+# Required to construct a Tokio runtime for async execution of the caller's
+# entry-point.
+tokio = { version = "1", features = ["rt-multi-thread"] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = [
+    "io-std",
+    "macros",
+    "process",
+    "rt-multi-thread",
+    "signal",
+] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2.172"
+landlock = "0.4.1"
+seccompiler = "0.5.0"
