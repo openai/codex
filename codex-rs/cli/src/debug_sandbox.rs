@@ -13,22 +13,42 @@ use crate::LandlockCommand;
 use crate::SeatbeltCommand;
 use crate::exit_status::handle_exit_status;
 
-pub async fn run_command_under_seatbelt(command: SeatbeltCommand) -> anyhow::Result<()> {
+pub async fn run_command_under_seatbelt(
+    command: SeatbeltCommand,
+    codex_linux_sandbox_exe: Option<PathBuf>,
+) -> anyhow::Result<()> {
     let SeatbeltCommand {
         full_auto,
         sandbox,
         command,
     } = command;
-    run_command_under_sandbox(full_auto, sandbox, command, None, SandboxType::Seatbelt).await
+    run_command_under_sandbox(
+        full_auto,
+        sandbox,
+        command,
+        codex_linux_sandbox_exe,
+        SandboxType::Seatbelt,
+    )
+    .await
 }
 
-pub async fn run_command_under_landlock(command: LandlockCommand) -> anyhow::Result<()> {
+pub async fn run_command_under_landlock(
+    command: LandlockCommand,
+    codex_linux_sandbox_exe: Option<PathBuf>,
+) -> anyhow::Result<()> {
     let LandlockCommand {
         full_auto,
         sandbox,
         command,
     } = command;
-    run_command_under_sandbox(full_auto, sandbox, command, None, SandboxType::Landlock).await
+    run_command_under_sandbox(
+        full_auto,
+        sandbox,
+        command,
+        codex_linux_sandbox_exe,
+        SandboxType::Landlock,
+    )
+    .await
 }
 
 enum SandboxType {

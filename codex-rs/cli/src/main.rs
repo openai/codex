@@ -86,10 +86,18 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         }
         Some(Subcommand::Debug(debug_args)) => match debug_args.cmd {
             DebugCommand::Seatbelt(seatbelt_command) => {
-                codex_cli::debug_sandbox::run_command_under_seatbelt(seatbelt_command).await?;
+                codex_cli::debug_sandbox::run_command_under_seatbelt(
+                    seatbelt_command,
+                    codex_linux_sandbox_exe,
+                )
+                .await?;
             }
             DebugCommand::Landlock(landlock_command) => {
-                codex_cli::debug_sandbox::run_command_under_landlock(landlock_command).await?;
+                codex_cli::debug_sandbox::run_command_under_landlock(
+                    landlock_command,
+                    codex_linux_sandbox_exe,
+                )
+                .await?;
             }
         },
     }
