@@ -7,10 +7,6 @@ edition = "2024"
 name = "codex"
 path = "src/main.rs"
 
-[[bin]]
-name = "codex-linux-sandbox"
-path = "src/linux-sandbox/main.rs"
-
 [lib]
 name = "codex_cli"
 path = "src/lib.rs"
@@ -24,6 +20,7 @@ clap = { version = "4", features = ["derive"] }
 codex-core = { path = "../core" }
 codex-common = { path = "../common", features = ["cli"] }
 codex-exec = { path = "../exec" }
+codex-linux-sandbox = { path = "../linux-sandbox" }
 codex-mcp-server = { path = "../mcp-server" }
 codex-tui = { path = "../tui" }
 serde_json = "1"
