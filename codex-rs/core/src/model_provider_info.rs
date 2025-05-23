@@ -97,6 +97,16 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
             },
         ),
         (
+            "requesty",
+            P {
+                name: "Requesty".into(),
+                base_url: "https://router.requesty.ai/v1".into(),
+                env_key: Some("REQUESTY_API_KEY".into()),
+                env_key_instructions: None,
+                wire_api: WireApi::Chat,
+            },
+        ),
+        (
             "gemini",
             P {
                 name: "Gemini".into(),
