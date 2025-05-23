@@ -21,7 +21,8 @@ schemars = "0.8.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = { version = "0.1.41", features = ["log"] }
-tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter", "json"] }
 tokio = { version = "1", features = [
     "io-std",
     "macros",
@@ -30,5 +31,15 @@ tokio = { version = "1", features = [
     "signal",
 ] }
 
+
+anyhow = "1.0"
+
+
 [dev-dependencies]
 pretty_assertions = "1.4.1"
+
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "my_server_benchmarks" 
+harness = false
