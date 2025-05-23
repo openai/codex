@@ -1,7 +1,9 @@
 import type { Choice } from "./get-api-key-components";
 import type { Request, Response } from "express";
 
+import { getApiKey as getApiKeyFromConfig } from "./config.js";
 import { ApiKeyPrompt, WaitingForAuth } from "./get-api-key-components";
+import { providers } from "./providers.js";
 import chalk from "chalk";
 import express from "express";
 import fs from "fs/promises";
@@ -13,10 +15,11 @@ import os from "os";
 import path from "path";
 import React from "react";
 
-function promptUserForChoice(): Promise<Choice> {
+function promptUserForChoice(provider: string = "openai"): Promise<Choice> {
   return new Promise<Choice>((resolve) => {
     const instance = render(
       <ApiKeyPrompt
+        provider={provider}
         onDone={(choice: Choice) => {
           resolve(choice);
           instance.unmount();
@@ -734,31 +737,79 @@ async function signInFlow(issuer: string, clientId: string): Promise<string> {
   });
 }
 
+/**
+ * Get an API key for a given provider.
+ * For OpenAI: Uses OAuth login flow with auth.json fallback or interactive prompts.
+ * For other providers: Only reads from environment variables.
+ *
+ * @param options.issuer - OAuth issuer URL (only used for OpenAI)
+ * @param options.clientId - OAuth client ID (only used for OpenAI)
+ * @param options.forceLogin - Force showing the login prompt even if API key exists
+ * @param options.provider - The provider to get an API key for (default: "openai")
+ */
 export async function getApiKey(
-  issuer: string,
-  clientId: string,
-  forceLogin: boolean = false,
+  options: {
+    issuer?: string;
+    clientId?: string;
+    forceLogin?: boolean;
+    provider?: string;
+  } = {},
 ): Promise<string> {
-  if (!forceLogin && process.env["OPENAI_API_KEY"]) {
-    return process.env["OPENAI_API_KEY"]!;
+  const { provider = "openai", forceLogin = false, issuer, clientId } = options;
+
+  const providerInfo = providers[provider.toLowerCase()];
+  if (!providerInfo) {
+    throw new Error(`Unknown provider: ${provider}`);
   }
-  const choice = await promptUserForChoice();
+
+  // For non-OpenAI providers, only use environment variables
+  if (provider.toLowerCase() !== "openai") {
+    const apiKey = process.env[providerInfo.envKey];
+    if (apiKey) {
+      return apiKey;
+    }
+    throw new Error(
+      `Missing API key for provider "${provider}".\n` +
+        `Please set the ${providerInfo.envKey} environment variable.\n` +
+        `Example: export ${providerInfo.envKey}=sk-...`,
+    );
+  }
+
+  // For OpenAI provider, try environment variable first
+  if (!forceLogin) {
+    const apiKeyFromConfig = getApiKeyFromConfig(provider);
+    if (apiKeyFromConfig) {
+      return apiKeyFromConfig;
+    }
+  }
+
+  // For OpenAI, show interactive prompts only when needed
+  if (!issuer || !clientId) {
+    throw new Error(
+      "OAuth issuer and clientId are required for OpenAI provider authentication",
+    );
+  }
+
+  const choice = await promptUserForChoice(provider);
+
   if (choice.type === "apikey") {
-    process.env["OPENAI_API_KEY"] = choice.key;
+    process.env[providerInfo.envKey] = choice.key;
     return choice.key;
   }
-  const spinner = render(<WaitingForAuth />);
-  try {
-    const key = await signInFlow(issuer, clientId);
-    spinner.clear();
-    spinner.unmount();
-    process.env["OPENAI_API_KEY"] = key;
-    return key;
-  } catch (err) {
-    spinner.clear();
-    spinner.unmount();
-    throw err;
+
+  if (choice.type === "signin") {
+    const spinner = render(<WaitingForAuth />);
+    try {
+      const key = await signInFlow(issuer, clientId);
+      process.env[providerInfo.envKey] = key;
+      return key;
+    } finally {
+      spinner.clear();
+      spinner.unmount();
+    }
   }
+
+  throw new Error("Invalid choice from user prompt");
 }
 
 export { maybeRedeemCredits };

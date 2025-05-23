@@ -37,9 +37,17 @@ vi.mock("openai", () => {
         return new FakeStream();
       },
     };
+    public chat = {
+      completions: {
+        create: async (params: any) => {
+          lastCreateParams = params;
+          return new FakeStream();
+        },
+      },
+    };
   }
 
-  class APIConnectionTimeoutError extends Error {}
+  class APIConnectionTimeoutError extends Error { }
 
   return {
     __esModule: true,
@@ -72,7 +80,7 @@ vi.mock("../src/format-command.js", () => {
 // clean.
 vi.mock("../src/utils/agent/log.js", () => ({
   __esModule: true,
-  log: () => {},
+  log: () => { },
   isLoggingEnabled: () => false,
 }));
 
@@ -117,10 +125,10 @@ describe("AgentLoop", () => {
       instructions: config.instructions,
       config,
       approvalPolicy: { mode: "suggest" } as any,
-      onItem: () => {},
-      onLoading: () => {},
+      onItem: () => { },
+      onLoading: () => { },
       getCommandConfirmation: async () => ({ review: "yes" }) as any,
-      onLastResponseId: () => {},
+      onLastResponseId: () => { },
     });
 
     // Kick off a single run and wait for it to finish. The fake OpenAI client

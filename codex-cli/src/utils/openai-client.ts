@@ -32,20 +32,35 @@ export function createOpenAIClient(
     headers["OpenAI-Project"] = OPENAI_PROJECT;
   }
 
-  if (config.provider?.toLowerCase() === "azure") {
-    return new AzureOpenAI({
-      apiKey: getApiKey(config.provider),
-      baseURL: getBaseUrl(config.provider),
-      apiVersion: AZURE_OPENAI_API_VERSION,
+  const provider = config.provider || "openai";
+
+  try {
+    // This will either return a valid API key or throw an error for non-OpenAI providers
+    const apiKey = getApiKey(provider);
+
+    if (provider.toLowerCase() === "azure") {
+      return new AzureOpenAI({
+        apiKey: apiKey as unknown as string,
+        baseURL: getBaseUrl(provider),
+        apiVersion: AZURE_OPENAI_API_VERSION,
+        timeout: OPENAI_TIMEOUT_MS,
+        defaultHeaders: headers,
+      });
+    }
+
+    // For OpenAI and all other providers (including OpenRouter)
+    return new OpenAI({
+      apiKey: apiKey as unknown as string,
+      baseURL: getBaseUrl(provider),
       timeout: OPENAI_TIMEOUT_MS,
       defaultHeaders: headers,
     });
+  } catch (error) {
+    // Special handling for OpenAI provider - we want a specific error message
+    if (provider.toLowerCase() === "openai") {
+      throw new Error("Missing API key for OpenAI provider");
+    }
+    // Re-throw the original error for other providers
+    throw error;
   }
-
-  return new OpenAI({
-    apiKey: getApiKey(config.provider),
-    baseURL: getBaseUrl(config.provider),
-    timeout: OPENAI_TIMEOUT_MS,
-    defaultHeaders: headers,
-  });
 }

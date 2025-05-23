@@ -52,4 +52,9 @@ export const providers: Record<
     baseURL: "https://conductor.arcee.ai/v1",
     envKey: "ARCEEAI_API_KEY",
   },
+  anthropic: {
+    name: "Anthropic",
+    baseURL: "https://api.anthropic.com/v1",
+    envKey: "ANTHROPIC_API_KEY",
+  },
 };
