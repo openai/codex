@@ -34,6 +34,7 @@ pub fn exec_linux(
                 command,
                 cwd,
                 timeout_ms,
+                env,
             } = params;
             apply_sandbox_policy_to_current_thread(&sandbox_policy, &cwd)?;
             let child = spawn_child_async(
@@ -41,6 +42,7 @@ pub fn exec_linux(
                 cwd,
                 &sandbox_policy,
                 StdioPolicy::RedirectForShellTool,
+                env,
             )
             .await?;
             consume_truncated_output(child, ctrl_c_copy, timeout_ms).await
