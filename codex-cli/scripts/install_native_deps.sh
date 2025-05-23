@@ -65,7 +65,7 @@ mkdir -p "$BIN_DIR"
 # Until we start publishing stable GitHub releases, we have to grab the binaries
 # from the GitHub Action that created them. Update the URL below to point to the
 # appropriate workflow run:
-WORKFLOW_URL="https://github.com/openai/codex/actions/runs/15087655786"
+WORKFLOW_URL="https://github.com/openai/codex/actions/runs/15192425904"
 WORKFLOW_ID="${WORKFLOW_URL##*/}"
 
 ARTIFACTS_DIR="$(mktemp -d)"

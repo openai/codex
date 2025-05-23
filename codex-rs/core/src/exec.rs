@@ -1,6 +1,7 @@
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
 
+use std::collections::HashMap;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
@@ -59,6 +60,7 @@ pub struct ExecParams {
     pub command: Vec<String>,
     pub cwd: PathBuf,
     pub timeout_ms: Option<u64>,
+    pub env: HashMap<String, String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -87,12 +89,14 @@ pub async fn process_exec_tool_call(
                 command,
                 cwd,
                 timeout_ms,
+                env,
             } = params;
             let child = spawn_command_under_seatbelt(
                 command,
                 sandbox_policy,
                 cwd,
                 StdioPolicy::RedirectForShellTool,
+                env,
             )
             .await?;
             consume_truncated_output(child, ctrl_c, timeout_ms).await
@@ -145,9 +149,10 @@ pub async fn spawn_command_under_seatbelt(
     sandbox_policy: &SandboxPolicy,
     cwd: PathBuf,
     stdio_policy: StdioPolicy,
+    env: HashMap<String, String>,
 ) -> std::io::Result<Child> {
     let seatbelt_command = create_seatbelt_command(command, sandbox_policy, &cwd);
-    spawn_child_async(seatbelt_command, cwd, sandbox_policy, stdio_policy).await
+    spawn_child_async(seatbelt_command, cwd, sandbox_policy, stdio_policy, env).await
 }
 
 fn create_seatbelt_command(
@@ -233,6 +238,7 @@ async fn exec(
         command,
         cwd,
         timeout_ms,
+        env,
     }: ExecParams,
     sandbox_policy: &SandboxPolicy,
     ctrl_c: Arc<Notify>,
@@ -242,6 +248,7 @@ async fn exec(
         cwd,
         sandbox_policy,
         StdioPolicy::RedirectForShellTool,
+        env,
     )
     .await?;
     consume_truncated_output(child, ctrl_c, timeout_ms).await
@@ -259,7 +266,8 @@ macro_rules! configure_command {
         $command: expr,
         $cwd: expr,
         $sandbox_policy: expr,
-        $stdio_policy: expr
+        $stdio_policy: expr,
+        $env_map: expr
     ) => {{
         // For now, we take `SandboxPolicy` as a parameter to spawn_child() because
         // we need to determine whether to set the
@@ -278,6 +286,38 @@ macro_rules! configure_command {
         let mut cmd = <$cmd_type>::new(&$command[0]);
         cmd.args(&$command[1..]);
         cmd.current_dir($cwd);
+
+        // Previously, to update the env for `cmd`, we did the straightforward
+        // thing of calling `env_clear()` followed by `envs(&env_map)` so
+        // that the spawned process inherited *only* the variables explicitly
+        // provided by the caller. On Linux, the combination of `env_clear()`
+        // and Landlock/seccomp caused a permission error whereas this more
+        // "surgical" approach of setting variables individually appears to
+        // work fine. More time with `strace` and friends is merited to fully
+        // debug thus, though we will soon use a helper binary like we do for
+        // Seatbelt, which will simplify this logic.
+
+        // Iterate through the current process environment first so we can
+        // decide, for every variable that already exists, whether we need to
+        // override its value.
+        let mut remaining_overrides = $env_map.clone();
+        for (key, current_val) in std::env::vars() {
+            if let Some(desired_val) = remaining_overrides.remove(&key) {
+                // The caller provided a value for this variable. Override it
+                // only if the value differs from what is currently set.
+                if desired_val != current_val {
+                    cmd.env(&key, desired_val);
+                }
+            }
+            // If the variable was not in `env_map`, we leave it unchanged.
+        }
+
+        // Any entries still left in `remaining_overrides` were not present in
+        // the parent environment. Add them now so that the child process sees
+        // the complete set requested by the caller.
+        for (key, val) in remaining_overrides {
+            cmd.env(key, val);
+        }
 
         if !$sandbox_policy.has_full_network_access() {
             cmd.env(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR, "1");
@@ -313,8 +353,9 @@ pub(crate) async fn spawn_child_async(
     cwd: PathBuf,
     sandbox_policy: &SandboxPolicy,
     stdio_policy: StdioPolicy,
+    env: HashMap<String, String>,
 ) -> std::io::Result<Child> {
-    let mut cmd = configure_command!(Command, command, cwd, sandbox_policy, stdio_policy)?;
+    let mut cmd = configure_command!(Command, command, cwd, sandbox_policy, stdio_policy, env)?;
     cmd.kill_on_drop(true).spawn()
 }
 
@@ -326,13 +367,15 @@ pub fn spawn_child_sync(
     cwd: PathBuf,
     sandbox_policy: &SandboxPolicy,
     stdio_policy: StdioPolicy,
+    env: HashMap<String, String>,
 ) -> std::io::Result<std::process::Child> {
     let mut cmd = configure_command!(
         std::process::Command,
         command,
         cwd,
         sandbox_policy,
-        stdio_policy
+        stdio_policy,
+        env
     )?;
     cmd.spawn()
 }
