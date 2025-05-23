@@ -36,9 +36,10 @@ import {
   loadConfig,
   PRETTY_PRINT,
   INSTRUCTIONS_FILEPATH,
+  getApiKey as getApiKeyFromConfig,
 } from "./utils/config";
 import {
-  getApiKey as fetchApiKey,
+  getApiKey as fetchApiKeyFromInteractive,
   maybeRedeemCredits,
 } from "./utils/get-api-key";
 import { createInputItem } from "./utils/input-utils";
@@ -293,12 +294,24 @@ const model = cli.flags.model ?? config.model;
 const imagePaths = cli.flags.image;
 const provider = cli.flags.provider ?? config.provider ?? "openai";
 
+// Set of providers that don't require API keys. This needs to be defined before the apiKey logic.
+const NO_API_KEY_REQUIRED = new Set(["ollama"]);
+
+let apiKey = ""; // Initialize apiKey
+
+// Try to get API key using the determined provider from config/env
+if (!NO_API_KEY_REQUIRED.has(provider.toLowerCase())) {
+  const providerSpecificApiKey = getApiKeyFromConfig(provider); // Using the function from utils/config.ts
+  if (providerSpecificApiKey) {
+    apiKey = providerSpecificApiKey;
+  }
+}
+
 const client = {
   issuer: "https://auth.openai.com",
   client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
 };
 
-let apiKey = "";
 let savedTokens:
   | {
       id_token?: string;
@@ -327,8 +340,49 @@ try {
   // ignore errors
 }
 
-if (cli.flags.login) {
-  apiKey = await fetchApiKey(client.issuer, client.client_id);
+// Existing logic for auth.json and interactive prompt, now conditional
+if (!apiKey && provider.toLowerCase() === 'openai') {
+  try {
+    const home = os.homedir();
+    const authDir = path.join(home, ".codex");
+    const authFile = path.join(authDir, "auth.json");
+    if (fs.existsSync(authFile)) {
+      const data = JSON.parse(fs.readFileSync(authFile, "utf-8"));
+      savedTokens = data.tokens;
+      const lastRefreshTime = data.last_refresh
+        ? new Date(data.last_refresh).getTime()
+        : 0;
+      const expired = Date.now() - lastRefreshTime > 28 * 24 * 60 * 60 * 1000;
+      if (data.OPENAI_API_KEY && !expired) {
+        apiKey = data.OPENAI_API_KEY; // This will set apiKey if found
+      }
+    }
+  } catch {
+    // ignore errors
+  }
+
+  // Existing logic for fetchApiKeyFromInteractive (interactive prompt or OPENAI_API_KEY from env)
+  // This should only be called if apiKey is still not found after checking auth.json for openai
+  if (!apiKey) {
+    if (cli.flags.login) {
+      apiKey = await fetchApiKeyFromInteractive(client.issuer, client.client_id, true); // force login
+    } else {
+      apiKey = await fetchApiKeyFromInteractive(client.issuer, client.client_id); // attempts OPENAI_API_KEY from env, then prompts
+    }
+  }
+  // Ensure OPENAI_API_KEY is set in the environment if we are using openai and got a key
+  if (apiKey) {
+    process.env["OPENAI_API_KEY"] = apiKey;
+  }
+}
+
+// The following try-catch block for loading savedTokens if cli.flags.login was true
+// seems redundant if fetchApiKeyFromInteractive updates the auth.json itself or
+// if savedTokens are only used in conjunction with the interactive flow.
+// For now, I'm keeping it as it was, but it might need review.
+if (cli.flags.login && provider.toLowerCase() === 'openai') {
+  // This block was originally after `apiKey = await fetchApiKey(...)`
+  // It re-reads auth.json to get tokens. This might be necessary if fetchApiKeyFromInteractive updated them.
   try {
     const home = os.homedir();
     const authDir = path.join(home, ".codex");
@@ -340,19 +394,24 @@ if (cli.flags.login) {
   } catch {
     /* ignore */
   }
-} else if (!apiKey) {
-  apiKey = await fetchApiKey(client.issuer, client.client_id);
 }
-// Ensure the API key is available as an environment variable for legacy code
-process.env["OPENAI_API_KEY"] = apiKey;
+// Note: The original `else if (!apiKey)` block that called `fetchApiKey` is now handled
+// inside the `if (!apiKey && provider.toLowerCase() === 'openai')` block.
+
+// `process.env["OPENAI_API_KEY"] = apiKey;` has been moved into the OpenAI specific block.
+// If other providers need their API keys set as environment variables,
+// that logic would need to be added to the `getApiKeyFromConfig` section or here.
 
 if (cli.flags.free) {
   // eslint-disable-next-line no-console
   console.log(`${chalk.bold("codex --free")} attempting to redeem credits...`);
-  if (!savedTokens?.refresh_token) {
-    apiKey = await fetchApiKey(client.issuer, client.client_id, true);
-    // fetchApiKey includes credit redemption as the end of the flow
-  } else {
+  if (!savedTokens?.refresh_token && provider.toLowerCase() === 'openai') { // Ensure this is also OpenAI specific
+    apiKey = await fetchApiKeyFromInteractive(client.issuer, client.client_id, true);
+    // fetchApiKeyFromInteractive includes credit redemption as the end of the flow
+    if (apiKey && provider.toLowerCase() === 'openai') { // also set env var if key is fetched
+        process.env["OPENAI_API_KEY"] = apiKey;
+    }
+  } else if (savedTokens?.refresh_token) { // Only try to redeem if tokens are available
     await maybeRedeemCredits(
       client.issuer,
       client.client_id,
@@ -362,31 +421,31 @@ if (cli.flags.free) {
   }
 }
 
-// Set of providers that don't require API keys
-const NO_API_KEY_REQUIRED = new Set(["ollama"]);
+// The NO_API_KEY_REQUIRED set is now defined earlier, before its first use.
 
 // Skip API key validation for providers that don't require an API key
 if (!apiKey && !NO_API_KEY_REQUIRED.has(provider.toLowerCase())) {
+  const providerConfig = config.providers?.[provider.toLowerCase()];
+  const expectedEnvVar = providerConfig?.envKey || `${provider.toUpperCase()}_API_KEY`;
+  const specificProviderDocs = config.providers?.[provider.toLowerCase()]?.name;
+
+  let helpMessage = `Set the environment variable ${chalk.bold(expectedEnvVar)} and re-run this command.\n`;
+
+  if (provider.toLowerCase() === "openai") {
+    helpMessage += `You can create a key here: ${chalk.bold(
+      chalk.underline("https://platform.openai.com/account/api-keys"),
+    )}\n`;
+  } else if (specificProviderDocs) {
+    // If provider is known from default providers.ts or user's config.json
+    helpMessage += `You can create a ${chalk.bold(expectedEnvVar)} in the ${chalk.bold(specificProviderDocs)} dashboard.\n`;
+  } else {
+    // For a generic custom provider not in config
+    helpMessage += `Ensure ${chalk.bold(expectedEnvVar)} is set correctly for the custom provider '${provider}'.\n`;
+  }
+
   // eslint-disable-next-line no-console
   console.error(
-    `\n${chalk.red(`Missing ${provider} API key.`)}\n\n` +
-      `Set the environment variable ${chalk.bold(
-        `${provider.toUpperCase()}_API_KEY`,
-      )} ` +
-      `and re-run this command.\n` +
-      `${
-        provider.toLowerCase() === "openai"
-          ? `You can create a key here: ${chalk.bold(
-              chalk.underline("https://platform.openai.com/account/api-keys"),
-            )}\n`
-          : provider.toLowerCase() === "gemini"
-            ? `You can create a ${chalk.bold(
-                `${provider.toUpperCase()}_API_KEY`,
-              )} ` + `in the ${chalk.bold(`Google AI Studio`)}.\n`
-            : `You can create a ${chalk.bold(
-                `${provider.toUpperCase()}_API_KEY`,
-              )} ` + `in the ${chalk.bold(`${provider}`)} dashboard.\n`
-      }`,
+    `\n${chalk.red(`Missing ${provider} API key.`)}\n\n` + helpMessage,
   );
   process.exit(1);
 }
