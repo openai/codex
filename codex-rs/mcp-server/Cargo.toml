@@ -21,14 +21,34 @@ schemars = "0.8.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = { version = "0.1.41", features = ["log"] }
-tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+# Added 'json' feature for structured logging in production
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter", "json"] }
 tokio = { version = "1", features = [
     "io-std",
     "macros",
     "process",
     "rt-multi-thread",
     "signal",
+    # Consider adding these based on your server's exact needs.
+    # Only uncomment if you truly need them, as they add to binary size.
+    # "fs",   # For async file I/O
+    # "net",  # For async network sockets (if you open direct sockets)
+    # "time", # For async timers (e.g., `tokio::time::sleep`)
 ] }
+
+# Added for robust error handling, which is crucial for stable production servers
+anyhow = "1.0"
+# For configurable logging output, e.g., to files
+# tracing-appender = "0.2"
 
 [dev-dependencies]
 pretty_assertions = "1.4.1"
+# For benchmarking critical code sections
+criterion = { version = "0.5", features = ["html_reports"] }
+
+# For pretty error reporting during development
+# color-eyre = "0.6"
+
+[[bench]]
+name = "my_server_benchmarks" # You can name this anything relevant to your benchmarks
+harness = false # Required for criterion
