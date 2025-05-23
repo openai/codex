@@ -1,0 +1,14 @@
+{
+  "name": "codex-ui-backend",
+  "version": "1.0.0",
+  "description": "Backend for Codex UI",
+  "main": "server.js",
+  "scripts": {
+    "server": "node server.js",
+    "client": "echo \"Frontend client script placeholder. Run 'npm start' in client directory.\"",
+    "dev": "echo \"Run server and client separately. Backend: 'npm run server'. Frontend: 'cd client && npm start'\""
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}

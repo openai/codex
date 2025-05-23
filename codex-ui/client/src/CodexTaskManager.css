@@ -1,0 +1,247 @@
+.codex-task-manager {
+  background-color: #3c3c3c;
+  padding: 20px;
+  border-radius: 8px;
+  margin-top: 20px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  display: flex;
+  flex-direction: column;
+}
+
+.codex-task-manager h2 {
+  margin-top: 0;
+  color: #e0e0e0;
+  border-bottom: 1px solid #555;
+  padding-bottom: 10px;
+  margin-bottom: 15px;
+  font-size: 1.3rem;
+}
+
+.codex-form {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.form-group label {
+  margin-bottom: 8px;
+  color: #c0c0c0;
+  font-weight: bold;
+  font-size: 0.95rem;
+}
+
+.form-group textarea,
+.form-group input[type="text"],
+.form-group select {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px;
+  border: 1px solid #555;
+  border-radius: 4px;
+  background-color: #2c2c2c;
+  color: #e0e0e0;
+  font-size: 1rem;
+}
+
+.form-group textarea {
+  min-height: 100px;
+  resize: vertical;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+.form-group input[type="text"]::placeholder,
+.form-group textarea::placeholder {
+  color: #888;
+}
+
+.options-group {
+  display: flex;
+  gap: 20px;
+}
+
+.options-group .form-group {
+  flex: 1;
+}
+
+.execute-button {
+  padding: 12px 18px;
+  background-color: #0099ff;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 1.1rem;
+  transition: background-color 0.2s ease-in-out;
+  align-self: flex-start;
+  font-weight: bold;
+}
+
+.execute-button:hover {
+  background-color: #007acc;
+}
+
+.execute-button:disabled {
+  background-color: #555;
+  cursor: not-allowed;
+}
+
+/* Loading and No Output Messages */
+.loading-message,
+.no-output-message {
+  margin-top: 15px;
+  padding: 10px;
+  background-color: #2c2c2c;
+  border: 1px solid #555;
+  border-radius: 4px;
+  color: #aaa;
+  text-align: center;
+  font-style: italic;
+}
+
+
+/* General Error, Stdout, and Stderr Containers */
+.general-error-container,
+.stdout-container,
+.stderr-container {
+  margin-top: 20px;
+  padding: 15px;
+  border-radius: 6px;
+  background-color: #2a2a2a;
+  border: 1px solid #444;
+}
+
+.general-error-container h4,
+.stdout-container h4,
+.stderr-container h4 {
+  margin-top: 0;
+  color: #00bfff;
+  font-size: 1.1rem;
+  border-bottom: 1px solid #555;
+  padding-bottom: 8px;
+  margin-bottom: 10px;
+}
+
+/* Preformatted text display styles */
+.general-error-display,
+.stdout-display,
+.stderr-display {
+  background-color: #1e1e1e;
+  color: #d4d4d4;
+  padding: 15px;
+  border-radius: 4px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  font-family: 'Consolas', 'Menlo', 'Courier New', monospace;
+  font-size: 0.9em;
+  border: 1px solid #383838;
+}
+
+.general-error-container {
+  border-color: #ff4d4d;
+}
+.general-error-container h4 {
+  color: #ff4d4d;
+}
+.general-error-display {
+  color: #ffcccc;
+  background-color: #332222;
+  border-color: #773333;
+}
+
+.stderr-container {
+  border-color: #ffcc00;
+}
+.stderr-container h4 {
+  color: #ffcc00;
+}
+.stderr-display {
+  color: #fff0cc;
+  background-color: #332b00;
+  border-color: #775500;
+}
+
+.stdout-container {
+  border-color: #555;
+}
+.stdout-container h4 {
+  color: #00bfff;
+}
+
+/* User Actions Section */
+.user-actions-container {
+  margin-top: 20px;
+  padding: 15px;
+  background-color: #2a2a2a; /* Consistent with other output areas */
+  border: 1px solid #444;
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 15px; /* Space between elements within this container */
+}
+
+.diff-placeholder {
+  padding: 10px;
+  background-color: #1e1e1e; /* Darker background for placeholder */
+  border: 1px dashed #555; /* Dashed border to indicate placeholder */
+  border-radius: 4px;
+  color: #aaa; /* Muted text color */
+  text-align: center;
+  font-style: italic;
+}
+
+.action-buttons {
+  display: flex;
+  gap: 10px; /* Space between Approve and Reject buttons */
+  justify-content: flex-start; /* Align buttons to the start */
+}
+
+.approve-button,
+.reject-button {
+  padding: 10px 20px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 1rem;
+  font-weight: bold;
+  transition: background-color 0.2s ease-in-out, transform 0.1s ease;
+}
+
+.approve-button {
+  background-color: #28a745; /* Green for approve */
+  color: white;
+}
+
+.approve-button:hover {
+  background-color: #218838; /* Darker green on hover */
+}
+
+.reject-button {
+  background-color: #dc3545; /* Red for reject */
+  color: white;
+}
+
+.reject-button:hover {
+  background-color: #c82333; /* Darker red on hover */
+}
+
+.approve-button:active,
+.reject-button:active {
+  transform: translateY(1px); /* Slight press effect */
+}
+
+.user-action-message {
+  margin-top: 10px; /* Space above the message */
+  padding: 8px;
+  background-color: #333; /* Background for the message */
+  border: 1px solid #555;
+  border-radius: 4px;
+  color: #e0e0e0; /* Light text color */
+  font-size: 0.9rem;
+  text-align: center;
+}

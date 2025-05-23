@@ -1,0 +1,121 @@
+/* General App styling */
+.App {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  background-color: #1e1e1e; /* Dark background for the entire app */
+  color: #e0e0e0; /* Light text color */
+}
+
+.App-header {
+  background-color: #2a2a2a; /* Slightly lighter dark shade for header */
+  padding: 20px;
+  text-align: center;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  border-bottom: 1px solid #444;
+}
+
+.App-header h1 {
+  margin: 0;
+  font-size: 2rem;
+  color: #0099ff; /* Accent color for the title */
+}
+
+.App-main {
+  flex-grow: 1;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px; /* Spacing between main sections */
+}
+
+/* Loading and Error Messages */
+.loading-message,
+.error-message {
+  text-align: center;
+  padding: 10px;
+  border-radius: 4px;
+  margin-bottom: 15px;
+}
+
+.loading-message {
+  background-color: #333;
+  color: #e0e0e0;
+}
+
+.error-message {
+  background-color: #ff4d4d44; /* Semi-transparent red */
+  color: #ffcccc; /* Light red text */
+  border: 1px solid #ff4d4d;
+}
+
+/* Display Area for Config and Agents */
+.display-area {
+  background-color: #2c2c2c; /* Dark card background */
+  padding: 15px;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+}
+
+.display-area h2 {
+  margin-top: 0;
+  color: #0099ff; /* Accent color for headings */
+  font-size: 1.5rem;
+  border-bottom: 1px solid #444;
+  padding-bottom: 10px;
+  margin-bottom: 15px;
+}
+
+.display-area p {
+  margin: 8px 0;
+  line-height: 1.6;
+}
+
+.display-area p strong {
+  color: #c0c0c0; /* Slightly lighter color for strong text */
+}
+
+.agents-display pre {
+  background-color: #1a1a1a; /* Very dark background for preformatted text */
+  color: #d0d0d0; /* Light text for code/pre */
+  padding: 15px;
+  border-radius: 4px;
+  overflow-x: auto; /* Allow horizontal scrolling for long lines */
+  white-space: pre-wrap; /* Wrap text within the pre tag */
+  word-wrap: break-word; /* Break long words */
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 0.9rem;
+  border: 1px solid #444;
+}
+
+/* Responsive adjustments (optional, basic example) */
+@media (min-width: 768px) {
+  .App-main {
+    flex-direction: row; /* Arrange sections side-by-side on larger screens */
+    align-items: flex-start; /* Align items to the top */
+  }
+
+  .config-manager {
+    flex: 1; /* Allow ConfigManager to take up available space */
+    max-width: 400px; /* Max width for ConfigManager */
+  }
+
+  .display-area {
+    flex: 2; /* Allow display areas to take more space */
+    margin-left: 20px; /* Add some space between ConfigManager and display areas */
+  }
+  .agents-display {
+     margin-left: 0; /* Reset margin if it's a column */
+  }
+
+  /* If ConfigManager and other sections are in a column, you might need a wrapper */
+  /* For a 2-column layout (ConfigManager | Other Display Areas in a column): */
+  /* .main-content-wrapper { display: flex; flex-direction: column; flex: 2; } */
+  /* Then wrap the display-area and agents-display in this wrapper */
+
+}
+
+/* Fallback for browsers that don't support gap, if needed */
+.App-main > *:not(:last-child) {
+  /* margin-bottom: 20px; /* This is if they are stacked vertically */
+}
