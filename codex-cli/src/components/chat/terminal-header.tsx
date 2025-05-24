@@ -1,4 +1,5 @@
 import type { AgentLoop } from "../../utils/agent/agent-loop.js";
+import type { ReasoningEffort } from "openai/resources.mjs";
 
 import { Box, Text } from "ink";
 import path from "node:path";
@@ -15,6 +16,7 @@ export interface TerminalHeaderProps {
   agent?: AgentLoop;
   initialImagePaths?: Array<string>;
   flexModeEnabled?: boolean;
+  reasoningEffort?: ReasoningEffort;
 }
 
 const TerminalHeader: React.FC<TerminalHeaderProps> = ({
@@ -28,6 +30,7 @@ const TerminalHeader: React.FC<TerminalHeaderProps> = ({
   agent,
   initialImagePaths,
   flexModeEnabled = false,
+  reasoningEffort,
 }) => {
   return (
     <>
@@ -81,6 +84,12 @@ const TerminalHeader: React.FC<TerminalHeaderProps> = ({
               <Text dimColor>
                 <Text color="blueBright">↳</Text> flex-mode:{" "}
                 <Text bold>enabled</Text>
+              </Text>
+            )}
+            {model.startsWith("o") && (
+              <Text dimColor>
+                <Text color="blueBright">↳</Text> reasoning-effort:{" "}
+                <Text bold>{reasoningEffort}</Text>
               </Text>
             )}
             {initialImagePaths?.map((img, idx) => (
