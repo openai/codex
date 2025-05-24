@@ -17,32 +17,32 @@ Implementation of a comprehensive lifecycle hooks system for Codex that allows e
 
 ### 1.1 Hook Type Definitions and Core Types
 
-- [ ] Create `codex-rs/core/src/hooks/mod.rs` - Main hooks module
-- [ ] Create `codex-rs/core/src/hooks/types.rs` - Core hook type definitions
-  - [ ] Define `LifecycleEvent` enum with all lifecycle events
-  - [ ] Define `HookConfig` struct for hook configuration
-  - [ ] Define `HookExecutionContext` for runtime context
-  - [ ] Define `HookResult` and error types
-- [ ] Create `codex-rs/core/src/hooks/context.rs` - Hook execution context
-  - [ ] Implement context data serialization
-  - [ ] Environment variable injection logic
-  - [ ] Temporary file management for hook data
+- [x] Create `codex-rs/core/src/hooks/mod.rs` - Main hooks module
+- [x] Create `codex-rs/core/src/hooks/types.rs` - Core hook type definitions
+  - [x] Define `LifecycleEvent` enum with all lifecycle events
+  - [x] Define `HookConfig` struct for hook configuration
+  - [x] Define `HookExecutionContext` for runtime context
+  - [x] Define `HookResult` and error types
+- [x] Create `codex-rs/core/src/hooks/context.rs` - Hook execution context
+  - [x] Implement context data serialization
+  - [x] Environment variable injection logic
+  - [x] Temporary file management for hook data
 
 ### 1.2 Hook Registry System
 
-- [ ] Create `codex-rs/core/src/hooks/registry.rs` - Hook registry implementation
-  - [ ] Hook registration and lookup functionality
-  - [ ] Event filtering and matching logic
+- [x] Create `codex-rs/core/src/hooks/registry.rs` - Hook registry implementation
+  - [x] Hook registration and lookup functionality
+  - [x] Event filtering and matching logic
   - [ ] Hook priority and dependency management
   - [ ] Conditional execution support (hook conditions)
 
 ### 1.3 Hook Configuration System
 
-- [ ] Create `codex-rs/core/src/hooks/config.rs` - Configuration parsing
-  - [ ] Parse `hooks.toml` configuration file
-  - [ ] Validate hook configurations at startup
-  - [ ] Support for environment variable substitution
-  - [ ] Configuration schema validation
+- [x] Create `codex-rs/core/src/hooks/config.rs` - Configuration parsing
+  - [x] Parse `hooks.toml` configuration file
+  - [x] Validate hook configurations at startup
+  - [x] Support for environment variable substitution
+  - [x] Configuration schema validation
 - [ ] Modify `codex-rs/core/src/config.rs` - Add hooks to main config
   - [ ] Add `hooks` field to `Config` struct
   - [ ] Add `hooks` field to `ConfigFile` struct
@@ -55,17 +55,17 @@ Implementation of a comprehensive lifecycle hooks system for Codex that allows e
 
 ### 2.1 Core Hook Manager
 
-- [ ] Create `codex-rs/core/src/hooks/manager.rs` - Hook manager implementation
-  - [ ] Hook registration and management
-  - [ ] Event subscription and routing
+- [x] Create `codex-rs/core/src/hooks/manager.rs` - Hook manager implementation
+  - [x] Hook registration and management
+  - [x] Event subscription and routing
   - [ ] Hook execution coordination
   - [ ] Error handling and logging
   - [ ] Performance monitoring and metrics
 
 ### 2.2 Hook Executor Framework
 
-- [ ] Create `codex-rs/core/src/hooks/executor.rs` - Base hook execution engine
-  - [ ] Async hook execution framework
+- [x] Create `codex-rs/core/src/hooks/executor.rs` - Base hook execution engine
+  - [x] Async hook execution framework
   - [ ] Timeout management and cancellation
   - [ ] Error isolation and recovery
   - [ ] Execution mode support (blocking/non-blocking, parallel/sequential)

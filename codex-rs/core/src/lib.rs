@@ -19,6 +19,7 @@ pub mod error;
 pub mod exec;
 pub mod exec_env;
 mod flags;
+pub mod hooks;
 mod is_safe_command;
 mod mcp_connection_manager;
 mod mcp_tool_call;

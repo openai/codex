@@ -13,8 +13,10 @@ workspace = true
 [dependencies]
 anyhow = "1"
 async-channel = "2.3.1"
+async-trait = "0.1"
 base64 = "0.21"
 bytes = "1.10.1"
+chrono = { version = "0.4", features = ["serde"] }
 codex-apply-patch = { path = "../apply-patch" }
 codex-mcp-client = { path = "../mcp-client" }
 dirs = "6"
@@ -31,9 +33,11 @@ rand = "0.9"
 reqwest = { version = "0.12", features = ["json", "stream"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+tempfile = "3"
 thiserror = "2.0.12"
 time = { version = "0.3", features = ["formatting", "local-offset", "macros"] }
 tokio = { version = "1", features = [
+    "fs",
     "io-std",
     "macros",
     "process",
