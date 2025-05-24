@@ -45,6 +45,10 @@ pub struct Cli {
     #[arg(long = "output-last-message")]
     pub last_message_file: Option<PathBuf>,
 
+    /// Continue prompting for additional input after each turn.
+    #[arg(long = "multi-turn", default_value_t = false)]
+    pub multi_turn: bool,
+
     /// Initial instructions for the agent.
     pub prompt: String,
 }

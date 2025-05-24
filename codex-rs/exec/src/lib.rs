@@ -24,6 +24,7 @@ use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
+use std::io::Write;
 
 pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
     let Cli {
@@ -37,6 +38,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         disable_response_storage,
         color,
         last_message_file,
+        multi_turn,
         prompt,
     } = cli;
 
@@ -165,6 +167,32 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
     // Run the loop until the task is complete.
     let mut event_processor = EventProcessor::create_with_ansi(stdout_with_ansi);
+
+    process_until_complete(&mut rx, &mut event_processor, last_message_file.as_deref()).await?;
+
+    if multi_turn {
+        loop {
+            print!("> ");
+            std::io::stdout().flush()?;
+            let mut input = String::new();
+            let bytes = std::io::stdin().read_line(&mut input)?;
+            if bytes == 0 || input.trim().is_empty() {
+                break;
+            }
+            let items: Vec<InputItem> = vec![InputItem::Text { text: input.trim_end().to_string() }];
+            codex.submit(Op::UserInput { items }).await?;
+            process_until_complete(&mut rx, &mut event_processor, last_message_file.as_deref()).await?;
+        }
+    }
+
+    Ok(())
+}
+
+async fn process_until_complete(
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<Event>,
+    event_processor: &mut EventProcessor,
+    last_message_file: Option<&Path>,
+) -> anyhow::Result<()> {
     while let Some(event) = rx.recv().await {
         let (is_last_event, last_assistant_message) = match &event.msg {
             EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) => {
@@ -174,11 +202,10 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         };
         event_processor.process_event(event);
         if is_last_event {
-            handle_last_message(last_assistant_message, last_message_file.as_deref())?;
+            handle_last_message(last_assistant_message, last_message_file)?;
             break;
         }
     }
-
     Ok(())
 }
 
