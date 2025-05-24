@@ -59,27 +59,27 @@ function log {
 
 log "Testing Docker Compose setup for Codex CLI..."
 
-# Check if docker-compose is installed
-if ! command -v docker-compose &> /dev/null; then
-    echo "Error: docker-compose is not installed. Please install it first."
+# Check if docker compose is available
+if ! docker compose version &> /dev/null; then
+    echo "Error: docker compose is not available. Please install Docker with Compose plugin."
     exit 1
 fi
 
 # Build the container
 log "Building Docker container..."
 if [[ "$QUIET_MODE" == true ]]; then
-    docker-compose build --quiet
+    docker compose build --quiet
 else
-    docker-compose build
+    docker compose build
 fi
 
 # Start the container in detached mode
 log "Starting Docker container..."
-docker-compose up -d
+docker compose up -d
 
 # Run a test command in the container
 log "Testing Codex CLI inside the container..."
-CODEX_VERSION=$(docker-compose exec -T codex-cli bash -c "codex --version")
+CODEX_VERSION=$(docker compose exec -T codex-cli bash -c "codex --version")
 RESULT=$?
 
 if [ $RESULT -eq 0 ]; then
@@ -90,14 +90,14 @@ else
     
     # Always stop the container on failure
     log "Stopping Docker container..."
-    docker-compose down
+    docker compose down
     exit 1
 fi
 
 # Optionally show Node.js version info
 if [[ "$SHOW_NODE_INFO" == true ]]; then
-    NODE_VERSION=$(docker-compose exec -T codex-cli bash -c "node --version")
-    NODE_INFO=$(docker-compose exec -T codex-cli bash -c "node -e 'console.log(\"Features available:\", { fetch: typeof fetch === \"function\" })'")
+    NODE_VERSION=$(docker compose exec -T codex-cli bash -c "node --version")
+    NODE_INFO=$(docker compose exec -T codex-cli bash -c "node -e 'console.log(\"Features available:\", { fetch: typeof fetch === \"function\" })'")
     log "Node.js version: $NODE_VERSION"
     log "Node.js info: $NODE_INFO"
 fi
@@ -105,10 +105,10 @@ fi
 # Handle container cleanup based on keep flag
 if [[ "$KEEP_RUNNING" == true ]]; then
     log "Container is still running."
-    log "You can access it with: docker-compose exec codex-cli bash"
-    log "To stop it later, run: docker-compose down"
+    log "You can access it with: docker compose exec codex-cli bash"
+    log "To stop it later, run: docker compose down"
 else
     log "Stopping Docker container..."
-    docker-compose down
+    docker compose down
     log "Container stopped."
 fi
