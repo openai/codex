@@ -5,6 +5,7 @@ use crate::config_types::ShellEnvironmentPolicy;
 use crate::config_types::ShellEnvironmentPolicyToml;
 use crate::config_types::Tui;
 use crate::config_types::UriBasedFileOpener;
+use crate::hooks::config::HooksConfig;
 use crate::flags::OPENAI_DEFAULT_MODEL;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::built_in_model_providers;
@@ -106,6 +107,9 @@ pub struct Config {
     ///
     /// When this program is invoked, arg0 will be set to `codex-linux-sandbox`.
     pub codex_linux_sandbox_exe: Option<PathBuf>,
+
+    /// Lifecycle hooks configuration.
+    pub hooks: HooksConfig,
 }
 
 /// Base config deserialized from ~/.codex/config.toml.
@@ -169,6 +173,10 @@ pub struct ConfigToml {
 
     /// Collection of settings that are specific to the TUI.
     pub tui: Option<Tui>,
+
+    /// Lifecycle hooks configuration.
+    #[serde(default)]
+    pub hooks: Option<HooksConfig>,
 }
 
 impl ConfigToml {
@@ -370,6 +378,7 @@ impl Config {
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
             tui: cfg.tui.unwrap_or_default(),
             codex_linux_sandbox_exe,
+            hooks: cfg.hooks.unwrap_or_default(),
         };
         Ok(config)
     }
@@ -711,6 +720,7 @@ disable_response_storage = true
                 file_opener: UriBasedFileOpener::VsCode,
                 tui: Tui::default(),
                 codex_linux_sandbox_exe: None,
+                hooks: HooksConfig::default(),
             },
             o3_profile_config
         );
@@ -750,6 +760,7 @@ disable_response_storage = true
             file_opener: UriBasedFileOpener::VsCode,
             tui: Tui::default(),
             codex_linux_sandbox_exe: None,
+            hooks: HooksConfig::default(),
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -804,6 +815,7 @@ disable_response_storage = true
             file_opener: UriBasedFileOpener::VsCode,
             tui: Tui::default(),
             codex_linux_sandbox_exe: None,
+            hooks: HooksConfig::default(),
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);

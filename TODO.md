@@ -33,8 +33,8 @@ Implementation of a comprehensive lifecycle hooks system for Codex that allows e
 - [x] Create `codex-rs/core/src/hooks/registry.rs` - Hook registry implementation
   - [x] Hook registration and lookup functionality
   - [x] Event filtering and matching logic
-  - [ ] Hook priority and dependency management
-  - [ ] Conditional execution support (hook conditions)
+  - [x] Hook priority and dependency management
+  - [x] Conditional execution support (hook conditions)
 
 ### 1.3 Hook Configuration System
 
@@ -43,11 +43,11 @@ Implementation of a comprehensive lifecycle hooks system for Codex that allows e
   - [x] Validate hook configurations at startup
   - [x] Support for environment variable substitution
   - [x] Configuration schema validation
-- [ ] Modify `codex-rs/core/src/config.rs` - Add hooks to main config
-  - [ ] Add `hooks` field to `Config` struct
-  - [ ] Add `hooks` field to `ConfigFile` struct
-  - [ ] Update config loading to include hooks configuration
-  - [ ] Add default hooks configuration
+- [x] Modify `codex-rs/core/src/config.rs` - Add hooks to main config
+  - [x] Add `hooks` field to `Config` struct
+  - [x] Add `hooks` field to `ConfigFile` struct
+  - [x] Update config loading to include hooks configuration
+  - [x] Add default hooks configuration
 
 ---
 

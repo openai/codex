@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::hooks::types::{HookError, HookExecutionMode, HookPriority, HookType, LifecycleEventType};
 
 /// Main hooks configuration structure.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct HooksConfig {
     /// Global hooks settings.
     #[serde(default)]
@@ -16,7 +16,7 @@ pub struct HooksConfig {
 }
 
 /// Global hooks configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct GlobalHooksConfig {
     /// Whether hooks are enabled globally.
     #[serde(default = "default_enabled")]
@@ -82,7 +82,7 @@ impl Default for GlobalHooksConfig {
 }
 
 /// Configuration for a single hook.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HookConfig {
     /// The lifecycle event that triggers this hook.
     pub event: LifecycleEventType,
@@ -280,8 +280,7 @@ fn default_parallel_execution() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
-    use std::io::Write;
+    use std::collections::HashMap;
 
     #[test]
     fn test_hooks_config_parsing() {
@@ -294,6 +293,7 @@ timeout_seconds = 60
 event = "task_start"
 type = "script"
 command = ["echo", "Task started"]
+environment = {}
 mode = "async"
 priority = 100
 "#;

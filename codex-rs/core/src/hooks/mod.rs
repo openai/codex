@@ -77,7 +77,7 @@ pub use config::{HookConfig, HooksConfig};
 pub use context::{HookContext, HookExecutionContext};
 pub use executor::{HookExecutor, HookExecutorResult};
 pub use manager::HookManager;
-pub use registry::HookRegistry;
+pub use registry::{HookRegistry, HookRegistryStatistics};
 pub use types::{
     HookError, HookResult, HookType, LifecycleEvent, LifecycleEventType, HookExecutionMode,
 };

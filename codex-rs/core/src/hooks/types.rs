@@ -332,7 +332,7 @@ pub enum HookError {
 }
 
 /// Hook execution priority.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct HookPriority(pub u32);
 
 impl Default for HookPriority {
