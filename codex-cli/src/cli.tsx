@@ -34,6 +34,7 @@ import { AutoApprovalMode } from "./utils/auto-approval-mode";
 import { checkForUpdates } from "./utils/check-updates";
 import {
   loadConfig,
+  getApiKey,
   PRETTY_PRINT,
   INSTRUCTIONS_FILEPATH,
 } from "./utils/config";
@@ -319,8 +320,9 @@ try {
       ? new Date(data.last_refresh).getTime()
       : 0;
     const expired = Date.now() - lastRefreshTime > 28 * 24 * 60 * 60 * 1000;
-    if (data.OPENAI_API_KEY && !expired) {
-      apiKey = data.OPENAI_API_KEY;
+    const providerApiKey = data[`${provider.toUpperCase()}_API_KEY`];
+    if (providerApiKey && !expired) {
+      apiKey = providerApiKey;
     }
   }
 } catch {
@@ -341,8 +343,13 @@ if (cli.flags.login) {
     /* ignore */
   }
 } else if (!apiKey) {
-  apiKey = await fetchApiKey(client.issuer, client.client_id);
+  if (provider.toLowerCase() === "openai") {
+    apiKey = await fetchApiKey(client.issuer, client.client_id);
+  } else {
+    apiKey = getApiKey(provider) ?? "";
+  }
 }
+
 // Ensure the API key is available as an environment variable for legacy code
 process.env["OPENAI_API_KEY"] = apiKey;
 
