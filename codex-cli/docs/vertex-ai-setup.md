@@ -35,6 +35,13 @@ export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account-key.json"
 export GOOGLE_CLOUD_PROJECT="your-project-id"
 ```
 
+**Security Note**: Service account key files contain sensitive credentials. Please:
+- Store key files with restricted permissions (e.g., `chmod 600 key.json`)
+- Never commit key files to version control
+- Use a secure secret management system in production
+- Consider using Workload Identity or other keyless authentication methods when possible
+- Rotate keys regularly and revoke unused keys
+
 ### Option 3: Google Cloud Compute Resources
 
 If running on Google Cloud (Compute Engine, Cloud Run, etc.), authentication happens automatically through the metadata service.
@@ -46,7 +53,7 @@ If running on Google Cloud (Compute Engine, Cloud Run, etc.), authentication hap
 ```json
 {
   "provider": "vertex",
-  "model": "gemini-1.5-pro-002"
+  "model": "gemini-2.0-flash"
 }
 ```
 
@@ -58,14 +65,22 @@ export VERTEX_LOCATION="us-central1"
 
 ## Available Models
 
-Vertex AI provides access to Google's Gemini models:
+Vertex AI provides access to Google's Gemini models (as of May 2025):
 
-- `gemini-1.5-pro-002` - Most capable model
-- `gemini-1.5-flash-002` - Faster, more cost-effective model
+### Latest Generation (Recommended)
+- `gemini-2.0-flash` - More capable model for complex tasks (alias points to `gemini-2.0-flash-001`)
+- `gemini-2.0-flash-lite` - Efficient model for speed/cost optimization (alias points to `gemini-2.0-flash-lite-001`)
+
+### Previous Generation (Auto-updated aliases)
+- `gemini-2.0-flash` - Auto-updated alias (currently points to `gemini-2.0-flash-002`)
+- `gemini-2.0-flash-lite` - Auto-updated alias (currently points to `gemini-2.0-flash-lite-002`)
+
+### Preview Models
+- Google also offers Gemini 2.5 Pro and Flash models in preview for cutting-edge capabilities
 
 The provider automatically maps common model names:
-- `gpt-4` → `gemini-1.5-pro-002`
-- `gpt-3.5-turbo` → `gemini-1.5-flash-002`
+- `gpt-4` → `gemini-2.0-flash`
+- `gpt-3.5-turbo` → `gemini-2.0-flash-lite`
 
 ## Usage
 
@@ -78,7 +93,7 @@ codex --provider vertex "explain this code"
 Or with a specific model:
 
 ```bash
-codex --provider vertex --model gemini-1.5-flash-002 "write a function to..."
+codex --provider vertex --model gemini-2.0-flash-lite "write a function to..."
 ```
 
 ## Troubleshooting
@@ -133,7 +148,8 @@ You can override the default model mappings in your config:
     "vertex": {
       "customConfig": {
         "modelMapping": {
-          "my-custom-model": "gemini-1.5-pro-002"
+          "my-custom-model": "gemini-2.0-flash",
+          "gpt-4": "gemini-2.0-flash"  // Override default mapping
         }
       }
     }

@@ -6,6 +6,16 @@
 import type OpenAI from "openai";
 
 /**
+ * Custom error class for unknown provider errors
+ */
+export class UnknownProviderError extends Error {
+  constructor(providerId: string) {
+    super(`Unknown provider: ${providerId}`);
+    this.name = "UnknownProviderError";
+  }
+}
+
+/**
  * Authentication types supported by providers
  */
 export enum AuthType {
@@ -64,12 +74,14 @@ export interface ProviderAdapter {
 /**
  * Factory for creating auth providers
  */
-export type AuthProviderFactory = (config: ProviderConfig) => AuthProvider | Promise<AuthProvider>;
+export type AuthProviderFactory = (
+  config: ProviderConfig,
+) => AuthProvider | Promise<AuthProvider>;
 
 /**
  * Factory for creating provider adapters
  */
 export type ProviderAdapterFactory = (
   config: ProviderConfig,
-  authProvider: AuthProvider
+  authProvider: AuthProvider,
 ) => ProviderAdapter;

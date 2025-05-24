@@ -7,11 +7,14 @@ import { providerConfigs } from "../providers/configs.js";
 export const providers: Record<
   string,
   { name: string; baseURL: string; envKey: string }
-> = Object.entries(providerConfigs).reduce((acc, [id, config]) => {
-  acc[id] = {
-    name: config.name,
-    baseURL: config.baseURL,
-    envKey: config.envKey,
-  };
-  return acc;
-}, {} as Record<string, { name: string; baseURL: string; envKey: string }>);
+> = Object.entries(providerConfigs).reduce(
+  (acc, [id, config]) => {
+    acc[id] = {
+      name: config.name,
+      baseURL: config.baseURL,
+      envKey: config.envKey,
+    };
+    return acc;
+  },
+  {} as Record<string, { name: string; baseURL: string; envKey: string }>,
+);

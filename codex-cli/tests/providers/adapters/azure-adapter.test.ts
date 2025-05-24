@@ -1,6 +1,10 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
 import { AzureAdapter } from "../../../src/providers/adapters/azure-adapter.js";
-import { AuthType, type ProviderConfig, type AuthProvider } from "../../../src/providers/types.js";
+import {
+  AuthType,
+  type ProviderConfig,
+  type AuthProvider,
+} from "../../../src/providers/types.js";
 import { AzureOpenAI } from "openai";
 
 // Save original env vars
@@ -12,7 +16,7 @@ vi.mock("openai", () => {
   class FakeAzureOpenAI {
     constructor(public config: any) {}
   }
-  
+
   return {
     __esModule: true,
     AzureOpenAI: FakeAzureOpenAI,
@@ -57,18 +61,19 @@ describe("AzureAdapter", () => {
     test("throws error when no base URL is configured", async () => {
       const authProvider = new MockAuthProvider();
       const adapter = new AzureAdapter(azureConfig, authProvider);
-      
+
       await expect(adapter.createClient()).rejects.toThrow(
-        "Azure OpenAI requires a base URL. Please set the AZURE_BASE_URL environment variable"
+        "Azure OpenAI requires a base URL. Please set the AZURE_BASE_URL environment variable",
       );
     });
 
     test("succeeds when base URL is set via environment variable", async () => {
-      process.env["AZURE_BASE_URL"] = "https://my-resource.openai.azure.com/openai";
-      
+      process.env["AZURE_BASE_URL"] =
+        "https://my-resource.openai.azure.com/openai";
+
       const authProvider = new MockAuthProvider();
       const adapter = new AzureAdapter(azureConfig, authProvider);
-      
+
       // Should not throw
       const client = await adapter.createClient();
       expect(client).toBeInstanceOf(AzureOpenAI);
@@ -79,10 +84,10 @@ describe("AzureAdapter", () => {
         ...azureConfig,
         baseURL: "https://my-resource.openai.azure.com/openai",
       };
-      
+
       const authProvider = new MockAuthProvider();
       const adapter = new AzureAdapter(configWithURL, authProvider);
-      
+
       // Should not throw
       const client = await adapter.createClient();
       expect(client).toBeInstanceOf(AzureOpenAI);
@@ -93,12 +98,12 @@ describe("AzureAdapter", () => {
     test("creates AzureOpenAI client with correct configuration", async () => {
       process.env["AZURE_BASE_URL"] = "https://test.openai.azure.com/openai";
       process.env["AZURE_OPENAI_API_VERSION"] = "2025-03-01-preview";
-      
+
       const authProvider = new MockAuthProvider();
       const adapter = new AzureAdapter(azureConfig, authProvider);
-      
+
       const client = await adapter.createClient();
-      
+
       expect(client).toBeInstanceOf(AzureOpenAI);
       expect((client as any).config).toMatchObject({
         apiKey: "azure-test-key",
@@ -110,24 +115,24 @@ describe("AzureAdapter", () => {
     test("uses default API version when not specified", async () => {
       process.env["AZURE_BASE_URL"] = "https://test.openai.azure.com/openai";
       // Don't set AZURE_OPENAI_API_VERSION
-      
+
       const authProvider = new MockAuthProvider();
       const adapter = new AzureAdapter(azureConfig, authProvider);
-      
+
       const client = await adapter.createClient();
-      
+
       // Should use the default from config
       expect((client as any).config.apiVersion).toBe("2025-03-01-preview");
     });
 
     test("returns AzureOpenAI instance", async () => {
       process.env["AZURE_BASE_URL"] = "https://test.openai.azure.com/openai";
-      
+
       const authProvider = new MockAuthProvider();
       const adapter = new AzureAdapter(azureConfig, authProvider);
-      
+
       const client = await adapter.createClient();
-      
+
       expect(client).toBeInstanceOf(AzureOpenAI);
     });
   });

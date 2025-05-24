@@ -1,4 +1,8 @@
-import type { ProviderAdapter, ProviderConfig, AuthProvider } from "../types.js";
+import type {
+  ProviderAdapter,
+  ProviderConfig,
+  AuthProvider,
+} from "../types.js";
 
 import { OPENAI_TIMEOUT_MS } from "../../utils/config.js";
 import OpenAI from "openai";
@@ -15,10 +19,11 @@ export abstract class BaseAdapter implements ProviderAdapter {
   async createClient(): Promise<OpenAI> {
     await this.validateConfiguration();
     await this.authProvider.validate();
-    
+
     const authHeader = await this.authProvider.getAuthHeader();
     const baseURL = await this.getBaseURL();
-    const additionalHeaders = await this.authProvider.getAdditionalHeaders?.() || {};
+    const additionalHeaders =
+      (await this.authProvider.getAdditionalHeaders?.()) || {};
 
     return new OpenAI({
       apiKey: authHeader.replace("Bearer ", ""), // OpenAI SDK expects just the key
@@ -34,14 +39,14 @@ export abstract class BaseAdapter implements ProviderAdapter {
     // Check for environment variable override
     const envKey = `${this.config.id.toUpperCase()}_BASE_URL`;
     const baseURL = process.env[envKey] || this.config.baseURL;
-    
+
     if (!baseURL) {
       throw new Error(
         `No base URL configured for ${this.config.name}. ` +
-        `Please set the ${envKey} environment variable.`
+          `Please set the ${envKey} environment variable.`,
       );
     }
-    
+
     return baseURL;
   }
 

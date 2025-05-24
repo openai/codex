@@ -20,7 +20,7 @@ export class ApiKeyAuthProvider implements AuthProvider {
     if (!this.apiKey || this.apiKey.trim() === "") {
       throw new Error(
         `No API key configured for ${this.providerName}. ` +
-        `Please set the appropriate environment variable or update your config.`,
+          `Please set the appropriate environment variable or update your config.`,
       );
     }
   }

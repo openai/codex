@@ -8,9 +8,9 @@ import {
   OPENAI_ORGANIZATION,
   OPENAI_PROJECT,
 } from "./config.js";
-import { createProviderAdapter } from "../providers/registry.js";
 import { providerConfigs } from "../providers/configs.js";
-import { AuthType } from "../providers/types.js";
+import { createProviderAdapter } from "../providers/registry.js";
+import { AuthType, UnknownProviderError } from "../providers/types.js";
 import OpenAI, { AzureOpenAI } from "openai";
 
 type OpenAIClientConfig = {
@@ -43,7 +43,7 @@ export function createOpenAIClient(
   if (providerConfig && providerConfig.authType === AuthType.OAUTH) {
     throw new Error(
       `Provider '${providerId}' requires async initialization. ` +
-      `Please use createOpenAIClientAsync() instead.`
+        `Please use createOpenAIClientAsync() instead.`,
     );
   }
 
@@ -78,14 +78,14 @@ export async function createOpenAIClientAsync(
   config: OpenAIClientConfig | AppConfig,
 ): Promise<OpenAI> {
   const providerId = config.provider || "openai";
-  
+
   try {
     // Create provider adapter
     const adapter = await createProviderAdapter(providerId);
-    
+
     // Create the client
     const client = await adapter.createClient();
-    
+
     // Add global headers if this is OpenAI
     if (providerId === "openai" && (OPENAI_ORGANIZATION || OPENAI_PROJECT)) {
       const headers: Record<string, string> = {};
@@ -95,19 +95,22 @@ export async function createOpenAIClientAsync(
       if (OPENAI_PROJECT) {
         headers["OpenAI-Project"] = OPENAI_PROJECT;
       }
-      
+
       // Update default headers
-      (client as unknown as { defaultHeaders: Record<string, string> }).defaultHeaders = {
-        ...(client as unknown as { defaultHeaders: Record<string, string> }).defaultHeaders,
+      (
+        client as unknown as { defaultHeaders: Record<string, string> }
+      ).defaultHeaders = {
+        ...(client as unknown as { defaultHeaders: Record<string, string> })
+          .defaultHeaders,
         ...headers,
       };
     }
-    
+
     return client;
   } catch (error) {
     // For backward compatibility, create a basic client if provider is not found
     // This allows custom providers to still work
-    if ((error as Error).message.includes("Unknown provider")) {
+    if (error instanceof UnknownProviderError) {
       return new OpenAI({
         apiKey: getApiKey(providerId),
         baseURL: getBaseUrl(providerId),

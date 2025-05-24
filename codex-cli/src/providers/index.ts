@@ -3,14 +3,14 @@
  * with various authentication methods.
  */
 
-export { 
+export {
   AuthType,
   type ProviderConfig,
   type AuthProvider,
   type ProviderAdapter,
 } from "./types.js";
 
-export { 
+export {
   createProviderAdapter,
   getProviderConfig,
   providerConfigs,

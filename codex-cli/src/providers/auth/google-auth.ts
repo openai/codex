@@ -25,7 +25,7 @@ export class GoogleAuthProvider implements AuthProvider {
     // Get new token
     const client = await this.authClient.getClient();
     const tokenResponse = await client.getAccessToken();
-    
+
     if (!tokenResponse.token) {
       throw new Error("Failed to get access token from Google Auth");
     }
@@ -46,9 +46,9 @@ export class GoogleAuthProvider implements AuthProvider {
       log(`Google Auth validation failed: ${error}`);
       throw new Error(
         "Failed to authenticate with Google Cloud. Please ensure you have valid credentials:\n" +
-        "- Run 'gcloud auth application-default login' to use your user credentials\n" +
-        "- Or set GOOGLE_APPLICATION_CREDENTIALS to point to a service account key file\n" +
-        "- Or run this on a Google Cloud compute resource with appropriate IAM roles",
+          "- Run 'gcloud auth application-default login' to use your user credentials\n" +
+          "- Or set GOOGLE_APPLICATION_CREDENTIALS to point to a service account key file\n" +
+          "- Or run this on a Google Cloud compute resource with appropriate IAM roles",
       );
     }
   }

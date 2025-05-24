@@ -15,10 +15,12 @@ vi.mock("google-auth-library", () => {
         return googleAuthState.getClientSpy();
       }
       return {
-        getAccessToken: googleAuthState.getAccessTokenSpy || (() => ({ token: "fake-token" })),
+        getAccessToken:
+          googleAuthState.getAccessTokenSpy ||
+          (() => ({ token: "fake-token" })),
       };
     }
-    
+
     async getProjectId() {
       return googleAuthState.getProjectIdSpy?.() ?? null;
     }
@@ -45,7 +47,7 @@ describe("GoogleAuthProvider", () => {
 
     const provider = new GoogleAuthProvider();
     const authHeader = await provider.getAuthHeader();
-    
+
     expect(authHeader).toBe("Bearer test-access-token");
   });
 
@@ -56,12 +58,12 @@ describe("GoogleAuthProvider", () => {
     googleAuthState.getAccessTokenSpy = getAccessTokenSpy;
 
     const provider = new GoogleAuthProvider();
-    
+
     // First call
     const authHeader1 = await provider.getAuthHeader();
     expect(authHeader1).toBe("Bearer cached-token");
     expect(getAccessTokenSpy).toHaveBeenCalledTimes(1);
-    
+
     // Second call should use cache
     const authHeader2 = await provider.getAuthHeader();
     expect(authHeader2).toBe("Bearer cached-token");
@@ -69,23 +71,24 @@ describe("GoogleAuthProvider", () => {
   });
 
   test("refreshes token when cache expires", async () => {
-    const getAccessTokenSpy = vi.fn()
+    const getAccessTokenSpy = vi
+      .fn()
       .mockResolvedValueOnce({ token: "token-1" })
       .mockResolvedValueOnce({ token: "token-2" });
     googleAuthState.getAccessTokenSpy = getAccessTokenSpy;
 
     const provider = new GoogleAuthProvider();
-    
+
     // First call
     const authHeader1 = await provider.getAuthHeader();
     expect(authHeader1).toBe("Bearer token-1");
-    
+
     // Manually expire the cache by setting expiry to past
     (provider as any).cachedToken = {
       token: "token-1",
       expiry: Date.now() - 1000, // 1 second ago
     };
-    
+
     // Second call should fetch new token
     const authHeader2 = await provider.getAuthHeader();
     expect(authHeader2).toBe("Bearer token-2");
@@ -98,9 +101,9 @@ describe("GoogleAuthProvider", () => {
     });
 
     const provider = new GoogleAuthProvider();
-    
+
     await expect(provider.getAuthHeader()).rejects.toThrow(
-      "Failed to get access token from Google Auth"
+      "Failed to get access token from Google Auth",
     );
   });
 
@@ -110,29 +113,31 @@ describe("GoogleAuthProvider", () => {
     });
 
     const provider = new GoogleAuthProvider();
-    
+
     // Should not throw
     await expect(provider.validate()).resolves.toBeUndefined();
   });
 
   test("validation throws error when auth client creation fails", async () => {
-    googleAuthState.getClientSpy = vi.fn().mockRejectedValue(
-      new Error("No credentials found")
-    );
+    googleAuthState.getClientSpy = vi
+      .fn()
+      .mockRejectedValue(new Error("No credentials found"));
 
     const provider = new GoogleAuthProvider();
-    
+
     await expect(provider.validate()).rejects.toThrow(
-      "Failed to authenticate with Google Cloud"
+      "Failed to authenticate with Google Cloud",
     );
   });
 
   test("getProjectId returns project ID from auth client", async () => {
-    googleAuthState.getProjectIdSpy = vi.fn().mockResolvedValue("test-project-123");
+    googleAuthState.getProjectIdSpy = vi
+      .fn()
+      .mockResolvedValue("test-project-123");
 
     const provider = new GoogleAuthProvider();
     const projectId = await provider.getProjectId();
-    
+
     expect(projectId).toBe("test-project-123");
   });
 
@@ -141,18 +146,18 @@ describe("GoogleAuthProvider", () => {
 
     const provider = new GoogleAuthProvider();
     const projectId = await provider.getProjectId();
-    
+
     expect(projectId).toBeNull();
   });
 
   test("getProjectId returns null when auth client throws", async () => {
-    googleAuthState.getProjectIdSpy = vi.fn().mockRejectedValue(
-      new Error("No project ID")
-    );
+    googleAuthState.getProjectIdSpy = vi
+      .fn()
+      .mockRejectedValue(new Error("No project ID"));
 
     const provider = new GoogleAuthProvider();
     const projectId = await provider.getProjectId();
-    
+
     expect(projectId).toBeNull();
   });
 });
