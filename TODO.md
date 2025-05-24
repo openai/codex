@@ -282,6 +282,292 @@ Implementation of a comprehensive lifecycle hooks system for Codex that allows e
 
 ---
 
+## Parallel Development Strategy
+
+### 👥 Two-Person Development Plan
+
+To enable parallel development, the remaining work has been split into two independent workstreams:
+
+#### 🔵 **Developer A: Core Execution Engine** (Backend Focus)
+
+- Phase 2: Hook Execution Engine
+- Phase 3: Event System Integration
+- Phase 6: Testing and Validation
+
+#### 🟢 **Developer B: Client Integration & Documentation** (Frontend/Docs Focus)
+
+- Phase 4: Client-Side Integration
+- Phase 5: Configuration and Documentation
+- Phase 7: Advanced Features
+
+### 📋 Task Assignment Details
+
+See the **WORKSTREAM ASSIGNMENTS** section below for detailed task breakdowns.
+
 ## Getting Started
 
-To begin implementation, start with **Phase 1.1: Hook Type Definitions and Core Types**. This will establish the foundational types and structures that all other components will build upon.
+**Phase 1 Complete** ✅ - Foundation established with types and registry system.
+
+**Next Steps**: Choose your workstream and begin with the assigned Phase 2 or Phase 4 tasks.
+
+---
+
+# WORKSTREAM ASSIGNMENTS
+
+## 🔵 Developer A: Core Execution Engine (Backend Focus)
+
+### Responsibilities
+
+- Hook execution coordination and management
+- Event system integration with existing Codex architecture
+- Core testing infrastructure and validation
+- Performance optimization and error handling
+
+### Primary Files to Work On
+
+- `codex-rs/core/src/hooks/manager.rs`
+- `codex-rs/core/src/hooks/executor.rs`
+- `codex-rs/core/src/hooks/executors/` (new directory)
+- `codex-rs/core/src/protocol.rs`
+- `codex-rs/core/src/codex.rs`
+- `codex-rs/core/src/agent.rs`
+- `codex-rs/exec/src/event_processor.rs`
+
+### Assigned Phases
+
+#### 🔄 **Phase 2: Hook Execution Engine** (Start Here)
+
+- **2.1 Core Hook Manager** 🔴 HIGH PRIORITY
+
+  - [ ] Complete hook execution coordination in `manager.rs`
+  - [ ] Implement event subscription and routing
+  - [ ] Add error handling and logging
+  - [ ] Performance monitoring and metrics
+
+- **2.2 Hook Executor Framework**
+
+  - [ ] Complete timeout management and cancellation in `executor.rs`
+  - [ ] Implement error isolation and recovery
+  - [ ] Add execution mode support (blocking/non-blocking, parallel/sequential)
+  - [ ] Hook execution result aggregation
+
+- **2.3 Hook Executor Implementations**
+  - [ ] Create `codex-rs/core/src/hooks/executors/mod.rs`
+  - [ ] Implement `ScriptExecutor` in `executors/script.rs`
+  - [ ] Implement `WebhookExecutor` in `executors/webhook.rs`
+  - [ ] Implement `McpToolExecutor` in `executors/mcp.rs`
+
+#### 🔄 **Phase 3: Event System Integration**
+
+- **3.1 Protocol Extensions**
+
+  - [ ] Add lifecycle event types to `protocol.rs`
+  - [ ] Add hook execution events for monitoring
+  - [ ] Update event serialization/deserialization
+
+- **3.2 Core Integration Points**
+
+  - [ ] Integrate hook manager in `codex.rs`
+  - [ ] Add hook trigger points in `agent.rs`
+  - [ ] Session and task lifecycle hooks
+
+- **3.3 Execution Integration**
+  - [ ] Add hook execution to `event_processor.rs`
+  - [ ] Command execution hooks (before/after)
+  - [ ] Patch application hooks (before/after)
+  - [ ] MCP tool execution hooks
+
+#### 🔄 **Phase 6: Testing and Validation**
+
+- **6.1 Unit Tests**
+
+  - [ ] Test hook execution coordination
+  - [ ] Test timeout and error handling
+  - [ ] Test individual hook executors
+
+- **6.2 Integration Tests**
+
+  - [ ] Test hook execution with real events
+  - [ ] Test hook error handling and recovery
+  - [ ] Test performance impact
+
+- **6.3 End-to-End Tests**
+  - [ ] Test complete hook workflows
+  - [ ] Test integration with existing Codex functionality
+
+---
+
+## 🟢 Developer B: Client Integration & Documentation (Frontend/Docs Focus)
+
+### Responsibilities
+
+- Client-side hook support and CLI integration
+- Documentation, examples, and user-facing features
+- Advanced features and monitoring capabilities
+- Configuration templates and user experience
+
+### Primary Files to Work On
+
+- `codex-cli/src/utils/agent/agent-loop.ts`
+- `docs/` (new directory)
+- `examples/` (new directory)
+- CLI configuration files
+- Documentation and example scripts
+
+### Assigned Phases
+
+#### 🔄 **Phase 4: Client-Side Integration** (Start Here)
+
+- **4.1 TypeScript/CLI Integration** 🔴 HIGH PRIORITY
+
+  - [ ] Add client-side hook support to `agent-loop.ts`
+  - [ ] Hook event handling in agent loop
+  - [ ] Client-side hook configuration
+  - [ ] Hook execution status reporting
+
+- **4.2 Event Processing Updates**
+  - [ ] Update CLI configuration to support hooks
+  - [ ] Command line flags for hook control
+  - [ ] Hook configuration file discovery
+  - [ ] Hook status and debugging output
+
+#### 🔄 **Phase 5: Configuration and Documentation**
+
+- **5.1 Configuration System**
+
+  - [ ] Create default `hooks.toml` configuration template
+  - [ ] Add configuration validation and error reporting
+  - [ ] Support for profile-specific hook configurations
+  - [ ] Environment-based hook configuration overrides
+
+- **5.2 Example Hooks and Scripts**
+
+  - [ ] Create `examples/hooks/` directory with example hook scripts
+  - [ ] Session logging hook example
+  - [ ] Security scanning hook example
+  - [ ] Slack notification webhook example
+  - [ ] File backup hook example
+  - [ ] Analytics/metrics collection hook example
+  - [ ] Create hook script templates for common use cases
+
+- **5.3 Documentation**
+  - [ ] Create `docs/hooks.md` - Comprehensive hooks documentation
+  - [ ] Hook system overview and architecture
+  - [ ] Configuration reference
+  - [ ] Hook types and executors
+  - [ ] Security considerations
+  - [ ] Troubleshooting guide
+  - [ ] Update main README.md with hooks section
+  - [ ] Create hook development guide
+  - [ ] Add API documentation for hook development
+
+#### 🔄 **Phase 7: Advanced Features**
+
+- **7.1 Advanced Hook Features**
+
+  - [ ] Hook dependency management and ordering
+  - [ ] Hook result chaining and data passing
+  - [ ] Hook execution metrics and monitoring
+  - [ ] Hook execution history and logging
+
+- **7.2 Additional Hook Types**
+
+  - [ ] Database hook executor (for logging to databases)
+  - [ ] Message queue hook executor (for async processing)
+  - [ ] File system hook executor (for file operations)
+  - [ ] Custom plugin hook executor (for extensibility)
+
+- **7.3 Management and Monitoring**
+  - [ ] Hook execution dashboard/monitoring
+  - [ ] Hook performance metrics collection
+  - [ ] Hook error reporting and alerting
+  - [ ] Hook configuration management tools
+
+---
+
+## 🔄 Coordination Points
+
+### Shared Dependencies
+
+Both developers will need to coordinate on these shared components:
+
+1. **Hook Types** (`types.rs`) - Already complete ✅
+2. **Hook Context** (`context.rs`) - Already complete ✅
+3. **Hook Configuration** (`config.rs`) - Already complete ✅
+4. **Hook Registry** (`registry.rs`) - Already complete ✅
+
+### Communication Protocol
+
+#### Daily Sync Points
+
+- **Morning Standup**: Share progress and identify any blocking dependencies
+- **End of Day**: Commit progress and update TODO checkboxes
+
+#### Merge Strategy
+
+- **Developer A**: Create feature branches like `feat/hook-execution-engine`
+- **Developer B**: Create feature branches like `feat/hook-client-integration`
+- **Regular Merges**: Merge completed phases to avoid large conflicts
+
+#### Conflict Resolution
+
+- **File Conflicts**: Developer A owns backend files, Developer B owns frontend/docs
+- **Shared Files**: Coordinate changes via GitHub issues or direct communication
+- **Testing**: Both developers should run full test suite before merging
+
+### Branch Strategy
+
+```bash
+# Developer A workflow
+git checkout -b feat/hook-execution-engine
+# Work on Phase 2 tasks
+git commit -m "feat: implement hook execution coordination"
+git push origin feat/hook-execution-engine
+# Create PR when phase complete
+
+# Developer B workflow
+git checkout -b feat/hook-client-integration
+# Work on Phase 4 tasks
+git commit -m "feat: add client-side hook support"
+git push origin feat/hook-client-integration
+# Create PR when phase complete
+```
+
+### Success Metrics
+
+#### Developer A Success Criteria
+
+- [ ] Hooks execute successfully with proper error handling
+- [ ] Performance impact < 5% on normal Codex operations
+- [ ] All hook types (script, webhook, MCP) working
+- [ ] Integration tests passing
+
+#### Developer B Success Criteria
+
+- [ ] CLI users can easily configure and use hooks
+- [ ] Comprehensive documentation with examples
+- [ ] Hook configuration validation and helpful error messages
+- [ ] Advanced features enhance user experience
+
+---
+
+## 📊 Progress Tracking
+
+### Developer A Progress
+
+- [ ] **Phase 2 Complete**: Hook Execution Engine (0/3 sections)
+- [ ] **Phase 3 Complete**: Event System Integration (0/3 sections)
+- [ ] **Phase 6 Complete**: Testing and Validation (0/3 sections)
+
+### Developer B Progress
+
+- [ ] **Phase 4 Complete**: Client-Side Integration (0/2 sections)
+- [ ] **Phase 5 Complete**: Configuration and Documentation (0/3 sections)
+- [ ] **Phase 7 Complete**: Advanced Features (0/3 sections)
+
+### Overall Project Progress
+
+- [x] **Phase 1 Complete**: Core Infrastructure (3/3 sections) ✅
+- [ ] **Phases 2-7 Complete**: Parallel Development (0/14 sections)
+
+**Total Progress: 3/17 sections complete (17.6%)**
