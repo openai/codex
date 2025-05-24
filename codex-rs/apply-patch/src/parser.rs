@@ -28,7 +28,7 @@ use std::path::PathBuf;
 use thiserror::Error;
 
 const BEGIN_PATCH_MARKER: &str = "*** Begin Patch";
-const END_PATCH_MARKER: &str = "*** End Patch";
+pub(crate) const END_PATCH_MARKER: &str = "*** End Patch";
 const ADD_FILE_MARKER: &str = "*** Add File: ";
 const DELETE_FILE_MARKER: &str = "*** Delete File: ";
 const UPDATE_FILE_MARKER: &str = "*** Update File: ";
@@ -96,16 +96,19 @@ pub struct UpdateFileChunk {
 
 pub fn parse_patch(patch: &str) -> Result<Vec<Hunk>, ParseError> {
     let lines: Vec<&str> = patch.trim().lines().collect();
-    if lines.is_empty() || lines[0] != BEGIN_PATCH_MARKER {
-        return Err(InvalidPatchError(String::from(
-            "The first line of the patch must be '*** Begin Patch'",
-        )));
-    }
-    let last_line_index = lines.len() - 1;
-    if lines[last_line_index] != END_PATCH_MARKER {
-        return Err(InvalidPatchError(String::from(
-            "The last line of the patch must be '*** End Patch'",
-        )));
+    let last_line_index = lines.len().saturating_sub(1);
+    if lines.len() < 2
+        || lines[0] != BEGIN_PATCH_MARKER
+        || lines[last_line_index] != END_PATCH_MARKER
+    {
+        let reason = if lines.len() < 2 {
+            "Patch text must have at least two lines."
+        } else if lines[0] != BEGIN_PATCH_MARKER {
+            "Patch text must start with the correct patch prefix."
+        } else {
+            "Patch text must end with the correct patch suffix."
+        };
+        return Err(InvalidPatchError(reason.to_string()));
     }
     let mut hunks: Vec<Hunk> = Vec::new();
     let mut remaining_lines = &lines[1..last_line_index];
@@ -314,13 +317,19 @@ fn test_parse_patch() {
     assert_eq!(
         parse_patch("bad"),
         Err(InvalidPatchError(
-            "The first line of the patch must be '*** Begin Patch'".to_string()
+            "Patch text must have at least two lines.".to_string()
+        ))
+    );
+    assert_eq!(
+        parse_patch("*** Something else\n*** End Patch"),
+        Err(InvalidPatchError(
+            "Patch text must start with the correct patch prefix.".to_string()
         ))
     );
     assert_eq!(
         parse_patch("*** Begin Patch\nbad"),
         Err(InvalidPatchError(
-            "The last line of the patch must be '*** End Patch'".to_string()
+            "Patch text must end with the correct patch suffix.".to_string()
         ))
     );
     assert_eq!(

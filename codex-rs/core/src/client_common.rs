@@ -11,7 +11,7 @@ use tokio::sync::mpsc;
 
 /// The `instructions` field in the payload sent to a model should always start
 /// with this content.
-const BASE_INSTRUCTIONS: &str = include_str!("../prompt.md");
+pub(crate) const BASE_INSTRUCTIONS: &str = include_str!("../prompt.md");
 
 /// API request payload for a single model turn.
 #[derive(Default, Debug, Clone)]
