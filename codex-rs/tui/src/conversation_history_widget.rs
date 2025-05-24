@@ -344,7 +344,7 @@ impl WidgetRef for ConversationHistoryWidget {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let (title, border_style) = if self.has_input_focus {
             (
-                "Messages (↑/↓ or j/k = line,  b/space = page)",
+                "Messages (↑/↓ or j/k = line, b/space = page)",
                 Style::default().fg(Color::LightYellow),
             )
         } else {
@@ -372,8 +372,7 @@ impl WidgetRef for ConversationHistoryWidget {
             return; // Nothing to draw – avoid division by zero.
         }
 
-        // Recompute cache if the effective width changed.
-        let num_lines: usize = if self.cached_width.get() != effective_width {
+        if self.cached_width.get() != effective_width {
             self.cached_width.set(effective_width);
 
             let mut num_lines: usize = 0;
@@ -382,15 +381,16 @@ impl WidgetRef for ConversationHistoryWidget {
                 num_lines += count;
                 entry.line_count.set(count);
             }
-            num_lines
+            self.num_rendered_lines.set(num_lines);
         } else {
-            self.entries.iter().map(|e| e.line_count.get()).sum()
-        };
+            let num_lines: usize = self.entries.iter().map(|e| e.line_count.get()).sum();
+            self.num_rendered_lines.set(num_lines);
+        }
 
         // Determine the scroll position. Note the existing value of
         // `self.scroll_position` could exceed the maximum scroll offset if the
         // user made the window wider since the last render.
-        let max_scroll = num_lines.saturating_sub(viewport_height);
+        let max_scroll = self.num_rendered_lines.get().saturating_sub(viewport_height);
         let scroll_pos = if self.scroll_position == usize::MAX {
             max_scroll
         } else {
@@ -469,9 +469,7 @@ impl WidgetRef for ConversationHistoryWidget {
         // Always render a scrollbar *track* so that the reserved column is
         // visually filled, even when the content fits within the viewport.
         // We only draw the *thumb* when the content actually overflows.
-
-        let overflow = num_lines.saturating_sub(viewport_height);
-
+        let overflow = self.num_rendered_lines.get().saturating_sub(viewport_height);
         let mut scroll_state = ScrollbarState::default()
             // The Scrollbar widget expects the *content* height minus the
             // viewport height.  When there is no overflow we still provide 0
@@ -479,41 +477,27 @@ impl WidgetRef for ConversationHistoryWidget {
             .content_length(overflow)
             .position(scroll_pos);
 
-        {
-            // Choose a thumb color that stands out only when this pane has focus so that the
-            // user’s attention is naturally drawn to the active viewport. When unfocused we show
-            // a low-contrast thumb so the scrollbar fades into the background without becoming
-            // invisible.
-            let thumb_style = if self.has_input_focus {
-                Style::reset().fg(Color::LightYellow)
-            } else {
-                Style::reset().fg(Color::Gray)
-            };
+        let thumb_style = if self.has_input_focus {
+            Style::reset().fg(Color::LightYellow)
+        } else {
+            Style::reset().fg(Color::Gray)
+        };
 
-            // By default the Scrollbar widget inherits any style that was
-            // present in the underlying buffer cells. That means if a colored
-            // line happens to be underneath the scrollbar, the track (and
-            // potentially the thumb) adopt that color. Explicitly setting the
-            // track/thumb styles ensures we always draw the scrollbar with a
-            // consistent palette regardless of what content is behind it.
-            StatefulWidget::render(
-                Scrollbar::new(ScrollbarOrientation::VerticalRight)
-                    .begin_symbol(Some("↑"))
-                    .end_symbol(Some("↓"))
-                    .begin_style(Style::reset().fg(Color::DarkGray))
-                    .end_style(Style::reset().fg(Color::DarkGray))
-                    .thumb_symbol("█")
-                    .thumb_style(thumb_style)
-                    .track_symbol(Some("│"))
-                    .track_style(Style::reset().fg(Color::DarkGray)),
-                inner,
-                buf,
-                &mut scroll_state,
-            );
-        }
+        StatefulWidget::render(
+            Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(Some("↑"))
+                .end_symbol(Some("↓"))
+                .begin_style(Style::reset().fg(Color::DarkGray))
+                .end_style(Style::reset().fg(Color::DarkGray))
+                .thumb_symbol("█")
+                .thumb_style(thumb_style)
+                .track_symbol(Some("│"))
+                .track_style(Style::reset().fg(Color::DarkGray)),
+            inner,
+            buf,
+            &mut scroll_state,
+        );
 
-        // Update auxiliary stats that the scroll handlers rely on.
-        self.num_rendered_lines.set(num_lines);
         self.last_viewport_height.set(viewport_height);
     }
 }

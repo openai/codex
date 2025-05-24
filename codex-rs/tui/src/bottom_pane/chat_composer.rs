@@ -1,5 +1,4 @@
 use crossterm::event::KeyEvent;
-use ratatui::buffer::Buffer;
 use ratatui::layout::Alignment;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -8,7 +7,6 @@ use ratatui::text::Line;
 use ratatui::widgets::BorderType;
 use ratatui::widgets::Borders;
 use ratatui::widgets::Widget;
-use ratatui::widgets::WidgetRef;
 use tui_textarea::Input;
 use tui_textarea::Key;
 use tui_textarea::TextArea;
@@ -37,7 +35,7 @@ pub(crate) struct ChatComposer<'a> {
     history: ChatComposerHistory,
 }
 
-impl ChatComposer<'_> {
+impl<'a> ChatComposer<'a> {
     pub fn new(has_input_focus: bool, app_event_tx: AppEventSender) -> Self {
         let mut textarea = TextArea::default();
         textarea.set_placeholder_text("send a message");
@@ -290,33 +288,18 @@ impl ChatComposer<'_> {
     pub(crate) fn is_command_popup_visible(&self) -> bool {
         self.command_popup.is_some()
     }
+
+    pub fn textarea(&self) -> &TextArea<'a> {
+        &self.textarea
+    }
+
+    pub fn textarea_mut(&mut self) -> &mut TextArea<'a> {
+        &mut self.textarea
+    }
 }
 
-impl WidgetRef for &ChatComposer<'_> {
-    fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        if let Some(popup) = &self.command_popup {
-            let popup_height = popup.calculate_required_height(&area);
-
-            // Split the provided rect so that the popup is rendered at the
-            // *top* and the textarea occupies the remaining space below.
-            let popup_rect = Rect {
-                x: area.x,
-                y: area.y,
-                width: area.width,
-                height: popup_height.min(area.height),
-            };
-
-            let textarea_rect = Rect {
-                x: area.x,
-                y: area.y + popup_rect.height,
-                width: area.width,
-                height: area.height.saturating_sub(popup_rect.height),
-            };
-
-            popup.render(popup_rect, buf);
-            self.textarea.render(textarea_rect, buf);
-        } else {
-            self.textarea.render(area, buf);
-        }
+impl<'a> ratatui::widgets::WidgetRef for ChatComposer<'a> {
+    fn render_ref(&self, area: ratatui::layout::Rect, buf: &mut ratatui::buffer::Buffer) {
+        self.textarea.render(area, buf);
     }
 }

@@ -43,7 +43,7 @@ pub(crate) struct BottomPaneParams {
     pub(crate) has_input_focus: bool,
 }
 
-impl BottomPane<'_> {
+impl<'a> BottomPane<'a> {
     pub fn new(params: BottomPaneParams) -> Self {
         Self {
             composer: ChatComposer::new(params.has_input_focus, params.app_event_tx.clone()),
@@ -187,15 +187,23 @@ impl BottomPane<'_> {
             self.request_redraw();
         }
     }
+
+    pub fn composer_mut(&mut self) -> &mut ChatComposer<'a> {
+        &mut self.composer
+    }
+
+    pub fn composer(&self) -> &ChatComposer<'a> {
+        &self.composer
+    }
 }
 
-impl WidgetRef for &BottomPane<'_> {
+impl<'a> WidgetRef for BottomPane<'a> {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         // Show BottomPaneView if present.
         if let Some(ov) = &self.active_view {
             ov.render(area, buf);
         } else {
-            (&self.composer).render_ref(area, buf);
+            self.composer.render_ref(area, buf);
         }
     }
 }
