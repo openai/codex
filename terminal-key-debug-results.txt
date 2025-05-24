@@ -1,0 +1,26 @@
+Terminal Key Debug Results
+=========================
+
+Tested in: PowerShell, Git Bash, WSL
+
+---
+
+PowerShell:
+- Enter: input: "\r", key: { return: true, shift: true/false, ... } → Submits the message
+- Shift+Enter: input: "\r", key: { return: true, shift: true, ... } → Submits the message
+- Ctrl+J: Exits or not handled as newline
+
+Git Bash:
+- Enter: input: "\r", key: { return: true, shift: true/false, ... } → Submits the message
+- Shift+Enter: input: "\r", key: { return: true, shift: true, ... } → Submits the message
+- Ctrl+J: Exits or not handled as newline
+
+WSL:
+- Enter: input: "\r", key: { return: true, shift: true/false, ... } → Submits the message
+- Shift+Enter: input: "\r", key: { return: true, shift: true, ... } → Submits the message
+- Ctrl+J: input: "\n", key: { ... } → Inserts a new line
+
+Summary:
+- Most terminals do not support Shift+Enter for new lines; they treat it as Enter (submit).
+- Ctrl+J works for new lines only in WSL/Linux.
+- The CLI code is correct, but terminal limitations prevent multi-line input in most Windows terminals. 

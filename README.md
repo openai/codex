@@ -731,3 +731,7 @@ Have you discovered a vulnerability or have concerns about model output? Please 
 ## License
 
 This repository is licensed under the [Apache-2.0 License](LICENSE).
+
+## Terminal Limitations for Multi-line Input
+
+> **Note:** Most terminal emulators (especially on Windows) do not support Shift+Enter or Alt+Enter for inserting new lines in the Codex CLI input. These key combinations are often treated as plain Enter, which submits the message. For multi-line input, Ctrl+J may work in WSL or Linux terminals. For best results with multi-line editing, use WSL or a Linux terminal.
