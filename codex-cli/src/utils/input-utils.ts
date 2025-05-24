@@ -14,10 +14,15 @@ export async function createInputItem(
     type: "message",
   };
 
-  for (const filePath of images) {
+  for (const imagePath of images) {
     try {
+      // Resolve the path to an absolute path if it's not already
+      const resolvedPath = path.isAbsolute(imagePath)
+        ? imagePath
+        : path.resolve(process.cwd(), imagePath);
+
       /* eslint-disable no-await-in-loop */
-      const binary = await fs.readFile(filePath);
+      const binary = await fs.readFile(resolvedPath);
       const kind = await fileTypeFromBuffer(binary);
       /* eslint-enable no-await-in-loop */
       const encoded = binary.toString("base64");
@@ -30,7 +35,7 @@ export async function createInputItem(
     } catch (err) {
       inputItem.content.push({
         type: "input_text",
-        text: `[missing image: ${path.basename(filePath)}]`,
+        text: `[missing image: ${path.basename(imagePath)}]`,
       });
     }
   }
