@@ -11,7 +11,7 @@ import type { ReasoningEffort } from "openai/resources.mjs";
 
 import { AutoApprovalMode } from "./auto-approval-mode.js";
 import { log } from "./logger/log.js";
-import { providers } from "./providers.js";
+import { providers as defaultProviders } from "./providers.js";
 import { config as loadDotenv } from "dotenv";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { load as loadYaml, dump as dumpYaml } from "js-yaml";
@@ -111,10 +111,13 @@ export function getBaseUrl(provider: string = "openai"): string | undefined {
 
 export function getApiKey(provider: string = "openai"): string | undefined {
   const config = loadConfig();
-  const providersConfig = config.providers ?? providers;
+  const providersConfig = config.providers ?? defaultProviders;
   const providerInfo = providersConfig[provider.toLowerCase()];
   if (providerInfo) {
-    if (providerInfo.name === "Ollama") {
+    if (
+      providerInfo.name === "Ollama" ||
+      providerInfo.name === "Local LM Studio"
+    ) {
       return process.env[providerInfo.envKey] ?? "dummy";
     }
     return process.env[providerInfo.envKey];
@@ -521,7 +524,15 @@ export const loadConfig = (
   }
 
   // Merge default providers with user configured providers in the config.
-  config.providers = { ...providers, ...storedConfig.providers };
+  config.providers = {
+    ...defaultProviders,
+    local_lm_studio: {
+      name: "Local LM Studio",
+      baseURL: "http://localhost:1234/v1",
+      envKey: "LOCAL_LM_STUDIO_API_KEY",
+    },
+    ...storedConfig.providers,
+  };
 
   return config;
 };
