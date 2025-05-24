@@ -144,7 +144,10 @@ pub(crate) fn create_tool_for_codex_tool_call_param() -> Tool {
 impl CodexToolCallParam {
     /// Returns the initial user prompt to start the Codex conversation and the
     /// Config.
-    pub fn into_config(self) -> std::io::Result<(String, codex_core::config::Config)> {
+    pub fn into_config(
+        self,
+        codex_linux_sandbox_exe: Option<PathBuf>,
+    ) -> std::io::Result<(String, codex_core::config::Config)> {
         let Self {
             prompt,
             model,
@@ -167,6 +170,7 @@ impl CodexToolCallParam {
             sandbox_policy,
             disable_response_storage,
             model_provider: None,
+            codex_linux_sandbox_exe,
         };
 
         let cfg = codex_core::config::Config::load_with_overrides(overrides)?;

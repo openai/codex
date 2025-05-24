@@ -1,6 +1,8 @@
 use crate::config_profile::ConfigProfile;
 use crate::config_types::History;
 use crate::config_types::McpServerConfig;
+use crate::config_types::ShellEnvironmentPolicy;
+use crate::config_types::ShellEnvironmentPolicyToml;
 use crate::config_types::Tui;
 use crate::config_types::UriBasedFileOpener;
 use crate::flags::OPENAI_DEFAULT_MODEL;
@@ -36,6 +38,8 @@ pub struct Config {
     pub approval_policy: AskForApproval,
 
     pub sandbox_policy: SandboxPolicy,
+
+    pub shell_environment_policy: ShellEnvironmentPolicy,
 
     /// Disable server-side response storage (sends the full conversation
     /// context with every request). Currently necessary for OpenAI customers
@@ -94,6 +98,14 @@ pub struct Config {
 
     /// Collection of settings that are specific to the TUI.
     pub tui: Tui,
+
+    /// Path to the `codex-linux-sandbox` executable. This must be set if
+    /// [`crate::exec::SandboxType::LinuxSeccomp`] is used. Note that this
+    /// cannot be set in the config file: it must be set in code via
+    /// [`ConfigOverrides`].
+    ///
+    /// When this program is invoked, arg0 will be set to `codex-linux-sandbox`.
+    pub codex_linux_sandbox_exe: Option<PathBuf>,
 }
 
 /// Base config deserialized from ~/.codex/config.toml.
@@ -107,6 +119,9 @@ pub struct ConfigToml {
 
     /// Default approval policy for executing commands.
     pub approval_policy: Option<AskForApproval>,
+
+    #[serde(default)]
+    pub shell_environment_policy: ShellEnvironmentPolicyToml,
 
     // The `default` attribute ensures that the field is treated as `None` when
     // the key is omitted from the TOML. Without it, Serde treats the field as
@@ -215,6 +230,7 @@ pub struct ConfigOverrides {
     pub disable_response_storage: Option<bool>,
     pub model_provider: Option<String>,
     pub config_profile: Option<String>,
+    pub codex_linux_sandbox_exe: Option<PathBuf>,
 }
 
 impl Config {
@@ -251,6 +267,7 @@ impl Config {
             disable_response_storage,
             model_provider,
             config_profile: config_profile_key,
+            codex_linux_sandbox_exe,
         } = overrides;
 
         let config_profile = match config_profile_key.or(cfg.profile) {
@@ -302,6 +319,8 @@ impl Config {
             })?
             .clone();
 
+        let shell_environment_policy = cfg.shell_environment_policy.into();
+
         let resolved_cwd = {
             use std::env;
 
@@ -336,6 +355,7 @@ impl Config {
                 .or(cfg.approval_policy)
                 .unwrap_or_else(AskForApproval::default),
             sandbox_policy,
+            shell_environment_policy,
             disable_response_storage: disable_response_storage
                 .or(config_profile.disable_response_storage)
                 .or(cfg.disable_response_storage)
@@ -349,6 +369,7 @@ impl Config {
             history,
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
             tui: cfg.tui.unwrap_or_default(),
+            codex_linux_sandbox_exe,
         };
         Ok(config)
     }
@@ -677,6 +698,7 @@ disable_response_storage = true
                 model_provider: fixture.openai_provider.clone(),
                 approval_policy: AskForApproval::Never,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                shell_environment_policy: ShellEnvironmentPolicy::default(),
                 disable_response_storage: false,
                 instructions: None,
                 notify: None,
@@ -688,6 +710,7 @@ disable_response_storage = true
                 history: History::default(),
                 file_opener: UriBasedFileOpener::VsCode,
                 tui: Tui::default(),
+                codex_linux_sandbox_exe: None,
             },
             o3_profile_config
         );
@@ -714,6 +737,7 @@ disable_response_storage = true
             model_provider: fixture.openai_chat_completions_provider.clone(),
             approval_policy: AskForApproval::UnlessAllowListed,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            shell_environment_policy: ShellEnvironmentPolicy::default(),
             disable_response_storage: false,
             instructions: None,
             notify: None,
@@ -725,6 +749,7 @@ disable_response_storage = true
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
             tui: Tui::default(),
+            codex_linux_sandbox_exe: None,
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -766,6 +791,7 @@ disable_response_storage = true
             model_provider: fixture.openai_provider.clone(),
             approval_policy: AskForApproval::OnFailure,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            shell_environment_policy: ShellEnvironmentPolicy::default(),
             disable_response_storage: true,
             instructions: None,
             notify: None,
@@ -777,6 +803,7 @@ disable_response_storage = true
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
             tui: Tui::default(),
+            codex_linux_sandbox_exe: None,
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);
