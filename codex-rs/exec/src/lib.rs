@@ -3,6 +3,7 @@ mod event_processor;
 
 use std::io::IsTerminal;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 pub use cli::Cli;
@@ -18,12 +19,13 @@ use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::util::is_inside_git_repo;
 use event_processor::EventProcessor;
+use event_processor::print_config_summary;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
+pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
     let Cli {
         images,
         model,
@@ -68,8 +70,11 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
         },
         cwd: cwd.map(|p| p.canonicalize().unwrap_or(p)),
         model_provider: None,
+        codex_linux_sandbox_exe,
     };
     let config = Config::load_with_overrides(overrides)?;
+    // Print the effective configuration so users can see what Codex is using.
+    print_config_summary(&config, stdout_with_ansi);
 
     if !skip_git_repo_check && !is_inside_git_repo(&config) {
         eprintln!("Not inside a Git repo and --skip-git-repo-check was not specified.");
