@@ -45,6 +45,13 @@ import { createInputItem } from "./utils/input-utils";
 import { initLogger } from "./utils/logger/log";
 import { isModelSupportedForResponses } from "./utils/model-utils.js";
 import { parseToolCall } from "./utils/parsers";
+import { setSessionId, CLI_VERSION } from "./utils/session";
+import {
+  listSessions,
+  saveSession,
+  loadSession,
+  deleteSession,
+} from "./utils/session-manager";
 import { onExit, setInkRenderer } from "./utils/terminal";
 import chalk from "chalk";
 import { spawnSync } from "child_process";
@@ -66,9 +73,10 @@ initLogger();
 
 const cli = meow(
   `
-  Usage
+Usage
     $ codex [options] <prompt>
     $ codex completion <bash|zsh|fish>
+    $ codex session <list|save|load|delete> [id]
 
   Options
     --version                       Print version and exit
@@ -102,6 +110,12 @@ const cli = meow(
 
     --reasoning <effort>      Set the reasoning effort level (low, medium, high) (default: high)
 
+  Session Management Commands
+    $ codex session list                List all saved sessions
+    $ codex session save [name]         Save current session with optional name
+    $ codex session load <id>           Load a previously saved session
+    $ codex session delete <id>         Delete a saved session
+
   Dangerous options
     --dangerously-auto-approve-everything
                                Skip all confirmation prompts and execute commands without
@@ -116,6 +130,9 @@ const cli = meow(
     $ codex "Write and run a python program that prints ASCII art"
     $ codex -q "fix build issues"
     $ codex completion bash
+    $ codex session list
+    $ codex session save my-feature-branch
+    $ codex session load session-1234567890
 `,
   {
     importMeta: import.meta,
@@ -251,6 +268,112 @@ complete -c codex -a '(__fish_complete_path)' -d 'file path'`,
   // eslint-disable-next-line no-console
   console.log(script);
   process.exit(0);
+}
+// Handle 'session' subcommand for session management
+if (cli.input[0] === "session") {
+  const action = cli.input[1];
+  const sessionArg = cli.input[2]; // may be session ID or name provided by the user
+
+  // Ensure configuration exists before handling session commands
+  let config;
+  try {
+    config = loadConfig(undefined, undefined, {
+      cwd: process.cwd(),
+      disableProjectDoc: Boolean(cli.flags.noProjectDoc),
+      projectDocPath: cli.flags.projectDoc as string | undefined,
+      isFullContext: false,
+    });
+  } catch (e) {
+    // If config couldn't be loaded, create minimal config for session management
+    config = {
+      model: cli.flags.model || "o4-mini",
+      provider: cli.flags.provider || "openai",
+    };
+  }
+
+  switch (action) {
+    case "list": {
+      const sessions = listSessions();
+      if (sessions.length === 0) {
+        // eslint-disable-next-line no-console
+        console.log("No sessions found.");
+      } else {
+        // eslint-disable-next-line no-console
+        console.log("Available Sessions:");
+        sessions.forEach((s) => {
+          // eslint-disable-next-line no-console
+          console.log(
+            `ID: ${s.id}, User: ${s.user || "unknown"}, Model: ${
+              s.model
+            }, Timestamp: ${s.timestamp}`,
+          );
+        });
+      }
+      process.exit(0);
+      break;
+    }
+    case "save": {
+      // Create a new session from the current configuration context
+      const newSession = {
+        id: sessionArg || Date.now().toString(),
+        user: process.env["USER"] || "unknown",
+        version: CLI_VERSION,
+        model: config.model,
+        timestamp: new Date().toISOString(),
+        instructions: config.instructions || "",
+        cwd: process.cwd(),
+        firstPrompt: cli.input[3] || "No prompt provided",
+      };
+      saveSession(newSession);
+      // eslint-disable-next-line no-console
+      console.log(`Session saved with ID: ${newSession.id}`);
+      process.exit(0);
+      break;
+    }
+    case "load": {
+      if (!sessionArg) {
+        // eslint-disable-next-line no-console
+        console.error("Please provide a session ID to load.");
+        process.exit(1);
+      }
+      const sess = loadSession(sessionArg);
+      if (sess) {
+        setSessionId(sess.id); // update the global session id
+        // eslint-disable-next-line no-console
+        console.log(`Loaded session ${sess.id} (${sess.model})`);
+      } else {
+        // eslint-disable-next-line no-console
+        console.error(`Session with ID ${sessionArg} not found.`);
+        process.exit(1);
+      }
+      process.exit(0);
+      break;
+    }
+    case "delete": {
+      if (!sessionArg) {
+        // eslint-disable-next-line no-console
+        console.error("Please provide a session ID to delete.");
+        process.exit(1);
+      }
+      const success = deleteSession(sessionArg);
+      if (success) {
+        // eslint-disable-next-line no-console
+        console.log(`Deleted session ${sessionArg}`);
+      } else {
+        // eslint-disable-next-line no-console
+        console.error(`Session with ID ${sessionArg} not found.`);
+        process.exit(1);
+      }
+      process.exit(0);
+      break;
+    }
+    default:
+      // eslint-disable-next-line no-console
+      console.error(
+        "Invalid session action. Use one of: list, save [name], load <id>, delete <id>.",
+      );
+      process.exit(1);
+  }
 }
 
 // For --help, show help and exit.
