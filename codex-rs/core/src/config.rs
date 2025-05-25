@@ -1,6 +1,11 @@
 use crate::config_profile::ConfigProfile;
+use crate::config_types::History;
+use crate::config_types::McpServerConfig;
+use crate::config_types::ShellEnvironmentPolicy;
+use crate::config_types::ShellEnvironmentPolicyToml;
+use crate::config_types::Tui;
+use crate::config_types::UriBasedFileOpener;
 use crate::flags::OPENAI_DEFAULT_MODEL;
-use crate::mcp_server_config::McpServerConfig;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::built_in_model_providers;
 use crate::protocol::AskForApproval;
@@ -33,6 +38,8 @@ pub struct Config {
     pub approval_policy: AskForApproval,
 
     pub sandbox_policy: SandboxPolicy,
+
+    pub shell_environment_policy: ShellEnvironmentPolicy,
 
     /// Disable server-side response storage (sends the full conversation
     /// context with every request). Currently necessary for OpenAI customers
@@ -91,75 +98,14 @@ pub struct Config {
 
     /// Collection of settings that are specific to the TUI.
     pub tui: Tui,
-}
 
-/// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
-#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
-pub struct History {
-    /// If true, history entries will not be written to disk.
-    pub persistence: HistoryPersistence,
-
-    /// If set, the maximum size of the history file in bytes.
-    /// TODO(mbolin): Not currently honored.
-    pub max_bytes: Option<usize>,
-}
-
-#[derive(Deserialize, Debug, Copy, Clone, PartialEq, Default)]
-#[serde(rename_all = "kebab-case")]
-pub enum HistoryPersistence {
-    /// Save all history entries to disk.
-    #[default]
-    SaveAll,
-    /// Do not write history to disk.
-    None,
-}
-
-/// Collection of settings that are specific to the TUI.
-#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
-pub struct Tui {
-    /// By default, mouse capture is enabled in the TUI so that it is possible
-    /// to scroll the conversation history with a mouse. This comes at the cost
-    /// of not being able to use the mouse to select text in the TUI.
-    /// (Most terminals support a modifier key to allow this. For example,
-    /// text selection works in iTerm if you hold down the `Option` key while
-    /// clicking and dragging.)
+    /// Path to the `codex-linux-sandbox` executable. This must be set if
+    /// [`crate::exec::SandboxType::LinuxSeccomp`] is used. Note that this
+    /// cannot be set in the config file: it must be set in code via
+    /// [`ConfigOverrides`].
     ///
-    /// Setting this option to `true` disables mouse capture, so scrolling with
-    /// the mouse is not possible, though the keyboard shortcuts e.g. `b` and
-    /// `space` still work. This allows the user to select text in the TUI
-    /// using the mouse without needing to hold down a modifier key.
-    pub disable_mouse_capture: bool,
-}
-
-#[derive(Deserialize, Debug, Copy, Clone, PartialEq)]
-pub enum UriBasedFileOpener {
-    #[serde(rename = "vscode")]
-    VsCode,
-
-    #[serde(rename = "vscode-insiders")]
-    VsCodeInsiders,
-
-    #[serde(rename = "windsurf")]
-    Windsurf,
-
-    #[serde(rename = "cursor")]
-    Cursor,
-
-    /// Option to disable the URI-based file opener.
-    #[serde(rename = "none")]
-    None,
-}
-
-impl UriBasedFileOpener {
-    pub fn get_scheme(&self) -> Option<&str> {
-        match self {
-            UriBasedFileOpener::VsCode => Some("vscode"),
-            UriBasedFileOpener::VsCodeInsiders => Some("vscode-insiders"),
-            UriBasedFileOpener::Windsurf => Some("windsurf"),
-            UriBasedFileOpener::Cursor => Some("cursor"),
-            UriBasedFileOpener::None => None,
-        }
-    }
+    /// When this program is invoked, arg0 will be set to `codex-linux-sandbox`.
+    pub codex_linux_sandbox_exe: Option<PathBuf>,
 }
 
 /// Base config deserialized from ~/.codex/config.toml.
@@ -173,6 +119,9 @@ pub struct ConfigToml {
 
     /// Default approval policy for executing commands.
     pub approval_policy: Option<AskForApproval>,
+
+    #[serde(default)]
+    pub shell_environment_policy: ShellEnvironmentPolicyToml,
 
     // The `default` attribute ensures that the field is treated as `None` when
     // the key is omitted from the TOML. Without it, Serde treats the field as
@@ -281,6 +230,7 @@ pub struct ConfigOverrides {
     pub disable_response_storage: Option<bool>,
     pub model_provider: Option<String>,
     pub config_profile: Option<String>,
+    pub codex_linux_sandbox_exe: Option<PathBuf>,
 }
 
 impl Config {
@@ -317,6 +267,7 @@ impl Config {
             disable_response_storage,
             model_provider,
             config_profile: config_profile_key,
+            codex_linux_sandbox_exe,
         } = overrides;
 
         let config_profile = match config_profile_key.or(cfg.profile) {
@@ -368,6 +319,8 @@ impl Config {
             })?
             .clone();
 
+        let shell_environment_policy = cfg.shell_environment_policy.into();
+
         let resolved_cwd = {
             use std::env;
 
@@ -402,6 +355,7 @@ impl Config {
                 .or(cfg.approval_policy)
                 .unwrap_or_else(AskForApproval::default),
             sandbox_policy,
+            shell_environment_policy,
             disable_response_storage: disable_response_storage
                 .or(config_profile.disable_response_storage)
                 .or(cfg.disable_response_storage)
@@ -415,6 +369,7 @@ impl Config {
             history,
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
             tui: cfg.tui.unwrap_or_default(),
+            codex_linux_sandbox_exe,
         };
         Ok(config)
     }
@@ -523,6 +478,8 @@ pub fn parse_sandbox_permission_with_base_path(
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used, clippy::unwrap_used)]
+    use crate::config_types::HistoryPersistence;
+
     use super::*;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
@@ -741,6 +698,7 @@ disable_response_storage = true
                 model_provider: fixture.openai_provider.clone(),
                 approval_policy: AskForApproval::Never,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                shell_environment_policy: ShellEnvironmentPolicy::default(),
                 disable_response_storage: false,
                 instructions: None,
                 notify: None,
@@ -752,6 +710,7 @@ disable_response_storage = true
                 history: History::default(),
                 file_opener: UriBasedFileOpener::VsCode,
                 tui: Tui::default(),
+                codex_linux_sandbox_exe: None,
             },
             o3_profile_config
         );
@@ -778,6 +737,7 @@ disable_response_storage = true
             model_provider: fixture.openai_chat_completions_provider.clone(),
             approval_policy: AskForApproval::UnlessAllowListed,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            shell_environment_policy: ShellEnvironmentPolicy::default(),
             disable_response_storage: false,
             instructions: None,
             notify: None,
@@ -789,6 +749,7 @@ disable_response_storage = true
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
             tui: Tui::default(),
+            codex_linux_sandbox_exe: None,
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -830,6 +791,7 @@ disable_response_storage = true
             model_provider: fixture.openai_provider.clone(),
             approval_policy: AskForApproval::OnFailure,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            shell_environment_policy: ShellEnvironmentPolicy::default(),
             disable_response_storage: true,
             instructions: None,
             notify: None,
@@ -841,6 +803,7 @@ disable_response_storage = true
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
             tui: Tui::default(),
+            codex_linux_sandbox_exe: None,
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);
