@@ -7,7 +7,7 @@
     "lib": [
       "DOM",
       "DOM.Iterable",
-      "ES2022" // Node.js 18
+      "ES2022" // Node.js 22
     ],
     "types": ["node"],
     "baseUrl": "./",
