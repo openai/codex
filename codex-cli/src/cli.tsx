@@ -402,14 +402,6 @@ if (!currentProviderEnvKey || (!process.env[currentProviderEnvKey] && !NO_API_KE
 }
 
 const flagPresent = Object.hasOwn(cli.flags, "disableResponseStorage");
-      client.issuer,
-      client.client_id,
-      savedTokens.refresh_token,
-      savedTokens.id_token,
-    );
-  }
-}
-
 
 const disableResponseStorage = flagPresent
   ? Boolean(cli.flags.disableResponseStorage) // value user actually passed
