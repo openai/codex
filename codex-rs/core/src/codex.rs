@@ -187,6 +187,7 @@ pub(crate) struct Session {
     /// sessions can be replayed or inspected later.
     rollout: Mutex<Option<crate::rollout::RolloutRecorder>>,
     state: Mutex<State>,
+    codex_linux_sandbox_exe: Option<PathBuf>,
 }
 
 impl Session {
@@ -644,6 +645,7 @@ async fn submission_loop(
                     notify,
                     state: Mutex::new(state),
                     rollout: Mutex::new(rollout_recorder),
+                    codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
                 }));
 
                 // Gather history metadata for SessionConfiguredEvent.
@@ -1244,6 +1246,7 @@ async fn handle_container_exec_with_params(
         sandbox_type,
         sess.ctrl_c.clone(),
         &sess.sandbox_policy,
+        &sess.codex_linux_sandbox_exe,
     )
     .await;
 
@@ -1348,6 +1351,7 @@ async fn handle_sanbox_error(
                 SandboxType::None,
                 sess.ctrl_c.clone(),
                 &sess.sandbox_policy,
+                &sess.codex_linux_sandbox_exe,
             )
             .await;
 
