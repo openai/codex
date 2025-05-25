@@ -1,11 +1,9 @@
-#[cfg(target_os = "linux")]
-pub mod landlock;
+pub mod debug_sandbox;
+mod exit_status;
 pub mod proto;
-pub mod seatbelt;
 
 use clap::Parser;
-use codex_core::protocol::SandboxPolicy;
-use codex_core::SandboxPermissionOption;
+use codex_common::SandboxPermissionOption;
 
 #[derive(Debug, Parser)]
 pub struct SeatbeltCommand {
@@ -33,15 +31,4 @@ pub struct LandlockCommand {
     /// Full command args to run under landlock.
     #[arg(trailing_var_arg = true)]
     pub command: Vec<String>,
-}
-
-pub fn create_sandbox_policy(full_auto: bool, sandbox: SandboxPermissionOption) -> SandboxPolicy {
-    if full_auto {
-        SandboxPolicy::new_full_auto_policy()
-    } else {
-        match sandbox.permissions.map(Into::into) {
-            Some(sandbox_policy) => sandbox_policy,
-            None => SandboxPolicy::new_read_only_policy(),
-        }
-    }
 }

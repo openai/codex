@@ -1,0 +1,16 @@
+[package]
+name = "codex-common"
+version = { workspace = true }
+edition = "2024"
+
+[lints]
+workspace = true
+
+[dependencies]
+clap = { version = "4", features = ["derive", "wrap_help"], optional = true }
+codex-core = { path = "../core" }
+
+[features]
+# Separate feature so that `clap` is not a mandatory dependency.
+cli = ["clap"]
+elapsed = []

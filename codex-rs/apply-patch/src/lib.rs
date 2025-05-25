@@ -4,21 +4,22 @@ mod seek_sequence;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
+use std::str::Utf8Error;
 
 use anyhow::Context;
-use anyhow::Error;
 use anyhow::Result;
-pub use parser::parse_patch;
 pub use parser::Hunk;
 pub use parser::ParseError;
 use parser::ParseError::*;
 use parser::UpdateFileChunk;
+pub use parser::parse_patch;
 use similar::TextDiff;
 use thiserror::Error;
+use tree_sitter::LanguageError;
 use tree_sitter::Parser;
 use tree_sitter_bash::LANGUAGE as BASH;
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, PartialEq)]
 pub enum ApplyPatchError {
     #[error(transparent)]
     ParseError(#[from] ParseError),
@@ -46,10 +47,16 @@ pub struct IoError {
     source: std::io::Error,
 }
 
-#[derive(Debug)]
+impl PartialEq for IoError {
+    fn eq(&self, other: &Self) -> bool {
+        self.context == other.context && self.source.to_string() == other.source.to_string()
+    }
+}
+
+#[derive(Debug, PartialEq)]
 pub enum MaybeApplyPatch {
     Body(Vec<Hunk>),
-    ShellParseError(Error),
+    ShellParseError(ExtractHeredocError),
     PatchParseError(ParseError),
     NotApplyPatch,
 }
@@ -77,7 +84,7 @@ pub fn maybe_parse_apply_patch(argv: &[String]) -> MaybeApplyPatch {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum ApplyPatchFileChange {
     Add {
         content: String,
@@ -91,14 +98,14 @@ pub enum ApplyPatchFileChange {
     },
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum MaybeApplyPatchVerified {
     /// `argv` corresponded to an `apply_patch` invocation, and these are the
     /// resulting proposed file changes.
-    Body(HashMap<PathBuf, ApplyPatchFileChange>),
+    Body(ApplyPatchAction),
     /// `argv` could not be parsed to determine whether it corresponds to an
     /// `apply_patch` invocation.
-    ShellParseError(Error),
+    ShellParseError(ExtractHeredocError),
     /// `argv` corresponded to an `apply_patch` invocation, but it could not
     /// be fulfilled due to the specified error.
     CorrectnessError(ApplyPatchError),
@@ -106,27 +113,52 @@ pub enum MaybeApplyPatchVerified {
     NotApplyPatch,
 }
 
-pub fn maybe_parse_apply_patch_verified(argv: &[String]) -> MaybeApplyPatchVerified {
+#[derive(Debug, PartialEq)]
+/// ApplyPatchAction is the result of parsing an `apply_patch` command. By
+/// construction, all paths should be absolute paths.
+pub struct ApplyPatchAction {
+    changes: HashMap<PathBuf, ApplyPatchFileChange>,
+}
+
+impl ApplyPatchAction {
+    pub fn is_empty(&self) -> bool {
+        self.changes.is_empty()
+    }
+
+    /// Returns the changes that would be made by applying the patch.
+    pub fn changes(&self) -> &HashMap<PathBuf, ApplyPatchFileChange> {
+        &self.changes
+    }
+
+    /// Should be used exclusively for testing. (Not worth the overhead of
+    /// creating a feature flag for this.)
+    pub fn new_add_for_test(path: &Path, content: String) -> Self {
+        if !path.is_absolute() {
+            panic!("path must be absolute");
+        }
+
+        let changes = HashMap::from([(path.to_path_buf(), ApplyPatchFileChange::Add { content })]);
+        Self { changes }
+    }
+}
+
+/// cwd must be an absolute path so that we can resolve relative paths in the
+/// patch.
+pub fn maybe_parse_apply_patch_verified(argv: &[String], cwd: &Path) -> MaybeApplyPatchVerified {
     match maybe_parse_apply_patch(argv) {
         MaybeApplyPatch::Body(hunks) => {
             let mut changes = HashMap::new();
             for hunk in hunks {
+                let path = hunk.resolve_path(cwd);
                 match hunk {
-                    Hunk::AddFile { path, contents } => {
-                        changes.insert(
-                            path,
-                            ApplyPatchFileChange::Add {
-                                content: contents.clone(),
-                            },
-                        );
+                    Hunk::AddFile { contents, .. } => {
+                        changes.insert(path, ApplyPatchFileChange::Add { content: contents });
                     }
-                    Hunk::DeleteFile { path } => {
+                    Hunk::DeleteFile { .. } => {
                         changes.insert(path, ApplyPatchFileChange::Delete);
                     }
                     Hunk::UpdateFile {
-                        path,
-                        move_path,
-                        chunks,
+                        move_path, chunks, ..
                     } => {
                         let ApplyPatchFileUpdate {
                             unified_diff,
@@ -138,17 +170,17 @@ pub fn maybe_parse_apply_patch_verified(argv: &[String]) -> MaybeApplyPatchVerif
                             }
                         };
                         changes.insert(
-                            path.clone(),
+                            path,
                             ApplyPatchFileChange::Update {
                                 unified_diff,
-                                move_path,
+                                move_path: move_path.map(|p| cwd.join(p)),
                                 new_content: contents,
                             },
                         );
                     }
                 }
             }
-            MaybeApplyPatchVerified::Body(changes)
+            MaybeApplyPatchVerified::Body(ApplyPatchAction { changes })
         }
         MaybeApplyPatch::ShellParseError(e) => MaybeApplyPatchVerified::ShellParseError(e),
         MaybeApplyPatch::PatchParseError(e) => MaybeApplyPatchVerified::CorrectnessError(e.into()),
@@ -174,17 +206,21 @@ pub fn maybe_parse_apply_patch_verified(argv: &[String]) -> MaybeApplyPatchVerif
 /// * `Ok(String)` - The heredoc body if the extraction is successful.
 /// * `Err(anyhow::Error)` - An error if the extraction fails.
 ///
-fn extract_heredoc_body_from_apply_patch_command(src: &str) -> anyhow::Result<String> {
+fn extract_heredoc_body_from_apply_patch_command(
+    src: &str,
+) -> std::result::Result<String, ExtractHeredocError> {
     if !src.trim_start().starts_with("apply_patch") {
-        anyhow::bail!("expected command to start with 'apply_patch'");
+        return Err(ExtractHeredocError::CommandDidNotStartWithApplyPatch);
     }
 
     let lang = BASH.into();
     let mut parser = Parser::new();
-    parser.set_language(&lang).expect("load bash grammar");
+    parser
+        .set_language(&lang)
+        .map_err(ExtractHeredocError::FailedToLoadBashGrammar)?;
     let tree = parser
         .parse(src, None)
-        .ok_or_else(|| anyhow::anyhow!("failed to parse patch into AST"))?;
+        .ok_or(ExtractHeredocError::FailedToParsePatchIntoAst)?;
 
     let bytes = src.as_bytes();
     let mut c = tree.root_node().walk();
@@ -192,7 +228,9 @@ fn extract_heredoc_body_from_apply_patch_command(src: &str) -> anyhow::Result<St
     loop {
         let node = c.node();
         if node.kind() == "heredoc_body" {
-            let text = node.utf8_text(bytes).unwrap();
+            let text = node
+                .utf8_text(bytes)
+                .map_err(ExtractHeredocError::HeredocNotUtf8)?;
             return Ok(text.trim_end_matches('\n').to_owned());
         }
 
@@ -201,10 +239,19 @@ fn extract_heredoc_body_from_apply_patch_command(src: &str) -> anyhow::Result<St
         }
         while !c.goto_next_sibling() {
             if !c.goto_parent() {
-                anyhow::bail!("expected to find heredoc_body in patch candidate");
+                return Err(ExtractHeredocError::FailedToFindHeredocBody);
             }
         }
     }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum ExtractHeredocError {
+    CommandDidNotStartWithApplyPatch,
+    FailedToLoadBashGrammar(LanguageError),
+    HeredocNotUtf8(Utf8Error),
+    FailedToParsePatchIntoAst,
+    FailedToFindHeredocBody,
 }
 
 /// Applies the patch and prints the result to stdout/stderr.
@@ -378,7 +425,7 @@ fn derive_new_contents_from_chunks(
             return Err(ApplyPatchError::IoError(IoError {
                 context: format!("Failed to read file to update {}", path.display()),
                 source: err,
-            }))
+            }));
         }
     };
 
@@ -574,6 +621,8 @@ pub fn print_summary(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
+
     use super::*;
     use pretty_assertions::assert_eq;
     use std::fs;
@@ -1098,6 +1147,50 @@ E
 f
 g
 "#
+        );
+    }
+
+    #[test]
+    fn test_apply_patch_should_resolve_absolute_paths_in_cwd() {
+        let session_dir = tempdir().unwrap();
+        let relative_path = "source.txt";
+
+        // Note that we need this file to exist for the patch to be "verified"
+        // and parsed correctly.
+        let session_file_path = session_dir.path().join(relative_path);
+        fs::write(&session_file_path, "session directory content\n").unwrap();
+
+        let argv = vec![
+            "apply_patch".to_string(),
+            r#"*** Begin Patch
+*** Update File: source.txt
+@@
+-session directory content
++updated session directory content
+*** End Patch"#
+                .to_string(),
+        ];
+
+        let result = maybe_parse_apply_patch_verified(&argv, session_dir.path());
+
+        // Verify the patch contents - as otherwise we may have pulled contents
+        // from the wrong file (as we're using relative paths)
+        assert_eq!(
+            result,
+            MaybeApplyPatchVerified::Body(ApplyPatchAction {
+                changes: HashMap::from([(
+                    session_dir.path().join(relative_path),
+                    ApplyPatchFileChange::Update {
+                        unified_diff: r#"@@ -1 +1 @@
+-session directory content
++updated session directory content
+"#
+                        .to_string(),
+                        move_path: None,
+                        new_content: "updated session directory content\n".to_string(),
+                    },
+                )]),
+            })
         );
     }
 }

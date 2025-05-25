@@ -1,10 +1,7 @@
 use std::collections::BTreeMap;
 use std::io::BufRead;
 use std::path::Path;
-use std::pin::Pin;
 use std::sync::LazyLock;
-use std::task::Context;
-use std::task::Poll;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -14,6 +11,7 @@ use reqwest::StatusCode;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
+use serde_json::json;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tokio_util::io::ReaderStream;
@@ -21,67 +19,39 @@ use tracing::debug;
 use tracing::trace;
 use tracing::warn;
 
+use crate::chat_completions::AggregateStreamExt;
+use crate::chat_completions::stream_chat_completions;
+use crate::client_common::Payload;
+use crate::client_common::Prompt;
+use crate::client_common::Reasoning;
+use crate::client_common::ResponseEvent;
+use crate::client_common::ResponseStream;
+use crate::client_common::Summary;
 use crate::error::CodexErr;
+use crate::error::EnvVarError;
 use crate::error::Result;
-use crate::flags::get_api_key;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
-use crate::flags::OPENAI_API_BASE;
 use crate::flags::OPENAI_REQUEST_MAX_RETRIES;
 use crate::flags::OPENAI_STREAM_IDLE_TIMEOUT_MS;
+use crate::model_provider_info::ModelProviderInfo;
+use crate::model_provider_info::WireApi;
 use crate::models::ResponseItem;
 use crate::util::backoff;
 
-/// API request payload for a single model turn.
-#[derive(Default, Debug, Clone)]
-pub struct Prompt {
-    /// Conversation context input items.
-    pub input: Vec<ResponseItem>,
-    /// Optional previous response ID (when storage is enabled).
-    pub prev_id: Option<String>,
-    /// Optional initial instructions (only sent on first turn).
-    pub instructions: Option<String>,
-    /// Whether to store response on server side (disable_response_storage = !store).
-    pub store: bool,
+/// When serialized as JSON, this produces a valid "Tool" in the OpenAI
+/// Responses API.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type")]
+enum OpenAiTool {
+    #[serde(rename = "function")]
+    Function(ResponsesApiTool),
+    #[serde(rename = "local_shell")]
+    LocalShell {},
 }
 
-#[derive(Debug)]
-pub enum ResponseEvent {
-    OutputItemDone(ResponseItem),
-    Completed { response_id: String },
-}
-
-#[derive(Debug, Serialize)]
-struct Payload<'a> {
-    model: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    instructions: Option<&'a String>,
-    // TODO(mbolin): ResponseItem::Other should not be serialized. Currently,
-    // we code defensively to avoid this case, but perhaps we should use a
-    // separate enum for serialization.
-    input: &'a Vec<ResponseItem>,
-    tools: &'a [Tool],
-    tool_choice: &'static str,
-    parallel_tool_calls: bool,
-    reasoning: Option<Reasoning>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    previous_response_id: Option<String>,
-    /// true when using the Responses API.
-    store: bool,
-    stream: bool,
-}
-
-#[derive(Debug, Serialize)]
-struct Reasoning {
-    effort: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    generate_summary: Option<bool>,
-}
-
-#[derive(Debug, Serialize)]
-struct Tool {
+#[derive(Debug, Clone, Serialize)]
+struct ResponsesApiTool {
     name: &'static str,
-    #[serde(rename = "type")]
-    kind: &'static str, // "function"
     description: &'static str,
     strict: bool,
     parameters: JsonSchema,
@@ -105,7 +75,7 @@ enum JsonSchema {
 }
 
 /// Tool usage specification
-static TOOLS: LazyLock<Vec<Tool>> = LazyLock::new(|| {
+static DEFAULT_TOOLS: LazyLock<Vec<OpenAiTool>> = LazyLock::new(|| {
     let mut properties = BTreeMap::new();
     properties.insert(
         "command".to_string(),
@@ -116,9 +86,8 @@ static TOOLS: LazyLock<Vec<Tool>> = LazyLock::new(|| {
     properties.insert("workdir".to_string(), JsonSchema::String);
     properties.insert("timeout".to_string(), JsonSchema::Number);
 
-    vec![Tool {
+    vec![OpenAiTool::Function(ResponsesApiTool {
         name: "shell",
-        kind: "function",
         description: "Runs a shell command, and returns its output.",
         strict: false,
         parameters: JsonSchema::Object {
@@ -126,46 +95,112 @@ static TOOLS: LazyLock<Vec<Tool>> = LazyLock::new(|| {
             required: &["command"],
             additional_properties: false,
         },
-    }]
+    })]
 });
+
+static DEFAULT_CODEX_MODEL_TOOLS: LazyLock<Vec<OpenAiTool>> =
+    LazyLock::new(|| vec![OpenAiTool::LocalShell {}]);
 
 #[derive(Clone)]
 pub struct ModelClient {
     model: String,
     client: reqwest::Client,
+    provider: ModelProviderInfo,
 }
 
 impl ModelClient {
-    pub fn new(model: impl ToString) -> Self {
-        let model = model.to_string();
-        let client = reqwest::Client::new();
-        Self { model, client }
+    pub fn new(model: impl ToString, provider: ModelProviderInfo) -> Self {
+        Self {
+            model: model.to_string(),
+            client: reqwest::Client::new(),
+            provider,
+        }
     }
 
-    pub async fn stream(&mut self, prompt: &Prompt) -> Result<ResponseStream> {
+    /// Dispatches to either the Responses or Chat implementation depending on
+    /// the provider config.  Public callers always invoke `stream()` – the
+    /// specialised helpers are private to avoid accidental misuse.
+    pub async fn stream(&self, prompt: &Prompt) -> Result<ResponseStream> {
+        match self.provider.wire_api {
+            WireApi::Responses => self.stream_responses(prompt).await,
+            WireApi::Chat => {
+                // Create the raw streaming connection first.
+                let response_stream =
+                    stream_chat_completions(prompt, &self.model, &self.client, &self.provider)
+                        .await?;
+
+                // Wrap it with the aggregation adapter so callers see *only*
+                // the final assistant message per turn (matching the
+                // behaviour of the Responses API).
+                let mut aggregated = response_stream.aggregate();
+
+                // Bridge the aggregated stream back into a standard
+                // `ResponseStream` by forwarding events through a channel.
+                let (tx, rx) = mpsc::channel::<Result<ResponseEvent>>(16);
+
+                tokio::spawn(async move {
+                    use futures::StreamExt;
+                    while let Some(ev) = aggregated.next().await {
+                        // Exit early if receiver hung up.
+                        if tx.send(ev).await.is_err() {
+                            break;
+                        }
+                    }
+                });
+
+                Ok(ResponseStream { rx_event: rx })
+            }
+        }
+    }
+
+    /// Implementation for the OpenAI *Responses* experimental API.
+    async fn stream_responses(&self, prompt: &Prompt) -> Result<ResponseStream> {
         if let Some(path) = &*CODEX_RS_SSE_FIXTURE {
             // short circuit for tests
             warn!(path, "Streaming from fixture");
             return stream_from_fixture(path).await;
         }
 
+        // Assemble tool list: built-in tools + any extra tools from the prompt.
+        let default_tools = if self.model.starts_with("codex") {
+            &DEFAULT_CODEX_MODEL_TOOLS
+        } else {
+            &DEFAULT_TOOLS
+        };
+        let mut tools_json = Vec::with_capacity(default_tools.len() + prompt.extra_tools.len());
+        for t in default_tools.iter() {
+            tools_json.push(serde_json::to_value(t)?);
+        }
+        tools_json.extend(
+            prompt
+                .extra_tools
+                .clone()
+                .into_iter()
+                .map(|(name, tool)| mcp_tool_to_openai_tool(name, tool)),
+        );
+
+        debug!("tools_json: {}", serde_json::to_string_pretty(&tools_json)?);
+
+        let full_instructions = prompt.get_full_instructions();
         let payload = Payload {
             model: &self.model,
-            instructions: prompt.instructions.as_ref(),
+            instructions: &full_instructions,
             input: &prompt.input,
-            tools: &TOOLS,
+            tools: &tools_json,
             tool_choice: "auto",
             parallel_tool_calls: false,
             reasoning: Some(Reasoning {
                 effort: "high",
-                generate_summary: None,
+                summary: Some(Summary::Auto),
             }),
             previous_response_id: prompt.prev_id.clone(),
             store: prompt.store,
             stream: true,
         };
 
-        let url = format!("{}/v1/responses", *OPENAI_API_BASE);
+        let base_url = self.provider.base_url.clone();
+        let base_url = base_url.trim_end_matches('/');
+        let url = format!("{}/responses", base_url);
         debug!(url, "POST");
         trace!("request payload: {}", serde_json::to_string(&payload)?);
 
@@ -173,10 +208,16 @@ impl ModelClient {
         loop {
             attempt += 1;
 
+            let api_key = self.provider.api_key()?.ok_or_else(|| {
+                CodexErr::EnvVar(EnvVarError {
+                    var: self.provider.env_key.clone().unwrap_or_default(),
+                    instructions: None,
+                })
+            })?;
             let res = self
                 .client
                 .post(&url)
-                .bearer_auth(get_api_key()?)
+                .bearer_auth(api_key)
                 .header("OpenAI-Beta", "responses=experimental")
                 .header(reqwest::header::ACCEPT, "text/event-stream")
                 .json(&payload)
@@ -233,6 +274,20 @@ impl ModelClient {
             }
         }
     }
+}
+
+fn mcp_tool_to_openai_tool(
+    fully_qualified_name: String,
+    tool: mcp_types::Tool,
+) -> serde_json::Value {
+    // TODO(mbolin): Change the contract of this function to return
+    // ResponsesApiTool.
+    json!({
+        "name": fully_qualified_name,
+        "description": tool.description,
+        "parameters": tool.input_schema,
+        "type": "function",
+    })
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -348,18 +403,6 @@ where
             }
             other => debug!(other, "sse event"),
         }
-    }
-}
-
-pub struct ResponseStream {
-    rx_event: mpsc::Receiver<Result<ResponseEvent>>,
-}
-
-impl Stream for ResponseStream {
-    type Item = Result<ResponseEvent>;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.rx_event.poll_recv(cx)
     }
 }
 

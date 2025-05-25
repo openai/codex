@@ -4,48 +4,54 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs, flake-utils, ... }: 
-    flake-utils.lib.eachDefaultSystem (system: let
-      pkgs = import nixpkgs { inherit system; };
-      node = pkgs.nodejs_22;
-    in rec {
-      packages = {
-        codex-cli = pkgs.buildNpmPackage rec {
-          pname       = "codex-cli";
-          version     = "0.1.0";
-          src         = self + "/codex-cli";
-          npmDepsHash = "sha256-riVXC7T9zgUBUazH5Wq7+MjU1FepLkp9kHLSq+ZVqbs=";
-          nodejs      = node;
-          npmInstallFlags = [ "--frozen-lockfile" ];
-          meta = with pkgs.lib; {
-            description = "OpenAI Codex command‑line interface";
-            license     = licenses.asl20;
-            homepage    = "https://github.com/openai/codex";
-          };
+  outputs = { nixpkgs, flake-utils, rust-overlay, ... }: 
+    flake-utils.lib.eachDefaultSystem (system:
+      let
+        pkgs = import nixpkgs {
+          inherit system;
         };
-      };
-      defaultPackage = packages.codex-cli;
-      devShell = pkgs.mkShell {
-        name        = "codex-cli-dev";
-        buildInputs = [
-          node
+        pkgsWithRust = import nixpkgs {
+          inherit system;
+          overlays = [ rust-overlay.overlays.default ];
+        };
+        monorepo-deps = with pkgs; [
+          # for precommit hook
+          pnpm
+          husky
         ];
-        shellHook = ''
-          echo "Entering development shell for codex-cli"
-          cd codex-cli
-          npm ci
-          npm run build
-          export PATH=$PWD/node_modules/.bin:$PATH
-          alias codex="node $PWD/dist/cli.js"
-        '';
-      };
-      apps = {
-        codex = {
-          type    = "app";
-          program = "${packages.codex-cli}/bin/codex";
+        codex-cli = import ./codex-cli {
+          inherit pkgs monorepo-deps;
         };
-      };
-    });
+        codex-rs = import ./codex-rs {
+          pkgs = pkgsWithRust;
+          inherit monorepo-deps;
+        };
+      in
+      rec {
+        packages = {
+          codex-cli = codex-cli.package;
+          codex-rs = codex-rs.package;
+        };
+
+        devShells = {
+          codex-cli = codex-cli.devShell;
+          codex-rs = codex-rs.devShell;
+        };
+
+        apps = {
+          codex-cli = codex-cli.app;
+          codex-rs = codex-rs.app;
+        };
+
+        defaultPackage = packages.codex-cli;
+        defaultApp = apps.codex-cli;
+        defaultDevShell = devShells.codex-cli;
+      }
+    );
 }

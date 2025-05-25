@@ -7,8 +7,8 @@ use allocative::Allocative;
 use derive_more::derive::Display;
 use serde::Serialize;
 use starlark::any::ProvidesStaticType;
-use starlark::values::starlark_value;
 use starlark::values::StarlarkValue;
+use starlark::values::starlark_value;
 
 #[derive(Debug, Clone, Display, Eq, PartialEq, ProvidesStaticType, Allocative, Serialize)]
 #[display("{}", self)]

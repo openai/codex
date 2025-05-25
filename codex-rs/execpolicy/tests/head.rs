@@ -1,4 +1,4 @@
-use codex_execpolicy::get_default_policy;
+#![expect(clippy::expect_used)]
 use codex_execpolicy::ArgMatcher;
 use codex_execpolicy::ArgType;
 use codex_execpolicy::Error;
@@ -9,6 +9,7 @@ use codex_execpolicy::MatchedOpt;
 use codex_execpolicy::Policy;
 use codex_execpolicy::Result;
 use codex_execpolicy::ValidExec;
+use codex_execpolicy::get_default_policy;
 
 extern crate codex_execpolicy;
 
@@ -67,7 +68,10 @@ fn test_head_one_flag_one_file() -> Result<()> {
             exec: ValidExec {
                 program: "head".to_string(),
                 flags: vec![],
-                opts: vec![MatchedOpt::new("-n", "100", ArgType::PositiveInteger).unwrap()],
+                opts: vec![
+                    MatchedOpt::new("-n", "100", ArgType::PositiveInteger)
+                        .expect("should validate")
+                ],
                 args: vec![MatchedArg::new(
                     2,
                     ArgType::ReadableFile,

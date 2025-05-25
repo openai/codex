@@ -1,6 +1,6 @@
 use clap::Parser;
 use clap::ValueEnum;
-use codex_core::SandboxPermissionOption;
+use codex_common::SandboxPermissionOption;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -14,12 +14,20 @@ pub struct Cli {
     #[arg(long, short = 'm')]
     pub model: Option<String>,
 
+    /// Configuration profile from config.toml to specify default options.
+    #[arg(long = "profile", short = 'p')]
+    pub config_profile: Option<String>,
+
     /// Convenience alias for low-friction sandboxed automatic execution (network-disabled sandbox that can write to cwd and TMPDIR)
     #[arg(long = "full-auto", default_value_t = false)]
     pub full_auto: bool,
 
     #[clap(flatten)]
     pub sandbox: SandboxPermissionOption,
+
+    /// Tell the agent to use the specified directory as its working root.
+    #[clap(long = "cd", short = 'C', value_name = "DIR")]
+    pub cwd: Option<PathBuf>,
 
     /// Allow running Codex outside a Git repository.
     #[arg(long = "skip-git-repo-check", default_value_t = false)]
@@ -32,6 +40,10 @@ pub struct Cli {
     /// Specifies color settings for use in the output.
     #[arg(long = "color", value_enum, default_value_t = Color::Auto)]
     pub color: Color,
+
+    /// Specifies file where the last message from the agent should be written.
+    #[arg(long = "output-last-message")]
+    pub last_message_file: Option<PathBuf>,
 
     /// Initial instructions for the agent.
     pub prompt: String,

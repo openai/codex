@@ -1,20 +1,13 @@
 //! A live status indicator that shows the *latest* log line emitted by the
 //! application while the agent is processing a long‑running task.
-//!
-//! It replaces the old spinner animation with real log feedback so users can
-//! watch Codex “think” in real‑time. Whenever new text is provided via
-//! [`StatusIndicatorWidget::update_text`], the parent widget triggers a
-//! redraw so the change is visible immediately.
 
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
-use std::sync::mpsc::Sender;
-use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Alignment;
 use ratatui::layout::Rect;
@@ -32,6 +25,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 
 use crate::app_event::AppEvent;
+use crate::app_event_sender::AppEventSender;
 
 use codex_ansi_escape::ansi_escape_line;
 
@@ -45,18 +39,18 @@ pub(crate) struct StatusIndicatorWidget {
     /// input mode and loading mode.
     height: u16,
 
-    frame_idx: std::sync::Arc<AtomicUsize>,
-    running: std::sync::Arc<AtomicBool>,
+    frame_idx: Arc<AtomicUsize>,
+    running: Arc<AtomicBool>,
     // Keep one sender alive to prevent the channel from closing while the
     // animation thread is still running. The field itself is currently not
     // accessed anywhere, therefore the leading underscore silences the
     // `dead_code` warning without affecting behavior.
-    _app_event_tx: Sender<AppEvent>,
+    _app_event_tx: AppEventSender,
 }
 
 impl StatusIndicatorWidget {
     /// Create a new status indicator and start the animation timer.
-    pub(crate) fn new(app_event_tx: Sender<AppEvent>, height: u16) -> Self {
+    pub(crate) fn new(app_event_tx: AppEventSender, height: u16) -> Self {
         let frame_idx = Arc::new(AtomicUsize::new(0));
         let running = Arc::new(AtomicBool::new(true));
 
@@ -71,9 +65,7 @@ impl StatusIndicatorWidget {
                     std::thread::sleep(Duration::from_millis(200));
                     counter = counter.wrapping_add(1);
                     frame_idx_clone.store(counter, Ordering::Relaxed);
-                    if app_event_tx_clone.send(AppEvent::Redraw).is_err() {
-                        break;
-                    }
+                    app_event_tx_clone.send(AppEvent::Redraw);
                 }
             });
         }
@@ -85,14 +77,6 @@ impl StatusIndicatorWidget {
             running,
             _app_event_tx: app_event_tx,
         }
-    }
-
-    pub(crate) fn handle_key_event(
-        &mut self,
-        _key: KeyEvent,
-    ) -> Result<bool, std::sync::mpsc::SendError<AppEvent>> {
-        // The indicator does not handle any input – always return `false`.
-        Ok(false)
     }
 
     /// Preferred height in terminal rows.
@@ -120,7 +104,7 @@ impl WidgetRef for StatusIndicatorWidget {
             .padding(Padding::new(1, 0, 0, 0))
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(widget_style);
+            .border_style(widget_style.dim());
         // Animated 3‑dot pattern inside brackets. The *active* dot is bold
         // white, the others are dim.
         const DOT_COUNT: usize = 3;
