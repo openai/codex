@@ -4,10 +4,17 @@ import {
   getBaseUrl,
   getApiKey,
   AZURE_OPENAI_API_VERSION,
+  AZURE_OPENAI_DEPLOYMENT,
   OPENAI_TIMEOUT_MS,
   OPENAI_ORGANIZATION,
   OPENAI_PROJECT,
+  HTTPS_PROXY_URL,
 } from "./config.js";
+import {
+  DefaultAzureCredential,
+  getBearerTokenProvider,
+} from "@azure/identity";
+import { HttpsProxyAgent } from "https-proxy-agent";
 import OpenAI, { AzureOpenAI } from "openai";
 
 type OpenAIClientConfig = {
@@ -23,29 +30,55 @@ type OpenAIClientConfig = {
  */
 export function createOpenAIClient(
   config: OpenAIClientConfig | AppConfig,
+  headers: Record<string, string> = {},
 ): OpenAI | AzureOpenAI {
-  const headers: Record<string, string> = {};
-  if (OPENAI_ORGANIZATION) {
-    headers["OpenAI-Organization"] = OPENAI_ORGANIZATION;
-  }
-  if (OPENAI_PROJECT) {
-    headers["OpenAI-Project"] = OPENAI_PROJECT;
-  }
+  const defaultHeaders: Record<string, string> = {
+    ...(OPENAI_ORGANIZATION
+      ? { "OpenAI-Organization": OPENAI_ORGANIZATION }
+      : {}),
+    ...(OPENAI_PROJECT ? { "OpenAI-Project": OPENAI_PROJECT } : {}),
+    ...headers,
+  };
+
+  const apiKey = getApiKey(config.provider);
+  const httpAgent = HTTPS_PROXY_URL
+    ? new HttpsProxyAgent(HTTPS_PROXY_URL)
+    : undefined;
+  const baseURL = getBaseUrl(config.provider);
+  const timeout = OPENAI_TIMEOUT_MS;
 
   if (config.provider?.toLowerCase() === "azure") {
+    if (apiKey === undefined) {
+      const credential = new DefaultAzureCredential();
+      const azureADTokenProvider = getBearerTokenProvider(
+        credential,
+        "https://cognitiveservices.azure.com/.default",
+      );
+      return new AzureOpenAI({
+        azureADTokenProvider,
+        baseURL,
+        timeout,
+        defaultHeaders,
+        httpAgent,
+        deployment: AZURE_OPENAI_DEPLOYMENT,
+        apiVersion: AZURE_OPENAI_API_VERSION,
+      });
+    }
+
     return new AzureOpenAI({
-      apiKey: getApiKey(config.provider),
-      baseURL: getBaseUrl(config.provider),
+      apiKey,
+      baseURL,
+      timeout,
+      defaultHeaders,
+      httpAgent,
       apiVersion: AZURE_OPENAI_API_VERSION,
-      timeout: OPENAI_TIMEOUT_MS,
-      defaultHeaders: headers,
     });
   }
 
   return new OpenAI({
-    apiKey: getApiKey(config.provider),
-    baseURL: getBaseUrl(config.provider),
-    timeout: OPENAI_TIMEOUT_MS,
-    defaultHeaders: headers,
+    apiKey,
+    baseURL,
+    timeout,
+    defaultHeaders,
   });
 }
