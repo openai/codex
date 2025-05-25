@@ -43,6 +43,7 @@ import {
 } from "./utils/get-api-key";
 import { createInputItem } from "./utils/input-utils";
 import { initLogger } from "./utils/logger/log";
+import { getModelForProvider } from "./utils/model-selection";
 import { isModelSupportedForResponses } from "./utils/model-utils.js";
 import { parseToolCall } from "./utils/parsers";
 import { onExit, setInkRenderer } from "./utils/terminal";
@@ -289,9 +290,15 @@ let config = loadConfig(undefined, undefined, {
 // via the `--history` flag. Therefore it must be declared with `let` rather
 // than `const`.
 let prompt = cli.input[0];
-const model = cli.flags.model ?? config.model;
-const imagePaths = cli.flags.image;
 const provider = cli.flags.provider ?? config.provider ?? "openai";
+
+// Get the appropriate model for the selected provider
+const model = getModelForProvider(config, {
+  model: cli.flags.model,
+  provider,
+});
+
+const imagePaths = cli.flags.image;
 
 const client = {
   issuer: "https://auth.openai.com",
