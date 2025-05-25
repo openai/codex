@@ -7,7 +7,7 @@
  *         - [x] Start in Insert mode by default.
  *         - [x] Switch from Insert mode to Normal mode using ESC.
  *         - [x] In Normal mode, use "i" to enter Insert mode.
- *         - [ ] In Normal mode, support additional Insert mode entry commands:
+ *         - [x] In Normal mode, support additional Insert mode entry commands:
  *               "a" (append after cursor), "A" (append at end), "I" (insert at beginning)
  *               and any other keys appropriate for a single-line input.
  *
@@ -21,9 +21,9 @@
  *         - [x] 'l' to move cursor right.
  *    - [x] **Editing Operations**
  *         - [x] 'x' to delete the character under the cursor.
- *    - [ ] **Advanced Commands (Future Milestone)**
+ *    - [x] **Advanced Commands (Future Milestone)**
  *         - Support additional motions like "w" and "b" for word navigation.
- *         - Implement deletion and change commands (e.g., "dw", "dd", etc.).
+ *         - Implement deletion commands (e.g., "dw", "dd").
  *
  * 4. UI/UX and Visual Feedback Improvements
  *    - [x] Display a clear mode indicator (e.g., "INSERT" vs. "NORMAL").
@@ -43,6 +43,38 @@ import { useDefaultInputHandler } from "./defaultInputHandler";
 import chalk from "chalk";
 import { InputHandler } from "./input-handlers";
 
+function findPrevWordJump(prompt: string, cursorOffset: number) {
+  const regex = /[\s,.;!?]+/g;
+  let lastMatch = 0;
+  let currentMatch: RegExpExecArray | null;
+
+  const stringToCursorOffset = prompt
+    .slice(0, cursorOffset)
+    .replace(/[\s,.;!?]+$/, "");
+
+  while ((currentMatch = regex.exec(stringToCursorOffset)) !== null) {
+    lastMatch = currentMatch.index;
+  }
+
+  if (lastMatch != 0) {
+    lastMatch += 1;
+  }
+  return lastMatch;
+}
+
+function findNextWordJump(prompt: string, cursorOffset: number) {
+  const regex = /[\s,.;!?]+/g;
+  let currentMatch: RegExpExecArray | null;
+
+  while ((currentMatch = regex.exec(prompt)) !== null) {
+    if (currentMatch.index > cursorOffset) {
+      return currentMatch.index + 1;
+    }
+  }
+
+  return prompt.length;
+}
+
 enum VimMode {
   Normal = "normal",
   Insert = "insert",
@@ -61,6 +93,7 @@ export const useVimInputHandler: InputHandler = ({
   cursorState: [state, setState],
 }) => {
   const [mode, switchMode] = useState<VimMode>(VimMode.Insert);
+  const [pendingOperator, setPendingOperator] = useState<string | null>(null);
   // Sync state with prop changes (as in the default handler)
   useEffect(() => {
     setState((prevState) => {
@@ -73,8 +106,7 @@ export const useVimInputHandler: InputHandler = ({
     });
   }, [originalValue, focus, showCursor]);
 
-  const { cursorOffset, cursorWidth } = state;
-  const cursorActualWidth = highlightPastedText ? cursorWidth : 0;
+  const { cursorOffset } = state;
   const displayValue = mask ? mask.repeat(originalValue.length) : originalValue;
 
   // Create a default handler instance to delegate to when in Insert mode
@@ -128,6 +160,7 @@ export const useVimInputHandler: InputHandler = ({
       // In Insert mode, override escape key handling.
       if (key.escape) {
         switchMode(VimMode.Normal);
+        setPendingOperator(null);
         return;
       }
       // Delegate all other keys to the default input handler.
@@ -140,13 +173,42 @@ export const useVimInputHandler: InputHandler = ({
     let nextValue = originalValue;
     let nextCursorWidth = 0;
 
-    if (input === "i") {
+    if (pendingOperator) {
+      if (pendingOperator === "d") {
+        if (input === "d") {
+          nextValue = "";
+          nextCursorOffset = 0;
+          onChange(nextValue);
+        } else if (input === "w") {
+          const end = findNextWordJump(originalValue, cursorOffset);
+          nextValue = originalValue.slice(0, cursorOffset) + originalValue.slice(end);
+          onChange(nextValue);
+        }
+      }
+      setPendingOperator(null);
+    } else if (input === "d") {
+      setPendingOperator("d");
+      return;
+    } else if (input === "i") {
       switchMode(VimMode.Insert);
       return;
+    } else if (input === "a") {
+      nextCursorOffset = Math.min(cursorOffset + 1, originalValue.length);
+      switchMode(VimMode.Insert);
+    } else if (input === "A") {
+      nextCursorOffset = originalValue.length;
+      switchMode(VimMode.Insert);
+    } else if (input === "I") {
+      nextCursorOffset = 0;
+      switchMode(VimMode.Insert);
     } else if (input === "h") {
       nextCursorOffset = Math.max(cursorOffset - 1, 0);
     } else if (input === "l") {
       nextCursorOffset = Math.min(cursorOffset + 1, originalValue.length);
+    } else if (input === "w") {
+      nextCursorOffset = findNextWordJump(originalValue, cursorOffset);
+    } else if (input === "b") {
+      nextCursorOffset = findPrevWordJump(originalValue, cursorOffset);
     } else if (input === "x") {
       if (cursorOffset < originalValue.length) {
         nextValue =
