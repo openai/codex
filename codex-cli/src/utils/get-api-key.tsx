@@ -790,9 +790,3 @@ export async function getApiKey(
 }
 
 export { maybeRedeemCredits };
-    spinner.unmount();
-    throw err;
-  }
-}
-
-export { maybeRedeemCredits };
