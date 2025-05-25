@@ -3,6 +3,7 @@ mod event_processor;
 
 use std::io::IsTerminal;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 pub use cli::Cli;
@@ -24,7 +25,7 @@ use tracing::error;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
+pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
     let Cli {
         images,
         model,
@@ -69,6 +70,7 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
         },
         cwd: cwd.map(|p| p.canonicalize().unwrap_or(p)),
         model_provider: None,
+        codex_linux_sandbox_exe,
     };
     let config = Config::load_with_overrides(overrides)?;
     // Print the effective configuration so users can see what Codex is using.

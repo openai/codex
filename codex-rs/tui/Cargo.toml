@@ -20,6 +20,7 @@ clap = { version = "4", features = ["derive"] }
 codex-ansi-escape = { path = "../ansi-escape" }
 codex-core = { path = "../core" }
 codex-common = { path = "../common", features = ["cli", "elapsed"] }
+codex-linux-sandbox = { path = "../linux-sandbox" }
 color-eyre = "0.6.3"
 crossterm = { version = "0.28.1", features = ["bracketed-paste"] }
 lazy_static = "1"
