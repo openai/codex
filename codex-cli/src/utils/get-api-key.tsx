@@ -1,7 +1,8 @@
 import type { Choice } from "./get-api-key-components";
 import type { Request, Response } from "express";
-import { providers } from "./providers";
+
 import { ApiKeyPrompt, WaitingForAuth } from "./get-api-key-components";
+import { providers } from "./providers";
 import chalk from "chalk";
 import express from "express";
 import fs from "fs/promises";
@@ -748,9 +749,7 @@ export async function getApiKey(
   let provider = providers[providerId];
   if (!provider) {
     // eslint-disable-next-line no-console
-    console.warn(
-      `Provider "${providerId}" not found, defaulting to OpenAI.`,
-    );
+    console.warn(`Provider "${providerId}" not found, defaulting to OpenAI.`);
     provider = providers["openai"];
   }
 

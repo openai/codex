@@ -41,11 +41,11 @@ import {
   getApiKey as fetchApiKey,
   maybeRedeemCredits,
 } from "./utils/get-api-key";
-import { providers } from "./utils/providers";
 import { createInputItem } from "./utils/input-utils";
 import { initLogger } from "./utils/logger/log";
 import { isModelSupportedForResponses } from "./utils/model-utils.js";
 import { parseToolCall } from "./utils/parsers";
+import { providers } from "./utils/providers";
 import { onExit, setInkRenderer } from "./utils/terminal";
 import chalk from "chalk";
 import { spawnSync } from "child_process";
@@ -278,62 +278,41 @@ if (cli.flags.config) {
 // API key handling
 // ---------------------------------------------------------------------------
 
-const fullContextMode = Boolean(cli.flags.fullContext);
-let config = loadConfig(undefined, undefined, {
-  cwd: process.cwd(),
-  disableProjectDoc: Boolean(cli.flags.noProjectDoc),
-  projectDocPath: cli.flags.projectDoc,
-  isFullContext: fullContextMode,
-});
+async function main(): Promise<void> {
+  const fullContextMode = Boolean(cli.flags.fullContext);
+  let config = loadConfig(undefined, undefined, {
+    cwd: process.cwd(),
+    disableProjectDoc: Boolean(cli.flags.noProjectDoc),
+    projectDocPath: cli.flags.projectDoc,
+    isFullContext: fullContextMode,
+  });
 
-// `prompt` can be updated later when the user resumes a previous session
-// via the `--history` flag. Therefore it must be declared with `let` rather
-// than `const`.
-let prompt = cli.input[0];
-const model = cli.flags.model ?? config.model;
-const imagePaths = cli.flags.image;
-const provider = cli.flags.provider ?? config.provider ?? "openai";
+  // `prompt` can be updated later when the user resumes a previous session
+  // via the `--history` flag. Therefore it must be declared with `let` rather
+  // than `const`.
+  let prompt = cli.input[0];
+  const model = cli.flags.model ?? config.model;
+  const imagePaths = cli.flags.image;
+  const provider = cli.flags.provider ?? config.provider ?? "openai";
 
-const client = {
-  issuer: "https://auth.openai.com",
-  client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
-};
+  const client = {
+    issuer: "https://auth.openai.com",
+    client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
+  };
 
-let apiKey = "";
-let savedTokens:
-  | {
-      id_token?: string;
-      access_token?: string;
-      refresh_token: string;
-    }
-  | undefined;
-
-// Try to load existing auth file if present
-try {
-  const home = os.homedir();
-  const authDir = path.join(home, ".codex");
-  const authFile = path.join(authDir, "auth.json");
-  if (fs.existsSync(authFile)) {
-    const data = JSON.parse(fs.readFileSync(authFile, "utf-8"));
-    savedTokens = data.tokens;
-    const lastRefreshTime = data.last_refresh
-      ? new Date(data.last_refresh).getTime()
-      : 0;
-    const expired = Date.now() - lastRefreshTime > 28 * 24 * 60 * 60 * 1000;
-    if (provider.toLowerCase() === "openai") { // Only use auth.json key if provider is openai
-      if (data.OPENAI_API_KEY && !expired) {
-        apiKey = data.OPENAI_API_KEY; // This will be used by fetchApiKey for openai
-                                      // or potentially used directly if fetchApiKey is skipped
+  let apiKey = "";
+  let savedTokens:
+    | {
+        id_token?: string;
+        access_token?: string;
+        refresh_token: string;
       }
-    }
-  }
-} catch {
-  // ignore errors
-}
+    | undefined;
 
-if (cli.flags.login) {
-  // Force login means we always call fetchApiKey
-  apiKey = await fetchApiKey(provider, client.issuer, client.client_id, true);
+  // Set of providers that don't require API keys
+  const NO_API_KEY_REQUIRED = new Set(["ollama"]);
+
+  // Try to load existing auth file if present
   try {
     const home = os.homedir();
     const authDir = path.join(home, ".codex");
@@ -341,266 +320,312 @@ if (cli.flags.login) {
     if (fs.existsSync(authFile)) {
       const data = JSON.parse(fs.readFileSync(authFile, "utf-8"));
       savedTokens = data.tokens;
+      const lastRefreshTime = data.last_refresh
+        ? new Date(data.last_refresh).getTime()
+        : 0;
+      const expired = Date.now() - lastRefreshTime > 28 * 24 * 60 * 60 * 1000;
+      if (provider.toLowerCase() === "openai") {
+        // Only use auth.json key if provider is openai
+        if (data.OPENAI_API_KEY && !expired) {
+          apiKey = data.OPENAI_API_KEY; // This will be used by fetchApiKey for openai
+          // or potentially used directly if fetchApiKey is skipped
+        }
+      }
     }
   } catch {
-    /* ignore */
-  }
-} else if (!process.env[providers[provider]?.envKey ?? ''] && !apiKey && !NO_API_KEY_REQUIRED.has(provider.toLowerCase())) {
-  // If not login, not already in env, and (if openai) not pre-loaded from auth.json, then fetch.
-  apiKey = await fetchApiKey(provider, client.issuer, client.client_id, false);
-}
-// process.env["OPENAI_API_KEY"] = apiKey; // This line is removed. fetchApiKey handles setting the correct env var.
-
-if (cli.flags.free) {
-  // eslint-disable-next-line no-console
-  console.log(`${chalk.bold("codex --free")} attempting to redeem credits...`);
-  if (provider.toLowerCase() === "openai") {
-    if (!savedTokens?.refresh_token) {
-      // apiKey will be set by fetchApiKey, which also handles env var
-      await fetchApiKey(provider, client.issuer, client.client_id, true);
-      // fetchApiKey includes credit redemption as the end of the flow
-    } else {
-      await maybeRedeemCredits(
-        client.issuer,
-        client.client_id,
-        savedTokens.refresh_token,
-        savedTokens.id_token,
-      );
-    }
-  } else {
-    // eslint-disable-next-line no-console
-    console.log(chalk.yellow(`The --free flag is only applicable for the OpenAI provider.`));
-  }
-}
-
-// Set of providers that don't require API keys
-const NO_API_KEY_REQUIRED = new Set(["ollama"]);
-
-// Check if the API key is in the environment after all potential fetch/set operations
-const currentProviderEnvKey = providers[provider]?.envKey;
-if (!currentProviderEnvKey || (!process.env[currentProviderEnvKey] && !NO_API_KEY_REQUIRED.has(provider.toLowerCase()))) {
-  const providerName = providers[provider]?.name ?? provider;
-  const envKeyToSet = currentProviderEnvKey ?? `${provider.toUpperCase()}_API_KEY`;
-  // eslint-disable-next-line no-console
-  console.error(
-    `\n${chalk.red(`Missing ${providerName} API key.`)}\n\n` +
-      `Set the environment variable ${chalk.bold(envKeyToSet)} ` +
-      `and re-run this command, or run with --login if you are using OpenAI.\n` +
-      `${
-        provider.toLowerCase() === "openai"
-          ? `You can create a key here: ${chalk.bold(
-              chalk.underline("https://platform.openai.com/account/api-keys"),
-            )}\n`
-          : provider.toLowerCase() === "gemini"
-            ? `You can create a ${chalk.bold(envKeyToSet)} ` +
-              `in the ${chalk.bold("Google AI Studio")}.\n`
-            : `You can create a ${chalk.bold(envKeyToSet)} ` +
-              `in the ${chalk.bold(providerName)} dashboard.\n`
-      }`,
-  );
-  process.exit(1);
-}
-
-const flagPresent = Object.hasOwn(cli.flags, "disableResponseStorage");
-
-const disableResponseStorage = flagPresent
-  ? Boolean(cli.flags.disableResponseStorage) // value user actually passed
-  : (config.disableResponseStorage ?? false); // fall back to YAML, default to false
-
-config = {
-  // apiKey is no longer the source of truth here for all providers.
-  // Environment variables are set by fetchApiKey.
-  // For OpenAI, if apiKey was loaded from auth.json, it might be used.
-  // For other providers, it's whatever is in their specific env var.
-  apiKey: process.env[providers[provider]?.envKey ?? ''] ?? (provider.toLowerCase() === 'openai' ? apiKey : ''),
-  ...config,
-  model: model ?? config.model,
-  notify: Boolean(cli.flags.notify),
-  reasoningEffort:
-    (cli.flags.reasoning as ReasoningEffort | undefined) ?? "medium",
-  flexMode: cli.flags.flexMode || (config.flexMode ?? false),
-  provider,
-  disableResponseStorage,
-};
-
-// Check for updates after loading config. This is important because we write state file in
-// the config dir.
-try {
-  await checkForUpdates();
-} catch {
-  // ignore
-}
-
-// For --flex-mode, validate and exit if incorrect.
-if (config.flexMode) {
-  const allowedFlexModels = new Set(["o3", "o4-mini"]);
-  if (!allowedFlexModels.has(config.model)) {
-    if (cli.flags.flexMode) {
-      // eslint-disable-next-line no-console
-      console.error(
-        `The --flex-mode option is only supported when using the 'o3' or 'o4-mini' models. ` +
-          `Current model: '${config.model}'.`,
-      );
-      process.exit(1);
-    } else {
-      config.flexMode = false;
-    }
-  }
-}
-
-if (
-  !(await isModelSupportedForResponses(provider, config.model)) &&
-  (!provider || provider.toLowerCase() === "openai")
-) {
-  // eslint-disable-next-line no-console
-  console.error(
-    `The model "${config.model}" does not appear in the list of models ` +
-      `available to your account. Double-check the spelling (use\n` +
-      `  openai models list\n` +
-      `to see the full list) or choose another model with the --model flag.`,
-  );
-  process.exit(1);
-}
-
-let rollout: AppRollout | undefined;
-
-// For --history, show session selector and optionally update prompt or rollout.
-if (cli.flags.history) {
-  const result: { path: string; mode: "view" | "resume" } | null =
-    await new Promise((resolve) => {
-      const instance = render(
-        React.createElement(SessionsOverlay, {
-          onView: (p: string) => {
-            instance.unmount();
-            resolve({ path: p, mode: "view" });
-          },
-          onResume: (p: string) => {
-            instance.unmount();
-            resolve({ path: p, mode: "resume" });
-          },
-          onExit: () => {
-            instance.unmount();
-            resolve(null);
-          },
-        }),
-      );
-    });
-
-  if (!result) {
-    process.exit(0);
+    // ignore errors
   }
 
-  if (result.mode === "view") {
+  if (cli.flags.login) {
+    // Force login means we always call fetchApiKey
+    apiKey = await fetchApiKey(provider, client.issuer, client.client_id, true);
     try {
-      const content = fs.readFileSync(result.path, "utf-8");
-      rollout = JSON.parse(content) as AppRollout;
-    } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error("Error reading session file:", error);
-      process.exit(1);
+      const home = os.homedir();
+      const authDir = path.join(home, ".codex");
+      const authFile = path.join(authDir, "auth.json");
+      if (fs.existsSync(authFile)) {
+        const data = JSON.parse(fs.readFileSync(authFile, "utf-8"));
+        savedTokens = data.tokens;
+      }
+    } catch {
+      /* ignore */
     }
-  } else {
-    prompt = `Resume this session: ${result.path}`;
+  } else if (
+    !process.env[providers[provider]?.envKey ?? ""] &&
+    !apiKey &&
+    !NO_API_KEY_REQUIRED.has(provider.toLowerCase())
+  ) {
+    // If not login, not already in env, and (if openai) not pre-loaded from auth.json, then fetch.
+    apiKey = await fetchApiKey(
+      provider,
+      client.issuer,
+      client.client_id,
+      false,
+    );
   }
-}
+  // process.env["OPENAI_API_KEY"] = apiKey; // This line is removed. fetchApiKey handles setting the correct env var.
 
-// For --view, optionally load an existing rollout from disk, display it and exit.
-if (cli.flags.view) {
-  const viewPath = cli.flags.view;
-  const absolutePath = path.isAbsolute(viewPath)
-    ? viewPath
-    : path.join(process.cwd(), viewPath);
-  try {
-    const content = fs.readFileSync(absolutePath, "utf-8");
-    rollout = JSON.parse(content) as AppRollout;
-  } catch (error) {
+  if (cli.flags.free) {
     // eslint-disable-next-line no-console
-    console.error("Error reading rollout file:", error);
-    process.exit(1);
+    console.log(
+      `${chalk.bold("codex --free")} attempting to redeem credits...`,
+    );
+    if (provider.toLowerCase() === "openai") {
+      if (!savedTokens?.refresh_token) {
+        // apiKey will be set by fetchApiKey, which also handles env var
+        await fetchApiKey(provider, client.issuer, client.client_id, true);
+        // fetchApiKey includes credit redemption as the end of the flow
+      } else {
+        await maybeRedeemCredits(
+          client.issuer,
+          client.client_id,
+          savedTokens.refresh_token,
+          savedTokens.id_token,
+        );
+      }
+    } else {
+      // eslint-disable-next-line no-console
+      console.log(
+        chalk.yellow(
+          `The --free flag is only applicable for the OpenAI provider.`,
+        ),
+      );
+    }
   }
-}
 
-// For --fullcontext, run the separate cli entrypoint and exit.
-if (fullContextMode) {
-  await runSinglePass({
-    originalPrompt: prompt,
-    config,
-    rootPath: process.cwd(),
-  });
-  onExit();
-  process.exit(0);
-}
-
-// Ensure that all values in additionalWritableRoots are absolute paths.
-const additionalWritableRoots: ReadonlyArray<string> = (
-  cli.flags.writableRoot ?? []
-).map((p) => path.resolve(p));
-
-// For --quiet, run the cli without user interactions and exit.
-if (cli.flags.quiet) {
-  process.env["CODEX_QUIET_MODE"] = "1";
-  if (!prompt || prompt.trim() === "") {
+  // Check if the API key is in the environment after all potential fetch/set operations
+  const currentProviderEnvKey = providers[provider]?.envKey;
+  if (
+    !currentProviderEnvKey ||
+    (!process.env[currentProviderEnvKey] &&
+      !NO_API_KEY_REQUIRED.has(provider.toLowerCase()))
+  ) {
+    const providerName = providers[provider]?.name ?? provider;
+    const envKeyToSet =
+      currentProviderEnvKey ?? `${provider.toUpperCase()}_API_KEY`;
     // eslint-disable-next-line no-console
     console.error(
-      'Quiet mode requires a prompt string, e.g.,: codex -q "Fix bug #123 in the foobar project"',
+      `\n${chalk.red(`Missing ${providerName} API key.`)}\n\n` +
+        `Set the environment variable ${chalk.bold(envKeyToSet)} ` +
+        `and re-run this command, or run with --login if you are using OpenAI.\n` +
+        `${
+          provider.toLowerCase() === "openai"
+            ? `You can create a key here: ${chalk.bold(
+                chalk.underline("https://platform.openai.com/account/api-keys"),
+              )}\n`
+            : provider.toLowerCase() === "gemini"
+              ? `You can create a ${chalk.bold(envKeyToSet)} ` +
+                `in the ${chalk.bold("Google AI Studio")}.\n`
+              : `You can create a ${chalk.bold(envKeyToSet)} ` +
+                `in the ${chalk.bold(providerName)} dashboard.\n`
+        }`,
     );
     process.exit(1);
   }
 
-  // Determine approval policy for quiet mode based on flags
-  const quietApprovalPolicy: ApprovalPolicy =
+  const flagPresent = Object.hasOwn(cli.flags, "disableResponseStorage");
+
+  const disableResponseStorage = flagPresent
+    ? Boolean(cli.flags.disableResponseStorage) // value user actually passed
+    : (config.disableResponseStorage ?? false); // fall back to YAML, default to false
+
+  config = {
+    // apiKey is no longer the source of truth here for all providers.
+    // Environment variables are set by fetchApiKey.
+    // For OpenAI, if apiKey was loaded from auth.json, it might be used.
+    // For other providers, it's whatever is in their specific env var.
+    apiKey:
+      process.env[providers[provider]?.envKey ?? ""] ??
+      (provider.toLowerCase() === "openai" ? apiKey : ""),
+    ...config,
+    model: model ?? config.model,
+    notify: Boolean(cli.flags.notify),
+    reasoningEffort:
+      (cli.flags.reasoning as ReasoningEffort | undefined) ?? "medium",
+    flexMode: cli.flags.flexMode || (config.flexMode ?? false),
+    provider,
+    disableResponseStorage,
+  };
+
+  // Check for updates after loading config. This is important because we write state file in
+  // the config dir.
+  try {
+    await checkForUpdates();
+  } catch {
+    // ignore
+  }
+
+  // For --flex-mode, validate and exit if incorrect.
+  if (config.flexMode) {
+    const allowedFlexModels = new Set(["o3", "o4-mini"]);
+    if (!allowedFlexModels.has(config.model)) {
+      if (cli.flags.flexMode) {
+        // eslint-disable-next-line no-console
+        console.error(
+          `The --flex-mode option is only supported when using the 'o3' or 'o4-mini' models. ` +
+            `Current model: '${config.model}'.`,
+        );
+        process.exit(1);
+      } else {
+        config.flexMode = false;
+      }
+    }
+  }
+
+  if (
+    !(await isModelSupportedForResponses(provider, config.model)) &&
+    (!provider || provider.toLowerCase() === "openai")
+  ) {
+    // eslint-disable-next-line no-console
+    console.error(
+      `The model "${config.model}" does not appear in the list of models ` +
+        `available to your account. Double-check the spelling (use\n` +
+        `  openai models list\n` +
+        `to see the full list) or choose another model with the --model flag.`,
+    );
+    process.exit(1);
+  }
+
+  let rollout: AppRollout | undefined;
+
+  // For --history, show session selector and optionally update prompt or rollout.
+  if (cli.flags.history) {
+    const result: { path: string; mode: "view" | "resume" } | null =
+      await new Promise((resolve) => {
+        const instance = render(
+          React.createElement(SessionsOverlay, {
+            onView: (p: string) => {
+              instance.unmount();
+              resolve({ path: p, mode: "view" });
+            },
+            onResume: (p: string) => {
+              instance.unmount();
+              resolve({ path: p, mode: "resume" });
+            },
+            onExit: () => {
+              instance.unmount();
+              resolve(null);
+            },
+          }),
+        );
+      });
+
+    if (!result) {
+      process.exit(0);
+    }
+
+    if (result.mode === "view") {
+      try {
+        const content = fs.readFileSync(result.path, "utf-8");
+        rollout = JSON.parse(content) as AppRollout;
+      } catch (error) {
+        // eslint-disable-next-line no-console
+        console.error("Error reading session file:", error);
+        process.exit(1);
+      }
+    } else {
+      prompt = `Resume this session: ${result.path}`;
+    }
+  }
+
+  // For --view, optionally load an existing rollout from disk, display it and exit.
+  if (cli.flags.view) {
+    const viewPath = cli.flags.view;
+    const absolutePath = path.isAbsolute(viewPath)
+      ? viewPath
+      : path.join(process.cwd(), viewPath);
+    try {
+      const content = fs.readFileSync(absolutePath, "utf-8");
+      rollout = JSON.parse(content) as AppRollout;
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error("Error reading rollout file:", error);
+      process.exit(1);
+    }
+  }
+
+  // For --fullcontext, run the separate cli entrypoint and exit.
+  if (fullContextMode) {
+    await runSinglePass({
+      originalPrompt: prompt,
+      config,
+      rootPath: process.cwd(),
+    });
+    onExit();
+    process.exit(0);
+  }
+
+  // Ensure that all values in additionalWritableRoots are absolute paths.
+  const additionalWritableRoots: ReadonlyArray<string> = (
+    cli.flags.writableRoot ?? []
+  ).map((p) => path.resolve(p));
+
+  // For --quiet, run the cli without user interactions and exit.
+  if (cli.flags.quiet) {
+    process.env["CODEX_QUIET_MODE"] = "1";
+    if (!prompt || prompt.trim() === "") {
+      // eslint-disable-next-line no-console
+      console.error(
+        'Quiet mode requires a prompt string, e.g.,: codex -q "Fix bug #123 in the foobar project"',
+      );
+      process.exit(1);
+    }
+
+    // Determine approval policy for quiet mode based on flags
+    const quietApprovalPolicy: ApprovalPolicy =
+      cli.flags.fullAuto || cli.flags.approvalMode === "full-auto"
+        ? AutoApprovalMode.FULL_AUTO
+        : cli.flags.autoEdit || cli.flags.approvalMode === "auto-edit"
+          ? AutoApprovalMode.AUTO_EDIT
+          : config.approvalMode || AutoApprovalMode.SUGGEST;
+
+    await runQuietMode({
+      prompt,
+      imagePaths: imagePaths || [],
+      approvalPolicy: quietApprovalPolicy,
+      additionalWritableRoots,
+      config,
+    });
+    onExit();
+    process.exit(0);
+  }
+
+  // Default to the "suggest" policy.
+  // Determine the approval policy to use in interactive mode.
+  //
+  // Priority (highest → lowest):
+  // 1. --fullAuto – run everything automatically in a sandbox.
+  // 2. --dangerouslyAutoApproveEverything – run everything **without** a sandbox
+  //    or prompts.  This is intended for completely trusted environments.  Since
+  //    it is more dangerous than --fullAuto we deliberately give it lower
+  //    priority so a user specifying both flags still gets the safer behaviour.
+  // 3. --autoEdit – automatically approve edits, but prompt for commands.
+  // 4. config.approvalMode - use the approvalMode setting from ~/.codex/config.json.
+  // 5. Default – suggest mode (prompt for everything).
+
+  const approvalPolicy: ApprovalPolicy =
     cli.flags.fullAuto || cli.flags.approvalMode === "full-auto"
       ? AutoApprovalMode.FULL_AUTO
       : cli.flags.autoEdit || cli.flags.approvalMode === "auto-edit"
         ? AutoApprovalMode.AUTO_EDIT
         : config.approvalMode || AutoApprovalMode.SUGGEST;
 
-  await runQuietMode({
-    prompt,
-    imagePaths: imagePaths || [],
-    approvalPolicy: quietApprovalPolicy,
-    additionalWritableRoots,
-    config,
-  });
-  onExit();
-  process.exit(0);
+  const instance = render(
+    <App
+      prompt={prompt}
+      config={config}
+      rollout={rollout}
+      imagePaths={imagePaths}
+      approvalPolicy={approvalPolicy}
+      additionalWritableRoots={additionalWritableRoots}
+      fullStdout={Boolean(cli.flags.fullStdout)}
+    />,
+    {
+      patchConsole: process.env["DEBUG"] ? false : true,
+    },
+  );
+  setInkRenderer(instance);
 }
-
-// Default to the "suggest" policy.
-// Determine the approval policy to use in interactive mode.
-//
-// Priority (highest → lowest):
-// 1. --fullAuto – run everything automatically in a sandbox.
-// 2. --dangerouslyAutoApproveEverything – run everything **without** a sandbox
-//    or prompts.  This is intended for completely trusted environments.  Since
-//    it is more dangerous than --fullAuto we deliberately give it lower
-//    priority so a user specifying both flags still gets the safer behaviour.
-// 3. --autoEdit – automatically approve edits, but prompt for commands.
-// 4. config.approvalMode - use the approvalMode setting from ~/.codex/config.json.
-// 5. Default – suggest mode (prompt for everything).
-
-const approvalPolicy: ApprovalPolicy =
-  cli.flags.fullAuto || cli.flags.approvalMode === "full-auto"
-    ? AutoApprovalMode.FULL_AUTO
-    : cli.flags.autoEdit || cli.flags.approvalMode === "auto-edit"
-      ? AutoApprovalMode.AUTO_EDIT
-      : config.approvalMode || AutoApprovalMode.SUGGEST;
-
-const instance = render(
-  <App
-    prompt={prompt}
-    config={config}
-    rollout={rollout}
-    imagePaths={imagePaths}
-    approvalPolicy={approvalPolicy}
-    additionalWritableRoots={additionalWritableRoots}
-    fullStdout={Boolean(cli.flags.fullStdout)}
-  />,
-  {
-    patchConsole: process.env["DEBUG"] ? false : true,
-  },
-);
-setInkRenderer(instance);
 
 function formatResponseItemForQuietMode(item: ResponseItem): string {
   if (!PRETTY_PRINT) {
@@ -728,3 +753,14 @@ if (process.stdin.isTTY) {
 // Ensure terminal clean-up always runs, even when other code calls
 // `process.exit()` directly.
 process.once("exit", onExit);
+
+main()
+  .catch((err) => {
+    // eslint-disable-next-line no-console
+    console.error(chalk.red("An unexpected error occurred:"), err);
+    process.exit(1);
+  })
+  .finally(() => {
+    // Ensure cleanup runs, though onExit() is also hooked to process events
+    onExit();
+  });
