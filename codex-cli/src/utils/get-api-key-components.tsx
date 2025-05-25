@@ -8,8 +8,12 @@ export type Choice = { type: "signin" } | { type: "apikey"; key: string };
 
 export function ApiKeyPrompt({
   onDone,
+  providerName,
+  providerEnvKey,
 }: {
   onDone: (choice: Choice) => void;
+  providerName: string;
+  providerEnvKey: string;
 }): JSX.Element {
   const [step, setStep] = useState<"select" | "paste">("select");
   const [apiKey, setApiKey] = useState("");
@@ -18,20 +22,36 @@ export function ApiKeyPrompt({
     return (
       <Box flexDirection="column" gap={1}>
         <Box flexDirection="column">
-          <Text>
-            Sign in with ChatGPT to generate an API key or paste one you already
-            have.
-          </Text>
+          {providerName === "OpenAI" ? (
+            <Text>
+              Sign in with {providerName} to generate an API key or paste one
+              you already have.
+            </Text>
+          ) : (
+            <Text>
+              Paste your {providerName} API key or set it as an environment
+              variable.
+            </Text>
+          )}
           <Text dimColor>[use arrows to move, enter to select]</Text>
         </Box>
         <SelectInput
-          items={[
-            { label: "Sign in with ChatGPT", value: "signin" },
-            {
-              label: "Paste an API key (or set as OPENAI_API_KEY)",
-              value: "paste",
-            },
-          ]}
+          items={
+            providerName === "OpenAI"
+              ? [
+                  { label: `Sign in with ${providerName}`, value: "signin" },
+                  {
+                    label: `Paste an API key (or set as ${providerEnvKey})`,
+                    value: "paste",
+                  },
+                ]
+              : [
+                  {
+                    label: `Paste an API key (or set as ${providerEnvKey})`,
+                    value: "paste",
+                  },
+                ]
+          }
           onSelect={(item: { value: string }) => {
             if (item.value === "signin") {
               onDone({ type: "signin" });
@@ -46,7 +66,9 @@ export function ApiKeyPrompt({
 
   return (
     <Box flexDirection="column">
-      <Text>Paste your OpenAI API key and press &lt;Enter&gt;:</Text>
+      <Text>
+        Paste your {providerName} API key and press &lt;Enter&gt;:
+      </Text>
       <TextInput
         value={apiKey}
         onChange={setApiKey}
