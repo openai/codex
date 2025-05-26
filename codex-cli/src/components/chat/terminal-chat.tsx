@@ -426,6 +426,9 @@ export default function TerminalChat({
   // ────────────────────────────────────────────────────────────────
   useEffect(() => {
     (async () => {
+      if (provider.toLowerCase() === "azure") {
+        return;
+      }
       const available = await getAvailableModels(provider);
       if (model && available.length > 0 && !available.includes(model)) {
         setItems((prev) => [
