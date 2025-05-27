@@ -78,3 +78,10 @@ jobs:
         run: ./scripts/asciicheck.py README.md
       - name: Check README ToC
         run: python3 scripts/readme_toc.py README.md
+
+  build-nix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - run: nix build
