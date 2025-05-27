@@ -808,13 +808,19 @@ export class AgentLoop {
                       this.oai,
                       params as ResponseCreateParams & { stream: true },
                     );
+            // Fix for Gemini: ensure model name has "models/" prefix
+            let modelName = this.model;
+            if (this.provider.toLowerCase() === "gemini" && !modelName.startsWith("models/")) {
+              modelName = `models/${modelName}`;
+            }
+
             log(
               `instructions (length ${mergedInstructions.length}): ${mergedInstructions}`,
             );
 
             // eslint-disable-next-line no-await-in-loop
             stream = await responseCall({
-              model: this.model,
+              model: modelName,
               instructions: mergedInstructions,
               input: turnInput,
               stream: true,
@@ -1197,13 +1203,19 @@ export class AgentLoop {
                         params as ResponseCreateParams & { stream: true },
                       );
 
+              // Fix for Gemini: ensure model name has "models/" prefix
+              let retryModelName = this.model;
+              if (this.provider.toLowerCase() === "gemini" && !retryModelName.startsWith("models/")) {
+                retryModelName = `models/${retryModelName}`;
+              }
+
               log(
                 "agentLoop.run(): responseCall(1): turnInput: " +
                   JSON.stringify(turnInput),
               );
               // eslint-disable-next-line no-await-in-loop
               stream = await responseCall({
-                model: this.model,
+                model: retryModelName,
                 instructions: mergedInstructions,
                 input: turnInput,
                 stream: true,
