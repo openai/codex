@@ -22,7 +22,7 @@ export const SLASH_COMMANDS: Array<SlashCommand> = [
   { command: "/history", description: "Open command history" },
   { command: "/sessions", description: "Browse previous sessions" },
   { command: "/help", description: "Show list of commands" },
-  { command: "/model", description: "Open model selection panel" },
+  { command: "/model", description: "Open model selection panel or switch to specific model with: /model <model-name>" },
   { command: "/approval", description: "Open approval mode selection panel" },
   {
     command: "/bug",
