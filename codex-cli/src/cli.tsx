@@ -102,6 +102,9 @@ const cli = meow(
 
     --reasoning <effort>      Set the reasoning effort level (low, medium, high) (default: high)
 
+    --output <format>              Set output format: text (default) or json
+    --all-events                   (with --output json) Output all events, not just final assistant reply
+
   Dangerous options
     --dangerously-auto-approve-everything
                                Skip all confirmation prompts and execute commands without
@@ -115,6 +118,7 @@ const cli = meow(
   Examples
     $ codex "Write and run a python program that prints ASCII art"
     $ codex -q "fix build issues"
+    $ codex -q --output json "Summarize the main functionality of all Python files in this repository."
     $ codex completion bash
 `,
   {
@@ -212,6 +216,19 @@ const cli = meow(
         aliases: ["f"],
         description: `Run in full-context editing approach. The model is given the whole code
           directory as context and performs changes in one go without acting.`,
+      },
+
+      output: {
+        type: "string",
+        aliases: ["o"],
+        description: "Set output format: text (default) or json",
+        choices: ["text", "json"],
+        default: "text",
+      },
+
+      allEvents: {
+        type: "boolean",
+        description: "Output all events instead of only final assistant reply",
       },
     },
   },
@@ -659,8 +676,20 @@ async function runQuietMode({
     additionalWritableRoots,
     disableResponseStorage: config.disableResponseStorage,
     onItem: (item: ResponseItem) => {
-      // eslint-disable-next-line no-console
-      console.log(formatResponseItemForQuietMode(item));
+      if (cli.flags.output === "json") {
+        if (cli.flags.allEvents) {
+          // eslint-disable-next-line no-console
+          console.log(JSON.stringify(item));
+        } else {
+          if (item.type === "message" && item.role === "assistant") {
+            // eslint-disable-next-line no-console
+            console.log(JSON.stringify(item));
+          }
+        }
+      } else {
+        // eslint-disable-next-line no-console
+        console.log(formatResponseItemForQuietMode(item));
+      }
     },
     onLoading: () => {
       /* intentionally ignored in quiet mode */
