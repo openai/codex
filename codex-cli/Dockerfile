@@ -1,4 +1,4 @@
-FROM node:20-slim
+FROM node:lts-slim
 
 ARG TZ
 ENV TZ="$TZ"
