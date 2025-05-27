@@ -229,6 +229,10 @@ const cli = meow(
         type: "string",
         description: "URL of the remote server to send permission requests to.",
       },
+      agentId: {
+        type: "string",
+        description: "Agent ID to use for remote permission requests.",
+      },
     },
   },
 );
@@ -596,6 +600,15 @@ if (cli.flags.remotePermission) {
     );
     process.exit(1);
   }
+  if (!cli.flags.agentId) {
+    // We require an agent ID to send remote permission requests, since permission server
+    // might be dealing with multiple agents.
+    // eslint-disable-next-line no-console
+    console.error(
+      "The --remote-permission flag requires the --agent-id flag to be set.",
+    );
+    process.exit(1);
+  }
   if (!prompt || prompt.trim() === "") {
     // eslint-disable-next-line no-console
     console.error(
@@ -604,6 +617,7 @@ if (cli.flags.remotePermission) {
     process.exit(1);
   }
   await runRemoteMode({
+    agentId: cli.flags.agentId,
     url: cli.flags.permissionServerUrl,
     prompt,
     imagePaths: imagePaths || [],
@@ -728,6 +742,7 @@ async function runQuietMode({
 }
 
 async function runRemoteMode({
+  agentId,
   url,
   prompt,
   imagePaths,
@@ -735,6 +750,7 @@ async function runRemoteMode({
   additionalWritableRoots,
   config,
 }: {
+  agentId: string;
   url: string;
   prompt: string;
   imagePaths: Array<string>;
@@ -767,7 +783,11 @@ async function runRemoteMode({
     ): Promise<CommandConfirmation> => {
       // First request for confirmation
       let { decision: review, customDenyMessage } =
-        await requestRemotePermission(url, `command: ${command.join(" ")}`);
+        await requestRemotePermission(
+          agentId,
+          url,
+          `command: ${command.join(" ")}`,
+        );
 
       // If the user wants an explanation, generate one and ask again.
       if (review === ReviewDecision.EXPLAIN) {
