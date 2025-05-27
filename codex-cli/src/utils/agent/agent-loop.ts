@@ -181,8 +181,6 @@ export class AgentLoop {
       return;
     }
 
-    // Reset the current stream to allow new requests
-    this.currentStream = null;
     log(
       `AgentLoop.cancel() invoked – currentStream=${Boolean(
         this.currentStream,
@@ -193,6 +191,9 @@ export class AgentLoop {
     (
       this.currentStream as { controller?: { abort?: () => void } } | null
     )?.controller?.abort?.();
+
+    // Reset the current stream to allow new requests
+    this.currentStream = null;
 
     this.canceled = true;
 
@@ -1297,13 +1298,16 @@ export class AgentLoop {
               this.onItem(item);
             }
           }
+          // guarading clear
+          // because we may still enter this after abort
+          this.pendingAborts.clear();
         }
 
         // At this point the turn finished without the user invoking
         // `cancel()`.  Any outstanding function‑calls must therefore have been
         // satisfied, so we can safely clear the set that tracks pending aborts
         // to avoid emitting duplicate synthetic outputs in subsequent runs.
-        this.pendingAborts.clear();
+        // this.pendingAborts.clear();
         // Now emit system messages recording the per‑turn *and* cumulative
         // thinking times so UIs and tests can surface/verify them.
         // const thinkingEnd = Date.now();
