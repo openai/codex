@@ -54,18 +54,23 @@ pub fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> std::io::
             model: cli.model.clone(),
             approval_policy,
             sandbox_policy,
-            disable_response_storage: if cli.disable_response_storage {
-                Some(true)
-            } else {
-                None
-            },
             cwd: cli.cwd.clone().map(|p| p.canonicalize().unwrap_or(p)),
             model_provider: None,
             config_profile: cli.config_profile.clone(),
             codex_linux_sandbox_exe,
         };
+        // Parse `-c` overrides from the CLI.
+        let cli_kv_overrides = match cli.config_overrides.parse_overrides() {
+            Ok(v) => v,
+            #[allow(clippy::print_stderr)]
+            Err(e) => {
+                eprintln!("Error parsing -c overrides: {e}");
+                std::process::exit(1);
+            }
+        };
+
         #[allow(clippy::print_stderr)]
-        match Config::load_with_overrides(overrides) {
+        match Config::load_with_cli_overrides(cli_kv_overrides, overrides) {
             Ok(config) => config,
             Err(err) => {
                 eprintln!("Error loading configuration: {err}");

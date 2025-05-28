@@ -32,7 +32,7 @@ The `config.toml` file supports the following options:
 The model that Codex should use.
 
 ```toml
-model = "o3"  # overrides the default of "codex-mini-latest"
+model = "o3"  # overrides the default of "o4-mini"
 ```
 
 ### model_provider
