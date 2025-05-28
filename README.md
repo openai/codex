@@ -106,6 +106,7 @@ export OPENAI_API_KEY="your-api-key-here"
 > - xai
 > - groq
 > - arceeai
+> - portkey
 > - any other provider that is compatible with the OpenAI API
 >
 > If you use a provider other than OpenAI, you will need to set the API key for the provider in the config file or in the environment variable as:
