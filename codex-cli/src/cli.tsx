@@ -29,6 +29,7 @@ import { initLogger } from "./utils/logger/log";
 import { isModelSupportedForResponses } from "./utils/model-utils.js";
 import { parseToolCall } from "./utils/parsers";
 import { onExit, setInkRenderer } from "./utils/terminal";
+import { loadTodos, saveTodos } from "./utils/todo";
 import chalk from "chalk";
 import { spawnSync } from "child_process";
 import fs from "fs";
@@ -224,6 +225,97 @@ complete -c codex -a '(__fish_complete_path)' -d 'file path'`,
   }
   // eslint-disable-next-line no-console
   console.log(script);
+  process.exit(0);
+}
+
+// Handle 'todo' subcommand before any prompting or API calls
+if (cli.input[0] === "todo") {
+  const subcommand = cli.input[1];
+  const todos = loadTodos();
+
+  switch (subcommand) {
+    case "list":
+    case "ls": {
+      if (todos.length === 0) {
+        // eslint-disable-next-line no-console
+        console.log("🗒️  No todos yet.");
+      } else {
+        // eslint-disable-next-line no-console
+        console.log("🗒️  Todo list:");
+        // eslint-disable-next-line no-console
+        todos.forEach((todo, i) => console.log(`  ${i + 1}. ${todo}`));
+      }
+      break;
+    }
+
+    case "add": {
+      const todoText = cli.input.slice(2).join(" ");
+      if (!todoText) {
+        // eslint-disable-next-line no-console
+        console.error(
+          '❌ Please provide a todo description: codex todo add "your todo"',
+        );
+        process.exit(1);
+      }
+      todos.push(todoText);
+      saveTodos(todos);
+      // eslint-disable-next-line no-console
+      console.log(`✅ Added todo: ${todoText}`);
+      break;
+    }
+
+    case "remove":
+    case "rm":
+    case "delete": {
+      const indexStr = cli.input[2];
+      if (!indexStr) {
+        // eslint-disable-next-line no-console
+        console.error(
+          "❌ Please provide a todo number: codex todo remove <number>",
+        );
+        process.exit(1);
+      }
+      const index = parseInt(indexStr, 10) - 1;
+      if (isNaN(index) || index < 0 || index >= todos.length) {
+        // eslint-disable-next-line no-console
+        console.error(
+          `❌ Invalid todo number. Use a number between 1 and ${todos.length}`,
+        );
+        process.exit(1);
+      }
+      const removed = todos.splice(index, 1)[0];
+      saveTodos(todos);
+      // eslint-disable-next-line no-console
+      console.log(`🗑️  Removed todo: ${removed}`);
+      break;
+    }
+
+    case "clear": {
+      saveTodos([]);
+      // eslint-disable-next-line no-console
+      console.log("🧹 Cleared all todos");
+      break;
+    }
+
+    default: {
+      // eslint-disable-next-line no-console
+      console.log(`Usage: codex todo <command>
+
+Commands:
+  list, ls           Show all todos
+  add <text>         Add a new todo
+  remove <number>    Remove a todo by number
+  clear              Remove all todos
+
+Examples:
+  codex todo list
+  codex todo add "Fix the login bug"
+  codex todo remove 1
+  codex todo clear`);
+      break;
+    }
+  }
+
   process.exit(0);
 }
 
