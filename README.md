@@ -228,11 +228,13 @@ Key flags: `--model/-m`, `--approval-mode/-a`, `--quiet/-q`, and `--notify`.
 
 ## Memory & project docs
 
-You can give Codex extra instructions and guidance using `AGENTS.md` files. Codex looks for `AGENTS.md` files in the following places, and merges them top-down:
+You can give Codex extra instructions and guidance using instruction files. Codex looks for instruction files in the following places, and merges them top-down:
 
-1. `~/.codex/AGENTS.md` - personal global guidance
-2. `AGENTS.md` at repo root - shared project notes
+1. `~/.codex/instructions.md` - personal global guidance
+2. `AGENTS.md` at repo root - shared project notes  
 3. `AGENTS.md` in the current working directory - sub-folder/feature specifics
+
+For project documentation (items 2-3), Codex also supports legacy file names for backward compatibility: `CODEX.md`, `codex.md`, and `.codex.md`.
 
 Disable loading of these files with `--no-project-doc` or the environment variable `CODEX_DISABLE_PROJECT_DOC=1`.
 
@@ -452,7 +454,7 @@ Below is a comprehensive example of `config.json` with multiple custom providers
 
 ### Custom instructions
 
-You can create a `~/.codex/AGENTS.md` file to define custom guidance for the agent:
+You can create a `~/.codex/instructions.md` file to define custom guidance for the agent:
 
 ```markdown
 - Always respond with emojis
@@ -599,7 +601,7 @@ To debug the CLI with a visual debugger, do the following in the `codex-cli` fol
 
 1. **Start with an issue.** Open a new one or comment on an existing discussion so we can agree on the solution before code is written.
 2. **Add or update tests.** Every new feature or bug-fix should come with test coverage that fails before your change and passes afterwards. 100% coverage is not required, but aim for meaningful assertions.
-3. **Document behaviour.** If your change affects user-facing behaviour, update the README, inline help (`codex --help`), or relevant example projects.
+3. **Document behavior.** If your change affects user-facing behavior, update the README, inline help (`codex --help`), or relevant example projects.
 4. **Keep commits atomic.** Each commit should compile and the tests should pass. This makes reviews and potential rollbacks easier.
 
 ### Opening a pull request
