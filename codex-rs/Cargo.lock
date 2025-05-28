@@ -506,6 +506,8 @@ version = "0.0.0"
 dependencies = [
  "clap",
  "codex-core",
+ "serde",
+ "toml",
 ]
 
 [[package]]
@@ -634,6 +636,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "toml",
  "tracing",
  "tracing-subscriber",
 ]

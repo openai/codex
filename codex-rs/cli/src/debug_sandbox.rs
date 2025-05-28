@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use codex_common::CliConfigOverrides;
 use codex_common::SandboxPermissionOption;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -20,12 +21,14 @@ pub async fn run_command_under_seatbelt(
     let SeatbeltCommand {
         full_auto,
         sandbox,
+        config_overrides,
         command,
     } = command;
     run_command_under_sandbox(
         full_auto,
         sandbox,
         command,
+        config_overrides,
         codex_linux_sandbox_exe,
         SandboxType::Seatbelt,
     )
@@ -39,12 +42,14 @@ pub async fn run_command_under_landlock(
     let LandlockCommand {
         full_auto,
         sandbox,
+        config_overrides,
         command,
     } = command;
     run_command_under_sandbox(
         full_auto,
         sandbox,
         command,
+        config_overrides,
         codex_linux_sandbox_exe,
         SandboxType::Landlock,
     )
@@ -60,16 +65,22 @@ async fn run_command_under_sandbox(
     full_auto: bool,
     sandbox: SandboxPermissionOption,
     command: Vec<String>,
+    config_overrides: CliConfigOverrides,
     codex_linux_sandbox_exe: Option<PathBuf>,
     sandbox_type: SandboxType,
 ) -> anyhow::Result<()> {
     let sandbox_policy = create_sandbox_policy(full_auto, sandbox);
     let cwd = std::env::current_dir()?;
-    let config = Config::load_with_overrides(ConfigOverrides {
-        sandbox_policy: Some(sandbox_policy),
-        codex_linux_sandbox_exe,
-        ..Default::default()
-    })?;
+    let config = Config::load_with_cli_overrides(
+        config_overrides
+            .parse_overrides()
+            .map_err(anyhow::Error::msg)?,
+        ConfigOverrides {
+            sandbox_policy: Some(sandbox_policy),
+            codex_linux_sandbox_exe,
+            ..Default::default()
+        },
+    )?;
     let stdio_policy = StdioPolicy::Inherit;
     let env = create_env(&config.shell_environment_policy);
 
