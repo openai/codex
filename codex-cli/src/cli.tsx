@@ -301,17 +301,17 @@ if (cli.input[0] === "todo") {
       // eslint-disable-next-line no-console
       console.log(`Usage: codex todo <command>
 
-Commands:
-  list, ls           Show all todos
-  add <text>         Add a new todo
-  remove <number>    Remove a todo by number
-  clear              Remove all todos
+      Commands:
+        list, ls           Show all todos
+        add <text>         Add a new todo
+        remove <number>    Remove a todo by number
+        clear              Remove all todos
 
-Examples:
-  codex todo list
-  codex todo add "Fix the login bug"
-  codex todo remove 1
-  codex todo clear`);
+      Examples:
+        codex todo list
+        codex todo add "Fix the login bug"
+        codex todo remove 1
+        codex todo clear`);
       break;
     }
   }
