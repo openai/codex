@@ -52,4 +52,9 @@ export const providers: Record<
     baseURL: "https://conductor.arcee.ai/v1",
     envKey: "ARCEEAI_API_KEY",
   },
+  portkey: {
+    name: "PortkeyAI",
+    baseURL: "https://portkey.ai/v1",
+    envKey: "PORTKEY_API_KEY",
+  },
 };
