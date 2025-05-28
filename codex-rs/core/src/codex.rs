@@ -37,6 +37,7 @@ use crate::client::ModelClient;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::config::Config;
+use crate::config_types::ShellEnvironmentPolicy;
 use crate::conversation_history::ConversationHistory;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
@@ -45,6 +46,7 @@ use crate::exec::ExecParams;
 use crate::exec::ExecToolCallOutput;
 use crate::exec::SandboxType;
 use crate::exec::process_exec_tool_call;
+use crate::exec_env::create_env;
 use crate::flags::OPENAI_STREAM_MAX_RETRIES;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::mcp_connection_manager::try_parse_fully_qualified_tool_name;
@@ -171,6 +173,7 @@ pub(crate) struct Session {
     instructions: Option<String>,
     approval_policy: AskForApproval,
     sandbox_policy: SandboxPolicy,
+    shell_environment_policy: ShellEnvironmentPolicy,
     writable_roots: Mutex<Vec<PathBuf>>,
 
     /// Manager for external MCP servers/tools.
@@ -184,6 +187,7 @@ pub(crate) struct Session {
     /// sessions can be replayed or inspected later.
     rollout: Mutex<Option<crate::rollout::RolloutRecorder>>,
     state: Mutex<State>,
+    codex_linux_sandbox_exe: Option<PathBuf>,
 }
 
 impl Session {
@@ -634,12 +638,14 @@ async fn submission_loop(
                     instructions,
                     approval_policy,
                     sandbox_policy,
+                    shell_environment_policy: config.shell_environment_policy.clone(),
                     cwd,
                     writable_roots,
                     mcp_connection_manager,
                     notify,
                     state: Mutex::new(state),
                     rollout: Mutex::new(rollout_recorder),
+                    codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
                 }));
 
                 // Gather history metadata for SessionConfiguredEvent.
@@ -1124,6 +1130,7 @@ fn to_exec_params(params: ShellToolCallParams, sess: &Session) -> ExecParams {
         command: params.command,
         cwd: sess.resolve_path(params.workdir.clone()),
         timeout_ms: params.timeout_ms,
+        env: create_env(&sess.shell_environment_policy),
     }
 }
 
@@ -1239,6 +1246,7 @@ async fn handle_container_exec_with_params(
         sandbox_type,
         sess.ctrl_c.clone(),
         &sess.sandbox_policy,
+        &sess.codex_linux_sandbox_exe,
     )
     .await;
 
@@ -1343,6 +1351,7 @@ async fn handle_sanbox_error(
                 SandboxType::None,
                 sess.ctrl_c.clone(),
                 &sess.sandbox_policy,
+                &sess.codex_linux_sandbox_exe,
             )
             .await;
 

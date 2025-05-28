@@ -1,5 +1,6 @@
 use chrono::Utc;
 use codex_common::elapsed::format_elapsed;
+use codex_core::config::Config;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::BackgroundEventEvent;
 use codex_core::protocol::ErrorEvent;
@@ -13,7 +14,6 @@ use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::SessionConfiguredEvent;
-use codex_core::protocol::TaskCompleteEvent;
 use owo_colors::OwoColorize;
 use owo_colors::Style;
 use shlex::try_join;
@@ -103,9 +103,36 @@ macro_rules! ts_println {
     }};
 }
 
+/// Print a concise summary of the effective configuration that will be used
+/// for the session. This mirrors the information shown in the TUI welcome
+/// screen.
+pub(crate) fn print_config_summary(config: &Config, with_ansi: bool) {
+    let bold = if with_ansi {
+        Style::new().bold()
+    } else {
+        Style::new()
+    };
+
+    ts_println!("OpenAI Codex (research preview)\n--------");
+
+    let entries = vec![
+        ("workdir", config.cwd.display().to_string()),
+        ("model", config.model.clone()),
+        ("provider", config.model_provider_id.clone()),
+        ("approval", format!("{:?}", config.approval_policy)),
+        ("sandbox", format!("{:?}", config.sandbox_policy)),
+    ];
+
+    for (key, value) in entries {
+        println!("{} {}", format!("{key}: ").style(bold), value);
+    }
+
+    println!("--------\n");
+}
+
 impl EventProcessor {
     pub(crate) fn process_event(&mut self, event: Event) {
-        let Event { id, msg } = event;
+        let Event { id: _, msg } = event;
         match msg {
             EventMsg::Error(ErrorEvent { message }) => {
                 let prefix = "ERROR:".style(self.red);
@@ -114,15 +141,8 @@ impl EventProcessor {
             EventMsg::BackgroundEvent(BackgroundEventEvent { message }) => {
                 ts_println!("{}", message.style(self.dimmed));
             }
-            EventMsg::TaskStarted => {
-                let msg = format!("Task started: {id}");
-                ts_println!("{}", msg.style(self.dimmed));
-            }
-            EventMsg::TaskComplete(TaskCompleteEvent {
-                last_agent_message: _,
-            }) => {
-                let msg = format!("Task complete: {id}");
-                ts_println!("{}", msg.style(self.bold));
+            EventMsg::TaskStarted | EventMsg::TaskComplete(_) => {
+                // Ignore.
             }
             EventMsg::AgentMessage(AgentMessageEvent { message }) => {
                 let prefix = "Agent message:".style(self.bold);
@@ -385,7 +405,15 @@ impl EventProcessor {
                     history_log_id: _,
                     history_entry_count: _,
                 } = session_configured_event;
-                println!("session {session_id} with model {model}");
+
+                ts_println!(
+                    "{} {}",
+                    "codex session".style(self.magenta).style(self.bold),
+                    session_id.to_string().style(self.dimmed)
+                );
+
+                ts_println!("model: {}", model);
+                println!();
             }
             EventMsg::GetHistoryEntryResponse(_) => {
                 // Currently ignored in exec output.
