@@ -9,6 +9,9 @@ use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::text::Line as RtLine;
 use ratatui::text::Span as RtSpan;
+
+use crate::cell_widget::CellWidget;
+use crate::text_block::TextBlock;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -34,16 +37,16 @@ pub(crate) enum PatchEventType {
 /// scrollable list.
 pub(crate) enum HistoryCell {
     /// Welcome message.
-    WelcomeMessage { lines: Vec<Line<'static>> },
+    WelcomeMessage { view: TextBlock },
 
     /// Message from the user.
-    UserPrompt { lines: Vec<Line<'static>> },
+    UserPrompt { view: TextBlock },
 
     /// Message from the agent.
-    AgentMessage { lines: Vec<Line<'static>> },
+    AgentMessage { view: TextBlock },
 
     /// Reasoning event from the agent.
-    AgentReasoning { lines: Vec<Line<'static>> },
+    AgentReasoning { view: TextBlock },
 
     /// An exec tool call that has not finished yet.
     ActiveExecCommand {
@@ -51,11 +54,11 @@ pub(crate) enum HistoryCell {
         /// The shell command, escaped and formatted.
         command: String,
         start: Instant,
-        lines: Vec<Line<'static>>,
+        view: TextBlock,
     },
 
     /// Completed exec tool call.
-    CompletedExecCommand { lines: Vec<Line<'static>> },
+    CompletedExecCommand { view: TextBlock },
 
     /// An MCP tool call that has not finished yet.
     ActiveMcpToolCall {
@@ -67,29 +70,25 @@ pub(crate) enum HistoryCell {
         /// exact same text without re-formatting.
         invocation: String,
         start: Instant,
-        lines: Vec<Line<'static>>,
+        view: TextBlock,
     },
 
     /// Completed MCP tool call.
-    CompletedMcpToolCall { lines: Vec<Line<'static>> },
+    CompletedMcpToolCall { view: TextBlock },
 
-    /// Background event
-    BackgroundEvent { lines: Vec<Line<'static>> },
+    /// Background event.
+    BackgroundEvent { view: TextBlock },
 
     /// Error event from the backend.
-    ErrorEvent { lines: Vec<Line<'static>> },
+    ErrorEvent { view: TextBlock },
 
-    /// Info describing the newly‑initialized session.
-    SessionInfo { lines: Vec<Line<'static>> },
+    /// Info describing the newly-initialized session.
+    SessionInfo { view: TextBlock },
 
     /// A pending code patch that is awaiting user approval. Mirrors the
     /// behaviour of `ActiveExecCommand` so the user sees *what* patch the
     /// model wants to apply before being prompted to approve or deny it.
-    PendingPatch {
-        /// Identifier so that a future `PatchApplyEnd` can update the entry
-        /// with the final status (not yet implemented).
-        lines: Vec<Line<'static>>,
-    },
+    PendingPatch { view: TextBlock },
 }
 
 const TOOL_CALL_MAX_LINES: usize = 5;
@@ -132,9 +131,13 @@ impl HistoryCell {
                 lines.push(Line::from(vec![format!("{key}: ").bold(), value.into()]));
             }
             lines.push(Line::from(""));
-            HistoryCell::WelcomeMessage { lines }
+            HistoryCell::WelcomeMessage {
+                view: TextBlock::new(lines),
+            }
         } else if config.model == model {
-            HistoryCell::SessionInfo { lines: vec![] }
+            HistoryCell::SessionInfo {
+                view: TextBlock::new(Vec::new()),
+            }
         } else {
             let lines = vec![
                 Line::from("model changed:".magenta().bold()),
@@ -142,7 +145,9 @@ impl HistoryCell {
                 Line::from(format!("used: {}", model)),
                 Line::from(""),
             ];
-            HistoryCell::SessionInfo { lines }
+            HistoryCell::SessionInfo {
+                view: TextBlock::new(lines),
+            }
         }
     }
 
@@ -152,7 +157,9 @@ impl HistoryCell {
         lines.extend(message.lines().map(|l| Line::from(l.to_string())));
         lines.push(Line::from(""));
 
-        HistoryCell::UserPrompt { lines }
+        HistoryCell::UserPrompt {
+            view: TextBlock::new(lines),
+        }
     }
 
     pub(crate) fn new_agent_message(config: &Config, message: String) -> Self {
@@ -161,7 +168,9 @@ impl HistoryCell {
         append_markdown(&message, &mut lines, config);
         lines.push(Line::from(""));
 
-        HistoryCell::AgentMessage { lines }
+        HistoryCell::AgentMessage {
+            view: TextBlock::new(lines),
+        }
     }
 
     pub(crate) fn new_agent_reasoning(config: &Config, text: String) -> Self {
@@ -170,7 +179,9 @@ impl HistoryCell {
         append_markdown(&text, &mut lines, config);
         lines.push(Line::from(""));
 
-        HistoryCell::AgentReasoning { lines }
+        HistoryCell::AgentReasoning {
+            view: TextBlock::new(lines),
+        }
     }
 
     pub(crate) fn new_active_exec_command(call_id: String, command: Vec<String>) -> Self {
@@ -187,7 +198,7 @@ impl HistoryCell {
             call_id,
             command: command_escaped,
             start,
-            lines,
+            view: TextBlock::new(lines),
         }
     }
 
@@ -226,7 +237,9 @@ impl HistoryCell {
         }
         lines.push(Line::from(""));
 
-        HistoryCell::CompletedExecCommand { lines }
+        HistoryCell::CompletedExecCommand {
+            view: TextBlock::new(lines),
+        }
     }
 
     pub(crate) fn new_active_mcp_tool_call(
@@ -267,7 +280,7 @@ impl HistoryCell {
             fq_tool_name,
             invocation,
             start,
-            lines,
+            view: TextBlock::new(lines),
         }
     }
 
@@ -304,7 +317,9 @@ impl HistoryCell {
 
         lines.push(Line::from(""));
 
-        HistoryCell::CompletedMcpToolCall { lines }
+        HistoryCell::CompletedMcpToolCall {
+            view: TextBlock::new(lines),
+        }
     }
 
     pub(crate) fn new_background_event(message: String) -> Self {
@@ -312,7 +327,9 @@ impl HistoryCell {
         lines.push(Line::from("event".dim()));
         lines.extend(message.lines().map(|l| Line::from(l.to_string()).dim()));
         lines.push(Line::from(""));
-        HistoryCell::BackgroundEvent { lines }
+        HistoryCell::BackgroundEvent {
+            view: TextBlock::new(lines),
+        }
     }
 
     pub(crate) fn new_error_event(message: String) -> Self {
@@ -320,7 +337,9 @@ impl HistoryCell {
             vec!["ERROR: ".red().bold(), message.into()].into(),
             "".into(),
         ];
-        HistoryCell::ErrorEvent { lines }
+        HistoryCell::ErrorEvent {
+            view: TextBlock::new(lines),
+        }
     }
 
     /// Create a new `PendingPatch` cell that lists the file‑level summary of
@@ -339,7 +358,9 @@ impl HistoryCell {
                 auto_approved: false,
             } => {
                 let lines = vec![Line::from("patch applied".magenta().bold())];
-                return Self::PendingPatch { lines };
+                return Self::PendingPatch {
+                    view: TextBlock::new(lines),
+                };
             }
         };
 
@@ -380,23 +401,52 @@ impl HistoryCell {
 
         lines.push(Line::from(""));
 
-        HistoryCell::PendingPatch { lines }
+        HistoryCell::PendingPatch {
+            view: TextBlock::new(lines),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// `CellWidget` implementation – most variants delegate to their internal
+// `TextBlock`.  Variants that need custom painting can add their own logic in
+// the match arms.
+// ---------------------------------------------------------------------------
+
+impl CellWidget for HistoryCell {
+    fn height(&self, width: u16) -> usize {
+        match self {
+            HistoryCell::WelcomeMessage { view }
+            | HistoryCell::UserPrompt { view }
+            | HistoryCell::AgentMessage { view }
+            | HistoryCell::AgentReasoning { view }
+            | HistoryCell::BackgroundEvent { view }
+            | HistoryCell::ErrorEvent { view }
+            | HistoryCell::SessionInfo { view }
+            | HistoryCell::CompletedExecCommand { view }
+            | HistoryCell::CompletedMcpToolCall { view }
+            | HistoryCell::PendingPatch { view }
+            | HistoryCell::ActiveExecCommand { view, .. }
+            | HistoryCell::ActiveMcpToolCall { view, .. } => view.height(width),
+        }
     }
 
-    pub(crate) fn lines(&self) -> &Vec<Line<'static>> {
+    fn render_window(&self, first_visible_line: usize, area: Rect, buf: &mut Buffer) {
         match self {
-            HistoryCell::WelcomeMessage { lines, .. }
-            | HistoryCell::UserPrompt { lines, .. }
-            | HistoryCell::AgentMessage { lines, .. }
-            | HistoryCell::AgentReasoning { lines, .. }
-            | HistoryCell::BackgroundEvent { lines, .. }
-            | HistoryCell::ErrorEvent { lines, .. }
-            | HistoryCell::SessionInfo { lines, .. }
-            | HistoryCell::ActiveExecCommand { lines, .. }
-            | HistoryCell::CompletedExecCommand { lines, .. }
-            | HistoryCell::ActiveMcpToolCall { lines, .. }
-            | HistoryCell::CompletedMcpToolCall { lines, .. }
-            | HistoryCell::PendingPatch { lines, .. } => lines,
+            HistoryCell::WelcomeMessage { view }
+            | HistoryCell::UserPrompt { view }
+            | HistoryCell::AgentMessage { view }
+            | HistoryCell::AgentReasoning { view }
+            | HistoryCell::BackgroundEvent { view }
+            | HistoryCell::ErrorEvent { view }
+            | HistoryCell::SessionInfo { view }
+            | HistoryCell::CompletedExecCommand { view }
+            | HistoryCell::CompletedMcpToolCall { view }
+            | HistoryCell::PendingPatch { view }
+            | HistoryCell::ActiveExecCommand { view, .. }
+            | HistoryCell::ActiveMcpToolCall { view, .. } => {
+                view.render_window(first_visible_line, area, buf)
+            }
         }
     }
 }

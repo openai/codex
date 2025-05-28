@@ -1,3 +1,4 @@
+use crate::cell_widget::CellWidget;
 use crate::history_cell::CommandOutput;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::PatchEventType;
@@ -236,11 +237,7 @@ impl ConversationHistoryWidget {
 
     fn add_to_history(&mut self, cell: HistoryCell) {
         let width = self.cached_width.get();
-        let count = if width > 0 {
-            wrapped_line_count_for_cell(&cell, width)
-        } else {
-            0
-        };
+        let count = if width > 0 { cell.height(width) } else { 0 };
 
         self.entries.push(Entry {
             cell,
@@ -284,9 +281,7 @@ impl ConversationHistoryWidget {
 
                     // Update cached line count.
                     if width > 0 {
-                        entry
-                            .line_count
-                            .set(wrapped_line_count_for_cell(cell, width));
+                        entry.line_count.set(cell.height(width));
                     }
                     break;
                 }
@@ -328,9 +323,7 @@ impl ConversationHistoryWidget {
                     entry.cell = completed;
 
                     if width > 0 {
-                        entry
-                            .line_count
-                            .set(wrapped_line_count_for_cell(&entry.cell, width));
+                        entry.line_count.set(entry.cell.height(width));
                     }
 
                     break;
@@ -378,7 +371,7 @@ impl WidgetRef for ConversationHistoryWidget {
 
             let mut num_lines: usize = 0;
             for entry in &self.entries {
-                let count = wrapped_line_count_for_cell(&entry.cell, effective_width);
+                let count = entry.cell.height(effective_width);
                 num_lines += count;
                 entry.line_count.set(count);
             }
@@ -398,78 +391,68 @@ impl WidgetRef for ConversationHistoryWidget {
         };
 
         // ------------------------------------------------------------------
-        // Build a *window* into the history so we only clone the `Line`s that
-        // may actually be visible in this frame. We still hand the slice off
-        // to a `Paragraph` with an additional scroll offset to avoid slicing
-        // inside a wrapped line (we don’t have per-subline granularity).
-        // ------------------------------------------------------------------
-
-        // Find the first entry that intersects the current scroll position.
-        let mut cumulative = 0usize;
-        let mut first_idx = 0usize;
-        for (idx, entry) in self.entries.iter().enumerate() {
-            let next = cumulative + entry.line_count.get();
-            if next > scroll_pos {
-                first_idx = idx;
-                break;
-            }
-            cumulative = next;
-        }
-
-        let offset_into_first = scroll_pos - cumulative;
-
-        // Collect enough raw lines from `first_idx` onward to cover the
-        // viewport. We may fetch *slightly* more than necessary (whole cells)
-        // but never the entire history.
-        let mut collected_wrapped = 0usize;
-        let mut visible_lines: Vec<Line<'static>> = Vec::new();
-
-        for entry in &self.entries[first_idx..] {
-            visible_lines.extend(entry.cell.lines().iter().cloned());
-            collected_wrapped += entry.line_count.get();
-            if collected_wrapped >= offset_into_first + viewport_height {
-                break;
-            }
-        }
-
-        // Build the Paragraph with wrapping enabled so long lines are not
-        // clipped. Apply vertical scroll so that `offset_into_first` wrapped
-        // lines are hidden at the top.
-        // ------------------------------------------------------------------
         // Render order:
-        //   1. Clear the whole widget area so we do not leave behind any glyphs
-        //      from the previous frame.
+        //   1. Clear full widget area (avoid artifacts from prior frame).
         //   2. Draw the surrounding Block (border and title).
-        //   3. Draw the Paragraph inside the Block, **leaving the right-most
-        //      column free** for the scrollbar.
-        //   4. Finally draw the scrollbar (if needed).
+        //   3. Render *each* visible HistoryCell into its own sub-Rect while
+        //      respecting partial visibility at the top and bottom.
+        //   4. Draw the scrollbar track / thumb in the reserved column.
         // ------------------------------------------------------------------
 
-        // Clear the widget area to avoid visual artifacts from previous frames.
+        // Clear entire widget area first.
         Clear.render(area, buf);
 
-        // Draw the outer border and title first so the Paragraph does not
-        // overwrite it.
+        // Draw border + title.
         block.render(area, buf);
 
-        // Area available for text after accounting for the scrollbar.
-        let text_area = Rect {
-            x: inner.x,
-            y: inner.y,
-            width: effective_width,
-            height: inner.height,
-        };
+        // ------------------------------------------------------------------
+        // Calculate which cells are visible for the current scroll position
+        // and paint them one by one.
+        // ------------------------------------------------------------------
 
-        let paragraph = Paragraph::new(visible_lines)
-            .wrap(wrap_cfg())
-            .scroll((offset_into_first as u16, 0));
+        let mut y_cursor = inner.y; // first line inside viewport
+        let mut remaining_height = inner.height as usize;
+        let mut lines_to_skip = scroll_pos; // number of wrapped lines to skip (above viewport)
 
-        paragraph.render(text_area, buf);
+        for entry in &self.entries {
+            let cell_height = entry.line_count.get();
 
-        // Always render a scrollbar *track* so that the reserved column is
-        // visually filled, even when the content fits within the viewport.
-        // We only draw the *thumb* when the content actually overflows.
+            // Completely above viewport? Skip whole cell.
+            if lines_to_skip >= cell_height {
+                lines_to_skip -= cell_height;
+                continue;
+            }
 
+            // Determine how much of this cell is visible.
+            let visible_height = (cell_height - lines_to_skip).min(remaining_height);
+
+            if visible_height == 0 {
+                break; // no space left
+            }
+
+            let cell_rect = Rect {
+                x: inner.x,
+                y: y_cursor,
+                width: effective_width,
+                height: visible_height as u16,
+            };
+
+            entry.cell.render_window(lines_to_skip, cell_rect, buf);
+
+            // Advance cursor inside viewport.
+            y_cursor += visible_height as u16;
+            remaining_height -= visible_height;
+
+            // After the first (possibly partially skipped) cell, we no longer
+            // need to skip lines at the top.
+            lines_to_skip = 0;
+
+            if remaining_height == 0 {
+                break; // viewport filled
+            }
+        }
+
+        // Always render a scrollbar *track* so the reserved column is filled.
         let overflow = num_lines.saturating_sub(viewport_height);
 
         let mut scroll_state = ScrollbarState::default()
@@ -521,15 +504,6 @@ impl WidgetRef for ConversationHistoryWidget {
 /// Common [`Wrap`] configuration used for both measurement and rendering so
 /// they stay in sync.
 #[inline]
-const fn wrap_cfg() -> ratatui::widgets::Wrap {
+pub(crate) const fn wrap_cfg() -> ratatui::widgets::Wrap {
     ratatui::widgets::Wrap { trim: false }
-}
-
-/// Returns the wrapped line count for `cell` at the given `width` using the
-/// same wrapping rules that `ConversationHistoryWidget` uses during
-/// rendering.
-fn wrapped_line_count_for_cell(cell: &HistoryCell, width: u16) -> usize {
-    Paragraph::new(cell.lines().clone())
-        .wrap(wrap_cfg())
-        .line_count(width)
 }

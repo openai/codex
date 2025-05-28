@@ -19,6 +19,7 @@ mod app;
 mod app_event;
 mod app_event_sender;
 mod bottom_pane;
+mod cell_widget;
 mod chatwidget;
 mod citation_regex;
 mod cli;
@@ -32,6 +33,7 @@ mod mouse_capture;
 mod scroll_event_helper;
 mod slash_command;
 mod status_indicator_widget;
+mod text_block;
 mod tui;
 mod user_approval_widget;
 
