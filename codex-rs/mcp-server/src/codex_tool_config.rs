@@ -230,7 +230,7 @@ mod tests {
                 "type": "string"
               },
               "model": {
-                "description": "Optional override for the model name (e.g. \"o3\", \"codex-mini-latest\")",
+                "description": "Optional override for the model name (e.g. \"o3\", \"o4-mini\")",
                 "type": "string"
               },
               "profile": {
