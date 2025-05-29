@@ -19,7 +19,7 @@ pub(crate) struct CodexToolCallParam {
     /// The *initial user prompt* to start the Codex conversation.
     pub prompt: String,
 
-    /// Optional override for the model name (e.g. "o3", "o4-mini")
+    /// Optional override for the model name (e.g. "o3", "codex-mini-latest")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
 
@@ -230,7 +230,7 @@ mod tests {
                 "type": "string"
               },
               "model": {
-                "description": "Optional override for the model name (e.g. \"o3\", \"o4-mini\")",
+                "description": "Optional override for the model name (e.g. \"o3\", \"codex-mini-latest\")",
                 "type": "string"
               },
               "profile": {
