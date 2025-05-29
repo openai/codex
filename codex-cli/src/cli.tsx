@@ -541,15 +541,18 @@ if (cli.flags.quiet) {
         ? AutoApprovalMode.AUTO_EDIT
         : config.approvalMode || AutoApprovalMode.SUGGEST;
 
-  await runQuietMode({
-    prompt,
-    imagePaths: imagePaths || [],
-    approvalPolicy: quietApprovalPolicy,
-    additionalWritableRoots,
-    config,
-  });
-  onExit();
-  process.exit(0);
+  // In quiet mode, only use the non-interactive runner when in suggest mode.
+  if (quietApprovalPolicy === AutoApprovalMode.SUGGEST) {
+    await runQuietMode({
+      prompt,
+      imagePaths: imagePaths || [],
+      approvalPolicy: quietApprovalPolicy,
+      additionalWritableRoots,
+      config,
+    });
+    onExit();
+    process.exit(0);
+  }
 }
 
 // Default to the "suggest" policy.
