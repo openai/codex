@@ -396,10 +396,17 @@ pub struct McpToolCallBeginEvent {
 pub struct McpToolCallEndEvent {
     /// Identifier for the corresponding McpToolCallBegin that finished.
     pub call_id: String,
-    /// Whether the tool call was successful. If `false`, `result` might not be present.
-    pub success: bool,
     /// Result of the tool call. Note this could be an error.
-    pub result: Option<CallToolResult>,
+    pub result: Result<CallToolResult, String>,
+}
+
+impl McpToolCallEndEvent {
+    pub fn is_success(&self) -> bool {
+        match &self.result {
+            Ok(result) => !result.is_error.unwrap_or(false),
+            Err(_) => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

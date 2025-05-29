@@ -343,11 +343,9 @@ impl ChatWidget<'_> {
                     .add_active_mcp_tool_call(call_id, server, tool, arguments);
                 self.request_redraw();
             }
-            EventMsg::McpToolCallEnd(McpToolCallEndEvent {
-                call_id,
-                success,
-                result,
-            }) => {
+            EventMsg::McpToolCallEnd(mcp_tool_call_end_event) => {
+                let success = mcp_tool_call_end_event.is_success();
+                let McpToolCallEndEvent { call_id, result } = mcp_tool_call_end_event;
                 self.conversation_history
                     .record_completed_mcp_tool_call(call_id, success, result);
                 self.request_redraw();

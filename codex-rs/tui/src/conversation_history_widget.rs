@@ -293,15 +293,8 @@ impl ConversationHistoryWidget {
         &mut self,
         call_id: String,
         success: bool,
-        result: Option<mcp_types::CallToolResult>,
+        result: Result<mcp_types::CallToolResult, String>,
     ) {
-        // Convert result into serde_json::Value early so we don't have to
-        // worry about lifetimes inside the match arm.
-        let result_val = result.map(|r| {
-            serde_json::to_value(r)
-                .unwrap_or_else(|_| serde_json::Value::String("<serialization error>".into()))
-        });
-
         let width = self.cached_width.get();
         for entry in self.entries.iter_mut() {
             if let HistoryCell::ActiveMcpToolCall {
@@ -318,7 +311,7 @@ impl ConversationHistoryWidget {
                         invocation.clone(),
                         *start,
                         success,
-                        result_val,
+                        result,
                     );
                     entry.cell = completed;
 
