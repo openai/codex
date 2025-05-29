@@ -36,6 +36,7 @@ import {
   loadConfig,
   PRETTY_PRINT,
   INSTRUCTIONS_FILEPATH,
+  getApiKey,
 } from "./utils/config";
 import {
   getApiKey as fetchApiKey,
@@ -307,28 +308,8 @@ let savedTokens:
     }
   | undefined;
 
-// Try to load existing auth file if present
-try {
-  const home = os.homedir();
-  const authDir = path.join(home, ".codex");
-  const authFile = path.join(authDir, "auth.json");
-  if (fs.existsSync(authFile)) {
-    const data = JSON.parse(fs.readFileSync(authFile, "utf-8"));
-    savedTokens = data.tokens;
-    const lastRefreshTime = data.last_refresh
-      ? new Date(data.last_refresh).getTime()
-      : 0;
-    const expired = Date.now() - lastRefreshTime > 28 * 24 * 60 * 60 * 1000;
-    if (data.OPENAI_API_KEY && !expired) {
-      apiKey = data.OPENAI_API_KEY;
-    }
-  }
-} catch {
-  // ignore errors
-}
-
-if (cli.flags.login) {
-  apiKey = await fetchApiKey(client.issuer, client.client_id);
+if (provider.toLowerCase() === "openai") {
+  // Try to load existing auth file if present
   try {
     const home = os.homedir();
     const authDir = path.join(home, ".codex");
@@ -336,30 +317,57 @@ if (cli.flags.login) {
     if (fs.existsSync(authFile)) {
       const data = JSON.parse(fs.readFileSync(authFile, "utf-8"));
       savedTokens = data.tokens;
+      const lastRefreshTime = data.last_refresh
+        ? new Date(data.last_refresh).getTime()
+        : 0;
+      const expired = Date.now() - lastRefreshTime > 28 * 24 * 60 * 60 * 1000;
+      if (data.OPENAI_API_KEY && !expired) {
+        apiKey = data.OPENAI_API_KEY;
+      }
     }
   } catch {
-    /* ignore */
+    // ignore errors
   }
-} else if (!apiKey) {
-  apiKey = await fetchApiKey(client.issuer, client.client_id);
-}
-// Ensure the API key is available as an environment variable for legacy code
-process.env["OPENAI_API_KEY"] = apiKey;
+  if (cli.flags.login && provider.toLowerCase() === "openai") {
+    apiKey = await fetchApiKey(client.issuer, client.client_id);
+    try {
+      const home = os.homedir();
+      const authDir = path.join(home, ".codex");
+      const authFile = path.join(authDir, "auth.json");
+      if (fs.existsSync(authFile)) {
+        const data = JSON.parse(fs.readFileSync(authFile, "utf-8"));
+        savedTokens = data.tokens;
+      }
+    } catch {
+      /* ignore */
+    }
+  } else if (!apiKey) {
+    apiKey = await fetchApiKey(client.issuer, client.client_id);
+  }
+  // Ensure the API key is available as an environment variable for legacy code
+  process.env["OPENAI_API_KEY"] = apiKey;
 
-if (cli.flags.free) {
-  // eslint-disable-next-line no-console
-  console.log(`${chalk.bold("codex --free")} attempting to redeem credits...`);
-  if (!savedTokens?.refresh_token) {
-    apiKey = await fetchApiKey(client.issuer, client.client_id, true);
-    // fetchApiKey includes credit redemption as the end of the flow
-  } else {
-    await maybeRedeemCredits(
-      client.issuer,
-      client.client_id,
-      savedTokens.refresh_token,
-      savedTokens.id_token,
+  if (cli.flags.free) {
+    // eslint-disable-next-line no-console
+    console.log(
+      `${chalk.bold("codex --free")} attempting to redeem credits...`,
     );
+    if (!savedTokens?.refresh_token) {
+      apiKey = await fetchApiKey(client.issuer, client.client_id, true);
+      // fetchApiKey includes credit redemption as the end of the flow
+    } else {
+      await maybeRedeemCredits(
+        client.issuer,
+        client.client_id,
+        savedTokens.refresh_token,
+        savedTokens.id_token,
+      );
+    }
   }
+}
+
+if (!apiKey) {
+  apiKey = getApiKey(provider) ?? "";
 }
 
 // Set of providers that don't require API keys
