@@ -293,7 +293,11 @@ const isSandboxExecAvailable: Promise<boolean> = fs
 
 async function getSandbox(runInSandbox: boolean): Promise<SandboxType> {
   if (runInSandbox) {
-    if (process.platform === "darwin") {
+    if (CODEX_UNSAFE_ALLOW_NO_SANDBOX) {
+      // Allow running without a sandbox if the user has explicitly marked the
+      // environment as already being sufficiently locked-down.
+      return SandboxType.NONE;
+    } else if (process.platform === "darwin") {
       // On macOS we rely on the system-provided `sandbox-exec` binary to
       // enforce the Seatbelt profile.  However, starting with macOS 14 the
       // executable may be removed from the default installation or the user
@@ -313,10 +317,6 @@ async function getSandbox(runInSandbox: boolean): Promise<SandboxType> {
       // using Landlock in a Linux Docker container from a macOS host may not
       // work.
       return SandboxType.LINUX_LANDLOCK;
-    } else if (CODEX_UNSAFE_ALLOW_NO_SANDBOX) {
-      // Allow running without a sandbox if the user has explicitly marked the
-      // environment as already being sufficiently locked-down.
-      return SandboxType.NONE;
     }
 
     // For all else, we hard fail if the user has requested a sandbox and none is available.
