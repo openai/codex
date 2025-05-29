@@ -280,12 +280,26 @@ fn mcp_tool_to_openai_tool(
     fully_qualified_name: String,
     tool: mcp_types::Tool,
 ) -> serde_json::Value {
+    let mcp_types::Tool {
+        description,
+        mut input_schema,
+        ..
+    } = tool;
+
+    // OpenAI models mandate the "properties" field in the schema. The Agents
+    // SDK fixed this by inserting an empty object for "properties" if it is not
+    // already present https://github.com/openai/openai-agents-python/issues/449
+    // so here we do the same.
+    if input_schema.properties.is_none() {
+        input_schema.properties = Some(serde_json::Value::Object(serde_json::Map::new()));
+    }
+
     // TODO(mbolin): Change the contract of this function to return
     // ResponsesApiTool.
     json!({
         "name": fully_qualified_name,
-        "description": tool.description,
-        "parameters": tool.input_schema,
+        "description": description,
+        "parameters": input_schema,
         "type": "function",
     })
 }

@@ -1,12 +1,10 @@
+pub mod debug_sandbox;
 mod exit_status;
-#[cfg(unix)]
-pub mod landlock;
 pub mod proto;
-pub mod seatbelt;
 
 use clap::Parser;
+use codex_common::CliConfigOverrides;
 use codex_common::SandboxPermissionOption;
-use codex_core::protocol::SandboxPolicy;
 
 #[derive(Debug, Parser)]
 pub struct SeatbeltCommand {
@@ -16,6 +14,9 @@ pub struct SeatbeltCommand {
 
     #[clap(flatten)]
     pub sandbox: SandboxPermissionOption,
+
+    #[clap(skip)]
+    pub config_overrides: CliConfigOverrides,
 
     /// Full command args to run under seatbelt.
     #[arg(trailing_var_arg = true)]
@@ -31,18 +32,10 @@ pub struct LandlockCommand {
     #[clap(flatten)]
     pub sandbox: SandboxPermissionOption,
 
+    #[clap(skip)]
+    pub config_overrides: CliConfigOverrides,
+
     /// Full command args to run under landlock.
     #[arg(trailing_var_arg = true)]
     pub command: Vec<String>,
-}
-
-pub fn create_sandbox_policy(full_auto: bool, sandbox: SandboxPermissionOption) -> SandboxPolicy {
-    if full_auto {
-        SandboxPolicy::new_full_auto_policy()
-    } else {
-        match sandbox.permissions.map(Into::into) {
-            Some(sandbox_policy) => sandbox_policy,
-            None => SandboxPolicy::new_read_only_policy(),
-        }
-    }
 }

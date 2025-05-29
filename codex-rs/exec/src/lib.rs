@@ -3,6 +3,7 @@ mod event_processor;
 
 use std::io::IsTerminal;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 pub use cli::Cli;
@@ -18,12 +19,13 @@ use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::util::is_inside_git_repo;
 use event_processor::EventProcessor;
+use event_processor::print_config_summary;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
+pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
     let Cli {
         images,
         model,
@@ -32,10 +34,10 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
         sandbox,
         cwd,
         skip_git_repo_check,
-        disable_response_storage,
         color,
         last_message_file,
         prompt,
+        config_overrides,
     } = cli;
 
     let (stdout_with_ansi, stderr_with_ansi) = match color {
@@ -61,15 +63,22 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
         // the user for approval.
         approval_policy: Some(AskForApproval::Never),
         sandbox_policy,
-        disable_response_storage: if disable_response_storage {
-            Some(true)
-        } else {
-            None
-        },
         cwd: cwd.map(|p| p.canonicalize().unwrap_or(p)),
         model_provider: None,
+        codex_linux_sandbox_exe,
     };
-    let config = Config::load_with_overrides(overrides)?;
+    // Parse `-c` overrides.
+    let cli_kv_overrides = match config_overrides.parse_overrides() {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("Error parsing -c overrides: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides)?;
+    // Print the effective configuration so users can see what Codex is using.
+    print_config_summary(&config, stdout_with_ansi);
 
     if !skip_git_repo_check && !is_inside_git_repo(&config) {
         eprintln!("Not inside a Git repo and --skip-git-repo-check was not specified.");
