@@ -89,7 +89,7 @@ pub struct Tui {
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
-
+#[serde(rename_all = "kebab-case")]
 pub enum ShellEnvironmentPolicyInherit {
     /// "Core" environment variables for the platform. On UNIX, this would
     /// include HOME, LOGNAME, PATH, SHELL, and USER, among others.
