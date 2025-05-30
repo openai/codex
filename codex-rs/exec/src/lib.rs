@@ -2,6 +2,7 @@ mod cli;
 mod event_processor;
 
 use std::io::IsTerminal;
+use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -39,6 +40,41 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         prompt,
         config_overrides,
     } = cli;
+
+    // Determine the prompt based on CLI arg and/or stdin.
+    let prompt = match prompt {
+        Some(p) if p != "-" => p,
+        // Either `-` was passed or no positional arg.
+        maybe_dash => {
+            // When no arg (None) **and** stdin is a TTY, bail out early – unless the
+            // user explicitly forced reading via `-`.
+            let force_stdin = matches!(maybe_dash.as_deref(), Some("-"));
+
+            if std::io::stdin().is_terminal() && !force_stdin {
+                eprintln!(
+                    "No prompt provided. Either specify one as an argument or pipe the prompt into stdin."
+                );
+                std::process::exit(1);
+            }
+
+            // Ensure the user knows we are waiting on stdin, as they may
+            // have gotten into this state by mistake. If so, and they are not
+            // writing to stdin, Codex will hang indefinitely, so this should
+            // help them debug in that case.
+            if !force_stdin {
+                eprintln!("Reading prompt from stdin...");
+            }
+            let mut buffer = String::new();
+            if let Err(e) = std::io::stdin().read_to_string(&mut buffer) {
+                eprintln!("Failed to read prompt from stdin: {e}");
+                std::process::exit(1);
+            } else if buffer.trim().is_empty() {
+                eprintln!("No prompt provided via stdin.");
+                std::process::exit(1);
+            }
+            buffer
+        }
+    };
 
     let (stdout_with_ansi, stderr_with_ansi) = match color {
         cli::Color::Always => (true, true),

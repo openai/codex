@@ -45,8 +45,10 @@ pub struct Cli {
     #[arg(long = "output-last-message")]
     pub last_message_file: Option<PathBuf>,
 
-    /// Initial instructions for the agent.
-    pub prompt: String,
+    /// Initial instructions for the agent. If not provided as an argument (or
+    /// if `-` is used), instructions are read from stdin.
+    #[arg(value_name = "PROMPT")]
+    pub prompt: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
