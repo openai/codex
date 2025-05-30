@@ -17,6 +17,7 @@ export async function postComment(
   const bodyWithFooter = footer ? `${commentBody}${footer}` : commentBody;
 
   const octokit = ctx.getOctokit();
+  console.info("Got Octokit instance for posting comment");
   const { owner, repo } = github.context.repo;
   const issueNumber = github.context.issue.number;
 
@@ -28,6 +29,7 @@ export async function postComment(
   }
 
   try {
+    console.info("Calling octokit.rest.issues.createComment()");
     await octokit.rest.issues.createComment({
       owner,
       repo,
