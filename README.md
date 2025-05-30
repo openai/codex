@@ -187,7 +187,11 @@ WSL2 or Linux environment
 ### 7.2 Installation
 
 ```bash
-# Clone repository
+# Clone this repository
+git clone https://github.com/HarleyCoops/Codex-To-Claude.git
+cd Codex-To-Claude
+
+# Clone Codex CLI repository
 git clone https://github.com/openai/codex.git
 cd codex
 

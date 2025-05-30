@@ -11,7 +11,7 @@ npm i -g @openai/codex@native
 codex
 ```
 
-You can also download a platform-specific release directly from our [GitHub Releases](https://github.com/openai/codex/releases).
+You can also download a platform-specific release directly from our [GitHub Releases](https://github.com/HarleyCoops/Codex-To-Claude/releases).
 
 ## Config
 
