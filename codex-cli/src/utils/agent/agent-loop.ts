@@ -17,6 +17,7 @@ import {
   OPENAI_TIMEOUT_MS,
   OPENAI_ORGANIZATION,
   OPENAI_PROJECT,
+  getApiKey,
   getBaseUrl,
   AZURE_OPENAI_API_VERSION,
 } from "../config.js";
@@ -306,7 +307,7 @@ export class AgentLoop {
     this.sessionId = getSessionId() || randomUUID().replaceAll("-", "");
     // Configure OpenAI client with optional timeout (ms) from environment
     const timeoutMs = OPENAI_TIMEOUT_MS;
-    const apiKey = this.config.apiKey ?? process.env["OPENAI_API_KEY"] ?? "";
+    const apiKey = this.config.apiKey ?? getApiKey(this.provider) ?? process.env["OPENAI_API_KEY"] ?? "";
     const baseURL = getBaseUrl(this.provider);
 
     this.oai = new OpenAI({
