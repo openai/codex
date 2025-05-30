@@ -1,4 +1,3 @@
-use chrono::Utc;
 use codex_common::elapsed::format_elapsed;
 use codex_core::config::Config;
 use codex_core::protocol::AgentMessageEvent;
@@ -37,11 +36,13 @@ pub(crate) struct EventProcessor {
     // using .style() with one of these fields. If you need a new style, add a
     // new field here.
     bold: Style,
+    italic: Style,
     dimmed: Style,
 
     magenta: Style,
     red: Style,
     green: Style,
+    cyan: Style,
 }
 
 impl EventProcessor {
@@ -55,10 +56,12 @@ impl EventProcessor {
                 call_id_to_command,
                 call_id_to_patch,
                 bold: Style::new().bold(),
+                italic: Style::new().italic(),
                 dimmed: Style::new().dimmed(),
                 magenta: Style::new().magenta(),
                 red: Style::new().red(),
                 green: Style::new().green(),
+                cyan: Style::new().cyan(),
                 call_id_to_tool_call,
             }
         } else {
@@ -66,10 +69,12 @@ impl EventProcessor {
                 call_id_to_command,
                 call_id_to_patch,
                 bold: Style::new(),
+                italic: Style::new(),
                 dimmed: Style::new(),
                 magenta: Style::new(),
                 red: Style::new(),
                 green: Style::new(),
+                cyan: Style::new(),
                 call_id_to_tool_call,
             }
         }
@@ -94,43 +99,47 @@ struct PatchApplyBegin {
     auto_approved: bool,
 }
 
+#[macro_export]
 macro_rules! ts_println {
     ($($arg:tt)*) => {{
-        let now = Utc::now();
+        let now = chrono::Utc::now();
         let formatted = now.format("%Y-%m-%dT%H:%M:%S").to_string();
         print!("[{}] ", formatted);
         println!($($arg)*);
     }};
 }
 
-/// Print a concise summary of the effective configuration that will be used
-/// for the session. This mirrors the information shown in the TUI welcome
-/// screen.
-pub(crate) fn print_config_summary(config: &Config, with_ansi: bool) {
-    let bold = if with_ansi {
-        Style::new().bold()
-    } else {
-        Style::new()
-    };
+impl EventProcessor {
+    /// Print a concise summary of the effective configuration that will be used
+    /// for the session. This mirrors the information shown in the TUI welcome
+    /// screen.
+    pub(crate) fn print_config_summary(&mut self, config: &Config, prompt: &str) {
+        ts_println!("OpenAI Codex (research preview)\n--------");
 
-    ts_println!("OpenAI Codex (research preview)\n--------");
+        let entries = vec![
+            ("workdir", config.cwd.display().to_string()),
+            ("model", config.model.clone()),
+            ("provider", config.model_provider_id.clone()),
+            ("approval", format!("{:?}", config.approval_policy)),
+            ("sandbox", format!("{:?}", config.sandbox_policy)),
+        ];
 
-    let entries = vec![
-        ("workdir", config.cwd.display().to_string()),
-        ("model", config.model.clone()),
-        ("provider", config.model_provider_id.clone()),
-        ("approval", format!("{:?}", config.approval_policy)),
-        ("sandbox", format!("{:?}", config.sandbox_policy)),
-    ];
+        for (key, value) in entries {
+            println!("{} {}", format!("{key}: ").style(self.bold), value);
+        }
 
-    for (key, value) in entries {
-        println!("{} {}", format!("{key}: ").style(bold), value);
+        println!("--------");
+
+        // Echo the prompt that will be sent to the agent so it is visible in the
+        // transcript/logs before any events come in. Note the prompt may have been
+        // read from stdin, so it may not be visible in the terminal otherwise.
+        ts_println!(
+            "{}\n{}",
+            "User instructions:".style(self.bold).style(self.cyan),
+            prompt
+        );
     }
 
-    println!("--------\n");
-}
-
-impl EventProcessor {
     pub(crate) fn process_event(&mut self, event: Event) {
         let Event { id: _, msg } = event;
         match msg {
@@ -145,8 +154,10 @@ impl EventProcessor {
                 // Ignore.
             }
             EventMsg::AgentMessage(AgentMessageEvent { message }) => {
-                let prefix = "Agent message:".style(self.bold);
-                ts_println!("{prefix} {message}");
+                ts_println!(
+                    "{}\n{message}",
+                    "codex".style(self.bold).style(self.magenta)
+                );
             }
             EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
                 call_id,
@@ -394,7 +405,11 @@ impl EventProcessor {
                 // Should we exit?
             }
             EventMsg::AgentReasoning(agent_reasoning_event) => {
-                println!("thinking: {}", agent_reasoning_event.text);
+                ts_println!(
+                    "{}\n{}",
+                    "thinking".style(self.italic).style(self.magenta),
+                    agent_reasoning_event.text
+                );
             }
             EventMsg::SessionConfigured(session_configured_event) => {
                 let SessionConfiguredEvent {
