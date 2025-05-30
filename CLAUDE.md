@@ -91,6 +91,24 @@ Platform-specific sandboxing implementations in `src/utils/agent/sandbox/`:
 - **Linux**: Landlock LSM for filesystem isolation
 - Network access blocked by default in full-auto mode
 
+**WSL2 Compatibility Issue**: WSL2 doesn't fully support Landlock/seccomp features. **Recommended solutions:**
+
+1. **Docker Container (Recommended)**: Use the provided Docker setup for proper sandboxing:
+   ```bash
+   # Build the container
+   cd codex-cli && pnpm build && pnpm stage-release
+   docker build -t codex .
+   
+   # Run commands in sandboxed container
+   ./scripts/run_in_container.sh "your prompt here"
+   ```
+
+2. **Local WSL Workarounds** (less secure):
+   - `codex --dangerously-auto-approve-everything` (disables sandboxing entirely)
+   - `codex --auto-edit` (safer alternative, prompts for commands)
+
+**For Mixture-of-Idiots Multi-Agent Framework**: Both Claude Code and Codex CLI should run in separate Docker containers for proper isolation. The Codex container uses the existing `run_in_container.sh` script, while Claude Code should run in its own container with shared volumes for the file-based message exchange protocol described in the README.md.
+
 ### Multi-Agent Framework (`llm_bridge/`)
 
 The Mixture-of-Idiots system enables human-mediated collaboration between different AI models:

@@ -1,0 +1,14 @@
+{
+  "name": "mixture-of-idiots",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Human-in-the-loop multi-agent framework for Claude and Codex collaboration",
+  "main": "master_control.js",
+  "scripts": {
+    "start": "node master_control.js",
+    "bridge": "node smart_bridge.js",
+    "claude": "node claude_enhanced.js",
+    "codex": "node codex_enhanced.js",
+    "start:all": "bash ./start_mixture.sh"
+  }
+}

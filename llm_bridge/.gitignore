@@ -1,0 +1,7 @@
+ # Ignore runtime message and log files
+ *.txt
+ mixture_conversation.log
+ system_status.json
+
+ # Local environment configuration
+ .env

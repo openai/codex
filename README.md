@@ -1,4 +1,4 @@
-# A Heterogeneous Multi-Agent Communication Framework for Collaborative Code Generation: Implementation of Human-Mediated Inter-Model Dialogue Systems
+# A Mixture-of-Idiots: Human in the Loop Console between CODEX and CLAUDE
 
 ## Abstract
 

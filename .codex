@@ -1,0 +1,105 @@
+# Codex Project Snapshot
+
+This document provides a comprehensive overview of the current codebase, including its architecture, components, and key workflows. It is intended as a baseline for future iterations and for any AI assistant to understand the repository's structure and purpose.
+
+---
+
+## Repository Layout
+
+```text
+.
+├── codex-cli/            # Core CLI implementation (TypeScript, Node.js, React/Ink)
+├── codex-rs/             # Rust native CLI implementation (zero-dependency)
+├── llm_bridge/           # Experiment: Claude ↔ Codex conversation bridge
+├── docs/                 # Project documentation (e.g., CLA agreements)
+├── AGENTS.md             # Agent guidance overrides (preferred project instructions)
+├── CHANGELOG.md          # Project change log
+├── CLAUDE.md             # Guidance for Claude Code agent overrides
+├── PNPM.md               # Migration to pnpm guide
+├── README.md             # High-level project README and user guide
+├── LICENSE               # Apache 2.0 license
+├── NOTICE                # NOTICE file for Apache license
+├── .env / .env.example   # Local environment overrides (ignored)
+├── .npmrc                # pnpm configuration
+├── .prettierignore       # Prettier ignore settings
+├── .prettierrc.toml      # Prettier configuration
+├── pnpm-workspace.yaml   # pnpm workspace configuration
+├── pnpm-lock.yaml        # Lockfile for reproducible installs
+└── package.json          # Root package manifest and workspace settings
+``` 
+
+---
+
+## codex-cli Component
+
+**Language & Frameworks**: TypeScript, Node.js, React/Ink (terminal UI), Vitest (testing)
+
+**Core Functionality**:
+- Interactive REPL and single-pass modes (`src/cli.tsx`, `src/cli_singlepass.tsx`)
+- Agent execution loop and tool integration (`src/utils/agent/agent-loop.ts`)
+- Git safety checks and sandboxing (`src/utils/agent/sandbox/`)
+- Approval policies (`src/utils/auto-approval-mode.ts`)
+- Shell command parsing and patch application
+- Memory & project docs support (reads `AGENTS.md`, `codex.md`/`.codex.md`/`CODEX.md`, and `~/.codex/instructions.md`)
+- Comprehensive test suite under `tests/`
+
+**Build & Distribution**:
+- Build script (`build.mjs`) produces `dist/cli.js`
+- Containerized execution support via Docker (`Dockerfile`, scripts/)
+- Example prompts and guides under `examples/`
+
+---
+
+## llm_bridge Component
+
+The `llm_bridge` directory contains scripts and configuration for orchestrating a continuous conversation loop between Anthropic Claude Code and the Codex CLI:
+- `bridge.js`: Central orchestrator and turn management
+- `claude_interface.js` / `codex_interface.js`: Terminal interfaces for each agent
+- `mixture_config.js`, `claude_enhanced.js`, `codex_enhanced.js`: Enhanced interaction strategies
+- Setup scripts (`setup.sh`, `start_mixture.sh`) and instructions (`manual_bridge_instructions.md`)
+
+---
+
+## codex-rs Component
+
+**Language & Frameworks**: Rust, Cargo (with Nix and Just support)
+
+**Core Functionality**:
+- Native, zero-dependency Codex CLI binary
+- Rich configuration options (`config.md`), including Model Context Protocol (MCP) client/server support
+- Business logic library in `core/` crate for reuse by other Rust-native applications
+- Multiple frontends: headless automation (`exec/`), Ratatui-based fullscreen TUI (`tui/`), and multi-tool CLI (`cli/`) via subcommands
+
+**Build & Distribution**:
+- Cargo workspace with `Cargo.toml`, `Cargo.lock`, Nix support (`default.nix`), and `justfile`
+- Installable via npm as `@openai/codex@native` or direct GitHub Releases
+
+---
+
+## Root-Level Documentation & Configuration
+
+- **AGENTS.md**: Agent guidance overrides (preferred project instructions)
+- **CLAUDE.md**: Guidance file for Claude Code agent overrides
+- **CHANGELOG.md**: Project change log
+- **PNPM.md**: Migration to pnpm guide
+- **README.md**: Primary project entry with Quickstart, security model, CLI reference, and contribution guidelines
+- **docs/**: Additional documentation (e.g., contributor license agreements)
+- **.env / .env.example**: Local environment overrides
+- **.npmrc**: pnpm configuration
+- **.prettierrc.toml / .prettierignore**: Code formatting configuration
+- **pnpm-workspace.yaml**: pnpm workspace configuration
+- **pnpm-lock.yaml**: pnpm lockfile for reproducible installs
+- **package.json**: Defines dependencies, scripts, and workspace settings
+
+---
+
+## Key Workflows & Usage
+
+- **Interactive Mode**: `codex`
+- **Prompt Mode**: `codex "<task>"` or `codex --approval-mode full-auto "<task>"`
+- **CI / Non-interactive Mode**: `codex --quiet` or set `CODEX_QUIET_MODE=1`
+- **Memory & Docs**: Merges `~/.codex/instructions.md` and any `AGENTS.md` or `codex.md`/`.codex.md`/`CODEX.md` files at the project root or in sub-packages
+
+---
+
+*(End of Codex Snapshot)*
