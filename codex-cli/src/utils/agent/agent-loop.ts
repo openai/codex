@@ -307,7 +307,7 @@ export class AgentLoop {
     this.sessionId = getSessionId() || randomUUID().replaceAll("-", "");
     // Configure OpenAI client with optional timeout (ms) from environment
     const timeoutMs = OPENAI_TIMEOUT_MS;
-    const apiKey = this.config.apiKey ?? getApiKey(this.provider) ?? process.env["OPENAI_API_KEY"] ?? "";
+    const apiKey = getApiKey(this.provider) ?? this.config.apiKey ?? process.env["OPENAI_API_KEY"] ?? "";
     const baseURL = getBaseUrl(this.provider);
 
     this.oai = new OpenAI({
