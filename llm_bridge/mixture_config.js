@@ -22,8 +22,8 @@ class MixtureConfig {
     const config = {
       // Defaults
       OPENAI_API_KEY: '',
-      CLAUDE_MODEL: 'claude-3-sonnet',
-      CODEX_MODEL: 'o1-mini',
+      CLAUDE_MODEL: 'claude-opus-4-20250514',
+      CODEX_MODEL: 'codex-mini',
       AUTO_CONTINUE_CONVERSATION: true,
       LOG_LEVEL: 'info',
       MAX_CONVERSATION_TURNS: 50,

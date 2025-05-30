@@ -48,8 +48,9 @@ launch_terminal() {
     else
         # Fallback - run in background with tmux if available
         if command -v tmux >/dev/null 2>&1; then
-            echo "Using tmux session for $title"
-            tmux new-session -d -s "mixture-$title" "cd '$BRIDGE_DIR' && $command"
+            local session_name="mixture-$(echo \"$title\" | tr ' ' '-')"
+            echo "Using tmux session for $title ($session_name)"
+            tmux new-session -d -s "$session_name" "cd '$BRIDGE_DIR' && $command"
         else
             echo "⚠️  No terminal emulator found. Please run manually:"
             echo "   Terminal: $title"
