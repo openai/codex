@@ -1,7 +1,7 @@
 {
-  "mode": "AI_TO_AI",
-  "turnCount": 0,
+  "mode": "DIRECTING_CLAUDE",
+  "turnCount": 8,
   "currentSpeaker": "CODEX",
-  "lastActivity": "2025-05-30T03:19:55.959Z",
+  "lastActivity": "2025-05-30T03:32:29.812Z",
   "bridgeActive": true
 }
