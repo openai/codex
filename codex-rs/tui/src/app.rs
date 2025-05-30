@@ -7,6 +7,7 @@ use crate::mouse_capture::MouseCapture;
 use crate::scroll_event_helper::ScrollEventHelper;
 use crate::slash_command::SlashCommand;
 use crate::tui;
+// used by ChatWidgetArgs
 use codex_core::config::Config;
 use codex_core::protocol::Event;
 use codex_core::protocol::Op;
@@ -15,25 +16,43 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::MouseEvent;
 use crossterm::event::MouseEventKind;
+use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 use std::sync::mpsc::channel;
 
-/// Top‑level application state – which full‑screen view is currently active.
-enum AppState {
+/// Top-level application state: which full-screen view is currently active.
+#[allow(clippy::large_enum_variant)]
+enum AppState<'a> {
     /// The main chat UI is visible.
-    Chat,
-    /// The start‑up warning that recommends running codex inside a Git repo.
+    Chat {
+        /// Boxed to avoid a large enum variant and reduce the overall size of
+        /// `AppState`.
+        widget: Box<ChatWidget<'a>>,
+    },
+    /// The start-up warning that recommends running codex inside a Git repo.
     GitWarning { screen: GitWarningScreen },
 }
 
 pub(crate) struct App<'a> {
     app_event_tx: AppEventSender,
     app_event_rx: Receiver<AppEvent>,
-    chat_widget: ChatWidget<'a>,
-    app_state: AppState,
+    app_state: AppState<'a>,
+
+    /// Stored parameters needed to instantiate the ChatWidget later, e.g.,
+    /// after dismissing the Git-repo warning.
+    chat_args: Option<ChatWidgetArgs>,
 }
 
-impl App<'_> {
+/// Aggregate parameters needed to create a `ChatWidget`, as creation may be
+/// deferred until after the Git warning screen is dismissed.
+#[derive(Clone)]
+struct ChatWidgetArgs {
+    config: Config,
+    initial_prompt: Option<String>,
+    initial_images: Vec<PathBuf>,
+}
+
+impl<'a> App<'a> {
     pub(crate) fn new(
         config: Config,
         initial_prompt: Option<String>,
@@ -94,26 +113,33 @@ impl App<'_> {
             });
         }
 
-        let chat_widget = ChatWidget::new(
-            config,
-            app_event_tx.clone(),
-            initial_prompt.clone(),
-            initial_images,
-        );
-
-        let app_state = if show_git_warning {
-            AppState::GitWarning {
-                screen: GitWarningScreen::new(),
-            }
+        let (app_state, chat_args) = if show_git_warning {
+            (
+                AppState::GitWarning {
+                    screen: GitWarningScreen::new(),
+                },
+                Some(ChatWidgetArgs {
+                    config,
+                    initial_prompt,
+                    initial_images,
+                }),
+            )
         } else {
-            AppState::Chat
+            let chat_widget =
+                ChatWidget::new(config, app_event_tx.clone(), initial_prompt, initial_images);
+            (
+                AppState::Chat {
+                    widget: Box::new(chat_widget),
+                },
+                None,
+            )
         };
 
         Self {
             app_event_tx,
             app_event_rx,
-            chat_widget,
             app_state,
+            chat_args,
         }
     }
 
@@ -144,7 +170,15 @@ impl App<'_> {
                             modifiers: crossterm::event::KeyModifiers::CONTROL,
                             ..
                         } => {
-                            self.chat_widget.submit_op(Op::Interrupt);
+                            // Forward interrupt to ChatWidget when active.
+                            match &mut self.app_state {
+                                AppState::Chat { widget } => {
+                                    widget.submit_op(Op::Interrupt);
+                                }
+                                AppState::GitWarning { .. } => {
+                                    // No-op.
+                                }
+                            }
                         }
                         KeyEvent {
                             code: KeyCode::Char('d'),
@@ -167,20 +201,19 @@ impl App<'_> {
                 AppEvent::ExitRequest => {
                     break;
                 }
-                AppEvent::CodexOp(op) => {
-                    if matches!(self.app_state, AppState::Chat) {
-                        self.chat_widget.submit_op(op);
-                    }
-                }
-                AppEvent::LatestLog(line) => {
-                    if matches!(self.app_state, AppState::Chat) {
-                        self.chat_widget.update_latest_log(line);
-                    }
-                }
+                AppEvent::CodexOp(op) => match &mut self.app_state {
+                    AppState::Chat { widget } => widget.submit_op(op),
+                    AppState::GitWarning { .. } => {}
+                },
+                AppEvent::LatestLog(line) => match &mut self.app_state {
+                    AppState::Chat { widget } => widget.update_latest_log(line),
+                    AppState::GitWarning { .. } => {}
+                },
                 AppEvent::DispatchCommand(command) => match command {
-                    SlashCommand::Clear => {
-                        self.chat_widget.clear_conversation_history();
-                    }
+                    SlashCommand::Clear => match &mut self.app_state {
+                        AppState::Chat { widget } => widget.clear_conversation_history(),
+                        AppState::GitWarning { .. } => {}
+                    },
                     SlashCommand::ToggleMouseMode => {
                         if let Err(e) = mouse_capture.toggle() {
                             tracing::error!("Failed to toggle mouse mode: {e}");
@@ -199,8 +232,8 @@ impl App<'_> {
 
     fn draw_next_frame(&mut self, terminal: &mut tui::Tui) -> Result<()> {
         match &mut self.app_state {
-            AppState::Chat => {
-                terminal.draw(|frame| frame.render_widget_ref(&self.chat_widget, frame.area()))?;
+            AppState::Chat { widget } => {
+                terminal.draw(|frame| frame.render_widget_ref(&**widget, frame.area()))?;
             }
             AppState::GitWarning { screen } => {
                 terminal.draw(|frame| frame.render_widget_ref(&*screen, frame.area()))?;
@@ -213,12 +246,24 @@ impl App<'_> {
     /// with it.
     fn dispatch_key_event(&mut self, key_event: KeyEvent) {
         match &mut self.app_state {
-            AppState::Chat => {
-                self.chat_widget.handle_key_event(key_event);
+            AppState::Chat { widget } => {
+                widget.handle_key_event(key_event);
             }
             AppState::GitWarning { screen } => match screen.handle_key_event(key_event) {
                 GitWarningOutcome::Continue => {
-                    self.app_state = AppState::Chat;
+                    // User accepted – switch to chat view.
+                    let args = match self.chat_args.take() {
+                        Some(args) => args,
+                        None => panic!("ChatWidgetArgs already consumed"),
+                    };
+
+                    let widget = Box::new(ChatWidget::new(
+                        args.config,
+                        self.app_event_tx.clone(),
+                        args.initial_prompt,
+                        args.initial_images,
+                    ));
+                    self.app_state = AppState::Chat { widget };
                     self.app_event_tx.send(AppEvent::Redraw);
                 }
                 GitWarningOutcome::Quit => {
@@ -232,14 +277,16 @@ impl App<'_> {
     }
 
     fn dispatch_scroll_event(&mut self, scroll_delta: i32) {
-        if matches!(self.app_state, AppState::Chat) {
-            self.chat_widget.handle_scroll_delta(scroll_delta);
+        match &mut self.app_state {
+            AppState::Chat { widget } => widget.handle_scroll_delta(scroll_delta),
+            AppState::GitWarning { .. } => {}
         }
     }
 
     fn dispatch_codex_event(&mut self, event: Event) {
-        if matches!(self.app_state, AppState::Chat) {
-            self.chat_widget.handle_codex_event(event);
+        match &mut self.app_state {
+            AppState::Chat { widget } => widget.handle_codex_event(event),
+            AppState::GitWarning { .. } => {}
         }
     }
 }

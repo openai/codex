@@ -8,6 +8,7 @@ members = [
     "core",
     "exec",
     "execpolicy",
+    "linux-sandbox",
     "mcp-client",
     "mcp-server",
     "mcp-types",
@@ -23,7 +24,7 @@ version = "0.0.0"
 edition = "2024"
 
 [workspace.lints]
-rust = { }
+rust = {}
 
 [workspace.lints.clippy]
 expect_used = "deny"

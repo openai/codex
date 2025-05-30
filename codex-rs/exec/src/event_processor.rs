@@ -242,11 +242,9 @@ impl EventProcessor {
                     invocation.style(self.bold),
                 );
             }
-            EventMsg::McpToolCallEnd(McpToolCallEndEvent {
-                call_id,
-                success,
-                result,
-            }) => {
+            EventMsg::McpToolCallEnd(tool_call_end_event) => {
+                let is_success = tool_call_end_event.is_success();
+                let McpToolCallEndEvent { call_id, result } = tool_call_end_event;
                 // Retrieve start time and invocation for duration calculation and labeling.
                 let info = self.call_id_to_tool_call.remove(&call_id);
 
@@ -261,13 +259,13 @@ impl EventProcessor {
                     (String::new(), format!("tool('{call_id}')"))
                 };
 
-                let status_str = if success { "success" } else { "failed" };
-                let title_style = if success { self.green } else { self.red };
+                let status_str = if is_success { "success" } else { "failed" };
+                let title_style = if is_success { self.green } else { self.red };
                 let title = format!("{invocation} {status_str}{duration}:");
 
                 ts_println!("{}", title.style(title_style));
 
-                if let Some(res) = result {
+                if let Ok(res) = result {
                     let val: serde_json::Value = res.into();
                     let pretty =
                         serde_json::to_string_pretty(&val).unwrap_or_else(|_| val.to_string());

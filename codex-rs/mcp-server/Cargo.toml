@@ -15,11 +15,14 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
+anyhow = "1"
 codex-core = { path = "../core" }
+codex-linux-sandbox = { path = "../linux-sandbox" }
 mcp-types = { path = "../mcp-types" }
 schemars = "0.8.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+toml = "0.8"
 tracing = { version = "0.1.41", features = ["log"] }
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 tokio = { version = "1", features = [
