@@ -20,7 +20,6 @@ use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::util::is_inside_git_repo;
 use event_processor::EventProcessor;
-use event_processor::print_config_summary;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -113,8 +112,10 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     };
 
     let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides)?;
-    // Print the effective configuration so users can see what Codex is using.
-    print_config_summary(&config, stdout_with_ansi);
+    let mut event_processor = EventProcessor::create_with_ansi(stdout_with_ansi);
+    // Print the effective configuration and prompt so users can see what Codex
+    // is using.
+    event_processor.print_config_summary(&config, &prompt);
 
     if !skip_git_repo_check && !is_inside_git_repo(&config) {
         eprintln!("Not inside a Git repo and --skip-git-repo-check was not specified.");
@@ -204,7 +205,6 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     info!("Sent prompt with event ID: {initial_prompt_task_id}");
 
     // Run the loop until the task is complete.
-    let mut event_processor = EventProcessor::create_with_ansi(stdout_with_ansi);
     while let Some(event) = rx.recv().await {
         let (is_last_event, last_assistant_message) = match &event.msg {
             EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) => {
