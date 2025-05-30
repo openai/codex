@@ -4,6 +4,72 @@
 
 This paper presents a novel architectural framework for orchestrating collaborative interactions between heterogeneous large language models (LLMs) in software development contexts. We introduce the Mixture-of-Idiots (MoI) paradigm, a human-in-the-loop system that enables structured communication between Anthropic's Claude Code and OpenAI's Codex CLI through an intelligent message routing infrastructure. Our implementation demonstrates how specialized AI agents can be coordinated through formal protocol specifications to achieve emergent collaborative behaviors while maintaining human oversight and control authority.
 
+## Quick Start Guide
+
+### Prerequisites
+
+```bash
+# System requirements
+Node.js 18.0+
+OpenAI API key with Codex access
+WSL2 or Linux environment
+```
+
+### Installation
+
+```bash
+# Clone this repository
+git clone https://github.com/HarleyCoops/Codex-To-Claude.git
+cd Codex-To-Claude
+
+# Clone Codex CLI repository
+git clone https://github.com/openai/codex.git
+cd codex
+
+# Build Codex CLI
+cd codex-cli
+npm install
+npm run build
+cd ..
+
+# Setup bridge system
+cd llm_bridge
+echo "OPENAI_API_KEY=your_key_here" > .env
+chmod +x start_mixture.sh
+```
+
+### Execution
+
+```bash
+# Launch complete system
+./start_mixture.sh
+
+# System opens 4 terminals:
+# - Smart Bridge (message router)
+# - Master Control (your interface)
+# - Claude Enhanced (Claude Code adapter)
+# - Codex Enhanced (Codex CLI adapter)
+```
+
+### Operation
+
+In the Master Control terminal:
+
+```bash
+# Direct agent communication
+/claude analyze this codebase structure
+/codex implement the suggested architecture
+
+# Autonomous collaboration
+Let's build a web application together
+
+# System management
+/status    # View system state
+/pause     # Halt AI conversation
+/continue  # Resume AI conversation
+/quit      # Shutdown system
+```
+
 ## 1. Introduction
 
 The proliferation of specialized large language models has created opportunities for leveraging complementary capabilities across different AI architectures. However, existing frameworks lack sophisticated mechanisms for inter-model communication, particularly in domains requiring iterative collaboration such as software development. This work addresses the fundamental challenge of orchestrating dialogue between disparate LLM systems while preserving human agency in the collaborative process.
@@ -173,71 +239,6 @@ The system collects the following operational metrics:
 - Conversation turn distribution
 - Error rate and recovery time
 
-## 7. Quick Start Guide
-
-### 7.1 Prerequisites
-
-```bash
-# System requirements
-Node.js 18.0+
-OpenAI API key with Codex access
-WSL2 or Linux environment
-```
-
-### 7.2 Installation
-
-```bash
-# Clone this repository
-git clone https://github.com/HarleyCoops/Codex-To-Claude.git
-cd Codex-To-Claude
-
-# Clone Codex CLI repository
-git clone https://github.com/openai/codex.git
-cd codex
-
-# Build Codex CLI
-cd codex-cli
-npm install
-npm run build
-cd ..
-
-# Setup bridge system
-cd llm_bridge
-echo "OPENAI_API_KEY=your_key_here" > .env
-chmod +x start_mixture.sh
-```
-
-### 7.3 Execution
-
-```bash
-# Launch complete system
-./start_mixture.sh
-
-# System opens 4 terminals:
-# - Smart Bridge (message router)
-# - Master Control (your interface)
-# - Claude Enhanced (Claude Code adapter)
-# - Codex Enhanced (Codex CLI adapter)
-```
-
-### 7.4 Operation
-
-In the Master Control terminal:
-
-```bash
-# Direct agent communication
-/claude analyze this codebase structure
-/codex implement the suggested architecture
-
-# Autonomous collaboration
-Let's build a web application together
-
-# System management
-/status    # View system state
-/pause     # Halt AI conversation
-/continue  # Resume AI conversation
-/quit      # Shutdown system
-```
 
 ## 8. Technical Specifications
 
