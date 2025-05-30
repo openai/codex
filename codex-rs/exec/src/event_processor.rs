@@ -99,12 +99,13 @@ struct PatchApplyBegin {
     auto_approved: bool,
 }
 
+// Timestamped println helper. The timestamp is styled with self.dimmed.
 #[macro_export]
 macro_rules! ts_println {
-    ($($arg:tt)*) => {{
+    ($self:ident, $($arg:tt)*) => {{
         let now = chrono::Utc::now();
-        let formatted = now.format("%Y-%m-%dT%H:%M:%S").to_string();
-        print!("[{}] ", formatted);
+        let formatted = now.format("[%Y-%m-%dT%H:%M:%S]");
+        print!("{} ", formatted.style($self.dimmed));
         println!($($arg)*);
     }};
 }
@@ -114,7 +115,7 @@ impl EventProcessor {
     /// for the session. This mirrors the information shown in the TUI welcome
     /// screen.
     pub(crate) fn print_config_summary(&mut self, config: &Config, prompt: &str) {
-        ts_println!("OpenAI Codex (research preview)\n--------");
+        ts_println!(self, "OpenAI Codex (research preview)\n--------");
 
         let entries = vec![
             ("workdir", config.cwd.display().to_string()),
@@ -134,6 +135,7 @@ impl EventProcessor {
         // transcript/logs before any events come in. Note the prompt may have been
         // read from stdin, so it may not be visible in the terminal otherwise.
         ts_println!(
+            self,
             "{}\n{}",
             "User instructions:".style(self.bold).style(self.cyan),
             prompt
@@ -145,16 +147,17 @@ impl EventProcessor {
         match msg {
             EventMsg::Error(ErrorEvent { message }) => {
                 let prefix = "ERROR:".style(self.red);
-                ts_println!("{prefix} {message}");
+                ts_println!(self, "{prefix} {message}");
             }
             EventMsg::BackgroundEvent(BackgroundEventEvent { message }) => {
-                ts_println!("{}", message.style(self.dimmed));
+                ts_println!(self, "{}", message.style(self.dimmed));
             }
             EventMsg::TaskStarted | EventMsg::TaskComplete(_) => {
                 // Ignore.
             }
             EventMsg::AgentMessage(AgentMessageEvent { message }) => {
                 ts_println!(
+                    self,
                     "{}\n{message}",
                     "codex".style(self.bold).style(self.magenta)
                 );
@@ -172,6 +175,7 @@ impl EventProcessor {
                     },
                 );
                 ts_println!(
+                    self,
                     "{} {} in {}",
                     "exec".style(self.magenta),
                     escape_command(&command).style(self.bold),
@@ -207,11 +211,11 @@ impl EventProcessor {
                 match exit_code {
                     0 => {
                         let title = format!("{call} succeeded{duration}:");
-                        ts_println!("{}", title.style(self.green));
+                        ts_println!(self, "{}", title.style(self.green));
                     }
                     _ => {
                         let title = format!("{call} exited {exit_code}{duration}:");
-                        ts_println!("{}", title.style(self.red));
+                        ts_println!(self, "{}", title.style(self.red));
                     }
                 }
                 println!("{}", truncated_output.style(self.dimmed));
@@ -248,6 +252,7 @@ impl EventProcessor {
                 );
 
                 ts_println!(
+                    self,
                     "{} {}",
                     "tool".style(self.magenta),
                     invocation.style(self.bold),
@@ -274,7 +279,7 @@ impl EventProcessor {
                 let title_style = if is_success { self.green } else { self.red };
                 let title = format!("{invocation} {status_str}{duration}:");
 
-                ts_println!("{}", title.style(title_style));
+                ts_println!(self, "{}", title.style(title_style));
 
                 if let Ok(res) = result {
                     let val: serde_json::Value = res.into();
@@ -302,6 +307,7 @@ impl EventProcessor {
                 );
 
                 ts_println!(
+                    self,
                     "{} auto_approved={}:",
                     "apply_patch".style(self.magenta),
                     auto_approved,
@@ -393,7 +399,7 @@ impl EventProcessor {
                 };
 
                 let title = format!("{label} exited {exit_code}{duration}:");
-                ts_println!("{}", title.style(title_style));
+                ts_println!(self, "{}", title.style(title_style));
                 for line in output.lines() {
                     println!("{}", line.style(self.dimmed));
                 }
@@ -406,6 +412,7 @@ impl EventProcessor {
             }
             EventMsg::AgentReasoning(agent_reasoning_event) => {
                 ts_println!(
+                    self,
                     "{}\n{}",
                     "thinking".style(self.italic).style(self.magenta),
                     agent_reasoning_event.text
@@ -420,12 +427,13 @@ impl EventProcessor {
                 } = session_configured_event;
 
                 ts_println!(
+                    self,
                     "{} {}",
                     "codex session".style(self.magenta).style(self.bold),
                     session_id.to_string().style(self.dimmed)
                 );
 
-                ts_println!("model: {}", model);
+                ts_println!(self, "model: {}", model);
                 println!();
             }
             EventMsg::GetHistoryEntryResponse(_) => {
