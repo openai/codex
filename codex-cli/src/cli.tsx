@@ -114,8 +114,10 @@ const cli = meow(
                                into context and applies a batch of edits in one go. Incompatible
                                with all other flags, except for --model.
     -r, --remote-permission    Send permission requests to a remote server.
+                               Requires --permission-server-url and --agent-id flags.
     --permission-server-url <url>
                                URL of the remote server to send permission requests to.
+    --agent-id <id>            Agent ID to use for remote permission requests.
 
   Examples
     $ codex "Write and run a python program that prints ASCII art"
