@@ -86,7 +86,21 @@ export function setApiKey(apiKey: string): void {
 }
 
 export function getBaseUrl(provider: string = "openai"): string | undefined {
-  // Check for a PROVIDER-specific override: e.g. OPENAI_BASE_URL or OLLAMA_BASE_URL.
+  // --- Azure special-case --------------------------------------------------
+  if (provider.toLowerCase() === "azure") {
+    // Prefer the canonical Azure OpenAI env-var when it is set.
+    if (process.env["AZURE_OPENAI_BASE_URL"]) {
+      return process.env["AZURE_OPENAI_BASE_URL"];
+    }
+    // Fall back to the historic `AZURE_BASE_URL` if present.
+    if (process.env["AZURE_BASE_URL"]) {
+      return process.env["AZURE_BASE_URL"];
+    }
+  }
+
+  // ------------------------------------------------------------------------
+  // Generic provider-specific override (e.g. OPENAI_BASE_URL, OLLAMA_BASE_URL)
+  // ------------------------------------------------------------------------
   const envKey = `${provider.toUpperCase()}_BASE_URL`;
   if (process.env[envKey]) {
     return process.env[envKey];
