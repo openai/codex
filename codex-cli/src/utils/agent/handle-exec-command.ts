@@ -94,6 +94,7 @@ export async function handleExecCommand(
       /* applyPatch */ undefined,
       /* runInSandbox */ false,
       additionalWritableRoots,
+      config,
       abortSignal,
     ).then(convertSummaryToResult);
   }
@@ -142,6 +143,7 @@ export async function handleExecCommand(
     applyPatch,
     runInSandbox,
     additionalWritableRoots,
+    config,
     abortSignal,
   );
   // If the operation was aborted in the meantime, propagate the cancellation
@@ -179,6 +181,7 @@ export async function handleExecCommand(
         applyPatch,
         false,
         additionalWritableRoots,
+        config,
         abortSignal,
       );
       return convertSummaryToResult(summary);
@@ -213,6 +216,7 @@ async function execCommand(
   applyPatchCommand: ApplyPatchCommand | undefined,
   runInSandbox: boolean,
   additionalWritableRoots: ReadonlyArray<string>,
+  config: AppConfig,
   abortSignal?: AbortSignal,
 ): Promise<ExecCommandSummary> {
   let { workdir } = execInput;
@@ -252,6 +256,7 @@ async function execCommand(
       : await exec(
           { ...execInput, additionalWritableRoots },
           await getSandbox(runInSandbox),
+          config,
           abortSignal,
         );
   const duration = Date.now() - start;
@@ -303,6 +308,11 @@ async function getSandbox(runInSandbox: boolean): Promise<SandboxType> {
           "Sandbox was mandated, but 'sandbox-exec' was not found in PATH!",
         );
       }
+    } else if (process.platform === "linux") {
+      // TODO: Need to verify that the Landlock sandbox is working. For example,
+      // using Landlock in a Linux Docker container from a macOS host may not
+      // work.
+      return SandboxType.LINUX_LANDLOCK;
     } else if (CODEX_UNSAFE_ALLOW_NO_SANDBOX) {
       // Allow running without a sandbox if the user has explicitly marked the
       // environment as already being sufficiently locked-down.

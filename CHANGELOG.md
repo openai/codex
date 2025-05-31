@@ -2,6 +2,68 @@
 
 You can install any of these versions: `npm install -g codex@version`
 
+## `0.1.2505172129`
+
+### 🪲 Bug Fixes
+
+- Add node version check (#1007)
+- Persist token after refresh (#1006)
+
+## `0.1.2505171619`
+
+- `codex --login` + `codex --free` (#998)
+
+## `0.1.2505161800`
+
+- Sign in with chatgpt credits (#974)
+- Add support for OpenAI tool type, local_shell (#961)
+
+## `0.1.2505161243`
+
+- Sign in with chatgpt (#963)
+- Session history viewer (#912)
+- Apply patch issue when using different cwd (#942)
+- Diff command for filenames with special characters (#954)
+
+## `0.1.2505160811`
+
+- `codex-mini-latest` (#951)
+
+## `0.1.2505140839`
+
+### 🪲 Bug Fixes
+
+- Gpt-4.1 apply_patch handling (#930)
+- Add support for fileOpener in config.json (#911)
+- Patch in #366 and #367 for marked-terminal (#916)
+- Remember to set lastIndex = 0 on shared RegExp (#918)
+- Always load version from package.json at runtime (#909)
+- Tweak the label for citations for better rendering (#919)
+- Tighten up some logic around session timestamps and ids (#922)
+- Change EventMsg enum so every variant takes a single struct (#925)
+- Reasoning default to medium, show workdir when supplied (#931)
+- Test_dev_null_write() was not using echo as intended (#923)
+
+## `0.1.2504301751`
+
+### 🚀 Features
+
+- User config api key (#569)
+- `@mention` files in codex (#701)
+- Add `--reasoning` CLI flag (#314)
+- Lower default retry wait time and increase number of tries (#720)
+- Add common package registries domains to allowed-domains list (#414)
+
+### 🪲 Bug Fixes
+
+- Insufficient quota message (#758)
+- Input keyboard shortcut opt+delete (#685)
+- `/diff` should include untracked files (#686)
+- Only allow running without sandbox if explicitly marked in safe container (#699)
+- Tighten up check for /usr/bin/sandbox-exec (#710)
+- Check if sandbox-exec is available (#696)
+- Duplicate messages in quiet mode (#680)
+
 ## `0.1.2504251709`
 
 ### 🚀 Features

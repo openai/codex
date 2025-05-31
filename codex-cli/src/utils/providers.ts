@@ -12,6 +12,11 @@ export const providers: Record<
     baseURL: "https://openrouter.ai/api/v1",
     envKey: "OPENROUTER_API_KEY",
   },
+  azure: {
+    name: "AzureOpenAI",
+    baseURL: "https://YOUR_PROJECT_NAME.openai.azure.com/openai",
+    envKey: "AZURE_OPENAI_API_KEY",
+  },
   gemini: {
     name: "Gemini",
     baseURL: "https://generativelanguage.googleapis.com/v1beta/openai",
@@ -41,5 +46,10 @@ export const providers: Record<
     name: "Groq",
     baseURL: "https://api.groq.com/openai/v1",
     envKey: "GROQ_API_KEY",
+  },
+  arceeai: {
+    name: "ArceeAI",
+    baseURL: "https://conductor.arcee.ai/v1",
+    envKey: "ARCEEAI_API_KEY",
   },
 };

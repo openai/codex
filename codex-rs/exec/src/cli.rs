@@ -1,6 +1,7 @@
 use clap::Parser;
 use clap::ValueEnum;
-use codex_core::SandboxModeCliArg;
+use codex_common::CliConfigOverrides;
+use codex_common::SandboxPermissionOption;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -14,26 +15,40 @@ pub struct Cli {
     #[arg(long, short = 'm')]
     pub model: Option<String>,
 
-    /// Configure the process restrictions when a command is executed.
-    ///
-    /// Uses OS-specific sandboxing tools; Seatbelt on OSX, landlock+seccomp on Linux.
-    #[arg(long = "sandbox", short = 's')]
-    pub sandbox_policy: Option<SandboxModeCliArg>,
+    /// Configuration profile from config.toml to specify default options.
+    #[arg(long = "profile", short = 'p')]
+    pub config_profile: Option<String>,
+
+    /// Convenience alias for low-friction sandboxed automatic execution (network-disabled sandbox that can write to cwd and TMPDIR)
+    #[arg(long = "full-auto", default_value_t = false)]
+    pub full_auto: bool,
+
+    #[clap(flatten)]
+    pub sandbox: SandboxPermissionOption,
+
+    /// Tell the agent to use the specified directory as its working root.
+    #[clap(long = "cd", short = 'C', value_name = "DIR")]
+    pub cwd: Option<PathBuf>,
 
     /// Allow running Codex outside a Git repository.
     #[arg(long = "skip-git-repo-check", default_value_t = false)]
     pub skip_git_repo_check: bool,
 
-    /// Disable server‑side response storage (sends the full conversation context with every request)
-    #[arg(long = "disable-response-storage", default_value_t = false)]
-    pub disable_response_storage: bool,
+    #[clap(skip)]
+    pub config_overrides: CliConfigOverrides,
 
     /// Specifies color settings for use in the output.
     #[arg(long = "color", value_enum, default_value_t = Color::Auto)]
     pub color: Color,
 
-    /// Initial instructions for the agent.
-    pub prompt: String,
+    /// Specifies file where the last message from the agent should be written.
+    #[arg(long = "output-last-message")]
+    pub last_message_file: Option<PathBuf>,
+
+    /// Initial instructions for the agent. If not provided as an argument (or
+    /// if `-` is used), instructions are read from stdin.
+    #[arg(value_name = "PROMPT")]
+    pub prompt: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]

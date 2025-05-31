@@ -22,6 +22,7 @@
 //!
 //! The parser below is a little more lenient than the explicit spec and allows for
 //! leading/trailing whitespace around patch markers.
+use std::path::Path;
 use std::path::PathBuf;
 
 use thiserror::Error;
@@ -64,6 +65,17 @@ pub enum Hunk {
         chunks: Vec<UpdateFileChunk>,
     },
 }
+
+impl Hunk {
+    pub fn resolve_path(&self, cwd: &Path) -> PathBuf {
+        match self {
+            Hunk::AddFile { path, .. } => cwd.join(path),
+            Hunk::DeleteFile { path } => cwd.join(path),
+            Hunk::UpdateFile { path, .. } => cwd.join(path),
+        }
+    }
+}
+
 use Hunk::*;
 
 #[derive(Debug, PartialEq)]
@@ -196,7 +208,12 @@ fn parse_one_hunk(lines: &[&str], line_number: usize) -> Result<(Hunk, usize), P
         ));
     }
 
-    Err(InvalidHunkError { message: format!("'{first_line}' is not a valid hunk header. Valid hunk headers: '*** Add File: {{path}}', '*** Delete File: {{path}}', '*** Update File: {{path}}'"), line_number })
+    Err(InvalidHunkError {
+        message: format!(
+            "'{first_line}' is not a valid hunk header. Valid hunk headers: '*** Add File: {{path}}', '*** Delete File: {{path}}', '*** Update File: {{path}}'"
+        ),
+        line_number,
+    })
 }
 
 fn parse_update_file_chunk(
@@ -273,7 +290,12 @@ fn parse_update_file_chunk(
                     }
                     _ => {
                         if parsed_lines == 0 {
-                            return Err(InvalidHunkError { message: format!("Unexpected line found in update hunk: '{line_contents}'. Every line should start with ' ' (context line), '+' (added line), or '-' (removed line)"), line_number: line_number + 1 });
+                            return Err(InvalidHunkError {
+                                message: format!(
+                                    "Unexpected line found in update hunk: '{line_contents}'. Every line should start with ' ' (context line), '+' (added line), or '-' (removed line)"
+                                ),
+                                line_number: line_number + 1,
+                            });
                         }
                         // Assume this is the start of the next hunk.
                         break;
