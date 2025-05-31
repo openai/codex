@@ -38,6 +38,9 @@ import { randomUUID } from "node:crypto";
 import OpenAI, { APIConnectionTimeoutError, AzureOpenAI } from "openai";
 import os from "os";
 
+// Helper to access the id of a tool-call independent of endpoint variant
+type CallIdentifiable = { call_id?: string; id?: string };
+
 // Wait time before retrying after rate limit errors (ms).
 const RATE_LIMIT_RETRY_WAIT_MS = parseInt(
   process.env["OPENAI_RATE_LIMIT_RETRY_WAIT_MS"] || "500",
@@ -406,8 +409,8 @@ export class AgentLoop {
     // satisfied.  We therefore immediately emit a synthetic "aborted" result
     // instead of executing the tool.
     if (this.canceled) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const callId: string = (item as any).call_id ?? (item as any).id;
+      const callId: string =
+        (item as CallIdentifiable).call_id ?? (item as CallIdentifiable).id ?? "";
 
       const abortedOutput: ResponseInputItem.FunctionCallOutput = {
         type: "function_call_output",
@@ -516,7 +519,8 @@ export class AgentLoop {
     // so the backend sees a corresponding *_output item for the original
     // request.
     if (this.canceled) {
-      const callId: string = (item as any).call_id ?? (item as any).id;
+      const callId: string =
+        (item as CallIdentifiable).call_id ?? (item as CallIdentifiable).id ?? "";
 
       // @ts-expect-error waiting on SDK to expose "local_shell_call_output"
       const abortedOutput = {
