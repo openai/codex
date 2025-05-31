@@ -120,7 +120,12 @@ impl EventProcessor {
     /// for the session. This mirrors the information shown in the TUI welcome
     /// screen.
     pub(crate) fn print_config_summary(&mut self, config: &Config, prompt: &str) {
-        ts_println!(self, "OpenAI Codex (research preview)\n--------");
+        const VERSION: &str = env!("CARGO_PKG_VERSION");
+        ts_println!(
+            self,
+            "OpenAI Codex v{} (research preview)\n--------",
+            VERSION
+        );
 
         let entries = vec![
             ("workdir", config.cwd.display().to_string()),
