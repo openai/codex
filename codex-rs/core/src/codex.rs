@@ -20,6 +20,7 @@ use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_apply_patch::maybe_parse_apply_patch_verified;
 use codex_apply_patch::print_summary;
 use futures::prelude::*;
+use mcp_types::CallToolResult;
 use serde::Serialize;
 use serde_json;
 use tokio::sync::Notify;
@@ -388,7 +389,7 @@ impl Session {
         tool: &str,
         arguments: Option<serde_json::Value>,
         timeout: Option<Duration>,
-    ) -> anyhow::Result<mcp_types::CallToolResult> {
+    ) -> anyhow::Result<CallToolResult> {
         self.mcp_connection_manager
             .call_tool(server, tool, arguments, timeout)
             .await
@@ -775,6 +776,7 @@ async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
     let mut pending_response_input: Vec<ResponseInputItem> = vec![ResponseInputItem::from(input)];
     let last_agent_message: Option<String>;
     loop {
+        debug!("pending_response_input: {pending_response_input:?}");
         let mut net_new_turn_input = pending_response_input
             .drain(..)
             .map(ResponseItem::from)
@@ -828,31 +830,102 @@ async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
                 })
             })
             .collect();
+        debug!("Turn input: {turn_input:?}");
         match run_turn(&sess, sub_id.clone(), turn_input).await {
             Ok(turn_output) => {
-                let (items, responses): (Vec<_>, Vec<_>) = turn_output
-                    .into_iter()
-                    .map(|p| (p.item, p.response))
-                    .unzip();
-                let responses = responses
-                    .into_iter()
-                    .flatten()
-                    .collect::<Vec<ResponseInputItem>>();
+                let mut items_to_record_to_conversation_history = Vec::<ResponseItem>::new();
+                let mut responses = Vec::<ResponseInputItem>::new();
+                for processed_response_item in turn_output {
+                    let ProcessedResponseItem { item, response } = processed_response_item;
+                    match (&item, &response) {
+                        (ResponseItem::Message { role, content, .. }, None)
+                            if role == "assistant" =>
+                        {
+                            // If the model returned a message, we need to record it.
+                            items_to_record_to_conversation_history.push(ResponseItem::Message {
+                                content: content.clone(),
+                                role: "assistant".to_string(),
+                            });
+                        }
+                        (
+                            ResponseItem::LocalShellCall { .. },
+                            Some(ResponseInputItem::FunctionCallOutput { call_id, output }),
+                        ) => {
+                            items_to_record_to_conversation_history.push(item);
+                            items_to_record_to_conversation_history.push(
+                                ResponseItem::FunctionCallOutput {
+                                    call_id: call_id.clone(),
+                                    output: output.clone(),
+                                },
+                            );
+                        }
+                        (
+                            ResponseItem::FunctionCall { .. },
+                            Some(ResponseInputItem::FunctionCallOutput { call_id, output }),
+                        ) => {
+                            items_to_record_to_conversation_history.push(item);
+                            items_to_record_to_conversation_history.push(
+                                ResponseItem::FunctionCallOutput {
+                                    call_id: call_id.clone(),
+                                    output: output.clone(),
+                                },
+                            );
+                        }
+                        (
+                            ResponseItem::FunctionCall { .. },
+                            Some(ResponseInputItem::McpToolCallOutput { call_id, result }),
+                        ) => {
+                            items_to_record_to_conversation_history.push(item);
+                            // let (content, success): (String, Option<bool>) = match result {
+                            //     Ok(CallToolResult { content, is_error }) => {
+                            //         (content, is_error.or_else(false))
+                            //     }
+                            //     Err(e) => (e.clone(), Some(true)),
+                            // };
+                            // items_to_record_to_conversation_history.push(
+                            //     ResponseItem::FunctionCallOutput {
+                            //         call_id: call_id.clone(),
+                            //         output: FunctionCallOutputPayload { content, success },
+                            //     },
+                            // );
+                            warn!(
+                                "Skipping MCP tool call output: {call_id:?} with response: {result:?}"
+                            );
+                        }
+                        _ => {
+                            warn!("Unexpected response item: {item:?} with response: {response:?}");
+                        }
+                    };
+                    if let Some(response) = response {
+                        responses.push(response);
+                    }
+                }
 
                 // Only attempt to take the lock if there is something to record.
-                if !items.is_empty() {
+                if !items_to_record_to_conversation_history.is_empty() {
                     // First persist model-generated output to the rollout file – this only borrows.
-                    sess.record_rollout_items(&items).await;
+                    sess.record_rollout_items(&items_to_record_to_conversation_history)
+                        .await;
+
+                    debug!(
+                        "has transcript? {}",
+                        sess.state.lock().unwrap().zdr_transcript.is_some()
+                    );
 
                     // For ZDR we also need to keep a transcript clone.
                     if let Some(transcript) = sess.state.lock().unwrap().zdr_transcript.as_mut() {
-                        transcript.record_items(&items);
+                        debug!(
+                            "Recording items to transcript: {items_to_record_to_conversation_history:?}"
+                        );
+                        transcript.record_items(&items_to_record_to_conversation_history);
                     }
                 }
 
                 if responses.is_empty() {
                     debug!("Turn completed");
-                    last_agent_message = get_last_assistant_message_from_turn(&items);
+                    last_agent_message = get_last_assistant_message_from_turn(
+                        &items_to_record_to_conversation_history,
+                    );
                     sess.maybe_notify(UserNotification::AgentTurnComplete {
                         turn_id: sub_id.clone(),
                         input_messages: turn_input_messages,
@@ -959,6 +1032,7 @@ async fn run_turn(
 /// events map to a `ResponseItem`. A `ResponseItem` may need to be
 /// "handled" such that it produces a `ResponseInputItem` that needs to be
 /// sent back to the model on the next turn.
+#[derive(Debug)]
 struct ProcessedResponseItem {
     item: ResponseItem,
     response: Option<ResponseInputItem>,
