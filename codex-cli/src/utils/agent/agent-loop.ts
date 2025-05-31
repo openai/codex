@@ -432,20 +432,15 @@ export class AgentLoop {
       // The chat endpoint nests function details under a `function` key.
       // We conservatively treat the presence of this field as a signal that
       // we are dealing with the chat format.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (item as any).function != null;
 
     const name: string | undefined = isChatStyle
-      ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (item as any).function?.name
-      : // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (item as any).name;
+      ? (item as any).function?.name
+      : (item as any).name;
 
     const rawArguments: string | undefined = isChatStyle
-      ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (item as any).function?.arguments
-      : // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (item as any).arguments;
+      ? (item as any).function?.arguments
+      : (item as any).arguments;
 
     // The OpenAI "function_call" item may have either `call_id` (responses
     // endpoint) or `id` (chat endpoint).  Prefer `call_id` if present but fall

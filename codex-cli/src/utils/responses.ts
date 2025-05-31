@@ -1,8 +1,10 @@
-import OpenAI, { AzureOpenAI } from "openai";
 import type {
   ResponseCreateParams,
   Response,
 } from "openai/resources/responses/responses";
+
+import type OpenAI from "openai";
+import { AzureOpenAI } from "openai";
 
 // Define interfaces based on OpenAI API documentation
 type ResponseCreateInput = ResponseCreateParams;
@@ -304,8 +306,12 @@ async function responsesCreateViaChatCompletions(
   // Use the Responses API *only* for the official OpenAI endpoint.
   // AzureOpenAI clients must continue via Chat-Completions.
   if (!(openai instanceof AzureOpenAI) && input.model.startsWith("gpt")) {
-    // @ts-ignore – SDK typing lag
-    return (openai as any).responses.create(input as any);
+    // @ts-expect-error – 'responses' is not yet in the SDK types
+    return (
+      (openai as unknown as {
+        responses: { create: (p: ResponseCreateInput) => unknown };
+      }).responses.create(input)
+    );
   }
   const completion = await createCompletion(openai, input);
   if (input.stream) {
