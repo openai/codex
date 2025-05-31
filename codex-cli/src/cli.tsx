@@ -124,7 +124,7 @@ const cli = meow(
       // misc
       help: { type: "boolean", aliases: ["h"] },
       version: { type: "boolean", description: "Print version and exit" },
-      view: { type: "string" },
+      view: { type: "string", aliases: ["v"] },
       history: { type: "boolean", description: "Browse previous sessions" },
       login: { type: "boolean", description: "Force a new sign in flow" },
       free: { type: "boolean", description: "Retry redeeming free credits" },
