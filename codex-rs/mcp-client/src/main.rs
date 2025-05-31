@@ -20,9 +20,22 @@ use mcp_types::Implementation;
 use mcp_types::InitializeRequestParams;
 use mcp_types::ListToolsRequestParams;
 use mcp_types::MCP_SCHEMA_VERSION;
+use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let default_level = "debug";
+    let _ = tracing_subscriber::fmt()
+        // Fallback to the `default_level` log filter if the environment
+        // variable is not set _or_ contains an invalid value
+        .with_env_filter(
+            EnvFilter::try_from_default_env()
+                .or_else(|_| EnvFilter::try_new(default_level))
+                .unwrap_or_else(|_| EnvFilter::new(default_level)),
+        )
+        .with_writer(std::io::stderr)
+        .try_init();
+
     // Collect command-line arguments excluding the program name itself.
     let mut args: Vec<String> = std::env::args().skip(1).collect();
 

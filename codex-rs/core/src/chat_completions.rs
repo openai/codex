@@ -25,6 +25,7 @@ use crate::flags::OPENAI_REQUEST_MAX_RETRIES;
 use crate::flags::OPENAI_STREAM_IDLE_TIMEOUT_MS;
 use crate::models::ContentItem;
 use crate::models::ResponseItem;
+use crate::openai_tools::create_tools_json_for_chat_completions_api;
 use crate::util::backoff;
 
 /// Implementation for the classic Chat Completions API. This is intentionally
@@ -56,17 +57,22 @@ pub(crate) async fn stream_chat_completions(
         }
     }
 
+    let tools_json = create_tools_json_for_chat_completions_api(prompt, model)?;
     let payload = json!({
         "model": model,
         "messages": messages,
-        "stream": true
+        "stream": true,
+        "tools": tools_json,
     });
 
     let base_url = provider.base_url.trim_end_matches('/');
     let url = format!("{}/chat/completions", base_url);
 
     debug!(url, "POST (chat)");
-    trace!("request payload: {}", payload);
+    trace!(
+        "request payload: {}",
+        serde_json::to_string_pretty(&payload).unwrap_or_default()
+    );
 
     let api_key = provider.api_key()?;
     let mut attempt = 0;
