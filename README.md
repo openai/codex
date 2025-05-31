@@ -100,6 +100,7 @@ export OPENAI_API_KEY="your-api-key-here"
 > - openrouter
 > - azure
 > - gemini
+> - vertex (Google Vertex AI)
 > - ollama
 > - mistral
 > - deepseek
@@ -108,10 +109,23 @@ export OPENAI_API_KEY="your-api-key-here"
 > - arceeai
 > - any other provider that is compatible with the OpenAI API
 >
-> If you use a provider other than OpenAI, you will need to set the API key for the provider in the config file or in the environment variable as:
+> If you use a provider other than OpenAI, you will need to set the appropriate credentials:
 >
+> **For API key-based providers:**
 > ```shell
 > export <provider>_API_KEY="your-api-key-here"
+> ```
+>
+> **For Google Vertex AI:**
+> ```shell
+> # Authenticate with Google Cloud
+> gcloud auth application-default login
+> 
+> # Set your project ID
+> export GOOGLE_CLOUD_PROJECT="your-project-id"
+> 
+> # Optional: Set custom location (defaults to us-central1)
+> export VERTEX_LOCATION="us-east1"
 > ```
 >
 > If you use a provider not listed above, you must also set the base URL for the provider:
@@ -411,6 +425,11 @@ Below is a comprehensive example of `config.json` with multiple custom providers
       "baseURL": "https://generativelanguage.googleapis.com/v1beta/openai",
       "envKey": "GEMINI_API_KEY"
     },
+    "vertex": {
+      "name": "Vertex AI",
+      "baseURL": "dynamic",
+      "envKey": "GOOGLE_APPLICATION_CREDENTIALS"
+    },
     "ollama": {
       "name": "Ollama",
       "baseURL": "http://localhost:11434/v1",
@@ -474,6 +493,11 @@ export AZURE_OPENAI_API_VERSION="2025-03-01-preview" (Optional)
 # OpenRouter
 export OPENROUTER_API_KEY="your-openrouter-key-here"
 
+# Google Vertex AI
+gcloud auth application-default login
+export GOOGLE_CLOUD_PROJECT="your-project-id"
+# Optional: export VERTEX_LOCATION="us-east1"
+
 # Similarly for other providers
 ```
 
@@ -507,6 +531,14 @@ It's possible that your [API account needs to be verified](https://help.openai.c
 Codex runs model-generated commands in a sandbox. If a proposed command or file change doesn't look right, you can simply type **n** to deny the command or give the model feedback.
 
 </details>
+
+<details>
+<summary>How do I use Google Vertex AI models?</summary>
+
+Vertex AI requires Google Cloud authentication instead of API keys. First authenticate with `gcloud auth application-default login`, then set your project ID with `export GOOGLE_CLOUD_PROJECT="your-project-id"`. Use `--provider vertex` to select Vertex AI. Model names like `gpt-4` are automatically mapped to equivalent Gemini models.
+
+</details>
+
 <details>
 <summary>Does it work on Windows?</summary>
 
