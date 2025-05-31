@@ -199,6 +199,41 @@ export class AgentLoop {
     // Abort any in-progress tool calls
     this.execAbortController?.abort();
 
+    // -------------------------------------------------------------------
+    // Synthesise "aborted" outputs for any outstanding tool calls so the
+    // OpenAI backend sees a matching *_output item and the next request does
+    // not fail with
+    //   400 | No tool output found for function call …
+    // This is particularly important when `disableResponseStorage === true`
+    // (e.g. when targeting Azure OpenAI) because the previous function_call
+    // will *not* be persisted server-side.  Emitting the synthetic outputs
+    // immediately ensures that the contract is fulfilled within the same
+    // turn.
+    // -------------------------------------------------------------------
+
+    if (this.pendingAborts.size > 0) {
+      for (const id of this.pendingAborts) {
+        try {
+          const abortItem: ResponseItem = {
+            // Use a unique ID so the UI treats this as a fresh item.
+            id: `abort-${id}`,
+            type: "function_call_output",
+            call_id: id,
+            output: JSON.stringify({
+              output: "Execution cancelled by user",
+              metadata: { exit_code: -1, duration_seconds: 0, aborted: true },
+            }),
+          };
+
+          this.onItem(abortItem);
+        } catch (e) {
+          log(`Failed to emit synthetic abort output for ${id}: ${e}`);
+        }
+      }
+      // Clear so a follow-up run does not re-emit the same outputs.
+      this.pendingAborts.clear();
+    }
+
     // Create a new abort controller for future tool calls
     this.execAbortController = new AbortController();
     log("AgentLoop.cancel(): execAbortController.abort() called");
@@ -365,13 +400,27 @@ export class AgentLoop {
   private async handleFunctionCall(
     item: ResponseFunctionToolCall,
   ): Promise<Array<ResponseInputItem>> {
-    // If the agent has been canceled in the meantime we should not perform any
-    // additional work. Returning an empty array ensures that we neither execute
-    // the requested tool call nor enqueue any follow‑up input items. This keeps
-    // the cancellation semantics intuitive for users – once they interrupt a
-    // task no further actions related to that task should be taken.
+    // If the run has been canceled we still need to *reply* to the tool call
+    // so the overall request/response contract expected by the OpenAI API is
+    // satisfied.  We therefore immediately emit a synthetic "aborted" result
+    // instead of executing the tool.
     if (this.canceled) {
-      return [];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const callId: string = (item as any).call_id ?? (item as any).id;
+
+      const abortedOutput: ResponseInputItem.FunctionCallOutput = {
+        type: "function_call_output",
+        call_id: callId,
+        output: JSON.stringify({
+          output: "Command execution was cancelled by user",
+          metadata: { exit_code: -1, duration_seconds: 0, aborted: true },
+        }),
+      };
+
+      // Ensure we do not emit a duplicate synthetic output in a follow-up run.
+      this.pendingAborts.delete(callId);
+
+      return [abortedOutput];
     }
     // ---------------------------------------------------------------------
     // Normalise the function‑call item into a consistent shape regardless of
@@ -470,23 +519,39 @@ export class AgentLoop {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     item: any,
   ): Promise<Array<ResponseInputItem>> {
-    // If the agent has been canceled in the meantime we should not perform any
-    // additional work. Returning an empty array ensures that we neither execute
-    // the requested tool call nor enqueue any follow‑up input items. This keeps
-    // the cancellation semantics intuitive for users – once they interrupt a
-    // task no further actions related to that task should be taken.
+    // Similar to the remote function_call case above we must still answer the
+    // tool call even when the user has cancelled.  Provide a synthetic result
+    // so the backend sees a corresponding *_output item for the original
+    // request.
     if (this.canceled) {
-      return [];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const callId: string = (item as any).call_id ?? (item as any).id;
+
+      // @ts-expect-error waiting on SDK to expose "local_shell_call_output"
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const abortedOutput = {
+        type: "local_shell_call_output",
+        call_id: callId,
+        output: JSON.stringify({
+          output: "Execution cancelled by user",
+          metadata: { exit_code: -1, duration_seconds: 0, aborted: true },
+        }),
+      } as ResponseInputItem & { output: string };
+
+      this.pendingAborts.delete(callId);
+
+      return [abortedOutput];
     }
 
+    // @ts-expect-error waiting on SDK to expose "local_shell_call_output"
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const outputItem: any = {
+    const outputItem = {
       type: "local_shell_call_output",
       // `call_id` is mandatory – ensure we never send `undefined` which would
       // trigger the "No tool output found…" 400 from the API.
       call_id: item.call_id,
       output: "no function found",
-    };
+    } as ResponseInputItem & { output: string };
 
     // We intentionally *do not* remove this `callId` from the `pendingAborts`
     // set right away.  The output produced below is only queued up for the
@@ -800,7 +865,8 @@ export class AgentLoop {
 
             const responseCall =
               !this.config.provider ||
-              this.config.provider?.toLowerCase() === "openai"
+              this.config.provider?.toLowerCase() === "openai" ||
+              this.config.provider?.toLowerCase() === "azure"
                 ? (params: ResponseCreateParams) =>
                     this.oai.responses.create(params)
                 : (params: ResponseCreateParams) =>
@@ -1188,7 +1254,8 @@ export class AgentLoop {
 
               const responseCall =
                 !this.config.provider ||
-                this.config.provider?.toLowerCase() === "openai"
+                this.config.provider?.toLowerCase() === "openai" ||
+                this.config.provider?.toLowerCase() === "azure"
                   ? (params: ResponseCreateParams) =>
                       this.oai.responses.create(params)
                   : (params: ResponseCreateParams) =>
@@ -1561,13 +1628,13 @@ export class AgentLoop {
     output: Array<ResponseInputItem>,
     emitItem: (item: ResponseItem) => void,
   ): Promise<Array<ResponseInputItem>> {
-    // If the agent has been canceled we should short‑circuit immediately to
-    // avoid any further processing (including potentially expensive tool
-    // calls). Returning an empty array ensures the main run‑loop terminates
-    // promptly.
-    if (this.canceled) {
-      return [];
-    }
+    // When a cancellation is in progress we *still* loop through the output
+    // items so we can emit synthetic "cancelled" responses for any pending
+    // tool calls.  Skipping processing altogether would leave the OpenAI API
+    // waiting for a corresponding *_output item and result in the dreaded
+    // "No tool output found for function call …" error – especially when
+    // `disableResponseStorage` is enabled and the backend does not persist
+    // conversation state between requests.
     const turnInput: Array<ResponseInputItem> = [];
     for (const item of output) {
       if (item.type === "function_call") {

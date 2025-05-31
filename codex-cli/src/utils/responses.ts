@@ -1,4 +1,4 @@
-import type { OpenAI } from "openai";
+import OpenAI, { AzureOpenAI } from "openai";
 import type {
   ResponseCreateParams,
   Response,
@@ -302,9 +302,8 @@ async function responsesCreateViaChatCompletions(
   input: ResponseCreateInput,
 ): Promise<ResponseOutput | AsyncGenerator<ResponseEvent>> {
   // Use the Responses API *only* for the official OpenAI endpoint.
-  // AzureOpenAI clients expose `apiVersion`, so they must continue via
-  // Chat-Completions.
-  if ((openai as any).apiVersion === undefined && input.model.startsWith("gpt")) {
+  // AzureOpenAI clients must continue via Chat-Completions.
+  if (!(openai instanceof AzureOpenAI) && input.model.startsWith("gpt")) {
     // @ts-ignore – SDK typing lag
     return (openai as any).responses.create(input as any);
   }
