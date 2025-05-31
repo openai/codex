@@ -38,6 +38,22 @@ function getSocket(serverUrl: string): Socket {
     reconnectionDelayMax: 30000,
   });
 
+  socket.on("disconnect", () => {
+    if (activeRequest) {
+      activeRequest.reject(
+        new Error("Socket disconnected before permission response."),
+      );
+      activeRequest = null;
+    }
+  });
+
+  socket.on("error", (err) => {
+    if (activeRequest) {
+      activeRequest.reject(new Error(`Socket error: ${err?.message ?? err}`));
+      activeRequest = null;
+    }
+  });
+
   socket.on("permission_response", (data: PermissionResponsePayload): void => {
     if (!activeRequest || activeRequest.agentId !== data.agentId) {
       return;
