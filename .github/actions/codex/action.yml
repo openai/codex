@@ -15,7 +15,7 @@ inputs:
   codex_args:
     description: "A whitespace-delimited list of arguments to pass to Codex. Due to limitations in YAML, arguments with spaces are not supported. For more complex configurations, use the `codex_home` input."
     required: false
-    default: "--config hide_agent_reasoning=false --full-auto"
+    default: "--config hide_agent_reasoning=true --full-auto"
   codex_home:
     description: "Value to use as the CODEX_HOME environment variable when running Codex."
     required: false
