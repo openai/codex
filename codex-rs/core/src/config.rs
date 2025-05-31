@@ -42,6 +42,11 @@ pub struct Config {
 
     pub shell_environment_policy: ShellEnvironmentPolicy,
 
+    /// When `true`, `AgentReasoning` events emitted by the backend will be
+    /// suppressed from the frontend output. This can reduce visual noise when
+    /// users are only interested in the final agent responses.
+    pub hide_agent_reasoning: bool,
+
     /// Disable server-side response storage (sends the full conversation
     /// context with every request). Currently necessary for OpenAI customers
     /// who have opted into Zero Data Retention (ZDR).
@@ -272,6 +277,10 @@ pub struct ConfigToml {
 
     /// Collection of settings that are specific to the TUI.
     pub tui: Option<Tui>,
+
+    /// When set to `true`, `AgentReasoning` events will be hidden from the
+    /// UI/output. Defaults to `false`.
+    pub hide_agent_reasoning: Option<bool>,
 }
 
 fn deserialize_sandbox_permissions<'de, D>(
@@ -433,6 +442,8 @@ impl Config {
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
             tui: cfg.tui.unwrap_or_default(),
             codex_linux_sandbox_exe,
+
+            hide_agent_reasoning: cfg.hide_agent_reasoning.unwrap_or(false),
         };
         Ok(config)
     }
@@ -774,6 +785,7 @@ disable_response_storage = true
                 file_opener: UriBasedFileOpener::VsCode,
                 tui: Tui::default(),
                 codex_linux_sandbox_exe: None,
+                hide_agent_reasoning: false,
             },
             o3_profile_config
         );
@@ -813,6 +825,7 @@ disable_response_storage = true
             file_opener: UriBasedFileOpener::VsCode,
             tui: Tui::default(),
             codex_linux_sandbox_exe: None,
+            hide_agent_reasoning: false,
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -867,6 +880,7 @@ disable_response_storage = true
             file_opener: UriBasedFileOpener::VsCode,
             tui: Tui::default(),
             codex_linux_sandbox_exe: None,
+            hide_agent_reasoning: false,
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);
