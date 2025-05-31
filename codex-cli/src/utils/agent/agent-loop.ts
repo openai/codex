@@ -787,7 +787,10 @@ export class AgentLoop {
               reasoning = { effort: this.config.reasoningEffort ?? "medium" };
               reasoning.summary = "auto";
             }
-            if (this.model.startsWith("gpt-4.1")) {
+            if (
+              this.config.provider?.toLowerCase() !== "openai" ||
+              this.model.startsWith("gpt-4.1")
+            ) {
               modelSpecificInstructions = applyPatchToolInstructions;
             }
             const mergedInstructions = [
