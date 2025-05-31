@@ -70,10 +70,12 @@ export let OPENAI_API_KEY = process.env["OPENAI_API_KEY"] || "";
 
 export const AZURE_OPENAI_API_VERSION =
   process.env["AZURE_OPENAI_API_VERSION"] || "2025-03-01-preview";
+export const AZURE_OPENAI_DEPLOYMENT = process.env["AZURE_OPENAI_DEPLOYMENT"];
 
 export const DEFAULT_REASONING_EFFORT = "high";
 export const OPENAI_ORGANIZATION = process.env["OPENAI_ORGANIZATION"] || "";
 export const OPENAI_PROJECT = process.env["OPENAI_PROJECT"] || "";
+export const HTTPS_PROXY_URL = process.env["HTTPS_PROXY"] || "";
 
 // Can be set `true` when Codex is running in an environment that is marked as already
 // considered sufficiently locked-down so that we allow running without an explicit sandbox.
@@ -124,11 +126,6 @@ export function getApiKey(provider: string = "openai"): string | undefined {
   const customApiKey = process.env[`${provider.toUpperCase()}_API_KEY`];
   if (customApiKey) {
     return customApiKey;
-  }
-
-  // If the provider not found in the providers list and `OPENAI_API_KEY` is set, use it
-  if (OPENAI_API_KEY !== "") {
-    return OPENAI_API_KEY;
   }
 
   // We tried.

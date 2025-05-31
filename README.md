@@ -468,8 +468,9 @@ For each AI provider, you need to set the corresponding API key in your environm
 export OPENAI_API_KEY="your-api-key-here"
 
 # Azure OpenAI
-export AZURE_OPENAI_API_KEY="your-azure-api-key-here"
-export AZURE_OPENAI_API_VERSION="2025-03-01-preview" (Optional)
+export AZURE_OPENAI_API_KEY="your-azure-api-key-here" # (optional; uses Entra authentication if not set)
+export AZURE_OPENAI_API_VERSION="2025-03-01-preview" # (optional)
+export AZURE_OPENAI_DEPLOYMENT="my-deployment" # (optional; set this if your deployment name does not match the model name)
 
 # OpenRouter
 export OPENROUTER_API_KEY="your-openrouter-key-here"
