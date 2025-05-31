@@ -1,3 +1,4 @@
+import { loadConfig, saveConfig } from "./config.js";
 import SelectInput from "../components/select-input/select-input.js";
 import Spinner from "../components/vendor/ink-spinner.js";
 import TextInput from "../components/vendor/ink-text-input.js";
@@ -11,7 +12,7 @@ export function ApiKeyPrompt({
 }: {
   onDone: (choice: Choice) => void;
 }): JSX.Element {
-  const [step, setStep] = useState<"select" | "paste">("select");
+  const [step, setStep] = useState<"select" | "paste" | "exit">("select");
   const [apiKey, setApiKey] = useState("");
 
   if (step === "select") {
@@ -31,16 +32,43 @@ export function ApiKeyPrompt({
               label: "Paste an API key (or set as OPENAI_API_KEY)",
               value: "paste",
             },
+            {
+              label: "Use a different provider (e.g. Azure, edit config file)",
+              value: "other",
+            },
           ]}
           onSelect={(item: { value: string }) => {
-            if (item.value === "signin") {
-              onDone({ type: "signin" });
-            } else {
-              setStep("paste");
+            switch (item.value) {
+              case "signin":
+                onDone({ type: "signin" });
+                break;
+              case "paste":
+                setStep("paste");
+                break;
+              case "other":
+                saveConfig({
+                  ...loadConfig(),
+                  provider: "openai",
+                });
+                setStep("exit");
+
+                setTimeout(() => process.exit(0), 60);
+                break;
+              default:
+                break;
             }
           }}
         />
       </Box>
+    );
+  }
+
+  if (step === "exit") {
+    return (
+      <Text>
+        Please edit ~/.codex/config.json with your provider's API key, then
+        restart codex.
+      </Text>
     );
   }
 
