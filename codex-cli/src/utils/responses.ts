@@ -1,10 +1,9 @@
+import type OpenAI from "openai";
+import { AzureOpenAI } from "openai";
 import type {
   ResponseCreateParams,
   Response,
 } from "openai/resources/responses/responses";
-
-import type OpenAI from "openai";
-import { AzureOpenAI } from "openai";
 
 // Define interfaces based on OpenAI API documentation
 type ResponseCreateInput = ResponseCreateParams;

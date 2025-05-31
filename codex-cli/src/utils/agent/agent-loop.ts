@@ -429,25 +429,21 @@ export class AgentLoop {
     // endpoint – their JSON differs slightly.
     // ---------------------------------------------------------------------
 
-    const isChatStyle =
-      // The chat endpoint nests function details under a `function` key.
-      // We conservatively treat the presence of this field as a signal that
-      // we are dealing with the chat format.
-      (item as any).function != null;
+    type ChatVariant = {
+      function?: { name?: string; arguments?: string };
+      call_id?: string;
+      id?: string;
+      name?: string;
+      arguments?: string;
+    };
+    const iv = item as ChatVariant;
 
-    const name: string | undefined = isChatStyle
-      ? (item as any).function?.name
-      : (item as any).name;
-
+    const isChatStyle = iv.function !== undefined;
+    const name: string | undefined = isChatStyle ? iv.function?.name : iv.name;
     const rawArguments: string | undefined = isChatStyle
-      ? (item as any).function?.arguments
-      : (item as any).arguments;
-
-    // The OpenAI "function_call" item may have either `call_id` (responses
-    // endpoint) or `id` (chat endpoint).  Prefer `call_id` if present but fall
-    // back to `id` to remain compatible.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const callId: string = (item as any).call_id ?? (item as any).id;
+      ? iv.function?.arguments
+      : iv.arguments;
+    const callId: string = iv.call_id ?? iv.id ?? "";
 
     const args = parseToolCallArguments(rawArguments ?? "{}");
     log(
@@ -540,7 +536,6 @@ export class AgentLoop {
     }
 
     // @ts-expect-error waiting on SDK to expose "local_shell_call_output"
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const outputItem = {
       type: "local_shell_call_output",
       // `call_id` is mandatory – ensure we never send `undefined` which would
