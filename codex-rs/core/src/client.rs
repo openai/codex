@@ -98,6 +98,13 @@ impl ModelClient {
 
         let full_instructions = prompt.get_full_instructions();
         let tools_json = create_tools_json_for_responses_api(prompt, &self.model)?;
+        let mut reasoning: Option<Reasoning> = None;
+        if self.model.starts_with("o") || self.model.starts_with("codex") {
+            reasoning = Some(Reasoning {
+                effort: "high",
+                summary: Some(Summary::Auto),
+            });
+        }
         let payload = Payload {
             model: &self.model,
             instructions: &full_instructions,
@@ -105,10 +112,7 @@ impl ModelClient {
             tools: &tools_json,
             tool_choice: "auto",
             parallel_tool_calls: false,
-            reasoning: Some(Reasoning {
-                effort: "high",
-                summary: Some(Summary::Auto),
-            }),
+            reasoning,
             previous_response_id: prompt.prev_id.clone(),
             store: prompt.store,
             stream: true,
