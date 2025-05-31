@@ -135,7 +135,7 @@ type ToolCallData = {
 };
 
 // Define a type for usage data
-type UsageData = {
+export type UsageData = {
   prompt_tokens?: number;
   completion_tokens?: number;
   total_tokens?: number;
@@ -143,7 +143,6 @@ type UsageData = {
   input_tokens_details?: { cached_tokens: number };
   output_tokens?: number;
   output_tokens_details?: { reasoning_tokens: number };
-  [key: string]: unknown;
 };
 
 // Define a type for content output
@@ -256,7 +255,7 @@ function convertTools(
       function: {
         name: tool.name,
         description: tool.description || undefined,
-        parameters: tool.parameters,
+        parameters: tool.parameters ?? undefined,
       },
     }));
 }

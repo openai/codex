@@ -1,7 +1,7 @@
 import type { ReviewDecision } from "./review.js";
 import type { ApplyPatchCommand, ApprovalPolicy } from "../../approvals.js";
 import type { AppConfig } from "../config.js";
-import type { ResponseEvent } from "../responses.js";
+import type { ResponseEvent, UsageData } from "../responses.js";
 import type {
   ResponseFunctionToolCall,
   ResponseInputItem,
@@ -82,6 +82,8 @@ type AgentLoopParams = {
     applyPatch: ApplyPatchCommand | undefined,
   ) => Promise<CommandConfirmation>;
   onLastResponseId: (lastResponseId: string) => void;
+  /** Called when a response completes to report token usage for the interaction */
+  onTokenUsage?: (usage: UsageData) => void;
 };
 
 const shellFunctionTool: FunctionTool = {
@@ -137,6 +139,7 @@ export class AgentLoop {
     applyPatch: ApplyPatchCommand | undefined,
   ) => Promise<CommandConfirmation>;
   private onLastResponseId: (lastResponseId: string) => void;
+  private onTokenUsage: (usage: UsageData) => void;
 
   /**
    * A reference to the currently active stream returned from the OpenAI
@@ -280,6 +283,7 @@ export class AgentLoop {
     onLoading,
     getCommandConfirmation,
     onLastResponseId,
+    onTokenUsage,
     additionalWritableRoots,
   }: AgentLoopParams & { config?: AppConfig }) {
     this.model = model;
@@ -301,6 +305,7 @@ export class AgentLoop {
     this.onLoading = onLoading;
     this.getCommandConfirmation = getCommandConfirmation;
     this.onLastResponseId = onLastResponseId;
+    this.onTokenUsage = onTokenUsage ?? (() => {});
 
     this.disableResponseStorage = disableResponseStorage ?? false;
     this.sessionId = getSessionId() || randomUUID().replaceAll("-", "");
@@ -1068,6 +1073,9 @@ export class AgentLoop {
 
               if (event.type === "response.completed") {
                 if (thisGeneration === this.generation && !this.canceled) {
+                  if (event.response.usage) {
+                    this.onTokenUsage(event.response.usage);
+                  }
                   for (const item of event.response.output) {
                     stageItem(item as ResponseItem);
                   }
