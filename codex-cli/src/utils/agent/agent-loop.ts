@@ -516,11 +516,9 @@ export class AgentLoop {
     // so the backend sees a corresponding *_output item for the original
     // request.
     if (this.canceled) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const callId: string = (item as any).call_id ?? (item as any).id;
 
       // @ts-expect-error waiting on SDK to expose "local_shell_call_output"
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const abortedOutput = {
         type: "local_shell_call_output",
         call_id: callId,
