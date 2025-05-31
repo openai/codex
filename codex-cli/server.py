@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Optional
+from typing import Literal, Optional
 import socketio
 from fastapi import FastAPI
 from pydantic import BaseModel, ValidationError
@@ -10,10 +10,6 @@ import asyncio
 console = Console()
 
 
-class PermissionRequest(BaseModel):
-    agentId: str
-    message: str
-
 
 class Decision(str, Enum):
     YES = "yes"
@@ -21,8 +17,14 @@ class Decision(str, Enum):
     NO_EXIT = "no-exit"
     EXPLAIN = "explain"
 
+class PermissionRequest(BaseModel):
+    type: Literal["permission-request"] = "permission-request"
+    agentId: str
+    message: str
+
 
 class PermissionResponse(BaseModel):
+    type: Literal["permission-response"] = "permission-response"
     agentId: str
     decision: Decision
     customDenyMessage: Optional[str] = None
