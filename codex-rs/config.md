@@ -354,6 +354,16 @@ Note this is **not** a general editor setting (like `$EDITOR`), as it only accep
 
 Currently, `"vscode"` is the default, though Codex does not verify VS Code is installed. As such, `file_opener` may default to `"none"` or something else in the future.
 
+## hide_agent_reasoning
+
+Codex intermittently emits "reasoning" events that show the model’s internal "thinking" before it produces a final answer. Some users may find these events distracting, especially in CI logs or minimal terminal output.
+
+Setting `hide_agent_reasoning` to `true` suppresses these events in **both** the TUI as well as the headless `exec` sub-command:
+
+```toml
+hide_agent_reasoning = true   # defaults to false
+```
+
 ## project_doc_max_bytes
 
 Maximum number of bytes to read from an `AGENTS.md` file to include in the instructions sent with the first turn of a session. Defaults to 32 KiB.

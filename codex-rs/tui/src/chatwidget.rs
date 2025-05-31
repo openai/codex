@@ -239,9 +239,11 @@ impl ChatWidget<'_> {
                 self.request_redraw();
             }
             EventMsg::AgentReasoning(AgentReasoningEvent { text }) => {
-                self.conversation_history
-                    .add_agent_reasoning(&self.config, text);
-                self.request_redraw();
+                if !self.config.hide_agent_reasoning {
+                    self.conversation_history
+                        .add_agent_reasoning(&self.config, text);
+                    self.request_redraw();
+                }
             }
             EventMsg::TaskStarted => {
                 self.bottom_pane.set_task_running(true);

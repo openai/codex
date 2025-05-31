@@ -43,10 +43,13 @@ pub(crate) struct EventProcessor {
     red: Style,
     green: Style,
     cyan: Style,
+
+    /// Whether to include `AgentReasoning` events in the output.
+    show_agent_reasoning: bool,
 }
 
 impl EventProcessor {
-    pub(crate) fn create_with_ansi(with_ansi: bool) -> Self {
+    pub(crate) fn create_with_ansi(with_ansi: bool, show_agent_reasoning: bool) -> Self {
         let call_id_to_command = HashMap::new();
         let call_id_to_patch = HashMap::new();
         let call_id_to_tool_call = HashMap::new();
@@ -63,6 +66,7 @@ impl EventProcessor {
                 green: Style::new().green(),
                 cyan: Style::new().cyan(),
                 call_id_to_tool_call,
+                show_agent_reasoning,
             }
         } else {
             Self {
@@ -76,6 +80,7 @@ impl EventProcessor {
                 green: Style::new(),
                 cyan: Style::new(),
                 call_id_to_tool_call,
+                show_agent_reasoning,
             }
         }
     }
@@ -411,12 +416,14 @@ impl EventProcessor {
                 // Should we exit?
             }
             EventMsg::AgentReasoning(agent_reasoning_event) => {
-                ts_println!(
-                    self,
-                    "{}\n{}",
-                    "thinking".style(self.italic).style(self.magenta),
-                    agent_reasoning_event.text
-                );
+                if self.show_agent_reasoning {
+                    ts_println!(
+                        self,
+                        "{}\n{}",
+                        "thinking".style(self.italic).style(self.magenta),
+                        agent_reasoning_event.text
+                    );
+                }
             }
             EventMsg::SessionConfigured(session_configured_event) => {
                 let SessionConfiguredEvent {
