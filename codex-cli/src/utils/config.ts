@@ -140,8 +140,12 @@ export function getApiKey(provider: string = "openai"): string | undefined {
     return customApiKey;
   }
 
-  // If the provider not found in the providers list and `OPENAI_API_KEY` is set, use it
-  if (OPENAI_API_KEY !== "") {
+  // For the canonical OpenAI provider we still respect the global
+  // `OPENAI_API_KEY`.  For *all other* providers (e.g. `azure`) we do **not**
+  // fall back to it – they must provide their own specific key (e.g.
+  // `AZURE_OPENAI_API_KEY`).  Falling back silently was causing the CLI to
+  // send the wrong key and produce confusing 401 errors.
+  if (provider.toLowerCase() === "openai" && OPENAI_API_KEY !== "") {
     return OPENAI_API_KEY;
   }
 
