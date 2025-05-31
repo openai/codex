@@ -335,7 +335,7 @@ Codex configuration files can be placed in the `~/.codex/` directory, supporting
 
 | Parameter           | Type    | Default    | Description                      | Available Options                                                                              |
 | ------------------- | ------- | ---------- | -------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `model`             | string  | `o4-mini`  | AI model to use                  | Any model name supporting OpenAI API                                                           |
+| `model`             | string  | `codex-mini-latest`  | AI model to use                  | Any model name supporting OpenAI API                                                           |
 | `approvalMode`      | string  | `suggest`  | AI assistant's permission mode   | `suggest` (suggestions only)<br>`auto-edit` (automatic edits)<br>`full-auto` (fully automatic) |
 | `fullAutoErrorMode` | string  | `ask-user` | Error handling in full-auto mode | `ask-user` (prompt for user input)<br>`ignore-and-continue` (ignore and proceed)               |
 | `notify`            | boolean | `true`     | Enable desktop notifications     | `true`/`false`                                                                                 |
