@@ -7,11 +7,13 @@ import { io } from "socket.io-client";
 /** ---- internal singleton socket & helpers -------------------------------- */
 
 type PermissionRequestPayload = {
+  type: "permission-request";
   agentId: string;
   message: string;
 };
 
 type PermissionResponsePayload = ConfirmationResult & {
+  type: "permission-response";
   agentId: string;
 };
 
