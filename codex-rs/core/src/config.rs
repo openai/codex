@@ -1,6 +1,8 @@
 use crate::config_profile::ConfigProfile;
 use crate::config_types::History;
 use crate::config_types::McpServerConfig;
+use crate::config_types::ShellEnvironmentPolicy;
+use crate::config_types::ShellEnvironmentPolicyToml;
 use crate::config_types::Tui;
 use crate::config_types::UriBasedFileOpener;
 use crate::flags::OPENAI_DEFAULT_MODEL;
@@ -14,6 +16,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
+use toml::Value as TomlValue;
 
 /// Maximum number of bytes of the documentation that will be embedded. Larger
 /// files are *silently truncated* to this size so we do not take up too much of
@@ -36,6 +39,13 @@ pub struct Config {
     pub approval_policy: AskForApproval,
 
     pub sandbox_policy: SandboxPolicy,
+
+    pub shell_environment_policy: ShellEnvironmentPolicy,
+
+    /// When `true`, `AgentReasoning` events emitted by the backend will be
+    /// suppressed from the frontend output. This can reduce visual noise when
+    /// users are only interested in the final agent responses.
+    pub hide_agent_reasoning: bool,
 
     /// Disable server-side response storage (sends the full conversation
     /// context with every request). Currently necessary for OpenAI customers
@@ -94,6 +104,116 @@ pub struct Config {
 
     /// Collection of settings that are specific to the TUI.
     pub tui: Tui,
+
+    /// Path to the `codex-linux-sandbox` executable. This must be set if
+    /// [`crate::exec::SandboxType::LinuxSeccomp`] is used. Note that this
+    /// cannot be set in the config file: it must be set in code via
+    /// [`ConfigOverrides`].
+    ///
+    /// When this program is invoked, arg0 will be set to `codex-linux-sandbox`.
+    pub codex_linux_sandbox_exe: Option<PathBuf>,
+}
+
+impl Config {
+    /// Load configuration with *generic* CLI overrides (`-c key=value`) applied
+    /// **in between** the values parsed from `config.toml` and the
+    /// strongly-typed overrides specified via [`ConfigOverrides`].
+    ///
+    /// The precedence order is therefore: `config.toml` < `-c` overrides <
+    /// `ConfigOverrides`.
+    pub fn load_with_cli_overrides(
+        cli_overrides: Vec<(String, TomlValue)>,
+        overrides: ConfigOverrides,
+    ) -> std::io::Result<Self> {
+        // Resolve the directory that stores Codex state (e.g. ~/.codex or the
+        // value of $CODEX_HOME) so we can embed it into the resulting
+        // `Config` instance.
+        let codex_home = find_codex_home()?;
+
+        // Step 1: parse `config.toml` into a generic JSON value.
+        let mut root_value = load_config_as_toml(&codex_home)?;
+
+        // Step 2: apply the `-c` overrides.
+        for (path, value) in cli_overrides.into_iter() {
+            apply_toml_override(&mut root_value, &path, value);
+        }
+
+        // Step 3: deserialize into `ConfigToml` so that Serde can enforce the
+        // correct types.
+        let cfg: ConfigToml = root_value.try_into().map_err(|e| {
+            tracing::error!("Failed to deserialize overridden config: {e}");
+            std::io::Error::new(std::io::ErrorKind::InvalidData, e)
+        })?;
+
+        // Step 4: merge with the strongly-typed overrides.
+        Self::load_from_base_config_with_overrides(cfg, overrides, codex_home)
+    }
+}
+
+/// Read `CODEX_HOME/config.toml` and return it as a generic TOML value. Returns
+/// an empty TOML table when the file does not exist.
+fn load_config_as_toml(codex_home: &Path) -> std::io::Result<TomlValue> {
+    let config_path = codex_home.join("config.toml");
+    match std::fs::read_to_string(&config_path) {
+        Ok(contents) => match toml::from_str::<TomlValue>(&contents) {
+            Ok(val) => Ok(val),
+            Err(e) => {
+                tracing::error!("Failed to parse config.toml: {e}");
+                Err(std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+            }
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            tracing::info!("config.toml not found, using defaults");
+            Ok(TomlValue::Table(Default::default()))
+        }
+        Err(e) => {
+            tracing::error!("Failed to read config.toml: {e}");
+            Err(e)
+        }
+    }
+}
+
+/// Apply a single dotted-path override onto a TOML value.
+fn apply_toml_override(root: &mut TomlValue, path: &str, value: TomlValue) {
+    use toml::value::Table;
+
+    let segments: Vec<&str> = path.split('.').collect();
+    let mut current = root;
+
+    for (idx, segment) in segments.iter().enumerate() {
+        let is_last = idx == segments.len() - 1;
+
+        if is_last {
+            match current {
+                TomlValue::Table(table) => {
+                    table.insert(segment.to_string(), value);
+                }
+                _ => {
+                    let mut table = Table::new();
+                    table.insert(segment.to_string(), value);
+                    *current = TomlValue::Table(table);
+                }
+            }
+            return;
+        }
+
+        // Traverse or create intermediate object.
+        match current {
+            TomlValue::Table(table) => {
+                current = table
+                    .entry(segment.to_string())
+                    .or_insert_with(|| TomlValue::Table(Table::new()));
+            }
+            _ => {
+                *current = TomlValue::Table(Table::new());
+                if let TomlValue::Table(tbl) = current {
+                    current = tbl
+                        .entry(segment.to_string())
+                        .or_insert_with(|| TomlValue::Table(Table::new()));
+                }
+            }
+        }
+    }
 }
 
 /// Base config deserialized from ~/.codex/config.toml.
@@ -107,6 +227,9 @@ pub struct ConfigToml {
 
     /// Default approval policy for executing commands.
     pub approval_policy: Option<AskForApproval>,
+
+    #[serde(default)]
+    pub shell_environment_policy: ShellEnvironmentPolicyToml,
 
     // The `default` attribute ensures that the field is treated as `None` when
     // the key is omitted from the TOML. Without it, Serde treats the field as
@@ -154,29 +277,10 @@ pub struct ConfigToml {
 
     /// Collection of settings that are specific to the TUI.
     pub tui: Option<Tui>,
-}
 
-impl ConfigToml {
-    /// Attempt to parse the file at `~/.codex/config.toml`. If it does not
-    /// exist, return a default config. Though if it exists and cannot be
-    /// parsed, report that to the user and force them to fix it.
-    fn load_from_toml(codex_home: &Path) -> std::io::Result<Self> {
-        let config_toml_path = codex_home.join("config.toml");
-        match std::fs::read_to_string(&config_toml_path) {
-            Ok(contents) => toml::from_str::<Self>(&contents).map_err(|e| {
-                tracing::error!("Failed to parse config.toml: {e}");
-                std::io::Error::new(std::io::ErrorKind::InvalidData, e)
-            }),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                tracing::info!("config.toml not found, using defaults");
-                Ok(Self::default())
-            }
-            Err(e) => {
-                tracing::error!("Failed to read config.toml: {e}");
-                Err(e)
-            }
-        }
-    }
+    /// When set to `true`, `AgentReasoning` events will be hidden from the
+    /// UI/output. Defaults to `false`.
+    pub hide_agent_reasoning: Option<bool>,
 }
 
 fn deserialize_sandbox_permissions<'de, D>(
@@ -212,27 +316,12 @@ pub struct ConfigOverrides {
     pub cwd: Option<PathBuf>,
     pub approval_policy: Option<AskForApproval>,
     pub sandbox_policy: Option<SandboxPolicy>,
-    pub disable_response_storage: Option<bool>,
     pub model_provider: Option<String>,
     pub config_profile: Option<String>,
+    pub codex_linux_sandbox_exe: Option<PathBuf>,
 }
 
 impl Config {
-    /// Load configuration, optionally applying overrides (CLI flags). Merges
-    /// ~/.codex/config.toml, ~/.codex/instructions.md, embedded defaults, and
-    /// any values provided in `overrides` (highest precedence).
-    pub fn load_with_overrides(overrides: ConfigOverrides) -> std::io::Result<Self> {
-        // Resolve the directory that stores Codex state (e.g. ~/.codex or the
-        // value of $CODEX_HOME) so we can embed it into the resulting
-        // `Config` instance.
-        let codex_home = find_codex_home()?;
-
-        let cfg: ConfigToml = ConfigToml::load_from_toml(&codex_home)?;
-        tracing::warn!("Config parsed from config.toml: {cfg:?}");
-
-        Self::load_from_base_config_with_overrides(cfg, overrides, codex_home)
-    }
-
     /// Meant to be used exclusively for tests: `load_with_overrides()` should
     /// be used in all other cases.
     pub fn load_from_base_config_with_overrides(
@@ -248,9 +337,9 @@ impl Config {
             cwd,
             approval_policy,
             sandbox_policy,
-            disable_response_storage,
             model_provider,
             config_profile: config_profile_key,
+            codex_linux_sandbox_exe,
         } = overrides;
 
         let config_profile = match config_profile_key.or(cfg.profile) {
@@ -302,6 +391,8 @@ impl Config {
             })?
             .clone();
 
+        let shell_environment_policy = cfg.shell_environment_policy.into();
+
         let resolved_cwd = {
             use std::env;
 
@@ -336,8 +427,9 @@ impl Config {
                 .or(cfg.approval_policy)
                 .unwrap_or_else(AskForApproval::default),
             sandbox_policy,
-            disable_response_storage: disable_response_storage
-                .or(config_profile.disable_response_storage)
+            shell_environment_policy,
+            disable_response_storage: config_profile
+                .disable_response_storage
                 .or(cfg.disable_response_storage)
                 .unwrap_or(false),
             notify: cfg.notify,
@@ -349,6 +441,9 @@ impl Config {
             history,
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
             tui: cfg.tui.unwrap_or_default(),
+            codex_linux_sandbox_exe,
+
+            hide_agent_reasoning: cfg.hide_agent_reasoning.unwrap_or(false),
         };
         Ok(config)
     }
@@ -677,6 +772,7 @@ disable_response_storage = true
                 model_provider: fixture.openai_provider.clone(),
                 approval_policy: AskForApproval::Never,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                shell_environment_policy: ShellEnvironmentPolicy::default(),
                 disable_response_storage: false,
                 instructions: None,
                 notify: None,
@@ -688,6 +784,8 @@ disable_response_storage = true
                 history: History::default(),
                 file_opener: UriBasedFileOpener::VsCode,
                 tui: Tui::default(),
+                codex_linux_sandbox_exe: None,
+                hide_agent_reasoning: false,
             },
             o3_profile_config
         );
@@ -714,6 +812,7 @@ disable_response_storage = true
             model_provider: fixture.openai_chat_completions_provider.clone(),
             approval_policy: AskForApproval::UnlessAllowListed,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            shell_environment_policy: ShellEnvironmentPolicy::default(),
             disable_response_storage: false,
             instructions: None,
             notify: None,
@@ -725,6 +824,8 @@ disable_response_storage = true
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
             tui: Tui::default(),
+            codex_linux_sandbox_exe: None,
+            hide_agent_reasoning: false,
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -766,6 +867,7 @@ disable_response_storage = true
             model_provider: fixture.openai_provider.clone(),
             approval_policy: AskForApproval::OnFailure,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            shell_environment_policy: ShellEnvironmentPolicy::default(),
             disable_response_storage: true,
             instructions: None,
             notify: None,
@@ -777,6 +879,8 @@ disable_response_storage = true
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
             tui: Tui::default(),
+            codex_linux_sandbox_exe: None,
+            hide_agent_reasoning: false,
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);

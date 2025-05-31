@@ -1,21 +1,32 @@
+use crate::cell_widget::CellWidget;
+use crate::exec_command::escape_command;
+use crate::markdown::append_markdown;
+use crate::text_block::TextBlock;
+use base64::Engine;
 use codex_ansi_escape::ansi_escape_line;
 use codex_common::elapsed::format_duration;
 use codex_core::config::Config;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::SessionConfiguredEvent;
+use image::DynamicImage;
+use image::GenericImageView;
+use image::ImageReader;
+use lazy_static::lazy_static;
 use ratatui::prelude::*;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::text::Line as RtLine;
 use ratatui::text::Span as RtSpan;
+use ratatui_image::Image as TuiImage;
+use ratatui_image::Resize as ImgResize;
+use ratatui_image::picker::ProtocolType;
 use std::collections::HashMap;
+use std::io::Cursor;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
-
-use crate::exec_command::escape_command;
-use crate::markdown::append_markdown;
+use tracing::error;
 
 pub(crate) struct CommandOutput {
     pub(crate) exit_code: i32,
@@ -34,16 +45,16 @@ pub(crate) enum PatchEventType {
 /// scrollable list.
 pub(crate) enum HistoryCell {
     /// Welcome message.
-    WelcomeMessage { lines: Vec<Line<'static>> },
+    WelcomeMessage { view: TextBlock },
 
     /// Message from the user.
-    UserPrompt { lines: Vec<Line<'static>> },
+    UserPrompt { view: TextBlock },
 
     /// Message from the agent.
-    AgentMessage { lines: Vec<Line<'static>> },
+    AgentMessage { view: TextBlock },
 
     /// Reasoning event from the agent.
-    AgentReasoning { lines: Vec<Line<'static>> },
+    AgentReasoning { view: TextBlock },
 
     /// An exec tool call that has not finished yet.
     ActiveExecCommand {
@@ -51,11 +62,11 @@ pub(crate) enum HistoryCell {
         /// The shell command, escaped and formatted.
         command: String,
         start: Instant,
-        lines: Vec<Line<'static>>,
+        view: TextBlock,
     },
 
     /// Completed exec tool call.
-    CompletedExecCommand { lines: Vec<Line<'static>> },
+    CompletedExecCommand { view: TextBlock },
 
     /// An MCP tool call that has not finished yet.
     ActiveMcpToolCall {
@@ -67,29 +78,41 @@ pub(crate) enum HistoryCell {
         /// exact same text without re-formatting.
         invocation: String,
         start: Instant,
-        lines: Vec<Line<'static>>,
+        view: TextBlock,
     },
 
-    /// Completed MCP tool call.
-    CompletedMcpToolCall { lines: Vec<Line<'static>> },
+    /// Completed MCP tool call where we show the result serialized as JSON.
+    CompletedMcpToolCallWithTextOutput { view: TextBlock },
 
-    /// Background event
-    BackgroundEvent { lines: Vec<Line<'static>> },
+    /// Completed MCP tool call where the result is an image.
+    /// Admittedly, [mcp_types::CallToolResult] can have multiple content types,
+    /// which could be a mix of text and images, so we need to tighten this up.
+    // NOTE: For image output we keep the *original* image around and lazily
+    // compute a resized copy that fits the available cell width.  Caching the
+    // resized version avoids doing the potentially expensive rescale twice
+    // because the scroll-view first calls `height()` for layouting and then
+    // `render_window()` for painting.
+    CompletedMcpToolCallWithImageOutput {
+        image: DynamicImage,
+        /// Cached data derived from the current terminal width.  The cache is
+        /// invalidated whenever the width changes (e.g. when the user
+        /// resizes the window).
+        render_cache: std::cell::RefCell<Option<ImageRenderCache>>,
+    },
+
+    /// Background event.
+    BackgroundEvent { view: TextBlock },
 
     /// Error event from the backend.
-    ErrorEvent { lines: Vec<Line<'static>> },
+    ErrorEvent { view: TextBlock },
 
-    /// Info describing the newly‑initialized session.
-    SessionInfo { lines: Vec<Line<'static>> },
+    /// Info describing the newly-initialized session.
+    SessionInfo { view: TextBlock },
 
     /// A pending code patch that is awaiting user approval. Mirrors the
     /// behaviour of `ActiveExecCommand` so the user sees *what* patch the
     /// model wants to apply before being prompted to approve or deny it.
-    PendingPatch {
-        /// Identifier so that a future `PatchApplyEnd` can update the entry
-        /// with the final status (not yet implemented).
-        lines: Vec<Line<'static>>,
-    },
+    PendingPatch { view: TextBlock },
 }
 
 const TOOL_CALL_MAX_LINES: usize = 5;
@@ -107,10 +130,13 @@ impl HistoryCell {
             history_entry_count: _,
         } = event;
         if is_first_event {
+            const VERSION: &str = env!("CARGO_PKG_VERSION");
+
             let mut lines: Vec<Line<'static>> = vec![
                 Line::from(vec![
                     "OpenAI ".into(),
                     "Codex".bold(),
+                    format!(" v{}", VERSION).into(),
                     " (research preview)".dim(),
                 ]),
                 Line::from(""),
@@ -132,9 +158,13 @@ impl HistoryCell {
                 lines.push(Line::from(vec![format!("{key}: ").bold(), value.into()]));
             }
             lines.push(Line::from(""));
-            HistoryCell::WelcomeMessage { lines }
+            HistoryCell::WelcomeMessage {
+                view: TextBlock::new(lines),
+            }
         } else if config.model == model {
-            HistoryCell::SessionInfo { lines: vec![] }
+            HistoryCell::SessionInfo {
+                view: TextBlock::new(Vec::new()),
+            }
         } else {
             let lines = vec![
                 Line::from("model changed:".magenta().bold()),
@@ -142,7 +172,9 @@ impl HistoryCell {
                 Line::from(format!("used: {}", model)),
                 Line::from(""),
             ];
-            HistoryCell::SessionInfo { lines }
+            HistoryCell::SessionInfo {
+                view: TextBlock::new(lines),
+            }
         }
     }
 
@@ -152,7 +184,9 @@ impl HistoryCell {
         lines.extend(message.lines().map(|l| Line::from(l.to_string())));
         lines.push(Line::from(""));
 
-        HistoryCell::UserPrompt { lines }
+        HistoryCell::UserPrompt {
+            view: TextBlock::new(lines),
+        }
     }
 
     pub(crate) fn new_agent_message(config: &Config, message: String) -> Self {
@@ -161,7 +195,9 @@ impl HistoryCell {
         append_markdown(&message, &mut lines, config);
         lines.push(Line::from(""));
 
-        HistoryCell::AgentMessage { lines }
+        HistoryCell::AgentMessage {
+            view: TextBlock::new(lines),
+        }
     }
 
     pub(crate) fn new_agent_reasoning(config: &Config, text: String) -> Self {
@@ -170,7 +206,9 @@ impl HistoryCell {
         append_markdown(&text, &mut lines, config);
         lines.push(Line::from(""));
 
-        HistoryCell::AgentReasoning { lines }
+        HistoryCell::AgentReasoning {
+            view: TextBlock::new(lines),
+        }
     }
 
     pub(crate) fn new_active_exec_command(call_id: String, command: Vec<String>) -> Self {
@@ -187,7 +225,7 @@ impl HistoryCell {
             call_id,
             command: command_escaped,
             start,
-            lines,
+            view: TextBlock::new(lines),
         }
     }
 
@@ -226,7 +264,9 @@ impl HistoryCell {
         }
         lines.push(Line::from(""));
 
-        HistoryCell::CompletedExecCommand { lines }
+        HistoryCell::CompletedExecCommand {
+            view: TextBlock::new(lines),
+        }
     }
 
     pub(crate) fn new_active_mcp_tool_call(
@@ -267,7 +307,51 @@ impl HistoryCell {
             fq_tool_name,
             invocation,
             start,
-            lines,
+            view: TextBlock::new(lines),
+        }
+    }
+
+    fn try_new_completed_mcp_tool_call_with_image_output(
+        result: &Result<mcp_types::CallToolResult, String>,
+    ) -> Option<Self> {
+        match result {
+            Ok(mcp_types::CallToolResult { content, .. }) => {
+                if let Some(mcp_types::CallToolResultContent::ImageContent(image)) = content.first()
+                {
+                    let raw_data =
+                        match base64::engine::general_purpose::STANDARD.decode(&image.data) {
+                            Ok(data) => data,
+                            Err(e) => {
+                                error!("Failed to decode image data: {e}");
+                                return None;
+                            }
+                        };
+                    let reader = match ImageReader::new(Cursor::new(raw_data)).with_guessed_format()
+                    {
+                        Ok(reader) => reader,
+                        Err(e) => {
+                            error!("Failed to guess image format: {e}");
+                            return None;
+                        }
+                    };
+
+                    let image = match reader.decode() {
+                        Ok(image) => image,
+                        Err(e) => {
+                            error!("Image decoding failed: {e}");
+                            return None;
+                        }
+                    };
+
+                    Some(HistoryCell::CompletedMcpToolCallWithImageOutput {
+                        image,
+                        render_cache: std::cell::RefCell::new(None),
+                    })
+                } else {
+                    None
+                }
+            }
+            _ => None,
         }
     }
 
@@ -276,8 +360,12 @@ impl HistoryCell {
         invocation: String,
         start: Instant,
         success: bool,
-        result: Option<serde_json::Value>,
+        result: Result<mcp_types::CallToolResult, String>,
     ) -> Self {
+        if let Some(cell) = Self::try_new_completed_mcp_tool_call_with_image_output(&result) {
+            return cell;
+        }
+
         let duration = format_duration(start.elapsed());
         let status_str = if success { "success" } else { "failed" };
         let title_line = Line::from(vec![
@@ -289,7 +377,14 @@ impl HistoryCell {
         lines.push(title_line);
         lines.push(Line::from(format!("$ {invocation}")));
 
-        if let Some(res_val) = result {
+        // Convert result into serde_json::Value early so we don't have to
+        // worry about lifetimes inside the match arm.
+        let result_val = result.map(|r| {
+            serde_json::to_value(r)
+                .unwrap_or_else(|_| serde_json::Value::String("<serialization error>".into()))
+        });
+
+        if let Ok(res_val) = result_val {
             let json_pretty =
                 serde_json::to_string_pretty(&res_val).unwrap_or_else(|_| res_val.to_string());
             let mut iter = json_pretty.lines();
@@ -304,7 +399,9 @@ impl HistoryCell {
 
         lines.push(Line::from(""));
 
-        HistoryCell::CompletedMcpToolCall { lines }
+        HistoryCell::CompletedMcpToolCallWithTextOutput {
+            view: TextBlock::new(lines),
+        }
     }
 
     pub(crate) fn new_background_event(message: String) -> Self {
@@ -312,7 +409,9 @@ impl HistoryCell {
         lines.push(Line::from("event".dim()));
         lines.extend(message.lines().map(|l| Line::from(l.to_string()).dim()));
         lines.push(Line::from(""));
-        HistoryCell::BackgroundEvent { lines }
+        HistoryCell::BackgroundEvent {
+            view: TextBlock::new(lines),
+        }
     }
 
     pub(crate) fn new_error_event(message: String) -> Self {
@@ -320,7 +419,9 @@ impl HistoryCell {
             vec!["ERROR: ".red().bold(), message.into()].into(),
             "".into(),
         ];
-        HistoryCell::ErrorEvent { lines }
+        HistoryCell::ErrorEvent {
+            view: TextBlock::new(lines),
+        }
     }
 
     /// Create a new `PendingPatch` cell that lists the file‑level summary of
@@ -339,7 +440,9 @@ impl HistoryCell {
                 auto_approved: false,
             } => {
                 let lines = vec![Line::from("patch applied".magenta().bold())];
-                return Self::PendingPatch { lines };
+                return Self::PendingPatch {
+                    view: TextBlock::new(lines),
+                };
             }
         };
 
@@ -380,23 +483,85 @@ impl HistoryCell {
 
         lines.push(Line::from(""));
 
-        HistoryCell::PendingPatch { lines }
+        HistoryCell::PendingPatch {
+            view: TextBlock::new(lines),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// `CellWidget` implementation – most variants delegate to their internal
+// `TextBlock`.  Variants that need custom painting can add their own logic in
+// the match arms.
+// ---------------------------------------------------------------------------
+
+impl CellWidget for HistoryCell {
+    fn height(&self, width: u16) -> usize {
+        match self {
+            HistoryCell::WelcomeMessage { view }
+            | HistoryCell::UserPrompt { view }
+            | HistoryCell::AgentMessage { view }
+            | HistoryCell::AgentReasoning { view }
+            | HistoryCell::BackgroundEvent { view }
+            | HistoryCell::ErrorEvent { view }
+            | HistoryCell::SessionInfo { view }
+            | HistoryCell::CompletedExecCommand { view }
+            | HistoryCell::CompletedMcpToolCallWithTextOutput { view }
+            | HistoryCell::PendingPatch { view }
+            | HistoryCell::ActiveExecCommand { view, .. }
+            | HistoryCell::ActiveMcpToolCall { view, .. } => view.height(width),
+            HistoryCell::CompletedMcpToolCallWithImageOutput {
+                image,
+                render_cache,
+            } => ensure_image_cache(image, width, render_cache),
+        }
     }
 
-    pub(crate) fn lines(&self) -> &Vec<Line<'static>> {
+    fn render_window(&self, first_visible_line: usize, area: Rect, buf: &mut Buffer) {
         match self {
-            HistoryCell::WelcomeMessage { lines, .. }
-            | HistoryCell::UserPrompt { lines, .. }
-            | HistoryCell::AgentMessage { lines, .. }
-            | HistoryCell::AgentReasoning { lines, .. }
-            | HistoryCell::BackgroundEvent { lines, .. }
-            | HistoryCell::ErrorEvent { lines, .. }
-            | HistoryCell::SessionInfo { lines, .. }
-            | HistoryCell::ActiveExecCommand { lines, .. }
-            | HistoryCell::CompletedExecCommand { lines, .. }
-            | HistoryCell::ActiveMcpToolCall { lines, .. }
-            | HistoryCell::CompletedMcpToolCall { lines, .. }
-            | HistoryCell::PendingPatch { lines, .. } => lines,
+            HistoryCell::WelcomeMessage { view }
+            | HistoryCell::UserPrompt { view }
+            | HistoryCell::AgentMessage { view }
+            | HistoryCell::AgentReasoning { view }
+            | HistoryCell::BackgroundEvent { view }
+            | HistoryCell::ErrorEvent { view }
+            | HistoryCell::SessionInfo { view }
+            | HistoryCell::CompletedExecCommand { view }
+            | HistoryCell::CompletedMcpToolCallWithTextOutput { view }
+            | HistoryCell::PendingPatch { view }
+            | HistoryCell::ActiveExecCommand { view, .. }
+            | HistoryCell::ActiveMcpToolCall { view, .. } => {
+                view.render_window(first_visible_line, area, buf)
+            }
+            HistoryCell::CompletedMcpToolCallWithImageOutput {
+                image,
+                render_cache,
+            } => {
+                // Ensure we have a cached, resized copy that matches the current width.
+                // `height()` should have prepared the cache, but if something invalidated it
+                // (e.g. the first `render_window()` call happens *before* `height()` after a
+                // resize) we rebuild it here.
+
+                let width_cells = area.width;
+
+                // Ensure the cache is up-to-date and extract the scaled image.
+                let _ = ensure_image_cache(image, width_cells, render_cache);
+
+                let Some(resized) = render_cache
+                    .borrow()
+                    .as_ref()
+                    .map(|c| c.scaled_image.clone())
+                else {
+                    return;
+                };
+
+                let picker = &*TERMINAL_PICKER;
+
+                if let Ok(protocol) = picker.new_protocol(resized, area, ImgResize::Fit(None)) {
+                    let img_widget = TuiImage::new(&protocol);
+                    img_widget.render(area, buf);
+                }
+            }
         }
     }
 }
@@ -431,4 +596,121 @@ fn create_diff_summary(changes: HashMap<PathBuf, FileChange>) -> Vec<String> {
     }
 
     summaries
+}
+
+// -------------------------------------
+// Helper types for image rendering
+// -------------------------------------
+
+/// Cached information for rendering an image inside a conversation cell.
+///
+/// The cache ties the resized image to a *specific* content width (in
+/// terminal cells).  Whenever the terminal is resized and the width changes
+/// we need to re-compute the scaled variant so that it still fits the
+/// available space.  Keeping the resized copy around saves a costly rescale
+/// between the back-to-back `height()` and `render_window()` calls that the
+/// scroll-view performs while laying out the UI.
+pub(crate) struct ImageRenderCache {
+    /// Width in *terminal cells* the cached image was generated for.
+    width_cells: u16,
+    /// Height in *terminal rows* that the conversation cell must occupy so
+    /// the whole image becomes visible.
+    height_rows: usize,
+    /// The resized image that fits the given width / height constraints.
+    scaled_image: DynamicImage,
+}
+
+lazy_static! {
+    static ref TERMINAL_PICKER: ratatui_image::picker::Picker = {
+        use ratatui_image::picker::Picker;
+        use ratatui_image::picker::cap_parser::QueryStdioOptions;
+
+        // Ask the terminal for capabilities and explicit font size.  Request the
+        // Kitty *text-sizing protocol* as a fallback mechanism for terminals
+        // (like iTerm2) that do not reply to the standard CSI 16/18 queries.
+        match Picker::from_query_stdio_with_options(QueryStdioOptions {
+            text_sizing_protocol: true,
+        }) {
+            Ok(picker) => picker,
+            Err(err) => {
+                // Fall back to the conservative default that assumes ~8×16 px cells.
+                // Still better than breaking the build in a headless test run.
+                tracing::warn!("terminal capability query failed: {err:?}; using default font size");
+                Picker::from_fontsize((8, 16))
+            }
+        }
+    };
+}
+
+/// Resize `image` to fit into `width_cells`×10-rows keeping the original aspect
+/// ratio. The function updates `render_cache` and returns the number of rows
+/// (<= 10) the picture will occupy.
+fn ensure_image_cache(
+    image: &DynamicImage,
+    width_cells: u16,
+    render_cache: &std::cell::RefCell<Option<ImageRenderCache>>,
+) -> usize {
+    if let Some(cache) = render_cache.borrow().as_ref() {
+        if cache.width_cells == width_cells {
+            return cache.height_rows;
+        }
+    }
+
+    let picker = &*TERMINAL_PICKER;
+    let (char_w_px, char_h_px) = picker.font_size();
+
+    // Heuristic to compensate for Hi-DPI terminals (iTerm2 on Retina Mac) that
+    // report logical pixels (≈ 8×16) while the iTerm2 graphics protocol
+    // expects *device* pixels.  Empirically the device-pixel-ratio is almost
+    // always 2 on macOS Retina panels.
+    let hidpi_scale = if picker.protocol_type() == ProtocolType::Iterm2 {
+        2.0f64
+    } else {
+        1.0
+    };
+
+    // The fallback Halfblocks protocol encodes two pixel rows per cell, so each
+    // terminal *row* represents only half the (possibly scaled) font height.
+    let effective_char_h_px: f64 = if picker.protocol_type() == ProtocolType::Halfblocks {
+        (char_h_px as f64) * hidpi_scale / 2.0
+    } else {
+        (char_h_px as f64) * hidpi_scale
+    };
+
+    let char_w_px_f64 = (char_w_px as f64) * hidpi_scale;
+
+    const MAX_ROWS: f64 = 10.0;
+    let max_height_px: f64 = effective_char_h_px * MAX_ROWS;
+
+    let (orig_w_px, orig_h_px) = {
+        let (w, h) = image.dimensions();
+        (w as f64, h as f64)
+    };
+
+    if orig_w_px == 0.0 || orig_h_px == 0.0 || width_cells == 0 {
+        *render_cache.borrow_mut() = None;
+        return 0;
+    }
+
+    let max_w_px = char_w_px_f64 * width_cells as f64;
+    let scale_w = max_w_px / orig_w_px;
+    let scale_h = max_height_px / orig_h_px;
+    let scale = scale_w.min(scale_h).min(1.0);
+
+    use image::imageops::FilterType;
+    let scaled_w_px = (orig_w_px * scale).round().max(1.0) as u32;
+    let scaled_h_px = (orig_h_px * scale).round().max(1.0) as u32;
+
+    let scaled_image = image.resize(scaled_w_px, scaled_h_px, FilterType::Lanczos3);
+
+    let height_rows = ((scaled_h_px as f64 / effective_char_h_px).ceil()) as usize;
+
+    let new_cache = ImageRenderCache {
+        width_cells,
+        height_rows,
+        scaled_image,
+    };
+    *render_cache.borrow_mut() = Some(new_cache);
+
+    height_rows
 }
