@@ -227,9 +227,72 @@ if (cli.input[0] === "completion") {
   const scripts: Record<string, string> = {
     bash: `# bash completion for codex
 _codex_completion() {
-  local cur
-  cur="\${COMP_WORDS[COMP_CWORD]}"
-  COMPREPLY=( $(compgen -o default -o filenames -- "\${cur}") )
+    local cur prev opts models providers modes
+    COMPREPLY=()
+    cur="\${COMP_WORDS[COMP_CWORD]}"
+    prev="\${COMP_WORDS[COMP_CWORD-1]}"
+
+    # Supported options
+    opts="
+        --version
+        -h --help
+        -m --model
+        -p --provider
+        -i --image
+        -v --view
+        --history
+        --login
+        --free
+        -q --quiet
+        -c --config
+        -w --writable-root
+        -a --approval-mode
+        --auto-edit
+        --full-auto
+        --no-project-doc
+        --project-doc
+        --full-stdout
+        --notify
+        --disable-response-storage
+        --flex-mode
+        --reasoning
+        --dangerously-auto-approve-everything
+        -f --full-context
+    "
+
+    # Supported model, provider, approval-mode
+    models="codex-mini-latest o4-mini o3"
+    providers="openai azure openrouter gemini ollama mistral deepseek xai groq arceeai"
+    modes="suggest auto-edit full-auto"
+    reasoning="low medium high"
+
+    # Completion for options that require arguments
+    case "\${prev}" in
+        -m|--model)
+            COMPREPLY=( $(compgen -W "\${models}" -- "\${cur}") )
+            return 0
+            ;;
+        -p|--provider)
+            COMPREPLY=( $(compgen -W "\${providers}" -- "\${cur}") )
+            return 0
+            ;;
+        -a|--approval-mode)
+            COMPREPLY=( $(compgen -W "\${modes}" -- "\${cur}") )
+            return 0
+            ;;
+        --reasoning)
+            COMPREPLY=( $(compgen -W "\${reasoning}" -- "\${cur}") )
+            return 0
+            ;;
+        -v|--view|-i|--image|-w|--writable-root|--project-doc)
+            # File or directory completion
+            COMPREPLY=( $(compgen -f -- "\${cur}") )
+            return 0
+            ;;
+    esac
+
+    # General option completion
+    COMPREPLY=( $(compgen -W "\${opts}" -- "\${cur}") )
 }
 complete -F _codex_completion codex`,
     zsh: `# zsh completion for codex
