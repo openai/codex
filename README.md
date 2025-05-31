@@ -83,7 +83,7 @@ Next, set your OpenAI API key as an environment variable:
 export OPENAI_API_KEY="your-api-key-here"
 ```
 
-> **Note:** This command sets the key only for your current terminal session. You can add the `export` line to your shell's configuration file (e.g., `~/.zshrc`) but we recommend setting for the session. **Tip:** You can also place your API key into a `.env` file at the root of your project:
+> **Note:** This command sets the key only for your current terminal session. You can add the `export` line to your shell's configuration file (e.g., `~/.zshrc`), but we recommend setting it for the session. **Tip:** You can also place your API key into a `.env` file at the root of your project:
 >
 > ```env
 > OPENAI_API_KEY=your-api-key-here
@@ -148,7 +148,7 @@ they'll be committed to your working directory.
 ## Why Codex?
 
 Codex CLI is built for developers who already **live in the terminal** and want
-ChatGPT-level reasoning **plus** the power to actually run code, manipulate
+ChatGPT-level reasoning **plus** the power to run code, manipulate
 files, and iterate - all under version control. In short, it's _chat-driven
 development_ that understands and executes your repo.
 
@@ -171,7 +171,7 @@ Codex lets you decide _how much autonomy_ the agent receives and auto-approval p
 | **Auto Edit**             | <li>Read **and** apply-patch writes to files                                                        | <li>**All** shell commands                                                                      |
 | **Full Auto**             | <li>Read/write files <li> Execute shell commands (network disabled, writes limited to your workdir) | -                                                                                               |
 
-In **Full Auto** every command is run **network-disabled** and confined to the
+In **Full Auto**, every command is run **network-disabled** and confined to the
 current working directory (plus temporary files) for defense-in-depth. Codex
 will also show a warning/confirmation if you start in **auto-edit** or
 **full-auto** while the directory is _not_ tracked by Git, so you always have a
@@ -273,7 +273,7 @@ Below are a few bite-size examples you can copy-paste. Replace the text in quote
 | 3   | `codex "Write unit tests for utils/date.ts"`                                    | Generates tests, executes them, and iterates until they pass.              |
 | 4   | `codex "Bulk-rename *.jpeg -> *.jpg with git mv"`                               | Safely renames files and updates imports/usages.                           |
 | 5   | `codex "Explain what this regex does: ^(?=.*[A-Z]).{8,}$"`                      | Outputs a step-by-step human explanation.                                  |
-| 6   | `codex "Carefully review this repo, and propose 3 high impact well-scoped PRs"` | Suggests impactful PRs in the current codebase.                            |
+| 6   | `codex "Carefully review this repo, and propose 3 high-impact well-scoped PRs"` | Suggests impactful PRs in the current codebase.                            |
 | 7   | `codex "Look for vulnerabilities and create a security review report"`          | Finds and explains security bugs.                                          |
 
 ---
@@ -541,13 +541,13 @@ We're excited to launch a **$1 million initiative** supporting open source proje
 
 ## Contributing
 
-This project is under active development and the code will likely change pretty significantly. We'll update this message once that's complete!
+This project is under active development, and the code will likely change pretty significantly. We'll update this message once that's complete!
 
-More broadly we welcome contributions - whether you are opening your very first pull request or you're a seasoned maintainer. At the same time we care about reliability and long-term maintainability, so the bar for merging code is intentionally **high**. The guidelines below spell out what "high-quality" means in practice and should make the whole process transparent and friendly.
+More broadly, we welcome contributions, whether you are opening your very first pull request or you're a seasoned maintainer. At the same time we care about reliability and long-term maintainability, so the bar for merging code is intentionally **high**. The guidelines below spell out what "high-quality" means in practice and should make the whole process transparent and friendly.
 
 ### Development workflow
 
-- Create a _topic branch_ from `main` - e.g. `feat/interactive-prompt`.
+- Create a _topic branch_ from `main` - e.g., `feat/interactive-prompt`.
 - Keep your changes focused. Multiple unrelated fixes should be opened as separate PRs.
 - Use `pnpm test:watch` during development for super-fast feedback.
 - We use **Vitest** for unit tests, **ESLint** + **Prettier** for style, and **TypeScript** for type-checking.
@@ -607,7 +607,7 @@ To debug the CLI with a visual debugger, do the following in the `codex-cli` fol
 - Fill in the PR template (or include similar information) - **What? Why? How?**
 - Run **all** checks locally (`npm test && npm run lint && npm run typecheck`). CI failures that could have been caught locally slow down the process.
 - Make sure your branch is up-to-date with `main` and that you have resolved merge conflicts.
-- Mark the PR as **Ready for review** only when you believe it is in a merge-able state.
+- Mark the PR as **Ready for review** only when you believe it is in a mergeable state.
 
 ### Review process
 
@@ -625,7 +625,7 @@ To debug the CLI with a visual debugger, do the following in the `codex-cli` fol
 
 If you run into problems setting up the project, would like feedback on an idea, or just want to say _hi_ - please open a Discussion or jump into the relevant issue. We are happy to help.
 
-Together we can make Codex CLI an incredible tool. **Happy hacking!** :rocket:
+Together, we can make Codex CLI an incredible tool. **Happy hacking!** :rocket:
 
 ### Contributor license agreement (CLA)
 
@@ -648,11 +648,11 @@ No special Git commands, email attachments, or commit footers required.
 | ----------------- | ------------------------------------------------ |
 | Amend last commit | `git commit --amend -s --no-edit && git push -f` |
 
-The **DCO check** blocks merges until every commit in the PR carries the footer (with squash this is just the one).
+The **DCO check** blocks merges until every commit in the PR carries the footer (with squash, this is just the one).
 
 ### Releasing `codex`
 
-To publish a new version of the CLI you first need to stage the npm package. A
+To publish a new version of the CLI, you first need to stage the npm package. A
 helper script in `codex-cli/scripts/` does all the heavy lifting. Inside the
 `codex-cli` folder run:
 
@@ -724,7 +724,7 @@ echo "use flake ../flake.nix#codex-rs" >> .envrc && direnv allow
 
 ## Security & responsible AI
 
-Have you discovered a vulnerability or have concerns about model output? Please e-mail **security@openai.com** and we will respond promptly.
+Have you discovered a vulnerability or have concerns about the model output? Please e-mail **security@openai.com** and we will respond promptly.
 
 ---
 
