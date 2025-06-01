@@ -1445,6 +1445,14 @@ export class AgentLoop {
           return true;
         }
 
+        // Explicit check for OpenAI "server_error" types which are surfaced
+        // when the backend encounters an unexpected exception. The SDK often
+        // omits the HTTP status in this case (leaving it undefined) so we
+        // must inspect the structured error fields instead.
+        if (e.type === "server_error" || e.code === "server_error") {
+          return true;
+        }
+
         if (typeof e.status === "number" && e.status >= 500) {
           return true;
         }
