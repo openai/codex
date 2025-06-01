@@ -12,9 +12,11 @@ export const providers: Record<
     baseURL: "https://openrouter.ai/api/v1",
     envKey: "OPENROUTER_API_KEY",
   },
+  // Azure OpenAI: replace `<YOUR.AZURE.RESOURCE>` with the name of your
+  // resource, e.g. `https://my-ai-resource.openai.azure.com/openai`.
   azure: {
     name: "AzureOpenAI",
-    baseURL: "https://oaihp.openai.azure.com/openai",
+    baseURL: "https://<YOUR.AZURE.RESOURCE>.openai.azure.com/openai",
     envKey: "AZURE_OPENAI_API_KEY",
   },
   gemini: {
