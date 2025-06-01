@@ -27,9 +27,6 @@ result
 *.swp
 *~
 
-# cli tools
-CLAUDE.md
-.claude/
 
 # caches
 .cache/
@@ -81,4 +78,3 @@ CHANGELOG.ignore.md
 # nix related
 .direnv
 .envrc
-.aider*
