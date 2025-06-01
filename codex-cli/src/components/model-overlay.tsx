@@ -72,9 +72,10 @@ export default function ModelOverlay({
   // available action is to dismiss the overlay (Esc or Enter).
   // ---------------------------------------------------------------------------
 
-  // Register input handling for switching between model and provider selection
+  // Register input handling for switching between model and provider selection.
   useInput((_input, key) => {
-    if (hasLastResponse && (key.escape || key.return)) {
+    // Dismiss overlay on escape/enter.
+    if (key.escape || key.return) {
       onExit();
     } else if (!hasLastResponse) {
       if (key.tab) {
@@ -82,32 +83,6 @@ export default function ModelOverlay({
       }
     }
   });
-
-  if (hasLastResponse) {
-    return (
-      <Box
-        flexDirection="column"
-        borderStyle="round"
-        borderColor="gray"
-        width={80}
-      >
-        <Box paddingX={1}>
-          <Text bold color="red">
-            Unable to switch model
-          </Text>
-        </Box>
-        <Box paddingX={1}>
-          <Text>
-            You can only pick a model before the assistant sends its first
-            response. To use a different model please start a new chat.
-          </Text>
-        </Box>
-        <Box paddingX={1}>
-          <Text dimColor>press esc or enter to close</Text>
-        </Box>
-      </Box>
-    );
-  }
 
   if (mode === "provider") {
     return (
@@ -127,7 +102,8 @@ export default function ModelOverlay({
         onSelect={(provider) => {
           if (onSelectProvider) {
             onSelectProvider(provider);
-            // Immediately switch to model selection so user can pick a model for the new provider
+            // Immediately switch to model selection so user can pick a model for
+            // the new provider.
             setMode("model");
           }
         }}
