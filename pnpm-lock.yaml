@@ -17,6 +17,10 @@ patchedDependencies:
 importers:
 
   .:
+    dependencies:
+      openai:
+        specifier: ^5.0.1
+        version: 5.0.1(ws@8.18.1)(zod@3.24.3)
     devDependencies:
       git-cliff:
         specifier: ^2.8.0
@@ -1975,6 +1979,18 @@ packages:
 
   openai@4.95.1:
     resolution: {integrity: sha512-IqJy+ymeW+k/Wq+2YVN3693OQMMcODRtHEYOlz263MdUwnN/Dwdl9c2EXSxLLtGEHkSHAfvzpDMHI5MaWJKXjQ==}
+    hasBin: true
+    peerDependencies:
+      ws: ^8.18.0
+      zod: ^3.23.8
+    peerDependenciesMeta:
+      ws:
+        optional: true
+      zod:
+        optional: true
+
+  openai@5.0.1:
+    resolution: {integrity: sha512-Do6vxhbDv7cXhji/4ct1lrpZYMAOmjYbhyA9LJTuG7OfpbWMpuS+EIXkRT7R+XxpRB1OZhU/op4FU3p3uxU6gw==}
     hasBin: true
     peerDependencies:
       ws: ^8.18.0
@@ -4631,6 +4647,11 @@ snapshots:
       zod: 3.24.3
     transitivePeerDependencies:
       - encoding
+
+  openai@5.0.1(ws@8.18.1)(zod@3.24.3):
+    optionalDependencies:
+      ws: 8.18.1
+      zod: 3.24.3
 
   optionator@0.9.4:
     dependencies:

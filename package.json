@@ -48,5 +48,8 @@
       "pnpm --filter codex-cli run typecheck"
     ]
   },
-  "packageManager": "pnpm@10.8.1"
+  "packageManager": "pnpm@10.8.1",
+  "dependencies": {
+    "openai": "^5.0.1"
+  }
 }

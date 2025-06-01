@@ -6,7 +6,9 @@ import type {
 } from "openai/resources/responses/responses";
 
 // Value imports
-import { AzureOpenAI } from "openai";
+// We don't need a direct compile-time dependency on AzureOpenAI – using a
+// duck-typed feature-check allows us to keep the import tree smaller and avoid
+// issues when the SDK eventually promotes the Responses API to stable.
 
 // Define interfaces based on OpenAI API documentation
 type ResponseCreateInput = ResponseCreateParams;
@@ -305,15 +307,30 @@ async function responsesCreateViaChatCompletions(
   openai: OpenAI,
   input: ResponseCreateInput,
 ): Promise<ResponseOutput | AsyncGenerator<ResponseEvent>> {
-  // Use the Responses API *only* for the official OpenAI endpoint.
-  // AzureOpenAI clients must continue via Chat-Completions.
-  if (!(openai instanceof AzureOpenAI) && input.model.startsWith("gpt")) {
-    // @ts-expect-error – 'responses' is not yet in the SDK types
-    return (
-      (openai as unknown as {
-        responses: { create: (p: ResponseCreateInput) => unknown };
-      }).responses.create(input)
-    );
+  // Prefer the Responses API when it is available on the instantiated client.
+  // This now covers both the standard OpenAI client **and** Azure OpenAI which
+  // recently added first-class support for the /responses endpoint.
+
+  // NB:  The openai-ts SDK does not yet expose full typings for the Responses
+  // API on `AzureOpenAI`.  We therefore use a runtime feature-check to detect
+  // availability instead of relying on `instanceof` or compile-time types.
+
+  const maybeResponses = (
+    openai as unknown as {
+      responses?: { create: (p: ResponseCreateInput) => unknown };
+    }
+  ).responses;
+
+  if (maybeResponses && typeof maybeResponses.create === "function") {
+    // Attempt to use the native Responses API directly.
+    try {
+      return maybeResponses.create(input) as unknown as
+        | ResponseOutput
+        | AsyncGenerator<ResponseEvent>;
+    } catch {
+      // If the call fails (e.g. unsupported deployment or endpoint) fall back
+      // to the Chat-Completions shim below so the CLI continues to function.
+    }
   }
   const completion = await createCompletion(openai, input);
   if (input.stream) {
@@ -507,7 +524,9 @@ async function* streamResponses(
     }
     if (
       !isToolCall &&
-      ((choice.delta && "tool_calls" in choice.delta && choice.delta.tool_calls) ||
+      ((choice.delta &&
+        "tool_calls" in choice.delta &&
+        choice.delta.tool_calls) ||
         choice.finish_reason === "tool_calls")
     ) {
       isToolCall = true;
