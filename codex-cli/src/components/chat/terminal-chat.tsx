@@ -575,7 +575,81 @@ export default function TerminalChat({
               ]);
             }}
             submitInput={(inputs) => {
-              agent.run(inputs, lastResponseId || "");
+              // Check if this is a model switch command
+              const input = inputs[0];
+              if (input.type === "message" && input.role === "user" && 
+                  input.content[0].type === "input_text" && 
+                  typeof input.content[0].text === "string" &&
+                  input.content[0].text.startsWith("/model ")) {
+                
+                const modelName = input.content[0].text.substring(7).trim();
+                // Check if there's already a response in the conversation
+                if (lastResponseId && modelName !== model) {
+                  setItems((prev) => [
+                    ...prev,
+                    {
+                      id: `model-change-not-allowed-${Date.now()}`,
+                      type: "message",
+                      role: "system",
+                      content: [
+                        {
+                          type: "input_text",
+                          text: `You can only pick a model before the assistant sends its first response. To use a different model please start a new chat.`,
+                        },
+                      ],
+                    },
+                  ]);
+                  return;
+                }
+                
+                // Validate the model
+                getAvailableModels().then(models => {
+                  // Always allow recommended models even if they're not in the returned list
+                  const isRecommended = RECOMMENDED_MODELS.includes(modelName);
+                  
+                  if (models.includes(modelName) || isRecommended) {
+                    // Switch model
+                    agent?.cancel();
+                    setLoading(false);
+                    setModel(modelName);
+                    setLastResponseId((prev) => prev && modelName !== model ? null : prev);
+                    
+                    setItems((prev) => [
+                      ...prev,
+                      {
+                        id: `switch-model-${Date.now()}`,
+                        type: "message",
+                        role: "system",
+                        content: [
+                          {
+                            type: "input_text",
+                            text: `Switched model to ${modelName}`,
+                          },
+                        ],
+                      },
+                    ]);
+                  } else {
+                    // Invalid model
+                    setItems((prev) => [
+                      ...prev,
+                      {
+                        id: `invalid-model-${Date.now()}`,
+                        type: "message",
+                        role: "system",
+                        content: [
+                          {
+                            type: "input_text",
+                            text: `Model "${modelName}" is not available. Use /model to see available models.`,
+                          },
+                        ],
+                      },
+                    ]);
+                  }
+                });
+              } else {
+                // Regular input, run as normal
+                agent.run(inputs, lastResponseId || "");
+              }
               return {};
             }}
             items={items}
