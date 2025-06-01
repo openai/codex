@@ -14,10 +14,10 @@ You must export both the Azure API key and the base URL in your shell:
 
 ```bash
 export AZURE_OPENAI_API_KEY="<your-azure-openai-key>"
-export AZURE_BASE_URL="https://<your-resource>.openai.azure.com"
+export AZURE_OPENAI_BASE_URL="https://<your-resource>.openai.azure.com"
 ```
 
-> **Note:** Set `AZURE_BASE_URL` to the root of your Azure OpenAI resource **without** the `/openai` path. The CLI will automatically append `/openai` when making API requests.
+> **Note:** Set `AZURE_OPENAI_BASE_URL` to the root of your Azure OpenAI resource **without** the `/openai` path. The CLI will automatically append `/openai` when making API requests.
 
 ## 2. Configure Codex CLI to Use Azure
 
@@ -67,7 +67,7 @@ If you want to bypass the initial OpenAI login/validation step entirely for Azur
 
 ## TL;DR
 
-- **Export both** `AZURE_OPENAI_API_KEY` **and** `AZURE_BASE_URL`.
+- **Export both** `AZURE_OPENAI_API_KEY` **and** `AZURE_OPENAI_BASE_URL`.
 - **Set** `provider` **to** `azure` (via `--provider azure` or user config).
 - Codex CLI always runs the OpenAI auth flow first—only then will it switch to using your Azure settings.
 
@@ -75,4 +75,4 @@ If you want to bypass the initial OpenAI login/validation step entirely for Azur
 
 When using Azure, the CLI will call the Azure OpenAI Responses API directly (the `/responses` endpoint) to generate completions. This uses the Azure-specific Responses API as documented here: https://learn.microsoft.com/en-us/azure/ai-services/openai/how-to/responses?tabs=python-key.
 
-You can configure the API version by setting the `AZURE_OPENAI_API_VERSION` environment variable (default: `2025-03-01-preview`).
+You can configure the API version by setting the `AZURE_OPENAI_API_VERSION` environment variable (default: `2025-04-01-preview`).
