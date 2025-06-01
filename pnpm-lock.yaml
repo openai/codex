@@ -82,8 +82,8 @@ importers:
         specifier: ^10.1.0
         version: 10.1.1
       openai:
-        specifier: ^4.95.1
-        version: 4.95.1(ws@8.18.1)(zod@3.24.3)
+        specifier: ^4.96.2
+        version: 4.96.2(ws@8.18.1)(zod@3.24.3)
       package-manager-detector:
         specifier: ^1.2.0
         version: 1.2.0
@@ -1899,7 +1899,6 @@ packages:
   node-domexception@1.0.0:
     resolution: {integrity: sha512-/jKZoMpw0F8GRwl4/eLROPA3cfcXtLApP0QzLmUT/HuPCZWyB7IY9ZrMeKw2O/nFIqPQB3PVM9aYm0F312AXDQ==}
     engines: {node: '>=10.5.0'}
-    deprecated: Use your platform's native DOMException instead
 
   node-emoji@2.2.0:
     resolution: {integrity: sha512-Z3lTE9pLaJF47NyMhd4ww1yFTAP8YhYI8SleJiHzM46Fgpm5cnNzSl9XfzFNqbaz+VlJrIj3fXQ4DeN1Rjm6cw==}
@@ -1973,8 +1972,8 @@ packages:
     resolution: {integrity: sha512-zy1wx4+P3PfhXSEPJNtZmJXfhkkIaxU1VauWIrDZw1O7uJRDRJtKr9n3Ic4NgbA16KyOxOXO2ng9gYwCdXuSXA==}
     engines: {node: '>=18'}
 
-  openai@4.95.1:
-    resolution: {integrity: sha512-IqJy+ymeW+k/Wq+2YVN3693OQMMcODRtHEYOlz263MdUwnN/Dwdl9c2EXSxLLtGEHkSHAfvzpDMHI5MaWJKXjQ==}
+  openai@4.96.2:
+    resolution: {integrity: sha512-R2XnxvMsizkROr7BV3uNp1q/3skwPZ7fmPjO1bXLnfB4Tu5xKxrT1EVwzjhxn0MZKBKAvOaGWS63jTMN6KrIXA==}
     hasBin: true
     peerDependencies:
       ws: ^8.18.0
@@ -4617,7 +4616,7 @@ snapshots:
       is-inside-container: 1.0.0
       is-wsl: 3.1.0
 
-  openai@4.95.1(ws@8.18.1)(zod@3.24.3):
+  openai@4.96.2(ws@8.18.1)(zod@3.24.3):
     dependencies:
       '@types/node': 18.19.86
       '@types/node-fetch': 2.6.12
