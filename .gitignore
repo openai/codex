@@ -3,10 +3,11 @@
 node_modules
 .pnpm-store
 .pnpm-debug.log
-
+.aider.chat.history.md
 # Keep pnpm-lock.yaml
 !pnpm-lock.yaml
-
+.aider.input.history
+.aider.tags.cache.v4/
 # build
 dist/
 build/
