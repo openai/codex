@@ -18,12 +18,13 @@ use tracing::warn;
 
 use crate::chat_completions::AggregateStreamExt;
 use crate::chat_completions::stream_chat_completions;
-use crate::client_common::Payload;
 use crate::client_common::Prompt;
-use crate::client_common::Reasoning;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
-use crate::client_common::Summary;
+use crate::client_common::ResponsesApiRequest;
+use crate::client_common::create_reasoning_param_for_request;
+use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
+use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::error::CodexErr;
 use crate::error::EnvVarError;
 use crate::error::Result;
@@ -41,14 +42,23 @@ pub struct ModelClient {
     model: String,
     client: reqwest::Client,
     provider: ModelProviderInfo,
+    effort: ReasoningEffortConfig,
+    summary: ReasoningSummaryConfig,
 }
 
 impl ModelClient {
-    pub fn new(model: impl ToString, provider: ModelProviderInfo) -> Self {
+    pub fn new(
+        model: impl ToString,
+        provider: ModelProviderInfo,
+        effort: ReasoningEffortConfig,
+        summary: ReasoningSummaryConfig,
+    ) -> Self {
         Self {
             model: model.to_string(),
             client: reqwest::Client::new(),
             provider,
+            effort,
+            summary,
         }
     }
 
@@ -98,17 +108,15 @@ impl ModelClient {
 
         let full_instructions = prompt.get_full_instructions();
         let tools_json = create_tools_json_for_responses_api(prompt, &self.model)?;
-        let payload = Payload {
+        let reasoning = create_reasoning_param_for_request(&self.model, self.effort, self.summary);
+        let payload = ResponsesApiRequest {
             model: &self.model,
             instructions: &full_instructions,
             input: &prompt.input,
             tools: &tools_json,
             tool_choice: "auto",
             parallel_tool_calls: false,
-            reasoning: Some(Reasoning {
-                effort: "high",
-                summary: Some(Summary::Auto),
-            }),
+            reasoning,
             previous_response_id: prompt.prev_id.clone(),
             store: prompt.store,
             stream: true,

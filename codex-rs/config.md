@@ -142,6 +142,34 @@ Users can specify config values at multiple levels. Order of precedence is as fo
 3. as an entry in `config.toml`, e.g., `model = "o3"`
 4. the default value that comes with Codex CLI (i.e., Codex CLI defaults to `codex-mini-latest`)
 
+## model_reasoning_effort
+
+If the model name starts with `"o"` (as in `"o3"` or `"o4-mini"`) or `"codex"`, reasoning is enabled by default when using the Responses API. As explained in the [OpenAI Platform documentation](https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning), this can be set to:
+
+- `"low"`
+- `"medium"` (default)
+- `"high"`
+
+To disable reasoning, set `model_reasoning_effort` to `"none"` in your config:
+
+```toml
+model_reasoning_effort = "none"  # disable reasoning
+```
+
+## model_reasoning_summary
+
+If the model name starts with `"o"` (as in `"o3"` or `"o4-mini"`) or `"codex"`, reasoning is enabled by default when using the Responses API. As explained in the [OpenAI Platform documentation](https://platform.openai.com/docs/guides/reasoning?api-mode=responses#reasoning-summaries), this can be set to:
+
+- `"auto"` (default)
+- `"concise"`
+- `"detailed"`
+
+To disable reasoning summaries, set `model_reasoning_summary` to `"none"` in your config:
+
+```toml
+model_reasoning_summary = "none"  # disable reasoning summaries
+```
+
 ## sandbox_permissions
 
 List of permissions to grant to the sandbox that Codex uses to execute untrusted commands:

@@ -108,6 +108,8 @@ impl Codex {
         let configure_session = Op::ConfigureSession {
             provider: config.model_provider.clone(),
             model: config.model.clone(),
+            model_reasoning_effort: config.model_reasoning_effort,
+            model_reasoning_summary: config.model_reasoning_summary,
             instructions,
             approval_policy: config.approval_policy,
             sandbox_policy: config.sandbox_policy.clone(),
@@ -554,6 +556,8 @@ async fn submission_loop(
             Op::ConfigureSession {
                 provider,
                 model,
+                model_reasoning_effort,
+                model_reasoning_summary,
                 instructions,
                 approval_policy,
                 sandbox_policy,
@@ -575,7 +579,12 @@ async fn submission_loop(
                     return;
                 }
 
-                let client = ModelClient::new(model.clone(), provider.clone());
+                let client = ModelClient::new(
+                    model.clone(),
+                    provider.clone(),
+                    model_reasoning_effort,
+                    model_reasoning_summary,
+                );
 
                 // abort any current running session and clone its state
                 let retain_zdr_transcript =

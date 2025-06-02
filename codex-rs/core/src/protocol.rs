@@ -12,6 +12,8 @@ use serde::Deserialize;
 use serde::Serialize;
 use uuid::Uuid;
 
+use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
+use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::message_history::HistoryEntry;
 use crate::model_provider_info::ModelProviderInfo;
 
@@ -37,6 +39,10 @@ pub enum Op {
 
         /// If not specified, server will use its default model.
         model: String,
+
+        model_reasoning_effort: ReasoningEffortConfig,
+        model_reasoning_summary: ReasoningSummaryConfig,
+
         /// Model instructions
         instructions: Option<String>,
         /// When to escalate for approval for execution
