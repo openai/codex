@@ -1,7 +1,5 @@
-use std::collections::BTreeMap;
 use std::io::BufRead;
 use std::path::Path;
-use std::sync::LazyLock;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -11,7 +9,6 @@ use reqwest::StatusCode;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
-use serde_json::json;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tokio_util::io::ReaderStream;
@@ -36,70 +33,8 @@ use crate::flags::OPENAI_STREAM_IDLE_TIMEOUT_MS;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
 use crate::models::ResponseItem;
+use crate::openai_tools::create_tools_json_for_responses_api;
 use crate::util::backoff;
-
-/// When serialized as JSON, this produces a valid "Tool" in the OpenAI
-/// Responses API.
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "type")]
-enum OpenAiTool {
-    #[serde(rename = "function")]
-    Function(ResponsesApiTool),
-    #[serde(rename = "local_shell")]
-    LocalShell {},
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct ResponsesApiTool {
-    name: &'static str,
-    description: &'static str,
-    strict: bool,
-    parameters: JsonSchema,
-}
-
-/// Generic JSON‑Schema subset needed for our tool definitions
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "type", rename_all = "lowercase")]
-enum JsonSchema {
-    String,
-    Number,
-    Array {
-        items: Box<JsonSchema>,
-    },
-    Object {
-        properties: BTreeMap<String, JsonSchema>,
-        required: &'static [&'static str],
-        #[serde(rename = "additionalProperties")]
-        additional_properties: bool,
-    },
-}
-
-/// Tool usage specification
-static DEFAULT_TOOLS: LazyLock<Vec<OpenAiTool>> = LazyLock::new(|| {
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "command".to_string(),
-        JsonSchema::Array {
-            items: Box::new(JsonSchema::String),
-        },
-    );
-    properties.insert("workdir".to_string(), JsonSchema::String);
-    properties.insert("timeout".to_string(), JsonSchema::Number);
-
-    vec![OpenAiTool::Function(ResponsesApiTool {
-        name: "shell",
-        description: "Runs a shell command, and returns its output.",
-        strict: false,
-        parameters: JsonSchema::Object {
-            properties,
-            required: &["command"],
-            additional_properties: false,
-        },
-    })]
-});
-
-static DEFAULT_CODEX_MODEL_TOOLS: LazyLock<Vec<OpenAiTool>> =
-    LazyLock::new(|| vec![OpenAiTool::LocalShell {}]);
 
 #[derive(Clone)]
 pub struct ModelClient {
@@ -161,27 +96,8 @@ impl ModelClient {
             return stream_from_fixture(path).await;
         }
 
-        // Assemble tool list: built-in tools + any extra tools from the prompt.
-        let default_tools = if self.model.starts_with("codex") {
-            &DEFAULT_CODEX_MODEL_TOOLS
-        } else {
-            &DEFAULT_TOOLS
-        };
-        let mut tools_json = Vec::with_capacity(default_tools.len() + prompt.extra_tools.len());
-        for t in default_tools.iter() {
-            tools_json.push(serde_json::to_value(t)?);
-        }
-        tools_json.extend(
-            prompt
-                .extra_tools
-                .clone()
-                .into_iter()
-                .map(|(name, tool)| mcp_tool_to_openai_tool(name, tool)),
-        );
-
-        debug!("tools_json: {}", serde_json::to_string_pretty(&tools_json)?);
-
         let full_instructions = prompt.get_full_instructions();
+        let tools_json = create_tools_json_for_responses_api(prompt, &self.model)?;
         let payload = Payload {
             model: &self.model,
             instructions: &full_instructions,
@@ -274,34 +190,6 @@ impl ModelClient {
             }
         }
     }
-}
-
-fn mcp_tool_to_openai_tool(
-    fully_qualified_name: String,
-    tool: mcp_types::Tool,
-) -> serde_json::Value {
-    let mcp_types::Tool {
-        description,
-        mut input_schema,
-        ..
-    } = tool;
-
-    // OpenAI models mandate the "properties" field in the schema. The Agents
-    // SDK fixed this by inserting an empty object for "properties" if it is not
-    // already present https://github.com/openai/openai-agents-python/issues/449
-    // so here we do the same.
-    if input_schema.properties.is_none() {
-        input_schema.properties = Some(serde_json::Value::Object(serde_json::Map::new()));
-    }
-
-    // TODO(mbolin): Change the contract of this function to return
-    // ResponsesApiTool.
-    json!({
-        "name": fully_qualified_name,
-        "description": description,
-        "parameters": input_schema,
-        "type": "function",
-    })
 }
 
 #[derive(Debug, Deserialize, Serialize)]

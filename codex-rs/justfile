@@ -1,18 +1,20 @@
+set positional-arguments
+
 # Display help
 help:
     just -l
 
 # `codex`
 codex *args:
-    cargo run --bin codex -- {{args}}
+    cargo run --bin codex -- "$@"
 
 # `codex exec`
 exec *args:
-    cargo run --bin codex -- exec {{args}}
+    cargo run --bin codex -- exec "$@"
 
 # `codex tui`
 tui *args:
-    cargo run --bin codex -- tui {{args}}
+    cargo run --bin codex -- tui "$@"
 
 # format code
 fmt:
