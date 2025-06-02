@@ -27,6 +27,7 @@ mod model_provider_info;
 pub use model_provider_info::ModelProviderInfo;
 pub use model_provider_info::WireApi;
 mod models;
+mod openai_tools;
 mod project_doc;
 pub mod protocol;
 mod rollout;
