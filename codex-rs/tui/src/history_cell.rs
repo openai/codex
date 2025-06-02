@@ -130,10 +130,13 @@ impl HistoryCell {
             history_entry_count: _,
         } = event;
         if is_first_event {
+            const VERSION: &str = env!("CARGO_PKG_VERSION");
+
             let mut lines: Vec<Line<'static>> = vec![
                 Line::from(vec![
                     "OpenAI ".into(),
                     "Codex".bold(),
+                    format!(" v{}", VERSION).into(),
                     " (research preview)".dim(),
                 ]),
                 Line::from(""),
