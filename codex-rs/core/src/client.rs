@@ -117,8 +117,7 @@ impl ModelClient {
         let base_url = self.provider.base_url.clone();
         let base_url = base_url.trim_end_matches('/');
         let url = format!("{}/responses", base_url);
-        debug!(url, "POST");
-        trace!("request payload: {}", serde_json::to_string(&payload)?);
+        trace!("POST to {url}: {}", serde_json::to_string(&payload)?);
 
         let mut attempt = 0;
         loop {
@@ -302,6 +301,19 @@ where
                         }
                     };
                 };
+            }
+            "response.content_part.done"
+            | "response.created"
+            | "response.function_call_arguments.delta"
+            | "response.in_progress"
+            | "response.output_item.added"
+            | "response.output_text.delta"
+            | "response.output_text.done"
+            | "response.reasoning_summary_part.added"
+            | "response.reasoning_summary_text.delta"
+            | "response.reasoning_summary_text.done" => {
+                // Currently, we ignore these events, but we handle them
+                // separately to skip the logging message in the `other` case.
             }
             other => debug!(other, "sse event"),
         }
