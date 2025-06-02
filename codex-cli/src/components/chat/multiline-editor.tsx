@@ -199,6 +199,8 @@ const MultilineTextEditorInner = (
 
   useInput(
     (input, key) => {
+      // Debug log to see what the terminal sends for each keypress
+      // console.log("input:", JSON.stringify(input), "key:", key);
       if (!focus) {
         return;
       }
@@ -217,17 +219,17 @@ const MultilineTextEditorInner = (
         const m = input.match(/^\[([0-9]+);([0-9]+)u$/);
         if (m && m[1] === "13") {
           const mod = Number(m[2]);
-          // In xterm's encoding: bit-1 (value 2) is Shift. Everything >1 that
-          // isn't exactly 1 means some modifier was held. We treat *shift or
-          // alt present* (2,3,4,6,8,9) as newline; Ctrl (bit-2 / value 4)
-          // triggers submit.  See xterm/DEC modifyOtherKeys docs.
-
           const hasCtrl = Math.floor(mod / 4) % 2 === 1;
-          if (hasCtrl) {
+          const hasShift = mod % 4 === 2;
+          const hasAlt = Math.floor(mod / 8) % 2 === 1;
+
+          if (hasCtrl && !hasShift && !hasAlt) {
+            // Ctrl+Enter: submit
             if (onSubmit) {
               onSubmit(buffer.current.getText());
             }
           } else {
+            // Shift+Enter, Alt+Enter, or any other modifier: insert newline
             buffer.current.newline();
           }
           setVersion((v) => v + 1);
@@ -240,7 +242,7 @@ const MultilineTextEditorInner = (
       //     modifyOtherKeys=1 is configured, emit this legacy sequence.  We
       //     translate it to the same behaviour as the mode‑2 variant above so
       //     that Shift+Enter (newline) / Ctrl+Enter (submit) work regardless
-      //     of the user’s terminal settings.
+      //     of the user's terminal settings.
       if (input.startsWith("[27;") && input.endsWith("~")) {
         const m = input.match(/^\[27;([0-9]+);13~$/);
         if (m) {

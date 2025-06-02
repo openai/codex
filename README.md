@@ -384,6 +384,9 @@ notify: true
 
 ### Full configuration example
 
+> **⚠️ Important:**
+> For each provider, the value of `envKey` must be the *name* of the environment variable that holds your API key (for example, `OPENAI_API_KEY`), **not** the actual API key itself. Do not put your secret key directly in the config file—just the variable name.
+
 Below is a comprehensive example of `config.json` with multiple custom providers:
 
 ```json
