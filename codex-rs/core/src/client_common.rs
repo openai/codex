@@ -1,3 +1,5 @@
+use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
+use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::error::Result;
 use crate::models::ResponseItem;
 use futures::Stream;
@@ -52,25 +54,59 @@ pub enum ResponseEvent {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct Reasoning {
-    pub(crate) effort: &'static str,
+    pub(crate) effort: OpenAiReasoningEffort,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) summary: Option<Summary>,
+    pub(crate) summary: Option<OpenAiReasoningSummary>,
+}
+
+/// See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning
+#[derive(Debug, Serialize, Default, Clone, Copy)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum OpenAiReasoningEffort {
+    Low,
+    #[default]
+    Medium,
+    High,
+}
+
+impl From<ReasoningEffortConfig> for Option<OpenAiReasoningEffort> {
+    fn from(effort: ReasoningEffortConfig) -> Self {
+        match effort {
+            ReasoningEffortConfig::Low => Some(OpenAiReasoningEffort::Low),
+            ReasoningEffortConfig::Medium => Some(OpenAiReasoningEffort::Medium),
+            ReasoningEffortConfig::High => Some(OpenAiReasoningEffort::High),
+            ReasoningEffortConfig::None => None,
+        }
+    }
 }
 
 /// A summary of the reasoning performed by the model. This can be useful for
 /// debugging and understanding the model's reasoning process.
-#[derive(Debug, Serialize)]
+/// See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#reasoning-summaries
+#[derive(Debug, Serialize, Default, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
-pub(crate) enum Summary {
+pub(crate) enum OpenAiReasoningSummary {
+    #[default]
     Auto,
-    #[allow(dead_code)] // Will go away once this is configurable.
     Concise,
-    #[allow(dead_code)] // Will go away once this is configurable.
     Detailed,
 }
 
+impl From<ReasoningSummaryConfig> for Option<OpenAiReasoningSummary> {
+    fn from(summary: ReasoningSummaryConfig) -> Self {
+        match summary {
+            ReasoningSummaryConfig::Auto => Some(OpenAiReasoningSummary::Auto),
+            ReasoningSummaryConfig::Concise => Some(OpenAiReasoningSummary::Concise),
+            ReasoningSummaryConfig::Detailed => Some(OpenAiReasoningSummary::Detailed),
+            ReasoningSummaryConfig::None => None,
+        }
+    }
+}
+
+/// Request object that is serialized as JSON and POST'ed when using the
+/// Responses API.
 #[derive(Debug, Serialize)]
-pub(crate) struct Payload<'a> {
+pub(crate) struct ResponsesApiRequest<'a> {
     pub(crate) model: &'a str,
     pub(crate) instructions: &'a str,
     // TODO(mbolin): ResponseItem::Other should not be serialized. Currently,
@@ -86,6 +122,40 @@ pub(crate) struct Payload<'a> {
     /// true when using the Responses API.
     pub(crate) store: bool,
     pub(crate) stream: bool,
+}
+
+pub(crate) fn create_reasoning_param_for_request(
+    model: &str,
+    effort: ReasoningEffortConfig,
+    summary: ReasoningSummaryConfig,
+) -> Option<Reasoning> {
+    let effort: Option<OpenAiReasoningEffort> = effort.into();
+    let effort = effort?;
+
+    if model_supports_reasoning_summaries(model) {
+        Some(Reasoning {
+            effort,
+            summary: summary.into(),
+        })
+    } else {
+        None
+    }
+}
+
+pub fn model_supports_reasoning_summaries(model: &str) -> bool {
+    // Currently, we hardcode this rule to decide whether enable reasoning.
+    // We expect reasoning to apply only to OpenAI models, but we do not want
+    // users to have to mess with their config to disable reasoning for models
+    // that do not support it, such as `gpt-4.1`.
+    //
+    // Though if a user is using Codex with non-OpenAI models that, say, happen
+    // to start with "o", then they can set `model_reasoning_effort = "none` in
+    // config.toml to disable reasoning.
+    //
+    // Ultimately, this should also be configurable in config.toml, but we
+    // need to have defaults that "just work." Perhaps we could have a
+    // "reasoning models pattern" as part of ModelProviderInfo?
+    model.starts_with("o") || model.starts_with("codex")
 }
 
 pub(crate) struct ResponseStream {
