@@ -299,7 +299,6 @@ impl ConversationHistoryWidget {
         for entry in self.entries.iter_mut() {
             if let HistoryCell::ActiveMcpToolCall {
                 call_id: history_id,
-                fq_tool_name,
                 invocation,
                 start,
                 ..
@@ -307,7 +306,7 @@ impl ConversationHistoryWidget {
             {
                 if &call_id == history_id {
                     let completed = HistoryCell::new_completed_mcp_tool_call(
-                        fq_tool_name.clone(),
+                        width,
                         invocation.clone(),
                         *start,
                         success,

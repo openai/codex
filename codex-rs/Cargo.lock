@@ -768,6 +768,7 @@ dependencies = [
  "tui-input",
  "tui-markdown",
  "tui-textarea",
+ "unicode-segmentation",
  "uuid",
 ]
 
