@@ -112,6 +112,7 @@ pub fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> std::io::
     let file_layer = tracing_subscriber::fmt::layer()
         .with_writer(non_blocking)
         .with_target(false)
+        .with_ansi(false)
         .with_filter(env_filter());
 
     // Channel that carries formatted log lines to the UI.
