@@ -1,6 +1,19 @@
 #!/usr/bin/env node
 import "dotenv/config";
 
+// Exit early if on an older version of Node.js (< 22)
+const major = process.versions.node.split(".").map(Number)[0]!;
+if (major < 22) {
+  // eslint-disable-next-line no-console
+  console.error(
+    "\n" +
+      "Codex CLI requires Node.js version 22 or newer.\n" +
+      `You are running Node.js v${process.versions.node}.\n` +
+      "Please upgrade Node.js: https://nodejs.org/en/download/\n",
+  );
+  process.exit(1);
+}
+
 // Hack to suppress deprecation warnings (punycode)
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (process as any).noDeprecation = true;
@@ -24,7 +37,10 @@ import {
   PRETTY_PRINT,
   INSTRUCTIONS_FILEPATH,
 } from "./utils/config";
-import { getApiKey as fetchApiKey } from "./utils/get-api-key";
+import {
+  getApiKey as fetchApiKey,
+  maybeRedeemCredits,
+} from "./utils/get-api-key";
 import { createInputItem } from "./utils/input-utils";
 import { initLogger } from "./utils/logger/log";
 import { isModelSupportedForResponses } from "./utils/model-utils.js";
@@ -63,6 +79,8 @@ const cli = meow(
     -i, --image <path>              Path(s) to image files to include as input
     -v, --view <rollout>            Inspect a previously saved rollout instead of starting a session
     --history                       Browse previous sessions
+    --login                         Start a new sign in flow
+    --free                          Retry redeeming free credits
     -q, --quiet                     Non-interactive mode that only prints the assistant's final output
     -c, --config                    Open the instructions file in your editor
     -w, --writable-root <path>      Writable folder for sandbox in full-auto mode (can be specified multiple times)
@@ -108,6 +126,8 @@ const cli = meow(
       version: { type: "boolean", description: "Print version and exit" },
       view: { type: "string" },
       history: { type: "boolean", description: "Browse previous sessions" },
+      login: { type: "boolean", description: "Force a new sign in flow" },
+      free: { type: "boolean", description: "Retry redeeming free credits" },
       model: { type: "string", aliases: ["m"] },
       provider: { type: "string", aliases: ["p"] },
       image: { type: "string", isMultiple: true, aliases: ["i"] },
@@ -279,6 +299,13 @@ const client = {
 };
 
 let apiKey = "";
+let savedTokens:
+  | {
+      id_token?: string;
+      access_token?: string;
+      refresh_token: string;
+    }
+  | undefined;
 
 // Try to load existing auth file if present
 try {
@@ -287,6 +314,7 @@ try {
   const authFile = path.join(authDir, "auth.json");
   if (fs.existsSync(authFile)) {
     const data = JSON.parse(fs.readFileSync(authFile, "utf-8"));
+    savedTokens = data.tokens;
     const lastRefreshTime = data.last_refresh
       ? new Date(data.last_refresh).getTime()
       : 0;
@@ -299,11 +327,40 @@ try {
   // ignore errors
 }
 
-if (!apiKey) {
+if (cli.flags.login) {
+  apiKey = await fetchApiKey(client.issuer, client.client_id);
+  try {
+    const home = os.homedir();
+    const authDir = path.join(home, ".codex");
+    const authFile = path.join(authDir, "auth.json");
+    if (fs.existsSync(authFile)) {
+      const data = JSON.parse(fs.readFileSync(authFile, "utf-8"));
+      savedTokens = data.tokens;
+    }
+  } catch {
+    /* ignore */
+  }
+} else if (!apiKey) {
   apiKey = await fetchApiKey(client.issuer, client.client_id);
 }
 // Ensure the API key is available as an environment variable for legacy code
 process.env["OPENAI_API_KEY"] = apiKey;
+
+if (cli.flags.free) {
+  // eslint-disable-next-line no-console
+  console.log(`${chalk.bold("codex --free")} attempting to redeem credits...`);
+  if (!savedTokens?.refresh_token) {
+    apiKey = await fetchApiKey(client.issuer, client.client_id, true);
+    // fetchApiKey includes credit redemption as the end of the flow
+  } else {
+    await maybeRedeemCredits(
+      client.issuer,
+      client.client_id,
+      savedTokens.refresh_token,
+      savedTokens.id_token,
+    );
+  }
+}
 
 // Set of providers that don't require API keys
 const NO_API_KEY_REQUIRED = new Set(["ollama"]);

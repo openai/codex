@@ -1,5 +1,5 @@
 use codex_core::config::Config;
-use codex_core::config::UriBasedFileOpener;
+use codex_core::config_types::UriBasedFileOpener;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use std::borrow::Cow;
@@ -71,7 +71,7 @@ fn rewrite_file_citations<'a>(
         None => return Cow::Borrowed(src),
     };
 
-    CITATION_REGEX.replace_all(src, |caps: &regex::Captures<'_>| {
+    CITATION_REGEX.replace_all(src, |caps: &regex_lite::Captures<'_>| {
         let file = &caps[1];
         let start_line = &caps[2];
 

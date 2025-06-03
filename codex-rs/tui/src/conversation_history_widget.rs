@@ -1,3 +1,4 @@
+use crate::cell_widget::CellWidget;
 use crate::history_cell::CommandOutput;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::PatchEventType;
@@ -175,8 +176,18 @@ impl ConversationHistoryWidget {
     /// Note `model` could differ from `config.model` if the agent decided to
     /// use a different model than the one requested by the user.
     pub fn add_session_info(&mut self, config: &Config, event: SessionConfiguredEvent) {
-        let is_first_event = self.entries.is_empty();
-        self.add_to_history(HistoryCell::new_session_info(config, event, is_first_event));
+        // In practice, SessionConfiguredEvent should always be the first entry
+        // in the history, but it is possible that an error could be sent
+        // before the session info.
+        let has_welcome_message = self
+            .entries
+            .iter()
+            .any(|entry| matches!(entry.cell, HistoryCell::WelcomeMessage { .. }));
+        self.add_to_history(HistoryCell::new_session_info(
+            config,
+            event,
+            !has_welcome_message,
+        ));
     }
 
     pub fn add_user_message(&mut self, message: String) {
@@ -226,11 +237,7 @@ impl ConversationHistoryWidget {
 
     fn add_to_history(&mut self, cell: HistoryCell) {
         let width = self.cached_width.get();
-        let count = if width > 0 {
-            wrapped_line_count_for_cell(&cell, width)
-        } else {
-            0
-        };
+        let count = if width > 0 { cell.height(width) } else { 0 };
 
         self.entries.push(Entry {
             cell,
@@ -274,9 +281,7 @@ impl ConversationHistoryWidget {
 
                     // Update cached line count.
                     if width > 0 {
-                        entry
-                            .line_count
-                            .set(wrapped_line_count_for_cell(cell, width));
+                        entry.line_count.set(cell.height(width));
                     }
                     break;
                 }
@@ -288,15 +293,8 @@ impl ConversationHistoryWidget {
         &mut self,
         call_id: String,
         success: bool,
-        result: Option<mcp_types::CallToolResult>,
+        result: Result<mcp_types::CallToolResult, String>,
     ) {
-        // Convert result into serde_json::Value early so we don't have to
-        // worry about lifetimes inside the match arm.
-        let result_val = result.map(|r| {
-            serde_json::to_value(r)
-                .unwrap_or_else(|_| serde_json::Value::String("<serialization error>".into()))
-        });
-
         let width = self.cached_width.get();
         for entry in self.entries.iter_mut() {
             if let HistoryCell::ActiveMcpToolCall {
@@ -313,14 +311,12 @@ impl ConversationHistoryWidget {
                         invocation.clone(),
                         *start,
                         success,
-                        result_val,
+                        result,
                     );
                     entry.cell = completed;
 
                     if width > 0 {
-                        entry
-                            .line_count
-                            .set(wrapped_line_count_for_cell(&entry.cell, width));
+                        entry.line_count.set(entry.cell.height(width));
                     }
 
                     break;
@@ -352,21 +348,23 @@ impl WidgetRef for ConversationHistoryWidget {
         let inner = block.inner(area);
         let viewport_height = inner.height as usize;
 
-        // Cache (and if necessary recalculate) the wrapped line counts for
-        // every [`HistoryCell`] so that our scrolling math accounts for text
-        // wrapping.
-        let width = inner.width; // Width of the viewport in terminal cells.
-        if width == 0 {
+        // Cache (and if necessary recalculate) the wrapped line counts for every
+        // [`HistoryCell`] so that our scrolling math accounts for text
+        // wrapping.  We always reserve one column on the right-hand side for the
+        // scrollbar so that the content never renders "under" the scrollbar.
+        let effective_width = inner.width.saturating_sub(1);
+
+        if effective_width == 0 {
             return; // Nothing to draw – avoid division by zero.
         }
 
-        // Recompute cache if the width changed.
-        let num_lines: usize = if self.cached_width.get() != width {
-            self.cached_width.set(width);
+        // Recompute cache if the effective width changed.
+        let num_lines: usize = if self.cached_width.get() != effective_width {
+            self.cached_width.set(effective_width);
 
             let mut num_lines: usize = 0;
             for entry in &self.entries {
-                let count = wrapped_line_count_for_cell(&entry.cell, width);
+                let count = entry.cell.height(effective_width);
                 num_lines += count;
                 entry.line_count.set(count);
             }
@@ -386,62 +384,81 @@ impl WidgetRef for ConversationHistoryWidget {
         };
 
         // ------------------------------------------------------------------
-        // Build a *window* into the history so we only clone the `Line`s that
-        // may actually be visible in this frame. We still hand the slice off
-        // to a `Paragraph` with an additional scroll offset to avoid slicing
-        // inside a wrapped line (we don’t have per-subline granularity).
+        // Render order:
+        //   1. Clear full widget area (avoid artifacts from prior frame).
+        //   2. Draw the surrounding Block (border and title).
+        //   3. Render *each* visible HistoryCell into its own sub-Rect while
+        //      respecting partial visibility at the top and bottom.
+        //   4. Draw the scrollbar track / thumb in the reserved column.
         // ------------------------------------------------------------------
 
-        // Find the first entry that intersects the current scroll position.
-        let mut cumulative = 0usize;
-        let mut first_idx = 0usize;
-        for (idx, entry) in self.entries.iter().enumerate() {
-            let next = cumulative + entry.line_count.get();
-            if next > scroll_pos {
-                first_idx = idx;
-                break;
+        // Clear entire widget area first.
+        Clear.render(area, buf);
+
+        // Draw border + title.
+        block.render(area, buf);
+
+        // ------------------------------------------------------------------
+        // Calculate which cells are visible for the current scroll position
+        // and paint them one by one.
+        // ------------------------------------------------------------------
+
+        let mut y_cursor = inner.y; // first line inside viewport
+        let mut remaining_height = inner.height as usize;
+        let mut lines_to_skip = scroll_pos; // number of wrapped lines to skip (above viewport)
+
+        for entry in &self.entries {
+            let cell_height = entry.line_count.get();
+
+            // Completely above viewport? Skip whole cell.
+            if lines_to_skip >= cell_height {
+                lines_to_skip -= cell_height;
+                continue;
             }
-            cumulative = next;
+
+            // Determine how much of this cell is visible.
+            let visible_height = (cell_height - lines_to_skip).min(remaining_height);
+
+            if visible_height == 0 {
+                break; // no space left
+            }
+
+            let cell_rect = Rect {
+                x: inner.x,
+                y: y_cursor,
+                width: effective_width,
+                height: visible_height as u16,
+            };
+
+            entry.cell.render_window(lines_to_skip, cell_rect, buf);
+
+            // Advance cursor inside viewport.
+            y_cursor += visible_height as u16;
+            remaining_height -= visible_height;
+
+            // After the first (possibly partially skipped) cell, we no longer
+            // need to skip lines at the top.
+            lines_to_skip = 0;
+
+            if remaining_height == 0 {
+                break; // viewport filled
+            }
         }
 
-        let offset_into_first = scroll_pos - cumulative;
+        // Always render a scrollbar *track* so the reserved column is filled.
+        let overflow = num_lines.saturating_sub(viewport_height);
 
-        // Collect enough raw lines from `first_idx` onward to cover the
-        // viewport. We may fetch *slightly* more than necessary (whole cells)
-        // but never the entire history.
-        let mut collected_wrapped = 0usize;
-        let mut visible_lines: Vec<Line<'static>> = Vec::new();
+        let mut scroll_state = ScrollbarState::default()
+            // The Scrollbar widget expects the *content* height minus the
+            // viewport height.  When there is no overflow we still provide 0
+            // so that the widget renders only the track without a thumb.
+            .content_length(overflow)
+            .position(scroll_pos);
 
-        for entry in &self.entries[first_idx..] {
-            visible_lines.extend(entry.cell.lines().iter().cloned());
-            collected_wrapped += entry.line_count.get();
-            if collected_wrapped >= offset_into_first + viewport_height {
-                break;
-            }
-        }
-
-        // Build the Paragraph with wrapping enabled so long lines are not
-        // clipped. Apply vertical scroll so that `offset_into_first` wrapped
-        // lines are hidden at the top.
-        let paragraph = Paragraph::new(visible_lines)
-            .block(block)
-            .wrap(wrap_cfg())
-            .scroll((offset_into_first as u16, 0));
-
-        paragraph.render(area, buf);
-
-        // Draw scrollbar if necessary.
-        let needs_scrollbar = num_lines > viewport_height;
-        if needs_scrollbar {
-            let mut scroll_state = ScrollbarState::default()
-                // The Scrollbar widget expects the *content* height minus the
-                // viewport height, mirroring the calculation used previously.
-                .content_length(num_lines.saturating_sub(viewport_height))
-                .position(scroll_pos);
-
+        {
             // Choose a thumb color that stands out only when this pane has focus so that the
             // user’s attention is naturally drawn to the active viewport. When unfocused we show
-            // a low‑contrast thumb so the scrollbar fades into the background without becoming
+            // a low-contrast thumb so the scrollbar fades into the background without becoming
             // invisible.
             let thumb_style = if self.has_input_focus {
                 Style::reset().fg(Color::LightYellow)
@@ -449,30 +466,20 @@ impl WidgetRef for ConversationHistoryWidget {
                 Style::reset().fg(Color::Gray)
             };
 
+            // By default the Scrollbar widget inherits any style that was
+            // present in the underlying buffer cells. That means if a colored
+            // line happens to be underneath the scrollbar, the track (and
+            // potentially the thumb) adopt that color. Explicitly setting the
+            // track/thumb styles ensures we always draw the scrollbar with a
+            // consistent palette regardless of what content is behind it.
             StatefulWidget::render(
-                // By default the Scrollbar widget inherits the style that was already present
-                // in the underlying buffer cells. That means if a colored line (for example a
-                // background task notification that we render in blue) happens to be underneath
-                // the scrollbar, the track and thumb adopt that color and the scrollbar appears
-                // to "change color." Explicitly setting the *track* and *thumb* styles ensures
-                // we always draw the scrollbar with the same palette regardless of what content
-                // is behind it.
-                //
-                // N.B. Only the *foreground* color matters here because the scrollbar symbols
-                // themselves are filled‐in block glyphs that completely overwrite the prior
-                // character cells. We therefore leave the background at its default value so it
-                // blends nicely with the surrounding `Block`.
                 Scrollbar::new(ScrollbarOrientation::VerticalRight)
                     .begin_symbol(Some("↑"))
                     .end_symbol(Some("↓"))
                     .begin_style(Style::reset().fg(Color::DarkGray))
                     .end_style(Style::reset().fg(Color::DarkGray))
-                    // A solid thumb so that we can color it distinctly from the track.
                     .thumb_symbol("█")
-                    // Apply the dynamic thumb color computed above. We still start from
-                    // Style::reset() to clear any inherited modifiers.
                     .thumb_style(thumb_style)
-                    // Thin vertical line for the track.
                     .track_symbol(Some("│"))
                     .track_style(Style::reset().fg(Color::DarkGray)),
                 inner,
@@ -490,15 +497,6 @@ impl WidgetRef for ConversationHistoryWidget {
 /// Common [`Wrap`] configuration used for both measurement and rendering so
 /// they stay in sync.
 #[inline]
-const fn wrap_cfg() -> ratatui::widgets::Wrap {
+pub(crate) const fn wrap_cfg() -> ratatui::widgets::Wrap {
     ratatui::widgets::Wrap { trim: false }
-}
-
-/// Returns the wrapped line count for `cell` at the given `width` using the
-/// same wrapping rules that `ConversationHistoryWidget` uses during
-/// rendering.
-fn wrapped_line_count_for_cell(cell: &HistoryCell, width: u16) -> usize {
-    Paragraph::new(cell.lines().clone())
-        .wrap(wrap_cfg())
-        .line_count(width)
 }

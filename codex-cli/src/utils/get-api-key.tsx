@@ -2,7 +2,7 @@ import type { Choice } from "./get-api-key-components";
 import type { Request, Response } from "express";
 
 import { ApiKeyPrompt, WaitingForAuth } from "./get-api-key-components";
-import { clearTerminal } from "./terminal";
+import chalk from "chalk";
 import express from "express";
 import fs from "fs/promises";
 import { render } from "ink";
@@ -51,11 +51,15 @@ async function getOidcConfiguration(
 }
 
 interface IDTokenClaims {
+  "exp": number;
   "https://api.openai.com/auth": {
     organization_id: string;
     project_id: string;
     completed_platform_onboarding: boolean;
     is_org_owner: boolean;
+    chatgpt_subscription_active_start: string;
+    chatgpt_subscription_active_until: string;
+    chatgpt_plan_type: string;
   };
 }
 
@@ -75,6 +79,206 @@ function generatePKCECodes(): {
     .update(code_verifier)
     .digest("base64url");
   return { code_verifier, code_challenge };
+}
+
+async function maybeRedeemCredits(
+  issuer: string,
+  clientId: string,
+  refreshToken: string,
+  idToken?: string,
+): Promise<void> {
+  try {
+    let currentIdToken = idToken;
+    let idClaims: IDTokenClaims | undefined;
+
+    if (
+      currentIdToken &&
+      typeof currentIdToken === "string" &&
+      currentIdToken.split(".")[1]
+    ) {
+      idClaims = JSON.parse(
+        Buffer.from(currentIdToken.split(".")[1]!, "base64url").toString(
+          "utf8",
+        ),
+      ) as IDTokenClaims;
+    } else {
+      currentIdToken = "";
+    }
+
+    // Validate idToken expiration
+    // if expired, attempt token-exchange for a fresh idToken
+    if (!idClaims || !idClaims.exp || Date.now() >= idClaims.exp * 1000) {
+      // eslint-disable-next-line no-console
+      console.log(chalk.dim("Refreshing credentials..."));
+      try {
+        const refreshRes = await fetch("https://auth.openai.com/oauth/token", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            client_id: clientId,
+            grant_type: "refresh_token",
+            refresh_token: refreshToken,
+            scope: "openid profile email",
+          }),
+        });
+        if (!refreshRes.ok) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `Failed to refresh credentials: ${refreshRes.status} ${refreshRes.statusText}\n${chalk.dim(await refreshRes.text())}`,
+          );
+          // eslint-disable-next-line no-console
+          console.warn(
+            `Please sign in again to redeem credits: ${chalk.bold("codex --login")}`,
+          );
+          return;
+        }
+        const refreshData = (await refreshRes.json()) as {
+          id_token: string;
+          refresh_token?: string;
+        };
+        currentIdToken = refreshData.id_token;
+        idClaims = JSON.parse(
+          Buffer.from(currentIdToken.split(".")[1]!, "base64url").toString(
+            "utf8",
+          ),
+        ) as IDTokenClaims;
+        if (refreshData.refresh_token) {
+          try {
+            const home = os.homedir();
+            const authDir = path.join(home, ".codex");
+            const authFile = path.join(authDir, "auth.json");
+            const existingJson = JSON.parse(
+              await fs.readFile(authFile, "utf-8"),
+            );
+            existingJson.tokens.id_token = currentIdToken;
+            existingJson.tokens.refresh_token = refreshData.refresh_token;
+            existingJson.last_refresh = new Date().toISOString();
+            await fs.writeFile(
+              authFile,
+              JSON.stringify(existingJson, null, 2),
+              { mode: 0o600 },
+            );
+          } catch (err) {
+            // eslint-disable-next-line no-console
+            console.warn("Unable to update refresh token in auth file:", err);
+          }
+        }
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn("Unable to refresh ID token via token-exchange:", err);
+        return;
+      }
+    }
+
+    // Confirm the subscription is active for more than 7 days
+    const subStart =
+      idClaims["https://api.openai.com/auth"]
+        ?.chatgpt_subscription_active_start;
+    if (
+      typeof subStart === "string" &&
+      Date.now() - new Date(subStart).getTime() < 7 * 24 * 60 * 60 * 1000
+    ) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        "Sorry, your subscription must be active for more than 7 days to redeem credits.\nMore info: " +
+          chalk.dim("https://help.openai.com/en/articles/11381614") +
+          chalk.bold(
+            "\nPlease try again on " +
+              new Date(
+                new Date(subStart).getTime() + 7 * 24 * 60 * 60 * 1000,
+              ).toLocaleDateString() +
+              " " +
+              new Date(
+                new Date(subStart).getTime() + 7 * 24 * 60 * 60 * 1000,
+              ).toLocaleTimeString(),
+          ),
+      );
+      return;
+    }
+
+    const completed = Boolean(
+      idClaims["https://api.openai.com/auth"]?.completed_platform_onboarding,
+    );
+    const isOwner = Boolean(
+      idClaims["https://api.openai.com/auth"]?.is_org_owner,
+    );
+    const needsSetup = !completed && isOwner;
+
+    const planType = idClaims["https://api.openai.com/auth"]
+      ?.chatgpt_plan_type as string | undefined;
+
+    if (needsSetup || !(planType === "plus" || planType === "pro")) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        "Users with Plus or Pro subscriptions can redeem free API credits.\nMore info: " +
+          chalk.dim("https://help.openai.com/en/articles/11381614"),
+      );
+      return;
+    }
+
+    const apiHost =
+      issuer === "https://auth.openai.com"
+        ? "https://api.openai.com"
+        : "https://api.openai.org";
+
+    const redeemRes = await fetch(`${apiHost}/v1/billing/redeem_credits`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id_token: currentIdToken }),
+    });
+
+    if (!redeemRes.ok) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `Credit redemption request failed: ${redeemRes.status} ${redeemRes.statusText}`,
+      );
+      return;
+    }
+
+    try {
+      const redeemData = (await redeemRes.json()) as {
+        granted_chatgpt_subscriber_api_credits?: number;
+      };
+      const granted = redeemData?.granted_chatgpt_subscriber_api_credits ?? 0;
+      if (granted > 0) {
+        // eslint-disable-next-line no-console
+        console.log(
+          chalk.green(
+            `${chalk.bold(
+              `Thanks for being a ChatGPT ${
+                planType === "plus" ? "Plus" : "Pro"
+              } subscriber!`,
+            )}\nIf you haven't already redeemed, you should receive ${
+              planType === "plus" ? "$5" : "$50"
+            } in API credits\nCredits: ${chalk.dim(chalk.underline("https://platform.openai.com/settings/organization/billing/credit-grants"))}\nMore info: ${chalk.dim(chalk.underline("https://help.openai.com/en/articles/11381614"))}`,
+          ),
+        );
+      } else {
+        // eslint-disable-next-line no-console
+        console.log(
+          chalk.green(
+            `It looks like no credits were granted:\n${JSON.stringify(
+              redeemData,
+              null,
+              2,
+            )}\nCredits: ${chalk.dim(
+              chalk.underline(
+                "https://platform.openai.com/settings/organization/billing/credit-grants",
+              ),
+            )}\nMore info: ${chalk.dim(
+              chalk.underline("https://help.openai.com/en/articles/11381614"),
+            )}`,
+          ),
+        );
+      }
+    } catch (parseErr) {
+      // eslint-disable-next-line no-console
+      console.warn("Unable to parse credit redemption response:", parseErr);
+    }
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn("Unable to redeem ChatGPT subscriber API credits:", err);
+  }
 }
 
 async function handleCallback(
@@ -121,9 +325,9 @@ async function handleCallback(
   }
 
   const tokenData = (await tokenRes.json()) as {
-    access_token: string;
     id_token: string;
-    refresh_token?: string;
+    access_token: string;
+    refresh_token: string;
   };
 
   const idTokenParts = tokenData.id_token.split(".");
@@ -189,10 +393,10 @@ async function handleCallback(
   );
   const chatgptPlanType =
     accessTokenClaims["https://api.openai.com/auth"]?.chatgpt_plan_type;
-  let needsSetup = false;
-  if (chatgptPlanType === "plus" || chatgptPlanType === "pro") {
-    needsSetup = !completedOnboarding;
-  }
+  const isOrgOwner = Boolean(
+    idTokenClaims["https://api.openai.com/auth"]?.is_org_owner,
+  );
+  const needsSetup = !completedOnboarding && isOrgOwner;
 
   // Build the success URL on the same host/port as the callback and
   // include the required query parameters for the front-end page.
@@ -229,6 +433,13 @@ async function handleCallback(
     // eslint-disable-next-line no-console
     console.warn("Unable to save auth file:", err);
   }
+
+  await maybeRedeemCredits(
+    issuer,
+    clientId,
+    tokenData.refresh_token,
+    tokenData.id_token,
+  );
 
   return {
     access_token: exchanged.access_token,
@@ -363,11 +574,62 @@ const LOGIN_SUCCESS_HTML = String.raw`
           </div>
           <div class="title">Signed in to Codex CLI</div>
         </div>
-        <div class="close-box">
+        <div class="close-box" style="display: none;">
           <div class="setup-description">You may now close this page</div>
+        </div>
+        <div class="setup-box" style="display: none;">
+          <div class="setup-content">
+            <div class="setup-text">
+              <div class="setup-title">Finish setting up your API organization</div>
+              <div class="setup-description">Add a payment method to use your organization.</div>
+            </div>
+            <div class="redirect-box">
+              <div data-hasendicon="false" data-hasstarticon="false" data-ishovered="false" data-isinactive="false" data-ispressed="false" data-size="large" data-type="primary" class="redirect-button">
+                <div class="redirect-text">Redirecting in 3s...</div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
+    <script>
+      (function () {
+        const params = new URLSearchParams(window.location.search);
+        const needsSetup = params.get('needs_setup') === 'true';
+        const platformUrl = params.get('platform_url') || 'https://platform.openai.com';
+        const orgId = params.get('org_id');
+        const projectId = params.get('project_id');
+        const planType = params.get('plan_type');
+        const idToken = params.get('id_token');
+        // Show different message and optional redirect when setup is required
+        if (needsSetup) {
+          const setupBox = document.querySelector('.setup-box');
+          setupBox.style.display = 'flex';
+          const redirectUrlObj = new URL('/org-setup', platformUrl);
+          redirectUrlObj.searchParams.set('p', planType);
+          redirectUrlObj.searchParams.set('t', idToken);
+          redirectUrlObj.searchParams.set('with_org', orgId);
+          redirectUrlObj.searchParams.set('project_id', projectId);
+          const redirectUrl = redirectUrlObj.toString();
+          const message = document.querySelector('.redirect-text');
+          let countdown = 3;
+          function tick() {
+            message.textContent =
+              'Redirecting in ' + countdown + 's…';
+            if (countdown === 0) {
+              window.location.replace(redirectUrl);
+            } else {
+              countdown -= 1;
+              setTimeout(tick, 1000);
+            }
+          }
+          tick();
+        } else {
+          const closeBox = document.querySelector('.close-box');
+          closeBox.style.display = 'flex';
+        }
+      })();
+    </script>
   </body>
 </html>`;
 
@@ -475,8 +737,9 @@ async function signInFlow(issuer: string, clientId: string): Promise<string> {
 export async function getApiKey(
   issuer: string,
   clientId: string,
+  forceLogin: boolean = false,
 ): Promise<string> {
-  if (process.env["OPENAI_API_KEY"]) {
+  if (!forceLogin && process.env["OPENAI_API_KEY"]) {
     return process.env["OPENAI_API_KEY"]!;
   }
   const choice = await promptUserForChoice();
@@ -487,12 +750,15 @@ export async function getApiKey(
   const spinner = render(<WaitingForAuth />);
   try {
     const key = await signInFlow(issuer, clientId);
+    spinner.clear();
     spinner.unmount();
-    clearTerminal();
     process.env["OPENAI_API_KEY"] = key;
     return key;
   } catch (err) {
+    spinner.clear();
     spinner.unmount();
     throw err;
   }
 }
+
+export { maybeRedeemCredits };

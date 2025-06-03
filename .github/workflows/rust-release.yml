@@ -115,13 +115,42 @@ jobs:
       - name: Compress artifacts
         shell: bash
         run: |
+          # Path that contains the uncompressed binaries for the current
+          # ${{ matrix.target }}
           dest="dist/${{ matrix.target }}"
-          zstd -T0 -19 --rm "$dest"/*
+
+          # For compatibility with environments that lack the `zstd` tool we
+          # additionally create a `.tar.gz` alongside every single binary that
+          # we publish. The end result is:
+          #   codex-<target>.zst          (existing)
+          #   codex-<target>.tar.gz       (new)
+          #   ...same naming for codex-exec-* and codex-linux-sandbox-*
+
+          # 1. Produce a .tar.gz for every file in the directory *before* we
+          #    run `zstd --rm`, because that flag deletes the original files.
+          for f in "$dest"/*; do
+            base="$(basename "$f")"
+            # Skip files that are already archives (shouldn't happen, but be
+            # safe).
+            if [[ "$base" == *.tar.gz ]]; then
+              continue
+            fi
+
+            # Create per-binary tar.gz
+            tar -C "$dest" -czf "$dest/${base}.tar.gz" "$base"
+
+            # Also create .zst (existing behaviour) *and* remove the original
+            # uncompressed binary to keep the directory small.
+            zstd -T0 -19 --rm "$dest/$base"
+          done
 
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
-          path: codex-rs/dist/${{ matrix.target }}/*
+          # Upload the per-binary .zst files as well as the new .tar.gz
+          # equivalents we generated in the previous step.
+          path: |
+            codex-rs/dist/${{ matrix.target }}/*
 
   release:
     needs: build
