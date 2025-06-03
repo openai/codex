@@ -106,7 +106,7 @@ impl ModelClient {
             return stream_from_fixture(path).await;
         }
 
-        let full_instructions = prompt.get_full_instructions();
+        let full_instructions = prompt.get_full_instructions(&self.model);
         let tools_json = create_tools_json_for_responses_api(prompt, &self.model)?;
         let reasoning = create_reasoning_param_for_request(&self.model, self.effort, self.summary);
         let payload = ResponsesApiRequest {
