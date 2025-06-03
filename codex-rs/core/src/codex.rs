@@ -59,7 +59,7 @@ use crate::models::ReasoningItemReasoningSummary;
 use crate::models::ResponseInputItem;
 use crate::models::ResponseItem;
 use crate::models::ShellToolCallParams;
-use crate::project_doc::create_full_instructions;
+use crate::project_doc::get_user_instructions;
 use crate::protocol::AgentMessageEvent;
 use crate::protocol::AgentReasoningEvent;
 use crate::protocol::ApplyPatchApprovalRequestEvent;
@@ -104,7 +104,7 @@ impl Codex {
         let (tx_sub, rx_sub) = async_channel::bounded(64);
         let (tx_event, rx_event) = async_channel::bounded(64);
 
-        let instructions = create_full_instructions(&config).await;
+        let instructions = get_user_instructions(&config).await;
         let configure_session = Op::ConfigureSession {
             provider: config.model_provider.clone(),
             model: config.model.clone(),
@@ -990,9 +990,8 @@ async fn run_turn(
     input: Vec<ResponseItem>,
 ) -> CodexResult<Vec<ProcessedResponseItem>> {
     // Decide whether to use server-side storage (previous_response_id) or disable it
-    let (prev_id, store, is_first_turn) = {
+    let (prev_id, store) = {
         let state = sess.state.lock().unwrap();
-        let is_first_turn = state.previous_response_id.is_none();
         let store = state.zdr_transcript.is_none();
         let prev_id = if store {
             state.previous_response_id.clone()
@@ -1001,20 +1000,14 @@ async fn run_turn(
             // back, but trying to use it results in a 400.
             None
         };
-        (prev_id, store, is_first_turn)
-    };
-
-    let instructions = if is_first_turn {
-        sess.instructions.clone()
-    } else {
-        None
+        (prev_id, store)
     };
 
     let extra_tools = sess.mcp_connection_manager.list_all_tools();
     let prompt = Prompt {
         input,
         prev_id,
-        instructions,
+        user_instructions: sess.instructions.clone(),
         store,
         extra_tools,
     };
