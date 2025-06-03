@@ -2,6 +2,7 @@ use crate::cell_widget::CellWidget;
 use crate::exec_command::escape_command;
 use crate::markdown::append_markdown;
 use crate::text_block::TextBlock;
+use crate::text_formatting::format_and_truncate_tool_result;
 use base64::Engine;
 use codex_ansi_escape::ansi_escape_line;
 use codex_common::elapsed::format_duration;
@@ -30,7 +31,6 @@ use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
 use tracing::error;
-use unicode_segmentation::UnicodeSegmentation;
 
 pub(crate) struct CommandOutput {
     pub(crate) exit_code: i32,
@@ -367,7 +367,7 @@ impl HistoryCell {
     }
 
     pub(crate) fn new_completed_mcp_tool_call(
-        terminal_width: u16,
+        num_cols: u16,
         invocation: Line<'static>,
         start: Instant,
         success: bool,
@@ -402,7 +402,11 @@ impl HistoryCell {
                     for tool_call_result in content {
                         let line_text = match tool_call_result {
                             mcp_types::CallToolResultContent::TextContent(text) => {
-                                format_and_truncate_tool_result(&text.text, terminal_width)
+                                format_and_truncate_tool_result(
+                                    &text.text,
+                                    TOOL_CALL_MAX_LINES,
+                                    num_cols as usize,
+                                )
                             }
                             mcp_types::CallToolResultContent::ImageContent(_) => {
                                 // TODO show images even if they're not the first result, will require a refactor of `CompletedMcpToolCall`
@@ -754,54 +758,4 @@ fn ensure_image_cache(
     *render_cache.borrow_mut() = Some(new_cache);
 
     height_rows
-}
-
-/// Truncate a tool result to fit within the given width. If the text is valid JSON, we format it in a compact way before truncating
-fn format_and_truncate_tool_result(text: &str, width: u16) -> String {
-    // Work out the maximum number of graphemes we can display for a result given the current terminal width.
-    // It's not guaranteed that 1 grapheme = 1 cell, so we subtract 1 per line as a fudge factor.
-    // It also won't handle future terminal resizes properly, but it's an OK approximation for now.
-    let max_graphemes = (TOOL_CALL_MAX_LINES * width as usize).saturating_sub(TOOL_CALL_MAX_LINES);
-
-    // try to parse the text as json
-    let json = serde_json::from_str::<serde_json::Value>(text);
-    if let Ok(json) = json {
-        let json_pretty = serde_json::to_string_pretty(&json).unwrap_or_else(|_| json.to_string());
-        // Collapse pretty JSON to single line (for compactness) with spaces (to make it wrap nicely)
-        let json_spaced = json_pretty
-            .lines()
-            .map(|line| line.trim())
-            .collect::<Vec<_>>()
-            .join(" ");
-        truncate_text(&json_spaced, max_graphemes)
-    } else {
-        truncate_text(text, max_graphemes)
-    }
-}
-
-/// Truncate `text` to `max_graphemes` graphemes. Using graphemes to avoid accidentally truncating in the middle of a multi-codepoint character.
-fn truncate_text(text: &str, max_graphemes: usize) -> String {
-    let mut graphemes = text.grapheme_indices(true);
-
-    // Check if there's a grapheme at position max_graphemes (meaning there are more than max_graphemes total)
-    if let Some((byte_index, _)) = graphemes.nth(max_graphemes) {
-        // There are more than max_graphemes, so we need to truncate
-        if max_graphemes >= 3 {
-            // Truncate to max_graphemes - 3 and add "..." to stay within limit
-            let mut truncate_graphemes = text.grapheme_indices(true);
-            if let Some((truncate_byte_index, _)) = truncate_graphemes.nth(max_graphemes - 3) {
-                let truncated = &text[..truncate_byte_index];
-                format!("{}...", truncated)
-            } else {
-                text.to_string()
-            }
-        } else {
-            // max_graphemes < 3, so just return first max_graphemes without "..."
-            let truncated = &text[..byte_index];
-            truncated.to_string()
-        }
-    } else {
-        // There are max_graphemes or fewer graphemes, return original text
-        text.to_string()
-    }
 }
