@@ -45,6 +45,7 @@ import { createInputItem } from "./utils/input-utils";
 import { initLogger } from "./utils/logger/log";
 import { isModelSupportedForResponses } from "./utils/model-utils.js";
 import { parseToolCall } from "./utils/parsers";
+import { handleSnippetCommand } from "./utils/snippet-commands.js";
 import { onExit, setInkRenderer } from "./utils/terminal";
 import chalk from "chalk";
 import { spawnSync } from "child_process";
@@ -223,22 +224,23 @@ const cli = meow(
 
 // Handle 'completion' subcommand before any prompting or API calls
 if (cli.input[0] === "completion") {
-  const shell = cli.input[1] || "bash";
+  const shell = cli.input[1];
+  if (!shell) {
+    // eslint-disable-next-line no-console
+    console.error("Please specify a shell: bash, zsh, or fish");
+    process.exit(1);
+  }
   const scripts: Record<string, string> = {
     bash: `# bash completion for codex
-_codex_completion() {
-  local cur
-  cur="\${COMP_WORDS[COMP_CWORD]}"
-  COMPREPLY=( $(compgen -o default -o filenames -- "\${cur}") )
+_codex_completions() {
+  COMPREPLY=($(compgen -f "\${COMP_WORDS[COMP_CWORD]}"))
 }
-complete -F _codex_completion codex`,
+complete -F _codex_completions codex`,
     zsh: `# zsh completion for codex
-#compdef codex
-
 _codex() {
-  _arguments '*:filename:_files'
+  _files
 }
-_codex`,
+compdef _codex`,
     fish: `# fish completion for codex
 complete -c codex -a '(__fish_complete_path)' -d 'file path'`,
   };
@@ -250,6 +252,27 @@ complete -c codex -a '(__fish_complete_path)' -d 'file path'`,
   }
   // eslint-disable-next-line no-console
   console.log(script);
+  process.exit(0);
+}
+
+// Handle snippet command
+if (cli.input[0] === "snippet") {
+  const snippetInput = cli.input.join(" ");
+  const result = handleSnippetCommand(snippetInput);
+
+  if (result.success) {
+    if (result.displayContent) {
+      // eslint-disable-next-line no-console
+      console.log(result.displayContent);
+    } else {
+      // eslint-disable-next-line no-console
+      console.log(result.message);
+    }
+  } else {
+    // eslint-disable-next-line no-console
+    console.error(result.message);
+    process.exit(1);
+  }
   process.exit(0);
 }
 

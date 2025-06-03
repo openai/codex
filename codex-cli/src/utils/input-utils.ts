@@ -1,5 +1,9 @@
 import type { ResponseInputItem } from "openai/resources/responses/responses";
 
+import {
+  resolveSnippetsInPrompt,
+  hasSnippetReferences,
+} from "./snippet-resolver.js";
 import { fileTypeFromBuffer } from "file-type";
 import fs from "fs/promises";
 import path from "path";
@@ -8,9 +12,39 @@ export async function createInputItem(
   text: string,
   images: Array<string>,
 ): Promise<ResponseInputItem.Message> {
+  // Resolve snippet references before creating the input item
+  let processedText = text;
+
+  if (hasSnippetReferences(text)) {
+    const resolutionResult = resolveSnippetsInPrompt(text);
+    processedText = resolutionResult.resolvedPrompt;
+
+    // Log warnings if any snippets were not found
+    if (resolutionResult.warnings.length > 0) {
+      // eslint-disable-next-line no-console
+      console.warn("⚠️  Snippet warnings:");
+      resolutionResult.warnings.forEach((warning) => {
+        // eslint-disable-next-line no-console
+        console.warn(`   ${warning}`);
+      });
+    }
+
+    // Log successful replacements for user feedback
+    const successfulReplacements = resolutionResult.replacedSnippets.filter(
+      (r) => r.found,
+    );
+    if (successfulReplacements.length > 0) {
+      // eslint-disable-next-line no-console
+      console.log(
+        "✅ Expanded snippets:",
+        successfulReplacements.map((r) => r.label).join(", "),
+      );
+    }
+  }
+
   const inputItem: ResponseInputItem.Message = {
     role: "user",
-    content: [{ type: "input_text", text }],
+    content: [{ type: "input_text", text: processedText }],
     type: "message",
   };
 
