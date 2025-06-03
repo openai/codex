@@ -34,3 +34,5 @@ mod rollout;
 mod safety;
 mod user_notification;
 pub mod util;
+
+pub use client_common::model_supports_reasoning_summaries;

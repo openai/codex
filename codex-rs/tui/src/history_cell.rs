@@ -5,7 +5,9 @@ use crate::text_block::TextBlock;
 use base64::Engine;
 use codex_ansi_escape::ansi_escape_line;
 use codex_common::elapsed::format_duration;
+use codex_core::WireApi;
 use codex_core::config::Config;
+use codex_core::model_supports_reasoning_summaries;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::SessionConfiguredEvent;
 use image::DynamicImage;
@@ -147,13 +149,25 @@ impl HistoryCell {
                 ]),
             ];
 
-            let entries = vec![
+            let mut entries = vec![
                 ("workdir", config.cwd.display().to_string()),
                 ("model", config.model.clone()),
                 ("provider", config.model_provider_id.clone()),
                 ("approval", format!("{:?}", config.approval_policy)),
                 ("sandbox", format!("{:?}", config.sandbox_policy)),
             ];
+            if config.model_provider.wire_api == WireApi::Responses
+                && model_supports_reasoning_summaries(&config.model)
+            {
+                entries.push((
+                    "reasoning effort",
+                    config.model_reasoning_effort.to_string(),
+                ));
+                entries.push((
+                    "reasoning summaries",
+                    config.model_reasoning_summary.to_string(),
+                ));
+            }
             for (key, value) in entries {
                 lines.push(Line::from(vec![format!("{key}: ").bold(), value.into()]));
             }
