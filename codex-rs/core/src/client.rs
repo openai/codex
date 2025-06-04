@@ -18,12 +18,13 @@ use tracing::warn;
 
 use crate::chat_completions::AggregateStreamExt;
 use crate::chat_completions::stream_chat_completions;
-use crate::client_common::Payload;
 use crate::client_common::Prompt;
-use crate::client_common::Reasoning;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
-use crate::client_common::Summary;
+use crate::client_common::ResponsesApiRequest;
+use crate::client_common::create_reasoning_param_for_request;
+use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
+use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::error::CodexErr;
 use crate::error::EnvVarError;
 use crate::error::Result;
@@ -41,14 +42,23 @@ pub struct ModelClient {
     model: String,
     client: reqwest::Client,
     provider: ModelProviderInfo,
+    effort: ReasoningEffortConfig,
+    summary: ReasoningSummaryConfig,
 }
 
 impl ModelClient {
-    pub fn new(model: impl ToString, provider: ModelProviderInfo) -> Self {
+    pub fn new(
+        model: impl ToString,
+        provider: ModelProviderInfo,
+        effort: ReasoningEffortConfig,
+        summary: ReasoningSummaryConfig,
+    ) -> Self {
         Self {
             model: model.to_string(),
             client: reqwest::Client::new(),
             provider,
+            effort,
+            summary,
         }
     }
 
@@ -96,19 +106,17 @@ impl ModelClient {
             return stream_from_fixture(path).await;
         }
 
-        let full_instructions = prompt.get_full_instructions();
+        let full_instructions = prompt.get_full_instructions(&self.model);
         let tools_json = create_tools_json_for_responses_api(prompt, &self.model)?;
-        let payload = Payload {
+        let reasoning = create_reasoning_param_for_request(&self.model, self.effort, self.summary);
+        let payload = ResponsesApiRequest {
             model: &self.model,
             instructions: &full_instructions,
             input: &prompt.input,
             tools: &tools_json,
             tool_choice: "auto",
             parallel_tool_calls: false,
-            reasoning: Some(Reasoning {
-                effort: "high",
-                summary: Some(Summary::Auto),
-            }),
+            reasoning,
             previous_response_id: prompt.prev_id.clone(),
             store: prompt.store,
             stream: true,
@@ -117,8 +125,7 @@ impl ModelClient {
         let base_url = self.provider.base_url.clone();
         let base_url = base_url.trim_end_matches('/');
         let url = format!("{}/responses", base_url);
-        debug!(url, "POST");
-        trace!("request payload: {}", serde_json::to_string(&payload)?);
+        trace!("POST to {url}: {}", serde_json::to_string(&payload)?);
 
         let mut attempt = 0;
         loop {
@@ -302,6 +309,19 @@ where
                         }
                     };
                 };
+            }
+            "response.content_part.done"
+            | "response.created"
+            | "response.function_call_arguments.delta"
+            | "response.in_progress"
+            | "response.output_item.added"
+            | "response.output_text.delta"
+            | "response.output_text.done"
+            | "response.reasoning_summary_part.added"
+            | "response.reasoning_summary_text.delta"
+            | "response.reasoning_summary_text.done" => {
+                // Currently, we ignore these events, but we handle them
+                // separately to skip the logging message in the `other` case.
             }
             other => debug!(other, "sse event"),
         }

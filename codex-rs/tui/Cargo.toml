@@ -33,8 +33,8 @@ ratatui = { version = "0.29.0", features = [
     "unstable-rendered-line-info",
 ] }
 ratatui-image = "8.0.0"
-regex = "1"
-serde_json = "1"
+regex-lite = "0.1"
+serde_json = { version = "1", features = ["preserve_order"] }
 shlex = "1.3.0"
 strum = "0.27.1"
 strum_macros = "0.27.1"
@@ -51,6 +51,7 @@ tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 tui-input = "0.11.1"
 tui-markdown = "0.3.3"
 tui-textarea = "0.7.0"
+unicode-segmentation = "1.12.0"
 uuid = "1"
 
 [dev-dependencies]

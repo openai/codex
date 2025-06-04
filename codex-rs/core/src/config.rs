@@ -1,6 +1,8 @@
 use crate::config_profile::ConfigProfile;
 use crate::config_types::History;
 use crate::config_types::McpServerConfig;
+use crate::config_types::ReasoningEffort;
+use crate::config_types::ReasoningSummary;
 use crate::config_types::ShellEnvironmentPolicy;
 use crate::config_types::ShellEnvironmentPolicyToml;
 use crate::config_types::Tui;
@@ -112,6 +114,14 @@ pub struct Config {
     ///
     /// When this program is invoked, arg0 will be set to `codex-linux-sandbox`.
     pub codex_linux_sandbox_exe: Option<PathBuf>,
+
+    /// If not "none", the value to use for `reasoning.effort` when making a
+    /// request using the Responses API.
+    pub model_reasoning_effort: ReasoningEffort,
+
+    /// If not "none", the value to use for `reasoning.summary` when making a
+    /// request using the Responses API.
+    pub model_reasoning_summary: ReasoningSummary,
 }
 
 impl Config {
@@ -281,6 +291,9 @@ pub struct ConfigToml {
     /// When set to `true`, `AgentReasoning` events will be hidden from the
     /// UI/output. Defaults to `false`.
     pub hide_agent_reasoning: Option<bool>,
+
+    pub model_reasoning_effort: Option<ReasoningEffort>,
+    pub model_reasoning_summary: Option<ReasoningSummary>,
 }
 
 fn deserialize_sandbox_permissions<'de, D>(
@@ -444,6 +457,8 @@ impl Config {
             codex_linux_sandbox_exe,
 
             hide_agent_reasoning: cfg.hide_agent_reasoning.unwrap_or(false),
+            model_reasoning_effort: cfg.model_reasoning_effort.unwrap_or_default(),
+            model_reasoning_summary: cfg.model_reasoning_summary.unwrap_or_default(),
         };
         Ok(config)
     }
@@ -786,6 +801,8 @@ disable_response_storage = true
                 tui: Tui::default(),
                 codex_linux_sandbox_exe: None,
                 hide_agent_reasoning: false,
+                model_reasoning_effort: ReasoningEffort::default(),
+                model_reasoning_summary: ReasoningSummary::default(),
             },
             o3_profile_config
         );
@@ -826,6 +843,8 @@ disable_response_storage = true
             tui: Tui::default(),
             codex_linux_sandbox_exe: None,
             hide_agent_reasoning: false,
+            model_reasoning_effort: ReasoningEffort::default(),
+            model_reasoning_summary: ReasoningSummary::default(),
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -881,6 +900,8 @@ disable_response_storage = true
             tui: Tui::default(),
             codex_linux_sandbox_exe: None,
             hide_agent_reasoning: false,
+            model_reasoning_effort: ReasoningEffort::default(),
+            model_reasoning_summary: ReasoningSummary::default(),
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);

@@ -2,16 +2,20 @@ use crate::cell_widget::CellWidget;
 use crate::exec_command::escape_command;
 use crate::markdown::append_markdown;
 use crate::text_block::TextBlock;
+use crate::text_formatting::format_and_truncate_tool_result;
 use base64::Engine;
 use codex_ansi_escape::ansi_escape_line;
 use codex_common::elapsed::format_duration;
+use codex_core::WireApi;
 use codex_core::config::Config;
+use codex_core::model_supports_reasoning_summaries;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::SessionConfiguredEvent;
 use image::DynamicImage;
 use image::GenericImageView;
 use image::ImageReader;
 use lazy_static::lazy_static;
+use mcp_types::EmbeddedResourceResource;
 use ratatui::prelude::*;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
@@ -71,18 +75,14 @@ pub(crate) enum HistoryCell {
     /// An MCP tool call that has not finished yet.
     ActiveMcpToolCall {
         call_id: String,
-        /// `server.tool` fully-qualified name so we can show a concise label
-        fq_tool_name: String,
-        /// Formatted invocation that mirrors the `$ cmd ...` style of exec
-        /// commands. We keep this around so the completed state can reuse the
-        /// exact same text without re-formatting.
-        invocation: String,
+        /// Formatted line that shows the command name and arguments
+        invocation: Line<'static>,
         start: Instant,
         view: TextBlock,
     },
 
     /// Completed MCP tool call where we show the result serialized as JSON.
-    CompletedMcpToolCallWithTextOutput { view: TextBlock },
+    CompletedMcpToolCall { view: TextBlock },
 
     /// Completed MCP tool call where the result is an image.
     /// Admittedly, [mcp_types::CallToolResult] can have multiple content types,
@@ -147,13 +147,25 @@ impl HistoryCell {
                 ]),
             ];
 
-            let entries = vec![
+            let mut entries = vec![
                 ("workdir", config.cwd.display().to_string()),
                 ("model", config.model.clone()),
                 ("provider", config.model_provider_id.clone()),
                 ("approval", format!("{:?}", config.approval_policy)),
                 ("sandbox", format!("{:?}", config.sandbox_policy)),
             ];
+            if config.model_provider.wire_api == WireApi::Responses
+                && model_supports_reasoning_summaries(&config.model)
+            {
+                entries.push((
+                    "reasoning effort",
+                    config.model_reasoning_effort.to_string(),
+                ));
+                entries.push((
+                    "reasoning summaries",
+                    config.model_reasoning_summary.to_string(),
+                ));
+            }
             for (key, value) in entries {
                 lines.push(Line::from(vec![format!("{key}: ").bold(), value.into()]));
             }
@@ -275,8 +287,6 @@ impl HistoryCell {
         tool: String,
         arguments: Option<serde_json::Value>,
     ) -> Self {
-        let fq_tool_name = format!("{server}.{tool}");
-
         // Format the arguments as compact JSON so they roughly fit on one
         // line. If there are no arguments we keep it empty so the invocation
         // mirrors a function-style call.
@@ -288,29 +298,30 @@ impl HistoryCell {
             })
             .unwrap_or_default();
 
-        let invocation = if args_str.is_empty() {
-            format!("{fq_tool_name}()")
-        } else {
-            format!("{fq_tool_name}({args_str})")
-        };
+        let invocation_spans = vec![
+            Span::styled(server, Style::default().fg(Color::Blue)),
+            Span::raw("."),
+            Span::styled(tool, Style::default().fg(Color::Blue)),
+            Span::raw("("),
+            Span::styled(args_str, Style::default().fg(Color::Gray)),
+            Span::raw(")"),
+        ];
+        let invocation = Line::from(invocation_spans);
 
         let start = Instant::now();
         let title_line = Line::from(vec!["tool".magenta(), " running...".dim()]);
-        let lines: Vec<Line<'static>> = vec![
-            title_line,
-            Line::from(format!("$ {invocation}")),
-            Line::from(""),
-        ];
+        let lines: Vec<Line<'static>> = vec![title_line, invocation.clone(), Line::from("")];
 
         HistoryCell::ActiveMcpToolCall {
             call_id,
-            fq_tool_name,
             invocation,
             start,
             view: TextBlock::new(lines),
         }
     }
 
+    /// If the first content is an image, return a new cell with the image.
+    /// TODO(rgwood-dd): Handle images properly even if they're not the first result.
     fn try_new_completed_mcp_tool_call_with_image_output(
         result: &Result<mcp_types::CallToolResult, String>,
     ) -> Option<Self> {
@@ -356,8 +367,8 @@ impl HistoryCell {
     }
 
     pub(crate) fn new_completed_mcp_tool_call(
-        fq_tool_name: String,
-        invocation: String,
+        num_cols: u16,
+        invocation: Line<'static>,
         start: Instant,
         success: bool,
         result: Result<mcp_types::CallToolResult, String>,
@@ -370,36 +381,70 @@ impl HistoryCell {
         let status_str = if success { "success" } else { "failed" };
         let title_line = Line::from(vec![
             "tool".magenta(),
-            format!(" {fq_tool_name} ({status_str}, duration: {})", duration).dim(),
+            " ".into(),
+            if success {
+                status_str.green()
+            } else {
+                status_str.red()
+            },
+            format!(", duration: {duration}").gray(),
         ]);
 
         let mut lines: Vec<Line<'static>> = Vec::new();
         lines.push(title_line);
-        lines.push(Line::from(format!("$ {invocation}")));
+        lines.push(invocation);
 
-        // Convert result into serde_json::Value early so we don't have to
-        // worry about lifetimes inside the match arm.
-        let result_val = result.map(|r| {
-            serde_json::to_value(r)
-                .unwrap_or_else(|_| serde_json::Value::String("<serialization error>".into()))
-        });
+        match result {
+            Ok(mcp_types::CallToolResult { content, .. }) => {
+                if !content.is_empty() {
+                    lines.push(Line::from(""));
 
-        if let Ok(res_val) = result_val {
-            let json_pretty =
-                serde_json::to_string_pretty(&res_val).unwrap_or_else(|_| res_val.to_string());
-            let mut iter = json_pretty.lines();
-            for raw in iter.by_ref().take(TOOL_CALL_MAX_LINES) {
-                lines.push(Line::from(raw.to_string()).dim());
+                    for tool_call_result in content {
+                        let line_text = match tool_call_result {
+                            mcp_types::CallToolResultContent::TextContent(text) => {
+                                format_and_truncate_tool_result(
+                                    &text.text,
+                                    TOOL_CALL_MAX_LINES,
+                                    num_cols as usize,
+                                )
+                            }
+                            mcp_types::CallToolResultContent::ImageContent(_) => {
+                                // TODO show images even if they're not the first result, will require a refactor of `CompletedMcpToolCall`
+                                "<image content>".to_string()
+                            }
+                            mcp_types::CallToolResultContent::AudioContent(_) => {
+                                "<audio content>".to_string()
+                            }
+                            mcp_types::CallToolResultContent::EmbeddedResource(resource) => {
+                                let uri = match resource.resource {
+                                    EmbeddedResourceResource::TextResourceContents(text) => {
+                                        text.uri
+                                    }
+                                    EmbeddedResourceResource::BlobResourceContents(blob) => {
+                                        blob.uri
+                                    }
+                                };
+                                format!("embedded resource: {uri}")
+                            }
+                        };
+                        lines.push(Line::styled(line_text, Style::default().fg(Color::Gray)));
+                    }
+                }
+
+                lines.push(Line::from(""));
             }
-            let remaining = iter.count();
-            if remaining > 0 {
-                lines.push(Line::from(format!("... {} additional lines", remaining)).dim());
+            Err(e) => {
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        "Error: ",
+                        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(e),
+                ]));
             }
-        }
+        };
 
-        lines.push(Line::from(""));
-
-        HistoryCell::CompletedMcpToolCallWithTextOutput {
+        HistoryCell::CompletedMcpToolCall {
             view: TextBlock::new(lines),
         }
     }
@@ -506,7 +551,7 @@ impl CellWidget for HistoryCell {
             | HistoryCell::ErrorEvent { view }
             | HistoryCell::SessionInfo { view }
             | HistoryCell::CompletedExecCommand { view }
-            | HistoryCell::CompletedMcpToolCallWithTextOutput { view }
+            | HistoryCell::CompletedMcpToolCall { view }
             | HistoryCell::PendingPatch { view }
             | HistoryCell::ActiveExecCommand { view, .. }
             | HistoryCell::ActiveMcpToolCall { view, .. } => view.height(width),
@@ -527,7 +572,7 @@ impl CellWidget for HistoryCell {
             | HistoryCell::ErrorEvent { view }
             | HistoryCell::SessionInfo { view }
             | HistoryCell::CompletedExecCommand { view }
-            | HistoryCell::CompletedMcpToolCallWithTextOutput { view }
+            | HistoryCell::CompletedMcpToolCall { view }
             | HistoryCell::PendingPatch { view }
             | HistoryCell::ActiveExecCommand { view, .. }
             | HistoryCell::ActiveMcpToolCall { view, .. } => {

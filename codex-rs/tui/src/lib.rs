@@ -34,6 +34,7 @@ mod scroll_event_helper;
 mod slash_command;
 mod status_indicator_widget;
 mod text_block;
+mod text_formatting;
 mod tui;
 mod user_approval_widget;
 

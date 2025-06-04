@@ -567,7 +567,6 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "pretty_assertions",
- "regex",
  "serde_json",
  "similar",
  "tempfile",
@@ -635,6 +634,8 @@ dependencies = [
  "seccompiler",
  "serde",
  "serde_json",
+ "strum 0.27.1",
+ "strum_macros 0.27.1",
  "tempfile",
  "thiserror 2.0.12",
  "time",
@@ -680,7 +681,7 @@ dependencies = [
  "log",
  "multimap",
  "path-absolutize",
- "regex",
+ "regex-lite",
  "serde",
  "serde_json",
  "serde_with",
@@ -755,7 +756,7 @@ dependencies = [
  "pretty_assertions",
  "ratatui",
  "ratatui-image",
- "regex",
+ "regex-lite",
  "serde_json",
  "shlex",
  "strum 0.27.1",
@@ -767,6 +768,7 @@ dependencies = [
  "tui-input",
  "tui-markdown",
  "tui-textarea",
+ "unicode-segmentation",
  "uuid",
 ]
 
@@ -3320,6 +3322,12 @@ dependencies = [
  "memchr",
  "regex-syntax 0.8.5",
 ]
+
+[[package]]
+name = "regex-lite"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "53a49587ad06b26609c52e423de037e7f57f20d53535d66e08c695f347df952a"
 
 [[package]]
 name = "regex-syntax"
