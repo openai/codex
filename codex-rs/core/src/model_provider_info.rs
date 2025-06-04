@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::env::VarError;
 
 use crate::error::EnvVarError;
+use crate::openai_api_key::get_openai_api_key;
 
 /// Wire protocol that the provider speaks. Most third-party services only
 /// implement the classic OpenAI Chat Completions JSON schema, whereas OpenAI
@@ -52,20 +53,27 @@ impl ModelProviderInfo {
     /// cannot be found, returns an error.
     pub fn api_key(&self) -> crate::error::Result<Option<String>> {
         match &self.env_key {
-            Some(env_key) => std::env::var(env_key)
-                .and_then(|v| {
-                    if v.trim().is_empty() {
-                        Err(VarError::NotPresent)
-                    } else {
-                        Ok(Some(v))
-                    }
-                })
-                .map_err(|_| {
-                    crate::error::CodexErr::EnvVar(EnvVarError {
-                        var: env_key.clone(),
-                        instructions: self.env_key_instructions.clone(),
+            Some(env_key) => {
+                let env_value = if env_key == crate::openai_api_key::OPENAI_API_KEY_ENV_VAR {
+                    get_openai_api_key().map_or_else(|| Err(VarError::NotPresent), Ok)
+                } else {
+                    std::env::var(env_key)
+                };
+                env_value
+                    .and_then(|v| {
+                        if v.trim().is_empty() {
+                            Err(VarError::NotPresent)
+                        } else {
+                            Ok(Some(v))
+                        }
                     })
-                }),
+                    .map_err(|_| {
+                        crate::error::CodexErr::EnvVar(EnvVarError {
+                            var: env_key.clone(),
+                            instructions: self.env_key_instructions.clone(),
+                        })
+                    })
+            }
             None => Ok(None),
         }
     }

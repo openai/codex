@@ -9,6 +9,7 @@ members = [
     "exec",
     "execpolicy",
     "linux-sandbox",
+    "login",
     "mcp-client",
     "mcp-server",
     "mcp-types",
