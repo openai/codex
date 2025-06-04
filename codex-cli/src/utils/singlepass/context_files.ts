@@ -174,6 +174,54 @@ function _read_default_patterns_file(filePath?: string): string {
   return fsSync.readFileSync(filePath, "utf-8");
 }
 
+/**
+ * Finds the .gitignore file in the given directory or any parent directory.
+ * Returns the path to the .gitignore file, or null if not found.
+ */
+export function findGitignoreFile(startDir: string): string | null {
+  let currentDir = path.resolve(startDir);
+
+  // Look for .gitignore in current directory and parent directories
+  const foundGitignore = false;
+  while (!foundGitignore) {
+    const gitignorePath = path.join(currentDir, ".gitignore");
+    if (fsSync.existsSync(gitignorePath)) {
+      return gitignorePath;
+    }
+
+    // Move up to parent directory
+    const parentDir = path.dirname(currentDir);
+    if (parentDir === currentDir) {
+      // We've reached the root directory
+      break;
+    }
+    currentDir = parentDir;
+  }
+
+  return null;
+}
+
+/**
+ * Reads and parses the .gitignore file content.
+ * Returns an array of patterns from the .gitignore file.
+ */
+export function readGitignorePatterns(rootPath: string): Array<string> {
+  const gitignorePath = findGitignoreFile(rootPath);
+  if (!gitignorePath) {
+    return [];
+  }
+
+  try {
+    const content: string = fsSync.readFileSync(gitignorePath, "utf-8");
+    return content
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith("#"));
+  } catch {
+    return [];
+  }
+}
+
 /** Loads ignore patterns from a file (or a default list) and returns a list of RegExp patterns. */
 export function loadIgnorePatterns(filePath?: string): Array<RegExp> {
   try {
@@ -183,8 +231,12 @@ export function loadIgnorePatterns(filePath?: string): Array<RegExp> {
       .map((l: string) => l.trim())
       .filter((l: string) => l && !l.startsWith("#"));
 
+    const gitignorePatterns = filePath ? readGitignorePatterns(filePath) : [];
+
+    const allPatterns = cleaned.concat(gitignorePatterns);
+
     // Convert each pattern to a RegExp with a leading '*/'.
-    const regs = cleaned.map((pattern: string) => {
+    const regs = allPatterns.map((pattern: string) => {
       const escaped = pattern
         .replace(/[.+^${}()|[\]\\]/g, "\\$&")
         .replace(/\*/g, ".*")
