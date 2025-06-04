@@ -1,15 +1,16 @@
 //! Configuration object accepted by the `codex` MCP tool-call.
 
-use std::path::PathBuf;
-
+use codex_core::protocol::AskForApproval;
+use codex_core::protocol::SandboxPolicy;
 use mcp_types::Tool;
 use mcp_types::ToolInputSchema;
 use schemars::JsonSchema;
 use schemars::r#gen::SchemaSettings;
 use serde::Deserialize;
+use std::collections::HashMap;
+use std::path::PathBuf;
 
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::SandboxPolicy;
+use crate::json_to_toml::json_to_toml;
 
 /// Client-supplied configuration for a `codex` tool-call.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -41,12 +42,10 @@ pub(crate) struct CodexToolCallParam {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sandbox_permissions: Option<Vec<CodexToolCallSandboxPermission>>,
 
-    /// Disable server-side response storage.
+    /// Individual config settings that will override what is in
+    /// CODEX_HOME/config.toml.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub disable_response_storage: Option<bool>,
-    // Custom system instructions.
-    // #[serde(default, skip_serializing_if = "Option::is_none")]
-    // pub instructions: Option<String>,
+    pub config: Option<HashMap<String, serde_json::Value>>,
 }
 
 // Create custom enums for use with `CodexToolCallApprovalPolicy` where we
@@ -155,7 +154,7 @@ impl CodexToolCallParam {
             cwd,
             approval_policy,
             sandbox_permissions,
-            disable_response_storage,
+            config: cli_overrides,
         } = self;
         let sandbox_policy = sandbox_permissions.map(|perms| {
             SandboxPolicy::from(perms.into_iter().map(Into::into).collect::<Vec<_>>())
@@ -168,12 +167,17 @@ impl CodexToolCallParam {
             cwd: cwd.map(PathBuf::from),
             approval_policy: approval_policy.map(Into::into),
             sandbox_policy,
-            disable_response_storage,
             model_provider: None,
             codex_linux_sandbox_exe,
         };
 
-        let cfg = codex_core::config::Config::load_with_overrides(overrides)?;
+        let cli_overrides = cli_overrides
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(k, v)| (k, json_to_toml(v)))
+            .collect();
+
+        let cfg = codex_core::config::Config::load_with_cli_overrides(cli_overrides, overrides)?;
 
         Ok((prompt, cfg))
     }
@@ -216,13 +220,14 @@ mod tests {
                 ],
                 "type": "string"
               },
+              "config": {
+                "description": "Individual config settings that will override what is in CODEX_HOME/config.toml.",
+                "additionalProperties": true,
+                "type": "object"
+              },
               "cwd": {
                 "description": "Working directory for the session. If relative, it is resolved against the server process's current working directory.",
                 "type": "string"
-              },
-              "disable-response-storage": {
-                "description": "Disable server-side response storage.",
-                "type": "boolean"
               },
               "model": {
                 "description": "Optional override for the model name (e.g. \"o3\", \"o4-mini\")",

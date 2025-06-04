@@ -1,5 +1,6 @@
 use clap::Parser;
 use clap::ValueEnum;
+use codex_common::CliConfigOverrides;
 use codex_common::SandboxPermissionOption;
 use std::path::PathBuf;
 
@@ -33,9 +34,8 @@ pub struct Cli {
     #[arg(long = "skip-git-repo-check", default_value_t = false)]
     pub skip_git_repo_check: bool,
 
-    /// Disable server‑side response storage (sends the full conversation context with every request)
-    #[arg(long = "disable-response-storage", default_value_t = false)]
-    pub disable_response_storage: bool,
+    #[clap(skip)]
+    pub config_overrides: CliConfigOverrides,
 
     /// Specifies color settings for use in the output.
     #[arg(long = "color", value_enum, default_value_t = Color::Auto)]
@@ -45,8 +45,10 @@ pub struct Cli {
     #[arg(long = "output-last-message")]
     pub last_message_file: Option<PathBuf>,
 
-    /// Initial instructions for the agent.
-    pub prompt: String,
+    /// Initial instructions for the agent. If not provided as an argument (or
+    /// if `-` is used), instructions are read from stdin.
+    #[arg(value_name = "PROMPT")]
+    pub prompt: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]

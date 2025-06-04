@@ -10,13 +10,30 @@
 //! This allows us to ship a completely separate set of functionality as part
 //! of the `codex-exec` binary.
 use clap::Parser;
+use codex_common::CliConfigOverrides;
 use codex_exec::Cli;
 use codex_exec::run_main;
 
+#[derive(Parser, Debug)]
+struct TopCli {
+    #[clap(flatten)]
+    config_overrides: CliConfigOverrides,
+
+    #[clap(flatten)]
+    inner: Cli,
+}
+
 fn main() -> anyhow::Result<()> {
     codex_linux_sandbox::run_with_sandbox(|codex_linux_sandbox_exe| async move {
-        let cli = Cli::parse();
-        run_main(cli, codex_linux_sandbox_exe).await?;
+        let top_cli = TopCli::parse();
+        // Merge root-level overrides into inner CLI struct so downstream logic remains unchanged.
+        let mut inner = top_cli.inner;
+        inner
+            .config_overrides
+            .raw_overrides
+            .splice(0..0, top_cli.config_overrides.raw_overrides);
+
+        run_main(inner, codex_linux_sandbox_exe).await?;
         Ok(())
     })
 }
