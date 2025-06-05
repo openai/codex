@@ -3,6 +3,8 @@ import type { TerminalRendererOptions } from "marked-terminal";
 import type {
   ResponseFunctionToolCallItem,
   ResponseFunctionToolCallOutputItem,
+  ResponseLocalShellCallItem,
+  ResponseLocalShellCallOutputItem,
   ResponseInputMessageItem,
   ResponseItem,
   ResponseOutputMessage,
@@ -42,11 +44,9 @@ export default function TerminalChatResponseItem({
           fileOpener={fileOpener}
         />
       );
-    // @ts-expect-error new item types aren't in SDK yet
     case "local_shell_call":
     case "function_call":
       return <TerminalChatResponseToolCall message={item} />;
-    // @ts-expect-error new item types aren't in SDK yet
     case "local_shell_call_output":
     case "function_call_output":
       return (
@@ -171,8 +171,7 @@ function TerminalChatResponseMessage({
 function TerminalChatResponseToolCall({
   message,
 }: {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  message: ResponseFunctionToolCallItem | any;
+  message: ResponseFunctionToolCallItem | ResponseLocalShellCallItem;
 }) {
   let workdir: string | undefined;
   let cmdReadableText: string | undefined;
@@ -202,8 +201,9 @@ function TerminalChatResponseToolCallOutput({
   message,
   fullStdout,
 }: {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  message: ResponseFunctionToolCallOutputItem | any;
+  message:
+    | ResponseFunctionToolCallOutputItem
+    | ResponseLocalShellCallOutputItem;
   fullStdout: boolean;
 }) {
   const { output, metadata } = parseToolCallOutput(message.output);
