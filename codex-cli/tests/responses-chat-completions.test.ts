@@ -811,5 +811,105 @@ describe("responsesCreateViaChatCompletions", () => {
         }
       }
     });
+
+    it("should skip chunks with content_filter_results", async () => {
+      // Mock a stream that includes chunks with content_filter_results
+      async function* fakeStreamWithContentFilter() {
+        yield {
+          id: "chatcmpl-123",
+          model: "gpt-4o",
+          choices: [
+            {
+              delta: { role: "assistant" },
+              finish_reason: null,
+              index: 0,
+            },
+          ],
+        };
+        // This chunk should be skipped
+        yield {
+          id: "chatcmpl-123",
+          model: "gpt-4o",
+          choices: [
+            {
+              delta: { content: "Filtered content" },
+              finish_reason: null,
+              index: 0,
+              content_filter_results: {
+                hate: { filtered: false, severity: "safe" },
+                self_harm: { filtered: false, severity: "safe" },
+                sexual: { filtered: false, severity: "safe" },
+                violence: { filtered: false, severity: "safe" }
+              },
+            },
+          ],
+        };
+        // This chunk should be processed
+        yield {
+          id: "chatcmpl-123",
+          model: "gpt-4o",
+          choices: [
+            {
+              delta: { content: "Safe content" },
+              finish_reason: null,
+              index: 0,
+            },
+          ],
+        };
+        yield {
+          id: "chatcmpl-123",
+          model: "gpt-4o",
+          choices: [
+            {
+              delta: {},
+              finish_reason: "stop",
+              index: 0,
+            },
+          ],
+          usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
+        };
+      }
+
+      openAiState.createStreamSpy = vi.fn().mockResolvedValue(fakeStreamWithContentFilter());
+
+      const openaiClient = new (await import("openai")).default({
+        apiKey: "test-key",
+      }) as unknown as OpenAI;
+
+      const inputMessage = createTestInput({
+        model: "gpt-4o",
+        userMessage: "Generate some content",
+        stream: true,
+      });
+
+      const streamGenerator =
+        await responsesModule.responsesCreateViaChatCompletions(
+          openaiClient,
+          inputMessage as unknown as ResponseCreateParamsStreaming & {
+            stream: true;
+          },
+        );
+
+      // Collect all events from the stream
+      const events: Array<ResponseEvent> = [];
+      for await (const event of streamGenerator) {
+        events.push(event);
+      }
+
+      // Find content delta events
+      const deltaEvents = events.filter(isOutputTextDeltaEvent);
+      
+      // Should only have one delta event for "Safe content"
+      // The chunk with content_filter_results should have been skipped
+      expect(deltaEvents).toHaveLength(1);
+      expect(deltaEvents[0]?.delta).toBe("Safe content");
+
+      // Check final text content
+      const textDoneEvent = events.find(isOutputTextDoneEvent);
+      expect(textDoneEvent).toBeDefined();
+      if (textDoneEvent) {
+        expect(textDoneEvent.text).toBe("Safe content");
+      }
+    });
   });
 });
