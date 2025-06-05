@@ -16,6 +16,7 @@ async-channel = "2.3.1"
 base64 = "0.21"
 bytes = "1.10.1"
 codex-apply-patch = { path = "../apply-patch" }
+codex-login = { path = "../login" }
 codex-mcp-client = { path = "../mcp-client" }
 dirs = "6"
 env-flags = "0.1.1"
