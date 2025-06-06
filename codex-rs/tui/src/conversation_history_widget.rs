@@ -301,11 +301,15 @@ impl ConversationHistoryWidget {
                 call_id: history_id,
                 invocation,
                 start,
+                server,
+                tool,
                 ..
             } = &entry.cell
             {
                 if &call_id == history_id {
                     let completed = HistoryCell::new_completed_mcp_tool_call(
+                        server.clone(),
+                        tool.clone(),
                         width,
                         invocation.clone(),
                         *start,

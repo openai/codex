@@ -28,6 +28,7 @@ mod chatwidget;
 mod citation_regex;
 mod cli;
 mod conversation_history_widget;
+mod datadog;
 mod exec_command;
 mod git_warning_screen;
 mod history_cell;
