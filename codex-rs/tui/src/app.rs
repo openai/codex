@@ -40,6 +40,9 @@ pub(crate) struct App<'a> {
     app_event_rx: Receiver<AppEvent>,
     app_state: AppState<'a>,
 
+    /// Config is stored here so we can recreate ChatWidgets as needed.
+    config: Config,
+
     /// Stored parameters needed to instantiate the ChatWidget later, e.g.,
     /// after dismissing the Git-repo warning.
     chat_args: Option<ChatWidgetArgs>,
@@ -122,7 +125,7 @@ impl<'a> App<'a> {
                     screen: LoginScreen::new(app_event_tx.clone(), config.codex_home.clone()),
                 },
                 Some(ChatWidgetArgs {
-                    config,
+                    config: config.clone(),
                     initial_prompt,
                     initial_images,
                 }),
@@ -133,14 +136,18 @@ impl<'a> App<'a> {
                     screen: GitWarningScreen::new(),
                 },
                 Some(ChatWidgetArgs {
-                    config,
+                    config: config.clone(),
                     initial_prompt,
                     initial_images,
                 }),
             )
         } else {
-            let chat_widget =
-                ChatWidget::new(config, app_event_tx.clone(), initial_prompt, initial_images);
+            let chat_widget = ChatWidget::new(
+                config.clone(),
+                app_event_tx.clone(),
+                initial_prompt,
+                initial_images,
+            );
             (
                 AppState::Chat {
                     widget: Box::new(chat_widget),
@@ -153,6 +160,7 @@ impl<'a> App<'a> {
             app_event_tx,
             app_event_rx,
             app_state,
+            config,
             chat_args,
         }
     }
@@ -224,10 +232,16 @@ impl<'a> App<'a> {
                     AppState::Login { .. } | AppState::GitWarning { .. } => {}
                 },
                 AppEvent::DispatchCommand(command) => match command {
-                    SlashCommand::Clear => match &mut self.app_state {
-                        AppState::Chat { widget } => widget.clear_conversation_history(),
-                        AppState::Login { .. } | AppState::GitWarning { .. } => {}
-                    },
+                    SlashCommand::New => {
+                        let new_widget = Box::new(ChatWidget::new(
+                            self.config.clone(),
+                            self.app_event_tx.clone(),
+                            None,
+                            Vec::new(),
+                        ));
+                        self.app_state = AppState::Chat { widget: new_widget };
+                        self.app_event_tx.send(AppEvent::Redraw);
+                    }
                     SlashCommand::ToggleMouseMode => {
                         if let Err(e) = mouse_capture.toggle() {
                             tracing::error!("Failed to toggle mouse mode: {e}");

@@ -207,18 +207,6 @@ impl ChatWidget<'_> {
         self.conversation_history.scroll_to_bottom();
     }
 
-    pub(crate) fn clear_conversation_history(&mut self) {
-        // Clear the UI display
-        self.conversation_history.clear();
-
-        // Clear the actual conversation history that gets sent to the LLM
-        self.codex_op_tx.send(Op::ClearHistory).unwrap_or_else(|e| {
-            tracing::error!("failed to send ClearHistory op: {e}");
-        });
-
-        self.request_redraw();
-    }
-
     pub(crate) fn handle_codex_event(&mut self, event: Event) {
         let Event { id, msg } = event;
         match msg {
