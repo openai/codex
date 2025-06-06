@@ -75,7 +75,7 @@ pub async fn try_read_openai_api_key(codex_home: &Path) -> std::io::Result<Strin
         auth_dot_json.last_refresh = Utc::now();
 
         let mut options = OpenOptions::new();
-        options.write(true).create(true);
+        options.truncate(true).write(true).create(true);
         #[cfg(unix)]
         {
             options.mode(0o600);
