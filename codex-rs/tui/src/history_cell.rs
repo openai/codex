@@ -124,7 +124,7 @@ pub(crate) enum HistoryCell {
     PendingPatch { view: TextBlock },
 }
 
-const TOOL_CALL_MAX_LINES: usize = 5;
+const TOOL_CALL_MAX_LINES: usize = 2;
 
 impl HistoryCell {
     pub(crate) fn new_session_info(
