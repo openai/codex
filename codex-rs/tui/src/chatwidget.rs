@@ -208,7 +208,14 @@ impl ChatWidget<'_> {
     }
 
     pub(crate) fn clear_conversation_history(&mut self) {
+        // Clear the UI display
         self.conversation_history.clear();
+
+        // Clear the actual conversation history that gets sent to the LLM
+        self.codex_op_tx.send(Op::ClearHistory).unwrap_or_else(|e| {
+            tracing::error!("failed to send ClearHistory op: {e}");
+        });
+
         self.request_redraw();
     }
 

@@ -107,6 +107,9 @@ pub enum Op {
 
     /// Request a single history entry identified by `log_id` + `offset`.
     GetHistoryEntryRequest { offset: usize, log_id: u64 },
+
+    /// Clear the in-memory conversation history that gets sent to the LLM.
+    ClearHistory,
 }
 
 /// Determines how liberally commands are auto‑approved by the system.

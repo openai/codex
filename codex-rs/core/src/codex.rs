@@ -776,6 +776,22 @@ async fn submission_loop(
                     }
                 });
             }
+            Op::ClearHistory => {
+                let sess = match sess.as_ref() {
+                    Some(sess) => sess,
+                    None => {
+                        send_no_session_event(sub.id).await;
+                        continue;
+                    }
+                };
+
+                let mut state = sess.state.lock().unwrap();
+                state.previous_response_id = None;
+                if let Some(transcript) = &mut state.zdr_transcript {
+                    transcript.clear();
+                }
+                debug!("Cleared conversation history for session");
+            }
         }
     }
     debug!("Agent loop exited");
