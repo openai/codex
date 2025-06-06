@@ -3,20 +3,37 @@
 use crate::cell_widget::CellWidget;
 use crate::text_block::TextBlock;
 use chrono::DateTime;
-use ratatui::{
-    buffer::Buffer,
-    layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
-    prelude::*,
-    style::{Color, Modifier, Style},
-    symbols,
-    text::{Line, Span, Text},
-    widgets::{
-        Axis, Block, BorderType, Borders, Cell, Chart, Dataset, Padding, Paragraph, Row,
-        StatefulWidget, Table, Wrap,
-    },
-};
+use ratatui::buffer::Buffer;
+use ratatui::layout::Alignment;
+use ratatui::layout::Constraint;
+use ratatui::layout::Direction;
+use ratatui::layout::Layout;
+use ratatui::layout::Margin;
+use ratatui::layout::Rect;
+use ratatui::prelude::*;
+use ratatui::style::Color;
+use ratatui::style::Modifier;
+use ratatui::style::Style;
+use ratatui::symbols;
+use ratatui::text::Line;
+use ratatui::text::Span;
+use ratatui::text::Text;
+use ratatui::widgets::Axis;
+use ratatui::widgets::Block;
+use ratatui::widgets::BorderType;
+use ratatui::widgets::Borders;
+use ratatui::widgets::Cell;
+use ratatui::widgets::Chart;
+use ratatui::widgets::Dataset;
+use ratatui::widgets::Padding;
+use ratatui::widgets::Paragraph;
+use ratatui::widgets::Row;
+use ratatui::widgets::StatefulWidget;
+use ratatui::widgets::Table;
+use ratatui::widgets::Wrap;
 use serde::Deserialize;
-use tui_scrollview::{ScrollView, ScrollViewState};
+use tui_scrollview::ScrollView;
+use tui_scrollview::ScrollViewState;
 
 // Example of what's returned by the get_logs tool (see get_logs.json)
 
