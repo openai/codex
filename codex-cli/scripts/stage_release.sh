@@ -17,7 +17,7 @@
 # When --native is supplied we copy the linux-sandbox binaries (as before) and
 # additionally fetch / unpack the two Rust targets that we currently support:
 #   - x86_64-unknown-linux-musl
-#   - aarch64-unknown-linux-gnu
+#   - aarch64-unknown-linux-musl
 #
 # NOTE: This script is intended to be run from the repository root via
 #       `pnpm --filter codex-cli stage-release ...` or inside codex-cli with the
