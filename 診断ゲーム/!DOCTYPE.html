@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>放課後クロニクル 学生証ジェネレーター</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <style>
+    :root {
+      --grad: linear-gradient(135deg,#9b59b6,#2980b9);
+      --bg-form:#fff;
+      --bg-card:#2e2e2e;
+      --grid:#444;
+      --text-dark:#333;
+      --text-light:#f0f0f0;
+      --accent:#5dade2;
+      --accent-dark:#3498db;
+      --shadow-heavy:rgba(0,0,0,0.6);
+      --shadow-light:rgba(0,0,0,0.08);
+    }
+    * { box-sizing: border-box; margin:0; padding:0; }
+    body {
+      font-family: sans-serif;
+      background: var(--grad);
+      min-height:100vh;
+      padding:40px 0;
+    }
+    .header{
+      position:relative;
+      height:200px;
+      display:flex;
+      justify-content:center;
+      align-items:center;
+    }
+    .header .ui-logo{
+      width:100px;
+      opacity:0.2;
+    }
+    .container {
+      width: 90%;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+
+    /* ─────────── フォームカード ─────────── */
+    .card {
+      background: var(--bg-form);
+      border-radius: 12px;
+      padding: 24px;
+      box-shadow: 0 8px 20px var(--shadow-light);
+      margin-bottom: 40px;
+    }
+    /* フォーム内の要素間の余白を統一 */
+    .card > * + * {
+      margin-top: 16px;
+    }
+    .card label {
+      display:block;
+      margin-bottom:6px;
+      color:var(--text-dark);
+    }
+    .card input[type="file"] {
+      width:100%;
+      padding:6px;
+      border:1px solid #ddd;
+      border-radius:6px;
+      margin-bottom:20px;
+    }
+    .card input[type="text"] {
+      width:100%;
+      padding:8px 6px;
+      margin-bottom:20px;
+      border:none;
+      border-bottom:2px solid #ddd;
+      font-size:1rem;
+      color:var(--text-dark);
+    }
+    .card select {
+      width:48%;
+      padding:8px 6px;
+      border:2px solid #ddd;
+      border-radius:4px;
+      font-size:1rem;
+      background:#fff;
+      margin-right:4%;
+      cursor:pointer;
+    }
+    .card select:last-child {
+      margin-right:0;
+    }
+    .card button#createBtn {
+      padding:10px 16px;
+      background: var(--accent);
+      color:#fff;
+      border:none;
+      border-radius:6px;
+      cursor:pointer;
+      transition: background .2s;
+    }
+    .card button#createBtn:hover {
+      background: var(--accent-dark);
+    }
+
+    /* ─────────── プレビューカード ─────────── */
+    #previewArea {
+      display:none;
+    }
+    .preview-card {
+      background:#2e2e2e;
+      background-image:
+        linear-gradient(#444 1px,transparent 1px),
+        linear-gradient(90deg,#444 1px,transparent 1px);
+      background-size:20px 20px;
+      border-radius:12px;
+      box-shadow:0 8px 20px rgba(0,0,0,0.6);
+      overflow:hidden;
+      color:#f0f0f0;
+    }
+    .preview-canvas-wrapper {
+      padding:16px;
+      background:transparent;
+    }
+    #studentCanvas {
+      width:100%;
+      border-radius:8px;
+      box-shadow:0 4px 12px rgba(0,0,0,0.6);
+      background:#fff;
+      display:block;
+    }
+
+    /* ─────────── アクションボタン ─────────── */
+    .preview-actions {
+      display:flex;
+      gap:8px;
+      padding:16px;
+      background:var(--bg-form);
+    }
+    .preview-actions button {
+      flex:1;
+      padding:10px;
+      border:none;
+      border-radius:6px;
+      color:#fff;
+      cursor:pointer;
+      transition:transform .1s;
+      font-size:0.9rem;
+    }
+    #downloadBtn {
+      background:#1abc9c;
+    }
+    #twitterShareBtn {
+      background:#3498db;
+    }
+    #lineShareBtn {
+      background:#2ecc71;
+    }
+    .preview-actions button:hover {
+      transform:translateY(-2px);
+    }
+  </style>
+</head>
+<body>
+  <!-- UI ヘッダーに校章 -->
+  <header class="header">
+    <img src="436.png" alt="校章" class="ui-logo"/>
+  </header>
+
+  <div class="container">
+    <!-- 入力フォーム -->
+    <div class="card" id="formArea">
+      <label>顔写真アップロード</label>
+      <input type="file" id="photoInput" accept="image/*"/>
+
+      <label>氏名（漢字）</label>
+      <input type="text" id="nameInput" placeholder="例：高森 のばら"/>
+
+      <label>氏名（ローマ字）</label>
+      <input type="text" id="nameEnInput" placeholder="例：Takamori Nobara"/>
+
+      <label>学科</label>
+      <input type="text" id="deptInput" placeholder="例：芸術科"/>
+
+      <label>部活動</label>
+      <input type="text" id="clubInput" placeholder="例：ホラー布教部"/>
+
+      <label>生年月日</label>
+      <div>
+        <select id="birthMonth"></select>
+        <select id="birthDay"></select>
+      </div>
+
+      <button id="createBtn">学生証を作成</button>
+    </div>
+
+    <!-- プレビュー -->
+    <div id="previewArea">
+      <div class="preview-card">
+        <div class="preview-canvas-wrapper">
+          <canvas id="studentCanvas" width="1222" height="768"></canvas>
+        </div>
+        <div class="preview-actions">
+          <button id="downloadBtn">画像をダウンロード</button>
+          <button id="twitterShareBtn">Xでシェア</button>
+          <button id="lineShareBtn">LINEでシェア</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const IMG_BG = "student_card_with_boxes.png";
+    const BOX = {x:72,y:198,w:379,h:497};
+    const POS = {
+      name: {x:735,y:256,w:408},
+      nameEn: {x:735,y:321,w:412},
+      dept: {x:740,y:395,w:170},
+      club: {x:750,y:466,w:287},
+      month:{x:794,y:529,w:62},
+      day:  {x:905,y:531,w:48}
+    };
+
+    // Cloudinary設定
+    const CLOUD_NAME = "di5xqlddy";
+
+    // DOMContentLoadedで全体を囲む
+    window.addEventListener("DOMContentLoaded", () => {
+      console.log("DOMContentLoaded: 初期化開始");
+
+      // Elements
+      const photoInput  = document.getElementById("photoInput");
+      const nameI       = document.getElementById("nameInput");
+      const nameEnI     = document.getElementById("nameEnInput");
+      const deptI       = document.getElementById("deptInput");
+      const clubI       = document.getElementById("clubInput");
+      const monthI      = document.getElementById("birthMonth");
+      const dayI        = document.getElementById("birthDay");
+      const createBtn   = document.getElementById("createBtn");
+      const previewArea = document.getElementById("previewArea");
+      const canvas      = document.getElementById("studentCanvas");
+      const ctx         = canvas.getContext("2d");
+      const dlBtn       = document.getElementById("downloadBtn");
+      const twBtn       = document.getElementById("twitterShareBtn");
+      const lnBtn       = document.getElementById("lineShareBtn");
+
+      // 要素の存在チェック
+      if (!monthI || !dayI) {
+        console.error("birthMonth/birthDay が見つかりません");
+        return;
+      }
+
+      // 背景画像の読み込み
+      let bgImg = new Image();
+      let photoImg = null;
+
+      // 背景画像のロード処理
+      const loadBackgroundImage = () => {
+        return new Promise((resolve, reject) => {
+          const img = new Image();
+          img.onload = () => {
+            console.log("背景画像の読み込み完了");
+            resolve(img);
+          };
+          img.onerror = (err) => {
+            console.error("背景画像の読み込みに失敗:", err);
+            reject(err);
+          };
+          img.src = IMG_BG;
+        });
+      };
+
+      // 背景画像を読み込む
+      loadBackgroundImage()
+        .then(img => {
+          bgImg = img;
+          if (photoImg) drawCard();
+        })
+        .catch(err => {
+          console.error("背景画像の読み込みに失敗しました:", err);
+        });
+
+      // 生年月日ドロップダウンの初期化
+      monthI.innerHTML = `<option value="">月</option>`;
+      dayI.innerHTML = `<option value="">日</option>`;
+
+      for(let i=1; i<=12; i++){
+        const o = new Option(i, i);
+        monthI.appendChild(o);
+      }
+      for(let i=1; i<=31; i++){
+        const o = new Option(i, i);
+        dayI.appendChild(o);
+      }
+
+      // ホイール操作で上下可能に
+      [monthI, dayI].forEach(sel => {
+        sel.addEventListener("wheel", e => {
+          e.preventDefault();
+          const max = sel.options.length - 1;
+          let idx = sel.selectedIndex + (e.deltaY < 0 ? -1 : 1);
+          sel.selectedIndex = Math.min(max, Math.max(1, idx));
+        });
+      });
+
+      // 顔写真アップロード時
+      photoInput.addEventListener("change", e => {
+        const f = e.target.files[0]; 
+        if(!f) return;
+        const img = new Image();
+        img.onload = () => {
+          photoImg = img;
+          previewArea.style.display = "block";
+          if (bgImg) drawCard();
+        };
+        img.src = URL.createObjectURL(f);
+      });
+
+      // 学生証作成ボタン
+      createBtn.addEventListener("click", () => {
+        if(!photoImg) return alert("顔写真をアップしてください");
+        if(!bgImg) return alert("背景画像の読み込みを待っています...");
+        drawCard();
+        window.scrollTo({top:previewArea.offsetTop,behavior:"smooth"});
+      });
+
+      // カード描画処理
+      function drawCard(){
+        try {
+          if (!bgImg || !bgImg.complete) {
+            console.log("背景画像がまだ読み込まれていません");
+            return;
+          }
+
+          ctx.clearRect(0,0,canvas.width,canvas.height);
+          ctx.drawImage(bgImg,0,0,canvas.width,canvas.height);
+
+          if (photoImg) {
+            // 四角クリップを開始
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(BOX.x, BOX.y, BOX.w, BOX.h);
+            ctx.clip();
+
+            // Cover スケール計算
+            const iw = photoImg.naturalWidth, ih = photoImg.naturalHeight;
+            const scale = Math.max(BOX.w/iw, BOX.h/ih);
+            const dw = iw * scale, dh = ih * scale;
+            const dx = BOX.x - (dw - BOX.w)/2;
+            const dy = BOX.y - (dh - BOX.h)/2;
+
+            // 画像を描画
+            ctx.drawImage(photoImg, 0,0, iw,ih, dx,dy, dw,dh);
+
+            // クリップ解除
+            ctx.restore();
+          }
+
+          const name    = nameI.value||"——";
+          const nameEn  = nameEnI.value||"——";
+          const dept    = deptI.value||"——";
+          const club    = clubI.value||"——";
+          const month   = monthI.value||"–";
+          const day     = dayI.value||"–";
+
+          ctx.textAlign = "left"; 
+          ctx.textBaseline = "top";
+          ctx.fillStyle = "#333";
+
+          ctx.font = "bold 48px serif";
+          ctx.fillText(name,POS.name.x,POS.name.y,POS.name.w);
+
+          ctx.font = "30px sans-serif";
+          ctx.fillText(nameEn,POS.nameEn.x,POS.nameEn.y,POS.nameEn.w);
+
+          ctx.font = "32px sans-serif";
+          ctx.fillText(dept,POS.dept.x,POS.dept.y,POS.dept.w);
+          ctx.fillText(club,POS.club.x,POS.club.y,POS.club.w);
+
+          ctx.fillText(month,POS.month.x,POS.month.y,POS.month.w);
+          ctx.fillText(day,POS.day.x,POS.day.y,POS.day.w);
+
+          console.log("Draw: カード描画完了");
+        } catch (err) {
+          console.error("Draw: 描画エラー", err);
+        }
+      }
+
+      // ダウンロード処理
+      dlBtn.addEventListener("click", () => {
+        try {
+          if (!bgImg || !bgImg.complete) {
+            alert("背景画像の読み込みを待っています...");
+            return;
+          }
+          const dataURL = canvas.toDataURL("image/png");
+          const a = document.createElement("a");
+          a.href = dataURL;
+          a.download = "放課後クロニクル_学生証.png";
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          console.log("Download: ダウンロード開始");
+        } catch (err) {
+          console.error("Download: ダウンロード失敗", err);
+          alert("画像のダウンロードに失敗しました。\nエラー: " + err.message);
+        }
+      });
+
+      // シェア処理
+      async function uploadAndShare(){
+        try {
+          if (!bgImg || !bgImg.complete) {
+            alert("背景画像の読み込みを待っています...");
+            return;
+          }
+          console.log("Share: アップロード開始");
+          const blob = await new Promise((resolve, reject) => {
+            canvas.toBlob(blob => {
+              if (blob) resolve(blob);
+              else reject(new Error("Canvas toBlob failed"));
+            }, "image/png");
+          });
+
+          // Cloudinary アップロード
+          const form = new FormData();
+          form.append("file", blob);
+          form.append("upload_preset", "student_card_AS_chronicle");
+
+          const uploadURL = `https://api.cloudinary.com/v1_1/${CLOUD_NAME}/image/upload`;
+          console.log("Share: Cloudinaryへのアップロード開始", uploadURL);
+
+          const res = await fetch(uploadURL, { 
+            method: "POST", 
+            body: form 
+          });
+          
+          if (!res.ok) {
+            throw new Error(`Upload failed: ${res.status} ${res.statusText}`);
+          }
+          
+          const data = await res.json();
+          console.log("Share: アップロード完了", data);
+
+          // Intent URL に付与
+          const text = encodeURIComponent("放課後クロニクル 学生証を作成しました！ #放課後クロニクル");
+          const intent = `https://twitter.com/intent/tweet?text=${text}&url=${encodeURIComponent(data.secure_url)}`;
+          console.log("Share: Intent URL生成", intent);
+
+          window.open(intent, "_blank");
+          console.log("Share: シェアウィンドウを開きました");
+        } catch (err) {
+          console.error("Share: シェア処理失敗", err);
+          alert("画像のアップロードに失敗しました。\nエラー: " + err.message);
+        }
+      }
+
+      // シェアボタンのイベントリスナ
+      twBtn.addEventListener("click", () => {
+        console.log("▶︎ Twitter Share button clicked");
+        uploadAndShare();
+      });
+      lnBtn.addEventListener("click", () => {
+        console.log("▶︎ LINE Share button clicked");
+        uploadAndShare();
+      });
+
+      console.log("Init: 初期化完了");
+    });
+  </script>
+</body>
+</html> 
