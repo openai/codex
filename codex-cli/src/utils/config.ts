@@ -523,6 +523,23 @@ export const loadConfig = (
   // Merge default providers with user configured providers in the config.
   config.providers = { ...providers, ...storedConfig.providers };
 
+  // Warn if any envKey looks like an actual API key value instead of a variable name
+  for (const [providerName, providerInfo] of Object.entries(config.providers)) {
+    if (!providerInfo.envKey) { continue; }
+    // Heuristic: starts with 'sk-' (OpenAI), or looks like a long random string (32+ chars, alphanumeric)
+    if (
+      /^sk-/.test(providerInfo.envKey) ||
+      /^[A-Za-z0-9_-]{32,}$/.test(providerInfo.envKey)
+    ) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `\n[codex] Warning: The 'envKey' for provider '${providerName}' looks like an actual API key value.\n` +
+        `You should put the *name* of the environment variable (e.g., 'OPENAI_API_KEY'), not your secret key.\n` +
+        `Update your config to use the variable name only.\n`
+      );
+    }
+  }
+
   return config;
 };
 
