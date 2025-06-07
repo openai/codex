@@ -164,6 +164,8 @@ export type StoredConfig = {
   /** User-defined safe commands */
   safeCommands?: Array<string>;
   reasoningEffort?: ReasoningEffort;
+  /** Whether to skip SSL certificate verification for OpenAI/Azure API requests */
+  insecure?: boolean;
 
   /**
    * URI-based file opener. This is used when linking code references in
@@ -214,6 +216,8 @@ export type AppConfig = {
       maxLines: number;
     };
   };
+  /** Whether to skip SSL certificate verification for OpenAI/Azure API requests */
+  insecure?: boolean;
   fileOpener?: FileOpenerScheme;
 };
 
@@ -439,6 +443,7 @@ export const loadConfig = (
     disableResponseStorage: storedConfig.disableResponseStorage === true,
     reasoningEffort: storedConfig.reasoningEffort,
     fileOpener: storedConfig.fileOpener,
+    insecure: storedConfig.insecure === true,
   };
 
   // -----------------------------------------------------------------------
@@ -560,6 +565,7 @@ export const saveConfig = (
     disableResponseStorage: config.disableResponseStorage,
     flexMode: config.flexMode,
     reasoningEffort: config.reasoningEffort,
+    insecure: config.insecure,
   };
 
   // Add history settings if they exist
