@@ -36,6 +36,7 @@ import {
   loadConfig,
   PRETTY_PRINT,
   INSTRUCTIONS_FILEPATH,
+  getApiKey as getConfigApiKey,
 } from "./utils/config";
 import {
   getApiKey as fetchApiKey,
@@ -327,7 +328,7 @@ try {
   // ignore errors
 }
 
-if (cli.flags.login) {
+if (provider.toLowerCase() === "openai" && cli.flags.login) {
   apiKey = await fetchApiKey(client.issuer, client.client_id);
   try {
     const home = os.homedir();
@@ -340,11 +341,15 @@ if (cli.flags.login) {
   } catch {
     /* ignore */
   }
-} else if (!apiKey) {
+} else if (provider.toLowerCase() === "openai" && !apiKey) {
   apiKey = await fetchApiKey(client.issuer, client.client_id);
 }
 // Ensure the API key is available as an environment variable for legacy code
 process.env["OPENAI_API_KEY"] = apiKey;
+// For non-OpenAI providers, load provider-specific API key from config
+if (provider.toLowerCase() !== "openai") {
+  apiKey = getConfigApiKey(provider) ?? "";
+}
 
 if (cli.flags.free) {
   // eslint-disable-next-line no-console
