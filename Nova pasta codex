@@ -1,0 +1,1144 @@
+realizar um código onde eu deixo um input date com a cor vermelha quando um input tex está vazio e o input date fique preto quando o input text for preenchido
+{% extends 'base.html' %}{% load static %} {% block title %}Easy Medical | Cadastro Pacientes{% endblock %}
+{% block page %} Exames de Interesse {% endblock %} 
+{% block content %}
+<style>
+
+body {
+    background-color: #f8f9fa;
+    font-family: 'Arial', 'Times New Roman', sans-serif;
+}
+
+.container {
+    margin-top: 50px;
+}
+
+    input[type="text"].form-control {
+    height: 38px;
+    font-size: 16px;
+    padding:10px 45px;
+    font-family: 'Times New Roman', Times, serif;    
+}
+
+    input[type="date"] {
+    width: 0px; /* ou o valor que desejar */
+    font-size: 16px;
+    height: 38px;
+    padding-right: 40px; /* espaço para o ícone do calendário */
+    box-sizing: border-box;
+}
+
+    input[type="date"],
+    select {
+    font-family: 'Times New Roman', Times, serif;
+}
+
+    input[class="form-control"],
+    select{
+    font-family: 'Times New Roman', Times, serif;
+
+}
+
+    select[class="form-control"],
+    select{
+    font-family: 'Times New Roman', Times, serif;
+
+}
+
+h1, h6, label {
+    font-family: 'Arial', 'Times New Roman', sans-serif;
+    font-weight: normal;
+    text-align: center;
+    font-family: 'Times New Roman', Times, serif;
+}
+
+.input-group-text {
+    background-color: transparent;
+    border: none;
+}
+
+.input-group-text.add-button {
+    font-size: 18px;
+    padding: 2px 12px;
+    cursor: pointer;
+    border-radius: 2px;
+    transition: background-color 0.3s ease;
+    background-color: #e3ece3; /* verde claro */
+    color: black;
+}
+
+.input-group-text.toggle-extra {
+    font-size: 18px;
+    font-weight: normal;
+    padding: 2px 12px;
+    cursor: pointer;
+    color: #0b0a0a;
+    transition: transform 0.2s ease;
+    background-color: #e3ece3; /* mais escuro ao clicar */
+    font-family: 'Arial', 'Times New Roman', sans-serif;     
+}
+
+.input-group-text.add-button.clicked {
+    background-color: #41ec69; /* mais escuro ao clicar */
+    font-size: 20px; 
+    padding: 2px 18px;       
+    font-family: 'Times New Roman', Times, serif;    
+    font-weight: bold;      
+    color: black ;
+}
+
+.input-group-text.toggle-extra.active {
+    background-color: #e3ece3; /* verde claro */    
+    font-weight: normal;       
+    color: black;
+}
+
+.extra-result {
+    display: none;
+}
+
+.form-control {
+    font-family: 'Arial', 'Times New Roman', sans-serif;
+}
+
+
+    h1 {
+        text-align: center;
+        color: green;
+        margin-bottom: 30px;
+    }
+    .btn-custom {
+        width: 100%;
+        background-color: red;
+        border: none;
+        color: white;
+    }
+    .btn-custom-green {
+        width: 100%;
+        background-color: green;
+        border: none;
+        color: white;
+    }
+    label {
+        font-weight: bold;
+    }
+    .input-group-text {
+        background-color: transparent;
+        border: none;
+    }
+    .form-group .plus {
+        cursor: pointer;
+        font-size: 20px;
+        color: #000;
+    }
+    .campo-exame {  
+        height: 20px;
+        font-size: 18px;
+        padding: 18px 25px;
+        box-sizing: border-box;
+    }
+
+    .form-control {
+        width: 180px;
+        font-family: 'Times New Roman', Times, serif;
+        font-size: 16px;
+        height: 38px;
+    }
+
+    .menu-text { 
+        display: none; }
+      
+    input[type="date"],
+    input[type="text"]{
+        padding: 4px;
+    }
+
+    .linha input {
+        margin: 0;
+        padding: 4px 6px;
+    }
+
+    /* alterna a cor preto e vermelho quando resultados estão anotados */
+    .alerta-vermelho {
+        color: red;
+        border: 2px solid red;
+    }
+    .normal-preto {
+        color: black;
+        border: 1px solid #ced4da;
+    }
+</style>
+</head>
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+
+<head>
+    <style>
+    </style>
+</head>
+
+<body>
+<div class="container">
+
+
+  <!--  <h1>Exames de Interesse</h1> -->
+
+    <form>
+
+        <div class="form-row">
+            <!-- Primeira Coluna -->
+            <div class="col-md-6">
+                <h6 style="text-align: center ;font-style: italic; background-color: rgb(11, 114, 45); color: #f8f9fa;" for= "exameDeLaboratório"> Exames de laboratório  </h6>                                            
+                              
+                    <div class="form-group">
+                        <h6 style=  "text-align: left; font-style: normal; background-color: rgb(227, 235, 230); color: #16181a;" for="exameDeLaboratório">Hb</h6>
+                            <div id="hb-fields" data-label="Hb">
+                                <div class="input-group mb-2">
+                                <input type="date" lang="pt-BR" class="form-control hbDate" id="hbDate1" onchange="syncDates(this.value); verificarCampos()">
+                                <input type="text" class="form-control" id="hbResult1" placeholder="Digite resultado" oninput="updateResults(); verificarCampos()">
+                                    <div class="input-group-append">
+                                    <span class="input-group-text add-button" style= "font-family:Arial, Helvetica, sans-serif;"onclick="handleAddClick(this, 'hb-fields')">+</span>
+                                    <span class="input-group-text toggle-extra" style="display:inline-block; " onclick="toggleExtra('hb-fields')">></span>
+                                    </div>
+                                 </div>
+                            </div>
+                        </div>
+
+                    <div class="form-group">
+                        <h6 style=  "text-align: left; font-style: normal; background-color: rgb(227, 235, 230); color: #16181a;" for="exameDeLaboratório">Ht</h6>
+                            <div id="ht-fields" data-label="Ht">
+                                <div class="input-group mb-2 ">
+                                <input type="date" lang="pt-BR" class="form-control htDate" id="htDate1" onchange="syncDates(this.value); verificarCampos()">
+                                <input type="text" class="form-control" id="htResult1" placeholder="Digite o resultado" oninput="updateResults(); verificarCampos()">
+                                    <div class="input-group-append">
+                                    <span class="input-group-text add-button" style= "font-family:Arial, Helvetica, sans-serif;"onclick="handleAddClick(this, 'ht-fields')">+</span>
+                                    <span class="input-group-text toggle-extra" style="display:inline-block; " onclick="toggleExtra('ht-fields')">></span>
+                                    </div>
+                                 </div>
+                            </div>
+                        </div>
+
+                    <div class="form-group">
+                        <h6 style=  "text-align: left; font-style: normal; background-color: rgb(227, 235, 230); color: #16181a;" for="exameDeLaboratório">Urina I</h6>
+                            <div id="urina_i-fields" data-label="Urina I">
+                                <div class="input-group mb-2">
+                                <input type="date" style="font-family: 'Times New Roman', Times, serif;  height: 35px;" lang="pt-BR" class="form-control urina_iDate" id="urina_iDate1" onchange="syncDates(this.value); verificarCampos()">
+                                <input type="text" style="height: 35px;" class="form-control" id="urina_iResult1" placeholder="Digite o resultado" oninput="updateResults(), verificarCampos()">
+                                    <div class="input-group-append">
+                                    <span class="input-group-text add-button" style= "font-family:Arial, Helvetica, sans-serif;"onclick="handleAddClick(this, 'urina_i-fields')">+</span>
+                                    <span class="input-group-text toggle-extra" style="display:inline-block; " onclick="toggleExtra('urina_i-fields')">></span>
+                                    </div>
+                                 </div>
+                            </div>
+                        </div>
+
+                    <div class="form-group">
+                        <h6 style=  "text-align: left; font-style: normal; background-color: rgb(227, 235, 230); color: #16181a;" for="exameDeLaboratório">Urocultura</h6>
+                            <div id="urocultura-fields" data-label="urocultura">
+                                <div class="input-group mb-2">
+                                <input type="date" lang="pt-BR" class="form-control hbDate" id="uroculturaDate1" onchange="syncDates(this.value)">
+                                <input type="text" class="form-control" id="uroculturaResult1" placeholder="Digite o resultado" oninput="updateResults()">
+                                    <div class="input-group-append">
+                                    <span class="input-group-text add-button" style= "font-family:Arial, Helvetica, sans-serif;"onclick="handleAddClick(this, 'urocultura-fields')">+</span>
+                                    <span class="input-group-text toggle-extra" style="display:inline-block; " onclick="toggleExtra('urocultura-fields')">></span>
+                                    </div>
+                                 </div>
+                            </div>
+                        </div>
+
+                        <!-- glicemia   -->
+
+                <div class="form-group">
+                    <h6 style=" text-align: left ;font-style: normal; background-color: rgb(227, 235, 230); color: #16181a;" for= "exameDeLaboratório"> Glicemia </h6>                                                         
+                    <div id="glicemia-fields" data-label="Glicemia">
+                        <div class="input-group mb-2">
+                            <input type="date" class="form-control" id="glicemiaDate1" onchange="updateResults()">
+                            <input type="text" class="form-control" id="glicemiaResult1" placeholder="Digite o resultado" oninput="updateResults()">
+                                    <div class="input-group-append">
+                                    <span class="input-group-text add-button" style= "font-family:Arial, Helvetica, sans-serif;"onclick="handleAddClick(this, 'glicemia -fields')">+</span>
+                                    <span class="input-group-text toggle-extra" style="display:inline-block; " onclick="toggleExtra('glicemia-fields')">></span>
+                                    </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- totg -->
+                <div class="form-group">
+                    <h6 style= "font-weight: normal; text-align: left ;font-style: normal; background-color: rgb(227, 235, 230); color: #16181a;" for= "exameDeLaboratório"> TOTG </h6>                                                         
+                    <div id="totg-fields" data-label="TOTG">
+                        <div class="input-group mb-2">
+                            <input type="date" class="form-control" id="totgDate1" onchange="updateResults()">
+                            <input type="text" class="form-control" id="totgResult1" placeholder="Digite o resultado" oninput="updateResults()">
+                            <div class="input-group-append">
+                                <span class="input-group-text plus" onclick="addField('totg-fields')">+</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+<!--                
+                <div class="form-group">
+                     <h6 style="font-weight: normal;   text-align: left ;font-style: normal; background-color: rgb(227, 235, 230); color: #16181a;" for= "exameDeLaboratório"> VDRL </h6>                                                         
+                     <div id="vdrl-fields" data-label="VDRL">
+                            <div class="input-group mb-2">
+                            <input type="date" class="form-control" id="vdrlDate1" onchange="updateResults()">
+                            <select class="form-control" id="vdrlResult1" onchange="updateResults()">
+                                <option>Click na opção</option>
+                                <option>Negativo</option>
+                                <option>Positivo</option>
+                                <option>Reativa</option>
+                                <option>Não Reativa</option>
+                            </select>                                                       
+                            <div class="input-group-append">
+                                <span class="input-group-text plus" onclick="addSelectField('vdrl-fields')">+</span>
+                            </div>
+                        </div>
+                    </div>                                                                                                                                                                          
+                </div>
+            -->
+                <div class="form-group">
+                    <h6 style=" text-align: left ;font-style: normal; background-color: rgb(227, 235, 230); color: #16181a;" for= "exameDeLaboratório"> VDRL </h6>                                                         
+                    <div id="vdrl-fields" data-label="VDRL">
+                        <div class="input-group mb-2">
+                            <input type="date" class="form-control" id="vdrlDate1"  onchange="updateResults(), verificarCampos()">
+                            <select class="form-control" id="vdrlResult1"  onchange="updateResults(), verificarCampos()">
+                                <option disabled selected >Escolha a opção</option>
+                                <option>Negativo</option>
+                                <option>Positivo</option>
+                                <option>Reativo</option>                                
+                                <option>Não Reativa</option>
+                                <option>Susceptível</option>
+                                <option>Não Susceptível</option> 
+                                <option></option>                                                                                                
+                            </select>
+                            <div class="input-group-append">
+                                <span class="input-group-text plus" onclick="addField('vdrl-fields')">+</span>
+                              </div>
+                        </div>
+                    </div>
+                </div>
+
+<!--                
+                <div class="form-group">                 
+                    <h6 style="  text-align: left ;font-style: normal; background-color: rgb(227, 235, 230); color: #16181a;" for= "exameDeLaboratório"> HIV </h6>                                                         
+                    <div id="hiv-fields" data-label="HIV">
+                        <div class="input-group mb-2">
+                            <input type="date" class="form-control" id="hivDate1" onchange="updateResults()">
+                            <select class="form-control" id="hivResult1" onchange="updateResults()">
+                                <option>Click na opção</option>
+                                <option>Negativo</option>
+                                <option>Positivo</option>
+                                <option>Reativo</option>                                
+                                <option>Não Reativa</option>
+                            </select>
+                            <div class="input-group-append">
+                                <span class="input-group-text plus" onclick="addSelectField('hiv-fields')">+</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+-->
+                         <div class="form-group">
+                    <h6 style=" text-align: left ;font-style: normal; background-color: rgb(227, 235, 230); color: #16181a;" for= "exameDeLaboratório"> HIV </h6>                                                         
+                    <div id="hiv-fields" data-label="HIV">
+                        <div class="input-group mb-2">
+                            <input type="date" class="form-control" id="hivDate1"  onchange="updateResults(), verificarCampos()">
+                            <select class="form-control" id="hivResult1"  onchange="updateResults(), verificarCampos()">
+                                <option disabled selected >Escolha a opção</option>
+                                <option>Negativo</option>
+                                <option>Positivo</option>
+                                <option>Reativo</option>                                
+                                <option>Não Reativa</option>
+                                <option>Susceptível</option>
+                                <option>Não Susceptível</option> 
+                                <option></option>                                                                                                
+                            </select>
+                            <div class="input-group-append">
+                                <span class="input-group-text plus" onclick="addField('hiv-fields')">+</span>
+                              </div>
+                        </div>
+                    </div>
+                </div>
+       
+                <div class="form-group">
+                    <h6 style=" text-align: left ;font-style: normal; background-color: rgb(227, 235, 230); color: #16181a;" for= "exameDeLaboratório"> Hepatite B </h6>                                                         
+                    <div id="hepatite_b-fields" data-label="Hepatite B">
+                        <div class="input-group mb-2">
+                            <input type="date" class="form-control" id="hepatite_bDate1" onchange="updateResults()">
+                            <select class="form-control" id="hepatite_bResult1"onchange="updateResults()">
+                                <option>Click na opção</option>
+                                <option>Negativo</option>
+                                <option>Positivo</option>
+                                <option>Não Reativa</option>
+                                <option>Reativo</option>                                         
+                            </select>
+                            <div class="input-group-append">
+                                <span class="input-group-text plus" onclick="addSelectField('hepatiteB-fields')">+</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <h6 style="  text-align: left ;font-style: normal; background-color: rgb(227, 235, 230); color: #16181a;" for= "exameDeLaboratório"> Hepatite C </h6>                                                         
+                    <div id="hepatite_c-fields" data-label="Hepatite C">
+                        <div class="input-group mb-2">
+                            <input type="date" class="form-control" id="hepatite_cDate1" onchange="updateResults()">
+                            <select class="form-control" id="hepatite_cResult1"onchange="updateResults()">
+                                <option>Click na opção</option>
+                                <option>Negativo</option>
+                                <option>Positivo</option>
+                                <option>Não Reativa</option>
+                            </select>
+                            <div class="input-group-append">
+                                <span class="input-group-text plus" onclick="addSelectField('hepatiteC-fields')">+</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <h6 style=" text-align: left ;font-style: normal; background-color: rgb(227, 235, 230); color: #16181a;" for= "exameDeLaboratório"> CMV </h6>                                                         
+                    <div id="cmv-fields" data-label="CMV">
+                        <div class="input-group mb-2">
+                            <input type="date" class="form-control" id="cmvDate1" onchange="updateResults()">
+                            <select class="form-control" id="cmvResult1">
+                                <option>Click na opção</option>
+                                <option>Negativo</option>
+                                <option>Positivo</option>
+                                <option>Reativa</option>
+                                <option>Não Reativa</option>                                
+                            </select>
+                            <div class="input-group-append">
+                                <span class="input-group-text plus" onclick="addSelectField('cmv-fields')">+</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Segunda Coluna -->            
+                <div class="form-group">
+                    <h6 style="  text-align: left ;font-style: normal; background-color: rgb(227, 235, 230); color: #16181a;" for= "exameDeLaboratório"> Rubéola </h6>                                                         
+                    <div id="rubeola-fields" data-label="Rubéola">
+                        <div class="input-group mb-2">
+                            <input type="date" class="form-control" id="rubeolaDate1" onchange="updateResults()">
+                            <select class="form-control" id="rubeolaResult1" onchange="updateResults()">
+                                <option>Click na opção</option>
+                                <option>Negativo</option>
+                                <option>Positivo</option>
+                                <option>Reativo</option>                                
+                                <option>Não Reativa</option>
+                            </select>
+                            <div class="input-group-append">
+                                <span class="input-group-text plus" onclick="addSelectField('rubeola-fields')">+</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>              
+
+                <div class="form-group">
+                    <h6 style=" text-align: left ;font-style: normal; background-color: rgb(227, 235, 230); color: #16181a;" for= "exameDeLaboratório"> Toxoplasmose </h6>                                                         
+                    <div id="toxoplasmose-fields" data-label="Toxoplasmose">
+                        <div class="input-group mb-2">
+                            <input type="date" class="form-control" id="toxoplasmoseDate1"  onchange="updateResults(), verificarCampos()">
+                            <select class="form-control" id="toxoplasmoseResult1"  onchange="updateResults(), verificarCampos()">
+                                <option disabled selected >Escolha a opção</option>
+                                <option>Negativo</option>
+                                <option>Positivo</option>
+                                <option>Reativo</option>                                
+                                <option>Não Reativa</option>
+                                <option>Susceptível</option>
+                                <option>Não Susceptível</option> 
+                                <option></option>                                                                                                
+                            </select>
+                            <div class="input-group-append">
+                                <span class="input-group-text plus" onclick="addField('toxoplasmose-fields')">+</span>
+                              </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <h6 style="  text-align: left ;font-style: normal; background-color: rgb(227, 235, 230); color: #16181a;" for= "exameDeLaboratório"> Toxoplasmose avidez </h6>                                                         
+                    <div id="toxoplasmose-avidez-fields" data-label="Toxoplasmose avidez">
+                        <div class="input-group mb-2">
+                            <input type="date" class="form-control" id="toxoplasmose-avidezDate1" onchange="updateResults()">
+                            <input type="text" class="form-control" id="toxoplasmose-avidezResult1" placeholder="Digite o resultado" oninput="updateResults()">
+                            <div class="input-group-append">
+                                <span class="input-group-text plus" onclick="addField('toxoplasmose-avidez-fields')">+</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            
+                <div class="form-group">
+                    <h6 style=" text-align: left ;font-style: normal; background-color: rgb(227, 235, 230); color: #16181a;" for= "exameDeLaboratório">Streptococcus do grupo B </h6>                                                         
+                    <div id="streptococcus_grupo_b-fields" data-label="Swab EGB">
+                        <div class="input-group mb-2" >
+                            <input type="date" class="form-control" id="streptococcus_grupo_bDate1" onchange="updateResults()">
+                            <input type="text" class="form-control" id="streptococcus_grupo_bResult1" placeholder="Digite o resultado" oninput="updateResults()">
+                            <div class="input-group-append">
+                                <span class="input-group-text plus" onclick="addField('swab-fields')">+</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <h6 style="   text-align: left ;font-style: normal; background-color: rgb(227, 235, 230); color: #16181a;" for= "exameDeLaboratório"> Outros 1A </h6>                                                                          
+                    <div id="outros1A-fields" data-label="Outros 1 A">
+                        <div class="input-group mb-2">
+                            <input type="date" class="form-control" id="outros1ADate1" onchange="updateResults()">
+                            <input type="text" class="form-control" id="outros1AResult1" placeholder="Digite o resultado" oninput="updateResults()">
+                            <div class="input-group-append">
+                                <span class="input-group-text plus" onclick="addField('outros1A-fields')">+</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+
+                <div class="form-group">
+                           <!-- campo para editar o nome do Outros 1B-->
+                        <h6 style="   text-align: left ;font-style: normal; background-color: rgb(227, 235, 230); color: #16181a;" for= "exameDeLaboratório"> <!--Outros 1B </h6>  -->                                                                     
+                           <span id="outros1_BLabel">Outros 1B</span>
+                        </h6>    
+           
+                            <input type="text" class="form-control mb-1" id="outros1_BNomeExame" placeholder="Digite o nome do exame" oniput="updateResults()">
+                            <!--Label visual (opcional, pode ser deixado vazio) -->
+
+
+                   
+                    <div id="outros1_B-fields" data-label="Outros 1 B">
+                        <div class="input-group mb-2">
+                            <input type="date" class="form-control" id="outros1_BDate1" onchange="updateResults()">
+                            <input type="text" class="form-control" id="outros1_BResult1" placeholder="Digite o resultado" oninput="updateResults()"> 
+                            <div class="input-group-append">
+  
+      
+                                <span class="input-group-text plus" onclick="addField('outros1_B-fields')">+</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <h6 style="  text-align: left ;font-style: normal; background-color: rgb(227, 235, 230); color: #16181a;" for= "exameDeLaboratório"> Outros 2A </h6>                                                          
+                    <div id="outros2A-fields" data-label="Outros 2 A">
+                        <div class="input-group mb-2">
+                            <input type="date" class="form-control" id="outros2ADate1"
+                            onchange="updateResults()">
+                            <input type="text" class="form-control" id="outros2AResult1" placeholder="Digite o resultado" oninput="updateResults()">
+                            <div class="input-group-append">
+                                <span class="input-group-text plus" onclick="addField('outros2A-fields')">+</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-group">                
+                    <h6 style=" text-align: left ;font-style: normal; background-color: rgb(227, 235, 230); color: #16181a;" for= "exameDeLaboratório"> Outros 2B </h6>                                                          
+                    <div id="outros2B-fields" data-label="Outros 2 B">
+                        <div class="input-group mb-2">
+                            <input type="date" class="form-control" id="outros2BDate1"
+                            onchange="updateResults()">
+                            <input type="text" class="form-control" id="outros2BResult1" placeholder="Digite o resultado" oninput="updateResults()">
+                            <div class="input-group-append">
+                                <span class="input-group-text plus" onclick="addField('outros2B-fields')">+</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                 <!-- Título dos exames na sala de parto-->
+                <div class="form-group"> 
+                    <h6 style="text-align: center ;font-style: italic; background-color: rgb(11, 114, 45); color: #f8f9fa;" for= "exameDeLaboratório"> Teste rápido na sala de parto  </h6>                                                                                                             
+ 
+                <!-- exames da triagem na sala de parto
+                 style que deixa o texto à esquerda e em negrito -> font-weight: bold; -->
+                    <div id="vdrl_triagem-fields" data-label="VDRL triagem">
+                        <h6 style="font-weight: bold;   text-align: left ;font-style: normal; background-color: rgb(227, 235, 230); color: #16181a;" for= "exameDeLaboratório"> VDRL triagem </h6>                                                          
+                        <div class="input-group mb-2">   
+                            <input type="date" class="form-control" id="vdrl_triagemDate1"onchange="updateResults()">                                                                                                                                 
+                            <select class="form-control" id="vdrl_triagemResult1" onchange="updateResults()">                                
+                                <option>Click na opção</option>                               
+                                <option>Negativo</option>
+                                <option>Positivo</option>
+                                <option>Reativo</option>                                
+                                <option>Não Reativa</option>
+                            </select>    
+                            <div class="input-group-append">                                   
+                                <span class="input-group-text plus" onclick="addSelectField('vdrl_triagem-fields')">+</span>                                                                                                             
+                            </div>
+                        </div>
+                    </div>
+
+                    <!--
+                            <div class="input-group mb-2">   
+                                 <input type="date" class="form-control" id="vdrl_triagemDate1"onchange="updateResults()">                                                                                                                                 
+                                 <input type="text" class="form-control" id="vdrl_triagemResult" placeholder="Resultado 1" oninput="updateResults()">                              
+                             </div>
+                    -->
+
+                </div>
+
+
+                <div class="form-group">                  
+                    <div id="hiv_triagem-fields" data-label="HIV triagem">
+                        <h6 style="font-weight: bold;   text-align: left ;font-style: normal; background-color: rgb(227, 235, 230); color: #16181a;" for= "exameDeLaboratório"> HIV triagem </h6>                                                          
+                        <div class="input-group mb-2">
+                        <input type="date" class="form-control" id="hiv_triagemDate1"onchange="updateResults()">
+                        <select class="form-control" id="hiv_triagemResult1" onchange="updateResults()">                        
+                            <option>Click na opção</option>
+                            <option>Negativo</option>
+                            <option>Positivo</option>
+                            <option>Reativo</option>             
+                            <option>Não Reativa</option>
+                        </select>   
+                        <div class="input-group-append">                          
+                            <span class="input-group-text plus" onclick="addSelectField('hiv_triagem-fields')">+</span>                                                                   
+                        </div>
+                    </div>
+                </div>                                
+
+
+
+                
+                <div class="form-group">                   
+                    <div id="sifilis_triagem-fields" data-label="Sífilis triagem">
+                        <h6 style="font-weight: bold;   text-align: left ;font-style: normal; background-color: rgb(227, 235, 230); color: #16181a;" for= "exameDeLaboratório"> Sífilis triagem </h6>                                                          
+                        <div class="input-group mb-2">
+                        <input type="date" class="form-control" id="sifilis_triagemDate1"onchange="updateResults()">
+                        <select class="form-control" id="sifilis_triagemResult1" onchange="updateResults()">                        
+                            <option>Click na opção</option>
+                            <option>Negativo</option>
+                            <option>Positivo</option>
+                            <option>Reativo</option>             
+                            <option>Não Reativa</option>
+                        </select>    
+                        <div class="input-group-append">                          
+                            <span class="input-group-text plus" onclick="addSelectField('sifilis_triagem-fields')">+</span>                                                                                                     
+                         </div>
+                        </div>
+                    </div>
+                </div>       
+
+                <div class="form-group">                   
+                    <div id="hepatite_b_triagem-fields" data-label="Hepatite B triagem">
+                        <h6 style="font-weight: bold;   text-align: left ;font-style: normal; background-color: rgb(227, 235, 230); color: #16181a;" for= "exameDeLaboratório"> Hepatite B triagem </h6>                                                                                 
+                        <div class="input-group mb-2">
+                        <input type="date" class="form-control" id="hepatite_b_triagemDate1"onchange="updateResults()">
+                        <select class="form-control" id="hepatite_b_triagemResult1" onchange="updateResults()">                        
+                            <option>Click na opção</option>
+                            <option>Negativo</option>
+                            <option>Positivo</option>
+                            <option>Reativo</option>             
+                            <option>Não Reativa</option>
+                        </select>    
+                        <div class="input-group-append">                          
+                            <span class="input-group-text plus" onclick="addSelectField('hepatite_b_triagem-fields')">+</span>                                                                                                     
+                         </div>
+                        </div>
+                    </div>
+                </div>       
+
+                <div class="form-group">                  
+                    <div id="hepatite_c_triagem-fields" data-label="Hepatite C triagem">
+                        <h6 style="font-weight: bold;   text-align: left ;font-style: normal; background-color: rgb(227, 235, 230); color: #16181a;" for= "exameDeLaboratório"> Hepatite C triagem </h6>                                                                                 
+                        <div class="input-group mb-2">
+                        <input type="date" class="form-control" id="hepatite_c_triagemDate1"onchange="updateResults()">
+                        <select class="form-control" id="hepatite_c_triagemResult1" onchange="updateResults()">                        
+                            <option>Click na opção</option>
+                            <option>Negativo</option>
+                            <option>Positivo</option>
+                            <option>Reativo</option>             
+                            <option>Não Reativa</option>
+                        </select>   
+                        <div class="input-group-append">                          
+                            <span class="input-group-text plus" onclick="addSelectField('hepatite_c_triagem-fields')">+</span>                                                                   
+                        </div>
+                    </div>
+                </div>                                
+                    
+                <!--  mudança do código para adicional edição no select   -->
+                <div class="form-group">                   
+                    <div id="streptococcus_grupo_b_triagem-fields" data-label="Swab EGB triagem">
+                        <h6 style="font-weight: bold; text-align: left ;font-style: normal; background-color: rgb(227, 235, 230); color: #16181a;" for= "exameDeLaboratório"> Streptococcus do grupo B triagem </h6>                                                                                
+                        <div class="input-group mb-2">
+                        <input type="date" class="form-control" id="streptococcus_grupo_b_triagemDate1"onchange="updateResults()">
+                     <!-- código acrescentado-->
+                        <input class="form-control" id="streptococcus_grupo_b_triagemResult1" list="strepo-opcoes" placeholder="Digite ou escolha um resultado"  oninput="updateResults()">  
+                        
+                        <datalist id="strepo-opcoes">
+                            <option value="Negativo"style="font-weight: bold; text-align: right ;font-style: normal">
+                            <option value="Positivo">
+                            <option value="Não reagente">
+                            <option value="Reagente">                                                            
+                        </datalist>
+ 
+                    <!--
+                        <select class="form-control" id="streptococcus_grupo_b_triagemResult1" onchange="updateResults()">       
+                            <option>Click na opção</option>
+                            <option>Negativo</option>
+                            <option>Positivo</option>     
+                            <option>Não reagente</option>
+                            <option>Reagente</option>                                   
+                        </select>    
+                    -->
+
+                        <div class="input-group-append">                         
+                            <span class="input-group-text plus" onclick="addSelectField('streptococcus_grupo_b_triagem-fields')">+</span>                                                                                          
+                            </div>
+                        </div>
+                    </div>
+                </div>       
+
+                <div class="form-group">
+                    <h6 style="text-align: center ;font-style: italic; background-color: rgb(11, 114, 45); color: #f8f9fa;" for= "exameDeLaboratório"> Ultrassom gestacional  </h6>                       
+                    <div id="usg-fields" data-label="USG">
+                        <h6 style="text-align: left ;font-style: normal; background-color: rgb(227, 235, 230); color: #16181a;" for= "exameDeLaboratório"> USG </h6>                                                                                
+                            <div class="input-group mb-2">
+                            <input type="date" class="form-control" id="usgDate1"onchange="updateResults()">
+                            <input type="text" class="form-control" id="usgResult1" placeholder="Digite o resultado" oninput="updateResults()">
+                            <div class="input-group-append">
+                                <span class="input-group-text plus" onclick="addField('usg-fields')">+</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <h6 style="   text-align: left ;font-style: normal; background-color: rgb(227, 235, 230); color: #16181a;" for= "exameDeLaboratório"> Ultrassom gestacional considerado </h6>                                                                                                    
+                    <div id="usgConsiderado-fields" data-label="USG Considerado">
+                        <div class="input-group mb-2">
+                            <input type="date" class="form-control" id="usgConsideradoDate1" onchange="updateResults()">
+                           <input type="text" class="form-control" id="usgConsideradoResult1" placeholder="Digite o resultado" oninput="updateResults()"> 
+                            <div class="input-group-append"> 
+                           <!--   <span class="input-group-text plus" onclick="addField('usg-considerado-fields')">+</span> -->
+                           
+                        </div>  
+                    </div>
+                </div>
+            </div>
+            </div>
+            </div>
+
+ 
+ 
+
+       <div class="form-row">
+            <div class="form-group col-md-4">
+                <button type="button" class="btn btn-custom" onclick="limparResultados()">Limpar</button>
+            </div>               
+                <div class="form-group col-md-4">
+                    <button type="submit" class="btn btn-custom-green">Avançar</button>
+                </div>
+        </div>
+        </div>
+        <div class="col-md-6">
+            <div class="form-group">
+            <h6 style="text-align: center ; text-decoration:solid ; font-style: italic; background-color: rgb(11, 114, 45); color: #f8f9fa;">Resultados</h6>
+                <div id="resultados-container" class="resultados">                       
+                </div>
+            </div>
+        </div>
+            
+    </form>
+
+
+	
+<!-- Bootstrap 4 JS -->
+<script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.0.7/dist/umd/popper.min.js"></script>
+<script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+
+<nav class="d-flex flex-column sidebar bg-light" style="width: 60px;"></nav>
+<!-- Script para adicionar campos dinamicamente -->
+<script>
+
+
+// novoInput.classList.add("campo-exame");
+
+
+/// inserir datas nos exames
+let lastUsedDate = ""; // armazena a última data usada globalmente
+let fieldCount = {};  // Já usado para controlar numero de campos por exame
+
+function syncDates(newDate) {
+    lastUsedDate = newDate;
+
+    const allDateInputs = document.querySelectorAll('input[type="date"]');
+
+    allDateInputs.forEach(dateInput => {
+        const resultInput = dateInput.parentElement.querySelector('input[type="text"], select');
+        const resultEmpty = resultInput && resultInput.value.trim() === "";
+        
+        if (resultEmpty) {
+            dateInput.value = newDate;
+        }
+    });
+
+    updateResults();
+}
+
+function syncOtherExams(currentSectionId, newDate) {
+    for (const sectionId in fieldCount) {
+        if (sectionId !== currentSectionId) {
+            const container = document.getElementById(sectionId);
+            if (!container) continue;
+
+            const firstDateInput = container.querySelector('input[type="date"]');
+            if (firstDateInput && firstDateInput.value.trim() === '') {
+                firstDateInput.value = newDate;
+            }
+        }
+    }
+}
+
+function toggleExtra(sectionId) {
+    const extras = document.querySelectorAll(`#${sectionId} .extra-result`);
+    const toggleBtn = document.querySelector(`#${sectionId} .toggle-extra`);
+    const isHidden = Array.from(extras).every(div => div.style.display === 'none' || div.style.display === '');
+    const newDisplay = isHidden ? 'flex' : 'none';
+
+    extras.forEach(div => {
+        div.style.display = newDisplay;
+    });
+
+    if (toggleBtn) {
+        toggleBtn.textContent = isHidden ?'v':'>';
+        toggleBtn.classList.toggle('active');
+    }
+}
+
+function handleAddClick(element, sectionId) {
+    element.classList.add('clicked');
+    setTimeout(() => {
+        element.classList.remove('clicked');
+    }, 300);
+    addField(sectionId);
+}
+
+function addField(sectionId) {
+    if (!fieldCount[sectionId]) {
+        fieldCount[sectionId] = 1;
+    }
+
+    const exameId = sectionId.replace("-fields", "");
+    const container = document.getElementById(sectionId);
+
+    // Verifica se o último campo está preenchido antes de adicionar outro
+    if (fieldCount[sectionId] >= 1) {
+        const currentDateInput = document.getElementById(`${exameId}Date${fieldCount[sectionId]}`);
+        const currentResultInput = document.getElementById(`${exameId}Result${fieldCount[sectionId]}`);
+
+        const dateFilled = currentDateInput && currentDateInput.value.trim() !== "";
+        const resultFilled = currentResultInput &&
+            currentResultInput.value.trim() !== "" &&
+            currentResultInput.value !== "Escolha a opção";
+
+        if (!(dateFilled && resultFilled)) {
+            alert("Preencha a data e o resultado antes de adicionar um novo campo.");
+            return;
+        }
+    }
+
+            // 🔍 Captura a última data preenchida
+    const allDateInputs = container.querySelectorAll('input[type="date"]');
+    let lastUsedDate = "";
+    for (let i = allDateInputs.length - 1; i >= 0; i--) {
+        if (allDateInputs[i].value) {
+            lastUsedDate = allDateInputs[i].value;
+            break;
+        }
+    }
+
+        console.log("Última data usada para", exameId, ":", lastUsedDate);
+        const newIndex = fieldCount[sectionId] + 1;
+        fieldCount[sectionId]++;
+
+    const isSelectField = [
+        'vdrl', 'hiv', 'hepatite_b', 'hepatite_c', 'sifilis_triagem', 'vdrl_triagem',
+        'hiv_triagem', 'hepatite_b_triagem', 'hepatite_c_triagem',
+        'streptococcus_grupo_b_triagem', 'teste-rapido', 'streptococcus_grupo_b',
+        'toxoplasmose' // ⚠ Certifique-se de incluir aqui
+    ].includes(exameId);
+
+    const resultField = isSelectField
+        ? `<select class="form-control" id="${exameId}Result${fieldCount[sectionId]}" onchange="updateResults(); verificarCampos()">
+                <option disabled selected>Escolha a opção</option>
+                <option>Negativo</option>
+                <option>Positivo</option>
+                <option>Não reagente</option>
+                <option>Reagente</option>
+                <option>Reativo</option>
+                <option>Não Reativa</option>
+                <option>Susceptível</option>
+                <option>Não Susceptível</option>
+                <option></option>
+           </select>`
+        : `<input type="text" class="form-control campo-exame" id="${exameId}Result${fieldCount[sectionId]}" placeholder="Resultado ${fieldCount[sectionId]}" oninput="updateResults(); verificarCampos()">`;
+
+    const newField = `  
+        <div class="input-group mb-2 extra-result" style="display: flex;">
+            <input type="date" class="form-control" id="${exameId}Date${fieldCount[sectionId]}" value="${lastUsedDate}" onchange="syncDates(this.value); verificarCampos()">
+            ${resultField}
+        </div>`;
+
+    container.insertAdjacentHTML('beforeend', newField);
+
+    // Garante que o botão de toggle apareça
+    const toggleBtn = document.querySelector(`#${sectionId} .toggle-extra`);
+    if (toggleBtn) {
+        toggleBtn.style.display = 'inline-block';
+        toggleBtn.textContent = 'v';
+    }
+
+    verificarCampos();
+    updateResults();
+}
+
+function verificarCampos() {
+    const grupos = document.querySelectorAll('.input-group');
+
+    // captura a última data em qualquer campo 
+    let ultimaDataUsada = "";
+    document.querySelectorAll('input[type="date"]').forEach(input => {
+        if (input.value) {
+            ultimaDataUsada = input.value;
+
+        }
+    });
+
+    grupos.forEach(grupo => {
+        const campoTexto = grupo.querySelector('input[type="text"]') || grupo.querySelector('select');
+        const campoData = grupo.querySelector('input[type="date"]');
+
+        if (campoTexto && campoData) {
+            const vazio = campoTexto.tagName === 'SELECT'
+            ? campoTexto.value ==="" || campoTexto.value === "Escolha a opção"
+            : campoTexto.value.trim()==="";
+
+            if (vazio) {
+                campoData.classList.add('alerta-vermelho');
+                campoData.classList.remove('normal-preto');
+            } else {
+                campoData.classList.remove('alerta-vermelho');
+                campoData.classList.add('normal-preto');
+ 
+                if (campoTexto.tagName === 'SELECT' && !campoData.value && ultimaDataUsada) {
+                campoData.value = ultimaDataUsada;
+              }    
+            }
+        }
+    });
+}
+
+    function updateResults() {
+    const resultsContainer = document.getElementById("resultados-container");
+    let resultados = ""; 
+
+    function capitalizeWords(text) {
+        return text.replace(/\b\p{L}/gu, char => char.toUpperCase());
+    }
+
+    const exames = ['hb', 'ht', 'urina_i', 'urocultura', 'glicemia', 'totg', 'vdrl',
+        'hiv','hepatite_b', 'hepatite_c', 'cmv', 'rubeola','toxoplasmose',
+        'toxoplasmose-avidez', 'streptococcus_grupo_b', 
+        'outros1A', 'outros1_B', 'outros2A', 'outros2B', 
+        'sifilis_triagem','vdrl_triagem','hiv_triagem', 'hepatite_b_triagem',
+        'hepatite_c_triagem', 'streptococcus_grupo_b_triagem',
+         'swab','teste-rapido','usg', 'usgConsiderado'];
+
+    exames.forEach(exame => {
+        let i = 1;
+        let resultadosDoExame = [];
+        let houvePreenchimento = false;
+        let labelTexto = "";
+
+        while (true) {
+            const dateInput = document.getElementById(`${exame}Date${i}`);
+            const resultInput = document.getElementById(`${exame}Result${i}`);
+
+            if (!dateInput && !resultInput) break;
+
+            const dateValue = dateInput?.value?.trim() || "";
+            const resultValue = resultInput?.value.trim() || "";
+
+            if (dateValue || resultValue) {
+                houvePreenchimento = true;
+            }
+
+            if (!labelTexto) {
+                const labelDiv = document.getElementById(`${exame}-fields`);
+                labelTexto = (labelDiv?.getAttribute("data-label") || capitalizeWords(exame)).trim();
+
+                const nomeExameInput = document.getElementById(`${exame}NomeExame`);
+                if (nomeExameInput && nomeExameInput.value.trim() !== "") {
+                    labelTexto = nomeExameInput.value.trim();
+                    const labelVisual = document.getElementById(`${exame}Label`);
+                    if (labelVisual) labelVisual.textContent = labelTexto;
+                }
+            }
+
+            if (dateValue && resultValue) {
+                const [ano, mes, dia] = dateValue.split("-");
+                const dataFormatada = `(${dia}/${mes}/${ano.slice(2)})`;
+                resultadosDoExame.push(`${dataFormatada}= ${resultValue}`);
+            }
+
+            i++;
+        }
+
+        if (houvePreenchimento) {
+            if (resultadosDoExame.length > 0) {
+              //  resultadosDoExame.reverse();
+                resultados += `<span style="font-weight: normal; color: #16181a; font-style: italic;">
+                    ${labelTexto}: ${resultadosDoExame.join(" / ")}
+                </span><br>`;
+            } else {
+                resultados += `<span style="font-weight: normal; color: #16181a; font-style: italic;">
+                    ${labelTexto}: Exame não realizado ou não anotado
+                </span><br>`;
+            }
+        }
+    });
+
+    resultsContainer.innerHTML = resultados ? resultados : "<em>Nenhum exame registrado.</em>";
+}
+
+/////
+
+
+
+    grupos.forEach((grupo, index) => {
+        if (index > 0) {
+            grupo.style.display = extrasVisiveis ? 'none' : '';
+        }
+    });
+
+    button.textContent = extrasVisiveis?'▼':'▲';
+
+////
+
+    function limparResultados(sectionId) {
+        fieldCount[sectionId] = 0; // Reseta o contador
+        document.getElementById(sectionId).innerHTML = ''; // Limpa todos os campos
+        updateResults(); // Atualiza os resultados
+    }
+
+        flatpickr(".data-exame", {
+        dateFormat: "d/m/Y",
+        locale: "pt",
+        position: "auto right" // força o calendário a abrir à direita
+    });
+</script>
+</body>
+
+{% endblock %}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
