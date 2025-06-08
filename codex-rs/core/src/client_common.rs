@@ -2,6 +2,7 @@ use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::error::Result;
 use crate::models::ResponseItem;
+use codex_apply_patch::APPLY_PATCH_TOOL_INSTRUCTIONS;
 use futures::Stream;
 use serde::Serialize;
 use std::borrow::Cow;
@@ -24,7 +25,7 @@ pub struct Prompt {
     pub prev_id: Option<String>,
     /// Optional instructions from the user to amend to the built-in agent
     /// instructions.
-    pub instructions: Option<String>,
+    pub user_instructions: Option<String>,
     /// Whether to store response on server side (disable_response_storage = !store).
     pub store: bool,
 
@@ -35,14 +36,15 @@ pub struct Prompt {
 }
 
 impl Prompt {
-    pub(crate) fn get_full_instructions(&self) -> Cow<str> {
-        match &self.instructions {
-            Some(instructions) => {
-                let instructions = format!("{BASE_INSTRUCTIONS}\n{instructions}");
-                Cow::Owned(instructions)
-            }
-            None => Cow::Borrowed(BASE_INSTRUCTIONS),
+    pub(crate) fn get_full_instructions(&self, model: &str) -> Cow<str> {
+        let mut sections: Vec<&str> = vec![BASE_INSTRUCTIONS];
+        if let Some(ref user) = self.user_instructions {
+            sections.push(user);
         }
+        if model.starts_with("gpt-4.1") {
+            sections.push(APPLY_PATCH_TOOL_INSTRUCTIONS);
+        }
+        Cow::Owned(sections.join("\n"))
     }
 }
 
