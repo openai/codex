@@ -185,18 +185,28 @@ export class AgentLoop {
       return;
     }
 
-    // Reset the current stream to allow new requests
-    this.currentStream = null;
+    // Capture reference to the active stream *before* clearing it so we can
+    // properly abort the underlying network request.  Setting `currentStream`
+    // to `null` first would lose the handle to the controller and therefore
+    // leave the request running in the background.
+
+    const activeStream = this.currentStream as {
+      controller?: { abort?: () => void };
+    } | null;
+
     log(
       `AgentLoop.cancel() invoked – currentStream=${Boolean(
-        this.currentStream,
+        activeStream,
       )} execAbortController=${Boolean(this.execAbortController)} generation=${
         this.generation
       }`,
     );
-    (
-      this.currentStream as { controller?: { abort?: () => void } } | null
-    )?.controller?.abort?.();
+
+    // Abort the in-flight OpenAI streaming request, if any.
+    activeStream?.controller?.abort?.();
+
+    // Now reset the reference so a subsequent call to run() starts fresh.
+    this.currentStream = null;
 
     this.canceled = true;
 
@@ -410,7 +420,9 @@ export class AgentLoop {
     // instead of executing the tool.
     if (this.canceled) {
       const callId: string =
-        (item as CallIdentifiable).call_id ?? (item as CallIdentifiable).id ?? "";
+        (item as CallIdentifiable).call_id ??
+        (item as CallIdentifiable).id ??
+        "";
 
       const abortedOutput: ResponseInputItem.FunctionCallOutput = {
         type: "function_call_output",
@@ -520,7 +532,9 @@ export class AgentLoop {
     // request.
     if (this.canceled) {
       const callId: string =
-        (item as CallIdentifiable).call_id ?? (item as CallIdentifiable).id ?? "";
+        (item as CallIdentifiable).call_id ??
+        (item as CallIdentifiable).id ??
+        "";
 
       // @ts-expect-error waiting on SDK to expose "local_shell_call_output"
       const abortedOutput = {

@@ -1,0 +1,11 @@
+{
+  "name": "codex-web",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server/index.js"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}

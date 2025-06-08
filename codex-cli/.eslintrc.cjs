@@ -10,7 +10,9 @@ module.exports = {
     ".eslintrc.cjs",
     "build.mjs",
     "dist",
-    "vite.config.ts",
+    // Ignore the root-level Vite config, but allow nested ones such as the
+    // dashboard's config under codex-web/web/ so they can be linted.
+    "/vite.config.ts",
     "src/components/vendor",
   ],
   parser: "@typescript-eslint/parser",
@@ -101,6 +103,22 @@ module.exports = {
         "@typescript-eslint/no-var-requires": "off",
         "no-await-in-loop": "off",
         "no-control-regex": "off",
+      },
+    },
+    {
+      // Server-side code for the web dashboard
+      files: ["codex-web/server/**/*.{ts,tsx,js,jsx}"],
+      parserOptions: {
+        tsconfigRootDir: __dirname,
+        project: ["./codex-web/tsconfig.json"],
+      },
+    },
+    {
+      // Front-end React code for the web dashboard
+      files: ["codex-web/web/**/*.{ts,tsx}"],
+      parserOptions: {
+        tsconfigRootDir: __dirname,
+        project: ["./codex-web/web/tsconfig.json"],
       },
     },
   ],
