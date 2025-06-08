@@ -300,6 +300,9 @@ export default function TerminalChatInput({
                 case "/diff":
                   openDiffOverlay();
                   break;
+                case "/stats":
+                  onSubmit(cmd);
+                  break;
                 case "/bug":
                   onSubmit(cmd);
                   break;
@@ -585,6 +588,89 @@ export default function TerminalChatInput({
             ]);
           },
         );
+
+        return;
+      } else if (inputValue === "/stats") {
+        // Display file size statistics for the current directory.
+        setInput("");
+
+        try {
+          const { getFileSizeStats, formatBytes } = await import(
+            "../../utils/file-size-stats.js"
+          );
+
+          const stats = getFileSizeStats(process.cwd());
+
+          if (stats.length === 0) {
+            setItems((prev) => [
+              ...prev,
+              {
+                id: `stats-empty-${Date.now()}`,
+                type: "message",
+                role: "system",
+                content: [
+                  {
+                    type: "input_text",
+                    text: "📊 No files found in current directory",
+                  },
+                ],
+              },
+            ]);
+            return;
+          }
+
+          // Format the statistics into a readable table
+          const totalFiles = stats.reduce((sum, stat) => sum + stat.count, 0);
+          const totalSize = stats.reduce(
+            (sum, stat) => sum + stat.totalSize,
+            0,
+          );
+
+          let output = `📊 **File Size Statistics**\n\n`;
+          output += `Total: ${totalFiles} files, ${formatBytes(totalSize)}\n\n`;
+          output += `| Extension | Files | Total Size | Avg Size |\n`;
+          output += `|-----------|-------|------------|----------|\n`;
+
+          stats.slice(0, 10).forEach((stat) => {
+            const ext =
+              stat.extension === "no-ext" ? "(no ext)" : stat.extension;
+            output += `| ${ext} | ${stat.count} | ${formatBytes(stat.totalSize)} | ${formatBytes(stat.avgSize)} |\n`;
+          });
+
+          if (stats.length > 10) {
+            output += `\n... and ${stats.length - 10} more file types`;
+          }
+
+          setItems((prev) => [
+            ...prev,
+            {
+              id: `stats-${Date.now()}`,
+              type: "message",
+              role: "system",
+              content: [
+                {
+                  type: "input_text",
+                  text: output,
+                },
+              ],
+            },
+          ]);
+        } catch (error) {
+          setItems((prev) => [
+            ...prev,
+            {
+              id: `stats-error-${Date.now()}`,
+              type: "message",
+              role: "system",
+              content: [
+                {
+                  type: "input_text",
+                  text: `⚠️ Failed to generate file statistics: ${error}`,
+                },
+              ],
+            },
+          ]);
+        }
 
         return;
       } else if (inputValue === "/bug") {
