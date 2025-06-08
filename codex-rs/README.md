@@ -13,6 +13,28 @@ codex
 
 You can also download a platform-specific release directly from our [GitHub Releases](https://github.com/openai/codex/releases).
 
+## Build from source
+
+Navigate to the root directory of the `codex-rs` project where the `Cargo.toml` is located and execute
+
+```shell
+cargo build --release
+```
+
+### oniguruma build error
+
+if you get error like this while trying to build
+
+```shell
+  error occurred in cc-rs: command did not execute successfully (status code exit status: 1): LC_ALL="C" "cc" "-O0" "-ffunction-sections" "-fdata-sections" "-fPIC" "-gdwarf-4" "-fno-omit-frame-pointer" "-m64" "-I" "codex/codex-rs/target/debug/build/onig_sys-.../out" "-I" "oniguruma/src" "-DHAVE_UNISTD_H=1" "-DHAVE_SYS_TYPES_H=1" "-DHAVE_SYS_TIME_H=1" "-o" "codex/codex-rs/target/debug/build/onig_sys-.../out/...-regparse.o" "-c" "oniguruma/src/regparse.c"
+```
+
+run the `cargo build` with the environment variable `RUSTONIG_SYSTEM_LIBONIG=1`
+
+```shell
+RUSTONIG_SYSTEM_LIBONIG=1 cargo build --release
+```
+
 ## What's new in the Rust CLI
 
 While we are [working to close the gap between the TypeScript and Rust implementations of Codex CLI](https://github.com/openai/codex/issues/1262), note that the Rust CLI has a number of features that the TypeScript CLI does not!
