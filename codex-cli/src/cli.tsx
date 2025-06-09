@@ -36,6 +36,7 @@ import {
   loadConfig,
   PRETTY_PRINT,
   INSTRUCTIONS_FILEPATH,
+  getApiKey,
 } from "./utils/config";
 import {
   getApiKey as fetchApiKey,
@@ -307,7 +308,7 @@ let savedTokens:
     }
   | undefined;
 
-// Try to load existing auth file if present
+// Try to load existing auth file if present, or check for provider-specific API key
 try {
   const home = os.homedir();
   const authDir = path.join(home, ".codex");
@@ -321,6 +322,13 @@ try {
     const expired = Date.now() - lastRefreshTime > 28 * 24 * 60 * 60 * 1000;
     if (data.OPENAI_API_KEY && !expired) {
       apiKey = data.OPENAI_API_KEY;
+    }
+  }
+  // If no API key from auth file, check for provider-specific environment variable
+  if (!apiKey) {
+    const providerApiKey = getApiKey(provider);
+    if (providerApiKey) {
+      apiKey = providerApiKey;
     }
   }
 } catch {
@@ -341,7 +349,13 @@ if (cli.flags.login) {
     /* ignore */
   }
 } else if (!apiKey) {
-  apiKey = await fetchApiKey(client.issuer, client.client_id);
+  // Check for provider-specific API key first
+  const providerApiKey = getApiKey(provider);
+  if (providerApiKey) {
+    apiKey = providerApiKey;
+  } else {
+    apiKey = await fetchApiKey(client.issuer, client.client_id);
+  }
 }
 // Ensure the API key is available as an environment variable for legacy code
 process.env["OPENAI_API_KEY"] = apiKey;

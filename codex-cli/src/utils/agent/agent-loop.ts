@@ -18,6 +18,7 @@ import {
   OPENAI_ORGANIZATION,
   OPENAI_PROJECT,
   getBaseUrl,
+  getApiKey,
   AZURE_OPENAI_API_VERSION,
 } from "../config.js";
 import { log } from "../logger/log.js";
@@ -304,38 +305,35 @@ export class AgentLoop {
 
     this.disableResponseStorage = disableResponseStorage ?? false;
     this.sessionId = getSessionId() || randomUUID().replaceAll("-", "");
-    // Configure OpenAI client with optional timeout (ms) from environment
+    // Configure OpenAI client with AgentLoop-specific settings
+    // Using provider-aware API key lookup from getApiKey function
     const timeoutMs = OPENAI_TIMEOUT_MS;
-    const apiKey = this.config.apiKey ?? process.env["OPENAI_API_KEY"] ?? "";
     const baseURL = getBaseUrl(this.provider);
-
-    this.oai = new OpenAI({
-      // The OpenAI JS SDK only requires `apiKey` when making requests against
-      // the official API.  When running unit‑tests we stub out all network
-      // calls so an undefined key is perfectly fine.  We therefore only set
-      // the property if we actually have a value to avoid triggering runtime
-      // errors inside the SDK (it validates that `apiKey` is a non‑empty
-      // string when the field is present).
-      ...(apiKey ? { apiKey } : {}),
-      baseURL,
-      defaultHeaders: {
-        originator: ORIGIN,
-        version: CLI_VERSION,
-        session_id: this.sessionId,
-        ...(OPENAI_ORGANIZATION
-          ? { "OpenAI-Organization": OPENAI_ORGANIZATION }
-          : {}),
-        ...(OPENAI_PROJECT ? { "OpenAI-Project": OPENAI_PROJECT } : {}),
-      },
-      httpAgent: PROXY_URL ? new HttpsProxyAgent(PROXY_URL) : undefined,
-      ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
-    });
+    // Always prioritize provider-specific API key lookup over config.apiKey
+    const apiKey = getApiKey(this.provider) ?? this.config.apiKey ?? "";
 
     if (this.provider.toLowerCase() === "azure") {
       this.oai = new AzureOpenAI({
         apiKey,
         baseURL,
         apiVersion: AZURE_OPENAI_API_VERSION,
+        defaultHeaders: {
+          originator: ORIGIN,
+          version: CLI_VERSION,
+          session_id: this.sessionId,
+          ...(OPENAI_ORGANIZATION
+            ? { "OpenAI-Organization": OPENAI_ORGANIZATION }
+            : {}),
+          ...(OPENAI_PROJECT ? { "OpenAI-Project": OPENAI_PROJECT } : {}),
+        },
+        httpAgent: PROXY_URL ? new HttpsProxyAgent(PROXY_URL) : undefined,
+        ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
+      });
+    } else {
+      this.oai = new OpenAI({
+        // Use provider-specific API key from getApiKey function
+        ...(apiKey ? { apiKey } : {}),
+        baseURL,
         defaultHeaders: {
           originator: ORIGIN,
           version: CLI_VERSION,

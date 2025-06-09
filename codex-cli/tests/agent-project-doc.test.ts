@@ -114,8 +114,9 @@ describe("AgentLoop", () => {
     const agent = new AgentLoop({
       additionalWritableRoots: [],
       model: "o3", // arbitrary
+      provider: "openai", // explicitly set to use OpenAI responses API
       instructions: config.instructions,
-      config,
+      config: { ...config, provider: "openai" }, // ensure config also has provider set
       approvalPolicy: { mode: "suggest" } as any,
       onItem: () => {},
       onLoading: () => {},
