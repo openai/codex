@@ -47,4 +47,22 @@ describe("approximateTokensUsed", () => {
     expect(() => approximateTokensUsed(items)).not.toThrow();
     expect(approximateTokensUsed(items)).toBe(0);
   });
+
+  it("handles null text or refusal fields", () => {
+    const items: Array<ResponseItem> = [
+      {
+        id: "1",
+        type: "message",
+        role: "assistant",
+        status: "completed",
+        content: [
+          { type: "output_text", text: null as unknown as string },
+          { type: "refusal", refusal: null as unknown as string },
+        ],
+      } as ResponseItem,
+    ];
+
+    expect(() => approximateTokensUsed(items)).not.toThrow();
+    expect(approximateTokensUsed(items)).toBe(0);
+  });
 });
