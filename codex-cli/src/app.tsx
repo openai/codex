@@ -55,7 +55,9 @@ export default function App({
     );
   }
 
-  if (!inGitRepo && !accepted) {
+  const isQuietMode = process.env["CODEX_QUIET_MODE"] === "1";
+
+  if (!inGitRepo && !accepted && !isQuietMode) {
     return (
       <Box flexDirection="column">
         <Box borderStyle="round" paddingX={1} width={64}>
