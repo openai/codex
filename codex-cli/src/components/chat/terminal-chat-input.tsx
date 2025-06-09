@@ -300,9 +300,6 @@ export default function TerminalChatInput({
                 case "/diff":
                   openDiffOverlay();
                   break;
-                case "/stats":
-                  onSubmit(cmd);
-                  break;
                 case "/bug":
                   onSubmit(cmd);
                   break;
