@@ -95,8 +95,92 @@ impl ModelClient {
 
                 Ok(ResponseStream { rx_event: rx })
             }
+            WireApi::Gemini => self.stream_gemini(prompt).await,
         }
     }
+
+    /// Implementation for the Google Gemini API.
+    async fn stream_gemini(&self, prompt: &Prompt) -> Result<ResponseStream> {
+        // TODO: Implement SSE streaming for Gemini if available and adapt process_sse.
+        // For now, this will be a non-streaming implementation that sends
+        // ResponseEvents once the full response is received.
+
+        let api_key = self.provider.api_key()?.ok_or_else(|| {
+            CodexErr::EnvVar(EnvVarError {
+                var: self.provider.env_key.clone().unwrap_or_default(),
+                instructions: self.provider.env_key_instructions.clone(),
+            })
+        })?;
+
+        let gemini_request = map_prompt_to_gemini_request(prompt)?;
+
+        let base_url = self.provider.base_url.trim_end_matches('/');
+        // Model name might be "models/gemini-x.y-pro" or just "gemini-x.y-pro".
+        // The API expects "models/{model_id}" in the path if it's not already prefixed.
+        let model_path_segment = if self.model.starts_with("models/") {
+            self.model.clone()
+        } else {
+            format!("models/{}", self.model)
+        };
+        let url = format!("{}/{}:generateContent", base_url, model_path_segment);
+
+        trace!("POST to {url}: {}", serde_json::to_string(&gemini_request)?);
+
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let res = self
+                .client
+                .post(&url)
+                .header("x-goog-api-key", &api_key) // Standard Gemini API key header
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .json(&gemini_request)
+                .send()
+                .await;
+
+            match res {
+                Ok(resp) if resp.status().is_success() => {
+                    let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(16);
+                    let full_response_bytes = resp.bytes().await.map_err(CodexErr::Reqwest)?;
+
+                    match serde_json::from_slice::<GeminiGenerateContentResponse>(&full_response_bytes) {
+                        Ok(gemini_response) => {
+                            tokio::spawn(async move {
+                                process_gemini_response(gemini_response, tx_event.clone()).await;
+                                // Send a synthetic completed event as this is non-streaming for now
+                                let _ = tx_event.send(Ok(ResponseEvent::Completed { response_id: uuid::Uuid::new_v4().to_string() })).await;
+                            });
+                        }
+                        Err(e) => {
+                            error!("Failed to parse Gemini response: {e}. Response body: {}", String::from_utf8_lossy(&full_response_bytes));
+                            let _ = tx_event.send(Err(CodexErr::Stream(format!("Failed to parse Gemini response: {e}")))).await;
+                        }
+                    }
+                    return Ok(ResponseStream { rx_event });
+                }
+                Ok(res) => {
+                    let status = res.status();
+                    let body = res.text().await.unwrap_or_default();
+                    if !(status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error()) {
+                        return Err(CodexErr::UnexpectedStatus(status, body));
+                    }
+                    if attempt > *OPENAI_REQUEST_MAX_RETRIES { // Re-use existing retry const
+                        return Err(CodexErr::RetryLimit(status));
+                    }
+                    let delay = backoff(attempt); // Re-use existing backoff
+                    tokio::time::sleep(delay).await;
+                }
+                Err(e) => {
+                    if attempt > *OPENAI_REQUEST_MAX_RETRIES {
+                        return Err(e.into());
+                    }
+                    let delay = backoff(attempt);
+                    tokio::time::sleep(delay).await;
+                }
+            }
+        }
+    }
+
 
     /// Implementation for the OpenAI *Responses* experimental API.
     async fn stream_responses(&self, prompt: &Prompt) -> Result<ResponseStream> {
@@ -167,7 +251,7 @@ impl ModelClient {
                     // negligible.
                     if !(status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error()) {
                         // Surface the error body to callers. Use `unwrap_or_default` per Clippy.
-                        let body = (res.text().await).unwrap_or_default();
+                    let body = res.text().await.unwrap_or_default();
                         return Err(CodexErr::UnexpectedStatus(status, body));
                     }
 
@@ -327,6 +411,121 @@ where
         }
     }
 }
+
+// --- Gemini specific helper structs and functions ---
+
+#[derive(Serialize, Debug)]
+struct GeminiGenerateContentRequest<'a> {
+    contents: Vec<GeminiContent<'a>>,
+    // TODO: Add tools and generationConfig if needed
+}
+
+#[derive(Serialize, Debug)]
+struct GeminiContent<'a> {
+    role: &'a str, // "user" or "model"
+    parts: Vec<GeminiPart<'a>>,
+}
+
+#[derive(Serialize, Debug)]
+#[serde(untagged)]
+enum GeminiPart<'a> {
+    Text { text: &'a str },
+    // TODO: Add FunctionCall and FunctionResponse variants
+    // FunctionCall { function_call: GeminiFunctionCall<'a> },
+    // FunctionResponse { function_response: GeminiFunctionResponse<'a> },
+}
+
+
+#[derive(Deserialize, Debug)]
+struct GeminiGenerateContentResponse {
+    candidates: Option<Vec<GeminiCandidate>>,
+    // promptFeedback: Option<GeminiPromptFeedback>,
+}
+
+#[derive(Deserialize, Debug)]
+struct GeminiCandidate {
+    content: Option<GeminiContentResponsePart>,
+    // finishReason: Option<String>,
+    // safetyRatings: Option<Vec<GeminiSafetyRating>>,
+}
+
+#[derive(Deserialize, Debug)]
+struct GeminiContentResponsePart {
+    parts: Option<Vec<GeminiResponsePartInternal>>,
+    role: Option<String>, // Expected to be "model"
+}
+
+#[derive(Deserialize, Debug)]
+struct GeminiResponsePartInternal {
+    text: Option<String>,
+    // functionCall: Option<GeminiFunctionCallResponse>, // For later
+}
+
+
+fn map_prompt_to_gemini_request(prompt: &Prompt) -> Result<GeminiGenerateContentRequest> {
+    let mut gemini_contents = Vec::new();
+
+    for item in &prompt.input {
+        match item {
+            crate::client_common::InputItem::Message { role, content, .. } => {
+                let mut parts = Vec::new();
+                for content_item in content {
+                    match content_item {
+                        crate::models::ContentItem::OutputText { text } => {
+                            parts.push(GeminiPart::Text { text });
+                        }
+                        // TODO: Map other ContentItem variants if needed (e.g., FileData)
+                        _ => warn!("Unsupported ContentItem type for Gemini: {:?}", content_item),
+                    }
+                }
+                if !parts.is_empty() {
+                    gemini_contents.push(GeminiContent {
+                        role: if role == "user" { "user" } else { "model" },
+                        parts,
+                    });
+                }
+            }
+            // TODO: Handle InputItem::FunctionCallOutput for multi-turn function calling
+            // This would map to a "user" role with a FunctionResponse part.
+            _ => warn!("Unsupported InputItem type for Gemini: {:?}", item),
+        }
+    }
+
+    Ok(GeminiGenerateContentRequest {
+        contents: gemini_contents,
+    })
+}
+
+async fn process_gemini_response(
+    response: GeminiGenerateContentResponse,
+    tx_event: mpsc::Sender<Result<ResponseEvent>>,
+) {
+    if let Some(candidates) = response.candidates {
+        for candidate in candidates {
+            if let Some(content) = candidate.content {
+                if let Some(parts) = content.parts {
+                    for part in parts {
+                        if let Some(text) = part.text {
+                            let response_item = ResponseItem::Message {
+                                role: "assistant".to_string(), // Gemini responses are from the model/assistant
+                                content: vec![crate::models::ContentItem::OutputText { text }],
+                                // TODO: Populate id, call_id, status if applicable from Gemini response
+                                id: None,
+                                call_id: None,
+                                status: None,
+                            };
+                            if tx_event.send(Ok(ResponseEvent::OutputItemDone(response_item))).await.is_err() {
+                                return; // Receiver likely dropped
+                            }
+                        }
+                        // TODO: Handle functionCall parts from Gemini response
+                    }
+                }
+            }
+        }
+    }
+}
+
 
 /// used in tests to stream from a text SSE file
 async fn stream_from_fixture(path: impl AsRef<Path>) -> Result<ResponseStream> {
