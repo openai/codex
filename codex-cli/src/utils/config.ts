@@ -52,7 +52,7 @@ export function getBaseUrl(provider: string): string | undefined {
 export function getApiKey(provider: string): string | undefined {
   const providerInfo = providers[provider.toLowerCase()];
   if (providerInfo) {
-    if (providerInfo.name === "Ollama") {
+    if (providerInfo.name === "Ollama" || providerInfo.name === "Docker Model Runner") {
       return process.env[providerInfo.envKey] ?? "dummy";
     }
     return process.env[providerInfo.envKey];

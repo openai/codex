@@ -42,4 +42,9 @@ export const providers: Record<
     baseURL: "https://api.groq.com/openai/v1",
     envKey: "GROQ_API_KEY",
   },
+  dmr: {
+    name: "Docker Model Runner",
+    baseURL: "http://localhost:12434/engines/v1",
+    envKey: "DMR",
+  },
 };
