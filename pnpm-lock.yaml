@@ -107,6 +107,9 @@ importers:
       '@types/marked-terminal':
         specifier: ^6.1.1
         version: 6.1.1
+      '@types/node':
+        specifier: ^20.14.11
+        version: 20.19.0
       '@types/react':
         specifier: ^18.0.32
         version: 18.3.20
@@ -160,13 +163,13 @@ importers:
         version: 7.7.1
       ts-node:
         specifier: ^10.9.1
-        version: 10.9.2(@types/node@22.14.1)(typescript@5.8.3)
+        version: 10.9.2(@types/node@20.19.0)(typescript@5.8.3)
       typescript:
         specifier: ^5.0.3
         version: 5.8.3
       vitest:
         specifier: ^3.0.9
-        version: 3.1.1(@types/node@22.14.1)(yaml@2.7.1)
+        version: 3.1.1(@types/node@20.19.0)(yaml@2.7.1)
       whatwg-url:
         specifier: ^14.2.0
         version: 14.2.0
@@ -551,8 +554,8 @@ packages:
   '@types/node@18.19.86':
     resolution: {integrity: sha512-fifKayi175wLyKyc5qUfyENhQ1dCNI1UNjp653d8kuYcPQN5JhX3dGuP/XmvPTg/xRBn1VTLpbmi+H/Mr7tLfQ==}
 
-  '@types/node@22.14.1':
-    resolution: {integrity: sha512-u0HuPQwe/dHrItgHHpmw3N2fYCR6x4ivMNbPHRkBVP4CvN+kiRrKHWk3i8tXiO/joPwXLMYvF9TTF0eqgHIuOw==}
+  '@types/node@20.19.0':
+    resolution: {integrity: sha512-hfrc+1tud1xcdVTABC2JiomZJEklMcXYNTVtZLAeqTVWD+qL5jkHKT+1lOtqDdGxt+mB53DTtiz673vfjU8D1Q==}
 
   '@types/prop-types@15.7.14':
     resolution: {integrity: sha512-gNMvNH49DJ7OJYv+KAKn0Xp45p8PLl6zo2YnvDIbTd4J6MER2BmWN49TG7n9LvkyihINxeKW8+3bfS2yDC9dzQ==}
@@ -1747,6 +1750,7 @@ packages:
   node-domexception@1.0.0:
     resolution: {integrity: sha512-/jKZoMpw0F8GRwl4/eLROPA3cfcXtLApP0QzLmUT/HuPCZWyB7IY9ZrMeKw2O/nFIqPQB3PVM9aYm0F312AXDQ==}
     engines: {node: '>=10.5.0'}
+    deprecated: Use your platform's native DOMException instead
 
   node-emoji@2.2.0:
     resolution: {integrity: sha512-Z3lTE9pLaJF47NyMhd4ww1yFTAP8YhYI8SleJiHzM46Fgpm5cnNzSl9XfzFNqbaz+VlJrIj3fXQ4DeN1Rjm6cw==}
@@ -2754,20 +2758,20 @@ snapshots:
   '@types/marked-terminal@6.1.1':
     dependencies:
       '@types/cardinal': 2.1.1
-      '@types/node': 22.14.1
+      '@types/node': 20.19.0
       chalk: 5.4.1
       marked: 11.2.0
 
   '@types/node-fetch@2.6.12':
     dependencies:
-      '@types/node': 22.14.1
+      '@types/node': 20.19.0
       form-data: 4.0.2
 
   '@types/node@18.19.86':
     dependencies:
       undici-types: 5.26.5
 
-  '@types/node@22.14.1':
+  '@types/node@20.19.0':
     dependencies:
       undici-types: 6.21.0
 
@@ -2874,13 +2878,13 @@ snapshots:
       chai: 5.2.0
       tinyrainbow: 2.0.0
 
-  '@vitest/mocker@3.1.1(vite@6.3.1(@types/node@22.14.1)(yaml@2.7.1))':
+  '@vitest/mocker@3.1.1(vite@6.3.1(@types/node@20.19.0)(yaml@2.7.1))':
     dependencies:
       '@vitest/spy': 3.1.1
       estree-walker: 3.0.3
       magic-string: 0.30.17
     optionalDependencies:
-      vite: 6.3.1(@types/node@22.14.1)(yaml@2.7.1)
+      vite: 6.3.1(@types/node@20.19.0)(yaml@2.7.1)
 
   '@vitest/pretty-format@3.1.1':
     dependencies:
@@ -4681,14 +4685,14 @@ snapshots:
     dependencies:
       typescript: 5.8.3
 
-  ts-node@10.9.2(@types/node@22.14.1)(typescript@5.8.3):
+  ts-node@10.9.2(@types/node@20.19.0)(typescript@5.8.3):
     dependencies:
       '@cspotcode/source-map-support': 0.8.1
       '@tsconfig/node10': 1.0.11
       '@tsconfig/node12': 1.0.11
       '@tsconfig/node14': 1.0.3
       '@tsconfig/node16': 1.0.4
-      '@types/node': 22.14.1
+      '@types/node': 20.19.0
       acorn: 8.14.1
       acorn-walk: 8.3.4
       arg: 4.1.3
@@ -4774,13 +4778,13 @@ snapshots:
 
   v8-compile-cache-lib@3.0.1: {}
 
-  vite-node@3.1.1(@types/node@22.14.1)(yaml@2.7.1):
+  vite-node@3.1.1(@types/node@20.19.0)(yaml@2.7.1):
     dependencies:
       cac: 6.7.14
       debug: 4.4.0
       es-module-lexer: 1.6.0
       pathe: 2.0.3
-      vite: 6.3.1(@types/node@22.14.1)(yaml@2.7.1)
+      vite: 6.3.1(@types/node@20.19.0)(yaml@2.7.1)
     transitivePeerDependencies:
       - '@types/node'
       - jiti
@@ -4795,7 +4799,7 @@ snapshots:
       - tsx
       - yaml
 
-  vite@6.3.1(@types/node@22.14.1)(yaml@2.7.1):
+  vite@6.3.1(@types/node@20.19.0)(yaml@2.7.1):
     dependencies:
       esbuild: 0.25.2
       fdir: 6.4.3(picomatch@4.0.2)
@@ -4804,14 +4808,14 @@ snapshots:
       rollup: 4.40.0
       tinyglobby: 0.2.12
     optionalDependencies:
-      '@types/node': 22.14.1
+      '@types/node': 20.19.0
       fsevents: 2.3.3
       yaml: 2.7.1
 
-  vitest@3.1.1(@types/node@22.14.1)(yaml@2.7.1):
+  vitest@3.1.1(@types/node@20.19.0)(yaml@2.7.1):
     dependencies:
       '@vitest/expect': 3.1.1
-      '@vitest/mocker': 3.1.1(vite@6.3.1(@types/node@22.14.1)(yaml@2.7.1))
+      '@vitest/mocker': 3.1.1(vite@6.3.1(@types/node@20.19.0)(yaml@2.7.1))
       '@vitest/pretty-format': 3.1.1
       '@vitest/runner': 3.1.1
       '@vitest/snapshot': 3.1.1
@@ -4827,11 +4831,11 @@ snapshots:
       tinyexec: 0.3.2
       tinypool: 1.0.2
       tinyrainbow: 2.0.0
-      vite: 6.3.1(@types/node@22.14.1)(yaml@2.7.1)
-      vite-node: 3.1.1(@types/node@22.14.1)(yaml@2.7.1)
+      vite: 6.3.1(@types/node@20.19.0)(yaml@2.7.1)
+      vite-node: 3.1.1(@types/node@20.19.0)(yaml@2.7.1)
       why-is-node-running: 2.3.0
     optionalDependencies:
-      '@types/node': 22.14.1
+      '@types/node': 20.19.0
     transitivePeerDependencies:
       - jiti
       - less

@@ -27,6 +27,7 @@ import { createInputItem } from "./utils/input-utils";
 import { initLogger } from "./utils/logger/log";
 import { isModelSupportedForResponses } from "./utils/model-utils.js";
 import { parseToolCall } from "./utils/parsers";
+import { showProjectStats } from "./utils/project-status";
 import { onExit, setInkRenderer } from "./utils/terminal";
 import chalk from "chalk";
 import { spawnSync } from "child_process";
@@ -60,6 +61,7 @@ const cli = meow(
     -i, --image <path>              Path(s) to image files to include as input
     -v, --view <rollout>            Inspect a previously saved rollout instead of starting a session
     -q, --quiet                     Non-interactive mode that only prints the assistant's final output
+    -s, --stats                     Show project code statistics and exit
     -c, --config                    Open the instructions file in your editor
     -w, --writable-root <path>      Writable folder for sandbox in full-auto mode (can be specified multiple times)
     -a, --approval-mode <mode>      Override the approval policy: 'suggest', 'auto-edit', or 'full-auto'
@@ -71,6 +73,7 @@ const cli = meow(
     --project-doc <file>       Include an additional markdown file at <file> as context
     --full-stdout              Do not truncate stdout/stderr from command outputs
     --notify                   Enable desktop notifications for responses
+    --json                     Output in JSON format (use with --stats or --quiet)
 
     --disable-response-storage Disable server‑side response storage (sends the
                                full conversation context with every request)
@@ -91,6 +94,8 @@ const cli = meow(
   Examples
     $ codex "Write and run a python program that prints ASCII art"
     $ codex -q "fix build issues"
+    $ codex --stats
+    $ codex --stats --json
     $ codex completion bash
 `,
   {
@@ -109,10 +114,19 @@ const cli = meow(
         aliases: ["q"],
         description: "Non-interactive quiet mode",
       },
+      stats: {
+        type: "boolean",
+        aliases: ["s"],
+        description: "Show project code statistics and exit",
+      },
       config: {
         type: "boolean",
         aliases: ["c"],
         description: "Open the instructions file in your editor",
+      },
+      json: {
+        type: "boolean",
+        description: "Output in JSON format (use with --stats or --quiet)",
       },
       dangerouslyAutoApproveEverything: {
         type: "boolean",
@@ -221,6 +235,12 @@ if (cli.flags.help) {
   cli.showHelp();
 }
 
+// For --stats, show project statistics and exit.
+if (cli.flags.stats) {
+  await showProjectStats(Boolean(cli.flags.json));
+  process.exit(0);
+}
+
 // For --config, open custom instructions file in editor and exit.
 if (cli.flags.config) {
   try {
@@ -262,19 +282,19 @@ if (!apiKey && !NO_API_KEY_REQUIRED.has(provider.toLowerCase())) {
   // eslint-disable-next-line no-console
   console.error(
     `\n${chalk.red(`Missing ${provider} API key.`)}\n\n` +
-      `Set the environment variable ${chalk.bold(
+    `Set the environment variable ${chalk.bold(
+      `${provider.toUpperCase()}_API_KEY`,
+    )} ` +
+    `and re-run this command.\n` +
+    `${
+      provider.toLowerCase() === "openai"
+        ? `You can create a key here: ${chalk.bold(
+          chalk.underline("https://platform.openai.com/account/api-keys"),
+        )}\n`
+        : `You can create a ${chalk.bold(
         `${provider.toUpperCase()}_API_KEY`,
-      )} ` +
-      `and re-run this command.\n` +
-      `${
-        provider.toLowerCase() === "openai"
-          ? `You can create a key here: ${chalk.bold(
-              chalk.underline("https://platform.openai.com/account/api-keys"),
-            )}\n`
-          : `You can create a ${chalk.bold(
-              `${provider.toUpperCase()}_API_KEY`,
-            )} ` + `in the ${chalk.bold(`${provider}`)} dashboard.\n`
-      }`,
+      )} ` + `in the ${chalk.bold(`${provider}`)} dashboard.\n`
+    }`,
   );
   process.exit(1);
 }
@@ -307,7 +327,7 @@ if (cli.flags.flexMode) {
     // eslint-disable-next-line no-console
     console.error(
       `The --flex-mode option is only supported when using the 'o3' or 'o4-mini' models. ` +
-        `Current model: '${config.model}'.`,
+      `Current model: '${config.model}'.`,
     );
     process.exit(1);
   }
@@ -320,9 +340,9 @@ if (
   // eslint-disable-next-line no-console
   console.error(
     `The model "${config.model}" does not appear in the list of models ` +
-      `available to your account. Double-check the spelling (use\n` +
-      `  openai models list\n` +
-      `to see the full list) or choose another model with the --model flag.`,
+    `available to your account. Double-check the spelling (use\n` +
+    `  openai models list\n` +
+    `to see the full list) or choose another model with the --model flag.`,
   );
   process.exit(1);
 }
@@ -377,8 +397,8 @@ if (cli.flags.quiet) {
     cli.flags.fullAuto || cli.flags.approvalMode === "full-auto"
       ? AutoApprovalMode.FULL_AUTO
       : cli.flags.autoEdit || cli.flags.approvalMode === "auto-edit"
-      ? AutoApprovalMode.AUTO_EDIT
-      : config.approvalMode || AutoApprovalMode.SUGGEST;
+        ? AutoApprovalMode.AUTO_EDIT
+        : config.approvalMode || AutoApprovalMode.SUGGEST;
 
   await runQuietMode({
     prompt,
@@ -408,8 +428,8 @@ const approvalPolicy: ApprovalPolicy =
   cli.flags.fullAuto || cli.flags.approvalMode === "full-auto"
     ? AutoApprovalMode.FULL_AUTO
     : cli.flags.autoEdit || cli.flags.approvalMode === "auto-edit"
-    ? AutoApprovalMode.AUTO_EDIT
-    : config.approvalMode || AutoApprovalMode.SUGGEST;
+      ? AutoApprovalMode.AUTO_EDIT
+      : config.approvalMode || AutoApprovalMode.SUGGEST;
 
 const instance = render(
   <App
@@ -477,12 +497,12 @@ function formatResponseItemForQuietMode(item: ResponseItem): string {
 }
 
 async function runQuietMode({
-  prompt,
-  imagePaths,
-  approvalPolicy,
-  additionalWritableRoots,
-  config,
-}: {
+                              prompt,
+                              imagePaths,
+                              approvalPolicy,
+                              additionalWritableRoots,
+                              config,
+                            }: {
   prompt: string;
   imagePaths: Array<string>;
   approvalPolicy: ApprovalPolicy;
