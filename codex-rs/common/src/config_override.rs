@@ -23,7 +23,7 @@ pub struct CliConfigOverrides {
     /// parse as JSON, the raw string is used as a literal.
     ///
     /// Examples:
-    ///   - `-c model="o4-mini"`
+    ///   - `-c model="o3"`
     ///   - `-c 'sandbox_permissions=["disk-full-read-access"]'`
     ///   - `-c shell_environment_policy.inherit=all`
     #[arg(
@@ -61,7 +61,7 @@ impl CliConfigOverrides {
 
                 // Attempt to parse as JSON. If that fails, treat it as a raw
                 // string. This allows convenient usage such as
-                // `-c model=o4-mini` without the quotes.
+                // `-c model=o3` without the quotes.
                 let value: Value = match parse_toml_value(value_str) {
                     Ok(v) => v,
                     Err(_) => Value::String(value_str.to_string()),

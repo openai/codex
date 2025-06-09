@@ -12,6 +12,8 @@ use serde::Deserialize;
 use serde::Serialize;
 use uuid::Uuid;
 
+use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
+use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::message_history::HistoryEntry;
 use crate::model_provider_info::ModelProviderInfo;
 
@@ -37,6 +39,10 @@ pub enum Op {
 
         /// If not specified, server will use its default model.
         model: String,
+
+        model_reasoning_effort: ReasoningEffortConfig,
+        model_reasoning_summary: ReasoningSummaryConfig,
+
         /// Model instructions
         instructions: Option<String>,
         /// When to escalate for approval for execution
@@ -561,7 +567,7 @@ mod tests {
             id: "1234".to_string(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id,
-                model: "o4-mini".to_string(),
+                model: "codex-mini-latest".to_string(),
                 history_log_id: 0,
                 history_entry_count: 0,
             }),
@@ -569,7 +575,7 @@ mod tests {
         let serialized = serde_json::to_string(&event).unwrap();
         assert_eq!(
             serialized,
-            r#"{"id":"1234","msg":{"type":"session_configured","session_id":"67e55044-10b1-426f-9247-bb680e5fe0c8","model":"o4-mini","history_log_id":0,"history_entry_count":0}}"#
+            r#"{"id":"1234","msg":{"type":"session_configured","session_id":"67e55044-10b1-426f-9247-bb680e5fe0c8","model":"codex-mini-latest","history_log_id":0,"history_entry_count":0}}"#
         );
     }
 }
