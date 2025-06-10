@@ -7,9 +7,9 @@ if (major < 22) {
   // eslint-disable-next-line no-console
   console.error(
     "\n" +
-      "Codex CLI requires Node.js version 22 or newer.\n" +
-      `You are running Node.js v${process.versions.node}.\n` +
-      "Please upgrade Node.js: https://nodejs.org/en/download/\n",
+    "Codex CLI requires Node.js version 22 or newer.\n" +
+    `You are running Node.js v${process.versions.node}.\n` +
+    "Please upgrade Node.js: https://nodejs.org/en/download/\n",
   );
   process.exit(1);
 }
@@ -39,6 +39,7 @@ import {
 } from "./utils/config";
 import {
   getApiKey as fetchApiKey,
+  getGithubCopilotApiKey as fetchGithubCopilotApiKey,
   maybeRedeemCredits,
 } from "./utils/get-api-key";
 import { createInputItem } from "./utils/input-utils";
@@ -301,10 +302,10 @@ const client = {
 let apiKey = "";
 let savedTokens:
   | {
-      id_token?: string;
-      access_token?: string;
-      refresh_token: string;
-    }
+    id_token?: string;
+    access_token?: string;
+    refresh_token: string;
+  }
   | undefined;
 
 // Try to load existing auth file if present
@@ -322,12 +323,38 @@ try {
     if (data.OPENAI_API_KEY && !expired) {
       apiKey = data.OPENAI_API_KEY;
     }
+    if (
+      data.GITHUBCOPILOT_API_KEY &&
+      provider.toLowerCase() === "githubcopilot"
+    ) {
+      apiKey = data.GITHUBCOPILOT_API_KEY;
+    }
   }
 } catch {
   // ignore errors
 }
 
-if (cli.flags.login) {
+if (provider.toLowerCase() === "githubcopilot" && !apiKey) {
+  apiKey = await fetchGithubCopilotApiKey();
+  try {
+    const home = os.homedir();
+    const authDir = path.join(home, ".codex");
+    const authFile = path.join(authDir, "auth.json");
+    fs.writeFileSync(
+      authFile,
+      JSON.stringify(
+        {
+          GITHUBCOPILOT_API_KEY: apiKey,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+  } catch {
+    /* ignore */
+  }
+} else if (cli.flags.login) {
   apiKey = await fetchApiKey(client.issuer, client.client_id);
   try {
     const home = os.homedir();
@@ -344,7 +371,7 @@ if (cli.flags.login) {
   apiKey = await fetchApiKey(client.issuer, client.client_id);
 }
 // Ensure the API key is available as an environment variable for legacy code
-process.env["OPENAI_API_KEY"] = apiKey;
+process.env[`${provider.toUpperCase()}_API_KEY`] = apiKey;
 
 if (cli.flags.free) {
   // eslint-disable-next-line no-console
@@ -370,23 +397,22 @@ if (!apiKey && !NO_API_KEY_REQUIRED.has(provider.toLowerCase())) {
   // eslint-disable-next-line no-console
   console.error(
     `\n${chalk.red(`Missing ${provider} API key.`)}\n\n` +
-      `Set the environment variable ${chalk.bold(
-        `${provider.toUpperCase()}_API_KEY`,
-      )} ` +
-      `and re-run this command.\n` +
-      `${
-        provider.toLowerCase() === "openai"
-          ? `You can create a key here: ${chalk.bold(
-              chalk.underline("https://platform.openai.com/account/api-keys"),
-            )}\n`
-          : provider.toLowerCase() === "gemini"
-            ? `You can create a ${chalk.bold(
-                `${provider.toUpperCase()}_API_KEY`,
-              )} ` + `in the ${chalk.bold(`Google AI Studio`)}.\n`
-            : `You can create a ${chalk.bold(
-                `${provider.toUpperCase()}_API_KEY`,
-              )} ` + `in the ${chalk.bold(`${provider}`)} dashboard.\n`
-      }`,
+    `Set the environment variable ${chalk.bold(
+      `${provider.toUpperCase()}_API_KEY`,
+    )} ` +
+    `and re-run this command.\n` +
+    `${provider.toLowerCase() === "openai"
+      ? `You can create a key here: ${chalk.bold(
+        chalk.underline("https://platform.openai.com/account/api-keys"),
+      )}\n`
+      : provider.toLowerCase() === "gemini"
+        ? `You can create a ${chalk.bold(
+          `${provider.toUpperCase()}_API_KEY`,
+        )} ` + `in the ${chalk.bold(`Google AI Studio`)}.\n`
+        : `You can create a ${chalk.bold(
+          `${provider.toUpperCase()}_API_KEY`,
+        )} ` + `in the ${chalk.bold(`${provider}`)} dashboard.\n`
+    }`,
   );
   process.exit(1);
 }
@@ -425,7 +451,7 @@ if (config.flexMode) {
       // eslint-disable-next-line no-console
       console.error(
         `The --flex-mode option is only supported when using the 'o3' or 'o4-mini' models. ` +
-          `Current model: '${config.model}'.`,
+        `Current model: '${config.model}'.`,
       );
       process.exit(1);
     } else {
@@ -441,9 +467,9 @@ if (
   // eslint-disable-next-line no-console
   console.error(
     `The model "${config.model}" does not appear in the list of models ` +
-      `available to your account. Double-check the spelling (use\n` +
-      `  openai models list\n` +
-      `to see the full list) or choose another model with the --model flag.`,
+    `available to your account. Double-check the spelling (use\n` +
+    `  openai models list\n` +
+    `to see the full list) or choose another model with the --model flag.`,
   );
   process.exit(1);
 }

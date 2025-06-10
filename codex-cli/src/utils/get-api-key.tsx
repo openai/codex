@@ -2,10 +2,12 @@ import type { Choice } from "./get-api-key-components";
 import type { Request, Response } from "express";
 
 import { ApiKeyPrompt, WaitingForAuth } from "./get-api-key-components";
+import { GithubCopilotClient } from "./openai-client";
+import Spinner from "../components/vendor/ink-spinner.js";
 import chalk from "chalk";
 import express from "express";
 import fs from "fs/promises";
-import { render } from "ink";
+import { Box, Text, render } from "ink";
 import crypto from "node:crypto";
 import { URL } from "node:url";
 import open from "open";
@@ -181,17 +183,17 @@ async function maybeRedeemCredits(
       // eslint-disable-next-line no-console
       console.warn(
         "Sorry, your subscription must be active for more than 7 days to redeem credits.\nMore info: " +
-          chalk.dim("https://help.openai.com/en/articles/11381614") +
-          chalk.bold(
-            "\nPlease try again on " +
-              new Date(
-                new Date(subStart).getTime() + 7 * 24 * 60 * 60 * 1000,
-              ).toLocaleDateString() +
-              " " +
-              new Date(
-                new Date(subStart).getTime() + 7 * 24 * 60 * 60 * 1000,
-              ).toLocaleTimeString(),
-          ),
+        chalk.dim("https://help.openai.com/en/articles/11381614") +
+        chalk.bold(
+          "\nPlease try again on " +
+          new Date(
+            new Date(subStart).getTime() + 7 * 24 * 60 * 60 * 1000,
+          ).toLocaleDateString() +
+          " " +
+          new Date(
+            new Date(subStart).getTime() + 7 * 24 * 60 * 60 * 1000,
+          ).toLocaleTimeString(),
+        ),
       );
       return;
     }
@@ -211,7 +213,7 @@ async function maybeRedeemCredits(
       // eslint-disable-next-line no-console
       console.warn(
         "Users with Plus or Pro subscriptions can redeem free API credits.\nMore info: " +
-          chalk.dim("https://help.openai.com/en/articles/11381614"),
+        chalk.dim("https://help.openai.com/en/articles/11381614"),
       );
       return;
     }
@@ -245,11 +247,9 @@ async function maybeRedeemCredits(
         console.log(
           chalk.green(
             `${chalk.bold(
-              `Thanks for being a ChatGPT ${
-                planType === "plus" ? "Plus" : "Pro"
+              `Thanks for being a ChatGPT ${planType === "plus" ? "Plus" : "Pro"
               } subscriber!`,
-            )}\nIf you haven't already redeemed, you should receive ${
-              planType === "plus" ? "$5" : "$50"
+            )}\nIf you haven't already redeemed, you should receive ${planType === "plus" ? "$5" : "$50"
             } in API credits\nCredits: ${chalk.dim(chalk.underline("https://platform.openai.com/settings/organization/billing/credit-grants"))}\nMore info: ${chalk.dim(chalk.underline("https://help.openai.com/en/articles/11381614"))}`,
           ),
         );
@@ -365,9 +365,8 @@ async function handleCallback(
     requested_token: "openai-api-key",
     subject_token: tokenData.id_token,
     subject_token_type: "urn:ietf:params:oauth:token-type:id_token",
-    name: `Codex CLI [auto-generated] (${new Date().toISOString().slice(0, 10)}) [${
-      randomId
-    }]`,
+    name: `Codex CLI [auto-generated] (${new Date().toISOString().slice(0, 10)}) [${randomId
+      }]`,
   });
   const exchangeRes = await fetch(oidcConfig.token_endpoint, {
     method: "POST",
@@ -755,6 +754,31 @@ export async function getApiKey(
     spinner.clear();
     spinner.unmount();
     process.env["OPENAI_API_KEY"] = key;
+    return key;
+  } catch (err) {
+    spinner.clear();
+    spinner.unmount();
+    throw err;
+  }
+}
+
+export async function getGithubCopilotApiKey(): Promise<string> {
+  const { device_code, user_code, verification_uri } =
+    await GithubCopilotClient.getLoginURL();
+  const spinner = render(
+    <Box flexDirection="row" marginTop={1}>
+      <Spinner type="ball" />
+      <Text>
+        {" "}
+        Please visit {verification_uri} and enter code {user_code}
+      </Text>
+    </Box>,
+  );
+  try {
+    const key = await GithubCopilotClient.pollForAccessToken(device_code);
+    spinner.clear();
+    spinner.unmount();
+    process.env["GITHUBCOPILOT_API_KEY"] = key;
     return key;
   } catch (err) {
     spinner.clear();

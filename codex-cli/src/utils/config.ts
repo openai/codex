@@ -576,9 +576,9 @@ export const saveConfig = (
     configToSave.tools = {
       shell: config.tools.shell
         ? {
-            maxBytes: config.tools.shell.maxBytes,
-            maxLines: config.tools.shell.maxLines,
-          }
+          maxBytes: config.tools.shell.maxBytes,
+          maxLines: config.tools.shell.maxLines,
+        }
         : undefined,
     };
   }

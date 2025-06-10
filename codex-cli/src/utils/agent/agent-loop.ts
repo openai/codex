@@ -21,6 +21,7 @@ import {
   AZURE_OPENAI_API_VERSION,
 } from "../config.js";
 import { log } from "../logger/log.js";
+import { GithubCopilotClient } from "../openai-client.js";
 import { parseToolCallArguments } from "../parsers.js";
 import { responsesCreateViaChatCompletions } from "../responses.js";
 import {
@@ -336,6 +337,24 @@ export class AgentLoop {
         apiKey,
         baseURL,
         apiVersion: AZURE_OPENAI_API_VERSION,
+        defaultHeaders: {
+          originator: ORIGIN,
+          version: CLI_VERSION,
+          session_id: this.sessionId,
+          ...(OPENAI_ORGANIZATION
+            ? { "OpenAI-Organization": OPENAI_ORGANIZATION }
+            : {}),
+          ...(OPENAI_PROJECT ? { "OpenAI-Project": OPENAI_PROJECT } : {}),
+        },
+        httpAgent: PROXY_URL ? new HttpsProxyAgent(PROXY_URL) : undefined,
+        ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
+      });
+    }
+
+    if (this.provider.toLowerCase() === "githubcopilot") {
+      this.oai = new GithubCopilotClient({
+        ...(apiKey ? { apiKey } : {}),
+        baseURL,
         defaultHeaders: {
           originator: ORIGIN,
           version: CLI_VERSION,
