@@ -45,6 +45,8 @@ pub struct ModelProviderInfo {
 
     /// Which wire protocol this provider expects.
     pub wire_api: WireApi,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_version: Option<String>,
 }
 
 impl ModelProviderInfo {
@@ -92,6 +94,7 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
                 env_key: Some("OPENAI_API_KEY".into()),
                 env_key_instructions: Some("Create an API key (https://platform.openai.com) and export it as an environment variable.".into()),
                 wire_api: WireApi::Responses,
+                api_version: None,
             },
         ),
         (
@@ -102,6 +105,7 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
                 env_key: Some("OPENROUTER_API_KEY".into()),
                 env_key_instructions: None,
                 wire_api: WireApi::Chat,
+                api_version: None,
             },
         ),
         (
@@ -112,6 +116,7 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
                 env_key: Some("GEMINI_API_KEY".into()),
                 env_key_instructions: None,
                 wire_api: WireApi::Chat,
+                api_version: None,
             },
         ),
         (
@@ -122,6 +127,7 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
                 env_key: None,
                 env_key_instructions: None,
                 wire_api: WireApi::Chat,
+                api_version: None,
             },
         ),
         (
@@ -132,6 +138,7 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
                 env_key: Some("MISTRAL_API_KEY".into()),
                 env_key_instructions: None,
                 wire_api: WireApi::Chat,
+                api_version: None,
             },
         ),
         (
@@ -142,6 +149,7 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
                 env_key: Some("DEEPSEEK_API_KEY".into()),
                 env_key_instructions: None,
                 wire_api: WireApi::Chat,
+                api_version: None,
             },
         ),
         (
@@ -152,6 +160,7 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
                 env_key: Some("XAI_API_KEY".into()),
                 env_key_instructions: None,
                 wire_api: WireApi::Chat,
+                api_version: None,
             },
         ),
         (
@@ -162,6 +171,7 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
                 env_key: Some("GROQ_API_KEY".into()),
                 env_key_instructions: None,
                 wire_api: WireApi::Chat,
+                api_version: None,
             },
         ),
     ]

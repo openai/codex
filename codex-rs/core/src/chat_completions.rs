@@ -14,6 +14,7 @@ use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tracing::debug;
 use tracing::trace;
+use url::Url;
 
 use crate::ModelProviderInfo;
 use crate::client_common::Prompt;
@@ -114,11 +115,20 @@ pub(crate) async fn stream_chat_completions(
         "tools": tools_json,
     });
 
-    let base_url = provider.base_url.trim_end_matches('/');
-    let url = format!("{}/chat/completions", base_url);
+    let mut url = Url::parse(&provider.base_url)
+        .map_err(|e| std::io::Error::other(format!("invalid base_url in config: {}", e)))?;
+    url.path_segments_mut()
+        .map_err(|_| std::io::Error::other("URL cannot be a base; cannot append path"))?
+        .push("chat")
+        .push("completions");
+    if let Some(api_version) = &provider.api_version {
+        url.query_pairs_mut()
+            .append_pair("api-version", api_version);
+    }
 
     debug!(
-        "POST to {url}: {}",
+        "POST to {}: {}",
+        url.as_str(),
         serde_json::to_string_pretty(&payload).unwrap_or_default()
     );
 
@@ -127,7 +137,7 @@ pub(crate) async fn stream_chat_completions(
     loop {
         attempt += 1;
 
-        let mut req_builder = client.post(&url);
+        let mut req_builder = client.post(url.clone());
         if let Some(api_key) = &api_key {
             req_builder = req_builder.bearer_auth(api_key.clone());
         }
