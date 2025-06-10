@@ -27,6 +27,7 @@ mod model_provider_info;
 pub use model_provider_info::ModelProviderInfo;
 pub use model_provider_info::WireApi;
 mod models;
+pub mod openai_api_key;
 mod openai_tools;
 mod project_doc;
 pub mod protocol;
@@ -34,3 +35,5 @@ mod rollout;
 mod safety;
 mod user_notification;
 pub mod util;
+
+pub use client_common::model_supports_reasoning_summaries;

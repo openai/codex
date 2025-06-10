@@ -1,5 +1,7 @@
 use codex_common::elapsed::format_elapsed;
+use codex_core::WireApi;
 use codex_core::config::Config;
+use codex_core::model_supports_reasoning_summaries;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::BackgroundEventEvent;
 use codex_core::protocol::ErrorEvent;
@@ -43,10 +45,13 @@ pub(crate) struct EventProcessor {
     red: Style,
     green: Style,
     cyan: Style,
+
+    /// Whether to include `AgentReasoning` events in the output.
+    show_agent_reasoning: bool,
 }
 
 impl EventProcessor {
-    pub(crate) fn create_with_ansi(with_ansi: bool) -> Self {
+    pub(crate) fn create_with_ansi(with_ansi: bool, show_agent_reasoning: bool) -> Self {
         let call_id_to_command = HashMap::new();
         let call_id_to_patch = HashMap::new();
         let call_id_to_tool_call = HashMap::new();
@@ -63,6 +68,7 @@ impl EventProcessor {
                 green: Style::new().green(),
                 cyan: Style::new().cyan(),
                 call_id_to_tool_call,
+                show_agent_reasoning,
             }
         } else {
             Self {
@@ -76,6 +82,7 @@ impl EventProcessor {
                 green: Style::new(),
                 cyan: Style::new(),
                 call_id_to_tool_call,
+                show_agent_reasoning,
             }
         }
     }
@@ -115,18 +122,35 @@ impl EventProcessor {
     /// for the session. This mirrors the information shown in the TUI welcome
     /// screen.
     pub(crate) fn print_config_summary(&mut self, config: &Config, prompt: &str) {
-        ts_println!(self, "OpenAI Codex (research preview)\n--------");
+        const VERSION: &str = env!("CARGO_PKG_VERSION");
+        ts_println!(
+            self,
+            "OpenAI Codex v{} (research preview)\n--------",
+            VERSION
+        );
 
-        let entries = vec![
+        let mut entries = vec![
             ("workdir", config.cwd.display().to_string()),
             ("model", config.model.clone()),
             ("provider", config.model_provider_id.clone()),
             ("approval", format!("{:?}", config.approval_policy)),
             ("sandbox", format!("{:?}", config.sandbox_policy)),
         ];
+        if config.model_provider.wire_api == WireApi::Responses
+            && model_supports_reasoning_summaries(&config.model)
+        {
+            entries.push((
+                "reasoning effort",
+                config.model_reasoning_effort.to_string(),
+            ));
+            entries.push((
+                "reasoning summaries",
+                config.model_reasoning_summary.to_string(),
+            ));
+        }
 
         for (key, value) in entries {
-            println!("{} {}", format!("{key}: ").style(self.bold), value);
+            println!("{} {}", format!("{key}:").style(self.bold), value);
         }
 
         println!("--------");
@@ -411,12 +435,14 @@ impl EventProcessor {
                 // Should we exit?
             }
             EventMsg::AgentReasoning(agent_reasoning_event) => {
-                ts_println!(
-                    self,
-                    "{}\n{}",
-                    "thinking".style(self.italic).style(self.magenta),
-                    agent_reasoning_event.text
-                );
+                if self.show_agent_reasoning {
+                    ts_println!(
+                        self,
+                        "{}\n{}",
+                        "thinking".style(self.italic).style(self.magenta),
+                        agent_reasoning_event.text
+                    );
+                }
             }
             EventMsg::SessionConfigured(session_configured_event) => {
                 let SessionConfiguredEvent {

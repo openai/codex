@@ -112,7 +112,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     };
 
     let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides)?;
-    let mut event_processor = EventProcessor::create_with_ansi(stdout_with_ansi);
+    let mut event_processor =
+        EventProcessor::create_with_ansi(stdout_with_ansi, !config.hide_agent_reasoning);
     // Print the effective configuration and prompt so users can see what Codex
     // is using.
     event_processor.print_config_summary(&config, &prompt);

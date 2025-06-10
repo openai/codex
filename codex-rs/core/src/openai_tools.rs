@@ -93,7 +93,6 @@ pub(crate) fn create_tools_json_for_responses_api(
             .map(|(name, tool)| mcp_tool_to_openai_tool(name, tool)),
     );
 
-    tracing::debug!("tools_json: {}", serde_json::to_string_pretty(&tools_json)?);
     Ok(tools_json)
 }
 

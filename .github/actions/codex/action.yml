@@ -15,14 +15,14 @@ inputs:
   codex_args:
     description: "A whitespace-delimited list of arguments to pass to Codex. Due to limitations in YAML, arguments with spaces are not supported. For more complex configurations, use the `codex_home` input."
     required: false
-    default: "--full-auto"
+    default: "--config hide_agent_reasoning=true --full-auto"
   codex_home:
     description: "Value to use as the CODEX_HOME environment variable when running Codex."
     required: false
   codex_release_tag:
     description: "The release tag of the Codex model to run."
     required: false
-    default: "codex-rs-d519bd8bbd1e1fd9efdc5d68cf7bebdec0dd0f28-1-rust-v0.0.2505270918"
+    default: "codex-rs-ca8e97fcbcb991e542b8689f2d4eab9d30c399d6-1-rust-v0.0.2505302325"
 
 runs:
   using: "composite"
