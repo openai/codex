@@ -36,6 +36,8 @@ import {
   loadConfig,
   PRETTY_PRINT,
   INSTRUCTIONS_FILEPATH,
+  getApiKey as getApiKeyFromEnvAndAuth,
+  loadAuth,
 } from "./utils/config";
 import {
   getApiKey as fetchApiKey,
@@ -51,7 +53,6 @@ import { spawnSync } from "child_process";
 import fs from "fs";
 import { render } from "ink";
 import meow from "meow";
-import os from "os";
 import path from "path";
 import React from "react";
 
@@ -299,65 +300,41 @@ const client = {
 };
 
 let apiKey = "";
-let savedTokens:
-  | {
-      id_token?: string;
-      access_token?: string;
-      refresh_token: string;
-    }
-  | undefined;
-
-// Try to load existing auth file if present
-try {
-  const home = os.homedir();
-  const authDir = path.join(home, ".codex");
-  const authFile = path.join(authDir, "auth.json");
-  if (fs.existsSync(authFile)) {
-    const data = JSON.parse(fs.readFileSync(authFile, "utf-8"));
-    savedTokens = data.tokens;
-    const lastRefreshTime = data.last_refresh
-      ? new Date(data.last_refresh).getTime()
-      : 0;
-    const expired = Date.now() - lastRefreshTime > 28 * 24 * 60 * 60 * 1000;
-    if (data.OPENAI_API_KEY && !expired) {
-      apiKey = data.OPENAI_API_KEY;
-    }
-  }
-} catch {
-  // ignore errors
-}
 
 if (cli.flags.login) {
   apiKey = await fetchApiKey(client.issuer, client.client_id);
-  try {
-    const home = os.homedir();
-    const authDir = path.join(home, ".codex");
-    const authFile = path.join(authDir, "auth.json");
-    if (fs.existsSync(authFile)) {
-      const data = JSON.parse(fs.readFileSync(authFile, "utf-8"));
-      savedTokens = data.tokens;
-    }
-  } catch {
-    /* ignore */
-  }
 } else if (!apiKey) {
-  apiKey = await fetchApiKey(client.issuer, client.client_id);
+  const envApiKey = getApiKeyFromEnvAndAuth(provider);
+
+  if (envApiKey) {
+    apiKey = envApiKey;
+  } else {
+    apiKey = await fetchApiKey(
+      client.issuer,
+      client.client_id,
+      false,
+      provider,
+    );
+  }
 }
-// Ensure the API key is available as an environment variable for legacy code
-process.env["OPENAI_API_KEY"] = apiKey;
+// Ensure the API key is available as an environment variable for legacy code, only for openai
+process.env["OPENAI_API_KEY"] = getApiKeyFromEnvAndAuth("openai");
 
 if (cli.flags.free) {
   // eslint-disable-next-line no-console
   console.log(`${chalk.bold("codex --free")} attempting to redeem credits...`);
-  if (!savedTokens?.refresh_token) {
+
+  const { tokens } = loadAuth();
+
+  if (!tokens?.refresh_token) {
     apiKey = await fetchApiKey(client.issuer, client.client_id, true);
     // fetchApiKey includes credit redemption as the end of the flow
   } else {
     await maybeRedeemCredits(
       client.issuer,
       client.client_id,
-      savedTokens.refresh_token,
-      savedTokens.id_token,
+      tokens.refresh_token,
+      tokens.id_token,
     );
   }
 }

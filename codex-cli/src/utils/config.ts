@@ -56,6 +56,7 @@ export const CONFIG_DIR = join(homedir(), ".codex");
 export const CONFIG_JSON_FILEPATH = join(CONFIG_DIR, "config.json");
 export const CONFIG_YAML_FILEPATH = join(CONFIG_DIR, "config.yaml");
 export const CONFIG_YML_FILEPATH = join(CONFIG_DIR, "config.yml");
+export const AUTH_FILEPATH = join(CONFIG_DIR, "auth.json");
 
 // Keep the original constant name for backward compatibility, but point it at
 // the default JSON path. Code that relies on this constant will continue to
@@ -114,10 +115,20 @@ export function getApiKey(provider: string = "openai"): string | undefined {
   const providersConfig = config.providers ?? providers;
   const providerInfo = providersConfig[provider.toLowerCase()];
   if (providerInfo) {
+    const apiKey = process.env[providerInfo.envKey];
     if (providerInfo.name === "Ollama") {
-      return process.env[providerInfo.envKey] ?? "dummy";
+      return apiKey ?? "dummy";
+    } else if (providerInfo.name === "OpenAI" && !apiKey) {
+      const auth = loadAuth();
+      const lastRefreshTime = auth.last_refresh
+        ? new Date(auth.last_refresh).getTime()
+        : 0;
+      const expired = Date.now() - lastRefreshTime > 28 * 24 * 60 * 60 * 1000;
+      if (auth.OPENAI_API_KEY && !expired) {
+        return auth.OPENAI_API_KEY;
+      }
     }
-    return process.env[providerInfo.envKey];
+    return apiKey;
   }
 
   // Checking `PROVIDER_API_KEY` feels more intuitive with a custom provider.
@@ -315,6 +326,31 @@ export function loadProjectDoc(cwd: string, explicitPath?: string): string {
   } catch {
     return "";
   }
+}
+
+export type Auth = {
+  tokens?: {
+    access_token: string;
+    expires_in: number;
+    id_token: string;
+    scope: string;
+    token_type: string;
+    refresh_token: string;
+  };
+  last_refresh?: string;
+  OPENAI_API_KEY?: string;
+};
+
+export function loadAuth(): Auth {
+  try {
+    if (existsSync(AUTH_FILEPATH)) {
+      const data = JSON.parse(readFileSync(AUTH_FILEPATH, "utf-8"));
+      return data;
+    }
+  } catch {
+    /* ignore */
+  }
+  return {};
 }
 
 export type LoadConfigOptions = {

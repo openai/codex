@@ -13,10 +13,11 @@ import os from "os";
 import path from "path";
 import React from "react";
 
-function promptUserForChoice(): Promise<Choice> {
+function promptUserForChoice(provider: string = "openai"): Promise<Choice> {
   return new Promise<Choice>((resolve) => {
     const instance = render(
       <ApiKeyPrompt
+        provider={provider}
         onDone={(choice: Choice) => {
           resolve(choice);
           instance.unmount();
@@ -740,13 +741,17 @@ export async function getApiKey(
   issuer: string,
   clientId: string,
   forceLogin: boolean = false,
+  provider: string = "openai",
 ): Promise<string> {
-  if (!forceLogin && process.env["OPENAI_API_KEY"]) {
-    return process.env["OPENAI_API_KEY"]!;
+  const providerUpper = provider.toUpperCase();
+  const envVarName = `${providerUpper}_API_KEY`;
+
+  if (!forceLogin && process.env[envVarName]) {
+    return process.env[envVarName]!;
   }
-  const choice = await promptUserForChoice();
+  const choice = await promptUserForChoice(provider);
   if (choice.type === "apikey") {
-    process.env["OPENAI_API_KEY"] = choice.key;
+    process.env[envVarName] = choice.key;
     return choice.key;
   }
   const spinner = render(<WaitingForAuth />);

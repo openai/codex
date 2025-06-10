@@ -8,11 +8,20 @@ export type Choice = { type: "signin" } | { type: "apikey"; key: string };
 
 export function ApiKeyPrompt({
   onDone,
+  provider = "openai",
 }: {
   onDone: (choice: Choice) => void;
+  provider?: string;
 }): JSX.Element {
-  const [step, setStep] = useState<"select" | "paste">("select");
+  const isOpenAI = provider.toLowerCase() === "openai";
+
+  const [step, setStep] = useState<"select" | "paste">(
+    isOpenAI ? "select" : "paste",
+  );
   const [apiKey, setApiKey] = useState("");
+
+  const providerName = provider.charAt(0).toUpperCase() + provider.slice(1);
+  const envVarName = `${provider.toUpperCase()}_API_KEY`;
 
   if (step === "select") {
     return (
@@ -28,7 +37,7 @@ export function ApiKeyPrompt({
           items={[
             { label: "Sign in with ChatGPT", value: "signin" },
             {
-              label: "Paste an API key (or set as OPENAI_API_KEY)",
+              label: `Paste an API key (or set as ${envVarName})`,
               value: "paste",
             },
           ]}
@@ -46,7 +55,7 @@ export function ApiKeyPrompt({
 
   return (
     <Box flexDirection="column">
-      <Text>Paste your OpenAI API key and press &lt;Enter&gt;:</Text>
+      <Text>Paste your {providerName} API key and press &lt;Enter&gt;:</Text>
       <TextInput
         value={apiKey}
         onChange={setApiKey}
@@ -55,7 +64,7 @@ export function ApiKeyPrompt({
             onDone({ type: "apikey", key: value.trim() });
           }
         }}
-        placeholder="sk-..."
+        placeholder={isOpenAI ? "sk-..." : "Enter your API key..."}
         mask="*"
       />
     </Box>
