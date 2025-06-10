@@ -73,6 +73,9 @@ base_url = "https://api.openai.com/v1"
 env_key = "OPENAI_API_KEY"
 # valid values for wire_api are "chat" and "responses".
 wire_api = "chat"
+# Some providers, like Azure, require an explicit API version query parameter.
+# If set, Codex will append `?api-version=...` to the request URL.
+# api_version = "2025-01-01-preview"
 ```
 
 ## approval_policy

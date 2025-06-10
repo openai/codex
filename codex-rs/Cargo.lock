@@ -647,6 +647,7 @@ dependencies = [
  "tracing",
  "tree-sitter",
  "tree-sitter-bash",
+ "url",
  "uuid",
  "wildmatch",
  "wiremock",
