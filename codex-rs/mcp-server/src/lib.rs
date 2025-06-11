@@ -2,6 +2,7 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
 use std::io::Result as IoResult;
+use std::path::PathBuf;
 
 use mcp_types::JSONRPCMessage;
 use tokio::io::AsyncBufReadExt;
@@ -15,6 +16,7 @@ use tracing::info;
 
 mod codex_tool_config;
 mod codex_tool_runner;
+mod json_to_toml;
 mod message_processor;
 
 use crate::message_processor::MessageProcessor;
@@ -24,7 +26,7 @@ use crate::message_processor::MessageProcessor;
 /// plenty for an interactive CLI.
 const CHANNEL_CAPACITY: usize = 128;
 
-pub async fn run_main() -> IoResult<()> {
+pub async fn run_main(codex_linux_sandbox_exe: Option<PathBuf>) -> IoResult<()> {
     // Install a simple subscriber so `tracing` output is visible.  Users can
     // control the log level with `RUST_LOG`.
     tracing_subscriber::fmt()
@@ -61,7 +63,7 @@ pub async fn run_main() -> IoResult<()> {
 
     // Task: process incoming messages.
     let processor_handle = tokio::spawn({
-        let mut processor = MessageProcessor::new(outgoing_tx.clone());
+        let mut processor = MessageProcessor::new(outgoing_tx.clone(), codex_linux_sandbox_exe);
         async move {
             while let Some(msg) = incoming_rx.recv().await {
                 match msg {

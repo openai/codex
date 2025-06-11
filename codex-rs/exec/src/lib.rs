@@ -2,7 +2,9 @@ mod cli;
 mod event_processor;
 
 use std::io::IsTerminal;
+use std::io::Read;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 pub use cli::Cli;
@@ -18,13 +20,12 @@ use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::util::is_inside_git_repo;
 use event_processor::EventProcessor;
-use event_processor::print_config_summary;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
+pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
     let Cli {
         images,
         model,
@@ -33,11 +34,46 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
         sandbox,
         cwd,
         skip_git_repo_check,
-        disable_response_storage,
         color,
         last_message_file,
         prompt,
+        config_overrides,
     } = cli;
+
+    // Determine the prompt based on CLI arg and/or stdin.
+    let prompt = match prompt {
+        Some(p) if p != "-" => p,
+        // Either `-` was passed or no positional arg.
+        maybe_dash => {
+            // When no arg (None) **and** stdin is a TTY, bail out early – unless the
+            // user explicitly forced reading via `-`.
+            let force_stdin = matches!(maybe_dash.as_deref(), Some("-"));
+
+            if std::io::stdin().is_terminal() && !force_stdin {
+                eprintln!(
+                    "No prompt provided. Either specify one as an argument or pipe the prompt into stdin."
+                );
+                std::process::exit(1);
+            }
+
+            // Ensure the user knows we are waiting on stdin, as they may
+            // have gotten into this state by mistake. If so, and they are not
+            // writing to stdin, Codex will hang indefinitely, so this should
+            // help them debug in that case.
+            if !force_stdin {
+                eprintln!("Reading prompt from stdin...");
+            }
+            let mut buffer = String::new();
+            if let Err(e) = std::io::stdin().read_to_string(&mut buffer) {
+                eprintln!("Failed to read prompt from stdin: {e}");
+                std::process::exit(1);
+            } else if buffer.trim().is_empty() {
+                eprintln!("No prompt provided via stdin.");
+                std::process::exit(1);
+            }
+            buffer
+        }
+    };
 
     let (stdout_with_ansi, stderr_with_ansi) = match color {
         cli::Color::Always => (true, true),
@@ -62,17 +98,25 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
         // the user for approval.
         approval_policy: Some(AskForApproval::Never),
         sandbox_policy,
-        disable_response_storage: if disable_response_storage {
-            Some(true)
-        } else {
-            None
-        },
         cwd: cwd.map(|p| p.canonicalize().unwrap_or(p)),
         model_provider: None,
+        codex_linux_sandbox_exe,
     };
-    let config = Config::load_with_overrides(overrides)?;
-    // Print the effective configuration so users can see what Codex is using.
-    print_config_summary(&config, stdout_with_ansi);
+    // Parse `-c` overrides.
+    let cli_kv_overrides = match config_overrides.parse_overrides() {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("Error parsing -c overrides: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides)?;
+    let mut event_processor =
+        EventProcessor::create_with_ansi(stdout_with_ansi, !config.hide_agent_reasoning);
+    // Print the effective configuration and prompt so users can see what Codex
+    // is using.
+    event_processor.print_config_summary(&config, &prompt);
 
     if !skip_git_repo_check && !is_inside_git_repo(&config) {
         eprintln!("Not inside a Git repo and --skip-git-repo-check was not specified.");
@@ -162,7 +206,6 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
     info!("Sent prompt with event ID: {initial_prompt_task_id}");
 
     // Run the loop until the task is complete.
-    let mut event_processor = EventProcessor::create_with_ansi(stdout_with_ansi);
     while let Some(event) = rx.recv().await {
         let (is_last_event, last_assistant_message) = match &event.msg {
             EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) => {
