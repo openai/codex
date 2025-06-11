@@ -382,6 +382,8 @@ async function handleCallback(
 
   const exchanged = (await exchangeRes.json()) as {
     access_token: string;
+    // NOTE(mbolin): I did not see the "key" property set in practice. Note
+    // this property is not read by the code.
     key: string;
   };
 

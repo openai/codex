@@ -2,6 +2,7 @@ use std::io::IsTerminal;
 use std::sync::Arc;
 
 use clap::Parser;
+use codex_common::CliConfigOverrides;
 use codex_core::Codex;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -13,9 +14,12 @@ use tracing::error;
 use tracing::info;
 
 #[derive(Debug, Parser)]
-pub struct ProtoCli {}
+pub struct ProtoCli {
+    #[clap(skip)]
+    pub config_overrides: CliConfigOverrides,
+}
 
-pub async fn run_main(_opts: ProtoCli) -> anyhow::Result<()> {
+pub async fn run_main(opts: ProtoCli) -> anyhow::Result<()> {
     if std::io::stdin().is_terminal() {
         anyhow::bail!("Protocol mode expects stdin to be a pipe, not a terminal");
     }
@@ -24,7 +28,12 @@ pub async fn run_main(_opts: ProtoCli) -> anyhow::Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
-    let config = Config::load_with_overrides(ConfigOverrides::default())?;
+    let ProtoCli { config_overrides } = opts;
+    let overrides_vec = config_overrides
+        .parse_overrides()
+        .map_err(anyhow::Error::msg)?;
+
+    let config = Config::load_with_cli_overrides(overrides_vec, ConfigOverrides::default())?;
     let ctrl_c = notify_on_sigint();
     let (codex, _init_id) = Codex::spawn(config, ctrl_c.clone()).await?;
     let codex = Arc::new(codex);
