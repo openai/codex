@@ -15,7 +15,7 @@ import { useTerminalSize } from "../../hooks/use-terminal-size.js";
 import { AgentLoop } from "../../utils/agent/agent-loop.js";
 import { ReviewDecision } from "../../utils/agent/review.js";
 import { generateCompactSummary } from "../../utils/compact-summary.js";
-import { saveConfig } from "../../utils/config.js";
+import { getApiKey, saveConfig } from "../../utils/config.js";
 import { extractAppliedPatches as _extractAppliedPatches } from "../../utils/extract-applied-patches.js";
 import { getGitDiff } from "../../utils/get-diff.js";
 import { createInputItem } from "../../utils/input-utils.js";
@@ -246,7 +246,12 @@ export default function TerminalChat({
     agentRef.current = new AgentLoop({
       model,
       provider,
-      config,
+      config: {
+        ...config,
+        apiKey: getApiKey(provider) || config.apiKey,
+        model,
+        provider,
+      },
       instructions: config.instructions,
       approvalPolicy,
       disableResponseStorage: config.disableResponseStorage,
