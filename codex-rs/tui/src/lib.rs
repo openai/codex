@@ -5,9 +5,13 @@
 use app::App;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
+use codex_core::openai_api_key::OPENAI_API_KEY_ENV_VAR;
+use codex_core::openai_api_key::get_openai_api_key;
+use codex_core::openai_api_key::set_openai_api_key;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::util::is_inside_git_repo;
+use codex_login::try_read_openai_api_key;
 use log_layer::TuiLogLayer;
 use std::fs::OpenOptions;
 use std::path::PathBuf;
@@ -28,6 +32,7 @@ mod exec_command;
 mod git_warning_screen;
 mod history_cell;
 mod log_layer;
+mod login_screen;
 mod markdown;
 mod mouse_capture;
 mod scroll_event_helper;
@@ -124,13 +129,15 @@ pub fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> std::io::
         .with(tui_layer)
         .try_init();
 
+    let show_login_screen = should_show_login_screen(&config);
+
     // Determine whether we need to display the "not a git repo" warning
     // modal. The flag is shown when the current working directory is *not*
     // inside a Git repository **and** the user did *not* pass the
     // `--allow-no-git-exec` flag.
     let show_git_warning = !cli.skip_git_repo_check && !is_inside_git_repo(&config);
 
-    try_run_ratatui_app(cli, config, show_git_warning, log_rx);
+    try_run_ratatui_app(cli, config, show_login_screen, show_git_warning, log_rx);
     Ok(())
 }
 
@@ -141,10 +148,11 @@ pub fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> std::io::
 fn try_run_ratatui_app(
     cli: Cli,
     config: Config,
+    show_login_screen: bool,
     show_git_warning: bool,
     log_rx: tokio::sync::mpsc::UnboundedReceiver<String>,
 ) {
-    if let Err(report) = run_ratatui_app(cli, config, show_git_warning, log_rx) {
+    if let Err(report) = run_ratatui_app(cli, config, show_login_screen, show_git_warning, log_rx) {
         eprintln!("Error: {report:?}");
     }
 }
@@ -152,6 +160,7 @@ fn try_run_ratatui_app(
 fn run_ratatui_app(
     cli: Cli,
     config: Config,
+    show_login_screen: bool,
     show_git_warning: bool,
     mut log_rx: tokio::sync::mpsc::UnboundedReceiver<String>,
 ) -> color_eyre::Result<()> {
@@ -167,7 +176,13 @@ fn run_ratatui_app(
     terminal.clear()?;
 
     let Cli { prompt, images, .. } = cli;
-    let mut app = App::new(config.clone(), prompt, show_git_warning, images);
+    let mut app = App::new(
+        config.clone(),
+        prompt,
+        show_login_screen,
+        show_git_warning,
+        images,
+    );
 
     // Bridge log receiver into the AppEvent channel so latest log lines update the UI.
     {
@@ -196,4 +211,39 @@ fn restore() {
             err
         );
     }
+}
+
+#[allow(clippy::unwrap_used)]
+fn should_show_login_screen(config: &Config) -> bool {
+    if is_in_need_of_openai_api_key(config) {
+        // Reading the OpenAI API key is an async operation because it may need
+        // to refresh the token. Block on it.
+        let codex_home = config.codex_home.clone();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            match try_read_openai_api_key(&codex_home).await {
+                Ok(openai_api_key) => {
+                    set_openai_api_key(openai_api_key);
+                    tx.send(false).unwrap();
+                }
+                Err(_) => {
+                    tx.send(true).unwrap();
+                }
+            }
+        });
+        // TODO(mbolin): Impose some sort of timeout.
+        tokio::task::block_in_place(|| rx.blocking_recv()).unwrap()
+    } else {
+        false
+    }
+}
+
+fn is_in_need_of_openai_api_key(config: &Config) -> bool {
+    let is_using_openai_key = config
+        .model_provider
+        .env_key
+        .as_ref()
+        .map(|s| s == OPENAI_API_KEY_ENV_VAR)
+        .unwrap_or(false);
+    is_using_openai_key && get_openai_api_key().is_none()
 }

@@ -585,6 +585,7 @@ dependencies = [
  "codex-core",
  "codex-exec",
  "codex-linux-sandbox",
+ "codex-login",
  "codex-mcp-server",
  "codex-tui",
  "serde_json",
@@ -613,6 +614,7 @@ dependencies = [
  "base64 0.21.7",
  "bytes",
  "codex-apply-patch",
+ "codex-login",
  "codex-mcp-client",
  "dirs",
  "env-flags",
@@ -705,6 +707,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-login"
+version = "0.0.0"
+dependencies = [
+ "chrono",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "codex-mcp-client"
 version = "0.0.0"
 dependencies = [
@@ -747,6 +760,7 @@ dependencies = [
  "codex-common",
  "codex-core",
  "codex-linux-sandbox",
+ "codex-login",
  "color-eyre",
  "crossterm",
  "image",
