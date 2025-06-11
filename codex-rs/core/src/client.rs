@@ -1,7 +1,5 @@
-use std::collections::BTreeMap;
 use std::io::BufRead;
 use std::path::Path;
-use std::sync::LazyLock;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -11,7 +9,6 @@ use reqwest::StatusCode;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
-use serde_json::json;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tokio_util::io::ReaderStream;
@@ -21,12 +18,13 @@ use tracing::warn;
 
 use crate::chat_completions::AggregateStreamExt;
 use crate::chat_completions::stream_chat_completions;
-use crate::client_common::Payload;
 use crate::client_common::Prompt;
-use crate::client_common::Reasoning;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
-use crate::client_common::Summary;
+use crate::client_common::ResponsesApiRequest;
+use crate::client_common::create_reasoning_param_for_request;
+use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
+use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::error::CodexErr;
 use crate::error::EnvVarError;
 use crate::error::Result;
@@ -36,84 +34,31 @@ use crate::flags::OPENAI_STREAM_IDLE_TIMEOUT_MS;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
 use crate::models::ResponseItem;
+use crate::openai_tools::create_tools_json_for_responses_api;
 use crate::util::backoff;
-
-/// When serialized as JSON, this produces a valid "Tool" in the OpenAI
-/// Responses API.
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "type")]
-enum OpenAiTool {
-    #[serde(rename = "function")]
-    Function(ResponsesApiTool),
-    #[serde(rename = "local_shell")]
-    LocalShell {},
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct ResponsesApiTool {
-    name: &'static str,
-    description: &'static str,
-    strict: bool,
-    parameters: JsonSchema,
-}
-
-/// Generic JSON‑Schema subset needed for our tool definitions
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "type", rename_all = "lowercase")]
-enum JsonSchema {
-    String,
-    Number,
-    Array {
-        items: Box<JsonSchema>,
-    },
-    Object {
-        properties: BTreeMap<String, JsonSchema>,
-        required: &'static [&'static str],
-        #[serde(rename = "additionalProperties")]
-        additional_properties: bool,
-    },
-}
-
-/// Tool usage specification
-static DEFAULT_TOOLS: LazyLock<Vec<OpenAiTool>> = LazyLock::new(|| {
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "command".to_string(),
-        JsonSchema::Array {
-            items: Box::new(JsonSchema::String),
-        },
-    );
-    properties.insert("workdir".to_string(), JsonSchema::String);
-    properties.insert("timeout".to_string(), JsonSchema::Number);
-
-    vec![OpenAiTool::Function(ResponsesApiTool {
-        name: "shell",
-        description: "Runs a shell command, and returns its output.",
-        strict: false,
-        parameters: JsonSchema::Object {
-            properties,
-            required: &["command"],
-            additional_properties: false,
-        },
-    })]
-});
-
-static DEFAULT_CODEX_MODEL_TOOLS: LazyLock<Vec<OpenAiTool>> =
-    LazyLock::new(|| vec![OpenAiTool::LocalShell {}]);
 
 #[derive(Clone)]
 pub struct ModelClient {
     model: String,
     client: reqwest::Client,
     provider: ModelProviderInfo,
+    effort: ReasoningEffortConfig,
+    summary: ReasoningSummaryConfig,
 }
 
 impl ModelClient {
-    pub fn new(model: impl ToString, provider: ModelProviderInfo) -> Self {
+    pub fn new(
+        model: impl ToString,
+        provider: ModelProviderInfo,
+        effort: ReasoningEffortConfig,
+        summary: ReasoningSummaryConfig,
+    ) -> Self {
         Self {
             model: model.to_string(),
             client: reqwest::Client::new(),
             provider,
+            effort,
+            summary,
         }
     }
 
@@ -161,38 +106,17 @@ impl ModelClient {
             return stream_from_fixture(path).await;
         }
 
-        // Assemble tool list: built-in tools + any extra tools from the prompt.
-        let default_tools = if self.model.starts_with("codex") {
-            &DEFAULT_CODEX_MODEL_TOOLS
-        } else {
-            &DEFAULT_TOOLS
-        };
-        let mut tools_json = Vec::with_capacity(default_tools.len() + prompt.extra_tools.len());
-        for t in default_tools.iter() {
-            tools_json.push(serde_json::to_value(t)?);
-        }
-        tools_json.extend(
-            prompt
-                .extra_tools
-                .clone()
-                .into_iter()
-                .map(|(name, tool)| mcp_tool_to_openai_tool(name, tool)),
-        );
-
-        debug!("tools_json: {}", serde_json::to_string_pretty(&tools_json)?);
-
-        let full_instructions = prompt.get_full_instructions();
-        let payload = Payload {
+        let full_instructions = prompt.get_full_instructions(&self.model);
+        let tools_json = create_tools_json_for_responses_api(prompt, &self.model)?;
+        let reasoning = create_reasoning_param_for_request(&self.model, self.effort, self.summary);
+        let payload = ResponsesApiRequest {
             model: &self.model,
             instructions: &full_instructions,
             input: &prompt.input,
             tools: &tools_json,
             tool_choice: "auto",
             parallel_tool_calls: false,
-            reasoning: Some(Reasoning {
-                effort: "high",
-                summary: Some(Summary::Auto),
-            }),
+            reasoning,
             previous_response_id: prompt.prev_id.clone(),
             store: prompt.store,
             stream: true,
@@ -201,8 +125,7 @@ impl ModelClient {
         let base_url = self.provider.base_url.clone();
         let base_url = base_url.trim_end_matches('/');
         let url = format!("{}/responses", base_url);
-        debug!(url, "POST");
-        trace!("request payload: {}", serde_json::to_string(&payload)?);
+        trace!("POST to {url}: {}", serde_json::to_string(&payload)?);
 
         let mut attempt = 0;
         loop {
@@ -274,20 +197,6 @@ impl ModelClient {
             }
         }
     }
-}
-
-fn mcp_tool_to_openai_tool(
-    fully_qualified_name: String,
-    tool: mcp_types::Tool,
-) -> serde_json::Value {
-    // TODO(mbolin): Change the contract of this function to return
-    // ResponsesApiTool.
-    json!({
-        "name": fully_qualified_name,
-        "description": tool.description,
-        "parameters": tool.input_schema,
-        "type": "function",
-    })
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -400,6 +309,19 @@ where
                         }
                     };
                 };
+            }
+            "response.content_part.done"
+            | "response.created"
+            | "response.function_call_arguments.delta"
+            | "response.in_progress"
+            | "response.output_item.added"
+            | "response.output_text.delta"
+            | "response.output_text.done"
+            | "response.reasoning_summary_part.added"
+            | "response.reasoning_summary_text.delta"
+            | "response.reasoning_summary_text.done" => {
+                // Currently, we ignore these events, but we handle them
+                // separately to skip the logging message in the `other` case.
             }
             other => debug!(other, "sse event"),
         }

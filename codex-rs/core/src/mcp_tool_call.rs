@@ -50,51 +50,18 @@ pub(crate) async fn handle_mcp_tool_call(
     notify_mcp_tool_call_event(sess, sub_id, tool_call_begin_event).await;
 
     // Perform the tool call.
-    let (tool_call_end_event, tool_call_err) = match sess
+    let result = sess
         .call_tool(&server, &tool_name, arguments_value, timeout)
         .await
-    {
-        Ok(result) => (
-            EventMsg::McpToolCallEnd(McpToolCallEndEvent {
-                call_id,
-                success: !result.is_error.unwrap_or(false),
-                result: Some(result),
-            }),
-            None,
-        ),
-        Err(e) => (
-            EventMsg::McpToolCallEnd(McpToolCallEndEvent {
-                call_id,
-                success: false,
-                result: None,
-            }),
-            Some(e),
-        ),
-    };
+        .map_err(|e| format!("tool call error: {e}"));
+    let tool_call_end_event = EventMsg::McpToolCallEnd(McpToolCallEndEvent {
+        call_id: call_id.clone(),
+        result: result.clone(),
+    });
 
     notify_mcp_tool_call_event(sess, sub_id, tool_call_end_event.clone()).await;
-    let EventMsg::McpToolCallEnd(McpToolCallEndEvent {
-        call_id,
-        success,
-        result,
-    }) = tool_call_end_event
-    else {
-        unimplemented!("unexpected event type");
-    };
 
-    ResponseInputItem::FunctionCallOutput {
-        call_id,
-        output: FunctionCallOutputPayload {
-            content: result.map_or_else(
-                || format!("err: {tool_call_err:?}"),
-                |result| {
-                    serde_json::to_string(&result)
-                        .unwrap_or_else(|e| format!("JSON serialization error: {e}"))
-                },
-            ),
-            success: Some(success),
-        },
-    }
+    ResponseInputItem::McpToolCallOutput { call_id, result }
 }
 
 async fn notify_mcp_tool_call_event(sess: &Session, sub_id: &str, event: EventMsg) {

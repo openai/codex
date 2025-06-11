@@ -207,11 +207,6 @@ impl ChatWidget<'_> {
         self.conversation_history.scroll_to_bottom();
     }
 
-    pub(crate) fn clear_conversation_history(&mut self) {
-        self.conversation_history.clear();
-        self.request_redraw();
-    }
-
     pub(crate) fn handle_codex_event(&mut self, event: Event) {
         let Event { id, msg } = event;
         match msg {
@@ -239,9 +234,11 @@ impl ChatWidget<'_> {
                 self.request_redraw();
             }
             EventMsg::AgentReasoning(AgentReasoningEvent { text }) => {
-                self.conversation_history
-                    .add_agent_reasoning(&self.config, text);
-                self.request_redraw();
+                if !self.config.hide_agent_reasoning {
+                    self.conversation_history
+                        .add_agent_reasoning(&self.config, text);
+                    self.request_redraw();
+                }
             }
             EventMsg::TaskStarted => {
                 self.bottom_pane.set_task_running(true);
@@ -343,11 +340,9 @@ impl ChatWidget<'_> {
                     .add_active_mcp_tool_call(call_id, server, tool, arguments);
                 self.request_redraw();
             }
-            EventMsg::McpToolCallEnd(McpToolCallEndEvent {
-                call_id,
-                success,
-                result,
-            }) => {
+            EventMsg::McpToolCallEnd(mcp_tool_call_end_event) => {
+                let success = mcp_tool_call_end_event.is_success();
+                let McpToolCallEndEvent { call_id, result } = mcp_tool_call_end_event;
                 self.conversation_history
                     .record_completed_mcp_tool_call(call_id, success, result);
                 self.request_redraw();

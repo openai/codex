@@ -55,6 +55,10 @@ jobs:
             target: x86_64-unknown-linux-musl
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
           - runner: windows-latest
             target: x86_64-pc-windows-msvc
 
@@ -75,7 +79,7 @@ jobs:
             ${{ github.workspace }}/codex-rs/target/
           key: cargo-${{ matrix.runner }}-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
 
-      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' }}
+      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
         name: Install musl build tools
         run: |
           sudo apt install -y musl-tools pkg-config
