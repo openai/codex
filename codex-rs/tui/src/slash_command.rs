@@ -12,7 +12,7 @@ use strum_macros::IntoStaticStr;
 )]
 #[strum(serialize_all = "kebab-case")]
 pub enum SlashCommand {
-    Clear,
+    New,
     ToggleMouseMode,
     Quit,
 }
@@ -21,7 +21,7 @@ impl SlashCommand {
     /// User-visible description shown in the popup.
     pub fn description(self) -> &'static str {
         match self {
-            SlashCommand::Clear => "Clear the chat history.",
+            SlashCommand::New => "Start a new chat.",
             SlashCommand::ToggleMouseMode => {
                 "Toggle mouse mode (enable for scrolling, disable for text selection)"
             }
