@@ -29,6 +29,14 @@ pub struct Cli {
     /// Convenience alias for low-friction sandboxed automatic execution (-a on-failure, network-disabled sandbox that can write to cwd and TMPDIR)
     #[arg(long = "full-auto", default_value_t = false)]
     pub full_auto: bool,
+    /// Skip all confirmation prompts and execute commands without sandboxing.
+    /// Intended solely for ephemeral local testing.
+    #[arg(
+        long = "dangerously-auto-approve-everything",
+        default_value_t = false,
+        conflicts_with = "full_auto"
+    )]
+    pub dangerously_auto_approve_everything: bool,
 
     #[clap(flatten)]
     pub sandbox: SandboxPermissionOption,
