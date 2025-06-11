@@ -1,8 +1,10 @@
 pub mod debug_sandbox;
 mod exit_status;
+pub mod login;
 pub mod proto;
 
 use clap::Parser;
+use codex_common::CliConfigOverrides;
 use codex_common::SandboxPermissionOption;
 
 #[derive(Debug, Parser)]
@@ -13,6 +15,9 @@ pub struct SeatbeltCommand {
 
     #[clap(flatten)]
     pub sandbox: SandboxPermissionOption,
+
+    #[clap(skip)]
+    pub config_overrides: CliConfigOverrides,
 
     /// Full command args to run under seatbelt.
     #[arg(trailing_var_arg = true)]
@@ -27,6 +32,9 @@ pub struct LandlockCommand {
 
     #[clap(flatten)]
     pub sandbox: SandboxPermissionOption,
+
+    #[clap(skip)]
+    pub config_overrides: CliConfigOverrides,
 
     /// Full command args to run under landlock.
     #[arg(trailing_var_arg = true)]
