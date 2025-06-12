@@ -4,6 +4,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::style::Style;
+use ratatui::style::Stylize;
 use ratatui::widgets::Block;
 use ratatui::widgets::BorderType;
 use ratatui::widgets::Borders;
@@ -147,8 +148,6 @@ impl CommandPopup {
 
 impl WidgetRef for CommandPopup {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        let style = Style::default().bg(Color::Blue).fg(Color::White);
-
         let matches = self.filtered_commands();
 
         let mut rows: Vec<Row> = Vec::new();
@@ -157,21 +156,25 @@ impl WidgetRef for CommandPopup {
 
         if visible_matches.is_empty() {
             rows.push(Row::new(vec![
-                Cell::from("").style(style),
-                Cell::from("No matching commands").style(style.add_modifier(Modifier::ITALIC)),
+                Cell::from(""),
+                Cell::from("No matching commands").add_modifier(Modifier::ITALIC),
             ]));
         } else {
+            let default_style = Style::default();
+            let command_style = Style::default().fg(Color::LightBlue);
             for (idx, cmd) in visible_matches.iter().enumerate() {
-                let highlight = Style::default().bg(Color::White).fg(Color::Blue);
-                let cmd_style = if Some(idx) == self.selected_idx {
-                    highlight
+                let (cmd_style, desc_style) = if Some(idx) == self.selected_idx {
+                    (
+                        command_style.bg(Color::DarkGray),
+                        default_style.bg(Color::DarkGray),
+                    )
                 } else {
-                    style
+                    (command_style, default_style)
                 };
 
                 rows.push(Row::new(vec![
-                    Cell::from(cmd.command().to_string()).style(cmd_style),
-                    Cell::from(cmd.description().to_string()).style(style),
+                    Cell::from(format!("/{}", cmd.command())).style(cmd_style),
+                    Cell::from(cmd.description().to_string()).style(desc_style),
                 ]));
             }
         }
@@ -182,13 +185,11 @@ impl WidgetRef for CommandPopup {
             rows,
             [Constraint::Length(FIRST_COLUMN_WIDTH), Constraint::Min(10)],
         )
-        .style(style)
-        .column_spacing(1)
+        .column_spacing(0)
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .style(style),
+                .border_type(BorderType::Rounded),
         );
 
         table.render(area, buf);

@@ -245,12 +245,6 @@ impl ConversationHistoryWidget {
         });
     }
 
-    /// Remove all history entries and reset scrolling.
-    pub fn clear(&mut self) {
-        self.entries.clear();
-        self.scroll_position = usize::MAX;
-    }
-
     pub fn record_completed_exec_command(
         &mut self,
         call_id: String,
@@ -299,7 +293,6 @@ impl ConversationHistoryWidget {
         for entry in self.entries.iter_mut() {
             if let HistoryCell::ActiveMcpToolCall {
                 call_id: history_id,
-                fq_tool_name,
                 invocation,
                 start,
                 ..
@@ -307,7 +300,7 @@ impl ConversationHistoryWidget {
             {
                 if &call_id == history_id {
                     let completed = HistoryCell::new_completed_mcp_tool_call(
-                        fq_tool_name.clone(),
+                        width,
                         invocation.clone(),
                         *start,
                         success,

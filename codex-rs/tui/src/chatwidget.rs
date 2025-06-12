@@ -207,11 +207,6 @@ impl ChatWidget<'_> {
         self.conversation_history.scroll_to_bottom();
     }
 
-    pub(crate) fn clear_conversation_history(&mut self) {
-        self.conversation_history.clear();
-        self.request_redraw();
-    }
-
     pub(crate) fn handle_codex_event(&mut self, event: Event) {
         let Event { id, msg } = event;
         match msg {
@@ -239,9 +234,11 @@ impl ChatWidget<'_> {
                 self.request_redraw();
             }
             EventMsg::AgentReasoning(AgentReasoningEvent { text }) => {
-                self.conversation_history
-                    .add_agent_reasoning(&self.config, text);
-                self.request_redraw();
+                if !self.config.hide_agent_reasoning {
+                    self.conversation_history
+                        .add_agent_reasoning(&self.config, text);
+                    self.request_redraw();
+                }
             }
             EventMsg::TaskStarted => {
                 self.bottom_pane.set_task_running(true);
