@@ -73,7 +73,7 @@ pub(crate) async fn stream_chat_completions(
     loop {
         attempt += 1;
 
-        let mut req_builder = client.post(&url);
+        let mut req_builder = client.post(&url).query(&provider.query_params);
         if let Some(api_key) = &api_key {
             req_builder = req_builder.bearer_auth(api_key.clone());
         }

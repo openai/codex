@@ -217,6 +217,7 @@ impl ModelClient {
             let res = self
                 .client
                 .post(&url)
+                .query(&self.provider.query_params)
                 .bearer_auth(api_key)
                 .header("OpenAI-Beta", "responses=experimental")
                 .header(reqwest::header::ACCEPT, "text/event-stream")
