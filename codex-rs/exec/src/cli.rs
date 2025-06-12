@@ -26,7 +26,7 @@ pub struct Cli {
     /// Skip all confirmation prompts and execute commands without sandboxing.
     /// EXTREMELY DANGEROUS. Intended solely for running in environments that are externally sandboxed.
     #[arg(
-        long = "dangerously-auto-approve-everything",
+        long = "dangerously-auto-approve-and-run-without-sandbox",
         default_value_t = false,
         conflicts_with = "full_auto"
     )]
