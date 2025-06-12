@@ -30,17 +30,24 @@ pub enum InputResult {
     None,
 }
 
+const SUGGESTIONS: &[&str] = &[
+    "explain this codebase to me",
+    "fix any build errors",
+    "are there any bugs in my code?",
+];
+
 pub(crate) struct ChatComposer<'a> {
     textarea: TextArea<'a>,
     command_popup: Option<CommandPopup>,
     app_event_tx: AppEventSender,
     history: ChatComposerHistory,
+    selected_suggestion: Option<usize>,
+    has_user_typed: bool,
 }
 
 impl ChatComposer<'_> {
     pub fn new(has_input_focus: bool, app_event_tx: AppEventSender) -> Self {
         let mut textarea = TextArea::default();
-        textarea.set_placeholder_text("send a message");
         textarea.set_cursor_line_style(ratatui::style::Style::default());
 
         let mut this = Self {
@@ -48,6 +55,8 @@ impl ChatComposer<'_> {
             command_popup: None,
             app_event_tx,
             history: ChatComposerHistory::new(),
+            selected_suggestion: None,
+            has_user_typed: false,
         };
         this.update_border(has_input_focus);
         this
@@ -154,6 +163,43 @@ impl ChatComposer<'_> {
     /// Handle key event when no popup is visible.
     fn handle_key_event_without_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
         let input: Input = key_event.into();
+
+        // Handle suggested prompts when input is empty
+        if !self.has_user_typed && self.is_input_empty() {
+            match input {
+                Input { key: Key::Right, shift: false, .. } => {
+                    // Cycle forward through suggestions
+                    self.selected_suggestion = match self.selected_suggestion {
+                        None => Some(0),
+                        Some(i) if i >= SUGGESTIONS.len() - 1 => None,
+                        Some(i) => Some(i + 1),
+                    };
+                    return (InputResult::None, true);
+                }
+                Input { key: Key::Left, shift: false, .. } => {
+                    // Cycle backward through suggestions
+                    self.selected_suggestion = match self.selected_suggestion {
+                        None => Some(SUGGESTIONS.len() - 1),
+                        Some(0) => None,
+                        Some(i) => Some(i - 1),
+                    };
+                    return (InputResult::None, true);
+                }
+                Input {
+                    key: Key::Enter,
+                    shift: false,
+                    alt: false,
+                    ctrl: false,
+                } if self.selected_suggestion.is_some() => {
+                    if let Some(index) = self.selected_suggestion.take() {
+                        let suggestion = SUGGESTIONS[index];
+                        return (InputResult::Submitted(suggestion.to_string()), true);
+                    }
+                }
+                _ => {}
+            }
+        }
+
         match input {
             // -------------------------------------------------------------
             // History navigation (Up / Down) – only when the composer is not
@@ -191,6 +237,7 @@ impl ChatComposer<'_> {
                 let text = self.textarea.lines().join("\n");
                 self.textarea.select_all();
                 self.textarea.cut();
+                self.has_user_typed = false;
 
                 if text.is_empty() {
                     (InputResult::None, true)
@@ -218,6 +265,9 @@ impl ChatComposer<'_> {
     /// Handle generic Input events that modify the textarea content.
     fn handle_input_basic(&mut self, input: Input) -> (InputResult, bool) {
         self.textarea.input(input);
+        self.selected_suggestion = None;
+        // Mark that user has typed, but reset if input becomes empty
+        self.has_user_typed = !self.is_input_empty();
         (InputResult::None, true)
     }
 
@@ -289,6 +339,71 @@ impl ChatComposer<'_> {
 
     pub(crate) fn is_command_popup_visible(&self) -> bool {
         self.command_popup.is_some()
+    }
+
+    pub(crate) fn is_input_empty(&self) -> bool {
+        self.textarea.lines().iter().all(|line| line.trim().is_empty())
+    }
+
+    pub(crate) fn should_show_suggestions(&self) -> bool {
+        !self.has_user_typed && self.is_input_empty()
+    }
+
+    pub(crate) fn get_suggestion_state(&self) -> (Option<usize>, &'static [&'static str]) {
+        (self.selected_suggestion, SUGGESTIONS)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::expect_used)]
+    use super::*;
+    use crate::app_event_sender::AppEventSender;
+    use std::sync::mpsc::channel;
+
+    #[test]
+    fn test_is_input_empty_with_empty_textarea() {
+        let (tx, _rx) = channel();
+        let tx = AppEventSender::new(tx);
+        let composer = ChatComposer::new(false, tx);
+        
+        assert!(composer.is_input_empty());
+    }
+
+    #[test]
+    fn test_is_input_empty_with_whitespace_only() {
+        let (tx, _rx) = channel();
+        let tx = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(false, tx);
+        
+        // Add whitespace-only content
+        composer.textarea.insert_str("   \t  \n  ");
+        
+        assert!(composer.is_input_empty());
+    }
+
+    #[test]
+    fn test_is_input_empty_with_actual_content() {
+        let (tx, _rx) = channel();
+        let tx = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(false, tx);
+        
+        // Add actual content
+        composer.textarea.insert_str("hello world");
+        
+        assert!(!composer.is_input_empty());
+    }
+
+    #[test]
+    fn test_is_input_empty_with_mixed_content() {
+        let (tx, _rx) = channel();
+        let tx = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(false, tx);
+        
+        // Add mixed whitespace and content
+        composer.textarea.insert_str("  \n  hello  \n  ");
+        
+        assert!(!composer.is_input_empty());
     }
 }
 
