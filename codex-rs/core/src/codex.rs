@@ -1371,7 +1371,7 @@ async fn handle_container_exec_with_params(
             }
         }
         Err(CodexErr::Sandbox(error)) => {
-            handle_sanbox_error(error, sandbox_type, params, sess, sub_id, call_id).await
+            handle_sandbox_error(error, sandbox_type, params, sess, sub_id, call_id).await
         }
         Err(e) => {
             // Handle non-sandbox errors
@@ -1386,7 +1386,7 @@ async fn handle_container_exec_with_params(
     }
 }
 
-async fn handle_sanbox_error(
+async fn handle_sandbox_error(
     error: SandboxErr,
     sandbox_type: SandboxType,
     params: ExecParams,
