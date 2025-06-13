@@ -51,7 +51,7 @@ pub fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> std::io::
             Some(SandboxPolicy::new_full_auto_policy()),
             Some(AskForApproval::OnFailure),
         )
-    } else if cli.dangerously_auto_approve_everything {
+    } else if cli.dangerously_run_with_no_sandbox {
         (
             Some(SandboxPolicy::new_unrestricted_policy()),
             Some(AskForApproval::Never),
