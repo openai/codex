@@ -59,7 +59,7 @@ pub struct ModelProviderInfo {
     /// The map is kept empty by default so existing configurations continue
     /// to work unchanged.
     #[serde(default)]
-    pub query_params: std::collections::HashMap<String, String>,
+    pub query_params: HashMap<String, String>,
 }
 
 impl ModelProviderInfo {
@@ -107,7 +107,7 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
                 env_key: Some("OPENAI_API_KEY".into()),
                 env_key_instructions: Some("Create an API key (https://platform.openai.com) and export it as an environment variable.".into()),
                 wire_api: WireApi::Responses,
-                query_params: std::collections::HashMap::new(),
+                query_params: HashMap::new(),
             },
         ),
         (
@@ -118,7 +118,7 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
                 env_key: Some("OPENROUTER_API_KEY".into()),
                 env_key_instructions: None,
                 wire_api: WireApi::Chat,
-                query_params: std::collections::HashMap::new(),
+                query_params: HashMap::new(),
             },
         ),
         (
@@ -129,7 +129,7 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
                 env_key: Some("GEMINI_API_KEY".into()),
                 env_key_instructions: None,
                 wire_api: WireApi::Chat,
-                query_params: std::collections::HashMap::new(),
+                query_params: HashMap::new(),
             },
         ),
         (
@@ -140,7 +140,7 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
                 env_key: None,
                 env_key_instructions: None,
                 wire_api: WireApi::Chat,
-                query_params: std::collections::HashMap::new(),
+                query_params: HashMap::new(),
             },
         ),
         (
@@ -151,7 +151,7 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
                 env_key: Some("MISTRAL_API_KEY".into()),
                 env_key_instructions: None,
                 wire_api: WireApi::Chat,
-                query_params: std::collections::HashMap::new(),
+                query_params: HashMap::new(),
             },
         ),
         (
@@ -162,7 +162,7 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
                 env_key: Some("DEEPSEEK_API_KEY".into()),
                 env_key_instructions: None,
                 wire_api: WireApi::Chat,
-                query_params: std::collections::HashMap::new(),
+                query_params: HashMap::new(),
             },
         ),
         (
@@ -173,7 +173,7 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
                 env_key: Some("XAI_API_KEY".into()),
                 env_key_instructions: None,
                 wire_api: WireApi::Chat,
-                query_params: std::collections::HashMap::new(),
+                query_params: HashMap::new(),
             },
         ),
         (
@@ -184,7 +184,7 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
                 env_key: Some("GROQ_API_KEY".into()),
                 env_key_instructions: None,
                 wire_api: WireApi::Chat,
-                query_params: std::collections::HashMap::new(),
+                query_params: HashMap::new(),
             },
         ),
     ]
