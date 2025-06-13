@@ -162,9 +162,12 @@ impl SandboxPolicy {
             SandboxPolicy::Permissions(p) => p,
             SandboxPolicy::NoSandbox => Vec::new(),
         };
-        permissions.extend(writable_roots.iter().cloned().map(|folder| {
-            SandboxPermission::DiskWriteFolder { folder }
-        }));
+        permissions.extend(
+            writable_roots
+                .iter()
+                .cloned()
+                .map(|folder| SandboxPermission::DiskWriteFolder { folder }),
+        );
         SandboxPolicy::Permissions(permissions)
     }
 
