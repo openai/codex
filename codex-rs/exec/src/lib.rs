@@ -31,6 +31,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         model,
         config_profile,
         full_auto,
+        dangerously_run_with_no_sandbox,
         sandbox,
         cwd,
         skip_git_repo_check,
@@ -86,6 +87,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
     let sandbox_policy = if full_auto {
         Some(SandboxPolicy::new_full_auto_policy())
+    } else if dangerously_run_with_no_sandbox {
+        Some(SandboxPolicy::new_unrestricted_policy())
     } else {
         sandbox.permissions.clone().map(Into::into)
     };

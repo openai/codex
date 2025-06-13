@@ -23,6 +23,15 @@ pub struct Cli {
     #[arg(long = "full-auto", default_value_t = false)]
     pub full_auto: bool,
 
+    /// Skip all confirmation prompts and execute commands without sandboxing.
+    /// EXTREMELY DANGEROUS. Intended solely for running in environments that are externally sandboxed.
+    #[arg(
+        long = "dangerously-run-with-no-sandbox",
+        default_value_t = false,
+        conflicts_with = "full_auto"
+    )]
+    pub dangerously_run_with_no_sandbox: bool,
+
     #[clap(flatten)]
     pub sandbox: SandboxPermissionOption,
 
