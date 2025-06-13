@@ -1189,7 +1189,8 @@ export class AgentLoop {
 
               const responseCall =
                 !this.config.provider ||
-                this.config.provider?.toLowerCase() === "openai"
+                this.config.provider?.toLowerCase() === "openai" ||
+                this.config.provider?.toLowerCase() === "azure"
                   ? (params: ResponseCreateParams) =>
                       this.oai.responses.create(params)
                   : (params: ResponseCreateParams) =>
