@@ -54,6 +54,7 @@ import meow from "meow";
 import os from "os";
 import path from "path";
 import React from "react";
+import { providers } from "./utils/providers";
 
 // Call this early so `tail -F "$TMPDIR/oai-codex/codex-cli-latest.log"` works
 // immediately. This must be run with DEBUG=1 for logging to work.
@@ -327,26 +328,44 @@ try {
   // ignore errors
 }
 
-if (cli.flags.login) {
-  apiKey = await fetchApiKey(client.issuer, client.client_id);
-  try {
-    const home = os.homedir();
-    const authDir = path.join(home, ".codex");
-    const authFile = path.join(authDir, "auth.json");
-    if (fs.existsSync(authFile)) {
-      const data = JSON.parse(fs.readFileSync(authFile, "utf-8"));
-      savedTokens = data.tokens;
+// Get provider-specific API key if not OpenAI
+if (provider.toLowerCase() !== "openai") {
+  const providerInfo = providers[provider.toLowerCase()];
+  if (providerInfo) {
+    const providerApiKey = process.env[providerInfo.envKey];
+    if (providerApiKey) {
+      apiKey = providerApiKey;
     }
-  } catch {
-    /* ignore */
   }
-} else if (!apiKey) {
-  apiKey = await fetchApiKey(client.issuer, client.client_id);
 }
+
+// Only proceed with OpenAI auth flow if:
+// 1. Provider is OpenAI and no API key is set, or
+// 2. Login flag is explicitly set
+if (provider.toLowerCase() === "openai" && !apiKey) {
+  if (cli.flags.login) {
+    apiKey = await fetchApiKey(client.issuer, client.client_id);
+    try {
+      const home = os.homedir();
+      const authDir = path.join(home, ".codex");
+      const authFile = path.join(authDir, "auth.json");
+      if (fs.existsSync(authFile)) {
+        const data = JSON.parse(fs.readFileSync(authFile, "utf-8"));
+        savedTokens = data.tokens;
+      }
+    } catch {
+      /* ignore */
+    }
+  } else {
+    apiKey = await fetchApiKey(client.issuer, client.client_id);
+  }
+}
+
 // Ensure the API key is available as an environment variable for legacy code
 process.env["OPENAI_API_KEY"] = apiKey;
 
-if (cli.flags.free) {
+// Only attempt credit redemption for OpenAI provider
+if (cli.flags.free && provider.toLowerCase() === "openai") {
   // eslint-disable-next-line no-console
   console.log(`${chalk.bold("codex --free")} attempting to redeem credits...`);
   if (!savedTokens?.refresh_token) {
