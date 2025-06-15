@@ -25,6 +25,7 @@ describe("exec cancellation", () => {
     abortController.abort();
 
     const result = await promise;
+    expect(result.pid).toBeGreaterThan(0);
     const durationMs = Date.now() - start;
 
     // The process should have been terminated rapidly (well under the 5s the
@@ -49,6 +50,7 @@ describe("exec cancellation", () => {
     const cmd = ["node", "-e", "console.log('finished')"];
 
     const result = await rawExec(cmd, {}, config, abortController.signal);
+    expect(result.pid).toBeGreaterThan(0);
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe("finished");

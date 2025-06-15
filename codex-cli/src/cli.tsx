@@ -39,6 +39,7 @@ import {
 } from "./utils/config";
 import {
   getApiKey as fetchApiKey,
+  getGithubCopilotApiKey as fetchGithubCopilotApiKey,
   maybeRedeemCredits,
 } from "./utils/get-api-key";
 import { createInputItem } from "./utils/input-utils";
@@ -322,13 +323,43 @@ try {
     if (data.OPENAI_API_KEY && !expired) {
       apiKey = data.OPENAI_API_KEY;
     }
+    if (
+      data.GITHUBCOPILOT_API_KEY &&
+      provider.toLowerCase() === "githubcopilot"
+    ) {
+      apiKey = data.GITHUBCOPILOT_API_KEY;
+    }
   }
 } catch {
   // ignore errors
 }
 
-if (cli.flags.login) {
-  apiKey = await fetchApiKey(client.issuer, client.client_id);
+if (provider.toLowerCase() === "githubcopilot" && !apiKey) {
+  apiKey = await fetchGithubCopilotApiKey();
+  try {
+    const home = os.homedir();
+    const authDir = path.join(home, ".codex");
+    const authFile = path.join(authDir, "auth.json");
+    fs.writeFileSync(
+      authFile,
+      JSON.stringify(
+        {
+          GITHUBCOPILOT_API_KEY: apiKey,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+  } catch {
+    /* ignore */
+  }
+} else if (cli.flags.login) {
+  if (provider.toLowerCase() === "githubcopilot") {
+    apiKey = await fetchGithubCopilotApiKey();
+  } else {
+    apiKey = await fetchApiKey(client.issuer, client.client_id);
+  }
   try {
     const home = os.homedir();
     const authDir = path.join(home, ".codex");
@@ -341,10 +372,14 @@ if (cli.flags.login) {
     /* ignore */
   }
 } else if (!apiKey) {
-  apiKey = await fetchApiKey(client.issuer, client.client_id);
+  if (provider.toLowerCase() === "githubcopilot") {
+    apiKey = await fetchGithubCopilotApiKey();
+  } else {
+    apiKey = await fetchApiKey(client.issuer, client.client_id);
+  }
 }
 // Ensure the API key is available as an environment variable for legacy code
-process.env["OPENAI_API_KEY"] = apiKey;
+process.env[`${provider.toUpperCase()}_API_KEY`] = apiKey;
 
 if (cli.flags.free) {
   // eslint-disable-next-line no-console

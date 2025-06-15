@@ -41,6 +41,7 @@ export function exec(
       stdout: "",
       stderr: "command[0] is not a string",
       exitCode: 1,
+      pid: 0,
     });
   }
 
@@ -124,7 +125,7 @@ export function exec(
         if (!child.killed) {
           killTarget("SIGKILL");
         }
-      }, 2000).unref();
+      }, 250).unref();
     };
     if (abortSignal.aborted) {
       abortHandler();
@@ -186,6 +187,7 @@ export function exec(
         stdout,
         stderr,
         exitCode,
+        pid: child.pid ?? 0,
       };
       resolve(
         addTruncationWarningsIfNecessary(
@@ -201,6 +203,7 @@ export function exec(
         stdout: "",
         stderr: String(err),
         exitCode: 1,
+        pid: child.pid ?? 0,
       };
       resolve(
         addTruncationWarningsIfNecessary(
@@ -224,7 +227,7 @@ function addTruncationWarningsIfNecessary(
   if (!hitMaxStdout && !hitMaxStderr) {
     return execResult;
   } else {
-    const { stdout, stderr, exitCode } = execResult;
+    const { stdout, stderr, exitCode, pid } = execResult;
     return {
       stdout: hitMaxStdout
         ? stdout + "\n\n[Output truncated: too many lines or bytes]"
@@ -233,6 +236,7 @@ function addTruncationWarningsIfNecessary(
         ? stderr + "\n\n[Output truncated: too many lines or bytes]"
         : stderr,
       exitCode,
+      pid,
     };
   }
 }

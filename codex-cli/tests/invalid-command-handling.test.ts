@@ -11,6 +11,7 @@ describe("rawExec – invalid command handling", () => {
     const cmd = ["definitely-not-a-command-1234567890"];
     const config = { model: "any", instructions: "" } as AppConfig;
     const result = await rawExec(cmd, {}, config);
+    expect(result.pid).toBe(0);
 
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr.length).toBeGreaterThan(0);
