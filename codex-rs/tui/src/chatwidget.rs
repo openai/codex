@@ -397,6 +397,13 @@ impl ChatWidget<'_> {
     }
 }
 
+impl ChatWidget<'_> {
+    /// Returns true if the bottom pane's input buffer is empty.
+    pub(crate) fn is_input_empty(&self) -> bool {
+        self.bottom_pane.is_input_empty()
+    }
+}
+
 impl WidgetRef for &ChatWidget<'_> {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let bottom_height = self.bottom_pane.calculate_required_height(&area);

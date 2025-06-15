@@ -187,6 +187,11 @@ impl BottomPane<'_> {
             self.request_redraw();
         }
     }
+
+    /// Returns true if the current input buffer is empty.
+    pub(crate) fn is_input_empty(&self) -> bool {
+        self.composer.is_input_empty()
+    }
 }
 
 impl WidgetRef for &BottomPane<'_> {
