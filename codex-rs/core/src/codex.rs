@@ -191,6 +191,9 @@ pub(crate) struct Session {
     rollout: Mutex<Option<crate::rollout::RolloutRecorder>>,
     state: Mutex<State>,
     codex_linux_sandbox_exe: Option<PathBuf>,
+
+    /// This session's current agent instructions.
+    agent_instructions: Option<String>,
 }
 
 impl Session {
@@ -667,6 +670,7 @@ async fn submission_loop(
                     state: Mutex::new(state),
                     rollout: Mutex::new(rollout_recorder),
                     codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
+                    agent_instructions: config.agent_instructions.clone(),
                 }));
 
                 // Gather history metadata for SessionConfiguredEvent.
@@ -1010,6 +1014,7 @@ async fn run_turn(
         user_instructions: sess.instructions.clone(),
         store,
         extra_tools,
+        agent_instructions: sess.agent_instructions.clone(),
     };
 
     let mut retries = 0;

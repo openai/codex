@@ -33,11 +33,14 @@ pub struct Prompt {
     /// the "fully qualified" tool name (i.e., prefixed with the server name),
     /// which should be reported to the model in place of Tool::name.
     pub extra_tools: HashMap<String, mcp_types::Tool>,
+
+    /// Allow agents to override the prompt instructions
+    pub agent_instructions: Option<String>,
 }
 
 impl Prompt {
     pub(crate) fn get_full_instructions(&self, model: &str) -> Cow<str> {
-        let mut sections: Vec<&str> = vec![BASE_INSTRUCTIONS];
+        let mut sections: Vec<&str> = vec![self.agent_instructions.as_ref().map_or(BASE_INSTRUCTIONS, |z| z.as_str())];
         if let Some(ref user) = self.user_instructions {
             sections.push(user);
         }
