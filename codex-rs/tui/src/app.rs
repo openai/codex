@@ -202,13 +202,22 @@ impl<'a> App<'a> {
                                 }
                             }
                         }
-                        KeyEvent {
+                        key_event @ KeyEvent {
                             code: KeyCode::Char('d'),
                             modifiers: crossterm::event::KeyModifiers::CONTROL,
                             ..
-                        } => {
-                            self.app_event_tx.send(AppEvent::ExitRequest);
-                        }
+                        } => match &self.app_state {
+                            AppState::Chat { widget } => {
+                                if widget.is_input_empty() {
+                                    self.app_event_tx.send(AppEvent::ExitRequest);
+                                } else {
+                                    self.dispatch_key_event(key_event);
+                                }
+                            }
+                            _ => {
+                                self.app_event_tx.send(AppEvent::ExitRequest);
+                            }
+                        },
                         _ => {
                             self.dispatch_key_event(key_event);
                         }

@@ -267,8 +267,10 @@ impl ChatComposer<'_> {
 
         let bs = if has_focus {
             BlockState {
-                right_title: Line::from("Enter to send | Ctrl+D to quit | Ctrl+J for newline")
-                    .alignment(Alignment::Right),
+                right_title: Line::from(
+                    "Enter to send | Ctrl+D to quit if input empty | Ctrl+J for newline",
+                )
+                .alignment(Alignment::Right),
                 border_style: Style::default(),
             }
         } else {
@@ -289,6 +291,11 @@ impl ChatComposer<'_> {
 
     pub(crate) fn is_command_popup_visible(&self) -> bool {
         self.command_popup.is_some()
+    }
+
+    /// Returns true if the current input buffer is empty.
+    pub(crate) fn is_input_empty(&self) -> bool {
+        self.textarea.lines().iter().all(|line| line.is_empty())
     }
 }
 
