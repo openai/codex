@@ -68,6 +68,9 @@ pub enum Op {
         /// `ConfigureSession` operation so that the business-logic layer can
         /// operate deterministically.
         cwd: std::path::PathBuf,
+
+        /// defines the system instructions for the codex agent
+        agent_instructions: Option<String>,
     },
 
     /// Abort current task.

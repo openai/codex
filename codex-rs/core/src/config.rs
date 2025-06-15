@@ -122,6 +122,10 @@ pub struct Config {
     /// If not "none", the value to use for `reasoning.summary` when making a
     /// request using the Responses API.
     pub model_reasoning_summary: ReasoningSummary,
+
+    /// Agent Instructions defines how the agent should function.
+    /// This defaults to the prompt.md contents located within codex-rs.
+    pub agent_instructions: Option<String>,
 }
 
 impl Config {
@@ -332,6 +336,10 @@ pub struct ConfigOverrides {
     pub model_provider: Option<String>,
     pub config_profile: Option<String>,
     pub codex_linux_sandbox_exe: Option<PathBuf>,
+
+    /// Default agent instructions to use when configuring codex.
+    /// When None this will be set to the default agent instructions
+    pub agent_instructions: Option<String>,
 }
 
 impl Config {
@@ -353,6 +361,7 @@ impl Config {
             model_provider,
             config_profile: config_profile_key,
             codex_linux_sandbox_exe,
+            agent_instructions
         } = overrides;
 
         let config_profile = match config_profile_key.or(cfg.profile) {
@@ -459,6 +468,7 @@ impl Config {
             hide_agent_reasoning: cfg.hide_agent_reasoning.unwrap_or(false),
             model_reasoning_effort: cfg.model_reasoning_effort.unwrap_or_default(),
             model_reasoning_summary: cfg.model_reasoning_summary.unwrap_or_default(),
+            agent_instructions,
         };
         Ok(config)
     }
@@ -803,6 +813,7 @@ disable_response_storage = true
                 hide_agent_reasoning: false,
                 model_reasoning_effort: ReasoningEffort::default(),
                 model_reasoning_summary: ReasoningSummary::default(),
+                agent_instructions: None,
             },
             o3_profile_config
         );
@@ -845,6 +856,7 @@ disable_response_storage = true
             hide_agent_reasoning: false,
             model_reasoning_effort: ReasoningEffort::default(),
             model_reasoning_summary: ReasoningSummary::default(),
+            agent_instructions: None,
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -902,6 +914,7 @@ disable_response_storage = true
             hide_agent_reasoning: false,
             model_reasoning_effort: ReasoningEffort::default(),
             model_reasoning_summary: ReasoningSummary::default(),
+            agent_instructions: None,
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);

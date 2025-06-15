@@ -116,6 +116,7 @@ impl Codex {
             disable_response_storage: config.disable_response_storage,
             notify: config.notify.clone(),
             cwd: config.cwd.clone(),
+            agent_instructions: config.agent_instructions.clone(),
         };
 
         let config = Arc::new(config);
@@ -191,6 +192,9 @@ pub(crate) struct Session {
     rollout: Mutex<Option<crate::rollout::RolloutRecorder>>,
     state: Mutex<State>,
     codex_linux_sandbox_exe: Option<PathBuf>,
+
+    /// This session's current agent instructions.
+    agent_instructions: Option<String>,
 }
 
 impl Session {
@@ -564,6 +568,7 @@ async fn submission_loop(
                 disable_response_storage,
                 notify,
                 cwd,
+                agent_instructions,
             } => {
                 info!("Configuring session: model={model}; provider={provider:?}");
                 if !cwd.is_absolute() {
@@ -667,6 +672,7 @@ async fn submission_loop(
                     state: Mutex::new(state),
                     rollout: Mutex::new(rollout_recorder),
                     codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
+                    agent_instructions,
                 }));
 
                 // Gather history metadata for SessionConfiguredEvent.
@@ -1010,6 +1016,7 @@ async fn run_turn(
         user_instructions: sess.instructions.clone(),
         store,
         extra_tools,
+        agent_instructions: sess.agent_instructions.clone(),
     };
 
     let mut retries = 0;
