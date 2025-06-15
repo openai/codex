@@ -18,6 +18,8 @@ export type ExecResult = {
   stdout: string;
   stderr: string;
   exitCode: number;
+  /** PID of the spawned process. 0 if spawn failed */
+  pid: number;
 };
 
 /**

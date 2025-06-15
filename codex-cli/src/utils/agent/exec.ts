@@ -120,6 +120,7 @@ export function execApplyPatch(
       stdout: result,
       stderr: "",
       exitCode: 0,
+      pid: 0,
     };
   } catch (error: unknown) {
     // @ts-expect-error error might not be an object or have a message property.
@@ -128,6 +129,7 @@ export function execApplyPatch(
       stdout: "",
       stderr: stderr,
       exitCode: 1,
+      pid: 0,
     };
   }
 }

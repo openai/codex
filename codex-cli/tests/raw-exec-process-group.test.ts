@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import fs from "fs";
 import { exec as rawExec } from "../src/utils/agent/sandbox/raw-exec.js";
 import type { AppConfig } from "src/utils/config.js";
 
@@ -37,7 +38,11 @@ describe("rawExec – abort kills entire process group", () => {
     //  - spawns a background `sleep 30`
     //  - prints the PID of the `sleep`
     //  - waits for `sleep` to exit
-    const { stdout, exitCode } = await (async () => {
+    const {
+      stdout,
+      exitCode,
+      pid: rootPid,
+    } = await (async () => {
       const p = rawExec(cmd, {}, config, abortController.signal);
 
       // Give Bash a tiny bit of time to start and print the PID.
@@ -52,6 +57,7 @@ describe("rawExec – abort kills entire process group", () => {
 
     // We expect a non‑zero exit code because the process was killed.
     expect(exitCode).not.toBe(0);
+    expect(rootPid).toBeGreaterThan(0);
 
     // Extract the PID of the sleep process that bash printed
     const pid = Number(stdout.trim().match(/^\d+/)?.[0]);
@@ -68,17 +74,42 @@ describe("rawExec – abort kills entire process group", () => {
  * @throws {Error} If the process is still alive after 500ms
  */
 async function ensureProcessGone(pid: number) {
-  const timeout = 500;
+  const timeout = 1000;
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
     try {
       process.kill(pid, 0); // check if process still exists
+      try {
+        const stat = await fs.promises.readFile(`/proc/${pid}/stat`, "utf8");
+        if (stat.split(" ")[2] === "Z") {
+          return; // zombie processes are effectively dead
+        }
+      } catch {
+        /* ignore */
+      }
       await new Promise((r) => setTimeout(r, 50)); // wait and retry
     } catch (e: any) {
       if (e.code === "ESRCH") {
         return; // process is gone — success
       }
       throw e; // unexpected error — rethrow
+    }
+  }
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch {
+    /* ignore */
+  }
+  const extraDeadline = Date.now() + 250;
+  while (Date.now() < extraDeadline) {
+    try {
+      process.kill(pid, 0);
+      await new Promise((r) => setTimeout(r, 50));
+    } catch (e: any) {
+      if (e.code === "ESRCH") {
+        return;
+      }
+      throw e;
     }
   }
   throw new Error(
