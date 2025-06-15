@@ -116,6 +116,7 @@ impl Codex {
             disable_response_storage: config.disable_response_storage,
             notify: config.notify.clone(),
             cwd: config.cwd.clone(),
+            agent_instructions: config.agent_instructions.clone(),
         };
 
         let config = Arc::new(config);
@@ -567,6 +568,7 @@ async fn submission_loop(
                 disable_response_storage,
                 notify,
                 cwd,
+                agent_instructions,
             } => {
                 info!("Configuring session: model={model}; provider={provider:?}");
                 if !cwd.is_absolute() {
@@ -670,7 +672,7 @@ async fn submission_loop(
                     state: Mutex::new(state),
                     rollout: Mutex::new(rollout_recorder),
                     codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
-                    agent_instructions: config.agent_instructions.clone(),
+                    agent_instructions,
                 }));
 
                 // Gather history metadata for SessionConfiguredEvent.
