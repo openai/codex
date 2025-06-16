@@ -541,7 +541,6 @@ if (cli.flags.quiet) {
         ? AutoApprovalMode.AUTO_EDIT
         : config.approvalMode || AutoApprovalMode.SUGGEST;
 
-  // Run quiet mode with the determined approval policy
   await runQuietMode({
     prompt,
     imagePaths: imagePaths || [],
