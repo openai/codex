@@ -33,6 +33,7 @@ import { applyPatchToolInstructions } from "./apply-patch.js";
 import { handleExecCommand } from "./handle-exec-command.js";
 import { HttpsProxyAgent } from "https-proxy-agent";
 import { spawnSync } from "node:child_process";
+import { getEnvironmentInfo } from "../platform-info.js";
 import { randomUUID } from "node:crypto";
 import OpenAI, { APIConnectionTimeoutError, AzureOpenAI } from "openai";
 import os from "os";
@@ -1599,9 +1600,12 @@ export class AgentLoop {
 // Dynamic developer message prefix: includes user, workdir, and rg suggestion.
 const userName = os.userInfo().username;
 const workdir = process.cwd();
+const { platform, shell } = getEnvironmentInfo();
 const dynamicLines: Array<string> = [
   `User: ${userName}`,
   `Workdir: ${workdir}`,
+  `Platform: ${platform}`,
+  `Shell: ${shell}`,
 ];
 if (spawnSync("rg", ["--version"], { stdio: "ignore" }).status === 0) {
   dynamicLines.push(
