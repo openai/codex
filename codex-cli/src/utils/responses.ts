@@ -285,7 +285,22 @@ const createCompletion = (openai: OpenAI, input: ResponseCreateInput) => {
     metadata: input.metadata,
   };
 
-  return openai.chat.completions.create(chatInput);
+  // Older mocks or alternate SDKs used by the tests may not expose the
+  // `chat` API surface.  Fall back to the `responses` endpoint when the
+  // chat-based helper isn't available so unit tests can stub just
+  // `openai.responses.create()`.
+  type FallbackClient = {
+    chat?: { completions?: { create?: (p: typeof chatInput) => unknown } };
+    responses?: { create?: (p: ResponseCreateParams) => unknown };
+  };
+  const client = openai as unknown as FallbackClient;
+  if (client.chat?.completions?.create) {
+    return client.chat.completions.create(chatInput);
+  }
+  if (client.responses?.create) {
+    return client.responses.create(input as ResponseCreateParams);
+  }
+  throw new Error("No supported completion method found on OpenAI client");
 };
 
 // Main function with overloading
