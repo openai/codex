@@ -252,23 +252,6 @@ export class AgentLoop {
     this.execAbortController = new AbortController();
     log("AgentLoop.cancel(): execAbortController.abort() called");
 
-    // NOTE: We intentionally do *not* clear `lastResponseId` here.  If the
-    // stream produced a `function_call` before the user cancelled, OpenAI now
-    // expects a corresponding `function_call_output` that must reference that
-    // very same response ID.  We therefore keep the ID around so the
-    // follow‑up request can still satisfy the contract.
-
-    // If we have *not* seen any function_call IDs yet there is nothing that
-    // needs to be satisfied in a follow‑up request.  In that case we clear
-    // the stored lastResponseId so a subsequent run starts a clean turn.
-    if (this.pendingAborts.size === 0) {
-      try {
-        this.onLastResponseId("");
-      } catch {
-        /* ignore */
-      }
-    }
-
     this.onLoading(false);
 
     /* Inform the UI that the run was aborted by the user. */
@@ -975,9 +958,10 @@ export class AgentLoop {
                 // if provided.
                 let delayMs = RATE_LIMIT_RETRY_WAIT_MS * 2 ** (attempt - 1);
 
-                // Parse suggested retry time from error message, e.g., "Please try again in 1.3s"
+                // Parse suggested retry time from error message, e.g., "Please try again in 1.3s" or "5 seconds"
                 const msg = errCtx?.message ?? "";
-                const m = /(?:retry|try) again in ([\d.]+)s/i.exec(msg);
+                const m =
+                  /(?:retry|try) again in ([\d.]+)\s*(?:s|seconds?)/i.exec(msg);
                 if (m && m[1]) {
                   const suggested = parseFloat(m[1]) * 1000;
                   if (!Number.isNaN(suggested)) {
@@ -1232,8 +1216,22 @@ export class AgentLoop {
             ) {
               streamRetryAttempt += 1;
 
-              const waitMs =
+              // Exponential backoff: base wait * 2^(attempt-1), or use suggested retry time if provided.
+              let waitMs =
                 RATE_LIMIT_RETRY_WAIT_MS * 2 ** (streamRetryAttempt - 1);
+              // Parse suggested retry time from error message (e.g., "please try again in X seconds").
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const streamMsg = (err as any).message ?? "";
+              const m2 =
+                /(?:retry|try) again in ([\d.]+)\s*(?:s|seconds?)/i.exec(
+                  streamMsg,
+                );
+              if (m2 && m2[1]) {
+                const suggested = parseFloat(m2[1]) * 1000;
+                if (!Number.isNaN(suggested)) {
+                  waitMs = suggested;
+                }
+              }
               log(
                 `OpenAI stream rate‑limited – retry ${streamRetryAttempt}/${MAX_STREAM_RETRIES} in ${waitMs} ms`,
               );

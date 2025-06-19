@@ -76,3 +76,7 @@ If you want to bypass the initial OpenAI login/validation step entirely for Azur
 When using Azure, the CLI will call the Azure OpenAI Responses API directly (the `/responses` endpoint) to generate completions. This uses the Azure-specific Responses API as documented here: https://learn.microsoft.com/en-us/azure/ai-services/openai/how-to/responses?tabs=python-key.
 
 You can configure the API version by setting the `AZURE_OPENAI_API_VERSION` environment variable (default: `2025-04-01-preview`).
+
+## Rate Limit Considerations
+
+Azure OpenAI enforces rate limits per resource and deployment. When you exceed these limits, you may encounter HTTP 429 errors. The Codex CLI automatically retries requests using exponential backoff and honors any suggested retry time provided in the error message (e.g., "please try again in X seconds"). You can customize the base retry wait time by setting the `OPENAI_RATE_LIMIT_RETRY_WAIT_MS` environment variable. If you continue to see rate limit errors, consider reducing your request rate or upgrading your Azure resource tier.
