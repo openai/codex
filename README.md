@@ -8,7 +8,7 @@
 ---
 
 <details>
-<summary><strong>Table&nbsp;of&nbsp;Contents</strong></summary>
+<summary><strong>Table of contents</strong></summary>
 
 <!-- Begin ToC -->
 
@@ -98,12 +98,14 @@ export OPENAI_API_KEY="your-api-key-here"
 >
 > - openai (default)
 > - openrouter
+> - azure
 > - gemini
 > - ollama
 > - mistral
 > - deepseek
 > - xai
 > - groq
+> - arceeai
 > - any other provider that is compatible with the OpenAI API
 >
 > If you use a provider other than OpenAI, you will need to set the API key for the provider in the config file or in the environment variable as:
@@ -226,13 +228,13 @@ Key flags: `--model/-m`, `--approval-mode/-a`, `--quiet/-q`, and `--notify`.
 
 ## Memory & project docs
 
-Codex merges Markdown instructions in this order:
+You can give Codex extra instructions and guidance using `AGENTS.md` files. Codex looks for `AGENTS.md` files in the following places, and merges them top-down:
 
-1. `~/.codex/instructions.md` - personal global guidance
-2. `codex.md` at repo root - shared project notes
-3. `codex.md` in cwd - sub-package specifics
+1. `~/.codex/AGENTS.md` - personal global guidance
+2. `AGENTS.md` at repo root - shared project notes
+3. `AGENTS.md` in the current working directory - sub-folder/feature specifics
 
-Disable with `--no-project-doc` or `CODEX_DISABLE_PROJECT_DOC=1`.
+Disable loading of these files with `--no-project-doc` or the environment variable `CODEX_DISABLE_PROJECT_DOC=1`.
 
 ---
 
@@ -394,6 +396,11 @@ Below is a comprehensive example of `config.json` with multiple custom providers
       "baseURL": "https://api.openai.com/v1",
       "envKey": "OPENAI_API_KEY"
     },
+    "azure": {
+      "name": "AzureOpenAI",
+      "baseURL": "https://YOUR_PROJECT_NAME.openai.azure.com/openai",
+      "envKey": "AZURE_OPENAI_API_KEY"
+    },
     "openrouter": {
       "name": "OpenRouter",
       "baseURL": "https://openrouter.ai/api/v1",
@@ -428,6 +435,11 @@ Below is a comprehensive example of `config.json` with multiple custom providers
       "name": "Groq",
       "baseURL": "https://api.groq.com/openai/v1",
       "envKey": "GROQ_API_KEY"
+    },
+    "arceeai": {
+      "name": "ArceeAI",
+      "baseURL": "https://conductor.arcee.ai/v1",
+      "envKey": "ARCEEAI_API_KEY"
     }
   },
   "history": {
@@ -440,7 +452,7 @@ Below is a comprehensive example of `config.json` with multiple custom providers
 
 ### Custom instructions
 
-You can create a `~/.codex/instructions.md` file to define custom instructions:
+You can create a `~/.codex/AGENTS.md` file to define custom guidance for the agent:
 
 ```markdown
 - Always respond with emojis
@@ -454,6 +466,10 @@ For each AI provider, you need to set the corresponding API key in your environm
 ```bash
 # OpenAI
 export OPENAI_API_KEY="your-api-key-here"
+
+# Azure OpenAI
+export AZURE_OPENAI_API_KEY="your-azure-api-key-here"
+export AZURE_OPENAI_API_VERSION="2025-03-01-preview" (Optional)
 
 # OpenRouter
 export OPENROUTER_API_KEY="your-openrouter-key-here"
@@ -636,17 +652,21 @@ The **DCO check** blocks merges until every commit in the PR carries the footer 
 
 ### Releasing `codex`
 
-To publish a new version of the CLI, run the following in the `codex-cli` folder to stage the release in a temporary directory:
+To publish a new version of the CLI you first need to stage the npm package. A
+helper script in `codex-cli/scripts/` does all the heavy lifting. Inside the
+`codex-cli` folder run:
 
-```
+```bash
+# Classic, JS implementation that includes small, native binaries for Linux sandboxing.
 pnpm stage-release
-```
 
-Note you can specify the folder for the staged release:
-
-```
+# Optionally specify the temp directory to reuse between runs.
 RELEASE_DIR=$(mktemp -d)
-pnpm stage-release "$RELEASE_DIR"
+pnpm stage-release --tmp "$RELEASE_DIR"
+
+# "Fat" package that additionally bundles the native Rust CLI binaries for
+# Linux. End-users can then opt-in at runtime by setting CODEX_RUST=1.
+pnpm stage-release --native
 ```
 
 Go to the folder where the release is staged and verify that it works as intended. If so, run the following from the temp folder:
@@ -665,7 +685,9 @@ Prerequisite: Nix >= 2.4 with flakes enabled (`experimental-features = nix-comma
 Enter a Nix development shell:
 
 ```bash
-nix develop
+# Use either one of the commands according to which implementation you want to work with
+nix develop .#codex-cli # For entering codex-cli specific shell
+nix develop .#codex-rs # For entering codex-rs specific shell
 ```
 
 This shell includes Node.js, installs dependencies, builds the CLI, and provides a `codex` command alias.
@@ -673,14 +695,29 @@ This shell includes Node.js, installs dependencies, builds the CLI, and provides
 Build and run the CLI directly:
 
 ```bash
-nix build
+# Use either one of the commands according to which implementation you want to work with
+nix build .#codex-cli # For building codex-cli
+nix build .#codex-rs # For building codex-rs
 ./result/bin/codex --help
 ```
 
 Run the CLI via the flake app:
 
 ```bash
-nix run .#codex
+# Use either one of the commands according to which implementation you want to work with
+nix run .#codex-cli # For running codex-cli
+nix run .#codex-rs # For running codex-rs
+```
+
+Use direnv with flakes
+
+If you have direnv installed, you can use the following `.envrc` to automatically enter the Nix shell when you `cd` into the project directory:
+
+```bash
+cd codex-rs
+echo "use flake ../flake.nix#codex-cli" >> .envrc && direnv allow
+cd codex-cli
+echo "use flake ../flake.nix#codex-rs" >> .envrc && direnv allow
 ```
 
 ---

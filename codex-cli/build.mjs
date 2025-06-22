@@ -72,6 +72,9 @@ if (isDevBuild) {
 esbuild
   .build({
     entryPoints: ["src/cli.tsx"],
+    // Do not bundle the contents of package.json at build time: always read it
+    // at runtime.
+    external: ["../package.json"],
     bundle: true,
     format: "esm",
     platform: "node",

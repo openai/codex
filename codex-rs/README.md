@@ -1,16 +1,63 @@
-# codex-rs
+# Codex CLI (Rust Implementation)
 
-April 24, 2025
+We provide Codex CLI as a standalone, native executable to ensure a zero-dependency install.
 
-Today, Codex CLI is written in TypeScript and requires Node.js 22+ to run it. For a number of users, this runtime requirement inhibits adoption: they would be better served by a standalone executable. As maintainers, we want Codex to run efficiently in a wide range of environments with minimal overhead. We also want to take advantage of operating system-specific APIs to provide better sandboxing, where possible.
+## Installing Codex
 
-To that end, we are moving forward with a Rust implementation of Codex CLI contained in this folder, which has the following benefits:
+Today, the easiest way to install Codex is via `npm`, though we plan to publish Codex to other package managers soon.
 
-- The CLI compiles to small, standalone, platform-specific binaries.
-- Can make direct, native calls to [seccomp](https://man7.org/linux/man-pages/man2/seccomp.2.html) and [landlock](https://man7.org/linux/man-pages/man7/landlock.7.html) in order to support sandboxing on Linux.
-- No runtime garbage collection, resulting in lower memory consumption and better, more predictable performance.
+```shell
+npm i -g @openai/codex@native
+codex
+```
 
-Currently, the Rust implementation is materially behind the TypeScript implementation in functionality, so continue to use the TypeScript implmentation for the time being. We will publish native executables via GitHub Releases as soon as we feel the Rust version is usable.
+You can also download a platform-specific release directly from our [GitHub Releases](https://github.com/openai/codex/releases).
+
+## What's new in the Rust CLI
+
+While we are [working to close the gap between the TypeScript and Rust implementations of Codex CLI](https://github.com/openai/codex/issues/1262), note that the Rust CLI has a number of features that the TypeScript CLI does not!
+
+### Config
+
+Codex supports a rich set of configuration options. Note that the Rust CLI uses `config.toml` instead of `config.json`. See [`config.md`](./config.md) for details.
+
+### Model Context Protocol Support
+
+Codex CLI functions as an MCP client that can connect to MCP servers on startup. See the [`mcp_servers`](./config.md#mcp_servers) section in the configuration documentation for details.
+
+It is still experimental, but you can also launch Codex as an MCP _server_ by running `codex mcp`. Use the [`@modelcontextprotocol/inspector`](https://github.com/modelcontextprotocol/inspector) to try it out:
+
+```shell
+npx @modelcontextprotocol/inspector codex mcp
+```
+
+### Notifications
+
+You can enable notifications by configuring a script that is run whenever the agent finishes a turn. The [notify documentation](./config.md#notify) includes a detailed example that explains how to get desktop notifications via [terminal-notifier](https://github.com/julienXX/terminal-notifier) on macOS.
+
+### `codex exec` to run Codex programmatially/non-interactively
+
+To run Codex non-interactively, run `codex exec PROMPT` (you can also pass the prompt via `stdin`) and Codex will work on your task until it decides that it is done and exits. Output is printed to the terminal directly. You can set the `RUST_LOG` environment variable to see more about what's going on.
+
+### `--cd`/`-C` flag
+
+Sometimes it is not convenient to `cd` to the directory you want Codex to use as the "working root" before running Codex. Fortunately, `codex` supports a `--cd` option so you can specify whatever folder you want. You can confirm that Codex is honoring `--cd` by double-checking the **workdir** it reports in the TUI at the start of a new session.
+
+### Experimenting with the Codex Sandbox
+
+To test to see what happens when a command is run under the sandbox provided by Codex, we provide the following subcommands in Codex CLI:
+
+```
+# macOS
+codex debug seatbelt [-s SANDBOX_PERMISSION]... [COMMAND]...
+
+# Linux
+codex debug landlock [-s SANDBOX_PERMISSION]... [COMMAND]...
+```
+
+You can experiment with different values of `-s` to see what permissions the `COMMAND` needs to execute successfully.
+
+Note that the exact API for the `-s` flag is currently in flux. See https://github.com/openai/codex/issues/1248 for details.
 
 ## Code Organization
 
@@ -20,146 +67,3 @@ This folder is the root of a Cargo workspace. It contains quite a bit of experim
 - [`exec/`](./exec) "headless" CLI for use in automation.
 - [`tui/`](./tui) CLI that launches a fullscreen TUI built with [Ratatui](https://ratatui.rs/).
 - [`cli/`](./cli) CLI multitool that provides the aforementioned CLIs via subcommands.
-
-## Config
-
-The CLI can be configured via `~/.codex/config.toml`. It supports the following options:
-
-### model
-
-The model that Codex should use.
-
-```toml
-model = "o3"  # overrides the default of "o4-mini"
-```
-
-### approval_policy
-
-Determines when the user should be prompted to approve whether Codex can execute a command:
-
-```toml
-# This is analogous to --suggest in the TypeScript Codex CLI
-approval_policy = "unless-allow-listed"
-```
-
-```toml
-# If the command fails when run in the sandbox, Codex asks for permission to
-# retry the command outside the sandbox.
-approval_policy = "on-failure"
-```
-
-```toml
-# User is never prompted: if the command fails, Codex will automatically try
-# something out. Note the `exec` subcommand always uses this mode.
-approval_policy = "never"
-```
-
-### sandbox_permissions
-
-List of permissions to grant to the sandbox that Codex uses to execute untrusted commands:
-
-```toml
-# This is comparable to --full-auto in the TypeScript Codex CLI, though
-# specifying `disk-write-platform-global-temp-folder` adds /tmp as a writable
-# folder in addition to $TMPDIR.
-sandbox_permissions = [
-    "disk-full-read-access",
-    "disk-write-platform-user-temp-folder",
-    "disk-write-platform-global-temp-folder",
-    "disk-write-cwd",
-]
-```
-
-To add additional writable folders, use `disk-write-folder`, which takes a parameter (this can be specified multiple times):
-
-```toml
-sandbox_permissions = [
-    # ...
-    "disk-write-folder=/Users/mbolin/.pyenv/shims",
-]
-```
-
-### disable_response_storage
-
-Currently, customers whose accounts are set to use Zero Data Retention (ZDR) must set `disable_response_storage` to `true` so that Codex uses an alternative to the Responses API that works with ZDR:
-
-```toml
-disable_response_storage = true
-```
-
-### notify
-
-Specify a program that will be executed to get notified about events generated by Codex. Note that the program will receive the notification argument as a string of JSON, e.g.:
-
-```json
-{
-  "type": "agent-turn-complete",
-  "turn-id": "12345",
-  "input-messages": ["Rename `foo` to `bar` and update the callsites."],
-  "last-assistant-message": "Rename complete and verified `cargo build` succeeds."
-}
-```
-
-The `"type"` property will always be set. Currently, `"agent-turn-complete"` is the only notification type that is supported.
-
-As an example, here is a Python script that parses the JSON and decides whether to show a desktop push notification using [terminal-notifier](https://github.com/julienXX/terminal-notifier) on macOS:
-
-```python
-#!/usr/bin/env python3
-
-import json
-import subprocess
-import sys
-
-
-def main() -> int:
-    if len(sys.argv) != 2:
-        print("Usage: notify.py <NOTIFICATION_JSON>")
-        return 1
-
-    try:
-        notification = json.loads(sys.argv[1])
-    except json.JSONDecodeError:
-        return 1
-
-    match notification_type := notification.get("type"):
-        case "agent-turn-complete":
-            assistant_message = notification.get("last-assistant-message")
-            if assistant_message:
-                title = f"Codex: {assistant_message}"
-            else:
-                title = "Codex: Turn Complete!"
-            input_messages = notification.get("input_messages", [])
-            message = " ".join(input_messages)
-            title += message
-        case _:
-            print(f"not sending a push notification for: {notification_type}")
-            return 0
-
-    subprocess.check_output(
-        [
-            "terminal-notifier",
-            "-title",
-            title,
-            "-message",
-            message,
-            "-group",
-            "codex",
-            "-ignoreDnD",
-            "-activate",
-            "com.googlecode.iterm2",
-        ]
-    )
-
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
-```
-
-To have Codex use this script for notifications, you would configure it via `notify` in `~/.codex/config.toml` using the appropriate path to `notify.py` on your computer:
-
-```toml
-notify = ["python3", "/Users/mbolin/.codex/notify.py"]
-```

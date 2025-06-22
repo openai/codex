@@ -2,9 +2,11 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+use crate::ArgType;
+use crate::ExecCall;
 use crate::arg_matcher::ArgMatcher;
-use crate::arg_resolver::resolve_observed_args_with_patterns;
 use crate::arg_resolver::PositionalArg;
+use crate::arg_resolver::resolve_observed_args_with_patterns;
 use crate::error::Error;
 use crate::error::Result;
 use crate::opt::Opt;
@@ -12,8 +14,6 @@ use crate::opt::OptMeta;
 use crate::valid_exec::MatchedFlag;
 use crate::valid_exec::MatchedOpt;
 use crate::valid_exec::ValidExec;
-use crate::ArgType;
-use crate::ExecCall;
 
 #[derive(Debug)]
 pub struct ProgramSpec {

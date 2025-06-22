@@ -1,8 +1,14 @@
-//! Very small proof-of-concept request router for the MCP prototype server.
+use std::path::PathBuf;
 
+use crate::codex_tool_config::CodexToolCallParam;
+use crate::codex_tool_config::create_tool_for_codex_tool_call_param;
+
+use codex_core::config::Config as CodexConfig;
 use mcp_types::CallToolRequestParams;
+use mcp_types::CallToolResult;
 use mcp_types::CallToolResultContent;
 use mcp_types::ClientRequest;
+use mcp_types::JSONRPC_VERSION;
 use mcp_types::JSONRPCBatchRequest;
 use mcp_types::JSONRPCBatchResponse;
 use mcp_types::JSONRPCError;
@@ -17,24 +23,27 @@ use mcp_types::RequestId;
 use mcp_types::ServerCapabilitiesTools;
 use mcp_types::ServerNotification;
 use mcp_types::TextContent;
-use mcp_types::Tool;
-use mcp_types::ToolInputSchema;
-use mcp_types::JSONRPC_VERSION;
 use serde_json::json;
 use tokio::sync::mpsc;
+use tokio::task;
 
 pub(crate) struct MessageProcessor {
     outgoing: mpsc::Sender<JSONRPCMessage>,
     initialized: bool,
+    codex_linux_sandbox_exe: Option<PathBuf>,
 }
 
 impl MessageProcessor {
     /// Create a new `MessageProcessor`, retaining a handle to the outgoing
     /// `Sender` so handlers can enqueue messages to be written to stdout.
-    pub(crate) fn new(outgoing: mpsc::Sender<JSONRPCMessage>) -> Self {
+    pub(crate) fn new(
+        outgoing: mpsc::Sender<JSONRPCMessage>,
+        codex_linux_sandbox_exe: Option<PathBuf>,
+    ) -> Self {
         Self {
             outgoing,
             initialized: false,
+            codex_linux_sandbox_exe,
         }
     }
 
@@ -225,6 +234,8 @@ impl MessageProcessor {
     where
         T: ModelContextProtocolRequest,
     {
+        // result has `Serialized` instance so should never fail
+        #[expect(clippy::unwrap_used)]
         let response = JSONRPCMessage::Response(JSONRPCResponse {
             jsonrpc: JSONRPC_VERSION.into(),
             id,
@@ -303,21 +314,7 @@ impl MessageProcessor {
     ) {
         tracing::trace!("tools/list -> {params:?}");
         let result = ListToolsResult {
-            tools: vec![Tool {
-                name: "echo".to_string(),
-                input_schema: ToolInputSchema {
-                    r#type: "object".to_string(),
-                    properties: Some(json!({
-                        "input": {
-                            "type": "string",
-                            "description": "The input to echo back"
-                        }
-                    })),
-                    required: Some(vec!["input".to_string()]),
-                },
-                description: Some("Echoes the request back".to_string()),
-                annotations: None,
-            }],
+            tools: vec![create_tool_for_codex_tool_call_param()],
             next_cursor: None,
         };
 
@@ -331,26 +328,80 @@ impl MessageProcessor {
     ) {
         tracing::info!("tools/call -> params: {:?}", params);
         let CallToolRequestParams { name, arguments } = params;
-        match name.as_str() {
-            "echo" => {
-                let result = mcp_types::CallToolResult {
+
+        // We only support the "codex" tool for now.
+        if name != "codex" {
+            // Tool not found – return error result so the LLM can react.
+            let result = CallToolResult {
+                content: vec![CallToolResultContent::TextContent(TextContent {
+                    r#type: "text".to_string(),
+                    text: format!("Unknown tool '{name}'"),
+                    annotations: None,
+                })],
+                is_error: Some(true),
+            };
+            self.send_response::<mcp_types::CallToolRequest>(id, result);
+            return;
+        }
+
+        let (initial_prompt, config): (String, CodexConfig) = match arguments {
+            Some(json_val) => match serde_json::from_value::<CodexToolCallParam>(json_val) {
+                Ok(tool_cfg) => match tool_cfg.into_config(self.codex_linux_sandbox_exe.clone()) {
+                    Ok(cfg) => cfg,
+                    Err(e) => {
+                        let result = CallToolResult {
+                            content: vec![CallToolResultContent::TextContent(TextContent {
+                                r#type: "text".to_owned(),
+                                text: format!(
+                                    "Failed to load Codex configuration from overrides: {e}"
+                                ),
+                                annotations: None,
+                            })],
+                            is_error: Some(true),
+                        };
+                        self.send_response::<mcp_types::CallToolRequest>(id, result);
+                        return;
+                    }
+                },
+                Err(e) => {
+                    let result = CallToolResult {
+                        content: vec![CallToolResultContent::TextContent(TextContent {
+                            r#type: "text".to_owned(),
+                            text: format!("Failed to parse configuration for Codex tool: {e}"),
+                            annotations: None,
+                        })],
+                        is_error: Some(true),
+                    };
+                    self.send_response::<mcp_types::CallToolRequest>(id, result);
+                    return;
+                }
+            },
+            None => {
+                let result = CallToolResult {
                     content: vec![CallToolResultContent::TextContent(TextContent {
                         r#type: "text".to_string(),
-                        text: format!("Echo: {arguments:?}"),
+                        text:
+                            "Missing arguments for codex tool-call; the `prompt` field is required."
+                                .to_string(),
                         annotations: None,
                     })],
-                    is_error: None,
-                };
-                self.send_response::<mcp_types::CallToolRequest>(id, result);
-            }
-            _ => {
-                let result = mcp_types::CallToolResult {
-                    content: vec![],
                     is_error: Some(true),
                 };
                 self.send_response::<mcp_types::CallToolRequest>(id, result);
+                return;
             }
-        }
+        };
+
+        // Clone outgoing sender to move into async task.
+        let outgoing = self.outgoing.clone();
+
+        // Spawn an async task to handle the Codex session so that we do not
+        // block the synchronous message-processing loop.
+        task::spawn(async move {
+            // Run the Codex session and stream events back to the client.
+            crate::codex_tool_runner::run_codex_tool_session(id, initial_prompt, config, outgoing)
+                .await;
+        });
     }
 
     fn handle_set_level(

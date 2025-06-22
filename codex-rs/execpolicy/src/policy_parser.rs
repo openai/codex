@@ -1,13 +1,13 @@
 #![allow(clippy::needless_lifetimes)]
 
-use crate::arg_matcher::ArgMatcher;
-use crate::opt::OptMeta;
 use crate::Opt;
 use crate::Policy;
 use crate::ProgramSpec;
+use crate::arg_matcher::ArgMatcher;
+use crate::opt::OptMeta;
 use log::info;
 use multimap::MultiMap;
-use regex::Regex;
+use regex_lite::Regex;
 use starlark::any::ProvidesStaticType;
 use starlark::environment::GlobalsBuilder;
 use starlark::environment::LibraryExtension;
@@ -15,9 +15,9 @@ use starlark::environment::Module;
 use starlark::eval::Evaluator;
 use starlark::syntax::AstModule;
 use starlark::syntax::Dialect;
+use starlark::values::Heap;
 use starlark::values::list::UnpackList;
 use starlark::values::none::NoneType;
-use starlark::values::Heap;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -73,7 +73,7 @@ impl PolicyParser {
 
 #[derive(Debug)]
 pub struct ForbiddenProgramRegex {
-    pub regex: regex::Regex,
+    pub regex: regex_lite::Regex,
     pub reason: String,
 }
 
@@ -93,7 +93,7 @@ impl PolicyBuilder {
         }
     }
 
-    fn build(self) -> Result<Policy, regex::Error> {
+    fn build(self) -> Result<Policy, regex_lite::Error> {
         let programs = self.programs.into_inner();
         let forbidden_program_regexes = self.forbidden_program_regexes.into_inner();
         let forbidden_substrings = self.forbidden_substrings.into_inner();
@@ -168,6 +168,8 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
                 .map(|v| v.items.to_vec())
                 .collect(),
         );
+
+        #[expect(clippy::unwrap_used)]
         let policy_builder = eval
             .extra
             .as_ref()
@@ -182,6 +184,7 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
         strings: UnpackList<String>,
         eval: &mut Evaluator,
     ) -> anyhow::Result<NoneType> {
+        #[expect(clippy::unwrap_used)]
         let policy_builder = eval
             .extra
             .as_ref()
@@ -197,13 +200,14 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
         reason: String,
         eval: &mut Evaluator,
     ) -> anyhow::Result<NoneType> {
+        #[expect(clippy::unwrap_used)]
         let policy_builder = eval
             .extra
             .as_ref()
             .unwrap()
             .downcast_ref::<PolicyBuilder>()
             .unwrap();
-        let compiled_regex = regex::Regex::new(&regex)?;
+        let compiled_regex = regex_lite::Regex::new(&regex)?;
         policy_builder.add_forbidden_program_regex(compiled_regex, reason);
         Ok(NoneType)
     }

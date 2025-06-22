@@ -1,16 +1,16 @@
 use multimap::MultiMap;
-use regex::Error as RegexError;
-use regex::Regex;
+use regex_lite::Error as RegexError;
+use regex_lite::Regex;
 
-use crate::error::Error;
-use crate::error::Result;
-use crate::policy_parser::ForbiddenProgramRegex;
-use crate::program::PositiveExampleFailedCheck;
 use crate::ExecCall;
 use crate::Forbidden;
 use crate::MatchedExec;
 use crate::NegativeExamplePassedCheck;
 use crate::ProgramSpec;
+use crate::error::Error;
+use crate::error::Result;
+use crate::policy_parser::ForbiddenProgramRegex;
+use crate::program::PositiveExampleFailedCheck;
 
 pub struct Policy {
     programs: MultiMap<String, ProgramSpec>,
@@ -29,7 +29,7 @@ impl Policy {
         } else {
             let escaped_substrings = forbidden_substrings
                 .iter()
-                .map(|s| regex::escape(s))
+                .map(|s| regex_lite::escape(s))
                 .collect::<Vec<_>>()
                 .join("|");
             Some(Regex::new(&format!("({escaped_substrings})"))?)

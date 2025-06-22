@@ -1,15 +1,15 @@
 use anyhow::Result;
 use clap::Parser;
 use clap::Subcommand;
-use codex_execpolicy::get_default_policy;
 use codex_execpolicy::ExecCall;
 use codex_execpolicy::MatchedExec;
 use codex_execpolicy::Policy;
 use codex_execpolicy::PolicyParser;
 use codex_execpolicy::ValidExec;
-use serde::de;
+use codex_execpolicy::get_default_policy;
 use serde::Deserialize;
 use serde::Serialize;
+use serde::de;
 use std::path::PathBuf;
 use std::str::FromStr;
 

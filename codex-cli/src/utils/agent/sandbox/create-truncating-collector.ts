@@ -1,7 +1,6 @@
 // Maximum output cap: either MAX_OUTPUT_LINES lines or MAX_OUTPUT_BYTES bytes,
 // whichever limit is reached first.
-const MAX_OUTPUT_BYTES = 1024 * 10; // 10 KB
-const MAX_OUTPUT_LINES = 256;
+import { DEFAULT_SHELL_MAX_BYTES, DEFAULT_SHELL_MAX_LINES } from "../../config";
 
 /**
  * Creates a collector that accumulates data Buffers from a stream up to
@@ -10,8 +9,8 @@ const MAX_OUTPUT_LINES = 256;
  */
 export function createTruncatingCollector(
   stream: NodeJS.ReadableStream,
-  byteLimit: number = MAX_OUTPUT_BYTES,
-  lineLimit: number = MAX_OUTPUT_LINES,
+  byteLimit: number = DEFAULT_SHELL_MAX_BYTES,
+  lineLimit: number = DEFAULT_SHELL_MAX_LINES,
 ): {
   getString: () => string;
   hit: boolean;
