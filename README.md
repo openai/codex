@@ -228,9 +228,9 @@ Key flags: `--model/-m`, `--approval-mode/-a`, `--quiet/-q`, and `--notify`.
 
 ## Memory & project docs
 
-You can give Codex extra instructions and guidance using `AGENTS.md` files. Codex looks for `AGENTS.md` files in the following places, and merges them top-down:
+You can give Codex extra instructions and guidance using special Markdown files. Codex looks for these files in the following places, and merges them top-down:
 
-1. `~/.codex/AGENTS.md` - personal global guidance
+1. `~/.codex/instructions.md` - personal global guidance (user-level custom instructions injected into every session)
 2. `AGENTS.md` at repo root - shared project notes
 3. `AGENTS.md` in the current working directory - sub-folder/feature specifics
 
@@ -384,6 +384,9 @@ notify: true
 
 ### Full configuration example
 
+> **⚠️ Important:**
+> For each provider, the value of `envKey` must be the *name* of the environment variable that holds your API key (for example, `OPENAI_API_KEY`), **not** the actual API key itself. Do not put your secret key directly in the config file—just the variable name.
+
 Below is a comprehensive example of `config.json` with multiple custom providers:
 
 ```json
@@ -452,7 +455,7 @@ Below is a comprehensive example of `config.json` with multiple custom providers
 
 ### Custom instructions
 
-You can create a `~/.codex/AGENTS.md` file to define custom guidance for the agent:
+You can create a `~/.codex/instructions.md` file to define custom guidance for the agent:
 
 ```markdown
 - Always respond with emojis
@@ -731,3 +734,7 @@ Have you discovered a vulnerability or have concerns about model output? Please 
 ## License
 
 This repository is licensed under the [Apache-2.0 License](LICENSE).
+
+## Terminal Limitations for Multi-line Input
+
+> **Note:** Most terminal emulators (especially on Windows) do not support Shift+Enter or Alt+Enter for inserting new lines in the Codex CLI input. These key combinations are often treated as plain Enter, which submits the message. For multi-line input, Ctrl+J may work in WSL or Linux terminals. For best results with multi-line editing, use WSL or a Linux terminal.
