@@ -469,7 +469,7 @@ export OPENAI_API_KEY="your-api-key-here"
 
 # Azure OpenAI
 export AZURE_OPENAI_API_KEY="your-azure-api-key-here"
-export AZURE_OPENAI_API_VERSION="2025-03-01-preview" (Optional)
+export AZURE_OPENAI_API_VERSION="2025-04-01-preview" (Optional)
 
 # OpenRouter
 export OPENROUTER_API_KEY="your-openrouter-key-here"
