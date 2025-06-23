@@ -600,6 +600,7 @@ version = "0.0.0"
 dependencies = [
  "clap",
  "codex-core",
+ "reqwest",
  "serde",
  "toml",
 ]

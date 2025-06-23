@@ -14,3 +14,13 @@ mod config_override;
 
 #[cfg(feature = "cli")]
 pub use config_override::CliConfigOverrides;
+
+// -------------------------------------------------------------------------
+//  Optional helpers for querying the list of available models.
+// -------------------------------------------------------------------------
+
+#[cfg(feature = "model-list")]
+mod model_list;
+
+#[cfg(feature = "model-list")]
+pub use model_list::fetch_available_models;

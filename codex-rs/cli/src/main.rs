@@ -9,6 +9,7 @@ use codex_tui::Cli as TuiCli;
 use std::path::PathBuf;
 
 use crate::proto::ProtoCli;
+mod list_models;
 
 /// Codex CLI
 ///
@@ -42,6 +43,10 @@ enum Subcommand {
 
     /// Experimental: run Codex as an MCP server.
     Mcp,
+
+    /// List models for the configured or specified provider.
+    #[clap(name = "list-models", visible_alias = "lm")]
+    ListModels(crate::list_models::ListModelsCli),
 
     /// Run the Protocol stream via stdin/stdout
     #[clap(visible_alias = "p")]
@@ -121,6 +126,13 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 .await?;
             }
         },
+        Some(Subcommand::ListModels(list_cli)) => {
+            // Combine root-level overrides with subcommand-specific ones so
+            // that the latter take precedence.
+            let mut list_cli = list_cli;
+            prepend_config_flags(&mut list_cli.config_overrides, cli.config_overrides);
+            list_cli.run().await?;
+        }
     }
 
     Ok(())
