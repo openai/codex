@@ -15,15 +15,9 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
+anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 codex-core = { path = "../core" }
-codex-common = { path = "../common", features = ["cli"] }
-
-# Used for error handling in the helper that unifies runtime dispatch across
-# binaries.
-anyhow = "1"
-# Required to construct a Tokio runtime for async execution of the caller's
-# entry-point.
 tokio = { version = "1", features = ["rt-multi-thread"] }
 
 [dev-dependencies]

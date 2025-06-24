@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 use mcp_types::CallToolResult;
 use serde::Deserialize;
@@ -136,155 +137,108 @@ pub enum AskForApproval {
     Never,
 }
 
-/// Determines execution restrictions for model shell commands
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub struct SandboxPolicy {
-    permissions: Vec<SandboxPermission>,
+/// Determines execution restrictions for model shell commands.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "kebab-case")]
+pub enum SandboxPolicy {
+    /// No restrictions whatsoever. Use with caution.
+    #[serde(rename = "danger-full-access")]
+    DangerFullAccess,
+
+    /// Read-only access to the entire file-system.
+    #[serde(rename = "read-only")]
+    ReadOnly,
+
+    /// Same as `ReadOnly` but additionally grants write access to the current
+    /// working directory ("workspace").
+    #[serde(rename = "workspace-write")]
+    WorkspaceWrite {
+        /// Additional folders (beyond cwd and possibly TMPDIR) that should be
+        /// writable from within the sandbox.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        writable_roots: Vec<PathBuf>,
+
+        /// When set to `true`, outbound network access is allowed. `false` by
+        /// default.
+        #[serde(default)]
+        network_access: bool,
+    },
 }
 
-impl From<Vec<SandboxPermission>> for SandboxPolicy {
-    fn from(permissions: Vec<SandboxPermission>) -> Self {
-        Self { permissions }
+impl FromStr for SandboxPolicy {
+    type Err = serde_json::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        serde_json::from_str(s)
     }
 }
 
 impl SandboxPolicy {
+    /// Returns a policy with read-only disk access and no network.
     pub fn new_read_only_policy() -> Self {
-        Self {
-            permissions: vec![SandboxPermission::DiskFullReadAccess],
-        }
+        SandboxPolicy::ReadOnly
     }
 
-    pub fn new_read_only_policy_with_writable_roots(writable_roots: &[PathBuf]) -> Self {
-        let mut permissions = Self::new_read_only_policy().permissions;
-        permissions.extend(writable_roots.iter().map(|folder| {
-            SandboxPermission::DiskWriteFolder {
-                folder: folder.clone(),
+    /// Returns a policy that can read the entire disk, but can only write to
+    /// the current working directory and the per-user tmp dir on macOS. It does
+    /// not allow network access.
+    pub fn new_workspace_write_policy() -> Self {
+        let mut writable_roots = vec![];
+
+        // Also include the per-user tmp dir on macOS.
+        if cfg!(target_os = "macos") {
+            if let Some(tmpdir) = std::env::var_os("TMPDIR") {
+                writable_roots.push(PathBuf::from(tmpdir));
             }
-        }));
-        Self { permissions }
-    }
+        }
 
-    pub fn new_full_auto_policy() -> Self {
-        Self {
-            permissions: vec![
-                SandboxPermission::DiskFullReadAccess,
-                SandboxPermission::DiskWritePlatformUserTempFolder,
-                SandboxPermission::DiskWriteCwd,
-            ],
+        SandboxPolicy::WorkspaceWrite {
+            writable_roots,
+            network_access: false,
         }
     }
 
+    /// Always returns `true` for now, as we do not yet support restricting read
+    /// access.
     pub fn has_full_disk_read_access(&self) -> bool {
-        self.permissions
-            .iter()
-            .any(|perm| matches!(perm, SandboxPermission::DiskFullReadAccess))
+        true
     }
 
     pub fn has_full_disk_write_access(&self) -> bool {
-        self.permissions
-            .iter()
-            .any(|perm| matches!(perm, SandboxPermission::DiskFullWriteAccess))
+        match self {
+            SandboxPolicy::DangerFullAccess => true,
+            SandboxPolicy::ReadOnly => false,
+            SandboxPolicy::WorkspaceWrite { .. } => false,
+        }
     }
 
     pub fn has_full_network_access(&self) -> bool {
-        self.permissions
-            .iter()
-            .any(|perm| matches!(perm, SandboxPermission::NetworkFullAccess))
+        match self {
+            SandboxPolicy::DangerFullAccess => true,
+            SandboxPolicy::ReadOnly => false,
+            SandboxPolicy::WorkspaceWrite { network_access, .. } => *network_access,
+        }
     }
 
+    /// Returns the list of writable roots that should be passed down to the
+    /// Landlock rules installer, tailored to the current working directory.
     pub fn get_writable_roots_with_cwd(&self, cwd: &Path) -> Vec<PathBuf> {
-        let mut writable_roots = Vec::<PathBuf>::new();
-        for perm in &self.permissions {
-            use SandboxPermission::*;
-            match perm {
-                DiskWritePlatformUserTempFolder => {
-                    if cfg!(target_os = "macos") {
-                        if let Some(tempdir) = std::env::var_os("TMPDIR") {
-                            // Likely something that starts with /var/folders/...
-                            let tmpdir_path = PathBuf::from(&tempdir);
-                            if tmpdir_path.is_absolute() {
-                                writable_roots.push(tmpdir_path.clone());
-                                match tmpdir_path.canonicalize() {
-                                    Ok(canonicalized) => {
-                                        // Likely something that starts with /private/var/folders/...
-                                        if canonicalized != tmpdir_path {
-                                            writable_roots.push(canonicalized);
-                                        }
-                                    }
-                                    Err(e) => {
-                                        tracing::error!("Failed to canonicalize TMPDIR: {e}");
-                                    }
-                                }
-                            } else {
-                                tracing::error!("TMPDIR is not an absolute path: {tempdir:?}");
-                            }
-                        }
-                    }
-
-                    // For Linux, should this be XDG_RUNTIME_DIR, /run/user/<uid>, or something else?
-                }
-                DiskWritePlatformGlobalTempFolder => {
-                    if cfg!(unix) {
-                        writable_roots.push(PathBuf::from("/tmp"));
-                    }
-                }
-                DiskWriteCwd => {
-                    writable_roots.push(cwd.to_path_buf());
-                }
-                DiskWriteFolder { folder } => {
-                    writable_roots.push(folder.clone());
-                }
-                DiskFullReadAccess | NetworkFullAccess => {}
-                DiskFullWriteAccess => {
-                    // Currently, we expect callers to only invoke this method
-                    // after verifying has_full_disk_write_access() is false.
-                }
+        match self {
+            SandboxPolicy::DangerFullAccess => Vec::new(),
+            SandboxPolicy::ReadOnly => Vec::new(),
+            SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
+                let mut roots = writable_roots.clone();
+                roots.push(cwd.to_path_buf());
+                roots
             }
         }
-        writable_roots
     }
 
+    // TODO(mbolin): This conflates sandbox policy and approval policy and
+    // should go away.
     pub fn is_unrestricted(&self) -> bool {
-        self.has_full_disk_read_access()
-            && self.has_full_disk_write_access()
-            && self.has_full_network_access()
+        matches!(self, SandboxPolicy::DangerFullAccess)
     }
-}
-
-/// Permissions that should be granted to the sandbox in which the agent
-/// operates.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum SandboxPermission {
-    /// Is allowed to read all files on disk.
-    DiskFullReadAccess,
-
-    /// Is allowed to write to the operating system's temp dir that
-    /// is restricted to the user the agent is running as. For
-    /// example, on macOS, this is generally something under
-    /// `/var/folders` as opposed to `/tmp`.
-    DiskWritePlatformUserTempFolder,
-
-    /// Is allowed to write to the operating system's shared temp
-    /// dir. On UNIX, this is generally `/tmp`.
-    DiskWritePlatformGlobalTempFolder,
-
-    /// Is allowed to write to the current working directory (in practice, this
-    /// is the `cwd` where `codex` was spawned).
-    DiskWriteCwd,
-
-    /// Is allowed to the specified folder. `PathBuf` must be an
-    /// absolute path, though it is up to the caller to canonicalize
-    /// it if the path contains symlinks.
-    DiskWriteFolder { folder: PathBuf },
-
-    /// Is allowed to write to any file on disk.
-    DiskFullWriteAccess,
-
-    /// Can make arbitrary network requests.
-    NetworkFullAccess,
 }
 
 /// User input

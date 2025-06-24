@@ -1,7 +1,6 @@
 //! Configuration object accepted by the `codex` MCP tool-call.
 
 use codex_core::protocol::AskForApproval;
-use codex_core::protocol::SandboxPolicy;
 use mcp_types::Tool;
 use mcp_types::ToolInputSchema;
 use schemars::JsonSchema;
@@ -19,7 +18,7 @@ pub(crate) struct CodexToolCallParam {
     /// The *initial user prompt* to start the Codex conversation.
     pub prompt: String,
 
-    /// Optional override for the model name (e.g. "o3", "o4-mini")
+    /// Optional override for the model name (e.g. "o3", "o4-mini").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
 
@@ -37,22 +36,14 @@ pub(crate) struct CodexToolCallParam {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval_policy: Option<CodexToolCallApprovalPolicy>,
 
-    /// Sandbox permissions using the same string values accepted by the CLI
-    /// (e.g. "disk-write-cwd", "network-full-access").
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sandbox_permissions: Option<Vec<CodexToolCallSandboxPermission>>,
-
     /// Individual config settings that will override what is in
     /// CODEX_HOME/config.toml.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<HashMap<String, serde_json::Value>>,
 }
 
-// Create custom enums for use with `CodexToolCallApprovalPolicy` where we
-// intentionally exclude docstrings from the generated schema because they
-// introduce anyOf in the the generated JSON schema, which makes it more complex
-// without adding any real value since we aspire to use self-descriptive names.
-
+// Custom enum mirroring `AskForApproval`, but constrained to the subset we
+// expose via the tool-call schema.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum CodexToolCallApprovalPolicy {
@@ -73,50 +64,12 @@ impl From<CodexToolCallApprovalPolicy> for AskForApproval {
     }
 }
 
-// TODO: Support additional writable folders via a separate property on
-// CodexToolCallParam.
-
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-pub(crate) enum CodexToolCallSandboxPermission {
-    DiskFullReadAccess,
-    DiskWriteCwd,
-    DiskWritePlatformUserTempFolder,
-    DiskWritePlatformGlobalTempFolder,
-    DiskFullWriteAccess,
-    NetworkFullAccess,
-}
-
-impl From<CodexToolCallSandboxPermission> for codex_core::protocol::SandboxPermission {
-    fn from(value: CodexToolCallSandboxPermission) -> Self {
-        match value {
-            CodexToolCallSandboxPermission::DiskFullReadAccess => {
-                codex_core::protocol::SandboxPermission::DiskFullReadAccess
-            }
-            CodexToolCallSandboxPermission::DiskWriteCwd => {
-                codex_core::protocol::SandboxPermission::DiskWriteCwd
-            }
-            CodexToolCallSandboxPermission::DiskWritePlatformUserTempFolder => {
-                codex_core::protocol::SandboxPermission::DiskWritePlatformUserTempFolder
-            }
-            CodexToolCallSandboxPermission::DiskWritePlatformGlobalTempFolder => {
-                codex_core::protocol::SandboxPermission::DiskWritePlatformGlobalTempFolder
-            }
-            CodexToolCallSandboxPermission::DiskFullWriteAccess => {
-                codex_core::protocol::SandboxPermission::DiskFullWriteAccess
-            }
-            CodexToolCallSandboxPermission::NetworkFullAccess => {
-                codex_core::protocol::SandboxPermission::NetworkFullAccess
-            }
-        }
-    }
-}
-
+/// Builds a `Tool` definition (JSON schema etc.) for the Codex tool-call.
 pub(crate) fn create_tool_for_codex_tool_call_param() -> Tool {
     let schema = SchemaSettings::draft2019_09()
         .with(|s| {
             s.inline_subschemas = true;
-            s.option_add_null_type = false
+            s.option_add_null_type = false;
         })
         .into_generator()
         .into_root_schema_for::<CodexToolCallParam>();
@@ -129,12 +82,12 @@ pub(crate) fn create_tool_for_codex_tool_call_param() -> Tool {
         serde_json::from_value::<ToolInputSchema>(schema_value).unwrap_or_else(|e| {
             panic!("failed to create Tool from schema: {e}");
         });
+
     Tool {
         name: "codex".to_string(),
         input_schema: tool_input_schema,
         description: Some(
-            "Run a Codex session. Accepts configuration parameters matching the Codex Config struct."
-                .to_string(),
+            "Run a Codex session. Accepts configuration parameters matching the Codex Config struct.".to_string(),
         ),
         annotations: None,
     }
@@ -142,7 +95,7 @@ pub(crate) fn create_tool_for_codex_tool_call_param() -> Tool {
 
 impl CodexToolCallParam {
     /// Returns the initial user prompt to start the Codex conversation and the
-    /// Config.
+    /// effective Config object generated from the supplied parameters.
     pub fn into_config(
         self,
         codex_linux_sandbox_exe: Option<PathBuf>,
@@ -153,20 +106,18 @@ impl CodexToolCallParam {
             profile,
             cwd,
             approval_policy,
-            sandbox_permissions,
             config: cli_overrides,
         } = self;
-        let sandbox_policy = sandbox_permissions.map(|perms| {
-            SandboxPolicy::from(perms.into_iter().map(Into::into).collect::<Vec<_>>())
-        });
 
-        // Build ConfigOverrides recognised by codex-core.
+        // Build the `ConfigOverrides` recognised by codex-core.
         let overrides = codex_core::config::ConfigOverrides {
             model,
             config_profile: profile,
             cwd: cwd.map(PathBuf::from),
             approval_policy: approval_policy.map(Into::into),
-            sandbox_policy,
+            // Note we may want to expose a field on CodexToolCallParam to
+            // facilitate configuring the sandbox policy.
+            sandbox_policy: None,
             model_provider: None,
             codex_linux_sandbox_exe,
         };
@@ -230,7 +181,7 @@ mod tests {
                 "type": "string"
               },
               "model": {
-                "description": "Optional override for the model name (e.g. \"o3\", \"o4-mini\")",
+                "description": "Optional override for the model name (e.g. \"o3\", \"o4-mini\").",
                 "type": "string"
               },
               "profile": {
@@ -241,21 +192,6 @@ mod tests {
                 "description": "The *initial user prompt* to start the Codex conversation.",
                 "type": "string"
               },
-              "sandbox-permissions": {
-                "description": "Sandbox permissions using the same string values accepted by the CLI (e.g. \"disk-write-cwd\", \"network-full-access\").",
-                "items": {
-                  "enum": [
-                    "disk-full-read-access",
-                    "disk-write-cwd",
-                    "disk-write-platform-user-temp-folder",
-                    "disk-write-platform-global-temp-folder",
-                    "disk-full-write-access",
-                    "network-full-access"
-                  ],
-                  "type": "string"
-                },
-                "type": "array"
-              }
             },
             "required": [
               "prompt"

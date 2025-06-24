@@ -106,7 +106,6 @@ Here is an example of a `config.toml` that defines multiple profiles:
 ```toml
 model = "o3"
 approval_policy = "unless-allow-listed"
-sandbox_permissions = ["disk-full-read-access"]
 disable_response_storage = false
 
 # Setting `profile` is equivalent to specifying `--profile o3` on the command
@@ -170,30 +169,41 @@ To disable reasoning summaries, set `model_reasoning_summary` to `"none"` in you
 model_reasoning_summary = "none"  # disable reasoning summaries
 ```
 
-## sandbox_permissions
+## sandbox
 
-List of permissions to grant to the sandbox that Codex uses to execute untrusted commands:
+The `sandbox` configuration determines the _sandbox policy_ that Codex uses to execute untrusted commands. The `mode` determines the "base policy." Currently, only `workspace-write` supports additional configuration options, but this may change in the future.
 
-```toml
-# This is comparable to --full-auto in the TypeScript Codex CLI, though
-# specifying `disk-write-platform-global-temp-folder` adds /tmp as a writable
-# folder in addition to $TMPDIR.
-sandbox_permissions = [
-    "disk-full-read-access",
-    "disk-write-platform-user-temp-folder",
-    "disk-write-platform-global-temp-folder",
-    "disk-write-cwd",
-]
-```
-
-To add additional writable folders, use `disk-write-folder`, which takes a parameter (this can be specified multiple times):
+The default policy is `read-only`, which means commands can read any file on disk, but attempts to write a file or access the network will be blocked.
 
 ```toml
-sandbox_permissions = [
-    # ...
-    "disk-write-folder=/Users/mbolin/.pyenv/shims",
-]
+[sandbox]
+mode = "read-only"
 ```
+
+A more relaxed policy is `workspace-write`. When specified, the current working directory for the Codex task will be writable (as well as `$TMPDIR` on macOS). Note that the CLI defaults to using `cwd` where it was spawned, though this can be overridden using `--cwd/-C`.
+
+```toml
+[sandbox]
+mode = "workspace-write"
+
+# By default, only the cwd for the Codex session will be writable (and $TMPDIR on macOS),
+# but you can specify additional writable folders in this array.
+writable_roots = [
+    "/tmp",
+]
+network_access = false  # Like read-only, this also defaults to false and can be omitted.
+```
+
+To disable sandboxing altogether, specify `danger-full-access` like so:
+
+```toml
+[sandbox]
+mode = "danger-full-access"
+```
+
+This is reasonable to use if Codex is running in an environment that provides its own sandboxing (such as a Docker container) such that further sandboxing is unnecessary.
+
+Though using this option may also be necessary if you try to use Codex in environments where its native sandboxing mechanisms are unsupported, such as older Linux kernels or on Windows.
 
 ## mcp_servers
 
