@@ -6,16 +6,15 @@ export const providers: Record<
     name: "OpenAI",
     baseURL: "https://api.openai.com/v1",
     envKey: "OPENAI_API_KEY",
-  },
-  openrouter: {
+  },  openrouter: {
     name: "OpenRouter",
     baseURL: "https://openrouter.ai/api/v1",
     envKey: "OPENROUTER_API_KEY",
   },
   azure: {
-    name: "AzureOpenAI",
+    name: "Azure Foundry",
     baseURL: "https://YOUR_PROJECT_NAME.openai.azure.com/openai",
-    envKey: "AZURE_OPENAI_API_KEY",
+    envKey: "AZURE_API_KEY",
   },
   gemini: {
     name: "Gemini",

@@ -397,12 +397,12 @@ if (!apiKey && !NO_API_KEY_REQUIRED.has(provider.toLowerCase())) {
         provider.toLowerCase() === "openai"
           ? `You can create a key here: ${chalk.bold(
               chalk.underline("https://platform.openai.com/account/api-keys"),
-            )}\n`
-          : provider.toLowerCase() === "azure"
-            ? `You can create a ${chalk.bold(
-                `${provider.toUpperCase()}_OPENAI_API_KEY`,
-              )} ` +
-              `in Azure AI Foundry portal at ${chalk.bold(chalk.underline("https://ai.azure.com"))}.\n`
+            )}\n`          : provider.toLowerCase() === "azure"
+            ? `For Azure Foundry, set the following environment variables:\n` +
+              `  ${chalk.bold("AZURE_API_KEY")} - Your Azure API key\n` +
+              `  ${chalk.bold("AZURE_ENDPOINT")} - Your complete Azure endpoint URL\n` +
+              `  ${chalk.bold("AZURE_ADDITIONAL_HEADERS")} (optional) - JSON string with additional headers\n` +
+              `You can get these from Azure AI Foundry portal at ${chalk.bold(chalk.underline("https://ai.azure.com"))}.\n`
             : provider.toLowerCase() === "gemini"
               ? `You can create a ${chalk.bold(
                   `${provider.toUpperCase()}_API_KEY`,
@@ -460,7 +460,8 @@ if (config.flexMode) {
 
 if (
   !(await isModelSupportedForResponses(provider, config.model)) &&
-  (!provider || provider.toLowerCase() === "openai")
+  (!provider || provider.toLowerCase() === "openai") &&
+  provider.toLowerCase() !== "azure"
 ) {
   // eslint-disable-next-line no-console
   console.error(

@@ -71,6 +71,11 @@ export let OPENAI_API_KEY = process.env["OPENAI_API_KEY"] || "";
 export const AZURE_OPENAI_API_VERSION =
   process.env["AZURE_OPENAI_API_VERSION"] || "2025-04-01-preview";
 
+// Azure Foundry configuration
+export const AZURE_API_KEY = process.env["AZURE_API_KEY"] || "";
+export const AZURE_ENDPOINT = process.env["AZURE_ENDPOINT"] || "";
+export const AZURE_ADDITIONAL_HEADERS = process.env["AZURE_ADDITIONAL_HEADERS"] || "";
+
 export const DEFAULT_REASONING_EFFORT = "high";
 export const OPENAI_ORGANIZATION = process.env["OPENAI_ORGANIZATION"] || "";
 export const OPENAI_PROJECT = process.env["OPENAI_PROJECT"] || "";
@@ -85,7 +90,67 @@ export function setApiKey(apiKey: string): void {
   OPENAI_API_KEY = apiKey;
 }
 
+/**
+ * Parses the Azure additional headers from the environment variable.
+ * @returns An object containing the parsed headers, or an empty object if parsing fails
+ */
+export function parseAzureAdditionalHeaders(): Record<string, string> {
+  const azureAdditionalHeaders = process.env["AZURE_ADDITIONAL_HEADERS"];
+  if (!azureAdditionalHeaders) {
+    return {};
+  }
+  
+  try {
+    const parsed = JSON.parse(azureAdditionalHeaders);
+    if (typeof parsed === "object" && parsed != null && !Array.isArray(parsed)) {
+      return parsed;
+    }
+    return {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Gets the Azure Foundry-specific base URL from the AZURE_ENDPOINT environment variable.
+ * @returns The Azure endpoint URL or undefined if not set
+ */
+export function getAzureFoundryBaseUrl(): string | undefined {
+  return process.env["AZURE_ENDPOINT"] || undefined;
+}
+
+/**
+ * Gets the Azure Foundry API key from the AZURE_API_KEY environment variable.
+ * @returns The Azure API key or undefined if not set
+ */
+export function getAzureFoundryApiKey(): string | undefined {
+  return process.env["AZURE_API_KEY"] || undefined;
+}
+
 export function getBaseUrl(provider: string = "openai"): string | undefined {
+  // Special handling for Azure Foundry provider
+  if (provider.toLowerCase() === "azure") {
+    const azureEndpoint = getAzureFoundryBaseUrl();
+    if (azureEndpoint) {
+      // Parse the URL to extract components properly
+      const url = new URL(azureEndpoint);
+      
+      // Extract and store the API version for the AzureOpenAI client
+      const apiVersion = url.searchParams.get('api-version');
+      if (apiVersion) {
+        process.env['AZURE_EXTRACTED_API_VERSION'] = apiVersion;
+      }
+      
+      // Remove /chat/completions from the path if present
+      const basePath = url.pathname.replace(/\/chat\/completions$/, '');
+      
+      // Reconstruct the base URL WITHOUT query parameters (API version will be passed separately)
+      const baseUrl = `${url.protocol}//${url.host}${basePath}`;
+      
+      return baseUrl;
+    }
+  }
+
   // Check for a PROVIDER-specific override: e.g. OPENAI_BASE_URL or OLLAMA_BASE_URL.
   const envKey = `${provider.toUpperCase()}_BASE_URL`;
   if (process.env[envKey]) {
@@ -110,6 +175,14 @@ export function getBaseUrl(provider: string = "openai"): string | undefined {
 }
 
 export function getApiKey(provider: string = "openai"): string | undefined {
+  // Special handling for Azure Foundry provider
+  if (provider.toLowerCase() === "azure") {
+    const azureApiKey = getAzureFoundryApiKey();
+    if (azureApiKey) {
+      return azureApiKey;
+    }
+  }
+
   const config = loadConfig();
   const providersConfig = config.providers ?? providers;
   const providerInfo = providersConfig[provider.toLowerCase()];
