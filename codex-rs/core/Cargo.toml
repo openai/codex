@@ -59,6 +59,10 @@ seccompiler = "0.5.0"
 [target.x86_64-unknown-linux-musl.dependencies]
 openssl-sys = { version = "*", features = ["vendored"] }
 
+# Build OpenSSL from source for musl builds.
+[target.aarch64-unknown-linux-musl.dependencies]
+openssl-sys = { version = "*", features = ["vendored"] }
+
 [dev-dependencies]
 assert_cmd = "2"
 maplit = "1.0.2"

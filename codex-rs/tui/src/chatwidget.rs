@@ -207,11 +207,6 @@ impl ChatWidget<'_> {
         self.conversation_history.scroll_to_bottom();
     }
 
-    pub(crate) fn clear_conversation_history(&mut self) {
-        self.conversation_history.clear();
-        self.request_redraw();
-    }
-
     pub(crate) fn handle_codex_event(&mut self, event: Event) {
         let Event { id, msg } = event;
         match msg {

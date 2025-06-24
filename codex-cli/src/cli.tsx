@@ -46,6 +46,7 @@ import { createInputItem } from "./utils/input-utils";
 import { initLogger } from "./utils/logger/log";
 import { isModelSupportedForResponses } from "./utils/model-utils.js";
 import { parseToolCall } from "./utils/parsers";
+import { providers } from "./utils/providers";
 import { onExit, setInkRenderer } from "./utils/terminal";
 import chalk from "chalk";
 import { spawnSync } from "child_process";
@@ -387,13 +388,18 @@ if (!apiKey && !NO_API_KEY_REQUIRED.has(provider.toLowerCase())) {
           ? `You can create a key here: ${chalk.bold(
               chalk.underline("https://platform.openai.com/account/api-keys"),
             )}\n`
-          : provider.toLowerCase() === "gemini"
+          : provider.toLowerCase() === "azure"
             ? `You can create a ${chalk.bold(
-                `${provider.toUpperCase()}_API_KEY`,
-              )} ` + `in the ${chalk.bold(`Google AI Studio`)}.\n`
-            : `You can create a ${chalk.bold(
-                `${provider.toUpperCase()}_API_KEY`,
-              )} ` + `in the ${chalk.bold(`${provider}`)} dashboard.\n`
+                `${provider.toUpperCase()}_OPENAI_API_KEY`,
+              )} ` +
+              `in Azure AI Foundry portal at ${chalk.bold(chalk.underline("https://ai.azure.com"))}.\n`
+            : provider.toLowerCase() === "gemini"
+              ? `You can create a ${chalk.bold(
+                  `${provider.toUpperCase()}_API_KEY`,
+                )} ` + `in the ${chalk.bold(`Google AI Studio`)}.\n`
+              : `You can create a ${chalk.bold(
+                  `${provider.toUpperCase()}_API_KEY`,
+                )} ` + `in the ${chalk.bold(`${provider}`)} dashboard.\n`
       }`,
   );
   process.exit(1);

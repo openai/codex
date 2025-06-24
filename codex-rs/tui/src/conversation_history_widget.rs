@@ -245,12 +245,6 @@ impl ConversationHistoryWidget {
         });
     }
 
-    /// Remove all history entries and reset scrolling.
-    pub fn clear(&mut self) {
-        self.entries.clear();
-        self.scroll_position = usize::MAX;
-    }
-
     pub fn record_completed_exec_command(
         &mut self,
         call_id: String,
