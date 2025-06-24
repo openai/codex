@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 
 use codex_common::CliConfigOverrides;
-use codex_common::SandboxPermissionOption;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::exec::StdioPolicy;
@@ -20,13 +19,11 @@ pub async fn run_command_under_seatbelt(
 ) -> anyhow::Result<()> {
     let SeatbeltCommand {
         full_auto,
-        sandbox,
         config_overrides,
         command,
     } = command;
     run_command_under_sandbox(
         full_auto,
-        sandbox,
         command,
         config_overrides,
         codex_linux_sandbox_exe,
@@ -41,13 +38,11 @@ pub async fn run_command_under_landlock(
 ) -> anyhow::Result<()> {
     let LandlockCommand {
         full_auto,
-        sandbox,
         config_overrides,
         command,
     } = command;
     run_command_under_sandbox(
         full_auto,
-        sandbox,
         command,
         config_overrides,
         codex_linux_sandbox_exe,
@@ -63,13 +58,12 @@ enum SandboxType {
 
 async fn run_command_under_sandbox(
     full_auto: bool,
-    sandbox: SandboxPermissionOption,
     command: Vec<String>,
     config_overrides: CliConfigOverrides,
     codex_linux_sandbox_exe: Option<PathBuf>,
     sandbox_type: SandboxType,
 ) -> anyhow::Result<()> {
-    let sandbox_policy = create_sandbox_policy(full_auto, sandbox);
+    let sandbox_policy = create_sandbox_policy(full_auto);
     let cwd = std::env::current_dir()?;
     let config = Config::load_with_cli_overrides(
         config_overrides
@@ -110,13 +104,10 @@ async fn run_command_under_sandbox(
     handle_exit_status(status);
 }
 
-pub fn create_sandbox_policy(full_auto: bool, sandbox: SandboxPermissionOption) -> SandboxPolicy {
+pub fn create_sandbox_policy(full_auto: bool) -> SandboxPolicy {
     if full_auto {
-        SandboxPolicy::new_full_auto_policy()
+        SandboxPolicy::new_workspace_write_policy()
     } else {
-        match sandbox.permissions.map(Into::into) {
-            Some(sandbox_policy) => sandbox_policy,
-            None => SandboxPolicy::new_read_only_policy(),
-        }
+        SandboxPolicy::new_read_only_policy()
     }
 }
