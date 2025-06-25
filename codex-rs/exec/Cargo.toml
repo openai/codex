@@ -19,7 +19,11 @@ anyhow = "1"
 chrono = "0.4.40"
 clap = { version = "4", features = ["derive"] }
 codex-core = { path = "../core" }
-codex-common = { path = "../common", features = ["cli", "elapsed"] }
+codex-common = { path = "../common", features = [
+    "cli",
+    "elapsed",
+    "sandbox_summary",
+] }
 codex-linux-sandbox = { path = "../linux-sandbox" }
 mcp-types = { path = "../mcp-types" }
 owo-colors = "4.2.0"

@@ -46,7 +46,10 @@ async fn run_cmd(cmd: &[&str], writable_roots: &[PathBuf], timeout_ms: u64) {
         env: create_env_from_core_vars(),
     };
 
-    let sandbox_policy = SandboxPolicy::new_read_only_policy_with_writable_roots(writable_roots);
+    let sandbox_policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: writable_roots.to_vec(),
+        network_access: false,
+    };
     let sandbox_program = env!("CARGO_BIN_EXE_codex-linux-sandbox");
     let codex_linux_sandbox_exe = Some(PathBuf::from(sandbox_program));
     let ctrl_c = Arc::new(Notify::new());

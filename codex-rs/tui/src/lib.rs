@@ -48,11 +48,11 @@ pub use cli::Cli;
 pub fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> std::io::Result<()> {
     let (sandbox_policy, approval_policy) = if cli.full_auto {
         (
-            Some(SandboxPolicy::new_full_auto_policy()),
+            Some(SandboxPolicy::new_workspace_write_policy()),
             Some(AskForApproval::OnFailure),
         )
     } else {
-        let sandbox_policy = cli.sandbox.permissions.clone().map(Into::into);
+        let sandbox_policy = None;
         (sandbox_policy, cli.approval_policy.map(Into::into))
     };
 

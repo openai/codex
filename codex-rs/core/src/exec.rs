@@ -225,41 +225,20 @@ fn create_linux_sandbox_command_args(
     sandbox_policy: &SandboxPolicy,
     cwd: &Path,
 ) -> Vec<String> {
-    let mut linux_cmd: Vec<String> = vec![];
+    #[expect(clippy::expect_used)]
+    let sandbox_policy_cwd = cwd.to_str().expect("cwd must be valid UTF-8").to_string();
 
-    // Translate individual permissions.
-    // Use high-level helper methods to infer flags when we cannot see the
-    // exact permission list.
-    if sandbox_policy.has_full_disk_read_access() {
-        linux_cmd.extend(["-s", "disk-full-read-access"].map(String::from));
-    }
+    #[expect(clippy::expect_used)]
+    let sandbox_policy_json =
+        serde_json::to_string(sandbox_policy).expect("Failed to serialize SandboxPolicy to JSON");
 
-    if sandbox_policy.has_full_disk_write_access() {
-        linux_cmd.extend(["-s", "disk-full-write-access"].map(String::from));
-    } else {
-        // Derive granular writable paths (includes cwd if `DiskWriteCwd` is
-        // present).
-        for root in sandbox_policy.get_writable_roots_with_cwd(cwd) {
-            // Check if this path corresponds exactly to cwd to map to
-            // `disk-write-cwd`, otherwise use the generic folder rule.
-            if root == cwd {
-                linux_cmd.extend(["-s", "disk-write-cwd"].map(String::from));
-            } else {
-                linux_cmd.extend([
-                    "-s".to_string(),
-                    format!("disk-write-folder={}", root.to_string_lossy()),
-                ]);
-            }
-        }
-    }
-
-    if sandbox_policy.has_full_network_access() {
-        linux_cmd.extend(["-s", "network-full-access"].map(String::from));
-    }
-
-    // Separator so that command arguments starting with `-` are not parsed as
-    // options of the helper itself.
-    linux_cmd.push("--".to_string());
+    let mut linux_cmd: Vec<String> = vec![
+        sandbox_policy_cwd,
+        sandbox_policy_json,
+        // Separator so that command arguments starting with `-` are not parsed as
+        // options of the helper itself.
+        "--".to_string(),
+    ];
 
     // Append the original tool command.
     linux_cmd.extend(command);
