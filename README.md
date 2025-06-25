@@ -2,7 +2,8 @@
 <p align="center">Lightweight coding agent that runs in your terminal</p>
 <p align="center"><strong>Windows optimized version</strong></p>
 
-<p align="center"><code>git clone --depth 1 --branch codex_windows_version https://github.com/damdam775/codex.git && npm install -g ./codex/codex-cli</code></p>
+<p align="center"><code>git clone --depth 1 --branch codex_windows_version https://github.com/damdam775/codex.git</code></p>
+<p align="center"><code>cd codex/codex-cli && npm install && npm run build && npm install -g .</code></p>
 
 ![Codex demo GIF using: codex "explain this codebase to me"](./.github/demo.gif)
 
