@@ -6,6 +6,7 @@ use crate::text_formatting::format_and_truncate_tool_result;
 use base64::Engine;
 use codex_ansi_escape::ansi_escape_line;
 use codex_common::elapsed::format_duration;
+use codex_common::summarize_sandbox_policy;
 use codex_core::WireApi;
 use codex_core::config::Config;
 use codex_core::model_supports_reasoning_summaries;
@@ -152,7 +153,7 @@ impl HistoryCell {
                 ("model", config.model.clone()),
                 ("provider", config.model_provider_id.clone()),
                 ("approval", format!("{:?}", config.approval_policy)),
-                ("sandbox", format!("{:?}", config.sandbox_policy)),
+                ("sandbox", summarize_sandbox_policy(&config.sandbox_policy)),
             ];
             if config.model_provider.wire_api == WireApi::Responses
                 && model_supports_reasoning_summaries(&config.model)

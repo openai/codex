@@ -183,17 +183,8 @@ impl SandboxPolicy {
     /// the current working directory and the per-user tmp dir on macOS. It does
     /// not allow network access.
     pub fn new_workspace_write_policy() -> Self {
-        let mut writable_roots = vec![];
-
-        // Also include the per-user tmp dir on macOS.
-        if cfg!(target_os = "macos") {
-            if let Some(tmpdir) = std::env::var_os("TMPDIR") {
-                writable_roots.push(PathBuf::from(tmpdir));
-            }
-        }
-
         SandboxPolicy::WorkspaceWrite {
-            writable_roots,
+            writable_roots: vec![],
             network_access: false,
         }
     }
@@ -229,6 +220,17 @@ impl SandboxPolicy {
             SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
                 let mut roots = writable_roots.clone();
                 roots.push(cwd.to_path_buf());
+
+                // Also include the per-user tmp dir on macOS.
+                // Note this is added dynamically rather than storing it in
+                // writable_roots because writable_roots contains only static
+                // values deserialized from the config file.
+                if cfg!(target_os = "macos") {
+                    if let Some(tmpdir) = std::env::var_os("TMPDIR") {
+                        roots.push(PathBuf::from(tmpdir));
+                    }
+                }
+
                 roots
             }
         }
