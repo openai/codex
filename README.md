@@ -14,6 +14,7 @@
 
 - [Experimental technology disclaimer](#experimental-technology-disclaimer)
 - [Quickstart](#quickstart)
+  - [Windows setup](#windows-setup)
 - [Why Codex?](#why-codex)
 - [Security model & permissions](#security-model--permissions)
   - [Platform sandboxing details](#platform-sandboxing-details)
@@ -143,6 +144,13 @@ That's it - Codex will scaffold a file, run it inside a sandbox, install any
 missing dependencies, and show you the live result. Approve the changes and
 they'll be committed to your working directory.
 
+### Windows setup
+
+Windows users can run [`scripts/install_windows.ps1`](./scripts/install_windows.ps1) from PowerShell.
+The script updates your `PATH`, writes a default bilingual `~/.codex/AGENTS.md`,
+and optionally installs voice support. It also lets you pick the default model
+provider, fetching Gemini model names if that provider is selected.
+
 ---
 
 ## Why Codex?
@@ -204,7 +212,7 @@ The hardening mechanism Codex uses depends on your OS:
 
 | Requirement                 | Details                                                         |
 | --------------------------- | --------------------------------------------------------------- |
-| Operating systems           | macOS 12+, Ubuntu 20.04+/Debian 10+, or Windows 11 **via WSL2** |
+| Operating systems           | macOS 12+, Ubuntu 20.04+/Debian 10+, or Windows 11 (WSL2 recommended) |
 | Node.js                     | **22 or newer** (LTS recommended)                               |
 | Git (optional, recommended) | 2.23+ for built-in PR helpers                                   |
 | RAM                         | 4-GB minimum (8-GB recommended)                                 |
@@ -459,6 +467,9 @@ You can create a `~/.codex/AGENTS.md` file to define custom guidance for the age
 - Only use git commands when explicitly requested
 ```
 
+The `scripts/AGENTS_WINDOWS_TEMPLATE.md` file contains a bilingual example suitable
+for Windows installations.
+
 ### Environment variables setup
 
 For each AI provider, you need to set the corresponding API key in your environment variables. For example:
@@ -510,7 +521,7 @@ Codex runs model-generated commands in a sandbox. If a proposed command or file 
 <details>
 <summary>Does it work on Windows?</summary>
 
-Not directly. It requires [Windows Subsystem for Linux (WSL2)](https://learn.microsoft.com/en-us/windows/wsl/install) - Codex has been tested on macOS and Linux with Node 22.
+Yes. A PowerShell helper is provided at `scripts/install_windows.ps1` for a basic native setup. Running it will configure the `PATH`, create a default `~/.codex` folder with bilingual instructions, and optionally enable audio features. Using [Windows Subsystem for Linux (WSL2)](https://learn.microsoft.com/en-us/windows/wsl/install) is still recommended for sandboxing, but the script works on Windows 11 without WSL.
 
 </details>
 
