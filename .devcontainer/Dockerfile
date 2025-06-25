@@ -1,4 +1,4 @@
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
 # enable 'universe' because musl-tools & clang live there
@@ -11,20 +11,17 @@ RUN apt-get update && \
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     build-essential curl git ca-certificates \
-    pkg-config clang musl-tools libssl-dev && \
+    pkg-config clang musl-tools libssl-dev just && \
     rm -rf /var/lib/apt/lists/*
 
-# non-root dev user
-ARG USER=dev
-ARG UID=1000
-RUN useradd -m -u $UID $USER
-USER $USER
+# Ubuntu 24.04 ships with user 'ubuntu' already created with UID 1000.
+USER ubuntu
 
 # install Rust + musl target as dev user
 RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal && \
     ~/.cargo/bin/rustup target add aarch64-unknown-linux-musl && \
     ~/.cargo/bin/rustup component add clippy rustfmt
 
-ENV PATH="/home/${USER}/.cargo/bin:${PATH}"
+ENV PATH="/home/ubuntu/.cargo/bin:${PATH}"
 
 WORKDIR /workspace
