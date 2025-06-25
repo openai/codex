@@ -80,8 +80,13 @@ wire_api = "chat"
 Determines when the user should be prompted to approve whether Codex can execute a command:
 
 ```toml
-# This is analogous to --suggest in the TypeScript Codex CLI
-approval_policy = "unless-allow-listed"
+# Codex has hardcoded logic that defines a set of "trusted" commands.
+# Setting the approval_policy to `untrusted` means that Codex will prompt the
+# user before running a command not in the "trusted" set.
+#
+# See https://github.com/openai/codex/issues/1260 for the plan to enable
+# end-users to define their own trusted commands.
+approval_policy = "untrusted"
 ```
 
 ```toml

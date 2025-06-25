@@ -31,7 +31,7 @@ pub fn assess_patch_safety(
     }
 
     match policy {
-        AskForApproval::OnFailure | AskForApproval::AutoEdit | AskForApproval::Never => {
+        AskForApproval::OnFailure | AskForApproval::Never => {
             // Continue to see if this can be auto-approved.
         }
         // TODO(ragona): I'm not sure this is actually correct? I believe in this case

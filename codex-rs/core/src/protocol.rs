@@ -110,21 +110,17 @@ pub enum Op {
     GetHistoryEntryRequest { offset: usize, log_id: u64 },
 }
 
-/// Determines how liberally commands are auto‑approved by the system.
+/// Determines the conditions under which the user is consulted to approve
+/// running the command proposed by Codex.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AskForApproval {
-    /// Under this policy, only “known safe” commands—as determined by
+    /// Under this policy, only "known safe" commands—as determined by
     /// `is_safe_command()`—that **only read files** are auto‑approved.
     /// Everything else will ask the user to approve.
     #[default]
+    #[serde(rename = "untrusted")]
     UnlessAllowListed,
-
-    /// In addition to everything allowed by **`Suggest`**, commands that
-    /// *write* to files **within the user’s approved list of writable paths**
-    /// are also auto‑approved.
-    /// TODO(ragona): fix
-    AutoEdit,
 
     /// *All* commands are auto‑approved, but they are expected to run inside a
     /// sandbox where network access is disabled and writes are confined to a
