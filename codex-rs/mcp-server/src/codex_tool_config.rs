@@ -47,8 +47,7 @@ pub(crate) struct CodexToolCallParam {
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum CodexToolCallApprovalPolicy {
-    AutoEdit,
-    UnlessAllowListed,
+    Untrusted,
     OnFailure,
     Never,
 }
@@ -56,8 +55,7 @@ pub(crate) enum CodexToolCallApprovalPolicy {
 impl From<CodexToolCallApprovalPolicy> for AskForApproval {
     fn from(value: CodexToolCallApprovalPolicy) -> Self {
         match value {
-            CodexToolCallApprovalPolicy::AutoEdit => AskForApproval::AutoEdit,
-            CodexToolCallApprovalPolicy::UnlessAllowListed => AskForApproval::UnlessAllowListed,
+            CodexToolCallApprovalPolicy::Untrusted => AskForApproval::UnlessAllowListed,
             CodexToolCallApprovalPolicy::OnFailure => AskForApproval::OnFailure,
             CodexToolCallApprovalPolicy::Never => AskForApproval::Never,
         }
@@ -164,8 +162,7 @@ mod tests {
               "approval-policy": {
                 "description": "Execution approval policy expressed as the kebab-case variant name (`unless-allow-listed`, `auto-edit`, `on-failure`, `never`).",
                 "enum": [
-                  "auto-edit",
-                  "unless-allow-listed",
+                  "untrusted",
                   "on-failure",
                   "never"
                 ],
