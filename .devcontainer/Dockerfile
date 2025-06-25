@@ -22,7 +22,8 @@ USER $USER
 
 # install Rust + musl target as dev user
 RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal && \
-    ~/.cargo/bin/rustup target add aarch64-unknown-linux-musl
+    ~/.cargo/bin/rustup target add aarch64-unknown-linux-musl && \
+    ~/.cargo/bin/rustup component add clippy rustfmt
 
 ENV PATH="/home/${USER}/.cargo/bin:${PATH}"
 
