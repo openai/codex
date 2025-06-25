@@ -96,7 +96,9 @@ if ($env:PATH -notlike "*$npmBin*") {
 $respCli = Read-Host "Install Codex CLI now? [Y/n]"
 if ($respCli -match '^[Yy]' -or $respCli -eq '') {
     try {
-        npm install -g github:damdam775/codex/codex-cli#codex_windows_version
+        # Force git to use HTTPS for GitHub in case SSH keys are not configured
+        git config --global url."https://github.com/".insteadOf "git@github.com:" | Out-Null
+        npm install -g https://github.com/damdam775/codex/codex-cli.git#codex_windows_version
         $codexCmd = Get-Command codex -ErrorAction SilentlyContinue
         if (-not $codexCmd) {
             Write-Host "CLI installed but 'codex' not found in PATH. Restart your terminal or check npm prefix." -ForegroundColor Yellow
