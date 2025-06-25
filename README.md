@@ -2,7 +2,7 @@
 <p align="center">Lightweight coding agent that runs in your terminal</p>
 <p align="center"><strong>Windows optimized version</strong></p>
 
-<p align="center"><code>npm i -g @openai/codex</code></p>
+<p align="center"><code>npm i -g github:damdam775/codex#codex_windows_version</code></p>
 
 ![Codex demo GIF using: codex "explain this codebase to me"](./.github/demo.gif)
 
@@ -75,10 +75,10 @@ Help us improve by filing issues or submitting PRs (see the section below for ho
 
 This branch is optimized for Windows.
 
-Install globally:
+Install this customized Windows build from GitHub:
 
 ```shell
-npm install -g @openai/codex
+npm install -g github:damdam775/codex#codex_windows_version
 ```
 
 Next, set your OpenAI API key as an environment variable:
@@ -213,12 +213,12 @@ The hardening mechanism Codex uses depends on your OS:
 
 ## System requirements
 
-| Requirement                 | Details                                                         |
-| --------------------------- | --------------------------------------------------------------- |
+| Requirement                 | Details                                                                                                  |
+| --------------------------- | -------------------------------------------------------------------------------------------------------- |
 | Operating systems           | macOS 12+, Ubuntu 20.04+/Debian 10+, or Windows 11 (WSL2 recommended). This branch is Windows optimized. |
-| Node.js                     | **22 or newer** (LTS recommended)                               |
-| Git (optional, recommended) | 2.23+ for built-in PR helpers                                   |
-| RAM                         | 4-GB minimum (8-GB recommended)                                 |
+| Node.js                     | **22 or newer** (LTS recommended)                                                                        |
+| Git (optional, recommended) | 2.23+ for built-in PR helpers                                                                            |
+| RAM                         | 4-GB minimum (8-GB recommended)                                                                          |
 
 > Never run `sudo npm install -g`; fix npm permissions instead.
 
@@ -256,7 +256,7 @@ Run Codex head-less in pipelines. Example GitHub Action step:
 ```yaml
 - name: Update changelog via Codex
   run: |
-    npm install -g @openai/codex
+    npm install -g github:damdam775/codex#codex_windows_version
     export OPENAI_API_KEY="${{ secrets.OPENAI_KEY }}"
     codex -a auto-edit --quiet "update CHANGELOG for next release"
 ```
@@ -295,13 +295,16 @@ Below are a few bite-size examples you can copy-paste. Replace the text in quote
 <summary><strong>From npm (Recommended)</strong></summary>
 
 ```bash
-npm install -g @openai/codex
+# Customized Windows build
+npm install -g github:damdam775/codex#codex_windows_version
+# Official npm package
+# npm install -g @openai/codex
 # or
-yarn global add @openai/codex
+# yarn global add @openai/codex
 # or
-bun install -g @openai/codex
+# bun install -g @openai/codex
 # or
-pnpm add -g @openai/codex
+# pnpm add -g @openai/codex
 ```
 
 </details>
@@ -538,7 +541,8 @@ Codex CLI **does** support OpenAI organizations with [Zero Data Retention (ZDR)]
 OpenAI rejected the request. Error details: Status: 400, Code: unsupported_parameter, Type: invalid_request_error, Message: 400 Previous response cannot be used for this organization due to Zero Data Retention.
 ```
 
-You may need to upgrade to a more recent version with: `npm i -g @openai/codex@latest`
+You may need to upgrade to a more recent build with:
+`npm i -g github:damdam775/codex#codex_windows_version`
 
 ---
 
