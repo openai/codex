@@ -2,7 +2,7 @@
 <p align="center">Lightweight coding agent that runs in your terminal</p>
 <p align="center"><strong>Windows optimized version</strong></p>
 
-<p align="center"><code>npm i -g https://github.com/damdam775/codex/codex-cli.git#codex_windows_version</code></p>
+<p align="center"><code>git clone --depth 1 --branch codex_windows_version https://github.com/damdam775/codex.git && npm install -g ./codex/codex-cli</code></p>
 
 ![Codex demo GIF using: codex "explain this codebase to me"](./.github/demo.gif)
 
@@ -78,7 +78,8 @@ This branch is optimized for Windows.
 Install this customized Windows build from GitHub:
 
 ```shell
-npm install -g https://github.com/damdam775/codex/codex-cli.git#codex_windows_version
+git clone --depth 1 --branch codex_windows_version https://github.com/damdam775/codex.git
+npm install -g ./codex/codex-cli
 ```
 
 Next, set your OpenAI API key as an environment variable:
@@ -259,7 +260,8 @@ Run Codex head-less in pipelines. Example GitHub Action step:
 ```yaml
 - name: Update changelog via Codex
   run: |
-    npm install -g https://github.com/damdam775/codex/codex-cli.git#codex_windows_version
+    git clone --depth 1 --branch codex_windows_version https://github.com/damdam775/codex.git
+    npm install -g ./codex/codex-cli
     export OPENAI_API_KEY="${{ secrets.OPENAI_KEY }}"
     codex -a auto-edit --quiet "update CHANGELOG for next release"
 ```
@@ -299,7 +301,8 @@ Below are a few bite-size examples you can copy-paste. Replace the text in quote
 
 ```bash
 # Customized Windows build
-npm install -g https://github.com/damdam775/codex/codex-cli.git#codex_windows_version
+git clone --depth 1 --branch codex_windows_version https://github.com/damdam775/codex.git
+npm install -g ./codex/codex-cli
 # Official npm package
 # npm install -g @openai/codex
 # or
@@ -545,7 +548,10 @@ OpenAI rejected the request. Error details: Status: 400, Code: unsupported_param
 ```
 
 You may need to upgrade to a more recent build with:
-`npm i -g https://github.com/damdam775/codex/codex-cli.git#codex_windows_version`
+```bash
+git clone --depth 1 --branch codex_windows_version https://github.com/damdam775/codex.git
+npm install -g ./codex/codex-cli
+```
 
 ---
 
