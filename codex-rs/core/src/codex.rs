@@ -206,6 +206,8 @@ impl Session {
 struct State {
     approved_commands: HashSet<Vec<String>>,
     current_task: Option<AgentTask>,
+    /// Call IDs that have been sent from the Responses API but have not been sent back yet.
+    /// You CANNOT send a Responses API follow-up message unless you have sent back the output for all pending calls or else it will 400.
     pending_call_ids: HashSet<String>,
     previous_response_id: Option<String>,
     pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
@@ -411,13 +413,11 @@ impl Session {
 
     pub fn abort(&self) {
         info!("Aborting existing session");
-
-        // Extract any in-progress response ID so we can cancel it outside the
-        // mutex (to avoid holding the lock across an await).
         let mut state = self.state.lock().unwrap();
+        // Don't clear pending_call_ids because we need to keep track of them to ensure we don't 400 on the next turn.
+        // We will generate a synthetic aborted response for each pending call id.
         state.pending_approvals.clear();
         state.pending_input.clear();
-
         if let Some(task) = state.current_task.take() {
             task.abort();
         }
@@ -876,8 +876,7 @@ async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
                 })
             })
             .collect();
-        let turn_response = run_turn(&sess, sub_id.clone(), turn_input).await;
-        match turn_response {
+        match run_turn(&sess, sub_id.clone(), turn_input).await {
             Ok(turn_output) => {
                 let mut items_to_record_in_conversation_history = Vec::<ResponseItem>::new();
                 let mut responses = Vec::<ResponseInputItem>::new();
@@ -1070,7 +1069,7 @@ async fn try_run_turn(
     prompt: &Prompt,
 ) -> CodexResult<Vec<ProcessedResponseItem>> {
     // call_ids that are part of this response.
-    let included_call_ids = prompt
+    let completed_call_ids = prompt
         .input
         .iter()
         .filter_map(|ri| match ri {
@@ -1093,7 +1092,7 @@ async fn try_run_turn(
             .pending_call_ids
             .iter()
             .filter_map(|call_id| {
-                if included_call_ids.contains(&call_id) {
+                if completed_call_ids.contains(&call_id) {
                     None
                 } else {
                     Some(call_id.clone())
@@ -1135,9 +1134,8 @@ async fn try_run_turn(
         match event {
             ResponseEvent::Created { .. } => {
                 let mut state = sess.state.lock().unwrap();
-                state
-                    .pending_call_ids
-                    .retain(|item| !included_call_ids.contains(&item));
+                // We successfully created a new response and ensured that all pending calls were included so we can clear the pending call ids.
+                state.pending_call_ids.clear();
             }
             ResponseEvent::OutputItemDone(item) => {
                 let call_id = match &item {
@@ -1149,6 +1147,7 @@ async fn try_run_turn(
                     _ => None,
                 };
                 if let Some(call_id) = call_id {
+                    // We just got a new call id so we need to make sure to respond to it in the next turn.
                     let mut state = sess.state.lock().unwrap();
                     state.pending_call_ids.insert(call_id.clone());
                 }

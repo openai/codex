@@ -50,17 +50,9 @@ impl Prompt {
 
 #[derive(Debug)]
 pub enum ResponseEvent {
-    /// Emitted when the OpenAI Responses API acknowledges creation of a new in-progress
-    /// response and provides the response `id`. This variant is currently only emitted
-    /// when using the experimental Responses API.
-    /// Chat Completions streams will never produce it.
-    Created {
-        response_id: String,
-    },
+    Created {},
     OutputItemDone(ResponseItem),
-    Completed {
-        response_id: String,
-    },
+    Completed { response_id: String },
 }
 
 #[derive(Debug, Serialize)]

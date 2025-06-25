@@ -12,7 +12,7 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tokio_util::io::ReaderStream;
-use tracing::{debug, info};
+use tracing::debug;
 use tracing::trace;
 use tracing::warn;
 
@@ -197,46 +197,6 @@ impl ModelClient {
             }
         }
     }
-
-    /// Cancels an in-progress Responses API request using the
-    /// `/responses/{id}/cancel` endpoint.  This is a **best-effort** helper –
-    /// failures are surfaced to the caller so they can be logged, but should
-    /// not crash the agent.
-    pub async fn cancel_response(&self, response_id: &str) -> Result<()> {
-        if self.provider.wire_api != WireApi::Responses {
-            // Only the experimental Responses API supports server-side
-            // cancellations. For Chat completions (and other providers) we
-            // simply return Ok so callers do not need to special-case.
-            return Ok(());
-        }
-
-        let base_url = self.provider.base_url.trim_end_matches('/');
-        let url = format!("{}/responses/{}/cancel", base_url, response_id);
-
-        let api_key = self.provider.api_key()?.ok_or_else(|| {
-            CodexErr::EnvVar(EnvVarError {
-                var: self.provider.env_key.clone().unwrap_or_default(),
-                instructions: None,
-            })
-        })?;
-
-        let res = self
-            .client
-            .post(&url)
-            .bearer_auth(api_key)
-            .header("OpenAI-Beta", "responses=experimental")
-            .send()
-            .await
-            .map_err(CodexErr::Reqwest)?;
-
-        if res.status().is_success() {
-            Ok(())
-        } else {
-            let status = res.status();
-            let body = res.text().await.unwrap_or_default();
-            Err(CodexErr::UnexpectedStatus(status, body))
-        }
-    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -248,7 +208,10 @@ struct SseEvent {
 }
 
 #[derive(Debug, Deserialize)]
-struct ResponseId {
+struct ResponseCreated {}
+
+#[derive(Debug, Deserialize)]
+struct ResponseCompleted {
     id: String,
 }
 
@@ -314,7 +277,7 @@ where
             // duplicated `output` array embedded in the `response.completed`
             // payload.  That produced two concrete issues:
             //   1. No real‑time streaming – the user only saw output after the
-            //      entire turn had finished, which broke the "typing" UX and
+            //      entire turn had finished, which broke the “typing” UX and
             //      made long‑running turns look stalled.
             //   2. Duplicate `function_call_output` items – both the
             //      individual *and* the completed array were forwarded, which
@@ -336,10 +299,15 @@ where
                     return;
                 }
             }
+            "response.created" => {
+                if let Some(_) = event.response {
+                    let _ = tx_event.send(Ok(ResponseEvent::Created {})).await;
+                }
+            }
             // Final response completed – includes array of output items & id
             "response.completed" => {
                 if let Some(resp_val) = event.response {
-                    match serde_json::from_value::<ResponseId>(resp_val) {
+                    match serde_json::from_value::<ResponseCompleted>(resp_val) {
                         Ok(r) => {
                             response_id = Some(r.id);
                         }
@@ -349,24 +317,6 @@ where
                         }
                     };
                 };
-            }
-            "response.created" => {
-                if let Some(resp_val) = event.response {
-                    match serde_json::from_value::<ResponseId>(resp_val) {
-                        Ok(r) => {
-                            let id = r.id;
-                            response_id.get_or_insert(id.clone());
-                            // Forward to downstream so the agent can cancel if needed.
-                            let _ = tx_event
-                                .send(Ok(ResponseEvent::Created { response_id: id }))
-                                .await;
-                        }
-                        Err(e) => {
-                            debug!("failed to parse ResponseCreated: {e}");
-                            continue;
-                        }
-                    }
-                }
             }
             "response.content_part.done"
             | "response.function_call_arguments.delta"
