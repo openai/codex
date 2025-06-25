@@ -82,6 +82,8 @@ git clone --depth 1 --branch codex_windows_version https://github.com/damdam775/
 npm install -g ./codex/codex-cli
 ```
 
+**Important:** The `npm install -g` step puts a `codex` launcher into your npm global bin directory (e.g. `%AppData%\npm`). Make sure this directory is in your `PATH`. Do **not** add `codex-cli\bin` directly to `PATH`.
+
 Next, set your OpenAI API key as an environment variable:
 
 ```shell
@@ -157,6 +159,8 @@ install the CLI itself using the customized Windows build. It optionally
 installs voice packages and lets you select the default model provider,
 fetching Gemini model names when needed. A minimal Python helper for
 interactive prompts is provided at [`scripts/windows_agent.py`](./scripts/windows_agent.py).
+**Note:** The script adds Node and npm's global bin folder to your PATH. If running `codex` opens the JavaScript file in an editor, reinstall Node.js or run the setup script again to fix file associations.
+
 
 ---
 
