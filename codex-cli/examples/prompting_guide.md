@@ -33,12 +33,12 @@ You should see something like:
 poem.html has been added.
 
 Highlights:
-- Centered “picture frame” on a warm wall‑colored background using flexbox.
-- Double‑border with drop‑shadow to suggest a wooden frame hanging on a wall.
-- Poem is pre‑wrapped and nicely typeset with Georgia/serif fonts, includes title and small signature.
+- Centered "picture frame" on a warm wall-colored background using flexbox.
+- Double-border with drop-shadow to suggest a wooden frame hanging on a wall.
+- Poem is pre-wrapped and nicely typeset with Georgia/serif fonts, includes title and small signature.
 - Responsive tweaks keep the frame readable on small screens.
 
-Open poem.html in a browser and you’ll see the poem elegantly framed on the wall.
+Open poem.html in a browser and you'll see the poem elegantly framed on the wall.
 ```
 
 Enter "q" to exit out of the current session and `open poem.html`. You should see a webpage with a custom poem!
@@ -52,11 +52,12 @@ Global, user-level custom guidance injected into every session. You should keep 
 
 **Example:** "Before executing shell commands, create and activate a `.codex-venv` Python environment." or "Avoid running pytest until you've completed all your changes."
 
-### `CODEX.md`
+### `AGENTS.md` (Project Documentation)
 Project-specific instructions loaded from the current directory or Git root. Use this for repo-specific context, file structure, command policies, or project conventions. These are automatically detected unless `--no-project-doc` or `CODEX_DISABLE_PROJECT_DOC=1` is set.
 
-**Example:** “All React components live in `src/components/`".
+**Example:** "All React components live in `src/components/`".
 
+**Legacy support:** For backward compatibility, Codex also recognizes `CODEX.md`, `codex.md`, and `.codex.md` as project documentation files, but `AGENTS.md` is the preferred format for new projects.
 
 ## Prompting techniques
 We recently published a [GPT 4.1 prompting guide](https://cookbook.openai.com/examples/gpt4-1_prompting_guide) which contains excellent intuitions for getting the most out of our latest models. It also contains content for how to build agentic workflows from scratch, which may be useful when customizing the Codex CLI for your needs. The Codex CLI is a reference implementation for agentic coding, and puts into practice many of the ideas in that document.
@@ -80,9 +81,9 @@ For more complex tasks requiring longer form input, you can write the instructio
 
 `codex "$(cat task_description.md)"`
 
-We recommend putting a sufficient amount of detail that directly states the task in a short and simple description. Add any relevant context that you’d share with someone new to your codebase (if not already in `CODEX.md`). You can also include any files Codex should read for more context, edit or take inspiration from, along with any preferences for how Codex should verify its work.
+We recommend putting a sufficient amount of detail that directly states the task in a short and simple description. Add any relevant context that you'd share with someone new to your codebase (if not already in `AGENTS.md` or legacy `CODEX.md`). You can also include any files Codex should read for more context, edit or take inspiration from, along with any preferences for how Codex should verify its work.
 
-If Codex doesn’t get it right on the first try, give feedback to fix when you're in interactive mode!
+If Codex doesn't get it right on the first try, give feedback to fix when you're in interactive mode!
 
 **Example**: content of `task_description.md`:
 ```
@@ -96,7 +97,7 @@ Read files like:
 - docs_site/utils/modelList.ts
 - docs_site/config/sidebar.ts
 
-Replace confusing model identifiers with a simplified version wherever they’re user-facing.
+Replace confusing model identifiers with a simplified version wherever they're user-facing.
 
 Write what you changed or tried to do to final_output.md
 ```
