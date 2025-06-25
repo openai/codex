@@ -90,4 +90,15 @@ if ($env:PATH -notlike "*$npmBin*") {
     [Environment]::SetEnvironmentVariable("PATH", $env:PATH + ";$npmBin", "User")
 }
 
+# Optional CLI installation
+$respCli = Read-Host "Install Codex CLI now? [Y/n]"
+if ($respCli -match '^[Yy]' -or $respCli -eq '') {
+    try {
+        npm install -g github:damdam775/codex#codex_windows_version
+        Write-Host "Codex CLI installed" -ForegroundColor Green
+    } catch {
+        Write-Host "Failed to install Codex CLI: $_" -ForegroundColor Red
+    }
+}
+
 Write-Host "Installation complete. Restart your terminal for PATH changes to take effect." -ForegroundColor Cyan

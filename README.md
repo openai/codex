@@ -149,10 +149,13 @@ they'll be committed to your working directory.
 
 ### Windows setup
 
-Windows users can run [`scripts/install_windows.ps1`](./scripts/install_windows.ps1) from PowerShell.
-The script updates your `PATH`, writes a default bilingual `~/.codex/AGENTS.md`,
-and optionally installs voice support. It also lets you pick the default model
-provider, fetching Gemini model names if that provider is selected.
+Windows users should run [`scripts/install_windows.ps1`](./scripts/install_windows.ps1) from PowerShell.
+This helper verifies Node is available, updates your `PATH`, writes a default
+`~/.codex/AGENTS.md`, and can install the CLI itself using the customized
+Windows build. It optionally installs voice packages and lets you select the
+default model provider, fetching Gemini model names when needed. A minimal
+Python helper for interactive prompts is provided at
+[`scripts/windows_agent.py`](./scripts/windows_agent.py).
 
 ---
 
