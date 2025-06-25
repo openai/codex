@@ -55,7 +55,7 @@ pub(crate) enum CodexToolCallApprovalPolicy {
 impl From<CodexToolCallApprovalPolicy> for AskForApproval {
     fn from(value: CodexToolCallApprovalPolicy) -> Self {
         match value {
-            CodexToolCallApprovalPolicy::Untrusted => AskForApproval::UnlessAllowListed,
+            CodexToolCallApprovalPolicy::Untrusted => AskForApproval::UnlessTrusted,
             CodexToolCallApprovalPolicy::OnFailure => AskForApproval::OnFailure,
             CodexToolCallApprovalPolicy::Never => AskForApproval::Never,
         }

@@ -26,7 +26,7 @@ pub enum ApprovalModeCliArg {
 impl From<ApprovalModeCliArg> for AskForApproval {
     fn from(value: ApprovalModeCliArg) -> Self {
         match value {
-            ApprovalModeCliArg::Untrusted => AskForApproval::UnlessAllowListed,
+            ApprovalModeCliArg::Untrusted => AskForApproval::UnlessTrusted,
             ApprovalModeCliArg::OnFailure => AskForApproval::OnFailure,
             ApprovalModeCliArg::Never => AskForApproval::Never,
         }

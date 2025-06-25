@@ -36,7 +36,7 @@ pub fn assess_patch_safety(
         }
         // TODO(ragona): I'm not sure this is actually correct? I believe in this case
         // we want to continue to the writable paths check before asking the user.
-        AskForApproval::UnlessAllowListed => {
+        AskForApproval::UnlessTrusted => {
             return SafetyCheck::AskUser;
         }
     }
