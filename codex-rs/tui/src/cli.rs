@@ -29,6 +29,15 @@ pub struct Cli {
     #[arg(long = "full-auto", default_value_t = false)]
     pub full_auto: bool,
 
+    /// Skip all confirmation prompts and execute commands without sandboxing.
+    /// EXTREMELY DANGEROUS. Intended solely for running in environments that are externally sandboxed.
+    #[arg(
+        long = "dangerously-bypass-approvals-and-sandbox",
+        default_value_t = false,
+        conflicts_with_all = ["approval_policy", "full_auto"]
+    )]
+    pub dangerously_bypass_approvals_and_sandbox: bool,
+
     /// Tell the agent to use the specified directory as its working root.
     #[clap(long = "cd", short = 'C', value_name = "DIR")]
     pub cwd: Option<PathBuf>,
