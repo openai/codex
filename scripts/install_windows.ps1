@@ -98,7 +98,11 @@ if ($respCli -match '^[Yy]' -or $respCli -eq '') {
     try {
         # Force git to use HTTPS for GitHub in case SSH keys are not configured
         git config --global url."https://github.com/".insteadOf "git@github.com:" | Out-Null
-        npm install -g https://github.com/damdam775/codex/codex-cli.git#codex_windows_version
+        $tmp = Join-Path $env:TEMP "codex-cli-install"
+        if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }
+        git clone --depth 1 --branch codex_windows_version https://github.com/damdam775/codex.git $tmp | Out-Null
+        npm install -g (Join-Path $tmp "codex-cli")
+        Remove-Item $tmp -Recurse -Force
         $codexCmd = Get-Command codex -ErrorAction SilentlyContinue
         if (-not $codexCmd) {
             Write-Host "CLI installed but 'codex' not found in PATH. Restart your terminal or check npm prefix." -ForegroundColor Yellow
