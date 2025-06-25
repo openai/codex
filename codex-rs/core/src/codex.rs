@@ -1069,10 +1069,11 @@ async fn try_run_turn(
     sub_id: &str,
     prompt: &Prompt,
 ) -> CodexResult<Vec<ProcessedResponseItem>> {
-    let call_ids = prompt
+    // call_ids that are part of this response.
+    let included_call_ids = prompt
         .input
         .iter()
-        .map(|ri| match ri {
+        .filter_map(|ri| match ri {
             ResponseItem::FunctionCallOutput { call_id, .. } => Some(call_id),
             ResponseItem::LocalShellCall {
                 call_id: Some(call_id),
@@ -1080,9 +1081,47 @@ async fn try_run_turn(
             } => Some(call_id),
             _ => None,
         })
-        .filter_map(|item| item)
         .collect::<Vec<_>>();
-    let mut stream = sess.client.clone().stream(prompt).await?;
+
+    // call_ids that were pending but are not part of this response.
+    // This usually happens because the user interrupted the model before we responded to one of its tool calls
+    // and then the user sent a follow-up message.
+    let missing_calls = {
+        sess.state
+            .lock()
+            .unwrap()
+            .pending_call_ids
+            .iter()
+            .filter_map(|call_id| {
+                if included_call_ids.contains(&call_id) {
+                    None
+                } else {
+                    Some(call_id.clone())
+                }
+            })
+            .map(|call_id| ResponseItem::FunctionCallOutput {
+                call_id: call_id.clone(),
+                output: FunctionCallOutputPayload {
+                    content: "aborted".to_string(),
+                    success: Some(false),
+                },
+            })
+            .collect::<Vec<_>>()
+    };
+    let prompt = if missing_calls.is_empty() {
+        prompt.clone()
+    } else {
+        let input = [prompt.input.clone(), missing_calls].concat();
+        Prompt {
+            input,
+            prev_id: prompt.prev_id.clone(),
+            user_instructions: prompt.user_instructions.clone(),
+            store: prompt.store,
+            extra_tools: prompt.extra_tools.clone(),
+        }
+    };
+
+    let mut stream = sess.client.clone().stream(&prompt).await?;
 
     // Buffer all the incoming messages from the stream first, then execute them.
     // If we execute a function call in the middle of handling the stream, it can time out.
@@ -1098,7 +1137,7 @@ async fn try_run_turn(
                 let mut state = sess.state.lock().unwrap();
                 state
                     .pending_call_ids
-                    .retain(|item| !call_ids.contains(&item));
+                    .retain(|item| !included_call_ids.contains(&item));
             }
             ResponseEvent::OutputItemDone(item) => {
                 let call_id = match &item {
