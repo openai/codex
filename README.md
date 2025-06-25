@@ -1,5 +1,6 @@
 <h1 align="center">OpenAI Codex CLI</h1>
 <p align="center">Lightweight coding agent that runs in your terminal</p>
+<p align="center"><strong>Windows optimized version</strong></p>
 
 <p align="center"><code>npm i -g @openai/codex</code></p>
 
@@ -71,6 +72,8 @@ Codex CLI is an experimental project under active development. It is not yet sta
 Help us improve by filing issues or submitting PRs (see the section below for how to contribute)!
 
 ## Quickstart
+
+This branch is optimized for Windows.
 
 Install globally:
 
@@ -212,7 +215,7 @@ The hardening mechanism Codex uses depends on your OS:
 
 | Requirement                 | Details                                                         |
 | --------------------------- | --------------------------------------------------------------- |
-| Operating systems           | macOS 12+, Ubuntu 20.04+/Debian 10+, or Windows 11 (WSL2 recommended) |
+| Operating systems           | macOS 12+, Ubuntu 20.04+/Debian 10+, or Windows 11 (WSL2 recommended). This branch is Windows optimized. |
 | Node.js                     | **22 or newer** (LTS recommended)                               |
 | Git (optional, recommended) | 2.23+ for built-in PR helpers                                   |
 | RAM                         | 4-GB minimum (8-GB recommended)                                 |
@@ -521,7 +524,7 @@ Codex runs model-generated commands in a sandbox. If a proposed command or file 
 <details>
 <summary>Does it work on Windows?</summary>
 
-Yes. A PowerShell helper is provided at `scripts/install_windows.ps1` for a basic native setup. Running it will configure the `PATH`, create a default `~/.codex` folder with bilingual instructions, and optionally enable audio features. Using [Windows Subsystem for Linux (WSL2)](https://learn.microsoft.com/en-us/windows/wsl/install) is still recommended for sandboxing, but the script works on Windows 11 without WSL.
+Yes. This branch specifically targets Windows. A PowerShell helper is provided at `scripts/install_windows.ps1` for a basic native setup. Running it will configure the `PATH`, create a default `~/.codex` folder with bilingual instructions, and optionally enable audio features. Using [Windows Subsystem for Linux (WSL2)](https://learn.microsoft.com/en-us/windows/wsl/install) is still recommended for sandboxing, but the script works on Windows 11 without WSL.
 
 </details>
 
