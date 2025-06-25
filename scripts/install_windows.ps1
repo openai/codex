@@ -5,12 +5,14 @@ param(
 
 Write-Host "Codex CLI Windows setup" -ForegroundColor Cyan
 
-# Verify Node.js presence
+# Verify Node.js presence and version
 $node = Get-Command node -ErrorAction SilentlyContinue
 if (-not $node) {
     Write-Host "Node.js 22+ is required. Please install it from https://nodejs.org and re-run this script." -ForegroundColor Red
     exit 1
 }
+node "$PSScriptRoot\check_node_version.js"
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 $nodeDir = Split-Path $node.Source
 if ($env:PATH -notlike "*$nodeDir*") {
     Write-Host "Adding Node.js directory to PATH" -ForegroundColor Yellow
@@ -95,7 +97,12 @@ $respCli = Read-Host "Install Codex CLI now? [Y/n]"
 if ($respCli -match '^[Yy]' -or $respCli -eq '') {
     try {
         npm install -g github:damdam775/codex#codex_windows_version
-        Write-Host "Codex CLI installed" -ForegroundColor Green
+        $codexCmd = Get-Command codex -ErrorAction SilentlyContinue
+        if (-not $codexCmd) {
+            Write-Host "CLI installed but 'codex' not found in PATH. Restart your terminal or check npm prefix." -ForegroundColor Yellow
+        } else {
+            Write-Host "Codex CLI installed" -ForegroundColor Green
+        }
     } catch {
         Write-Host "Failed to install Codex CLI: $_" -ForegroundColor Red
     }
