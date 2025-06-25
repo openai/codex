@@ -231,12 +231,6 @@ impl SandboxPolicy {
             }
         }
     }
-
-    // TODO(mbolin): This conflates sandbox policy and approval policy and
-    // should go away.
-    pub fn is_unrestricted(&self) -> bool {
-        matches!(self, SandboxPolicy::DangerFullAccess)
-    }
 }
 
 /// User input
