@@ -2,7 +2,7 @@
 <p align="center">Lightweight coding agent that runs in your terminal</p>
 <p align="center"><strong>Windows optimized version</strong></p>
 
-<p align="center"><code>npm i -g github:damdam775/codex#codex_windows_version</code></p>
+<p align="center"><code>npm i -g github:damdam775/codex/codex-cli#codex_windows_version</code></p>
 
 ![Codex demo GIF using: codex "explain this codebase to me"](./.github/demo.gif)
 
@@ -78,7 +78,7 @@ This branch is optimized for Windows.
 Install this customized Windows build from GitHub:
 
 ```shell
-npm install -g github:damdam775/codex#codex_windows_version
+npm install -g github:damdam775/codex/codex-cli#codex_windows_version
 ```
 
 Next, set your OpenAI API key as an environment variable:
@@ -259,7 +259,7 @@ Run Codex head-less in pipelines. Example GitHub Action step:
 ```yaml
 - name: Update changelog via Codex
   run: |
-    npm install -g github:damdam775/codex#codex_windows_version
+    npm install -g github:damdam775/codex/codex-cli#codex_windows_version
     export OPENAI_API_KEY="${{ secrets.OPENAI_KEY }}"
     codex -a auto-edit --quiet "update CHANGELOG for next release"
 ```
@@ -299,7 +299,7 @@ Below are a few bite-size examples you can copy-paste. Replace the text in quote
 
 ```bash
 # Customized Windows build
-npm install -g github:damdam775/codex#codex_windows_version
+npm install -g github:damdam775/codex/codex-cli#codex_windows_version
 # Official npm package
 # npm install -g @openai/codex
 # or
@@ -545,7 +545,7 @@ OpenAI rejected the request. Error details: Status: 400, Code: unsupported_param
 ```
 
 You may need to upgrade to a more recent build with:
-`npm i -g github:damdam775/codex#codex_windows_version`
+`npm i -g github:damdam775/codex/codex-cli#codex_windows_version`
 
 ---
 
