@@ -188,7 +188,7 @@ pub(crate) struct Session {
 
     /// Optional rollout recorder for persisting the conversation transcript so
     /// sessions can be replayed or inspected later.
-    rollout: Mutex<Option<crate::rollout::RolloutRecorder>>,
+    rollout: Mutex<Option<RolloutRecorder>>,
     state: Mutex<State>,
     codex_linux_sandbox_exe: Option<PathBuf>,
 }
@@ -206,6 +206,7 @@ impl Session {
 struct State {
     approved_commands: HashSet<Vec<String>>,
     current_task: Option<AgentTask>,
+    pending_call_ids: HashSet<String>,
     previous_response_id: Option<String>,
     pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
     pending_input: Vec<ResponseInputItem>,
@@ -410,9 +411,13 @@ impl Session {
 
     pub fn abort(&self) {
         info!("Aborting existing session");
+
+        // Extract any in-progress response ID so we can cancel it outside the
+        // mutex (to avoid holding the lock across an await).
         let mut state = self.state.lock().unwrap();
         state.pending_approvals.clear();
         state.pending_input.clear();
+
         if let Some(task) = state.current_task.take() {
             task.abort();
         }
@@ -431,7 +436,7 @@ impl Session {
         }
 
         let Ok(json) = serde_json::to_string(&notification) else {
-            tracing::error!("failed to serialise notification payload");
+            error!("failed to serialise notification payload");
             return;
         };
 
@@ -443,7 +448,7 @@ impl Session {
 
         // Fire-and-forget – we do not wait for completion.
         if let Err(e) = command.spawn() {
-            tracing::warn!("failed to spawn notifier '{}': {e}", notify_command[0]);
+            warn!("failed to spawn notifier '{}': {e}", notify_command[0]);
         }
     }
 }
@@ -647,7 +652,7 @@ async fn submission_loop(
                     match RolloutRecorder::new(&config, session_id, instructions.clone()).await {
                         Ok(r) => Some(r),
                         Err(e) => {
-                            tracing::warn!("failed to initialise rollout recorder: {e}");
+                            warn!("failed to initialise rollout recorder: {e}");
                             None
                         }
                     };
@@ -742,7 +747,7 @@ async fn submission_loop(
                 tokio::spawn(async move {
                     if let Err(e) = crate::message_history::append_entry(&text, &id, &config).await
                     {
-                        tracing::warn!("failed to append to message history: {e}");
+                        warn!("failed to append to message history: {e}");
                     }
                 });
             }
@@ -772,7 +777,7 @@ async fn submission_loop(
                     };
 
                     if let Err(e) = tx_event.send(event).await {
-                        tracing::warn!("failed to send GetHistoryEntryResponse event: {e}");
+                        warn!("failed to send GetHistoryEntryResponse event: {e}");
                     }
                 });
             }
@@ -871,7 +876,8 @@ async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
                 })
             })
             .collect();
-        match run_turn(&sess, sub_id.clone(), turn_input).await {
+        let turn_response = run_turn(&sess, sub_id.clone(), turn_input).await;
+        match turn_response {
             Ok(turn_output) => {
                 let mut items_to_record_in_conversation_history = Vec::<ResponseItem>::new();
                 let mut responses = Vec::<ResponseInputItem>::new();
@@ -1052,6 +1058,7 @@ async fn run_turn(
 /// events map to a `ResponseItem`. A `ResponseItem` may need to be
 /// "handled" such that it produces a `ResponseInputItem` that needs to be
 /// sent back to the model on the next turn.
+#[derive(Debug)]
 struct ProcessedResponseItem {
     item: ResponseItem,
     response: Option<ResponseInputItem>,
@@ -1062,6 +1069,19 @@ async fn try_run_turn(
     sub_id: &str,
     prompt: &Prompt,
 ) -> CodexResult<Vec<ProcessedResponseItem>> {
+    let call_ids = prompt
+        .input
+        .iter()
+        .map(|ri| match ri {
+            ResponseItem::FunctionCallOutput { call_id, .. } => Some(call_id),
+            ResponseItem::LocalShellCall {
+                call_id: Some(call_id),
+                ..
+            } => Some(call_id),
+            _ => None,
+        })
+        .filter_map(|item| item)
+        .collect::<Vec<_>>();
     let mut stream = sess.client.clone().stream(prompt).await?;
 
     // Buffer all the incoming messages from the stream first, then execute them.
@@ -1074,8 +1094,27 @@ async fn try_run_turn(
     let mut output = Vec::new();
     for event in input {
         match event {
+            ResponseEvent::Created { .. } => {
+                let mut state = sess.state.lock().unwrap();
+                state
+                    .pending_call_ids
+                    .retain(|item| !call_ids.contains(&item));
+            }
             ResponseEvent::OutputItemDone(item) => {
+                let call_id = match &item {
+                    ResponseItem::LocalShellCall {
+                        call_id: Some(call_id),
+                        ..
+                    } => Some(call_id),
+                    ResponseItem::FunctionCall { call_id, .. } => Some(call_id),
+                    _ => None,
+                };
+                if let Some(call_id) = call_id {
+                    let mut state = sess.state.lock().unwrap();
+                    state.pending_call_ids.insert(call_id.clone());
+                }
                 let response = handle_response_item(sess, sub_id, item.clone()).await?;
+
                 output.push(ProcessedResponseItem { item, response });
             }
             ResponseEvent::Completed { response_id } => {
@@ -1125,7 +1164,7 @@ async fn handle_response_item(
             arguments,
             call_id,
         } => {
-            tracing::info!("FunctionCall: {arguments}");
+            info!("FunctionCall: {arguments}");
             Some(handle_function_call(sess, sub_id.to_string(), name, arguments, call_id).await)
         }
         ResponseItem::LocalShellCall {
@@ -1207,7 +1246,7 @@ async fn handle_function_call(
                     // Unknown function: reply with structured failure so the model can adapt.
                     ResponseInputItem::FunctionCallOutput {
                         call_id,
-                        output: crate::models::FunctionCallOutputPayload {
+                        output: FunctionCallOutputPayload {
                             content: format!("unsupported call: {}", name),
                             success: None,
                         },
@@ -1239,7 +1278,7 @@ fn parse_container_exec_arguments(
             // allow model to re-sample
             let output = ResponseInputItem::FunctionCallOutput {
                 call_id: call_id.to_string(),
-                output: crate::models::FunctionCallOutputPayload {
+                output: FunctionCallOutputPayload {
                     content: format!("failed to parse function arguments: {e}"),
                     success: None,
                 },
@@ -1307,7 +1346,7 @@ async fn handle_container_exec_with_params(
                 ReviewDecision::Denied | ReviewDecision::Abort => {
                     return ResponseInputItem::FunctionCallOutput {
                         call_id,
-                        output: crate::models::FunctionCallOutputPayload {
+                        output: FunctionCallOutputPayload {
                             content: "exec command rejected by user".to_string(),
                             success: None,
                         },
@@ -1323,7 +1362,7 @@ async fn handle_container_exec_with_params(
         SafetyCheck::Reject { reason } => {
             return ResponseInputItem::FunctionCallOutput {
                 call_id,
-                output: crate::models::FunctionCallOutputPayload {
+                output: FunctionCallOutputPayload {
                     content: format!("exec command rejected: {reason}"),
                     success: None,
                 },
@@ -1850,7 +1889,7 @@ fn apply_changes_from_apply_patch(action: &ApplyPatchAction) -> anyhow::Result<A
     })
 }
 
-fn get_writable_roots(cwd: &Path) -> Vec<std::path::PathBuf> {
+fn get_writable_roots(cwd: &Path) -> Vec<PathBuf> {
     let mut writable_roots = Vec::new();
     if cfg!(target_os = "macos") {
         // On macOS, $TMPDIR is private to the user.
@@ -1878,7 +1917,7 @@ fn get_writable_roots(cwd: &Path) -> Vec<std::path::PathBuf> {
 }
 
 /// Exec output is a pre-serialized JSON payload
-fn format_exec_output(output: &str, exit_code: i32, duration: std::time::Duration) -> String {
+fn format_exec_output(output: &str, exit_code: i32, duration: Duration) -> String {
     #[derive(Serialize)]
     struct ExecMetadata {
         exit_code: i32,

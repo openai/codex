@@ -413,7 +413,12 @@ where
 
                     // Nothing aggregated – forward Completed directly.
                     return Poll::Ready(Some(Ok(ResponseEvent::Completed { response_id })));
-                } // No other `Ok` variants exist at the moment, continue polling.
+                }
+                Poll::Ready(Some(Ok(ResponseEvent::Created { .. }))) => {
+                    // These events are exclusive to the Responses API and
+                    // will never appear in a Chat Completions stream.
+                    continue;
+                }
             }
         }
     }
