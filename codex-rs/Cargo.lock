@@ -697,7 +697,6 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "clap",
- "codex-common",
  "codex-core",
  "landlock",
  "libc",

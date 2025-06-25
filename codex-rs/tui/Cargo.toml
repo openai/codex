@@ -20,7 +20,11 @@ base64 = "0.22.1"
 clap = { version = "4", features = ["derive"] }
 codex-ansi-escape = { path = "../ansi-escape" }
 codex-core = { path = "../core" }
-codex-common = { path = "../common", features = ["cli", "elapsed"] }
+codex-common = { path = "../common", features = [
+    "cli",
+    "elapsed",
+    "sandbox_summary",
+] }
 codex-linux-sandbox = { path = "../linux-sandbox" }
 codex-login = { path = "../login" }
 color-eyre = "0.6.3"

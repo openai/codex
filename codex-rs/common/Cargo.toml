@@ -16,3 +16,4 @@ serde = { version = "1", optional = true }
 # Separate feature so that `clap` is not a mandatory dependency.
 cli = ["clap", "toml", "serde"]
 elapsed = []
+sandbox_summary = []
