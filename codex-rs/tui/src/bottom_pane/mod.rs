@@ -167,6 +167,16 @@ impl BottomPane<'_> {
         self.active_view.is_none() && self.composer.is_command_popup_visible()
     }
 
+    /// Get suggestion state for rendering (selected_index, suggestions_array, should_show)
+    pub(crate) fn get_suggestion_info(&self, is_conversation_new: bool) -> Option<(Option<usize>, &'static [&'static str])> {
+        if self.active_view.is_none() && is_conversation_new && self.composer.should_show_suggestions() {
+            let (selected, suggestions) = self.composer.get_suggestion_state();
+            Some((selected, suggestions))
+        } else {
+            None
+        }
+    }
+
     // --- History helpers ---
 
     pub(crate) fn set_history_metadata(&mut self, log_id: u64, entry_count: usize) {

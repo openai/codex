@@ -51,6 +51,12 @@ impl ConversationHistoryWidget {
         self.has_input_focus = has_input_focus;
     }
 
+    pub(crate) fn is_conversation_new(&self) -> bool {
+        !self.entries.iter().any(|entry| 
+            matches!(entry.cell, HistoryCell::UserPrompt { .. })
+        )
+    }
+
     /// Returns true if it needs a redraw.
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) -> bool {
         match key_event.code {
