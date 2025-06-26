@@ -1078,7 +1078,20 @@ async fn try_run_turn(
                 let response = handle_response_item(sess, sub_id, item.clone()).await?;
                 output.push(ProcessedResponseItem { item, response });
             }
-            ResponseEvent::Completed { response_id } => {
+            ResponseEvent::Completed {
+                response_id,
+                token_usage,
+            } => {
+                if let Some(token_usage) = token_usage {
+                    sess.tx_event
+                        .send(Event {
+                            id: sub_id.to_string(),
+                            msg: EventMsg::TokenCount(token_usage),
+                        })
+                        .await
+                        .ok();
+                }
+
                 let mut state = sess.state.lock().unwrap();
                 state.previous_response_id = Some(response_id);
                 break;

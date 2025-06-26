@@ -10,6 +10,7 @@ use crate::config_types::UriBasedFileOpener;
 use crate::flags::OPENAI_DEFAULT_MODEL;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::built_in_model_providers;
+use crate::openai_model_info::get_model_info;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
 use dirs::home_dir;
@@ -29,6 +30,12 @@ pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 pub struct Config {
     /// Optional override of model selection.
     pub model: String,
+
+    /// Size of the context window for the model, in tokens.
+    pub model_context_window: Option<u64>,
+
+    /// Maximum number of output tokens.
+    pub model_max_output_tokens: Option<u64>,
 
     /// Key into the model_providers map that specifies which provider to use.
     pub model_provider_id: String,
@@ -234,6 +241,12 @@ pub struct ConfigToml {
     /// Provider to use from the model_providers map.
     pub model_provider: Option<String>,
 
+    /// Size of the context window for the model, in tokens.
+    pub model_context_window: Option<u64>,
+
+    /// Maximum number of output tokens.
+    pub model_max_output_tokens: Option<u64>,
+
     /// Default approval policy for executing commands.
     pub approval_policy: Option<AskForApproval>,
 
@@ -387,11 +400,23 @@ impl Config {
 
         let history = cfg.history.unwrap_or_default();
 
+        let model = model
+            .or(config_profile.model)
+            .or(cfg.model)
+            .unwrap_or_else(default_model);
+        let openai_model_info = get_model_info(&model);
+        let model_context_window = cfg
+            .model_context_window
+            .or_else(|| openai_model_info.as_ref().map(|info| info.context_window));
+        let model_max_output_tokens = cfg.model_max_output_tokens.or_else(|| {
+            openai_model_info
+                .as_ref()
+                .map(|info| info.max_output_tokens)
+        });
         let config = Self {
-            model: model
-                .or(config_profile.model)
-                .or(cfg.model)
-                .unwrap_or_else(default_model),
+            model,
+            model_context_window,
+            model_max_output_tokens,
             model_provider_id,
             model_provider,
             cwd: resolved_cwd,
@@ -687,6 +712,8 @@ disable_response_storage = true
         assert_eq!(
             Config {
                 model: "o3".to_string(),
+                model_context_window: Some(200_000),
+                model_max_output_tokens: Some(100_000),
                 model_provider_id: "openai".to_string(),
                 model_provider: fixture.openai_provider.clone(),
                 approval_policy: AskForApproval::Never,
@@ -729,6 +756,8 @@ disable_response_storage = true
         )?;
         let expected_gpt3_profile_config = Config {
             model: "gpt-3.5-turbo".to_string(),
+            model_context_window: Some(16_385),
+            model_max_output_tokens: Some(4_096),
             model_provider_id: "openai-chat-completions".to_string(),
             model_provider: fixture.openai_chat_completions_provider.clone(),
             approval_policy: AskForApproval::UnlessTrusted,
@@ -786,6 +815,8 @@ disable_response_storage = true
         )?;
         let expected_zdr_profile_config = Config {
             model: "o3".to_string(),
+            model_context_window: Some(200_000),
+            model_max_output_tokens: Some(100_000),
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
             approval_policy: AskForApproval::OnFailure,

@@ -2,6 +2,7 @@ use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::error::Result;
 use crate::models::ResponseItem;
+use crate::protocol::TokenUsage;
 use codex_apply_patch::APPLY_PATCH_TOOL_INSTRUCTIONS;
 use futures::Stream;
 use serde::Serialize;
@@ -51,7 +52,10 @@ impl Prompt {
 #[derive(Debug)]
 pub enum ResponseEvent {
     OutputItemDone(ResponseItem),
-    Completed { response_id: String },
+    Completed {
+        response_id: String,
+        token_usage: Option<TokenUsage>,
+    },
 }
 
 #[derive(Debug, Serialize)]
