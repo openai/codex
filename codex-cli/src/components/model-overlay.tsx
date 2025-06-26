@@ -1,7 +1,7 @@
 import TypeaheadOverlay from "./typeahead-overlay.js";
 import {
   getAvailableModels,
-  RECOMMENDED_MODELS as _RECOMMENDED_MODELS,
+  RECOMMENDED_MODELS,
 } from "../utils/model-utils.js";
 import { Box, Text, useInput } from "ink";
 import React, { useEffect, useState } from "react";
@@ -22,6 +22,7 @@ type Props = {
   onSelect: (allModels: Array<string>, model: string) => void;
   onSelectProvider?: (provider: string) => void;
   onExit: () => void;
+  availableModels: Array<string>;
 };
 
 export default function ModelOverlay({
@@ -32,6 +33,7 @@ export default function ModelOverlay({
   onSelect,
   onSelectProvider,
   onExit,
+  availableModels,
 }: Props): JSX.Element {
   const [items, setItems] = useState<Array<{ label: string; value: string }>>(
     [],
@@ -40,37 +42,44 @@ export default function ModelOverlay({
     Array<{ label: string; value: string }>
   >(Object.values(providers).map((p) => ({ label: p.name, value: p.name })));
   const [mode, setMode] = useState<"model" | "provider">("model");
-  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [isLoading, setIsLoading] = useState<boolean>(false);
 
-  // This effect will run when the provider changes to update the model list
+  // Set up model items based on availableModels and currentProvider
   useEffect(() => {
-    setIsLoading(true);
-    (async () => {
-      try {
-        const models = await getAvailableModels(currentProvider);
-        // Convert the models to the format needed by TypeaheadOverlay
-        setItems(
-          models.map((m) => ({
-            label: m,
-            value: m,
-          })),
-        );
-      } catch (error) {
-        // Silently handle errors - remove console.error
-        // console.error("Error loading models:", error);
-      } finally {
-        setIsLoading(false);
-      }
-    })();
-  }, [currentProvider]);
+    if (currentProvider === "openai") {
+      // For OpenAI, use the pre-fetched available models with recommended ones first
+      const recommended = RECOMMENDED_MODELS.filter((m) =>
+        availableModels.includes(m),
+      );
+      const others = availableModels.filter((m) => !recommended.includes(m));
+      const ordered = [...recommended, ...others.sort()];
 
-  // ---------------------------------------------------------------------------
-  // If the conversation already contains a response we cannot change the model
-  // anymore because the backend requires a consistent model across the entire
-  // run.  In that scenario we replace the regular typeahead picker with a
-  // simple message instructing the user to start a new chat.  The only
-  // available action is to dismiss the overlay (Esc or Enter).
-  // ---------------------------------------------------------------------------
+      setItems(
+        ordered.map((m) => ({
+          label: recommended.includes(m) ? `⭐ ${m}` : m,
+          value: m,
+        })),
+      );
+    } else {
+      // For other providers, fetch their models
+      setIsLoading(true);
+      (async () => {
+        try {
+          const models = await getAvailableModels(currentProvider);
+          setItems(
+            models.map((m) => ({
+              label: m,
+              value: m,
+            })),
+          );
+        } catch (error) {
+          // Silently handle errors
+        } finally {
+          setIsLoading(false);
+        }
+      })();
+    }
+  }, [currentProvider, availableModels]);
 
   // Register input handling for switching between model and provider selection
   useInput((_input, key) => {
