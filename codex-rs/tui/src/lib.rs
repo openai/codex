@@ -29,6 +29,7 @@ mod citation_regex;
 mod cli;
 mod conversation_history_widget;
 mod exec_command;
+mod get_git_diff;
 mod git_warning_screen;
 mod history_cell;
 mod log_layer;

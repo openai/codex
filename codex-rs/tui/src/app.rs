@@ -1,6 +1,7 @@
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::chatwidget::ChatWidget;
+use crate::get_git_diff::get_git_diff;
 use crate::git_warning_screen::GitWarningOutcome;
 use crate::git_warning_screen::GitWarningScreen;
 use crate::login_screen::LoginScreen;
@@ -249,6 +250,27 @@ impl<'a> App<'a> {
                     }
                     SlashCommand::Quit => {
                         break;
+                    }
+                    SlashCommand::Diff => {
+                        let (is_git_repo, diff_text) = match get_git_diff() {
+                            Ok(v) => v,
+                            Err(e) => {
+                                let msg = format!("Failed to compute diff: {e}");
+                                if let AppState::Chat { widget } = &mut self.app_state {
+                                    widget.add_diff_output(msg);
+                                }
+                                continue;
+                            }
+                        };
+
+                        if let AppState::Chat { widget } = &mut self.app_state {
+                            let text = if is_git_repo {
+                                diff_text
+                            } else {
+                                "`/diff` — _not inside a git repository_".to_string()
+                            };
+                            widget.add_diff_output(text);
+                        }
                     }
                 },
             }

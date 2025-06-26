@@ -384,6 +384,11 @@ impl ChatWidget<'_> {
         self.app_event_tx.send(AppEvent::Redraw);
     }
 
+    pub(crate) fn add_diff_output(&mut self, diff_output: String) {
+        self.conversation_history.add_diff_output(diff_output);
+        self.request_redraw();
+    }
+
     pub(crate) fn handle_scroll_delta(&mut self, scroll_delta: i32) {
         // If the user is trying to scroll exactly one line, we let them, but
         // otherwise we assume they are trying to scroll in larger increments.

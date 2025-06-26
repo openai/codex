@@ -104,6 +104,9 @@ pub(crate) enum HistoryCell {
     /// Background event.
     BackgroundEvent { view: TextBlock },
 
+    /// Output from the `/diff` command.
+    GitDiffOutput { view: TextBlock },
+
     /// Error event from the backend.
     ErrorEvent { view: TextBlock },
 
@@ -453,9 +456,25 @@ impl HistoryCell {
     pub(crate) fn new_background_event(message: String) -> Self {
         let mut lines: Vec<Line<'static>> = Vec::new();
         lines.push(Line::from("event".dim()));
-        lines.extend(message.lines().map(|l| Line::from(l.to_string()).dim()));
+        lines.extend(message.lines().map(|line| ansi_escape_line(line).dim()));
         lines.push(Line::from(""));
         HistoryCell::BackgroundEvent {
+            view: TextBlock::new(lines),
+        }
+    }
+
+    pub(crate) fn new_diff_output(message: String) -> Self {
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        lines.push(Line::from("/diff".magenta()));
+
+        if message.trim().is_empty() {
+            lines.push(Line::from("No changes detected.".italic()));
+        } else {
+            lines.extend(message.lines().map(ansi_escape_line));
+        }
+
+        lines.push(Line::from(""));
+        HistoryCell::GitDiffOutput {
             view: TextBlock::new(lines),
         }
     }
@@ -549,6 +568,7 @@ impl CellWidget for HistoryCell {
             | HistoryCell::AgentMessage { view }
             | HistoryCell::AgentReasoning { view }
             | HistoryCell::BackgroundEvent { view }
+            | HistoryCell::GitDiffOutput { view }
             | HistoryCell::ErrorEvent { view }
             | HistoryCell::SessionInfo { view }
             | HistoryCell::CompletedExecCommand { view }
@@ -570,6 +590,7 @@ impl CellWidget for HistoryCell {
             | HistoryCell::AgentMessage { view }
             | HistoryCell::AgentReasoning { view }
             | HistoryCell::BackgroundEvent { view }
+            | HistoryCell::GitDiffOutput { view }
             | HistoryCell::ErrorEvent { view }
             | HistoryCell::SessionInfo { view }
             | HistoryCell::CompletedExecCommand { view }
