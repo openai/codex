@@ -2,8 +2,16 @@ import type { ResponseItem } from "openai/resources/responses/responses.mjs";
 
 import { approximateTokensUsed } from "./approximate-tokens-used.js";
 import { getApiKey } from "./config.js";
-import { type SupportedModelId, openAiModelInfo } from "./model-info.js";
+import {
+  type SupportedModelId,
+  openAiModelInfo,
+  geminiModelInfo,
+} from "./model-info.js";
 import { createOpenAIClient } from "./openai-client.js";
+import {
+  initializeGeminiClient,
+  listGeminiModels,
+} from "./gemini-client.js";
 
 const MODEL_LIST_TIMEOUT_MS = 2_000; // 2 seconds
 export const RECOMMENDED_MODELS: Array<string> = ["o4-mini", "o3"];
@@ -16,29 +24,40 @@ export const RECOMMENDED_MODELS: Array<string> = ["o4-mini", "o3"];
  * lifetime of the process and the results are cached for subsequent calls.
  */
 async function fetchModels(provider: string): Promise<Array<string>> {
-  // If the user has not configured an API key we cannot retrieve the models.
-  if (!getApiKey(provider)) {
+  const apiKey = getApiKey(provider);
+  if (!apiKey) {
     throw new Error("No API key configured for provider: " + provider);
   }
 
   try {
-    const openai = createOpenAIClient({ provider });
-    const list = await openai.models.list();
-    const models: Array<string> = [];
-    for await (const model of list as AsyncIterable<{ id?: string }>) {
-      if (model && typeof model.id === "string") {
-        let modelStr = model.id;
-        // Fix for gemini.
-        if (modelStr.startsWith("models/")) {
-          modelStr = modelStr.replace("models/", "");
+    if (provider.toLowerCase() === "gemini") {
+      initializeGeminiClient(apiKey);
+      const geminiModels = await listGeminiModels();
+      // Ensure model names are stripped of "models/" prefix if present,
+      // and match the expected format.
+      return geminiModels
+        .map((m) => (m.name.startsWith("models/") ? m.name.replace("models/", "") : m.name))
+        .sort();
+    } else {
+      // Existing logic for OpenAI and other compatible providers
+      const openai = createOpenAIClient({ provider });
+      const list = await openai.models.list();
+      const models: Array<string> = [];
+      for await (const model of list as AsyncIterable<{ id?: string }>) {
+        if (model && typeof model.id === "string") {
+          let modelStr = model.id;
+          // This fix might still be relevant for other providers if they adopt a similar naming
+          if (modelStr.startsWith("models/")) {
+            modelStr = modelStr.replace("models/", "");
+          }
+          models.push(modelStr);
         }
-        models.push(modelStr);
       }
+      return models.sort();
     }
-
-    return models.sort();
   } catch (error) {
-    return [];
+    console.error(`Error fetching models for provider ${provider}:`, error);
+    return []; // Return empty list on error as per existing behavior
   }
 }
 
@@ -88,6 +107,10 @@ export async function isModelSupportedForResponses(
 
 /** Returns the maximum context length (in tokens) for a given model. */
 export function maxTokensForModel(model: string): number {
+  if (model in geminiModelInfo) {
+    return geminiModelInfo[model as keyof typeof geminiModelInfo]
+      .maxContextLength;
+  }
   if (model in openAiModelInfo) {
     return openAiModelInfo[model as SupportedModelId].maxContextLength;
   }

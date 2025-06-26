@@ -27,6 +27,8 @@ pub enum WireApi {
     Responses,
     /// Regular Chat Completions compatible with `/v1/chat/completions`.
     Chat,
+    /// Gemini API.
+    Gemini,
 }
 
 /// Serializable representation of a provider definition.
@@ -108,10 +110,10 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
             "gemini",
             P {
                 name: "Gemini".into(),
-                base_url: "https://generativelanguage.googleapis.com/v1beta/openai".into(),
+                base_url: "https://generativelanguage.googleapis.com/v1beta".into(),
                 env_key: Some("GEMINI_API_KEY".into()),
                 env_key_instructions: None,
-                wire_api: WireApi::Chat,
+                wire_api: WireApi::Gemini,
             },
         ),
         (

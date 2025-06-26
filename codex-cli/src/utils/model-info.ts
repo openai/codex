@@ -200,3 +200,10 @@ export const openAiModelInfo = {
     maxContextLength: 128000,
   },
 } as const satisfies Record<string, ModelInfo>;
+
+export const geminiModelInfo = {
+  "gemini-2.5-pro-preview-06-05": {
+    label: "Gemini 2.5 Pro Preview (06-05)",
+    maxContextLength: 1048576,
+  },
+} as const satisfies Record<string, ModelInfo>;
