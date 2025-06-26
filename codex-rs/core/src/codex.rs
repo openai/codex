@@ -1,6 +1,7 @@
 // Poisoned mutex should fail the program
 #![allow(clippy::unwrap_used)]
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
@@ -315,7 +316,7 @@ impl Session {
     /// Append the given items to the session's rollout transcript (if enabled)
     /// and persist them to disk.
     async fn record_rollout_items(&self, items: &[ResponseItem]) {
-        // Clone the recorder outside of the mutex so we don’t hold the lock
+        // Clone the recorder outside of the mutex so we don't hold the lock
         // across an await point (MutexGuard is not Send).
         let recorder = {
             let guard = self.rollout.lock().unwrap();
@@ -1107,17 +1108,15 @@ async fn try_run_turn(
             })
             .collect::<Vec<_>>()
     };
-    let prompt = if missing_calls.is_empty() {
-        prompt.clone()
+    let prompt: Cow<Prompt> = if missing_calls.is_empty() {
+        Cow::Borrowed(prompt)
     } else {
-        let input = [prompt.input.clone(), missing_calls].concat();
-        Prompt {
+        // Add the synthetic aborted missing calls to the beginning of the input to ensure all call ids have responses.
+        let input = [missing_calls, prompt.input.clone()].concat();
+        Cow::Owned(Prompt {
             input,
-            prev_id: prompt.prev_id.clone(),
-            user_instructions: prompt.user_instructions.clone(),
-            store: prompt.store,
-            extra_tools: prompt.extra_tools.clone(),
-        }
+            ..prompt.clone()
+        })
     };
 
     let mut stream = sess.client.clone().stream(&prompt).await?;
@@ -1132,7 +1131,7 @@ async fn try_run_turn(
     let mut output = Vec::new();
     for event in input {
         match event {
-            ResponseEvent::Created { .. } => {
+            ResponseEvent::Created => {
                 let mut state = sess.state.lock().unwrap();
                 // We successfully created a new response and ensured that all pending calls were included so we can clear the pending call ids.
                 state.pending_call_ids.clear();

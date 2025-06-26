@@ -300,7 +300,7 @@ where
                 }
             }
             "response.created" => {
-                if let Some(_) = event.response {
+                if event.response.is_some() {
                     let _ = tx_event.send(Ok(ResponseEvent::Created {})).await;
                 }
             }
