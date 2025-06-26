@@ -1,3 +1,4 @@
+use codex_core::protocol::TokenUsage;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Alignment;
@@ -24,6 +25,8 @@ const MIN_TEXTAREA_ROWS: usize = 1;
 /// Rows consumed by the border.
 const BORDER_LINES: u16 = 2;
 
+const BASE_PLACEHOLDER_TEXT: &str = "send a message";
+
 /// Result returned when the user interacts with the text area.
 pub enum InputResult {
     Submitted(String),
@@ -40,7 +43,7 @@ pub(crate) struct ChatComposer<'a> {
 impl ChatComposer<'_> {
     pub fn new(has_input_focus: bool, app_event_tx: AppEventSender) -> Self {
         let mut textarea = TextArea::default();
-        textarea.set_placeholder_text("send a message");
+        textarea.set_placeholder_text(BASE_PLACEHOLDER_TEXT);
         textarea.set_cursor_line_style(ratatui::style::Style::default());
 
         let mut this = Self {
@@ -51,6 +54,41 @@ impl ChatComposer<'_> {
         };
         this.update_border(has_input_focus);
         this
+    }
+
+    /// Update the cached *context-left* percentage and refresh the placeholder
+    /// text. The UI relies on the placeholder to convey the remaining
+    /// context when the composer is empty.
+    pub(crate) fn set_token_usage(
+        &mut self,
+        token_usage: TokenUsage,
+        model_context_window: Option<u64>,
+    ) {
+        let placeholder = match (token_usage.total_tokens, model_context_window) {
+            (total_tokens, Some(context_window)) => {
+                let percent_remaining: u8 = if context_window > 0 {
+                    // Calculate the percentage of context left.
+                    let percent = 100.0 - (total_tokens as f32 / context_window as f32 * 100.0);
+                    percent.clamp(0.0, 100.0) as u8
+                } else {
+                    // If we don't have a context window, we cannot compute the
+                    // percentage.
+                    100
+                };
+                if percent_remaining > 25 {
+                    format!("{BASE_PLACEHOLDER_TEXT} — {percent_remaining}% context left")
+                } else {
+                    format!(
+                        "{BASE_PLACEHOLDER_TEXT} — {percent_remaining}% context left (consider /compact)"
+                    )
+                }
+            }
+            (total_tokens, None) => {
+                format!("{BASE_PLACEHOLDER_TEXT} — {total_tokens} tokens used")
+            }
+        };
+
+        self.textarea.set_placeholder_text(placeholder);
     }
 
     /// Record the history metadata advertised by `SessionConfiguredEvent` so

@@ -407,6 +407,16 @@ Setting `hide_agent_reasoning` to `true` suppresses these events in **both** the
 hide_agent_reasoning = true   # defaults to false
 ```
 
+## model_context_window
+
+The size of the context window for the model, in tokens.
+
+In general, Codex knows the context window for the most common OpenAI models, but if you are using a new model with an old version of the Codex CLI, then you can use `model_context_window` to tell Codex what value to use to determine how much context is left during a conversation.
+
+## model_max_output_tokens
+
+This is analogous to `model_context_window`, but for the maximum number of output tokens for the model.
+
 ## project_doc_max_bytes
 
 Maximum number of bytes to read from an `AGENTS.md` file to include in the instructions sent with the first turn of a session. Defaults to 32 KiB.

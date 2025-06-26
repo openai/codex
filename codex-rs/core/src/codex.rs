@@ -1078,7 +1078,20 @@ async fn try_run_turn(
                 let response = handle_response_item(sess, sub_id, item.clone()).await?;
                 output.push(ProcessedResponseItem { item, response });
             }
-            ResponseEvent::Completed { response_id } => {
+            ResponseEvent::Completed {
+                response_id,
+                token_usage,
+            } => {
+                if let Some(token_usage) = token_usage {
+                    sess.tx_event
+                        .send(Event {
+                            id: sub_id.to_string(),
+                            msg: EventMsg::TokenCount(token_usage),
+                        })
+                        .await
+                        .ok();
+                }
+
                 let mut state = sess.state.lock().unwrap();
                 state.previous_response_id = Some(response_id);
                 break;
@@ -1371,7 +1384,7 @@ async fn handle_container_exec_with_params(
             }
         }
         Err(CodexErr::Sandbox(error)) => {
-            handle_sanbox_error(error, sandbox_type, params, sess, sub_id, call_id).await
+            handle_sandbox_error(error, sandbox_type, params, sess, sub_id, call_id).await
         }
         Err(e) => {
             // Handle non-sandbox errors
@@ -1386,7 +1399,7 @@ async fn handle_container_exec_with_params(
     }
 }
 
-async fn handle_sanbox_error(
+async fn handle_sandbox_error(
     error: SandboxErr,
     sandbox_type: SandboxType,
     params: ExecParams,
@@ -1408,7 +1421,14 @@ async fn handle_sanbox_error(
         };
     }
 
-    // Ask the user to retry without sandbox
+    // Note that when `error` is `SandboxErr::Denied`, it could be a false
+    // positive. That is, it may have exited with a non-zero exit code, not
+    // because the sandbox denied it, but because that is its expected behavior,
+    // i.e., a grep command that did not match anything. Ideally we would
+    // include additional metadata on the command to indicate whether non-zero
+    // exit codes merit a retry.
+
+    // For now, we categorically ask the user to retry without sandbox.
     sess.notify_background_event(&sub_id, format!("Execution failed: {error}"))
         .await;
 
