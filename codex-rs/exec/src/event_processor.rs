@@ -16,6 +16,7 @@ use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::SessionConfiguredEvent;
+use codex_core::protocol::TokenUsage;
 use owo_colors::OwoColorize;
 use owo_colors::Style;
 use shlex::try_join;
@@ -179,6 +180,9 @@ impl EventProcessor {
             }
             EventMsg::TaskStarted | EventMsg::TaskComplete(_) => {
                 // Ignore.
+            }
+            EventMsg::TokenCount(TokenUsage { total_tokens, .. }) => {
+                ts_println!(self, "tokens used: {total_tokens}");
             }
             EventMsg::AgentMessage(AgentMessageEvent { message }) => {
                 ts_println!(
