@@ -18,6 +18,7 @@ use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::TaskCompleteEvent;
+use codex_core::protocol::TokenUsage;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
@@ -46,6 +47,7 @@ pub(crate) struct ChatWidget<'a> {
     input_focus: InputFocus,
     config: Config,
     initial_user_message: Option<UserMessage>,
+    token_usage: TokenUsage,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -131,6 +133,7 @@ impl ChatWidget<'_> {
                 initial_prompt.unwrap_or_default(),
                 initial_images,
             ),
+            token_usage: TokenUsage::default(),
         }
     }
 
@@ -249,6 +252,11 @@ impl ChatWidget<'_> {
             }) => {
                 self.bottom_pane.set_task_running(false);
                 self.request_redraw();
+            }
+            EventMsg::TokenCount(token_usage) => {
+                self.token_usage = add_token_usage(&self.token_usage, &token_usage);
+                self.bottom_pane
+                    .set_token_usage(self.token_usage.clone(), self.config.model_context_window);
             }
             EventMsg::Error(ErrorEvent { message }) => {
                 self.conversation_history.add_error(message);
@@ -408,5 +416,33 @@ impl WidgetRef for &ChatWidget<'_> {
 
         self.conversation_history.render(chunks[0], buf);
         (&self.bottom_pane).render(chunks[1], buf);
+    }
+}
+
+fn add_token_usage(current_usage: &TokenUsage, new_usage: &TokenUsage) -> TokenUsage {
+    let cached_input_tokens = match (
+        current_usage.cached_input_tokens,
+        new_usage.cached_input_tokens,
+    ) {
+        (Some(current), Some(new)) => Some(current + new),
+        (Some(current), None) => Some(current),
+        (None, Some(new)) => Some(new),
+        (None, None) => None,
+    };
+    let reasoning_output_tokens = match (
+        current_usage.reasoning_output_tokens,
+        new_usage.reasoning_output_tokens,
+    ) {
+        (Some(current), Some(new)) => Some(current + new),
+        (Some(current), None) => Some(current),
+        (None, Some(new)) => Some(new),
+        (None, None) => None,
+    };
+    TokenUsage {
+        input_tokens: current_usage.input_tokens + new_usage.input_tokens,
+        cached_input_tokens,
+        output_tokens: current_usage.output_tokens + new_usage.output_tokens,
+        reasoning_output_tokens,
+        total_tokens: current_usage.total_tokens + new_usage.total_tokens,
     }
 }

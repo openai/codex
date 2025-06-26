@@ -2,6 +2,7 @@
 
 use bottom_pane_view::BottomPaneView;
 use bottom_pane_view::ConditionalUpdate;
+use codex_core::protocol::TokenUsage;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -127,6 +128,18 @@ impl BottomPane<'_> {
                 // No change.
             }
         }
+    }
+
+    /// Update the *context-window remaining* indicator in the composer. This
+    /// is forwarded directly to the underlying `ChatComposer`.
+    pub(crate) fn set_token_usage(
+        &mut self,
+        token_usage: TokenUsage,
+        model_context_window: Option<u64>,
+    ) {
+        self.composer
+            .set_token_usage(token_usage, model_context_window);
+        self.request_redraw();
     }
 
     /// Called when the agent requests user approval.

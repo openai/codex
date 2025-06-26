@@ -120,7 +120,7 @@ pub enum AskForApproval {
     /// Everything else will ask the user to approve.
     #[default]
     #[serde(rename = "untrusted")]
-    UnlessAllowListed,
+    UnlessTrusted,
 
     /// *All* commands are auto‑approved, but they are expected to run inside a
     /// sandbox where network access is disabled and writes are confined to a
@@ -231,12 +231,6 @@ impl SandboxPolicy {
             }
         }
     }
-
-    // TODO(mbolin): This conflates sandbox policy and approval policy and
-    // should go away.
-    pub fn is_unrestricted(&self) -> bool {
-        matches!(self, SandboxPolicy::DangerFullAccess)
-    }
 }
 
 /// User input
@@ -280,6 +274,10 @@ pub enum EventMsg {
 
     /// Agent has completed all actions
     TaskComplete(TaskCompleteEvent),
+
+    /// Token count event, sent periodically to report the number of tokens
+    /// used in the current session.
+    TokenCount(TokenUsage),
 
     /// Agent text output message
     AgentMessage(AgentMessageEvent),
@@ -326,6 +324,15 @@ pub struct ErrorEvent {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TaskCompleteEvent {
     pub last_agent_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct TokenUsage {
+    pub input_tokens: u64,
+    pub cached_input_tokens: Option<u64>,
+    pub output_tokens: u64,
+    pub reasoning_output_tokens: Option<u64>,
+    pub total_tokens: u64,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

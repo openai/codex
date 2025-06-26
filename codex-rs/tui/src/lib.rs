@@ -51,6 +51,11 @@ pub fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> std::io::
             Some(SandboxPolicy::new_workspace_write_policy()),
             Some(AskForApproval::OnFailure),
         )
+    } else if cli.dangerously_bypass_approvals_and_sandbox {
+        (
+            Some(SandboxPolicy::DangerFullAccess),
+            Some(AskForApproval::Never),
+        )
     } else {
         let sandbox_policy = None;
         (sandbox_policy, cli.approval_policy.map(Into::into))
