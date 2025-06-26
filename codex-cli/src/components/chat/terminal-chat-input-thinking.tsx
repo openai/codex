@@ -1,4 +1,5 @@
 import { log } from "../../utils/logger/log.js";
+import { useSpinner } from "../../utils/terminal-chat-utils.js";
 import { Box, Text, useInput, useStdin } from "ink";
 import React, { useState } from "react";
 import { useInterval } from "use-interval";
@@ -75,34 +76,7 @@ export default function TerminalChatInputThinking({
     { isActive: active },
   );
 
-  // Custom ball animation including the elapsed seconds
-  const ballFrames = [
-    "( ●    )",
-    "(  ●   )",
-    "(   ●  )",
-    "(    ● )",
-    "(     ●)",
-    "(    ● )",
-    "(   ●  )",
-    "(  ●   )",
-    "( ●    )",
-    "(●     )",
-  ];
-
-  const [frame, setFrame] = useState(0);
-
-  useInterval(() => {
-    setFrame((idx) => (idx + 1) % ballFrames.length);
-  }, 80);
-
-  // Preserve the spinner (ball) animation while keeping the elapsed seconds
-  // text static.  We achieve this by rendering the bouncing ball inside the
-  // parentheses and appending the seconds counter *after* the spinner rather
-  // than injecting it directly next to the ball (which caused the counter to
-  // move horizontally together with the ball).
-
-  const frameTemplate = ballFrames[frame] ?? ballFrames[0];
-  const frameWithSeconds = `${frameTemplate} ${thinkingSeconds}s`;
+  const frameWithSeconds = useSpinner(thinkingSeconds);
 
   return (
     <Box flexDirection="column" gap={1}>
