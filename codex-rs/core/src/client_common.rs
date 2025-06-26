@@ -51,6 +51,7 @@ impl Prompt {
 
 #[derive(Debug)]
 pub enum ResponseEvent {
+    Created,
     OutputItemDone(ResponseItem),
     Completed {
         response_id: String,

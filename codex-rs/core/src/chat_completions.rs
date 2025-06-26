@@ -425,7 +425,12 @@ where
                         response_id,
                         token_usage,
                     })));
-                } // No other `Ok` variants exist at the moment, continue polling.
+                }
+                Poll::Ready(Some(Ok(ResponseEvent::Created))) => {
+                    // These events are exclusive to the Responses API and
+                    // will never appear in a Chat Completions stream.
+                    continue;
+                }
             }
         }
     }
@@ -439,7 +444,7 @@ pub(crate) trait AggregateStreamExt: Stream<Item = Result<ResponseEvent>> + Size
     ///
     /// ```ignore
     ///     OutputItemDone(<full message>)
-    ///     Completed { .. }
+    ///     Completed
     /// ```
     ///
     /// No other `OutputItemDone` events will be seen by the caller.
