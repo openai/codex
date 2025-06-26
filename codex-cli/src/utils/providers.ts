@@ -12,6 +12,11 @@ export const providers: Record<
     baseURL: "https://openrouter.ai/api/v1",
     envKey: "OPENROUTER_API_KEY",
   },
+  requesty: {
+    name: "Requesty",
+    baseURL: "https://router.requesty.ai/v1",
+    envKey: "REQUESTY_API_KEY",
+  },
   azure: {
     name: "AzureOpenAI",
     baseURL: "https://YOUR_PROJECT_NAME.openai.azure.com/openai",
