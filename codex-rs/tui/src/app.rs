@@ -11,7 +11,6 @@ use crate::slash_command::SlashCommand;
 use crate::tui;
 use codex_core::config::Config;
 use codex_core::protocol::Event;
-use codex_core::protocol::Op;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -193,10 +192,11 @@ impl<'a> App<'a> {
                             modifiers: crossterm::event::KeyModifiers::CONTROL,
                             ..
                         } => {
-                            // Forward interrupt to ChatWidget when active.
                             match &mut self.app_state {
                                 AppState::Chat { widget } => {
-                                    widget.submit_op(Op::Interrupt);
+                                    if widget.on_ctrl_c() {
+                                        self.app_event_tx.send(AppEvent::ExitRequest);
+                                    }
                                 }
                                 AppState::Login { .. } | AppState::GitWarning { .. } => {
                                     // No-op.
