@@ -121,10 +121,6 @@ impl ChatComposer<'_> {
         self.update_border(has_focus);
     }
 
-    pub fn ctrl_c_quit_hint_visible(&self) -> bool {
-        self.ctrl_c_quit_hint
-    }
-
     /// Handle a key event coming from the main UI.
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
         let result = match self.command_popup {
@@ -322,9 +318,8 @@ impl ChatComposer<'_> {
                 }
             } else {
                 BlockState {
-                    right_title:
-                        Line::from("Enter to send | Ctrl+D to quit | Ctrl+J for newline")
-                            .alignment(Alignment::Right),
+                    right_title: Line::from("Enter to send | Ctrl+D to quit | Ctrl+J for newline")
+                        .alignment(Alignment::Right),
                     border_style: Style::default(),
                 }
             }
