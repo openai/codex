@@ -1,7 +1,7 @@
 import type { AgentName } from "package-manager-detector";
 
 import { detectInstallerByPath } from "./package-manager-detector";
-import { CLI_VERSION } from "./session";
+import { CLI_VERSION } from "../version";
 import boxen from "boxen";
 import chalk from "chalk";
 import { getLatestVersion } from "fast-npm-meta";

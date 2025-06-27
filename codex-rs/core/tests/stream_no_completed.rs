@@ -3,20 +3,23 @@
 
 use std::time::Duration;
 
-use codex_core::protocol::AskForApproval;
+use codex_core::Codex;
+use codex_core::ModelProviderInfo;
+use codex_core::exec::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol::Submission;
-use codex_core::Codex;
+mod test_support;
+use tempfile::TempDir;
+use test_support::load_default_config_for_test;
 use tokio::time::timeout;
-use wiremock::matchers::method;
-use wiremock::matchers::path;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::Request;
 use wiremock::Respond;
 use wiremock::ResponseTemplate;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
 
 fn sse_incomplete() -> String {
     // Only a single line; missing the completed event.
@@ -33,6 +36,15 @@ data: {{\"type\":\"response.completed\",\"response\":{{\"id\":\"{}\",\"output\":
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn retries_on_early_close() {
+    #![allow(clippy::unwrap_used)]
+
+    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+        println!(
+            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+        );
+        return;
+    }
+
     let server = MockServer::start().await;
 
     struct SeqResponder;
@@ -62,37 +74,41 @@ async fn retries_on_early_close() {
         .await;
 
     // Environment
-    std::env::set_var("OPENAI_API_KEY", "test-key");
-    std::env::set_var("OPENAI_API_BASE", server.uri());
-    std::env::set_var("OPENAI_REQUEST_MAX_RETRIES", "0");
-    std::env::set_var("OPENAI_STREAM_MAX_RETRIES", "1");
-    std::env::set_var("OPENAI_STREAM_IDLE_TIMEOUT_MS", "2000");
+    //
+    // As of Rust 2024 `std::env::set_var` has been made `unsafe` because
+    // mutating the process environment is inherently racy when other threads
+    // are running.  We therefore have to wrap every call in an explicit
+    // `unsafe` block.  These are limited to the test-setup section so the
+    // scope is very small and clearly delineated.
 
-    let codex = Codex::spawn(std::sync::Arc::new(tokio::sync::Notify::new())).unwrap();
+    unsafe {
+        std::env::set_var("OPENAI_REQUEST_MAX_RETRIES", "0");
+        std::env::set_var("OPENAI_STREAM_MAX_RETRIES", "1");
+        std::env::set_var("OPENAI_STREAM_IDLE_TIMEOUT_MS", "2000");
+    }
+
+    let model_provider = ModelProviderInfo {
+        name: "openai".into(),
+        base_url: format!("{}/v1", server.uri()),
+        // Environment variable that should exist in the test environment.
+        // ModelClient will return an error if the environment variable for the
+        // provider is not set.
+        env_key: Some("PATH".into()),
+        env_key_instructions: None,
+        wire_api: codex_core::WireApi::Responses,
+    };
+
+    let ctrl_c = std::sync::Arc::new(tokio::sync::Notify::new());
+    let codex_home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&codex_home);
+    config.model_provider = model_provider;
+    let (codex, _init_id) = Codex::spawn(config, ctrl_c).await.unwrap();
 
     codex
-        .submit(Submission {
-            id: "init".into(),
-            op: Op::ConfigureSession {
-                model: None,
-                instructions: None,
-                approval_policy: AskForApproval::OnFailure,
-                sandbox_policy: SandboxPolicy::NetworkAndFileWriteRestricted,
-                disable_response_storage: false,
-            },
-        })
-        .await
-        .unwrap();
-    let _ = codex.next_event().await.unwrap();
-
-    codex
-        .submit(Submission {
-            id: "task".into(),
-            op: Op::UserInput {
-                items: vec![InputItem::Text {
-                    text: "hello".into(),
-                }],
-            },
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: "hello".into(),
+            }],
         })
         .await
         .unwrap();
@@ -103,7 +119,7 @@ async fn retries_on_early_close() {
             .await
             .unwrap()
             .unwrap();
-        if matches!(ev.msg, codex_core::protocol::EventMsg::TaskComplete) {
+        if matches!(ev.msg, EventMsg::TaskComplete(_)) {
             break;
         }
     }

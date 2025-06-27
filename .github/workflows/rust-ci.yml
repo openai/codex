@@ -26,7 +26,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.87
+        with:
+          components: rustfmt
       - name: cargo fmt
         run: cargo fmt -- --config imports_granularity=Item --check
 
@@ -53,14 +55,19 @@ jobs:
             target: x86_64-unknown-linux-musl
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
           - runner: windows-latest
             target: x86_64-pc-windows-msvc
 
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.87
         with:
           targets: ${{ matrix.target }}
+          components: clippy
 
       - uses: actions/cache@v4
         with:
@@ -72,23 +79,40 @@ jobs:
             ${{ github.workspace }}/codex-rs/target/
           key: cargo-${{ matrix.runner }}-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
 
-      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' }}
+      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
         name: Install musl build tools
         run: |
           sudo apt install -y musl-tools pkg-config
 
-      - name: Initialize failure flag
-        run: echo "FAILED=" >> $GITHUB_ENV
-
       - name: cargo clippy
-        run: cargo clippy --target ${{ matrix.target }} --all-features -- -D warnings || echo "FAILED=${FAILED:+$FAILED, }cargo clippy" >> $GITHUB_ENV
+        id: clippy
+        continue-on-error: true
+        run: cargo clippy --target ${{ matrix.target }} --all-features --tests -- -D warnings
+
+      # Running `cargo build` from the workspace root builds the workspace using
+      # the union of all features from third-party crates. This can mask errors
+      # where individual crates have underspecified features. To avoid this, we
+      # run `cargo build` for each crate individually, though because this is
+      # slower, we only do this for the x86_64-unknown-linux-gnu target.
+      - name: cargo build individual crates
+        id: build
+        if: ${{ matrix.target == 'x86_64-unknown-linux-gnu' }}
+        continue-on-error: true
+        run: find . -name Cargo.toml -mindepth 2 -maxdepth 2 -print0 | xargs -0 -n1 -I{} bash -c 'cd "$(dirname "{}")" && cargo build'
 
       - name: cargo test
-        run: cargo test --target ${{ matrix.target }} || echo "FAILED=${FAILED:+$FAILED, }cargo test" >> $GITHUB_ENV
+        id: test
+        continue-on-error: true
+        run: cargo test --all-features --target ${{ matrix.target }}
+        env:
+          RUST_BACKTRACE: 1
 
-      - name: Fail if any step failed
-        if: env.FAILED != ''
+      # Fail the job if any of the previous steps failed.
+      - name: verify all steps passed
+        if: |
+          steps.clippy.outcome == 'failure' ||
+          steps.build.outcome == 'failure' ||
+          steps.test.outcome == 'failure'
         run: |
-          echo "See logs above, as the following steps failed:"
-          echo "$FAILED"
+          echo "One or more checks failed (clippy, build, or test). See logs for details."
           exit 1

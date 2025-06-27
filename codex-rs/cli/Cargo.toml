@@ -1,19 +1,28 @@
 [package]
 name = "codex-cli"
-version = "0.1.0"
-edition = "2021"
+version = { workspace = true }
+edition = "2024"
 
 [[bin]]
 name = "codex"
 path = "src/main.rs"
 
+[lib]
+name = "codex_cli"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 codex-core = { path = "../core" }
+codex-common = { path = "../common", features = ["cli"] }
 codex-exec = { path = "../exec" }
-codex-interactive = { path = "../interactive" }
-codex-repl = { path = "../repl" }
+codex-login = { path = "../login" }
+codex-linux-sandbox = { path = "../linux-sandbox" }
+codex-mcp-server = { path = "../mcp-server" }
 codex-tui = { path = "../tui" }
 serde_json = "1"
 tokio = { version = "1", features = [

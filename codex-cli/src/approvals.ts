@@ -281,12 +281,14 @@ export function resolvePathAgainstWorkdir(
   candidatePath: string,
   workdir: string | undefined,
 ): string {
-  if (path.isAbsolute(candidatePath)) {
-    return candidatePath;
+  // Normalize candidatePath to prevent path traversal attacks
+  const normalizedCandidatePath = path.normalize(candidatePath);
+  if (path.isAbsolute(normalizedCandidatePath)) {
+    return normalizedCandidatePath;
   } else if (workdir != null) {
-    return path.resolve(workdir, candidatePath);
+    return path.resolve(workdir, normalizedCandidatePath);
   } else {
-    return path.resolve(candidatePath);
+    return path.resolve(normalizedCandidatePath);
   }
 }
 
@@ -361,6 +363,11 @@ export function isSafeCommand(
     case "cat":
       return {
         reason: "View file contents",
+        group: "Reading files",
+      };
+    case "nl":
+      return {
+        reason: "View file with line numbers",
         group: "Reading files",
       };
     case "rg":
@@ -446,11 +453,15 @@ export function isSafeCommand(
       }
       break;
     case "sed":
+      // We allow two types of sed invocations:
+      // 1. `sed -n 1,200p FILE`
+      // 2. `sed -n 1,200p` because the file is passed via stdin, e.g.,
+      //    `nl -ba README.md | sed -n '1,200p'`
       if (
         cmd1 === "-n" &&
         isValidSedNArg(cmd2) &&
-        typeof cmd3 === "string" &&
-        command.length === 4
+        (command.length === 3 ||
+          (typeof cmd3 === "string" && command.length === 4))
       ) {
         return {
           reason: "Sed print subset",

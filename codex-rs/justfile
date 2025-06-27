@@ -1,19 +1,25 @@
+set positional-arguments
+
 # Display help
 help:
     just -l
 
-# Install the `codex-tui` binary
-install:
-    cargo install --path tui
+# `codex`
+codex *args:
+    cargo run --bin codex -- "$@"
 
-# Run the TUI app
+# `codex exec`
+exec *args:
+    cargo run --bin codex -- exec "$@"
+
+# `codex tui`
 tui *args:
-    cargo run --bin codex -- tui {{args}}
+    cargo run --bin codex -- tui "$@"
 
-# Run the REPL app
-repl *args:
-    cargo run --bin codex -- repl {{args}}
+# Run the CLI version of the file-search crate.
+file-search *args:
+    cargo run --bin codex-file-search -- "$@"
 
-# Run the Proto app
-proto *args:
-    cargo run --bin codex -- proto {{args}}
+# format code
+fmt:
+    cargo fmt -- --config imports_granularity=Item

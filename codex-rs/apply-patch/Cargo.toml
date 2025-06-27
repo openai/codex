@@ -1,15 +1,17 @@
 [package]
 name = "codex-apply-patch"
-version = "0.1.0"
-edition = "2021"
+version = { workspace = true }
+edition = "2024"
 
 [lib]
 name = "codex_apply_patch"
 path = "src/lib.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow = "1"
-regex = "1.11.1"
 serde_json = "1.0.110"
 similar = "2.7.0"
 thiserror = "2.0.12"

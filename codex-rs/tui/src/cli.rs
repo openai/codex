@@ -1,6 +1,6 @@
 use clap::Parser;
-use codex_core::ApprovalModeCliArg;
-use codex_core::SandboxModeCliArg;
+use codex_common::ApprovalModeCliArg;
+use codex_common::CliConfigOverrides;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -17,29 +17,35 @@ pub struct Cli {
     #[arg(long, short = 'm')]
     pub model: Option<String>,
 
-    /// Configure when the model requires human approval before executing a command.
-    #[arg(long = "ask-for-approval", short = 'a', value_enum, default_value_t = ApprovalModeCliArg::OnFailure)]
-    pub approval_policy: ApprovalModeCliArg,
+    /// Configuration profile from config.toml to specify default options.
+    #[arg(long = "profile", short = 'p')]
+    pub config_profile: Option<String>,
 
-    /// Configure the process restrictions when a command is executed.
-    ///
-    /// Uses OS-specific sandboxing tools; Seatbelt on OSX, landlock+seccomp on Linux.
-    #[arg(long = "sandbox", short = 's', value_enum, default_value_t = SandboxModeCliArg::NetworkAndFileWriteRestricted)]
-    pub sandbox_policy: SandboxModeCliArg,
+    /// Configure when the model requires human approval before executing a command.
+    #[arg(long = "ask-for-approval", short = 'a')]
+    pub approval_policy: Option<ApprovalModeCliArg>,
+
+    /// Convenience alias for low-friction sandboxed automatic execution (-a on-failure, -c sandbox.mode=workspace-write).
+    #[arg(long = "full-auto", default_value_t = false)]
+    pub full_auto: bool,
+
+    /// Skip all confirmation prompts and execute commands without sandboxing.
+    /// EXTREMELY DANGEROUS. Intended solely for running in environments that are externally sandboxed.
+    #[arg(
+        long = "dangerously-bypass-approvals-and-sandbox",
+        default_value_t = false,
+        conflicts_with_all = ["approval_policy", "full_auto"]
+    )]
+    pub dangerously_bypass_approvals_and_sandbox: bool,
+
+    /// Tell the agent to use the specified directory as its working root.
+    #[clap(long = "cd", short = 'C', value_name = "DIR")]
+    pub cwd: Option<PathBuf>,
 
     /// Allow running Codex outside a Git repository.
     #[arg(long = "skip-git-repo-check", default_value_t = false)]
     pub skip_git_repo_check: bool,
 
-    /// Disable server‑side response storage (sends the full conversation context with every request)
-    #[arg(long = "disable-response-storage", default_value_t = false)]
-    pub disable_response_storage: bool,
-
-    /// Convenience alias for low-friction sandboxed automatic execution (-a on-failure, -s network-and-file-write-restricted)
-    #[arg(long = "full-auto", default_value_t = true)]
-    pub full_auto: bool,
-
-    /// Convenience alias for supervised sandboxed execution (-a unless-allow-listed, -s network-and-file-write-restricted)
-    #[arg(long = "suggest", default_value_t = false)]
-    pub suggest: bool,
+    #[clap(skip)]
+    pub config_overrides: CliConfigOverrides,
 }

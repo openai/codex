@@ -1,3 +1,5 @@
+#![expect(clippy::expect_used)]
+
 //! Optional smoke tests that hit the real OpenAI /v1/responses endpoint. They are `#[ignore]` by
 //! default so CI stays deterministic and free. Developers can run them locally with
 //! `cargo test --test live_cli -- --ignored` provided they set a valid `OPENAI_API_KEY`.
@@ -15,6 +17,7 @@ fn require_api_key() -> String {
 
 /// Helper that spawns the binary inside a TempDir with minimal flags. Returns (Assert, TempDir).
 fn run_live(prompt: &str) -> (assert_cmd::assert::Assert, TempDir) {
+    #![allow(clippy::unwrap_used)]
     use std::io::Read;
     use std::io::Write;
     use std::thread;
@@ -110,12 +113,15 @@ fn run_live(prompt: &str) -> (assert_cmd::assert::Assert, TempDir) {
 #[ignore]
 #[test]
 fn live_create_file_hello_txt() {
+    #![allow(clippy::unwrap_used)]
     if std::env::var("OPENAI_API_KEY").is_err() {
         eprintln!("skipping live_create_file_hello_txt – OPENAI_API_KEY not set");
         return;
     }
 
-    let (assert, dir) = run_live("Use the shell tool with the apply_patch command to create a file named hello.txt containing the text 'hello'.");
+    let (assert, dir) = run_live(
+        "Use the shell tool with the apply_patch command to create a file named hello.txt containing the text 'hello'.",
+    );
 
     assert.success();
 

@@ -487,7 +487,7 @@ async function* streamResponses(
   let isToolCall = false;
   for await (const chunk of completion as AsyncIterable<OpenAI.ChatCompletionChunk>) {
     // console.error('\nCHUNK: ', JSON.stringify(chunk));
-    const choice = chunk.choices[0];
+    const choice = chunk.choices?.[0];
     if (!choice) {
       continue;
     }

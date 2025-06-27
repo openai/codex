@@ -1,6 +1,19 @@
 #!/usr/bin/env node
 import "dotenv/config";
 
+// Exit early if on an older version of Node.js (< 22)
+const major = process.versions.node.split(".").map(Number)[0]!;
+if (major < 22) {
+  // eslint-disable-next-line no-console
+  console.error(
+    "\n" +
+      "Codex CLI requires Node.js version 22 or newer.\n" +
+      `You are running Node.js v${process.versions.node}.\n` +
+      "Please upgrade Node.js: https://nodejs.org/en/download/\n",
+  );
+  process.exit(1);
+}
+
 // Hack to suppress deprecation warnings (punycode)
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (process as any).noDeprecation = true;
@@ -10,29 +23,36 @@ import type { ApprovalPolicy } from "./approvals";
 import type { CommandConfirmation } from "./utils/agent/agent-loop";
 import type { AppConfig } from "./utils/config";
 import type { ResponseItem } from "openai/resources/responses/responses";
+import type { ReasoningEffort } from "openai/resources.mjs";
 
 import App from "./app";
 import { runSinglePass } from "./cli-singlepass";
+import SessionsOverlay from "./components/sessions-overlay.js";
 import { AgentLoop } from "./utils/agent/agent-loop";
 import { ReviewDecision } from "./utils/agent/review";
 import { AutoApprovalMode } from "./utils/auto-approval-mode";
 import { checkForUpdates } from "./utils/check-updates";
 import {
-  getApiKey,
   loadConfig,
   PRETTY_PRINT,
   INSTRUCTIONS_FILEPATH,
 } from "./utils/config";
+import {
+  getApiKey as fetchApiKey,
+  maybeRedeemCredits,
+} from "./utils/get-api-key";
 import { createInputItem } from "./utils/input-utils";
 import { initLogger } from "./utils/logger/log";
 import { isModelSupportedForResponses } from "./utils/model-utils.js";
 import { parseToolCall } from "./utils/parsers";
+import { providers } from "./utils/providers";
 import { onExit, setInkRenderer } from "./utils/terminal";
 import chalk from "chalk";
 import { spawnSync } from "child_process";
 import fs from "fs";
 import { render } from "ink";
 import meow from "meow";
+import os from "os";
 import path from "path";
 import React from "react";
 
@@ -55,10 +75,13 @@ const cli = meow(
     --version                       Print version and exit
 
     -h, --help                      Show usage and exit
-    -m, --model <model>             Model to use for completions (default: o4-mini)
+    -m, --model <model>             Model to use for completions (default: codex-mini-latest)
     -p, --provider <provider>       Provider to use for completions (default: openai)
     -i, --image <path>              Path(s) to image files to include as input
     -v, --view <rollout>            Inspect a previously saved rollout instead of starting a session
+    --history                       Browse previous sessions
+    --login                         Start a new sign in flow
+    --free                          Retry redeeming free credits
     -q, --quiet                     Non-interactive mode that only prints the assistant's final output
     -c, --config                    Open the instructions file in your editor
     -w, --writable-root <path>      Writable folder for sandbox in full-auto mode (can be specified multiple times)
@@ -67,7 +90,7 @@ const cli = meow(
     --auto-edit                Automatically approve file edits; still prompt for commands
     --full-auto                Automatically approve edits and commands when executed in the sandbox
 
-    --no-project-doc           Do not automatically include the repository's 'codex.md'
+    --no-project-doc           Do not automatically include the repository's 'AGENTS.md'
     --project-doc <file>       Include an additional markdown file at <file> as context
     --full-stdout              Do not truncate stdout/stderr from command outputs
     --notify                   Enable desktop notifications for responses
@@ -77,6 +100,8 @@ const cli = meow(
 
     --flex-mode               Use "flex-mode" processing mode for the request (only supported
                               with models o3 and o4-mini)
+
+    --reasoning <effort>      Set the reasoning effort level (low, medium, high) (default: high)
 
   Dangerous options
     --dangerously-auto-approve-everything
@@ -101,6 +126,9 @@ const cli = meow(
       help: { type: "boolean", aliases: ["h"] },
       version: { type: "boolean", description: "Print version and exit" },
       view: { type: "string" },
+      history: { type: "boolean", description: "Browse previous sessions" },
+      login: { type: "boolean", description: "Force a new sign in flow" },
+      free: { type: "boolean", description: "Retry redeeming free credits" },
       model: { type: "string", aliases: ["m"] },
       provider: { type: "string", aliases: ["p"] },
       image: { type: "string", isMultiple: true, aliases: ["i"] },
@@ -143,7 +171,7 @@ const cli = meow(
       },
       noProjectDoc: {
         type: "boolean",
-        description: "Disable automatic inclusion of project-level codex.md",
+        description: "Disable automatic inclusion of project-level AGENTS.md",
       },
       projectDoc: {
         type: "string",
@@ -159,6 +187,12 @@ const cli = meow(
         description:
           "Disable truncation of command stdout/stderr messages (show everything)",
         aliases: ["no-truncate"],
+      },
+      reasoning: {
+        type: "string",
+        description: "Set the reasoning effort level (low, medium, high)",
+        choices: ["low", "medium", "high"],
+        default: "high",
       },
       // Notification
       notify: {
@@ -183,6 +217,10 @@ const cli = meow(
     },
   },
 );
+
+// ---------------------------------------------------------------------------
+// Global flag handling
+// ---------------------------------------------------------------------------
 
 // Handle 'completion' subcommand before any prompting or API calls
 if (cli.input[0] === "completion") {
@@ -248,11 +286,100 @@ let config = loadConfig(undefined, undefined, {
   isFullContext: fullContextMode,
 });
 
-const prompt = cli.input[0];
+// `prompt` can be updated later when the user resumes a previous session
+// via the `--history` flag. Therefore it must be declared with `let` rather
+// than `const`.
+let prompt = cli.input[0];
 const model = cli.flags.model ?? config.model;
 const imagePaths = cli.flags.image;
 const provider = cli.flags.provider ?? config.provider ?? "openai";
-const apiKey = getApiKey(provider);
+
+const client = {
+  issuer: "https://auth.openai.com",
+  client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
+};
+
+let apiKey = "";
+let savedTokens:
+  | {
+      id_token?: string;
+      access_token?: string;
+      refresh_token: string;
+    }
+  | undefined;
+
+// Try to load existing auth file if present
+try {
+  const home = os.homedir();
+  const authDir = path.join(home, ".codex");
+  const authFile = path.join(authDir, "auth.json");
+  if (fs.existsSync(authFile)) {
+    const data = JSON.parse(fs.readFileSync(authFile, "utf-8"));
+    savedTokens = data.tokens;
+    const lastRefreshTime = data.last_refresh
+      ? new Date(data.last_refresh).getTime()
+      : 0;
+    const expired = Date.now() - lastRefreshTime > 28 * 24 * 60 * 60 * 1000;
+    if (data.OPENAI_API_KEY && !expired) {
+      apiKey = data.OPENAI_API_KEY;
+    }
+  }
+} catch {
+  // ignore errors
+}
+
+// Get provider-specific API key if not OpenAI
+if (provider.toLowerCase() !== "openai") {
+  const providerInfo = providers[provider.toLowerCase()];
+  if (providerInfo) {
+    const providerApiKey = process.env[providerInfo.envKey];
+    if (providerApiKey) {
+      apiKey = providerApiKey;
+    }
+  }
+}
+
+// Only proceed with OpenAI auth flow if:
+// 1. Provider is OpenAI and no API key is set, or
+// 2. Login flag is explicitly set
+if (provider.toLowerCase() === "openai" && !apiKey) {
+  if (cli.flags.login) {
+    apiKey = await fetchApiKey(client.issuer, client.client_id);
+    try {
+      const home = os.homedir();
+      const authDir = path.join(home, ".codex");
+      const authFile = path.join(authDir, "auth.json");
+      if (fs.existsSync(authFile)) {
+        const data = JSON.parse(fs.readFileSync(authFile, "utf-8"));
+        savedTokens = data.tokens;
+      }
+    } catch {
+      /* ignore */
+    }
+  } else {
+    apiKey = await fetchApiKey(client.issuer, client.client_id);
+  }
+}
+
+// Ensure the API key is available as an environment variable for legacy code
+process.env["OPENAI_API_KEY"] = apiKey;
+
+// Only attempt credit redemption for OpenAI provider
+if (cli.flags.free && provider.toLowerCase() === "openai") {
+  // eslint-disable-next-line no-console
+  console.log(`${chalk.bold("codex --free")} attempting to redeem credits...`);
+  if (!savedTokens?.refresh_token) {
+    apiKey = await fetchApiKey(client.issuer, client.client_id, true);
+    // fetchApiKey includes credit redemption as the end of the flow
+  } else {
+    await maybeRedeemCredits(
+      client.issuer,
+      client.client_id,
+      savedTokens.refresh_token,
+      savedTokens.id_token,
+    );
+  }
+}
 
 // Set of providers that don't require API keys
 const NO_API_KEY_REQUIRED = new Set(["ollama"]);
@@ -271,29 +398,39 @@ if (!apiKey && !NO_API_KEY_REQUIRED.has(provider.toLowerCase())) {
           ? `You can create a key here: ${chalk.bold(
               chalk.underline("https://platform.openai.com/account/api-keys"),
             )}\n`
-          : provider.toLowerCase() === "gemini"
+          : provider.toLowerCase() === "azure"
             ? `You can create a ${chalk.bold(
-                `${provider.toUpperCase()}_API_KEY`,
-              )} ` + `in the ${chalk.bold(`Google AI Studio`)}.\n`
-            : `You can create a ${chalk.bold(
-                `${provider.toUpperCase()}_API_KEY`,
-              )} ` + `in the ${chalk.bold(`${provider}`)} dashboard.\n`
+                `${provider.toUpperCase()}_OPENAI_API_KEY`,
+              )} ` +
+              `in Azure AI Foundry portal at ${chalk.bold(chalk.underline("https://ai.azure.com"))}.\n`
+            : provider.toLowerCase() === "gemini"
+              ? `You can create a ${chalk.bold(
+                  `${provider.toUpperCase()}_API_KEY`,
+                )} ` + `in the ${chalk.bold(`Google AI Studio`)}.\n`
+              : `You can create a ${chalk.bold(
+                  `${provider.toUpperCase()}_API_KEY`,
+                )} ` + `in the ${chalk.bold(`${provider}`)} dashboard.\n`
       }`,
   );
   process.exit(1);
 }
+
+const flagPresent = Object.hasOwn(cli.flags, "disableResponseStorage");
+
+const disableResponseStorage = flagPresent
+  ? Boolean(cli.flags.disableResponseStorage) // value user actually passed
+  : (config.disableResponseStorage ?? false); // fall back to YAML, default to false
 
 config = {
   apiKey,
   ...config,
   model: model ?? config.model,
   notify: Boolean(cli.flags.notify),
-  flexMode: Boolean(cli.flags.flexMode),
+  reasoningEffort:
+    (cli.flags.reasoning as ReasoningEffort | undefined) ?? "medium",
+  flexMode: cli.flags.flexMode || (config.flexMode ?? false),
   provider,
-  disableResponseStorage:
-    cli.flags.disableResponseStorage !== undefined
-      ? Boolean(cli.flags.disableResponseStorage)
-      : config.disableResponseStorage,
+  disableResponseStorage,
 };
 
 // Check for updates after loading config. This is important because we write state file in
@@ -305,15 +442,19 @@ try {
 }
 
 // For --flex-mode, validate and exit if incorrect.
-if (cli.flags.flexMode) {
+if (config.flexMode) {
   const allowedFlexModels = new Set(["o3", "o4-mini"]);
   if (!allowedFlexModels.has(config.model)) {
-    // eslint-disable-next-line no-console
-    console.error(
-      `The --flex-mode option is only supported when using the 'o3' or 'o4-mini' models. ` +
-        `Current model: '${config.model}'.`,
-    );
-    process.exit(1);
+    if (cli.flags.flexMode) {
+      // eslint-disable-next-line no-console
+      console.error(
+        `The --flex-mode option is only supported when using the 'o3' or 'o4-mini' models. ` +
+          `Current model: '${config.model}'.`,
+      );
+      process.exit(1);
+    } else {
+      config.flexMode = false;
+    }
   }
 }
 
@@ -332,6 +473,46 @@ if (
 }
 
 let rollout: AppRollout | undefined;
+
+// For --history, show session selector and optionally update prompt or rollout.
+if (cli.flags.history) {
+  const result: { path: string; mode: "view" | "resume" } | null =
+    await new Promise((resolve) => {
+      const instance = render(
+        React.createElement(SessionsOverlay, {
+          onView: (p: string) => {
+            instance.unmount();
+            resolve({ path: p, mode: "view" });
+          },
+          onResume: (p: string) => {
+            instance.unmount();
+            resolve({ path: p, mode: "resume" });
+          },
+          onExit: () => {
+            instance.unmount();
+            resolve(null);
+          },
+        }),
+      );
+    });
+
+  if (!result) {
+    process.exit(0);
+  }
+
+  if (result.mode === "view") {
+    try {
+      const content = fs.readFileSync(result.path, "utf-8");
+      rollout = JSON.parse(content) as AppRollout;
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error("Error reading session file:", error);
+      process.exit(1);
+    }
+  } else {
+    prompt = `Resume this session: ${result.path}`;
+  }
+}
 
 // For --view, optionally load an existing rollout from disk, display it and exit.
 if (cli.flags.view) {

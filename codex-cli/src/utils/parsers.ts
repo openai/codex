@@ -35,6 +35,7 @@ export function parseToolCallOutput(toolCallOutput: string): {
 export type CommandReviewDetails = {
   cmd: Array<string>;
   cmdReadableText: string;
+  workdir: string | undefined;
 };
 
 /**
@@ -51,12 +52,13 @@ export function parseToolCall(
     return undefined;
   }
 
-  const { cmd } = toolCallArgs;
+  const { cmd, workdir } = toolCallArgs;
   const cmdReadableText = formatCommandForDisplay(cmd);
 
   return {
     cmd,
     cmdReadableText,
+    workdir,
   };
 }
 

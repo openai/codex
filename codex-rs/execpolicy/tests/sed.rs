@@ -1,6 +1,6 @@
+#![expect(clippy::expect_used)]
 extern crate codex_execpolicy;
 
-use codex_execpolicy::get_default_policy;
 use codex_execpolicy::ArgType;
 use codex_execpolicy::Error;
 use codex_execpolicy::ExecCall;
@@ -11,6 +11,7 @@ use codex_execpolicy::MatchedOpt;
 use codex_execpolicy::Policy;
 use codex_execpolicy::Result;
 use codex_execpolicy::ValidExec;
+use codex_execpolicy::get_default_policy;
 
 fn setup() -> Policy {
     get_default_policy().expect("failed to load default policy")
@@ -47,7 +48,10 @@ fn test_sed_print_specific_lines_with_e_flag() -> Result<()> {
             exec: ValidExec {
                 program: "sed".to_string(),
                 flags: vec![MatchedFlag::new("-n")],
-                opts: vec![MatchedOpt::new("-e", "122,202p", ArgType::SedCommand).unwrap()],
+                opts: vec![
+                    MatchedOpt::new("-e", "122,202p", ArgType::SedCommand)
+                        .expect("should validate")
+                ],
                 args: vec![MatchedArg::new(3, ArgType::ReadableFile, "hello.txt")?],
                 system_path: vec!["/usr/bin/sed".to_string()],
             }

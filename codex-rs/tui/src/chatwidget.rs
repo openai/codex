@@ -1,14 +1,24 @@
-use std::sync::mpsc::SendError;
-use std::sync::mpsc::Sender;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use codex_core::codex_wrapper::init_codex;
-use codex_core::protocol::AskForApproval;
+use codex_core::config::Config;
+use codex_core::protocol::AgentMessageEvent;
+use codex_core::protocol::AgentReasoningEvent;
+use codex_core::protocol::ApplyPatchApprovalRequestEvent;
+use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
+use codex_core::protocol::ExecApprovalRequestEvent;
+use codex_core::protocol::ExecCommandBeginEvent;
+use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::InputItem;
+use codex_core::protocol::McpToolCallBeginEvent;
+use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
+use codex_core::protocol::PatchApplyBeginEvent;
+use codex_core::protocol::TaskCompleteEvent;
+use codex_core::protocol::TokenUsage;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
@@ -17,10 +27,11 @@ use ratatui::layout::Layout;
 use ratatui::layout::Rect;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
-use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::unbounded_channel;
 
 use crate::app_event::AppEvent;
+use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
 use crate::bottom_pane::InputResult;
@@ -29,13 +40,14 @@ use crate::history_cell::PatchEventType;
 use crate::user_approval_widget::ApprovalRequest;
 
 pub(crate) struct ChatWidget<'a> {
-    app_event_tx: Sender<AppEvent>,
+    app_event_tx: AppEventSender,
     codex_op_tx: UnboundedSender<Op>,
     conversation_history: ConversationHistoryWidget,
     bottom_pane: BottomPane<'a>,
     input_focus: InputFocus,
-    approval_policy: AskForApproval,
-    cwd: std::path::PathBuf,
+    config: Config,
+    initial_user_message: Option<UserMessage>,
+    token_usage: TokenUsage,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -44,38 +56,45 @@ enum InputFocus {
     BottomPane,
 }
 
+struct UserMessage {
+    text: String,
+    image_paths: Vec<PathBuf>,
+}
+
+impl From<String> for UserMessage {
+    fn from(text: String) -> Self {
+        Self {
+            text,
+            image_paths: Vec::new(),
+        }
+    }
+}
+
+fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Option<UserMessage> {
+    if text.is_empty() && image_paths.is_empty() {
+        None
+    } else {
+        Some(UserMessage { text, image_paths })
+    }
+}
+
 impl ChatWidget<'_> {
     pub(crate) fn new(
-        approval_policy: AskForApproval,
-        sandbox_policy: SandboxPolicy,
-        app_event_tx: Sender<AppEvent>,
+        config: Config,
+        app_event_tx: AppEventSender,
         initial_prompt: Option<String>,
-        initial_images: Vec<std::path::PathBuf>,
-        model: Option<String>,
-        disable_response_storage: bool,
+        initial_images: Vec<PathBuf>,
     ) -> Self {
         let (codex_op_tx, mut codex_op_rx) = unbounded_channel::<Op>();
 
-        // Determine the current working directory up‑front so we can display
-        // it alongside the Session information when the session is
-        // initialised.
-        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-
         let app_event_tx_clone = app_event_tx.clone();
         // Create the Codex asynchronously so the UI loads as quickly as possible.
+        let config_for_agent_loop = config.clone();
         tokio::spawn(async move {
-            // Initialize session; storage enabled by default
-            let (codex, session_event, _ctrl_c) = match init_codex(
-                approval_policy,
-                sandbox_policy,
-                disable_response_storage,
-                model,
-            )
-            .await
-            {
+            let (codex, session_event, _ctrl_c) = match init_codex(config_for_agent_loop).await {
                 Ok(vals) => vals,
                 Err(e) => {
-                    // TODO(mbolin): This error needs to be surfaced to the user.
+                    // TODO: surface this error to the user.
                     tracing::error!("failed to initialize codex: {e}");
                     return;
                 }
@@ -83,9 +102,7 @@ impl ChatWidget<'_> {
 
             // Forward the captured `SessionInitialized` event that was consumed
             // inside `init_codex()` so it can be rendered in the UI.
-            if let Err(e) = app_event_tx_clone.send(AppEvent::CodexEvent(session_event.clone())) {
-                tracing::error!("failed to send SessionInitialized event: {e}");
-            }
+            app_event_tx_clone.send(AppEvent::CodexEvent(session_event.clone()));
             let codex = Arc::new(codex);
             let codex_clone = codex.clone();
             tokio::spawn(async move {
@@ -98,15 +115,11 @@ impl ChatWidget<'_> {
             });
 
             while let Ok(event) = codex.next_event().await {
-                app_event_tx_clone
-                    .send(AppEvent::CodexEvent(event))
-                    .unwrap_or_else(|e| {
-                        tracing::error!("failed to send event: {e}");
-                    });
+                app_event_tx_clone.send(AppEvent::CodexEvent(event));
             }
         });
 
-        let mut chat_widget = Self {
+        Self {
             app_event_tx: app_event_tx.clone(),
             codex_op_tx,
             conversation_history: ConversationHistoryWidget::new(),
@@ -115,26 +128,22 @@ impl ChatWidget<'_> {
                 has_input_focus: true,
             }),
             input_focus: InputFocus::BottomPane,
-            approval_policy,
-            cwd: cwd.clone(),
-        };
-
-        let _ = chat_widget.submit_welcome_message();
-
-        if initial_prompt.is_some() || !initial_images.is_empty() {
-            let text = initial_prompt.unwrap_or_default();
-            let _ = chat_widget.submit_user_message_with_images(text, initial_images);
+            config,
+            initial_user_message: create_initial_user_message(
+                initial_prompt.unwrap_or_default(),
+                initial_images,
+            ),
+            token_usage: TokenUsage::default(),
         }
-
-        chat_widget
     }
 
-    pub(crate) fn handle_key_event(
-        &mut self,
-        key_event: KeyEvent,
-    ) -> std::result::Result<(), SendError<AppEvent>> {
-        // Special-case <tab>: does not get dispatched to child components.
-        if matches!(key_event.code, crossterm::event::KeyCode::Tab) {
+    pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
+        // Special-case <Tab>: normally toggles focus between history and bottom panes.
+        // However, when the slash-command popup is visible we forward the key
+        // to the bottom pane so it can handle auto-completion.
+        if matches!(key_event.code, crossterm::event::KeyCode::Tab)
+            && !self.bottom_pane.is_command_popup_visible()
+        {
             self.input_focus = match self.input_focus {
                 InputFocus::HistoryPane => InputFocus::BottomPane,
                 InputFocus::BottomPane => InputFocus::HistoryPane,
@@ -143,69 +152,28 @@ impl ChatWidget<'_> {
                 .set_input_focus(self.input_focus == InputFocus::HistoryPane);
             self.bottom_pane
                 .set_input_focus(self.input_focus == InputFocus::BottomPane);
-            self.request_redraw()?;
-            return Ok(());
+            self.request_redraw();
+            return;
         }
 
         match self.input_focus {
             InputFocus::HistoryPane => {
                 let needs_redraw = self.conversation_history.handle_key_event(key_event);
                 if needs_redraw {
-                    self.request_redraw()?;
+                    self.request_redraw();
                 }
-                Ok(())
             }
-            InputFocus::BottomPane => {
-                match self.bottom_pane.handle_key_event(key_event)? {
-                    InputResult::Submitted(text) => {
-                        // Special client‑side commands start with a leading slash.
-                        let trimmed = text.trim();
-
-                        match trimmed {
-                            "q" => {
-                                // Gracefully request application shutdown.
-                                let _ = self.app_event_tx.send(AppEvent::ExitRequest);
-                            }
-                            "/clear" => {
-                                // Clear the current conversation history without exiting.
-                                self.conversation_history.clear();
-                                self.request_redraw()?;
-                            }
-                            _ => {
-                                self.submit_user_message(text)?;
-                            }
-                        }
-                    }
-                    InputResult::None => {}
+            InputFocus::BottomPane => match self.bottom_pane.handle_key_event(key_event) {
+                InputResult::Submitted(text) => {
+                    self.submit_user_message(text.into());
                 }
-                Ok(())
-            }
+                InputResult::None => {}
+            },
         }
     }
 
-    fn submit_welcome_message(&mut self) -> std::result::Result<(), SendError<AppEvent>> {
-        self.handle_codex_event(Event {
-            id: "welcome".to_string(),
-            msg: EventMsg::AgentMessage {
-                message: "Welcome to codex!".to_string(),
-            },
-        })?;
-        Ok(())
-    }
-
-    fn submit_user_message(
-        &mut self,
-        text: String,
-    ) -> std::result::Result<(), SendError<AppEvent>> {
-        // Forward to codex and update conversation history.
-        self.submit_user_message_with_images(text, vec![])
-    }
-
-    fn submit_user_message_with_images(
-        &mut self,
-        text: String,
-        image_paths: Vec<std::path::PathBuf>,
-    ) -> std::result::Result<(), SendError<AppEvent>> {
+    fn submit_user_message(&mut self, user_message: UserMessage) {
+        let UserMessage { text, image_paths } = user_message;
         let mut items: Vec<InputItem> = Vec::new();
 
         if !text.is_empty() {
@@ -217,7 +185,7 @@ impl ChatWidget<'_> {
         }
 
         if items.is_empty() {
-            return Ok(());
+            return;
         }
 
         self.codex_op_tx
@@ -226,70 +194,92 @@ impl ChatWidget<'_> {
                 tracing::error!("failed to send message: {e}");
             });
 
+        // Persist the text to cross-session message history.
+        if !text.is_empty() {
+            self.codex_op_tx
+                .send(Op::AddToHistory { text: text.clone() })
+                .unwrap_or_else(|e| {
+                    tracing::error!("failed to send AddHistory op: {e}");
+                });
+        }
+
         // Only show text portion in conversation history for now.
         if !text.is_empty() {
             self.conversation_history.add_user_message(text);
         }
         self.conversation_history.scroll_to_bottom();
-
-        Ok(())
     }
 
-    pub(crate) fn handle_codex_event(
-        &mut self,
-        event: Event,
-    ) -> std::result::Result<(), SendError<AppEvent>> {
+    pub(crate) fn handle_codex_event(&mut self, event: Event) {
         let Event { id, msg } = event;
         match msg {
-            EventMsg::SessionConfigured { model } => {
+            EventMsg::SessionConfigured(event) => {
                 // Record session information at the top of the conversation.
-                self.conversation_history.add_session_info(
-                    model,
-                    self.cwd.clone(),
-                    self.approval_policy,
-                );
-                self.request_redraw()?;
+                self.conversation_history
+                    .add_session_info(&self.config, event.clone());
+
+                // Forward history metadata to the bottom pane so the chat
+                // composer can navigate through past messages.
+                self.bottom_pane
+                    .set_history_metadata(event.history_log_id, event.history_entry_count);
+
+                if let Some(user_message) = self.initial_user_message.take() {
+                    // If the user provided an initial message, add it to the
+                    // conversation history.
+                    self.submit_user_message(user_message);
+                }
+
+                self.request_redraw();
             }
-            EventMsg::AgentMessage { message } => {
-                self.conversation_history.add_agent_message(message);
-                self.request_redraw()?;
+            EventMsg::AgentMessage(AgentMessageEvent { message }) => {
+                self.conversation_history
+                    .add_agent_message(&self.config, message);
+                self.request_redraw();
+            }
+            EventMsg::AgentReasoning(AgentReasoningEvent { text }) => {
+                if !self.config.hide_agent_reasoning {
+                    self.conversation_history
+                        .add_agent_reasoning(&self.config, text);
+                    self.request_redraw();
+                }
             }
             EventMsg::TaskStarted => {
-                self.bottom_pane.set_task_running(true)?;
-                self.conversation_history
-                    .add_background_event(format!("task {id} started"));
-                self.request_redraw()?;
+                self.bottom_pane.set_task_running(true);
+                self.request_redraw();
             }
-            EventMsg::TaskComplete => {
-                self.bottom_pane.set_task_running(false)?;
-                self.request_redraw()?;
+            EventMsg::TaskComplete(TaskCompleteEvent {
+                last_agent_message: _,
+            }) => {
+                self.bottom_pane.set_task_running(false);
+                self.request_redraw();
             }
-            EventMsg::Error { message } => {
-                self.conversation_history
-                    .add_background_event(format!("Error: {message}"));
-                self.bottom_pane.set_task_running(false)?;
+            EventMsg::TokenCount(token_usage) => {
+                self.token_usage = add_token_usage(&self.token_usage, &token_usage);
+                self.bottom_pane
+                    .set_token_usage(self.token_usage.clone(), self.config.model_context_window);
             }
-            EventMsg::ExecApprovalRequest {
+            EventMsg::Error(ErrorEvent { message }) => {
+                self.conversation_history.add_error(message);
+                self.bottom_pane.set_task_running(false);
+            }
+            EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
                 command,
                 cwd,
                 reason,
-            } => {
+            }) => {
                 let request = ApprovalRequest::Exec {
                     id,
                     command,
                     cwd,
                     reason,
                 };
-                let needs_redraw = self.bottom_pane.push_approval_request(request);
-                if needs_redraw {
-                    self.request_redraw()?;
-                }
+                self.bottom_pane.push_approval_request(request);
             }
-            EventMsg::ApplyPatchApprovalRequest {
+            EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
                 changes,
                 reason,
                 grant_root,
-            } => {
+            }) => {
                 // ------------------------------------------------------------------
                 // Before we even prompt the user for approval we surface the patch
                 // summary in the main conversation so that the dialog appears in a
@@ -312,22 +302,23 @@ impl ChatWidget<'_> {
                     reason,
                     grant_root,
                 };
-                let _needs_redraw = self.bottom_pane.push_approval_request(request);
-                // Redraw is always need because the history has changed.
-                self.request_redraw()?;
+                self.bottom_pane.push_approval_request(request);
+                self.request_redraw();
             }
-            EventMsg::ExecCommandBegin {
-                call_id, command, ..
-            } => {
+            EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+                call_id,
+                command,
+                cwd: _,
+            }) => {
                 self.conversation_history
                     .add_active_exec_command(call_id, command);
-                self.request_redraw()?;
+                self.request_redraw();
             }
-            EventMsg::PatchApplyBegin {
+            EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
                 call_id: _,
                 auto_approved,
                 changes,
-            } => {
+            }) => {
                 // Even when a patch is auto‑approved we still display the
                 // summary so the user can follow along.
                 self.conversation_history
@@ -335,47 +326,70 @@ impl ChatWidget<'_> {
                 if !auto_approved {
                     self.conversation_history.scroll_to_bottom();
                 }
-                self.request_redraw()?;
+                self.request_redraw();
             }
-            EventMsg::ExecCommandEnd {
+            EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                 call_id,
                 exit_code,
                 stdout,
                 stderr,
-                ..
-            } => {
+            }) => {
                 self.conversation_history
                     .record_completed_exec_command(call_id, stdout, stderr, exit_code);
-                self.request_redraw()?;
+                self.request_redraw();
+            }
+            EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
+                call_id,
+                server,
+                tool,
+                arguments,
+            }) => {
+                self.conversation_history
+                    .add_active_mcp_tool_call(call_id, server, tool, arguments);
+                self.request_redraw();
+            }
+            EventMsg::McpToolCallEnd(mcp_tool_call_end_event) => {
+                let success = mcp_tool_call_end_event.is_success();
+                let McpToolCallEndEvent { call_id, result } = mcp_tool_call_end_event;
+                self.conversation_history
+                    .record_completed_mcp_tool_call(call_id, success, result);
+                self.request_redraw();
+            }
+            EventMsg::GetHistoryEntryResponse(event) => {
+                let codex_core::protocol::GetHistoryEntryResponseEvent {
+                    offset,
+                    log_id,
+                    entry,
+                } = event;
+
+                // Inform bottom pane / composer.
+                self.bottom_pane
+                    .on_history_entry_response(log_id, offset, entry.map(|e| e.text));
             }
             event => {
                 self.conversation_history
                     .add_background_event(format!("{event:?}"));
-                self.request_redraw()?;
+                self.request_redraw();
             }
         }
-        Ok(())
     }
 
     /// Update the live log preview while a task is running.
-    pub(crate) fn update_latest_log(
-        &mut self,
-        line: String,
-    ) -> std::result::Result<(), std::sync::mpsc::SendError<AppEvent>> {
+    pub(crate) fn update_latest_log(&mut self, line: String) {
         // Forward only if we are currently showing the status indicator.
-        self.bottom_pane.update_status_text(line)?;
-        Ok(())
+        self.bottom_pane.update_status_text(line);
     }
 
-    fn request_redraw(&mut self) -> std::result::Result<(), SendError<AppEvent>> {
-        self.app_event_tx.send(AppEvent::Redraw)?;
-        Ok(())
+    fn request_redraw(&mut self) {
+        self.app_event_tx.send(AppEvent::Redraw);
     }
 
-    pub(crate) fn handle_scroll_delta(
-        &mut self,
-        scroll_delta: i32,
-    ) -> std::result::Result<(), std::sync::mpsc::SendError<AppEvent>> {
+    pub(crate) fn add_diff_output(&mut self, diff_output: String) {
+        self.conversation_history.add_diff_output(diff_output);
+        self.request_redraw();
+    }
+
+    pub(crate) fn handle_scroll_delta(&mut self, scroll_delta: i32) {
         // If the user is trying to scroll exactly one line, we let them, but
         // otherwise we assume they are trying to scroll in larger increments.
         let magnified_scroll_delta = if scroll_delta == 1 {
@@ -385,8 +399,7 @@ impl ChatWidget<'_> {
             scroll_delta * 2
         };
         self.conversation_history.scroll(magnified_scroll_delta);
-        self.request_redraw()?;
-        Ok(())
+        self.request_redraw();
     }
 
     /// Forward an `Op` directly to codex.
@@ -399,7 +412,7 @@ impl ChatWidget<'_> {
 
 impl WidgetRef for &ChatWidget<'_> {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        let bottom_height = self.bottom_pane.required_height(&area);
+        let bottom_height = self.bottom_pane.calculate_required_height(&area);
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -408,5 +421,33 @@ impl WidgetRef for &ChatWidget<'_> {
 
         self.conversation_history.render(chunks[0], buf);
         (&self.bottom_pane).render(chunks[1], buf);
+    }
+}
+
+fn add_token_usage(current_usage: &TokenUsage, new_usage: &TokenUsage) -> TokenUsage {
+    let cached_input_tokens = match (
+        current_usage.cached_input_tokens,
+        new_usage.cached_input_tokens,
+    ) {
+        (Some(current), Some(new)) => Some(current + new),
+        (Some(current), None) => Some(current),
+        (None, Some(new)) => Some(new),
+        (None, None) => None,
+    };
+    let reasoning_output_tokens = match (
+        current_usage.reasoning_output_tokens,
+        new_usage.reasoning_output_tokens,
+    ) {
+        (Some(current), Some(new)) => Some(current + new),
+        (Some(current), None) => Some(current),
+        (None, Some(new)) => Some(new),
+        (None, None) => None,
+    };
+    TokenUsage {
+        input_tokens: current_usage.input_tokens + new_usage.input_tokens,
+        cached_input_tokens,
+        output_tokens: current_usage.output_tokens + new_usage.output_tokens,
+        reasoning_output_tokens,
+        total_tokens: current_usage.total_tokens + new_usage.total_tokens,
     }
 }

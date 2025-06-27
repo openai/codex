@@ -2,6 +2,26 @@
 set -euo pipefail  # Exit on error, undefined vars, and pipeline failures
 IFS=$'\n\t'       # Stricter word splitting
 
+# Read allowed domains from file
+ALLOWED_DOMAINS_FILE="/etc/codex/allowed_domains.txt"
+if [ -f "$ALLOWED_DOMAINS_FILE" ]; then
+    ALLOWED_DOMAINS=()
+    while IFS= read -r domain; do
+        ALLOWED_DOMAINS+=("$domain")
+    done < "$ALLOWED_DOMAINS_FILE"
+    echo "Using domains from file: ${ALLOWED_DOMAINS[*]}"
+else
+    # Fallback to default domains
+    ALLOWED_DOMAINS=("api.openai.com")
+    echo "Domains file not found, using default: ${ALLOWED_DOMAINS[*]}"
+fi
+
+# Ensure we have at least one domain
+if [ ${#ALLOWED_DOMAINS[@]} -eq 0 ]; then
+    echo "ERROR: No allowed domains specified"
+    exit 1
+fi
+
 # Flush existing rules and delete existing ipsets
 iptables -F
 iptables -X
@@ -24,8 +44,7 @@ iptables -A OUTPUT -o lo -j ACCEPT
 ipset create allowed-domains hash:net
 
 # Resolve and add other allowed domains
-for domain in \
-    "api.openai.com"; do
+for domain in "${ALLOWED_DOMAINS[@]}"; do
     echo "Resolving $domain..."
     ips=$(dig +short A "$domain")
     if [ -z "$ips" ]; then
@@ -87,7 +106,7 @@ else
     echo "Firewall verification passed - unable to reach https://example.com as expected"
 fi
 
-# Verify OpenAI API access
+# Always verify OpenAI API access is working
 if ! curl --connect-timeout 5 https://api.openai.com >/dev/null 2>&1; then
     echo "ERROR: Firewall verification failed - unable to reach https://api.openai.com"
     exit 1

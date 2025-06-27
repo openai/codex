@@ -1,0 +1,3 @@
+# Added by ./scripts/install_native_deps.sh
+/bin/codex-linux-sandbox-arm64
+/bin/codex-linux-sandbox-x64

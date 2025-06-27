@@ -8,35 +8,43 @@ import type {
   ResponseItem,
   ResponseCreateParams,
   FunctionTool,
+  Tool,
 } from "openai/resources/responses/responses.mjs";
 import type { Reasoning } from "openai/resources.mjs";
 
+import { CLI_VERSION } from "../../version.js";
 import {
   OPENAI_TIMEOUT_MS,
   OPENAI_ORGANIZATION,
   OPENAI_PROJECT,
-  getApiKey,
   getBaseUrl,
+  AZURE_OPENAI_API_VERSION,
 } from "../config.js";
 import { log } from "../logger/log.js";
 import { parseToolCallArguments } from "../parsers.js";
 import { responsesCreateViaChatCompletions } from "../responses.js";
 import {
   ORIGIN,
-  CLI_VERSION,
   getSessionId,
   setCurrentModel,
   setSessionId,
 } from "../session.js";
+import { applyPatchToolInstructions } from "./apply-patch.js";
 import { handleExecCommand } from "./handle-exec-command.js";
+import { HttpsProxyAgent } from "https-proxy-agent";
+import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import OpenAI, { APIConnectionTimeoutError } from "openai";
+import OpenAI, { APIConnectionTimeoutError, AzureOpenAI } from "openai";
+import os from "os";
 
 // Wait time before retrying after rate limit errors (ms).
 const RATE_LIMIT_RETRY_WAIT_MS = parseInt(
-  process.env["OPENAI_RATE_LIMIT_RETRY_WAIT_MS"] || "2500",
+  process.env["OPENAI_RATE_LIMIT_RETRY_WAIT_MS"] || "500",
   10,
 );
+
+// See https://github.com/openai/openai-node/tree/v4?tab=readme-ov-file#configuring-an-https-agent-eg-for-proxies
+const PROXY_URL = process.env["HTTPS_PROXY"];
 
 export type CommandConfirmation = {
   review: ReviewDecision;
@@ -76,7 +84,7 @@ type AgentLoopParams = {
   onLastResponseId: (lastResponseId: string) => void;
 };
 
-const shellTool: FunctionTool = {
+const shellFunctionTool: FunctionTool = {
   type: "function",
   name: "shell",
   description: "Runs a shell command, and returns its output.",
@@ -98,6 +106,11 @@ const shellTool: FunctionTool = {
     required: ["command"],
     additionalProperties: false,
   },
+};
+
+const localShellTool: Tool = {
+  //@ts-expect-error - waiting on sdk
+  type: "local_shell",
 };
 
 export class AgentLoop {
@@ -293,7 +306,7 @@ export class AgentLoop {
     this.sessionId = getSessionId() || randomUUID().replaceAll("-", "");
     // Configure OpenAI client with optional timeout (ms) from environment
     const timeoutMs = OPENAI_TIMEOUT_MS;
-    const apiKey = getApiKey(this.provider);
+    const apiKey = this.config.apiKey ?? process.env["OPENAI_API_KEY"] ?? "";
     const baseURL = getBaseUrl(this.provider);
 
     this.oai = new OpenAI({
@@ -314,8 +327,28 @@ export class AgentLoop {
           : {}),
         ...(OPENAI_PROJECT ? { "OpenAI-Project": OPENAI_PROJECT } : {}),
       },
+      httpAgent: PROXY_URL ? new HttpsProxyAgent(PROXY_URL) : undefined,
       ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
     });
+
+    if (this.provider.toLowerCase() === "azure") {
+      this.oai = new AzureOpenAI({
+        apiKey,
+        baseURL,
+        apiVersion: AZURE_OPENAI_API_VERSION,
+        defaultHeaders: {
+          originator: ORIGIN,
+          version: CLI_VERSION,
+          session_id: this.sessionId,
+          ...(OPENAI_ORGANIZATION
+            ? { "OpenAI-Organization": OPENAI_ORGANIZATION }
+            : {}),
+          ...(OPENAI_PROJECT ? { "OpenAI-Project": OPENAI_PROJECT } : {}),
+        },
+        httpAgent: PROXY_URL ? new HttpsProxyAgent(PROXY_URL) : undefined,
+        ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
+      });
+    }
 
     setSessionId(this.sessionId);
     setCurrentModel(this.model);
@@ -433,6 +466,73 @@ export class AgentLoop {
     return [outputItem, ...additionalItems];
   }
 
+  private async handleLocalShellCall(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    item: any,
+  ): Promise<Array<ResponseInputItem>> {
+    // If the agent has been canceled in the meantime we should not perform any
+    // additional work. Returning an empty array ensures that we neither execute
+    // the requested tool call nor enqueue any follow‑up input items. This keeps
+    // the cancellation semantics intuitive for users – once they interrupt a
+    // task no further actions related to that task should be taken.
+    if (this.canceled) {
+      return [];
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const outputItem: any = {
+      type: "local_shell_call_output",
+      // `call_id` is mandatory – ensure we never send `undefined` which would
+      // trigger the "No tool output found…" 400 from the API.
+      call_id: item.call_id,
+      output: "no function found",
+    };
+
+    // We intentionally *do not* remove this `callId` from the `pendingAborts`
+    // set right away.  The output produced below is only queued up for the
+    // *next* request to the OpenAI API – it has not been delivered yet.  If
+    // the user presses ESC‑ESC (i.e. invokes `cancel()`) in the small window
+    // between queuing the result and the actual network call, we need to be
+    // able to surface a synthetic `function_call_output` marked as
+    // "aborted".  Keeping the ID in the set until the run concludes
+    // successfully lets the next `run()` differentiate between an aborted
+    // tool call (needs the synthetic output) and a completed one (cleared
+    // below in the `flush()` helper).
+
+    // used to tell model to stop if needed
+    const additionalItems: Array<ResponseInputItem> = [];
+
+    if (item.action.type !== "exec") {
+      throw new Error("Invalid action type");
+    }
+
+    const args = {
+      cmd: item.action.command,
+      workdir: item.action.working_directory,
+      timeoutInMillis: item.action.timeout_ms,
+    };
+
+    const {
+      outputText,
+      metadata,
+      additionalItems: additionalItemsFromExec,
+    } = await handleExecCommand(
+      args,
+      this.config,
+      this.approvalPolicy,
+      this.additionalWritableRoots,
+      this.getCommandConfirmation,
+      this.execAbortController?.signal,
+    );
+    outputItem.output = JSON.stringify({ output: outputText, metadata });
+
+    if (additionalItemsFromExec) {
+      additionalItems.push(...additionalItemsFromExec);
+    }
+
+    return [outputItem, ...additionalItems];
+  }
+
   public async run(
     input: Array<ResponseInputItem>,
     previousResponseId: string = "",
@@ -516,6 +616,11 @@ export class AgentLoop {
       // transcript so we can avoid re‑emitting them to the UI. Only used when
       // `disableResponseStorage === true`.
       let transcriptPrefixLen = 0;
+
+      let tools: Array<Tool> = [shellFunctionTool];
+      if (this.model.startsWith("codex")) {
+        tools = [localShellTool];
+      }
 
       const stripInternalFields = (
         item: ResponseInputItem,
@@ -620,6 +725,8 @@ export class AgentLoop {
                 if (
                   (item as ResponseInputItem).type === "function_call" ||
                   (item as ResponseInputItem).type === "reasoning" ||
+                  //@ts-expect-error - waiting on sdk
+                  (item as ResponseInputItem).type === "local_shell_call" ||
                   ((item as ResponseInputItem).type === "message" &&
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     (item as any).role === "user")
@@ -658,7 +765,7 @@ export class AgentLoop {
         // prompts) and so that freshly generated `function_call_output`s are
         // shown immediately.
         // Figure out what subset of `turnInput` constitutes *new* information
-        // for the UI so that we don’t spam the interface with repeats of the
+        // for the UI so that we don't spam the interface with repeats of the
         // entire transcript on every iteration when response storage is
         // disabled.
         const deltaInput = this.disableResponseStorage
@@ -671,23 +778,30 @@ export class AgentLoop {
         let stream;
 
         // Retry loop for transient errors. Up to MAX_RETRIES attempts.
-        const MAX_RETRIES = 5;
+        const MAX_RETRIES = 8;
         for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
           try {
             let reasoning: Reasoning | undefined;
-            if (this.model.startsWith("o")) {
-              reasoning = { effort: "high" };
-              if (this.model === "o3" || this.model === "o4-mini") {
-                reasoning.summary = "auto";
-              }
+            let modelSpecificInstructions: string | undefined;
+            if (this.model.startsWith("o") || this.model.startsWith("codex")) {
+              reasoning = { effort: this.config.reasoningEffort ?? "medium" };
+              reasoning.summary = "auto";
             }
-            const mergedInstructions = [prefix, this.instructions]
+            if (this.model.startsWith("gpt-4.1")) {
+              modelSpecificInstructions = applyPatchToolInstructions;
+            }
+            const mergedInstructions = [
+              prefix,
+              modelSpecificInstructions,
+              this.instructions,
+            ]
               .filter(Boolean)
               .join("\n");
 
             const responseCall =
               !this.config.provider ||
-              this.config.provider?.toLowerCase() === "openai"
+              this.config.provider?.toLowerCase() === "openai" ||
+              this.config.provider?.toLowerCase() === "azure"
                 ? (params: ResponseCreateParams) =>
                     this.oai.responses.create(params)
                 : (params: ResponseCreateParams) =>
@@ -714,7 +828,7 @@ export class AgentLoop {
                     store: true,
                     previous_response_id: lastResponseId || undefined,
                   }),
-              tools: [shellTool],
+              tools: tools,
               // Explicitly tell the model it is allowed to pick whatever
               // tool it deems appropriate.  Omitting this sometimes leads to
               // the model ignoring the available tools and responding with
@@ -739,7 +853,13 @@ export class AgentLoop {
             const errCtx = error as any;
             const status =
               errCtx?.status ?? errCtx?.httpStatus ?? errCtx?.statusCode;
-            const isServerError = typeof status === "number" && status >= 500;
+            // Treat classical 5xx *and* explicit OpenAI `server_error` types
+            // as transient server-side failures that qualify for a retry. The
+            // SDK often omits the numeric status for these, reporting only
+            // the `type` field.
+            const isServerError =
+              (typeof status === "number" && status >= 500) ||
+              errCtx?.type === "server_error";
             if (
               (isTimeout || isServerError || isConnectionError) &&
               attempt < MAX_RETRIES
@@ -928,7 +1048,10 @@ export class AgentLoop {
                 if (maybeReasoning.type === "reasoning") {
                   maybeReasoning.duration_ms = Date.now() - thinkingStart;
                 }
-                if (item.type === "function_call") {
+                if (
+                  item.type === "function_call" ||
+                  item.type === "local_shell_call"
+                ) {
                   // Track outstanding tool call so we can abort later if needed.
                   // The item comes from the streaming response, therefore it has
                   // either `id` (chat) or `call_id` (responses) – we normalise
@@ -1051,7 +1174,11 @@ export class AgentLoop {
               let reasoning: Reasoning | undefined;
               if (this.model.startsWith("o")) {
                 reasoning = { effort: "high" };
-                if (this.model === "o3" || this.model === "o4-mini") {
+                if (
+                  this.model === "o3" ||
+                  this.model === "o4-mini" ||
+                  this.model === "codex-mini-latest"
+                ) {
                   reasoning.summary = "auto";
                 }
               }
@@ -1062,7 +1189,8 @@ export class AgentLoop {
 
               const responseCall =
                 !this.config.provider ||
-                this.config.provider?.toLowerCase() === "openai"
+                this.config.provider?.toLowerCase() === "openai" ||
+                this.config.provider?.toLowerCase() === "azure"
                   ? (params: ResponseCreateParams) =>
                       this.oai.responses.create(params)
                   : (params: ResponseCreateParams) =>
@@ -1090,7 +1218,7 @@ export class AgentLoop {
                       store: true,
                       previous_response_id: lastResponseId || undefined,
                     }),
-                tools: [shellTool],
+                tools: tools,
                 tool_choice: "auto",
               });
 
@@ -1137,7 +1265,7 @@ export class AgentLoop {
                 content: [
                   {
                     type: "input_text",
-                    text: "⚠️ Insufficient quota. Please check your billing details and retry.",
+                    text: `\u26a0 Insufficient quota: ${err instanceof Error && err.message ? err.message.trim() : "No remaining quota."} Manage or purchase credits at https://platform.openai.com/account/billing.`,
                   },
                 ],
               });
@@ -1452,6 +1580,17 @@ export class AgentLoop {
         // eslint-disable-next-line no-await-in-loop
         const result = await this.handleFunctionCall(item);
         turnInput.push(...result);
+        //@ts-expect-error - waiting on sdk
+      } else if (item.type === "local_shell_call") {
+        //@ts-expect-error - waiting on sdk
+        if (alreadyProcessedResponses.has(item.id)) {
+          continue;
+        }
+        //@ts-expect-error - waiting on sdk
+        alreadyProcessedResponses.add(item.id);
+        // eslint-disable-next-line no-await-in-loop
+        const result = await this.handleLocalShellCall(item);
+        turnInput.push(...result);
       }
       emitItem(item as ResponseItem);
     }
@@ -1459,6 +1598,19 @@ export class AgentLoop {
   }
 }
 
+// Dynamic developer message prefix: includes user, workdir, and rg suggestion.
+const userName = os.userInfo().username;
+const workdir = process.cwd();
+const dynamicLines: Array<string> = [
+  `User: ${userName}`,
+  `Workdir: ${workdir}`,
+];
+if (spawnSync("rg", ["--version"], { stdio: "ignore" }).status === 0) {
+  dynamicLines.push(
+    "- Always use rg instead of grep/ls -R because it is much faster and respects gitignore",
+  );
+}
+const dynamicPrefix = dynamicLines.join("\n");
 const prefix = `You are operating as and within the Codex CLI, a terminal-based agentic coding assistant built by OpenAI. It wraps OpenAI models to enable natural language interaction with a local codebase. You are expected to be precise, safe, and helpful.
 
 You can:
@@ -1494,7 +1646,6 @@ You MUST adhere to the following criteria when executing the task:
         - If there is a .pre-commit-config.yaml, use \`pre-commit run --files ...\` to check that your changes pass the pre-commit checks. However, do not fix pre-existing errors on lines you didn't touch.
             - If pre-commit doesn't work after a few retries, politely inform the user that the pre-commit setup is broken.
         - Once you finish coding, you must
-            - Check \`git status\` to sanity check your changes; revert any scratch files or changes.
             - Remove all inline comments you added as much as possible, even if they look normal. Check using \`git diff\`. Inline comments must be generally avoided, unless active maintainers of the repo, after long careful study of the code and the issue, will still misinterpret the code without the comments.
             - Check if you accidentally add copyright or license headers. If so, remove them.
             - Try to run pre-commit if it is available.
@@ -1504,7 +1655,9 @@ You MUST adhere to the following criteria when executing the task:
     - Respond in a friendly tone as a remote teammate, who is knowledgeable, capable and eager to help with coding.
 - When your task involves writing or modifying files:
     - Do NOT tell the user to "save the file" or "copy the code into a file" if you already created or modified the file using \`apply_patch\`. Instead, reference the file as already saved.
-    - Do NOT show the full contents of large files you have already written, unless the user explicitly asks for them.`;
+    - Do NOT show the full contents of large files you have already written, unless the user explicitly asks for them.
+
+${dynamicPrefix}`;
 
 function filterToApiMessages(
   items: Array<ResponseInputItem>,

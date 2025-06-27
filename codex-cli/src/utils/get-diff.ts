@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { execSync, execFileSync } from "node:child_process";
 
 // The objects thrown by `child_process.execSync()` are `Error` instances that
 // include additional, undocumented properties such as `status` (exit code) and
@@ -89,12 +89,18 @@ export function getGitDiff(): {
         //
         // `git diff --color --no-index /dev/null <file>` exits with status 1
         // when differences are found, so we capture stdout from the thrown
-        // error object instead of letting it propagate.
-        execSync(`git diff --color --no-index -- "${nullDevice}" "${file}"`, {
-          encoding: "utf8",
-          stdio: ["ignore", "pipe", "ignore"],
-          maxBuffer: 10 * 1024 * 1024,
-        });
+        // error object instead of letting it propagate. Using `execFileSync`
+        // avoids shell interpolation issues with special characters in the
+        // path.
+        execFileSync(
+          "git",
+          ["diff", "--color", "--no-index", "--", nullDevice, file],
+          {
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "ignore"],
+            maxBuffer: 10 * 1024 * 1024,
+          },
+        );
       } catch (err) {
         if (
           isExecSyncError(err) &&

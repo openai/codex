@@ -1,17 +1,17 @@
 #![allow(clippy::needless_lifetimes)]
 
-use crate::starlark::values::ValueLike;
 use crate::ArgType;
+use crate::starlark::values::ValueLike;
 use allocative::Allocative;
 use derive_more::derive::Display;
 use starlark::any::ProvidesStaticType;
-use starlark::values::starlark_value;
 use starlark::values::AllocValue;
 use starlark::values::Heap;
 use starlark::values::NoSerialize;
 use starlark::values::StarlarkValue;
 use starlark::values::UnpackValue;
 use starlark::values::Value;
+use starlark::values::starlark_value;
 
 /// Command line option that takes a value.
 #[derive(Clone, Debug, Display, PartialEq, Eq, ProvidesStaticType, NoSerialize, Allocative)]

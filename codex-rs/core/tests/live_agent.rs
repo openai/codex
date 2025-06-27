@@ -1,3 +1,5 @@
+#![expect(clippy::unwrap_used, clippy::expect_used)]
+
 //! Live integration tests that exercise the full [`Agent`] stack **against the real
 //! OpenAI `/v1/responses` API**.  These tests complement the lightweight mock‑based
 //! unit tests by verifying that the agent can drive an end‑to‑end conversation,
@@ -17,13 +19,16 @@
 
 use std::time::Duration;
 
-use codex_core::protocol::AskForApproval;
+use codex_core::Codex;
+use codex_core::error::CodexErr;
+use codex_core::protocol::AgentMessageEvent;
+use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol::Submission;
-use codex_core::Codex;
+mod test_support;
+use tempfile::TempDir;
+use test_support::load_default_config_for_test;
 use tokio::sync::Notify;
 use tokio::time::timeout;
 
@@ -34,7 +39,7 @@ fn api_key_available() -> bool {
 /// Helper that spawns a fresh Agent and sends the mandatory *ConfigureSession*
 /// submission.  The caller receives the constructed [`Agent`] plus the unique
 /// submission id used for the initialization message.
-async fn spawn_codex() -> Codex {
+async fn spawn_codex() -> Result<Codex, CodexErr> {
     assert!(
         api_key_available(),
         "OPENAI_API_KEY must be set for live tests"
@@ -42,38 +47,23 @@ async fn spawn_codex() -> Codex {
 
     // Environment tweaks to keep the tests snappy and inexpensive while still
     // exercising retry/robustness logic.
-    std::env::set_var("OPENAI_REQUEST_MAX_RETRIES", "2");
-    std::env::set_var("OPENAI_STREAM_MAX_RETRIES", "2");
-
-    let agent = Codex::spawn(std::sync::Arc::new(Notify::new())).unwrap();
-
-    agent
-        .submit(Submission {
-            id: "init".into(),
-            op: Op::ConfigureSession {
-                model: None,
-                instructions: None,
-                approval_policy: AskForApproval::OnFailure,
-                sandbox_policy: SandboxPolicy::NetworkAndFileWriteRestricted,
-                disable_response_storage: false,
-            },
-        })
-        .await
-        .expect("failed to submit init");
-
-    // Drain the SessionInitialized event so subsequent helper loops don't have
-    // to special‑case it.
-    loop {
-        let ev = timeout(Duration::from_secs(30), agent.next_event())
-            .await
-            .expect("timeout waiting for init event")
-            .expect("agent channel closed");
-        if matches!(ev.msg, EventMsg::SessionConfigured { .. }) {
-            break;
-        }
+    //
+    // NOTE: Starting with the 2024 edition `std::env::set_var` is `unsafe`
+    // because changing the process environment races with any other threads
+    // that might be performing environment look-ups at the same time.
+    // Restrict the unsafety to this tiny block that happens at the very
+    // beginning of the test, before we spawn any background tasks that could
+    // observe the environment.
+    unsafe {
+        std::env::set_var("OPENAI_REQUEST_MAX_RETRIES", "2");
+        std::env::set_var("OPENAI_STREAM_MAX_RETRIES", "2");
     }
 
-    agent
+    let codex_home = TempDir::new().unwrap();
+    let config = load_default_config_for_test(&codex_home);
+    let (agent, _init_id) = Codex::spawn(config, std::sync::Arc::new(Notify::new())).await?;
+
+    Ok(agent)
 }
 
 /// Verifies that the agent streams incremental *AgentMessage* events **before**
@@ -87,17 +77,14 @@ async fn live_streaming_and_prev_id_reset() {
         return;
     }
 
-    let codex = spawn_codex().await;
+    let codex = spawn_codex().await.unwrap();
 
     // ---------- Task 1 ----------
     codex
-        .submit(Submission {
-            id: "task1".into(),
-            op: Op::UserInput {
-                items: vec![InputItem::Text {
-                    text: "Say the words 'stream test'".into(),
-                }],
-            },
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: "Say the words 'stream test'".into(),
+            }],
         })
         .await
         .unwrap();
@@ -110,10 +97,14 @@ async fn live_streaming_and_prev_id_reset() {
             .expect("agent closed");
 
         match ev.msg {
-            EventMsg::AgentMessage { .. } => saw_message_before_complete = true,
-            EventMsg::TaskComplete => break,
-            EventMsg::Error { message } => panic!("agent reported error in task1: {message}"),
-            _ => (),
+            EventMsg::AgentMessage(_) => saw_message_before_complete = true,
+            EventMsg::TaskComplete(_) => break,
+            EventMsg::Error(ErrorEvent { message }) => {
+                panic!("agent reported error in task1: {message}")
+            }
+            _ => {
+                // Ignore other events.
+            }
         }
     }
 
@@ -124,13 +115,10 @@ async fn live_streaming_and_prev_id_reset() {
 
     // ---------- Task 2 (same session) ----------
     codex
-        .submit(Submission {
-            id: "task2".into(),
-            op: Op::UserInput {
-                items: vec![InputItem::Text {
-                    text: "Respond with exactly: second turn succeeded".into(),
-                }],
-            },
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: "Respond with exactly: second turn succeeded".into(),
+            }],
         })
         .await
         .unwrap();
@@ -143,12 +131,18 @@ async fn live_streaming_and_prev_id_reset() {
             .expect("agent closed");
 
         match &ev.msg {
-            EventMsg::AgentMessage { message } if message.contains("second turn succeeded") => {
+            EventMsg::AgentMessage(AgentMessageEvent { message })
+                if message.contains("second turn succeeded") =>
+            {
                 got_expected = true;
             }
-            EventMsg::TaskComplete => break,
-            EventMsg::Error { message } => panic!("agent reported error in task2: {message}"),
-            _ => (),
+            EventMsg::TaskComplete(_) => break,
+            EventMsg::Error(ErrorEvent { message }) => {
+                panic!("agent reported error in task2: {message}")
+            }
+            _ => {
+                // Ignore other events.
+            }
         }
     }
 
@@ -167,20 +161,17 @@ async fn live_shell_function_call() {
         return;
     }
 
-    let codex = spawn_codex().await;
+    let codex = spawn_codex().await.unwrap();
 
     const MARKER: &str = "codex_live_echo_ok";
 
     codex
-        .submit(Submission {
-            id: "task_fn".into(),
-            op: Op::UserInput {
-                items: vec![InputItem::Text {
-                    text: format!(
-                        "Use the shell function to run the command `echo {MARKER}` and no other commands."
-                    ),
-                }],
-            },
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: format!(
+                    "Use the shell function to run the command `echo {MARKER}` and no other commands."
+                ),
+            }],
         })
         .await
         .unwrap();
@@ -195,20 +186,31 @@ async fn live_shell_function_call() {
             .expect("agent closed");
 
         match ev.msg {
-            EventMsg::ExecCommandBegin { command, .. } => {
+            EventMsg::ExecCommandBegin(codex_core::protocol::ExecCommandBeginEvent {
+                command,
+                call_id: _,
+                cwd: _,
+            }) => {
                 assert_eq!(command, vec!["echo", MARKER]);
                 saw_begin = true;
             }
-            EventMsg::ExecCommandEnd {
-                stdout, exit_code, ..
-            } => {
+            EventMsg::ExecCommandEnd(codex_core::protocol::ExecCommandEndEvent {
+                stdout,
+                exit_code,
+                call_id: _,
+                stderr: _,
+            }) => {
                 assert_eq!(exit_code, 0, "echo returned non‑zero exit code");
                 assert!(stdout.contains(MARKER));
                 saw_end_with_output = true;
             }
-            EventMsg::TaskComplete => break,
-            EventMsg::Error { message } => panic!("agent error during shell test: {message}"),
-            _ => (),
+            EventMsg::TaskComplete(_) => break,
+            EventMsg::Error(codex_core::protocol::ErrorEvent { message }) => {
+                panic!("agent error during shell test: {message}")
+            }
+            _ => {
+                // Ignore other events.
+            }
         }
     }
 

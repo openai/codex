@@ -2,7 +2,24 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 
-export function getFileSystemSuggestions(pathPrefix: string): Array<string> {
+/**
+ * Represents a file system suggestion with path and directory information
+ */
+export interface FileSystemSuggestion {
+  /** The full path of the suggestion */
+  path: string;
+  /** Whether the suggestion is a directory */
+  isDirectory: boolean;
+}
+
+/**
+ * Gets file system suggestions based on a path prefix
+ * @param pathPrefix The path prefix to search for
+ * @returns Array of file system suggestions
+ */
+export function getFileSystemSuggestions(
+  pathPrefix: string,
+): Array<FileSystemSuggestion> {
   if (!pathPrefix) {
     return [];
   }
@@ -31,10 +48,10 @@ export function getFileSystemSuggestions(pathPrefix: string): Array<string> {
       .map((item) => {
         const fullPath = path.join(readDir, item);
         const isDirectory = fs.statSync(fullPath).isDirectory();
-        if (isDirectory) {
-          return path.join(fullPath, sep);
-        }
-        return fullPath;
+        return {
+          path: isDirectory ? path.join(fullPath, sep) : fullPath,
+          isDirectory,
+        };
       });
   } catch {
     return [];

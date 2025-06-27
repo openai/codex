@@ -29,6 +29,11 @@
   "overrides": {
     "punycode": "^2.3.1"
   },
+  "pnpm": {
+    "patchedDependencies": {
+      "marked-terminal@7.3.0": "patches/marked-terminal@7.3.0.patch"
+    }
+  },
   "engines": {
     "node": ">=22",
     "pnpm": ">=9.0.0"

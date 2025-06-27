@@ -136,7 +136,7 @@ define_program(
         ["--glob", "src"],
     ],
     # TODO(mbolin): Perhaps we need a way to indicate that we expect `rg` to be
-    # bundled with the host environment and we should be using that verison.
+    # bundled with the host environment and we should be using that version.
     system_path=[],
 )
 

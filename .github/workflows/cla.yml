@@ -23,7 +23,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          path-to-document: docs/CLA.md
+          path-to-document: https://github.com/openai/codex/blob/main/docs/CLA.md
           path-to-signatures: signatures/cla.json
           branch: cla-signatures
           allowlist: dependabot[bot]

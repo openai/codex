@@ -19,6 +19,10 @@ export const openAiModelInfo = {
     label: "o3 (2025-04-16)",
     maxContextLength: 200000,
   },
+  "codex-mini-latest": {
+    label: "codex-mini-latest",
+    maxContextLength: 200000,
+  },
   "o4-mini": {
     label: "o4 Mini",
     maxContextLength: 200000,

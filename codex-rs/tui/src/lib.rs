@@ -2,36 +2,98 @@
 // The standalone `codex-tui` binary prints a short help message before the
 // alternate‑screen mode starts; that file opts‑out locally via `allow`.
 #![deny(clippy::print_stdout, clippy::print_stderr)]
-
 use app::App;
+use codex_core::config::Config;
+use codex_core::config::ConfigOverrides;
+use codex_core::openai_api_key::OPENAI_API_KEY_ENV_VAR;
+use codex_core::openai_api_key::get_openai_api_key;
+use codex_core::openai_api_key::set_openai_api_key;
+use codex_core::protocol::AskForApproval;
+use codex_core::protocol::SandboxPolicy;
 use codex_core::util::is_inside_git_repo;
+use codex_login::try_read_openai_api_key;
 use log_layer::TuiLogLayer;
 use std::fs::OpenOptions;
+use std::path::PathBuf;
 use tracing_appender::non_blocking;
-use tracing_subscriber::prelude::*;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::prelude::*;
 
 mod app;
 mod app_event;
+mod app_event_sender;
 mod bottom_pane;
+mod cell_widget;
 mod chatwidget;
+mod citation_regex;
 mod cli;
 mod conversation_history_widget;
 mod exec_command;
+mod get_git_diff;
 mod git_warning_screen;
 mod history_cell;
 mod log_layer;
+mod login_screen;
+mod markdown;
+mod mouse_capture;
 mod scroll_event_helper;
+mod slash_command;
 mod status_indicator_widget;
+mod text_block;
+mod text_formatting;
 mod tui;
 mod user_approval_widget;
 
 pub use cli::Cli;
 
-pub fn run_main(cli: Cli) -> std::io::Result<()> {
-    assert_env_var_set();
+pub fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> std::io::Result<()> {
+    let (sandbox_policy, approval_policy) = if cli.full_auto {
+        (
+            Some(SandboxPolicy::new_workspace_write_policy()),
+            Some(AskForApproval::OnFailure),
+        )
+    } else if cli.dangerously_bypass_approvals_and_sandbox {
+        (
+            Some(SandboxPolicy::DangerFullAccess),
+            Some(AskForApproval::Never),
+        )
+    } else {
+        let sandbox_policy = None;
+        (sandbox_policy, cli.approval_policy.map(Into::into))
+    };
 
-    let log_dir = codex_core::config::log_dir()?;
+    let config = {
+        // Load configuration and support CLI overrides.
+        let overrides = ConfigOverrides {
+            model: cli.model.clone(),
+            approval_policy,
+            sandbox_policy,
+            cwd: cli.cwd.clone().map(|p| p.canonicalize().unwrap_or(p)),
+            model_provider: None,
+            config_profile: cli.config_profile.clone(),
+            codex_linux_sandbox_exe,
+        };
+        // Parse `-c` overrides from the CLI.
+        let cli_kv_overrides = match cli.config_overrides.parse_overrides() {
+            Ok(v) => v,
+            #[allow(clippy::print_stderr)]
+            Err(e) => {
+                eprintln!("Error parsing -c overrides: {e}");
+                std::process::exit(1);
+            }
+        };
+
+        #[allow(clippy::print_stderr)]
+        match Config::load_with_cli_overrides(cli_kv_overrides, overrides) {
+            Ok(config) => config,
+            Err(err) => {
+                eprintln!("Error loading configuration: {err}");
+                std::process::exit(1);
+            }
+        }
+    };
+
+    let log_dir = codex_core::config::log_dir(&config)?;
     std::fs::create_dir_all(&log_dir)?;
     // Open (or create) your log file, appending to it.
     let mut log_file_opts = OpenOptions::new();
@@ -73,13 +135,15 @@ pub fn run_main(cli: Cli) -> std::io::Result<()> {
         .with(tui_layer)
         .try_init();
 
+    let show_login_screen = should_show_login_screen(&config);
+
     // Determine whether we need to display the "not a git repo" warning
     // modal. The flag is shown when the current working directory is *not*
     // inside a Git repository **and** the user did *not* pass the
     // `--allow-no-git-exec` flag.
-    let show_git_warning = !cli.skip_git_repo_check && !is_inside_git_repo();
+    let show_git_warning = !cli.skip_git_repo_check && !is_inside_git_repo(&config);
 
-    try_run_ratatui_app(cli, show_git_warning, log_rx);
+    try_run_ratatui_app(cli, config, show_login_screen, show_git_warning, log_rx);
     Ok(())
 }
 
@@ -89,16 +153,20 @@ pub fn run_main(cli: Cli) -> std::io::Result<()> {
 )]
 fn try_run_ratatui_app(
     cli: Cli,
+    config: Config,
+    show_login_screen: bool,
     show_git_warning: bool,
     log_rx: tokio::sync::mpsc::UnboundedReceiver<String>,
 ) {
-    if let Err(report) = run_ratatui_app(cli, show_git_warning, log_rx) {
+    if let Err(report) = run_ratatui_app(cli, config, show_login_screen, show_git_warning, log_rx) {
         eprintln!("Error: {report:?}");
     }
 }
 
 fn run_ratatui_app(
     cli: Cli,
+    config: Config,
+    show_login_screen: bool,
     show_git_warning: bool,
     mut log_rx: tokio::sync::mpsc::UnboundedReceiver<String>,
 ) -> color_eyre::Result<()> {
@@ -110,30 +178,16 @@ fn run_ratatui_app(
     std::panic::set_hook(Box::new(|info| {
         tracing::error!("panic: {info}");
     }));
-    let mut terminal = tui::init()?;
+    let (mut terminal, mut mouse_capture) = tui::init(&config)?;
     terminal.clear()?;
 
-    let Cli {
-        prompt,
-        images,
-        approval_policy,
-        sandbox_policy: sandbox,
-        model,
-        disable_response_storage,
-        ..
-    } = cli;
-
-    let approval_policy = approval_policy.into();
-    let sandbox_policy = sandbox.into();
-
+    let Cli { prompt, images, .. } = cli;
     let mut app = App::new(
-        approval_policy,
-        sandbox_policy,
+        config.clone(),
         prompt,
+        show_login_screen,
         show_git_warning,
         images,
-        model,
-        disable_response_storage,
     );
 
     // Bridge log receiver into the AppEvent channel so latest log lines update the UI.
@@ -141,29 +195,15 @@ fn run_ratatui_app(
         let app_event_tx = app.event_sender();
         tokio::spawn(async move {
             while let Some(line) = log_rx.recv().await {
-                let _ = app_event_tx.send(crate::app_event::AppEvent::LatestLog(line));
+                app_event_tx.send(crate::app_event::AppEvent::LatestLog(line));
             }
         });
     }
 
-    let app_result = app.run(&mut terminal);
+    let app_result = app.run(&mut terminal, &mut mouse_capture);
 
     restore();
     app_result
-}
-
-#[expect(
-    clippy::print_stderr,
-    reason = "TUI should not have been displayed yet, so we can write to stderr."
-)]
-fn assert_env_var_set() {
-    if std::env::var("OPENAI_API_KEY").is_err() {
-        eprintln!("Welcome to codex! It looks like you're missing: `OPENAI_API_KEY`");
-        eprintln!(
-            "Create an API key (https://platform.openai.com) and export as an environment variable"
-        );
-        std::process::exit(1);
-    }
 }
 
 #[expect(
@@ -177,4 +217,39 @@ fn restore() {
             err
         );
     }
+}
+
+#[allow(clippy::unwrap_used)]
+fn should_show_login_screen(config: &Config) -> bool {
+    if is_in_need_of_openai_api_key(config) {
+        // Reading the OpenAI API key is an async operation because it may need
+        // to refresh the token. Block on it.
+        let codex_home = config.codex_home.clone();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            match try_read_openai_api_key(&codex_home).await {
+                Ok(openai_api_key) => {
+                    set_openai_api_key(openai_api_key);
+                    tx.send(false).unwrap();
+                }
+                Err(_) => {
+                    tx.send(true).unwrap();
+                }
+            }
+        });
+        // TODO(mbolin): Impose some sort of timeout.
+        tokio::task::block_in_place(|| rx.blocking_recv()).unwrap()
+    } else {
+        false
+    }
+}
+
+fn is_in_need_of_openai_api_key(config: &Config) -> bool {
+    let is_using_openai_key = config
+        .model_provider
+        .env_key
+        .as_ref()
+        .map(|s| s == OPENAI_API_KEY_ENV_VAR)
+        .unwrap_or(false);
+    is_using_openai_key && get_openai_api_key().is_none()
 }
