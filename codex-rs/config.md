@@ -20,41 +20,11 @@ The model that Codex should use.
 model = "o3"  # overrides the default of "codex-mini-latest"
 ```
 
-## model_provider
-
-Codex comes bundled with a number of "model providers" predefined. This config value is a string that indicates which provider to use. You can also define your own providers via `model_providers`.
-
-For example, if you are running ollama with Mistral locally, then you would need to add the following to your config:
-
-```toml
-model = "mistral"
-model_provider = "ollama"
-```
-
-because the following definition for `ollama` is included in Codex:
-
-```toml
-[model_providers.ollama]
-name = "Ollama"
-base_url = "http://localhost:11434/v1"
-wire_api = "chat"
-```
-
-This option defaults to `"openai"` and the corresponding provider is defined as follows:
-
-```toml
-[model_providers.openai]
-name = "OpenAI"
-base_url = "https://api.openai.com/v1"
-env_key = "OPENAI_API_KEY"
-wire_api = "responses"
-```
-
 ## model_providers
 
-This option lets you override and amend the default set of model providers bundled with Codex. This value is a map where the key is the value to use with `model_provider` to select the correspodning provider.
+This option lets you override and amend the default set of model providers bundled with Codex. This value is a map where the key is the value to use with `model_provider` to select the corresponding provider.
 
-For example, if you wanted to add a provider that uses the OpenAI 4o model via the chat completions API, then you
+For example, if you wanted to add a provider that uses the OpenAI 4o model via the chat completions API, then you could add the following configuration:
 
 ```toml
 # Recall that in TOML, root keys must be listed before tables.
@@ -71,8 +41,40 @@ base_url = "https://api.openai.com/v1"
 # using Codex with this provider. The value of the environment variable must be
 # non-empty and will be used in the `Bearer TOKEN` HTTP header for the POST request.
 env_key = "OPENAI_API_KEY"
-# valid values for wire_api are "chat" and "responses".
+# Valid values for wire_api are "chat" and "responses".
 wire_api = "chat"
+```
+
+Note this makes it possible to use Codex CLI with non-OpenAI models, so long as they use a wire API that is compatible with the OpenAI chat completions API. For example, you could define the following provider to use Codex CLI with Ollama running locally:
+
+```toml
+[model_providers.ollama]
+name = "Ollama"
+base_url = "http://localhost:11434/v1"
+wire_api = "chat"
+```
+
+Or a third-party provider (using a distinct environment variable for the API key):
+
+```toml
+[model_providers.mistral]
+name = "Mistral"
+base_url = "https://api.mistral.ai/v1"
+env_key = "MISTRAL_API_KEY"
+wire_api = "chat"
+```
+
+## model_provider
+
+Identifies which provider to use from the `model_providers` map. Defaults to `"openai"`.
+
+Note that if you override `model_provider`, then you likely want to override
+`model`, as well. For example, if you are running ollama with Mistral locally,
+then you would need to add the following to your config in addition to the new entry in the `model_providers` map:
+
+```toml
+model = "mistral"
+model_provider = "ollama"
 ```
 
 ## approval_policy
