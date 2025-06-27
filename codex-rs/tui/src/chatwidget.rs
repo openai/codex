@@ -404,6 +404,9 @@ impl ChatWidget<'_> {
         self.request_redraw();
     }
 
+    /// Handle Ctrl-C key press.
+    /// Returns true if the key press was handled, false if it was not.
+    /// If the key press was not handled, the caller should handle it (likely by exiting the process).
     pub(crate) fn on_ctrl_c(&mut self) -> bool {
         if self.bottom_pane.is_task_running() {
             self.bottom_pane.clear_ctrl_c_quit_hint();
