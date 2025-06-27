@@ -491,6 +491,9 @@ async function* streamResponses(
     if (!choice) {
       continue;
     }
+    if ("content_filter_results" in choice) {
+      continue;
+    }
     if (
       !isToolCall &&
       (("tool_calls" in choice.delta && choice.delta.tool_calls) ||
