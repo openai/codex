@@ -52,9 +52,9 @@ wire_api = "responses"
 
 ## model_providers
 
-This option lets you override and amend the default set of model providers bundled with Codex. This value is a map where the key is the value to use with `model_provider` to select the correspodning provider.
+This option lets you override and amend the default set of model providers bundled with Codex. This value is a map where the key is the value to use with `model_provider` to select the corresponding provider.
 
-For example, if you wanted to add a provider that uses the OpenAI 4o model via the chat completions API, then you
+For example, if you wanted to add a provider that uses the OpenAI 4o model via the chat completions API, then you can define the provider under model_providers with wire_api = "chat":
 
 ```toml
 # Recall that in TOML, root keys must be listed before tables.
