@@ -77,13 +77,21 @@ impl ModelProviderInfo {
             None => Ok(None),
         }
     }
+
+    /// Returns the effective base URL for this provider.
+    /// For Azure Foundry, this reads from AZURE_ENDPOINT instead of base_url.
+    pub fn effective_base_url(&self) -> String {
+        if self.name == "Azure Foundry" {
+            std::env::var("AZURE_ENDPOINT").unwrap_or_else(|_| self.base_url.clone())
+        } else {
+            self.base_url.clone()
+        }
+    }
 }
 
 /// Built-in default provider list.
 pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
-    use ModelProviderInfo as P;
-
-    [
+    use ModelProviderInfo as P;    [
         (
             "openai",
             P {
@@ -92,6 +100,16 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
                 env_key: Some("OPENAI_API_KEY".into()),
                 env_key_instructions: Some("Create an API key (https://platform.openai.com) and export it as an environment variable.".into()),
                 wire_api: WireApi::Responses,
+            },
+        ),
+        (
+            "azure",
+            P {
+                name: "Azure Foundry".into(),
+                base_url: "".into(), // Azure Foundry uses AZURE_ENDPOINT environment variable instead
+                env_key: Some("AZURE_API_KEY".into()),
+                env_key_instructions: Some("Set AZURE_API_KEY, AZURE_ENDPOINT, and optionally AZURE_ADDITIONAL_HEADERS environment variables for Azure Foundry (https://ai.azure.com).".into()),
+                wire_api: WireApi::Chat,
             },
         ),
         (
@@ -168,4 +186,104 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
     .into_iter()
     .map(|(k, v)| (k.to_string(), v))
     .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::env;
+
+    #[test]
+    fn test_azure_foundry_provider_exists() {
+        let providers = built_in_model_providers();
+        let azure_provider = providers.get("azure").expect("Azure provider should exist");
+        
+        assert_eq!(azure_provider.name, "Azure Foundry");
+        assert_eq!(azure_provider.env_key, Some("AZURE_API_KEY".to_string()));
+        assert_eq!(azure_provider.wire_api, WireApi::Chat);
+        assert!(azure_provider.env_key_instructions.is_some());
+    }
+
+    #[test]
+    fn test_azure_foundry_effective_base_url_with_endpoint() {
+        let azure_provider = ModelProviderInfo {
+            name: "Azure Foundry".to_string(),
+            base_url: "https://default.url".to_string(),
+            env_key: Some("AZURE_API_KEY".to_string()),
+            env_key_instructions: None,
+            wire_api: WireApi::Chat,
+        };
+
+        // Set AZURE_ENDPOINT environment variable
+        env::set_var("AZURE_ENDPOINT", "https://my-resource.openai.azure.com/openai/deployments/my-model");
+        
+        let effective_url = azure_provider.effective_base_url();
+        assert_eq!(effective_url, "https://my-resource.openai.azure.com/openai/deployments/my-model");
+        
+        // Clean up
+        env::remove_var("AZURE_ENDPOINT");
+    }
+
+    #[test]
+    fn test_azure_foundry_effective_base_url_without_endpoint() {
+        let azure_provider = ModelProviderInfo {
+            name: "Azure Foundry".to_string(),
+            base_url: "https://default.url".to_string(),
+            env_key: Some("AZURE_API_KEY".to_string()),
+            env_key_instructions: None,
+            wire_api: WireApi::Chat,
+        };
+
+        // Make sure AZURE_ENDPOINT is not set
+        env::remove_var("AZURE_ENDPOINT");
+        
+        let effective_url = azure_provider.effective_base_url();
+        assert_eq!(effective_url, "https://default.url");
+    }
+
+    #[test]
+    fn test_non_azure_provider_effective_base_url() {
+        let openai_provider = ModelProviderInfo {
+            name: "OpenAI".to_string(),
+            base_url: "https://api.openai.com/v1".to_string(),
+            env_key: Some("OPENAI_API_KEY".to_string()),
+            env_key_instructions: None,
+            wire_api: WireApi::Responses,
+        };
+
+        // Set AZURE_ENDPOINT environment variable (should be ignored for non-Azure providers)
+        env::set_var("AZURE_ENDPOINT", "https://should.be.ignored");
+        
+        let effective_url = openai_provider.effective_base_url();
+        assert_eq!(effective_url, "https://api.openai.com/v1");
+        
+        // Clean up
+        env::remove_var("AZURE_ENDPOINT");
+    }
+
+    #[test]
+    fn test_azure_api_key_retrieval() {
+        let azure_provider = ModelProviderInfo {
+            name: "Azure Foundry".to_string(),
+            base_url: "".to_string(),
+            env_key: Some("AZURE_API_KEY".to_string()),
+            env_key_instructions: None,
+            wire_api: WireApi::Chat,
+        };
+
+        // Test with API key set
+        env::set_var("AZURE_API_KEY", "test-azure-key");
+        let api_key = azure_provider.api_key().unwrap();
+        assert_eq!(api_key, Some("test-azure-key".to_string()));
+        
+        // Test with empty API key
+        env::set_var("AZURE_API_KEY", "");
+        let result = azure_provider.api_key();
+        assert!(result.is_err());
+        
+        // Test with API key not set
+        env::remove_var("AZURE_API_KEY");
+        let result = azure_provider.api_key();
+        assert!(result.is_err());
+    }
 }

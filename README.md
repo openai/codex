@@ -98,7 +98,7 @@ export OPENAI_API_KEY="your-api-key-here"
 >
 > - openai (default)
 > - openrouter
-> - azure
+> - azure (Azure Foundry - supports OpenAI, Mistral, DeepSeek, Meta-Llama, Phi, etc.)
 > - gemini
 > - ollama
 > - mistral
@@ -108,7 +108,17 @@ export OPENAI_API_KEY="your-api-key-here"
 > - arceeai
 > - any other provider that is compatible with the OpenAI API
 >
-> If you use a provider other than OpenAI, you will need to set the API key for the provider in the config file or in the environment variable as:
+> **Azure Foundry Setup:**
+> For Azure Foundry, you need to set specific environment variables:
+>
+> ```shell
+> export AZURE_API_KEY="your-azure-api-key-here"
+> export AZURE_ENDPOINT="https://your-resource.openai.azure.com/openai/deployments/your-model/chat/completions?api-version=2024-02-15-preview"
+> export AZURE_ADDITIONAL_HEADERS='{"model":"your-deployment-name"}' # Optional
+> ```
+>
+> **Other Providers:**
+> If you use a provider other than OpenAI or Azure, you will need to set the API key for the provider in the config file or in the environment variable as:
 >
 > ```shell
 > export <provider>_API_KEY="your-api-key-here"
@@ -395,11 +405,10 @@ Below is a comprehensive example of `config.json` with multiple custom providers
       "name": "OpenAI",
       "baseURL": "https://api.openai.com/v1",
       "envKey": "OPENAI_API_KEY"
-    },
-    "azure": {
-      "name": "AzureOpenAI",
+    },    "azure": {
+      "name": "Azure Foundry",
       "baseURL": "https://YOUR_PROJECT_NAME.openai.azure.com/openai",
-      "envKey": "AZURE_OPENAI_API_KEY"
+      "envKey": "AZURE_API_KEY"
     },
     "openrouter": {
       "name": "OpenRouter",
@@ -467,9 +476,14 @@ For each AI provider, you need to set the corresponding API key in your environm
 # OpenAI
 export OPENAI_API_KEY="your-api-key-here"
 
-# Azure OpenAI
+# Azure Foundry (supports OpenAI, Mistral, DeepSeek, Meta-Llama, Phi, etc.)
+export AZURE_API_KEY="your-azure-api-key-here"
+export AZURE_ENDPOINT="https://your-resource.openai.azure.com/openai/deployments/your-model/chat/completions?api-version=2024-02-15-preview"
+export AZURE_ADDITIONAL_HEADERS='{"model":"your-deployment-name","Custom-Header":"value"}' # Optional JSON string
+
+# Azure OpenAI (legacy)
 export AZURE_OPENAI_API_KEY="your-azure-api-key-here"
-export AZURE_OPENAI_API_VERSION="2025-04-01-preview" (Optional)
+export AZURE_OPENAI_API_VERSION="2025-04-01-preview" # Optional
 
 # OpenRouter
 export OPENROUTER_API_KEY="your-openrouter-key-here"

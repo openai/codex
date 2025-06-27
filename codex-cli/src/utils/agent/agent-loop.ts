@@ -19,6 +19,8 @@ import {
   OPENAI_PROJECT,
   getBaseUrl,
   AZURE_OPENAI_API_VERSION,
+  parseAzureAdditionalHeaders,
+  getAzureFoundryBaseUrl,
 } from "../config.js";
 import { log } from "../logger/log.js";
 import { parseToolCallArguments } from "../parsers.js";
@@ -325,29 +327,41 @@ export class AgentLoop {
         ...(OPENAI_ORGANIZATION
           ? { "OpenAI-Organization": OPENAI_ORGANIZATION }
           : {}),
-        ...(OPENAI_PROJECT ? { "OpenAI-Project": OPENAI_PROJECT } : {}),
-      },
+        ...(OPENAI_PROJECT ? { "OpenAI-Project": OPENAI_PROJECT } : {}),      },
       httpAgent: PROXY_URL ? new HttpsProxyAgent(PROXY_URL) : undefined,
       ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
-    });
-
-    if (this.provider.toLowerCase() === "azure") {
-      this.oai = new AzureOpenAI({
+    });    if (this.provider.toLowerCase() === "azure") {
+      const azureAdditionalHeaders = parseAzureAdditionalHeaders();
+      const azureEndpoint = getAzureFoundryBaseUrl();
+      const hasEmbeddedApiVersion = azureEndpoint && azureEndpoint.includes("api-version=");
+      
+      const originalEnvValue = process.env["OPENAI_API_VERSION"];
+      if (hasEmbeddedApiVersion && !originalEnvValue) {
+        process.env["OPENAI_API_VERSION"] = "dummy-value-ignored-by-url";
+      }
+      
+      const azureConfig: ConstructorParameters<typeof AzureOpenAI>[0] = {
         apiKey,
         baseURL,
-        apiVersion: AZURE_OPENAI_API_VERSION,
         defaultHeaders: {
-          originator: ORIGIN,
-          version: CLI_VERSION,
-          session_id: this.sessionId,
-          ...(OPENAI_ORGANIZATION
-            ? { "OpenAI-Organization": OPENAI_ORGANIZATION }
-            : {}),
-          ...(OPENAI_PROJECT ? { "OpenAI-Project": OPENAI_PROJECT } : {}),
+          ...azureAdditionalHeaders,
         },
         httpAgent: PROXY_URL ? new HttpsProxyAgent(PROXY_URL) : undefined,
         ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
-      });
+      };
+      
+      const extractedApiVersion = process.env['AZURE_EXTRACTED_API_VERSION'];
+      if (extractedApiVersion) {
+        azureConfig.apiVersion = extractedApiVersion;
+      } else if (!hasEmbeddedApiVersion) {
+        azureConfig.apiVersion = AZURE_OPENAI_API_VERSION;
+      }
+      
+      this.oai = new AzureOpenAI(azureConfig);
+      
+      if (hasEmbeddedApiVersion && !originalEnvValue) {
+        delete process.env["OPENAI_API_VERSION"];
+      }
     }
 
     setSessionId(this.sessionId);
@@ -789,26 +803,22 @@ export class AgentLoop {
             }
             if (this.model.startsWith("gpt-4.1")) {
               modelSpecificInstructions = applyPatchToolInstructions;
-            }
-            const mergedInstructions = [
+            }            const mergedInstructions = [
               prefix,
               modelSpecificInstructions,
               this.instructions,
             ]
               .filter(Boolean)
-              .join("\n");
-
-            const responseCall =
+              .join("\n");            const responseCall =
               !this.config.provider ||
-              this.config.provider?.toLowerCase() === "openai" ||
-              this.config.provider?.toLowerCase() === "azure"
+              this.config.provider?.toLowerCase() === "openai"
                 ? (params: ResponseCreateParams) =>
                     this.oai.responses.create(params)
-                : (params: ResponseCreateParams) =>
-                    responsesCreateViaChatCompletions(
+                : (params: ResponseCreateParams) =>                    responsesCreateViaChatCompletions(
                       this.oai,
                       params as ResponseCreateParams & { stream: true },
                     );
+            
             log(
               `instructions (length ${mergedInstructions.length}): ${mergedInstructions}`,
             );
@@ -1181,19 +1191,15 @@ export class AgentLoop {
                 ) {
                   reasoning.summary = "auto";
                 }
-              }
-
-              const mergedInstructions = [prefix, this.instructions]
+              }              const mergedInstructions = [prefix, this.instructions]
                 .filter(Boolean)
                 .join("\n");
 
               const responseCall =
                 !this.config.provider ||
-                this.config.provider?.toLowerCase() === "openai" ||
-                this.config.provider?.toLowerCase() === "azure"
+                this.config.provider?.toLowerCase() === "openai"
                   ? (params: ResponseCreateParams) =>
-                      this.oai.responses.create(params)
-                  : (params: ResponseCreateParams) =>
+                      this.oai.responses.create(params)                  : (params: ResponseCreateParams) =>
                       responsesCreateViaChatCompletions(
                         this.oai,
                         params as ResponseCreateParams & { stream: true },
