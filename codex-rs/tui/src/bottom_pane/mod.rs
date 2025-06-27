@@ -37,6 +37,7 @@ pub(crate) struct BottomPane<'a> {
     app_event_tx: AppEventSender,
     has_input_focus: bool,
     is_task_running: bool,
+    ctrl_c_quit_hint: bool,
 }
 
 pub(crate) struct BottomPaneParams {
@@ -52,6 +53,7 @@ impl BottomPane<'_> {
             app_event_tx: params.app_event_tx,
             has_input_focus: params.has_input_focus,
             is_task_running: false,
+            ctrl_c_quit_hint: false,
         }
     }
 
@@ -100,6 +102,26 @@ impl BottomPane<'_> {
         self.composer.set_input_focus(has_focus);
     }
 
+    pub(crate) fn show_ctrl_c_quit_hint(&mut self) {
+        self.ctrl_c_quit_hint = true;
+        self.composer
+            .set_ctrl_c_quit_hint(true, self.has_input_focus);
+        self.request_redraw();
+    }
+
+    pub(crate) fn clear_ctrl_c_quit_hint(&mut self) {
+        if self.ctrl_c_quit_hint {
+            self.ctrl_c_quit_hint = false;
+            self.composer
+                .set_ctrl_c_quit_hint(false, self.has_input_focus);
+            self.request_redraw();
+        }
+    }
+
+    pub(crate) fn ctrl_c_quit_hint_visible(&self) -> bool {
+        self.ctrl_c_quit_hint
+    }
+
     pub fn set_task_running(&mut self, running: bool) {
         self.is_task_running = running;
 
@@ -128,6 +150,10 @@ impl BottomPane<'_> {
                 // No change.
             }
         }
+    }
+
+    pub(crate) fn is_task_running(&self) -> bool {
+        self.is_task_running
     }
 
     /// Update the *context-window remaining* indicator in the composer. This

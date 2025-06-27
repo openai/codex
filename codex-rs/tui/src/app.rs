@@ -193,10 +193,11 @@ impl<'a> App<'a> {
                             modifiers: crossterm::event::KeyModifiers::CONTROL,
                             ..
                         } => {
-                            // Forward interrupt to ChatWidget when active.
                             match &mut self.app_state {
                                 AppState::Chat { widget } => {
-                                    widget.submit_op(Op::Interrupt);
+                                    if widget.on_ctrl_c() {
+                                        self.app_event_tx.send(AppEvent::ExitRequest);
+                                    }
                                 }
                                 AppState::Login { .. } | AppState::GitWarning { .. } => {
                                     // No-op.
