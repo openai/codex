@@ -183,12 +183,20 @@ pub async fn run(
     }
 
     let mut matches: Vec<(u32, String)> = global_heap.into_iter().map(|r| r.0).collect();
-    matches.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    sort_matches(&mut matches);
 
     Ok(FileSearchResults {
         matches,
         total_match_count,
     })
+}
+
+/// Sort matches in-place by descending score, then ascending path.
+fn sort_matches(matches: &mut [(u32, String)]) {
+    matches.sort_by(|a, b| match b.0.cmp(&a.0) {
+        std::cmp::Ordering::Equal => a.1.cmp(&b.1),
+        other => other,
+    });
 }
 
 /// Maintains the `max_count` best matches for a given pattern.
@@ -280,5 +288,25 @@ mod tests {
         let pattern = create_pattern("zzz");
         let score = pattern.score(haystack, &mut matcher);
         assert_eq!(score, None);
+    }
+
+    #[test]
+    fn tie_breakers_sort_by_path_when_scores_equal() {
+        let mut matches = vec![
+            (100, "b_path".to_string()),
+            (100, "a_path".to_string()),
+            (90, "zzz".to_string()),
+        ];
+
+        sort_matches(&mut matches);
+
+        // Highest score first; ties broken alphabetically.
+        let expected = vec![
+            (100, "a_path".to_string()),
+            (100, "b_path".to_string()),
+            (90, "zzz".to_string()),
+        ];
+
+        assert_eq!(matches, expected);
     }
 }
