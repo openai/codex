@@ -17,6 +17,7 @@ mod bottom_pane_view;
 mod chat_composer;
 mod chat_composer_history;
 mod command_popup;
+mod file_search_popup;
 mod status_indicator_view;
 
 pub(crate) use chat_composer::ChatComposer;
@@ -201,9 +202,9 @@ impl BottomPane<'_> {
         self.app_event_tx.send(AppEvent::Redraw)
     }
 
-    /// Returns true when the slash-command popup inside the composer is visible.
-    pub(crate) fn is_command_popup_visible(&self) -> bool {
-        self.active_view.is_none() && self.composer.is_command_popup_visible()
+    /// Returns true when a popup inside the composer is visible.
+    pub(crate) fn is_popup_visible(&self) -> bool {
+        self.active_view.is_none() && self.composer.is_popup_visible()
     }
 
     // --- History helpers ---
@@ -225,6 +226,11 @@ impl BottomPane<'_> {
         if updated {
             self.request_redraw();
         }
+    }
+
+    pub(crate) fn on_file_search_result(&mut self, query: String, matches: Vec<String>) {
+        self.composer.on_file_search_result(query, matches);
+        self.request_redraw();
     }
 }
 

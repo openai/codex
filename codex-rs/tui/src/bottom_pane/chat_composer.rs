@@ -16,6 +16,7 @@ use tui_textarea::TextArea;
 
 use super::chat_composer_history::ChatComposerHistory;
 use super::command_popup::CommandPopup;
+use super::file_search_popup::FileSearchPopup;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
@@ -35,10 +36,19 @@ pub enum InputResult {
 
 pub(crate) struct ChatComposer<'a> {
     textarea: TextArea<'a>,
-    command_popup: Option<CommandPopup>,
+    active_popup: ActivePopup,
     app_event_tx: AppEventSender,
     history: ChatComposerHistory,
     ctrl_c_quit_hint: bool,
+    dismissed_file_popup_token: Option<String>,
+    current_file_query: Option<String>,
+}
+
+/// Popup state – at most one can be visible at any time.
+enum ActivePopup {
+    None,
+    Command(CommandPopup),
+    File(FileSearchPopup),
 }
 
 impl ChatComposer<'_> {
@@ -49,10 +59,12 @@ impl ChatComposer<'_> {
 
         let mut this = Self {
             textarea,
-            command_popup: None,
+            active_popup: ActivePopup::None,
             app_event_tx,
             history: ChatComposerHistory::new(),
             ctrl_c_quit_hint: false,
+            dismissed_file_popup_token: None,
+            current_file_query: None,
         };
         this.update_border(has_input_focus);
         this
@@ -116,6 +128,23 @@ impl ChatComposer<'_> {
         self.update_border(has_focus);
     }
 
+    /// Integrate results from an asynchronous file search.
+    pub(crate) fn on_file_search_result(&mut self, query: String, matches: Vec<String>) {
+        // Only apply if user is still editing a token starting with `query`.
+        let current_opt = Self::current_at_token(&self.textarea);
+        let Some(current_token) = current_opt else {
+            return;
+        };
+
+        if !current_token.starts_with(&query) {
+            return;
+        }
+
+        if let ActivePopup::File(popup) = &mut self.active_popup {
+            popup.set_matches(&query, matches);
+        }
+    }
+
     pub fn set_ctrl_c_quit_hint(&mut self, show: bool, has_focus: bool) {
         self.ctrl_c_quit_hint = show;
         self.update_border(has_focus);
@@ -123,22 +152,27 @@ impl ChatComposer<'_> {
 
     /// Handle a key event coming from the main UI.
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
-        let result = match self.command_popup {
-            Some(_) => self.handle_key_event_with_popup(key_event),
-            None => self.handle_key_event_without_popup(key_event),
+        let result = match &mut self.active_popup {
+            ActivePopup::Command(_) => self.handle_key_event_with_slash_popup(key_event),
+            ActivePopup::File(_) => self.handle_key_event_with_file_popup(key_event),
+            ActivePopup::None => self.handle_key_event_without_popup(key_event),
         };
 
         // Update (or hide/show) popup after processing the key.
         self.sync_command_popup();
+        if matches!(self.active_popup, ActivePopup::Command(_)) {
+            self.dismissed_file_popup_token = None;
+        } else {
+            self.sync_file_search_popup();
+        }
 
         result
     }
 
     /// Handle key event when the slash-command popup is visible.
-    fn handle_key_event_with_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
-        let Some(popup) = self.command_popup.as_mut() else {
-            tracing::error!("handle_key_event_with_popup called without an active popup");
-            return (InputResult::None, false);
+    fn handle_key_event_with_slash_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
+        let ActivePopup::Command(popup) = &mut self.active_popup else {
+            unreachable!();
         };
 
         match key_event.into() {
@@ -186,13 +220,156 @@ impl ChatComposer<'_> {
                     self.textarea.cut();
 
                     // Hide popup since the command has been dispatched.
-                    self.command_popup = None;
+                    self.active_popup = ActivePopup::None;
                     return (InputResult::None, true);
                 }
                 // Fallback to default newline handling if no command selected.
                 self.handle_key_event_without_popup(key_event)
             }
             input => self.handle_input_basic(input),
+        }
+    }
+
+    /// Handle key events when file search popup is visible.
+    fn handle_key_event_with_file_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
+        let ActivePopup::File(popup) = &mut self.active_popup else {
+            unreachable!();
+        };
+
+        match key_event.into() {
+            Input { key: Key::Up, .. } => {
+                popup.move_up();
+                (InputResult::None, true)
+            }
+            Input { key: Key::Down, .. } => {
+                popup.move_down();
+                (InputResult::None, true)
+            }
+            Input { key: Key::Esc, .. } => {
+                // Hide popup without modifying text, remember token to avoid immediate reopen.
+                if let Some(tok) = Self::current_at_token(&self.textarea) {
+                    self.dismissed_file_popup_token = Some(tok.to_string());
+                }
+                self.active_popup = ActivePopup::None;
+                (InputResult::None, true)
+            }
+            Input { key: Key::Tab, .. }
+            | Input {
+                key: Key::Enter,
+                ctrl: false,
+                alt: false,
+                shift: false,
+            } => {
+                if let Some(sel) = popup.selected_match() {
+                    let sel_path = sel.to_string();
+                    // Drop popup borrow before using self mutably again.
+                    self.insert_selected_path(&sel_path);
+                    self.active_popup = ActivePopup::None;
+                    return (InputResult::None, true);
+                }
+                (InputResult::None, false)
+            }
+            input => self.handle_input_basic(input),
+        }
+    }
+
+    /// Extract the `@token` that the cursor is currently positioned on, if any.
+    ///
+    /// The returned string **does not** include the leading `@`.
+    ///
+    /// Behavior:
+    /// - The cursor may be anywhere *inside* the token (including on the
+    ///   leading `@`). It does **not** need to be at the end of the line.
+    /// - A token is delimited by ASCII whitespace (space, tab, newline).
+    /// - If the token under the cursor starts with `@` and contains at least
+    ///   one additional character, that token (without `@`) is returned.
+    fn current_at_token(textarea: &tui_textarea::TextArea) -> Option<String> {
+        let (row, col) = textarea.cursor();
+
+        // Guard against out-of-bounds rows.
+        let line = textarea.lines().get(row)?.as_str();
+
+        // Clamp the cursor column to the line length to avoid slicing panics
+        // when the cursor is at the end of the line.
+        let col = col.min(line.len());
+
+        // Split the line at the cursor position so we can search for word
+        // boundaries on both sides.
+        let before_cursor = &line[..col];
+        let after_cursor = &line[col..];
+
+        // Find start index (first character **after** the previous whitespace).
+        let start_idx = before_cursor
+            .rfind(|c: char| c.is_whitespace())
+            .map(|idx| idx + 1)
+            .unwrap_or(0);
+
+        // Find end index (first whitespace **after** the cursor position).
+        let end_rel_idx = after_cursor
+            .find(|c: char| c.is_whitespace())
+            .unwrap_or(after_cursor.len());
+        let end_idx = col + end_rel_idx;
+
+        if start_idx >= end_idx {
+            return None;
+        }
+
+        let token = &line[start_idx..end_idx];
+
+        if token.starts_with('@') && token.len() > 1 {
+            Some(token[1..].to_string())
+        } else {
+            None
+        }
+    }
+
+    /// Replace the active `@token` (the one under the cursor) with `path`.
+    ///
+    /// The algorithm mirrors `current_at_token` so replacement works no matter
+    /// where the cursor is within the token and regardless of how many
+    /// `@tokens` exist in the line.
+    fn insert_selected_path(&mut self, path: &str) {
+        let (row, col) = self.textarea.cursor();
+
+        // Materialize the textarea lines so we can mutate them easily.
+        let mut lines: Vec<String> = self.textarea.lines().to_vec();
+
+        if let Some(line) = lines.get_mut(row) {
+            let col = col.min(line.len());
+
+            let before_cursor = &line[..col];
+            let after_cursor = &line[col..];
+
+            // Determine token boundaries.
+            let start_idx = before_cursor
+                .rfind(|c: char| c.is_whitespace())
+                .map(|idx| idx + 1)
+                .unwrap_or(0);
+
+            let end_rel_idx = after_cursor
+                .find(|c: char| c.is_whitespace())
+                .unwrap_or(after_cursor.len());
+            let end_idx = col + end_rel_idx;
+
+            // Replace the slice `[start_idx, end_idx)` with the chosen path and a trailing space.
+            let mut new_line =
+                String::with_capacity(line.len() - (end_idx - start_idx) + path.len() + 1);
+            new_line.push_str(&line[..start_idx]);
+            new_line.push_str(path);
+            new_line.push(' ');
+            new_line.push_str(&line[end_idx..]);
+
+            *line = new_line;
+
+            // Re-populate the textarea.
+            let new_text = lines.join("\n");
+            self.textarea.select_all();
+            self.textarea.cut();
+            let _ = self.textarea.insert_str(new_text);
+
+            // Note: tui-textarea currently exposes only relative cursor
+            // movements. Leaving the cursor position unchanged is acceptable
+            // as subsequent typing will move the cursor naturally.
         }
     }
 
@@ -280,25 +457,67 @@ impl ChatComposer<'_> {
             .map(|s| s.as_str())
             .unwrap_or("");
 
-        if first_line.starts_with('/') {
-            // Create popup lazily when the user starts a slash command.
-            let popup = self.command_popup.get_or_insert_with(CommandPopup::new);
-
-            // Forward *only* the first line since `CommandPopup` only needs
-            // the command token.
-            popup.on_composer_text_change(first_line.to_string());
-        } else if self.command_popup.is_some() {
-            // Remove popup when '/' is no longer the first character.
-            self.command_popup = None;
+        let input_starts_with_slash = first_line.starts_with('/');
+        match &mut self.active_popup {
+            ActivePopup::Command(popup) => {
+                if input_starts_with_slash {
+                    popup.on_composer_text_change(first_line.to_string());
+                } else {
+                    self.active_popup = ActivePopup::None;
+                }
+            }
+            _ => {
+                if input_starts_with_slash {
+                    let mut command_popup = CommandPopup::new();
+                    command_popup.on_composer_text_change(first_line.to_string());
+                    self.active_popup = ActivePopup::Command(command_popup);
+                }
+            }
         }
+    }
+
+    /// Synchronize `self.file_search_popup` with the current text in the textarea.
+    /// Note this is only called when self.active_popup is NOT Command.
+    fn sync_file_search_popup(&mut self) {
+        // Determine if there is an @token underneath the cursor.
+        let query = match Self::current_at_token(&self.textarea) {
+            Some(token) => token,
+            None => {
+                self.active_popup = ActivePopup::None;
+                self.dismissed_file_popup_token = None;
+                return;
+            }
+        };
+
+        // If user dismissed popup for this exact query, don't reopen until text changes.
+        if self.dismissed_file_popup_token.as_ref() == Some(&query) {
+            return;
+        }
+
+        self.app_event_tx
+            .send(AppEvent::StartFileSearch(query.clone()));
+
+        match &mut self.active_popup {
+            ActivePopup::File(popup) => {
+                popup.set_query(&query);
+            }
+            _ => {
+                let mut popup = FileSearchPopup::new();
+                popup.set_query(&query);
+                self.active_popup = ActivePopup::File(popup);
+            }
+        }
+
+        self.current_file_query = Some(query);
+        self.dismissed_file_popup_token = None;
     }
 
     pub fn calculate_required_height(&self, area: &Rect) -> u16 {
         let rows = self.textarea.lines().len().max(MIN_TEXTAREA_ROWS);
-        let num_popup_rows = if let Some(popup) = &self.command_popup {
-            popup.calculate_required_height(area)
-        } else {
-            0
+        let num_popup_rows = match &self.active_popup {
+            ActivePopup::Command(popup) => popup.calculate_required_height(area),
+            ActivePopup::File(popup) => popup.calculate_required_height(area),
+            ActivePopup::None => 0,
         };
 
         rows as u16 + BORDER_LINES + num_popup_rows
@@ -339,36 +558,62 @@ impl ChatComposer<'_> {
         );
     }
 
-    pub(crate) fn is_command_popup_visible(&self) -> bool {
-        self.command_popup.is_some()
+    pub(crate) fn is_popup_visible(&self) -> bool {
+        match self.active_popup {
+            ActivePopup::Command(_) | ActivePopup::File(_) => true,
+            ActivePopup::None => false,
+        }
     }
 }
 
 impl WidgetRef for &ChatComposer<'_> {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        if let Some(popup) = &self.command_popup {
-            let popup_height = popup.calculate_required_height(&area);
+        match &self.active_popup {
+            ActivePopup::Command(popup) => {
+                let popup_height = popup.calculate_required_height(&area);
 
-            // Split the provided rect so that the popup is rendered at the
-            // *top* and the textarea occupies the remaining space below.
-            let popup_rect = Rect {
-                x: area.x,
-                y: area.y,
-                width: area.width,
-                height: popup_height.min(area.height),
-            };
+                // Split the provided rect so that the popup is rendered at the
+                // *top* and the textarea occupies the remaining space below.
+                let popup_rect = Rect {
+                    x: area.x,
+                    y: area.y,
+                    width: area.width,
+                    height: popup_height.min(area.height),
+                };
 
-            let textarea_rect = Rect {
-                x: area.x,
-                y: area.y + popup_rect.height,
-                width: area.width,
-                height: area.height.saturating_sub(popup_rect.height),
-            };
+                let textarea_rect = Rect {
+                    x: area.x,
+                    y: area.y + popup_rect.height,
+                    width: area.width,
+                    height: area.height.saturating_sub(popup_rect.height),
+                };
 
-            popup.render(popup_rect, buf);
-            self.textarea.render(textarea_rect, buf);
-        } else {
-            self.textarea.render(area, buf);
+                popup.render(popup_rect, buf);
+                self.textarea.render(textarea_rect, buf);
+            }
+            ActivePopup::File(popup) => {
+                let popup_height = popup.calculate_required_height(&area);
+
+                let popup_rect = Rect {
+                    x: area.x,
+                    y: area.y,
+                    width: area.width,
+                    height: popup_height.min(area.height),
+                };
+
+                let textarea_rect = Rect {
+                    x: area.x,
+                    y: area.y + popup_rect.height,
+                    width: area.width,
+                    height: area.height.saturating_sub(popup_height),
+                };
+
+                popup.render(popup_rect, buf);
+                self.textarea.render(textarea_rect, buf);
+            }
+            ActivePopup::None => {
+                self.textarea.render(area, buf);
+            }
         }
     }
 }
