@@ -38,6 +38,7 @@ pub(crate) struct ChatComposer<'a> {
     command_popup: Option<CommandPopup>,
     app_event_tx: AppEventSender,
     history: ChatComposerHistory,
+    ctrl_c_quit_hint: bool,
 }
 
 impl ChatComposer<'_> {
@@ -51,6 +52,7 @@ impl ChatComposer<'_> {
             command_popup: None,
             app_event_tx,
             history: ChatComposerHistory::new(),
+            ctrl_c_quit_hint: false,
         };
         this.update_border(has_input_focus);
         this
@@ -111,6 +113,11 @@ impl ChatComposer<'_> {
     }
 
     pub fn set_input_focus(&mut self, has_focus: bool) {
+        self.update_border(has_focus);
+    }
+
+    pub fn set_ctrl_c_quit_hint(&mut self, show: bool, has_focus: bool) {
+        self.ctrl_c_quit_hint = show;
         self.update_border(has_focus);
     }
 
@@ -304,10 +311,17 @@ impl ChatComposer<'_> {
         }
 
         let bs = if has_focus {
-            BlockState {
-                right_title: Line::from("Enter to send | Ctrl+D to quit | Ctrl+J for newline")
-                    .alignment(Alignment::Right),
-                border_style: Style::default(),
+            if self.ctrl_c_quit_hint {
+                BlockState {
+                    right_title: Line::from("Ctrl+C to quit").alignment(Alignment::Right),
+                    border_style: Style::default(),
+                }
+            } else {
+                BlockState {
+                    right_title: Line::from("Enter to send | Ctrl+D to quit | Ctrl+J for newline")
+                        .alignment(Alignment::Right),
+                    border_style: Style::default(),
+                }
             }
         } else {
             BlockState {
