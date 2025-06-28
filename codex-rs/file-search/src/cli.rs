@@ -20,6 +20,10 @@ pub struct Cli {
     #[clap(long, short = 'C')]
     pub cwd: Option<PathBuf>,
 
+    /// Include matching file indices in the output.
+    #[arg(long, default_value = "false")]
+    pub compute_indices: bool,
+
     // While it is common to default to the number of logical CPUs when creating
     // a thread pool, empirically, the I/O of the filetree traversal offers
     // limited parallelism and is the bottleneck, so using a smaller number of
