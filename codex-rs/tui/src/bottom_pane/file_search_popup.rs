@@ -1,8 +1,12 @@
+use codex_file_search::FileMatch;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::prelude::Constraint;
 use ratatui::style::Color;
+use ratatui::style::Modifier;
 use ratatui::style::Style;
+use ratatui::text::Line;
+use ratatui::text::Span;
 use ratatui::widgets::Block;
 use ratatui::widgets::BorderType;
 use ratatui::widgets::Borders;
@@ -25,7 +29,7 @@ pub(crate) struct FileSearchPopup {
     /// When `true` we are still waiting for results for `pending_query`.
     waiting: bool,
     /// Cached matches; paths relative to the search dir.
-    matches: Vec<String>,
+    matches: Vec<FileMatch>,
     /// Currently selected index inside `matches` (if any).
     selected_idx: Option<usize>,
 }
@@ -63,7 +67,7 @@ impl FileSearchPopup {
 
     /// Replace matches when a `FileSearchResult` arrives.
     /// Replace matches. Only applied when `query` matches `pending_query`.
-    pub(crate) fn set_matches(&mut self, query: &str, matches: Vec<String>) {
+    pub(crate) fn set_matches(&mut self, query: &str, matches: Vec<FileMatch>) {
         if query != self.pending_query {
             return; // stale
         }
@@ -101,7 +105,7 @@ impl FileSearchPopup {
     pub(crate) fn selected_match(&self) -> Option<&str> {
         self.selected_idx
             .and_then(|idx| self.matches.get(idx))
-            .map(String::as_str)
+            .map(|file_match| file_match.path.as_str())
     }
 
     /// Preferred height (rows) including border.
@@ -130,11 +134,36 @@ impl WidgetRef for &FileSearchPopup {
                 .iter()
                 .take(MAX_RESULTS)
                 .enumerate()
-                .map(|(i, p)| {
-                    let mut cell = Cell::from(p.as_str());
+                .map(|(i, file_match)| {
+                    let FileMatch { path, indices, .. } = file_match;
+                    let path = path.as_str();
+                    #[allow(clippy::expect_used)]
+                    let indices = indices.as_ref().expect("indices should be present");
+
+                    // Build spans with bold on matching indices.
+                    let mut idx_iter = indices.iter().peekable();
+                    let mut spans: Vec<Span> = Vec::with_capacity(path.len());
+
+                    for (char_idx, ch) in path.chars().enumerate() {
+                        let mut style = Style::default();
+                        if idx_iter
+                            .peek()
+                            .is_some_and(|next| **next == char_idx as u32)
+                        {
+                            idx_iter.next();
+                            style = style.add_modifier(Modifier::BOLD);
+                        }
+                        spans.push(Span::styled(ch.to_string(), style));
+                    }
+
+                    // Create cell from the spans.
+                    let mut cell = Cell::from(Line::from(spans));
+
+                    // If selected, also paint yellow.
                     if Some(i) == self.selected_idx {
                         cell = cell.style(Style::default().fg(Color::Yellow));
                     }
+
                     Row::new(vec![cell])
                 })
                 .collect()

@@ -165,7 +165,7 @@ impl FileSearchManager {
         cancellation_token: Arc<AtomicBool>,
         search_state: Arc<Mutex<SearchState>>,
     ) {
-        let compute_indices = false;
+        let compute_indices = true;
         std::thread::spawn(move || {
             let matches = file_search::run(
                 &query,
@@ -176,12 +176,7 @@ impl FileSearchManager {
                 cancellation_token.clone(),
                 compute_indices,
             )
-            .map(|res| {
-                res.matches
-                    .into_iter()
-                    .map(|m| m.path)
-                    .collect::<Vec<String>>()
-            })
+            .map(|res| res.matches)
             .unwrap_or_default();
 
             let is_cancelled = cancellation_token.load(Ordering::Relaxed);

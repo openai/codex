@@ -20,6 +20,7 @@ use super::file_search_popup::FileSearchPopup;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use codex_file_search::FileMatch;
 
 /// Minimum number of visible text rows inside the textarea.
 const MIN_TEXTAREA_ROWS: usize = 1;
@@ -129,7 +130,7 @@ impl ChatComposer<'_> {
     }
 
     /// Integrate results from an asynchronous file search.
-    pub(crate) fn on_file_search_result(&mut self, query: String, matches: Vec<String>) {
+    pub(crate) fn on_file_search_result(&mut self, query: String, matches: Vec<FileMatch>) {
         // Only apply if user is still editing a token starting with `query`.
         let current_opt = Self::current_at_token(&self.textarea);
         let Some(current_token) = current_opt else {

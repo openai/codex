@@ -1,16 +1,16 @@
 //! Bottom pane: shows the ChatComposer or a BottomPaneView, if one is active.
 
+use crate::app_event::AppEvent;
+use crate::app_event_sender::AppEventSender;
+use crate::user_approval_widget::ApprovalRequest;
 use bottom_pane_view::BottomPaneView;
 use bottom_pane_view::ConditionalUpdate;
 use codex_core::protocol::TokenUsage;
+use codex_file_search::FileMatch;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::widgets::WidgetRef;
-
-use crate::app_event::AppEvent;
-use crate::app_event_sender::AppEventSender;
-use crate::user_approval_widget::ApprovalRequest;
 
 mod approval_modal_view;
 mod bottom_pane_view;
@@ -228,7 +228,7 @@ impl BottomPane<'_> {
         }
     }
 
-    pub(crate) fn on_file_search_result(&mut self, query: String, matches: Vec<String>) {
+    pub(crate) fn on_file_search_result(&mut self, query: String, matches: Vec<FileMatch>) {
         self.composer.on_file_search_result(query, matches);
         self.request_redraw();
     }
