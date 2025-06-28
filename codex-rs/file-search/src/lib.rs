@@ -11,6 +11,8 @@ use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::num::NonZero;
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use tokio::process::Command;
@@ -71,10 +73,18 @@ pub async fn run_main<T: Reporter>(
         }
     };
 
+    let cancel_flag = Arc::new(AtomicBool::new(false));
     let FileSearchResults {
         total_match_count,
         matches,
-    } = run(&pattern_text, limit, &search_directory, exclude, threads).await?;
+    } = run(
+        &pattern_text,
+        limit,
+        &search_directory,
+        exclude,
+        threads,
+        cancel_flag,
+    )?;
     let match_count = matches.len();
     let matches_truncated = total_match_count > match_count;
 
@@ -88,12 +98,15 @@ pub async fn run_main<T: Reporter>(
     Ok(())
 }
 
-pub async fn run(
+/// The worker threads will periodically check `cancel_flag` to see if they
+/// should stop processing files.
+pub fn run(
     pattern_text: &str,
     limit: NonZero<usize>,
     search_directory: &Path,
     exclude: Vec<String>,
     threads: NonZero<usize>,
+    cancel_flag: Arc<AtomicBool>,
 ) -> anyhow::Result<FileSearchResults> {
     let pattern = create_pattern(pattern_text);
     // Create one BestMatchesList per worker thread so that each worker can
@@ -136,11 +149,25 @@ pub async fn run(
         let index = index_counter.fetch_add(1, Ordering::Relaxed);
         let best_list_ptr = best_matchers_per_worker[index].get();
         let best_list = unsafe { &mut *best_list_ptr };
+
+        // Each worker keeps a local counter so we only read the atomic flag
+        // every N entries which is cheaper than checking on every file.
+        const CHECK_INTERVAL: usize = 1024;
+        let mut processed = 0;
+
+        let cancel = cancel_flag.clone();
+
         Box::new(move |entry| {
             if let Some(path) = get_file_path(&entry, search_directory) {
                 best_list.insert(path);
             }
-            ignore::WalkState::Continue
+
+            processed += 1;
+            if processed % CHECK_INTERVAL == 0 && cancel.load(Ordering::Relaxed) {
+                ignore::WalkState::Quit
+            } else {
+                ignore::WalkState::Continue
+            }
         })
     });
 
@@ -160,6 +187,14 @@ pub async fn run(
             Ok(rel_path) => rel_path.to_str(),
             Err(_) => None,
         }
+    }
+
+    // If the cancel flag is set, we return early with an empty result.
+    if cancel_flag.load(Ordering::Relaxed) {
+        return Ok(FileSearchResults {
+            matches: Vec::new(),
+            total_match_count: 0,
+        });
     }
 
     // Merge results across best_matchers_per_worker.
