@@ -38,6 +38,7 @@ use crate::bottom_pane::InputResult;
 use crate::conversation_history_widget::ConversationHistoryWidget;
 use crate::history_cell::PatchEventType;
 use crate::user_approval_widget::ApprovalRequest;
+use codex_file_search::FileMatch;
 
 pub(crate) struct ChatWidget<'a> {
     app_event_tx: AppEventSender,
@@ -405,7 +406,7 @@ impl ChatWidget<'_> {
     }
 
     /// Forward file-search results to the bottom pane.
-    pub(crate) fn apply_file_search_result(&mut self, query: String, matches: Vec<String>) {
+    pub(crate) fn apply_file_search_result(&mut self, query: String, matches: Vec<FileMatch>) {
         self.bottom_pane.on_file_search_result(query, matches);
     }
 

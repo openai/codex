@@ -1,4 +1,5 @@
 use codex_core::protocol::Event;
+use codex_file_search::FileMatch;
 use crossterm::event::KeyEvent;
 
 use crate::slash_command::SlashCommand;
@@ -39,6 +40,6 @@ pub(crate) enum AppEvent {
     /// still relevant.
     FileSearchResult {
         query: String,
-        matches: Vec<String>,
+        matches: Vec<FileMatch>,
     },
 }
