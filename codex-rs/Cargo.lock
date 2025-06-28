@@ -770,6 +770,7 @@ dependencies = [
  "codex-ansi-escape",
  "codex-common",
  "codex-core",
+ "codex-file-search",
  "codex-linux-sandbox",
  "codex-login",
  "color-eyre",
