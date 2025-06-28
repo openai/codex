@@ -1,7 +1,79 @@
-<h1 align="center">OpenAI Codex CLI</h1>
-<p align="center">Lightweight coding agent that runs in your terminal</p>
+<h1 align="center">Codex: Agentic Computer System</h1>
+<p align="center">Autonomous development environment with AI-powered tool generation</p>
 
-<p align="center"><code>npm i -g @openai/codex</code></p>
+<p align="center">
+  <code>npm i -g @openai/codex</code> | 
+  <a href="#-agentic-system-quickstart">🤖 Agentic Features</a> | 
+  <a href="#-tool-builder-system">🛠️ Tool Builder</a>
+</p>
+
+---
+
+## 🎯 **NEW: Agentic Computer System**
+
+This repository now includes a comprehensive **agentic computer system** that extends the Codex CLI with autonomous tool generation, workflow orchestration, and self-improving capabilities.
+
+### 🚀 Agentic System Quickstart
+
+**Generate CLI tools automatically:**
+
+```bash
+# Install and set up (one-time)
+chmod +x ~/tool-builder.sh
+export OPENAI_API_KEY="your-api-key"
+
+# Generate any tool you can imagine
+~/tool-builder.sh todo-manager "manages todo lists with priorities and due dates"
+~/tool-builder.sh deploy-helper "automates application deployment across environments"
+~/tool-builder.sh data-pipeline "processes CSV files and generates analytics reports"
+```
+
+**What happens automatically:**
+
+1. 🧠 **AI Design Generation** - ChatGPT creates detailed specifications
+2. 🏗️ **Smart Scaffolding** - Codex CLI builds complete project structure
+3. 🐙 **GitHub Integration** - Repository, CI/CD, and Codespace creation
+4. 🚀 **Automated Deployment** - Full production-ready setup
+5. 📊 **Monitoring Setup** - Performance tracking and optimization
+
+### 🤖 Tool Builder System
+
+The **tool-builder.sh** script is an autonomous agent that:
+
+- Generates comprehensive design specifications using AI
+- Scaffolds complete CLI projects with best practices
+- Sets up GitHub repositories with CI/CD pipelines
+- Creates development environments (Codespaces)
+- Implements automated testing and deployment
+
+**[📖 Complete Tool Builder Guide →](docs/guides/tool-builder.md)**
+
+### 🏗️ Agentic Architecture
+
+```mermaid
+graph TB
+    subgraph "Agentic Computer System"
+        TB[Tool Builder Agent]
+        WO[Workflow Orchestrator]
+        IM[Infrastructure Manager]
+        LA[Learning Agent]
+    end
+
+    subgraph "Codex CLI Core"
+        CX[Codex Engine]
+        SM[Sandbox Manager]
+        MM[Memory Manager]
+    end
+
+    TB --> CX
+    WO --> SM
+    IM --> MM
+    LA --> TB
+```
+
+**[🏛️ Complete Architecture Guide →](docs/agentic-architecture.md)**
+
+---
 
 ![Codex demo GIF using: codex "explain this codebase to me"](./.github/demo.gif)
 
@@ -494,6 +566,16 @@ In 2021, OpenAI released Codex, an AI system designed to generate code from natu
 Any model available with [Responses API](https://platform.openai.com/docs/api-reference/responses). The default is `o4-mini`, but pass `--model gpt-4.1` or set `model: gpt-4.1` in your config file to override.
 
 </details>
+
+<details>
+<summary><strong>One-step Full-Access Installer</strong></summary>
+
+```bash
+bash scripts/install_codex_full_access.sh
+```
+
+</details>
+
 <details>
 <summary>Why does <code>o3</code> or <code>o4-mini</code> not work for me?</summary>
 

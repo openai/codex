@@ -13,7 +13,8 @@
     "typecheck": "pnpm --filter @openai/codex run typecheck",
     "changelog": "git-cliff --config cliff.toml --output CHANGELOG.ignore.md $LAST_RELEASE_TAG..HEAD",
     "prepare": "husky",
-    "husky:add": "husky add"
+    "husky:add": "husky add",
+    "setup:full-access": "bash scripts/install_codex_full_access.sh"
   },
   "devDependencies": {
     "git-cliff": "^2.8.0",
