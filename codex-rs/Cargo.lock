@@ -699,6 +699,7 @@ dependencies = [
  "clap",
  "ignore",
  "nucleo-matcher",
+ "serde",
  "serde_json",
  "tokio",
 ]
