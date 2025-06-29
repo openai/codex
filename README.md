@@ -143,6 +143,14 @@ That's it - Codex will scaffold a file, run it inside a sandbox, install any
 missing dependencies, and show you the live result. Approve the changes and
 they'll be committed to your working directory.
 
+### Generate a starter `AGENT.md`
+
+Use the helper script [`init_codex_cli.sh`](./codex-cli/scripts/init_codex_cli.sh)
+to bootstrap a project for Codex CLI. Run it from your project root and answer a
+few yes/no questions. The script analyzes your files, fetches Perplexity research,
+and calls OpenAI to produce an `AGENT.md` plus optional setup files like `.env.example`
+and `setup.sh`.
+
 ---
 
 ## Why Codex?
