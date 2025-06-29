@@ -807,6 +807,9 @@ export default class TextBuffer {
    *  High level "handleInput" – receives what Ink gives us
    *  Returns true when buffer mutated (=> re‑render)
    * ===================================================================== */
+  private escCount = 0;
+  public onCancelCurrent?: () => void;
+
   handleInput(
     input: string | undefined,
     key: Record<string, boolean>,
@@ -819,8 +822,15 @@ export default class TextBuffer {
     const [beforeRow, beforeCol] = this.getCursor();
 
     if (key["escape"]) {
-      return false;
+      this.escCount++;
+      if (this.escCount >= 2){
+        this.escCount = 0;
+        this.onCancelCurrent?.();
+        return true;  // re-render for cancellation
+      }
+      return false;  // first ESC: eat it but not re-render
     }
+    this.escCount = 0; // reset on any other key
 
     /* new line — Ink sets either `key.return` *or* passes a literal "\n" */
     if (key["return"] || input === "\r" || input === "\n") {
