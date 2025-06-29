@@ -1,14 +1,11 @@
-use std::path::PathBuf;
-
-use crate::codex_tool_config::CodexToolCallParam;
 use crate::codex_tool_config::create_tool_for_codex_tool_call_param;
+use crate::codex_tool_config::CodexToolCallParam;
 
 use codex_core::config::Config as CodexConfig;
 use mcp_types::CallToolRequestParams;
 use mcp_types::CallToolResult;
 use mcp_types::CallToolResultContent;
 use mcp_types::ClientRequest;
-use mcp_types::JSONRPC_VERSION;
 use mcp_types::JSONRPCBatchRequest;
 use mcp_types::JSONRPCBatchResponse;
 use mcp_types::JSONRPCError;
@@ -23,6 +20,7 @@ use mcp_types::RequestId;
 use mcp_types::ServerCapabilitiesTools;
 use mcp_types::ServerNotification;
 use mcp_types::TextContent;
+use mcp_types::JSONRPC_VERSION;
 use serde_json::json;
 use tokio::sync::mpsc;
 use tokio::task;
@@ -30,20 +28,15 @@ use tokio::task;
 pub(crate) struct MessageProcessor {
     outgoing: mpsc::Sender<JSONRPCMessage>,
     initialized: bool,
-    codex_linux_sandbox_exe: Option<PathBuf>,
 }
 
 impl MessageProcessor {
     /// Create a new `MessageProcessor`, retaining a handle to the outgoing
     /// `Sender` so handlers can enqueue messages to be written to stdout.
-    pub(crate) fn new(
-        outgoing: mpsc::Sender<JSONRPCMessage>,
-        codex_linux_sandbox_exe: Option<PathBuf>,
-    ) -> Self {
+    pub(crate) fn new(outgoing: mpsc::Sender<JSONRPCMessage>) -> Self {
         Self {
             outgoing,
             initialized: false,
-            codex_linux_sandbox_exe,
         }
     }
 
@@ -234,8 +227,6 @@ impl MessageProcessor {
     where
         T: ModelContextProtocolRequest,
     {
-        // result has `Serialized` instance so should never fail
-        #[expect(clippy::unwrap_used)]
         let response = JSONRPCMessage::Response(JSONRPCResponse {
             jsonrpc: JSONRPC_VERSION.into(),
             id,
@@ -345,8 +336,8 @@ impl MessageProcessor {
         }
 
         let (initial_prompt, config): (String, CodexConfig) = match arguments {
-            Some(json_val) => match serde_json::from_value::<CodexToolCallParam>(json_val) {
-                Ok(tool_cfg) => match tool_cfg.into_config(self.codex_linux_sandbox_exe.clone()) {
+                Some(json_val) => match serde_json::from_value::<CodexToolCallParam>(json_val) {
+                Ok(tool_cfg) => match tool_cfg.into_config(None) {
                     Ok(cfg) => cfg,
                     Err(e) => {
                         let result = CallToolResult {

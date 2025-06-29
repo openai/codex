@@ -734,6 +734,7 @@ name = "codex-mcp-client"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "assert_cmd",
  "mcp-types",
  "pretty_assertions",
  "serde",
@@ -748,6 +749,7 @@ name = "codex-mcp-server"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "codex-apply-patch",
  "codex-core",
  "codex-linux-sandbox",
  "mcp-types",
@@ -2446,6 +2448,19 @@ checksum = "8ea1f30cedd69f0a2954655f7188c6a834246d2bcf1e315e2ac40c4b24dc9519"
 dependencies = [
  "cfg-if",
  "rayon",
+]
+
+[[package]]
+name = "mcp-integration-tests"
+version = "0.1.0"
+dependencies = [
+ "assert_cmd",
+ "codex-mcp-client",
+ "codex-mcp-server",
+ "mcp-types",
+ "pretty_assertions",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

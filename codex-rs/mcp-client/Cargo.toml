@@ -24,3 +24,4 @@ tokio = { version = "1", features = [
 
 [dev-dependencies]
 pretty_assertions = "1.4.1"
+assert_cmd = "2.0"

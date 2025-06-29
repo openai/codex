@@ -30,7 +30,7 @@ fi
 TAG="rust-v$VERSION"
 RELEASE_BRANCH="release/$TAG"
 
-git checkout -b "$TAG"
+git checkout -b "$RELEASE_BRANCH"
 perl -i -pe "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
 git add Cargo.toml
 git commit -m "Release $VERSION"

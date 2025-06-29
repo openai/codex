@@ -27,7 +27,6 @@ use mcp_types::InitializeRequestParams;
 use mcp_types::InitializedNotification;
 use mcp_types::JSONRPC_VERSION;
 use mcp_types::JSONRPCMessage;
-use mcp_types::JSONRPCNotification;
 use mcp_types::JSONRPCRequest;
 use mcp_types::JSONRPCResponse;
 use mcp_types::ListToolsRequest;
@@ -41,9 +40,11 @@ use serde::de::DeserializeOwned;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
+use tokio::io::{AsyncBufRead, AsyncWrite};
 use tokio::process::Command;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
+use mcp_types::JSONRPCNotification;
 use tokio::sync::oneshot;
 use tokio::time;
 use tracing::debug;
@@ -58,13 +59,83 @@ const CHANNEL_CAPACITY: usize = 128;
 /// Internal representation of a pending request sender.
 type PendingSender = oneshot::Sender<JSONRPCMessage>;
 
+impl McpClient {
+    /// Create a new MCP client from any AsyncBufRead/AsyncWrite pair.
+    /// Does not manage a child process (child field will be None).
+    pub fn with_streams<R, W>(reader: R, writer: W) -> Self
+    where
+        R: AsyncBufRead + Unpin + Send + 'static,
+        W: AsyncWrite + Unpin + Send + 'static,
+    {
+        let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<JSONRPCMessage>(CHANNEL_CAPACITY);
+        let pending: Arc<Mutex<HashMap<i64, PendingSender>>> = Arc::new(Mutex::new(HashMap::new()));
+        let (notification_tx, notification_rx) = mpsc::channel::<JSONRPCNotification>(CHANNEL_CAPACITY);
+
+        // Writer task: send messages to the writer
+        let _writer_handle = {
+            let mut writer = writer;
+            tokio::spawn(async move {
+                while let Some(msg) = outgoing_rx.recv().await {
+                    match serde_json::to_string(&msg) {
+                        Ok(json) => {
+                            debug!("MCP message to server: {json}");
+                            if writer.write_all(json.as_bytes()).await.is_err() {
+                                error!("failed to write message to writer");
+                                break;
+                            }
+                            if writer.write_all(b"\n").await.is_err() {
+                                error!("failed to write newline to writer");
+                                break;
+                            }
+                            if writer.flush().await.is_err() {
+                                error!("failed to flush writer");
+                                break;
+                            }
+                        }
+                        Err(e) => error!("failed to serialize JSONRPCMessage: {e}"),
+                    }
+                }
+            })
+        };
+
+        // Reader task: receive messages from the reader and dispatch
+        let _reader_handle = {
+            let pending = pending.clone();
+            let mut lines = reader.lines();
+            let notification_tx = notification_tx.clone();
+            tokio::spawn(async move {
+                while let Ok(Some(line)) = lines.next_line().await {
+                    match serde_json::from_str::<JSONRPCMessage>(&line) {
+                        Ok(JSONRPCMessage::Response(resp)) => {
+                            Self::dispatch_response(resp, &pending).await;
+                        }
+                        Ok(JSONRPCMessage::Error(err)) => {
+                            Self::dispatch_error(err, &pending).await;
+                        }
+                        Ok(JSONRPCMessage::Notification(note)) => {
+                            let _ = notification_tx.send(note).await;
+                        }
+                        _ => {}
+                    }
+                }
+            })
+        };
+
+        McpClient {
+            child: None,
+            outgoing_tx,
+            pending,
+            id_counter: AtomicI64::new(1),
+            notification_rx,
+        }
+    }
+}
+
 /// A running MCP client instance.
 pub struct McpClient {
-    /// Retain this child process until the client is dropped. The Tokio runtime
-    /// will make a "best effort" to reap the process after it exits, but it is
-    /// not a guarantee. See the `kill_on_drop` documentation for details.
+    /// Optional child process handle; `None` for in-memory/test clients.
     #[allow(dead_code)]
-    child: tokio::process::Child,
+    child: Option<tokio::process::Child>,
 
     /// Channel for sending JSON-RPC messages *to* the background writer task.
     outgoing_tx: mpsc::Sender<JSONRPCMessage>,
@@ -75,6 +146,8 @@ pub struct McpClient {
 
     /// Monotonically increasing counter used to generate request IDs.
     id_counter: AtomicI64,
+    /// Receives server-initiated notifications.
+    notification_rx: mpsc::Receiver<JSONRPCNotification>,
 }
 
 impl McpClient {
@@ -108,82 +181,11 @@ impl McpClient {
             .take()
             .ok_or_else(|| std::io::Error::other("failed to capture child stdout"))?;
 
-        let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<JSONRPCMessage>(CHANNEL_CAPACITY);
-        let pending: Arc<Mutex<HashMap<i64, PendingSender>>> = Arc::new(Mutex::new(HashMap::new()));
-
-        // Spawn writer task. It listens on the `outgoing_rx` channel and
-        // writes messages to the child's STDIN.
-        let writer_handle = {
-            let mut stdin = stdin;
-            tokio::spawn(async move {
-                while let Some(msg) = outgoing_rx.recv().await {
-                    match serde_json::to_string(&msg) {
-                        Ok(json) => {
-                            debug!("MCP message to server: {json}");
-                            if stdin.write_all(json.as_bytes()).await.is_err() {
-                                error!("failed to write message to child stdin");
-                                break;
-                            }
-                            if stdin.write_all(b"\n").await.is_err() {
-                                error!("failed to write newline to child stdin");
-                                break;
-                            }
-                            if stdin.flush().await.is_err() {
-                                error!("failed to flush child stdin");
-                                break;
-                            }
-                        }
-                        Err(e) => error!("failed to serialize JSONRPCMessage: {e}"),
-                    }
-                }
-            })
-        };
-
-        // Spawn reader task. It reads line-delimited JSON from the child's
-        // STDOUT and dispatches responses to the pending map.
-        let reader_handle = {
-            let pending = pending.clone();
-            let mut lines = BufReader::new(stdout).lines();
-
-            tokio::spawn(async move {
-                while let Ok(Some(line)) = lines.next_line().await {
-                    debug!("MCP message from server: {line}");
-                    match serde_json::from_str::<JSONRPCMessage>(&line) {
-                        Ok(JSONRPCMessage::Response(resp)) => {
-                            Self::dispatch_response(resp, &pending).await;
-                        }
-                        Ok(JSONRPCMessage::Error(err)) => {
-                            Self::dispatch_error(err, &pending).await;
-                        }
-                        Ok(JSONRPCMessage::Notification(JSONRPCNotification { .. })) => {
-                            // For now we only log server-initiated notifications.
-                            info!("<- notification: {}", line);
-                        }
-                        Ok(other) => {
-                            // Batch responses and requests are currently not
-                            // expected from the server – log and ignore.
-                            info!("<- unhandled message: {:?}", other);
-                        }
-                        Err(e) => {
-                            error!("failed to deserialize JSONRPCMessage: {e}; line = {}", line)
-                        }
-                    }
-                }
-            })
-        };
-
-        // We intentionally *detach* the tasks. They will keep running in the
-        // background as long as their respective resources (channels/stdin/
-        // stdout) are alive. Dropping `McpClient` cancels the tasks due to
-        // dropped resources.
-        let _ = (writer_handle, reader_handle);
-
-        Ok(Self {
-            child,
-            outgoing_tx,
-            pending,
-            id_counter: AtomicI64::new(1),
-        })
+        // Set up client streams over stdio
+        let mut client = Self::with_streams(BufReader::new(stdout), stdin);
+        // Retain child process handle
+        client.child = Some(child);
+        Ok(client)
     }
 
     /// Send an arbitrary MCP request and await the typed result.
@@ -348,6 +350,11 @@ impl McpClient {
         debug!("MCP tool call: {params:?}");
         self.send_request::<CallToolRequest>(params, timeout).await
     }
+    /// Receive the next notification sent by the server.
+    /// Returns None if the notification channel is closed.
+    pub async fn next_notification(&mut self) -> Option<JSONRPCNotification> {
+        self.notification_rx.recv().await
+    }
 
     /// Internal helper: route a JSON-RPC *response* object to the pending map.
     async fn dispatch_response(
@@ -394,7 +401,9 @@ impl Drop for McpClient {
         // `kill_on_drop(true)` above, this extra check has the benefit of
         // forcing the process to be reaped immediately if it has already exited
         // instead of waiting for the Tokio runtime to reap it later.
-        let _ = self.child.try_wait();
+        if let Some(child) = &mut self.child {
+            let _ = child.try_wait();
+        }
     }
 }
 

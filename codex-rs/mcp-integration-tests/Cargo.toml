@@ -1,0 +1,15 @@
+[package]
+name = "mcp-integration-tests"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+codex-mcp-client = { path = "../mcp-client" }
+codex-mcp-server = { path = "../mcp-server" }
+mcp-types = { path = "../mcp-types" }
+tokio = { version = "1", features = ["full"] }
+serde_json = "1"
+
+[dev-dependencies]
+assert_cmd = "2.0"
+pretty_assertions = "1.4.1"

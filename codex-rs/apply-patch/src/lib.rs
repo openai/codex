@@ -9,9 +9,9 @@ use std::str::Utf8Error;
 use anyhow::Context;
 use anyhow::Result;
 pub use parser::Hunk;
+pub use parser::UpdateFileChunk;
 pub use parser::ParseError;
 use parser::ParseError::*;
-use parser::UpdateFileChunk;
 pub use parser::parse_patch;
 use similar::TextDiff;
 use thiserror::Error;
@@ -31,6 +31,9 @@ pub enum ApplyPatchError {
     /// Error that occurs while computing replacements when applying patch chunks
     #[error("{0}")]
     ComputeReplacements(String),
+    /// Conflict when two hunks overlap the same original lines.
+    #[error("Conflict applying patch to '{file}': hunk #{hunk1} overlaps with hunk #{hunk2}")]
+    Conflict { file: String, hunk1: usize, hunk2: usize },
 }
 
 impl From<std::io::Error> for ApplyPatchError {
@@ -465,9 +468,11 @@ fn compute_replacements(
     chunks: &[UpdateFileChunk],
 ) -> std::result::Result<Vec<(usize, usize, Vec<String>)>, ApplyPatchError> {
     let mut replacements: Vec<(usize, usize, Vec<String>)> = Vec::new();
+    // Track occupied original-line ranges: (start_idx, len, chunk_idx)
+    let mut occupied: Vec<(usize, usize, usize)> = Vec::new();
     let mut line_index: usize = 0;
 
-    for chunk in chunks {
+    for (chunk_index, chunk) in chunks.iter().enumerate() {
         // If a chunk has a `change_context`, we use seek_sequence to find it, then
         // adjust our `line_index` to continue from there.
         if let Some(ctx_line) = &chunk.change_context {
@@ -530,8 +535,25 @@ fn compute_replacements(
         }
 
         if let Some(start_idx) = found {
-            replacements.push((start_idx, pattern.len(), new_slice.to_vec()));
-            line_index = start_idx + pattern.len();
+            let old_len = pattern.len();
+            // Check for overlap with prior chunks
+            for (s0, len0, idx0) in &occupied {
+                let e0 = *s0 + *len0;
+                let s1 = start_idx;
+                let e1 = start_idx + old_len;
+                if s1 < e0 && *s0 < e1 {
+                    // Conflict detected
+                    return Err(ApplyPatchError::Conflict {
+                        file: path.display().to_string(),
+                        hunk1: *idx0,
+                        hunk2: chunk_index,
+                    });
+                }
+            }
+            // Record this range
+            occupied.push((start_idx, old_len, chunk_index));
+            replacements.push((start_idx, old_len, new_slice.to_vec()));
+            line_index = start_idx + old_len;
         } else {
             return Err(ApplyPatchError::ComputeReplacements(format!(
                 "Failed to find expected lines {:?} in {}",
@@ -578,12 +600,42 @@ pub struct ApplyPatchFileUpdate {
     unified_diff: String,
     content: String,
 }
+// Expose getters for integration tests
+impl ApplyPatchFileUpdate {
+    /// Get the unified diff text
+    pub fn unified_diff(&self) -> &str {
+        &self.unified_diff
+    }
+    /// Get the updated file content after patch
+    pub fn content(&self) -> &str {
+        &self.content
+    }
+}
 
 pub fn unified_diff_from_chunks(
     path: &Path,
     chunks: &[UpdateFileChunk],
 ) -> std::result::Result<ApplyPatchFileUpdate, ApplyPatchError> {
     unified_diff_from_chunks_with_context(path, chunks, 1)
+}
+
+/// Simple conflict resolver: if multiple hunks overlap, picks the first hunk only.
+/// Returns a unified diff for the resolved patch.
+pub fn resolve_conflict(
+    path: &Path,
+    chunks: &[UpdateFileChunk],
+) -> std::result::Result<ApplyPatchFileUpdate, ApplyPatchError> {
+    // First, attempt to apply all hunks
+    if let Ok(update) = unified_diff_from_chunks(path, chunks) {
+        return Ok(update);
+    }
+    // On conflict, fall back to first hunk only
+    if chunks.is_empty() {
+        return Err(ApplyPatchError::ComputeReplacements(
+            "no hunks to resolve".to_string(),
+        ));
+    }
+    unified_diff_from_chunks(path, &chunks[0..1])
 }
 
 pub fn unified_diff_from_chunks_with_context(

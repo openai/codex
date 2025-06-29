@@ -3,13 +3,13 @@
 use codex_core::protocol::AskForApproval;
 use mcp_types::Tool;
 use mcp_types::ToolInputSchema;
-use schemars::JsonSchema;
 use schemars::r#gen::SchemaSettings;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::json_to_toml::json_to_toml;
+use schemars::JsonSchema;
 
 /// Client-supplied configuration for a `codex` tool-call.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -40,6 +40,41 @@ pub(crate) struct CodexToolCallParam {
     /// CODEX_HOME/config.toml.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<HashMap<String, serde_json::Value>>,
+}
+
+/// Configuration for a `resolve-conflict` tool-call.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ResolveConflictParam {
+    /// Path to the file to resolve.
+    pub file_path: String,
+    /// Unified patch text containing conflicting hunks.
+    pub patch: String,
+}
+
+/// Builds a `Tool` definition (JSON schema etc.) for the resolve-conflict tool.
+pub(crate) fn create_tool_for_resolve_conflict_param() -> Tool {
+    let schema = SchemaSettings::draft2019_09()
+        .with(|s| {
+            s.inline_subschemas = true;
+            s.option_add_null_type = false;
+        })
+        .into_generator()
+        .into_root_schema_for::<ResolveConflictParam>();
+    let schema_value =
+        serde_json::to_value(&schema).expect("resolve-conflict schema should serialise to JSON");
+    let tool_input_schema =
+        serde_json::from_value::<ToolInputSchema>(schema_value).unwrap_or_else(|e| {
+            panic!("failed to create conflict resolution Tool from schema: {e}");
+        });
+    Tool {
+        name: "resolve-conflict".to_string(),
+        input_schema: tool_input_schema,
+        description: Some(
+            "Resolve overlapping hunks by choosing the first hunk on conflicts.".to_string(),
+        ),
+        annotations: None,
+    }
 }
 
 // Custom enum mirroring `AskForApproval`, but constrained to the subset we
