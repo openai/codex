@@ -27,6 +27,18 @@ function requiresShell(cmd: Array<string>): boolean {
     return tokens.some((token) => typeof token === "object" && "op" in token);
   }
 
+  // Common shell built-ins that require shell: true
+  const shellBuiltins = new Set([
+    'ls', 'dir', 'cat', 'echo', 'cd', 'pwd', 'cp', 'mv', 'rm', 'mkdir',
+    'rmdir', 'touch', 'grep', 'find', 'which', 'type', 'alias', 'export',
+    'source', '.', 'test', '[', '[[', 'read', 'set', 'unset'
+  ]);
+  
+  // Check if the first command is a shell built-in
+  if (cmd.length > 0 && cmd[0] && shellBuiltins.has(cmd[0])) {
+    return true;
+  }
+
   // If the command is split into multiple arguments, we don't need shell: true
   // even if one of the arguments is a shell operator like '|'
   return false;

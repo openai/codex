@@ -65,25 +65,28 @@ export default function ModelOverlay({
   }, [currentProvider]);
 
   // ---------------------------------------------------------------------------
-  // If the conversation already contains a response we cannot change the model
-  // anymore because the backend requires a consistent model across the entire
-  // run.  In that scenario we replace the regular typeahead picker with a
-  // simple message instructing the user to start a new chat.  The only
-  // available action is to dismiss the overlay (Esc or Enter).
+  // Model switching restrictions:
+  // - For hosted providers (OpenAI, etc.): Cannot switch after first response
+  //   due to API consistency requirements
+  // - For local providers (Ollama): Allow switching at any time since models
+  //   are local and don't have the same consistency constraints
   // ---------------------------------------------------------------------------
+
+  const isLocalProvider = currentProvider === "ollama";
+  const canSwitchModel = !hasLastResponse || isLocalProvider;
 
   // Register input handling for switching between model and provider selection
   useInput((_input, key) => {
-    if (hasLastResponse && (key.escape || key.return)) {
+    if (!canSwitchModel && (key.escape || key.return)) {
       onExit();
-    } else if (!hasLastResponse) {
+    } else if (canSwitchModel) {
       if (key.tab) {
         setMode(mode === "model" ? "provider" : "model");
       }
     }
   });
 
-  if (hasLastResponse) {
+  if (!canSwitchModel) {
     return (
       <Box
         flexDirection="column"
@@ -148,6 +151,9 @@ export default function ModelOverlay({
             Current provider: <Text color="greenBright">{currentProvider}</Text>
           </Text>
           {isLoading && <Text color="yellow">Loading models...</Text>}
+          {hasLastResponse && isLocalProvider && (
+            <Text color="cyan">✓ Mid-session switching enabled for local provider</Text>
+          )}
           <Text dimColor>press tab to switch to provider selection</Text>
         </Box>
       }
