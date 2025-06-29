@@ -46,7 +46,7 @@ ipset create allowed-domains hash:net
 # Resolve and add other allowed domains
 for domain in "${ALLOWED_DOMAINS[@]}"; do
     echo "Resolving $domain..."
-    ips=$(dig +short A "$domain")
+    ips=$(dig +short A "$domain" | sort -u)
     if [ -z "$ips" ]; then
         echo "ERROR: Failed to resolve $domain"
         exit 1
