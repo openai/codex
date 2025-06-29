@@ -3,6 +3,7 @@ import type {
   ResponseCreateParams,
   Response,
 } from "openai/resources/responses/responses";
+import { repairOllamaFunctionCall } from "./repair-json.js";
 
 // Define interfaces based on OpenAI API documentation
 type ResponseCreateInput = ResponseCreateParams;
@@ -306,6 +307,7 @@ async function responsesCreateViaChatCompletions(
     return streamResponses(
       input,
       completion as AsyncIterable<OpenAI.ChatCompletionChunk>,
+      openai,
     );
   } else {
     return nonStreamResponses(
@@ -446,6 +448,7 @@ async function nonStreamResponses(
 async function* streamResponses(
   input: ResponseCreateInput,
   completion: AsyncIterable<OpenAI.ChatCompletionChunk>,
+  openai: OpenAI,
 ): AsyncGenerator<ResponseEvent> {
   const fullMessages = getFullMessages(input);
 
@@ -456,6 +459,17 @@ async function* streamResponses(
   const toolCalls = new Map<number, ToolCallData>();
   let usage: UsageData | null = null;
   const finalOutputItem: Array<ResponseContentOutput> = [];
+  
+  // Detect if this is Ollama based on the OpenAI client's baseURL
+  const isOllama = openai.baseURL?.includes('11434') || 
+                   openai.baseURL?.includes('localhost:11434') ||
+                   openai.baseURL?.toLowerCase().includes('ollama') ||
+                   false;
+  
+  if (process.env.DEBUG || process.env.CODEX_DEBUG) {
+    console.error('[streamResponses] baseURL:', openai.baseURL, 'isOllama:', isOllama);
+  }
+  
   // Initial response
   const initialResponse: Partial<ResponseOutput> = {
     id: responseId,
@@ -582,56 +596,299 @@ async function* streamResponses(
         continue;
       }
     } else {
-      if (!textContentAdded) {
-        yield {
-          type: "response.content_part.added",
-          item_id: outputItemId,
-          output_index: 0,
-          content_index: 0,
-          part: { type: "output_text", text: "", annotations: [] },
-        };
-        textContentAdded = true;
-      }
       if (choice.delta.content?.length) {
-        yield {
-          type: "response.output_text.delta",
-          item_id: outputItemId,
-          output_index: 0,
-          content_index: 0,
-          delta: choice.delta.content,
-        };
-        textContent += choice.delta.content;
+        // Special handling for Ollama - accumulate content but don't emit yet
+        if (isOllama) {
+          textContent += choice.delta.content;
+          // Don't emit anything during streaming for Ollama
+          continue;
+        } else {
+          // Non-Ollama providers - normal streaming
+          textContent += choice.delta.content;
+          // Non-Ollama providers - normal streaming
+          if (!textContentAdded) {
+            yield {
+              type: "response.content_part.added",
+              item_id: outputItemId,
+              output_index: 0,
+              content_index: 0,
+              part: { type: "output_text", text: "", annotations: [] },
+            };
+            textContentAdded = true;
+          }
+          
+          yield {
+            type: "response.output_text.delta",
+            item_id: outputItemId,
+            output_index: 0,
+            content_index: 0,
+            delta: choice.delta.content,
+          };
+        }
       }
       if (choice.finish_reason) {
-        yield {
-          type: "response.output_text.done",
-          item_id: outputItemId,
-          output_index: 0,
-          content_index: 0,
-          text: textContent,
-        };
-        yield {
-          type: "response.content_part.done",
-          item_id: outputItemId,
-          output_index: 0,
-          content_index: 0,
-          part: { type: "output_text", text: textContent, annotations: [] },
-        };
-        const item = {
-          type: "message",
-          id: outputItemId,
-          status: "completed",
-          role: "assistant",
-          content: [
-            { type: "output_text", text: textContent, annotations: [] },
-          ],
-        };
-        yield {
-          type: "response.output_item.done",
-          output_index: 0,
-          item,
-        };
-        finalOutputItem.push(item as unknown as ResponseContentOutput);
+        // Check if this looks like an Ollama function call
+        let isOllamaFunctionCall = false;
+        let functionName = "";
+        let functionArgs = "";
+        
+        // For Ollama, process the entire content and filter out JSON function calls
+        if (isOllama && textContent) {
+          const functionCalls: Array<{name: string, args: string}> = [];
+          let processedContent = textContent;
+          let foundJson = true;
+          
+          // Keep looking for JSON function calls until we can't find any more
+          while (foundJson) {
+            foundJson = false;
+            
+            // Look for the start of a JSON function call
+            const startMatch = processedContent.match(/\{\s*"name"\s*:\s*"[^"]+"\s*,\s*"arguments"\s*:/);
+            
+            if (startMatch && startMatch.index !== undefined) {
+              const startIdx = startMatch.index;
+              let braceCount = 0;
+              let inString = false;
+              let escapeNext = false;
+              let endIdx = -1;
+              
+              // Parse from the start to find the matching closing brace
+              for (let i = startIdx; i < processedContent.length; i++) {
+                const char = processedContent[i];
+                
+                if (escapeNext) {
+                  escapeNext = false;
+                  continue;
+                }
+                
+                if (char === '\\') {
+                  escapeNext = true;
+                  continue;
+                }
+                
+                if (char === '"' && !escapeNext) {
+                  inString = !inString;
+                  continue;
+                }
+                
+                if (!inString) {
+                  if (char === '{') {
+                    braceCount++;
+                  } else if (char === '}') {
+                    braceCount--;
+                    if (braceCount === 0) {
+                      endIdx = i;
+                      break;
+                    }
+                  }
+                }
+              }
+              
+              if (endIdx !== -1) {
+                const jsonStr = processedContent.substring(startIdx, endIdx + 1);
+                
+                // Try to parse as valid JSON first
+                try {
+                  const parsed = JSON.parse(jsonStr);
+                  if (parsed.name && (parsed.arguments || parsed.parameters)) {
+                    // It's a function call, extract it and remove from content
+                    functionCalls.push({
+                      name: parsed.name,
+                      args: typeof parsed.arguments === 'string' ? parsed.arguments : JSON.stringify(parsed.arguments)
+                    });
+                    processedContent = processedContent.substring(0, startIdx) + processedContent.substring(endIdx + 1);
+                    foundJson = true;
+                  }
+                } catch {
+                  // Try to repair the JSON
+                  const repaired = repairOllamaFunctionCall(jsonStr);
+                  if (repaired) {
+                    functionCalls.push({
+                      name: repaired.name,
+                      args: typeof repaired.arguments === 'string' ? repaired.arguments : JSON.stringify(repaired.arguments)
+                    });
+                    processedContent = processedContent.substring(0, startIdx) + processedContent.substring(endIdx + 1);
+                    foundJson = true;
+                  } else if (jsonStr.includes('"name"') && jsonStr.includes('"arguments"')) {
+                    // Even if we can't parse it, if it looks like a function call, remove it
+                    // Try to extract name manually
+                    const nameMatch = jsonStr.match(/"name"\s*:\s*"([^"]+)"/);
+                    if (nameMatch) {
+                      functionCalls.push({
+                        name: nameMatch[1],
+                        args: "{}" // Default empty args if we can't parse
+                      });
+                      processedContent = processedContent.substring(0, startIdx) + processedContent.substring(endIdx + 1);
+                      foundJson = true;
+                    }
+                  }
+                }
+              }
+            }
+          }
+          
+          // Clean up extra whitespace and blank lines
+          const cleanedText = processedContent.trim().replace(/\n\s*\n\s*\n/g, '\n\n');
+          if (cleanedText) {
+            if (!textContentAdded) {
+              yield {
+                type: "response.content_part.added",
+                item_id: outputItemId,
+                output_index: 0,
+                content_index: 0,
+                part: { type: "output_text", text: "", annotations: [] },
+              };
+              textContentAdded = true;
+            }
+            
+            yield {
+              type: "response.output_text.delta",
+              item_id: outputItemId,
+              output_index: 0,
+              content_index: 0,
+              delta: cleanedText,
+            };
+            
+            yield {
+              type: "response.output_text.done",
+              item_id: outputItemId,
+              output_index: 0,
+              content_index: 0,
+              text: cleanedText,
+            };
+            
+            yield {
+              type: "response.content_part.done",
+              item_id: outputItemId,
+              output_index: 0,
+              content_index: 0,
+              part: { type: "output_text", text: cleanedText, annotations: [] },
+            };
+          }
+          
+          // Process function calls (use the last one if multiple)
+          if (functionCalls.length > 0) {
+            const lastCall = functionCalls[functionCalls.length - 1];
+            isOllamaFunctionCall = true;
+            functionName = lastCall.name;
+            functionArgs = lastCall.args;
+            
+            if (process.env.DEBUG || process.env.CODEX_DEBUG) {
+              console.error('[streamResponses] Filtered out', functionCalls.length, 'Ollama function call(s)');
+              console.error('[streamResponses] Using last function call:', functionName, functionArgs);
+              console.error('[streamResponses] Clean text:', cleanedText);
+            }
+          }
+        } else if (textContent.trim().startsWith('{')) {
+          try {
+            const parsed = JSON.parse(textContent);
+            if (process.env.DEBUG) {
+              console.error('[streamResponses] Checking for Ollama function call, parsed:', JSON.stringify(parsed));
+            }
+            if (parsed.name && (parsed.arguments || parsed.parameters)) {
+              isOllamaFunctionCall = true;
+              functionName = parsed.name;
+              const argsObj = parsed.arguments || parsed.parameters || {};
+              functionArgs = typeof argsObj === 'string' ? argsObj : JSON.stringify(argsObj);
+              if (process.env.DEBUG) {
+                console.error('[streamResponses] Detected Ollama function call:', functionName, 'args:', functionArgs);
+              }
+            }
+          } catch (e) {
+            // Try to repair the JSON
+            if (process.env.DEBUG) {
+              console.error('[streamResponses] Failed to parse as JSON, attempting repair:', e.message);
+            }
+            const repaired = repairOllamaFunctionCall(textContent.trim());
+            if (repaired) {
+              isOllamaFunctionCall = true;
+              functionName = repaired.name;
+              functionArgs = typeof repaired.arguments === 'string' ? repaired.arguments : JSON.stringify(repaired.arguments);
+              if (process.env.DEBUG) {
+                console.error('[streamResponses] Repaired Ollama function call:', functionName, 'args:', functionArgs);
+              }
+            } else {
+              // Not valid JSON even after repair, treat as regular text
+              if (process.env.DEBUG) {
+                console.error('[streamResponses] Could not repair JSON, treating as regular text');
+              }
+            }
+          }
+        }
+        
+        if (isOllamaFunctionCall) {
+          // Handle as function call
+          const toolCallId = generateId("call");
+          const functionCallItem = {
+            type: "function_call" as const,
+            id: outputItemId,
+            status: "completed" as const,
+            call_id: toolCallId,
+            name: functionName,
+            arguments: functionArgs,
+          };
+          
+          yield {
+            type: "response.output_item.added",
+            item: functionCallItem,
+            output_index: 0,
+          };
+          
+          yield {
+            type: "response.function_call_arguments.delta",
+            item_id: outputItemId,
+            output_index: 0,
+            content_index: 0,
+            delta: functionArgs,
+          };
+          
+          yield {
+            type: "response.function_call_arguments.done",
+            item_id: outputItemId,
+            output_index: 0,
+            content_index: 0,
+            arguments: functionArgs,
+          };
+          
+          yield {
+            type: "response.output_item.done",
+            output_index: 0,
+            item: functionCallItem,
+          };
+          
+          finalOutputItem.push(functionCallItem as unknown as ResponseContentOutput);
+        } else {
+          // Handle as regular text message
+          yield {
+            type: "response.output_text.done",
+            item_id: outputItemId,
+            output_index: 0,
+            content_index: 0,
+            text: textContent,
+          };
+          yield {
+            type: "response.content_part.done",
+            item_id: outputItemId,
+            output_index: 0,
+            content_index: 0,
+            part: { type: "output_text", text: textContent, annotations: [] },
+          };
+          const item = {
+            type: "message",
+            id: outputItemId,
+            status: "completed",
+            role: "assistant",
+            content: [
+              { type: "output_text", text: textContent, annotations: [] },
+            ],
+          };
+          yield {
+            type: "response.output_item.done",
+            output_index: 0,
+            item,
+          };
+          finalOutputItem.push(item as unknown as ResponseContentOutput);
+        }
       } else {
         continue;
       }

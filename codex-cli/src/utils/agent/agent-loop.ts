@@ -790,6 +790,28 @@ export class AgentLoop {
             if (this.model.startsWith("gpt-4.1")) {
               modelSpecificInstructions = applyPatchToolInstructions;
             }
+            // Add Ollama-specific instructions for function calling
+            if (this.config.provider?.toLowerCase() === "ollama") {
+              modelSpecificInstructions = `
+CRITICAL INSTRUCTION FOR TOOL USE:
+When you need to use a tool/function, you MUST respond with ONLY a JSON object. No explanatory text before or after.
+
+The JSON format is:
+{
+  "name": "function_name",
+  "arguments": {
+    "param1": "value1"
+  }
+}
+
+NEVER write text like "I'll help you..." or "Let me..." before the JSON.
+NEVER write explanatory text after the JSON.
+The JSON must be your COMPLETE response when using a tool.
+
+Example - to list files, respond with EXACTLY:
+{"name": "shell", "arguments": {"command": ["ls", "-la"]}}
+`;
+            }
             const mergedInstructions = [
               prefix,
               modelSpecificInstructions,
@@ -1068,8 +1090,14 @@ export class AgentLoop {
               }
 
               if (event.type === "response.completed") {
+                if (process.env.CODEX_DEBUG) {
+                  console.error('[AgentLoop] response.completed with', event.response.output.length, 'output items');
+                }
                 if (thisGeneration === this.generation && !this.canceled) {
                   for (const item of event.response.output) {
+                    if (process.env.CODEX_DEBUG) {
+                      console.error('[AgentLoop] Staging item:', JSON.stringify(item));
+                    }
                     stageItem(item as ResponseItem);
                   }
                 }

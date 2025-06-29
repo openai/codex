@@ -222,9 +222,13 @@ async function execCommand(
   let { workdir } = execInput;
   if (workdir) {
     try {
-      await fs.access(workdir);
+      const stats = await fs.stat(workdir);
+      if (!stats.isDirectory()) {
+        log(`EXEC workdir=${workdir} is not a directory, use process.cwd() instead`);
+        workdir = process.cwd();
+      }
     } catch (e) {
-      log(`EXEC workdir=${workdir} not found, use process.cwd() instead`);
+      log(`EXEC workdir=${workdir} not found or inaccessible, use process.cwd() instead`);
       workdir = process.cwd();
     }
   }
@@ -254,7 +258,7 @@ async function execCommand(
     applyPatchCommand != null
       ? execApplyPatch(applyPatchCommand.patch, workdir)
       : await exec(
-          { ...execInput, additionalWritableRoots },
+          { ...execInput, workdir, additionalWritableRoots },
           await getSandbox(runInSandbox),
           config,
           abortSignal,
