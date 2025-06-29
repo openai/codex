@@ -118,6 +118,7 @@ impl CodexToolCallParam {
             sandbox_policy: None,
             model_provider: None,
             codex_linux_sandbox_exe,
+            agent_instructions: None,
         };
 
         let cli_overrides = cli_overrides
