@@ -68,6 +68,7 @@ To enable any MCP server, uncomment the relevant section in `~/.config/codex/con
 - ✅ Models are available and responding
 - ✅ Configuration files are in place
 - ✅ Environment variables are set
+- ⚠️  **Tool/Function calling has limitations** - See [OLLAMA_TOOLS_LIMITATION.md](./OLLAMA_TOOLS_LIMITATION.md)
 
 ### Next Steps
 
