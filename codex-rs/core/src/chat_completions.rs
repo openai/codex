@@ -14,6 +14,7 @@ use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tracing::debug;
 use tracing::trace;
+use uuid::Uuid;
 
 use crate::ModelProviderInfo;
 use crate::client_common::Prompt;
@@ -141,7 +142,8 @@ pub(crate) async fn stream_chat_completions(
             Ok(resp) if resp.status().is_success() => {
                 let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(16);
                 let stream = resp.bytes_stream().map_err(CodexErr::Reqwest);
-                tokio::spawn(process_chat_sse(stream, tx_event));
+                let provider_name = provider.name.clone();
+                tokio::spawn(process_chat_sse(stream, tx_event, provider_name));
                 return Ok(ResponseStream { rx_event });
             }
             Ok(res) => {
@@ -180,7 +182,7 @@ pub(crate) async fn stream_chat_completions(
 /// Lightweight SSE processor for the Chat Completions streaming format. The
 /// output is mapped onto Codex's internal [`ResponseEvent`] so that the rest
 /// of the pipeline can stay agnostic of the underlying wire format.
-async fn process_chat_sse<S>(stream: S, tx_event: mpsc::Sender<Result<ResponseEvent>>)
+async fn process_chat_sse<S>(stream: S, tx_event: mpsc::Sender<Result<ResponseEvent>>, provider_name: String)
 where
     S: Stream<Item = Result<Bytes>> + Unpin,
 {
@@ -255,6 +257,24 @@ where
                 .and_then(|d| d.get("content"))
                 .and_then(|c| c.as_str())
             {
+                // Check if this is Ollama and the content looks like a function call
+                if provider_name.to_lowercase() == "ollama" && content.trim_start().starts_with('{') {
+                    // Try to parse as JSON function call
+                    if let Ok(json_content) = serde_json::from_str::<serde_json::Value>(content) {
+                        if let (Some(name), Some(args)) = (
+                            json_content.get("name").and_then(|n| n.as_str()),
+                            json_content.get("arguments")
+                        ) {
+                            // This is an Ollama function call
+                            fn_call_state.active = true;
+                            fn_call_state.name = Some(name.to_string());
+                            fn_call_state.arguments = serde_json::to_string(args).unwrap_or_default();
+                            fn_call_state.call_id = Some(format!("ollama_call_{}", Uuid::new_v4()));
+                            continue; // Skip regular content processing
+                        }
+                    }
+                }
+                
                 let item = ResponseItem::Message {
                     role: "assistant".to_string(),
                     content: vec![ContentItem::OutputText {
@@ -310,6 +330,18 @@ where
                         let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
                     }
                     "stop" => {
+                        // For Ollama, check if we have a pending function call
+                        if provider_name.to_lowercase() == "ollama" && fn_call_state.active {
+                            // Build the FunctionCall response item.
+                            let item = ResponseItem::FunctionCall {
+                                name: fn_call_state.name.clone().unwrap_or_else(|| "".to_string()),
+                                arguments: fn_call_state.arguments.clone(),
+                                call_id: fn_call_state.call_id.clone().unwrap_or_else(String::new),
+                            };
+
+                            // Emit it downstream.
+                            let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
+                        }
                         // Regular turn without tool-call.
                     }
                     _ => {}

@@ -47,9 +47,9 @@ const client = new OpenAI({
 #### Option 3: Wait for terminal fix
 The current issue is related to raw mode support in the terminal. This will be fixed in future versions.
 
-### 5. MCP Servers (Tools)
+### 5. MCP Servers (Tools) - Now Working!
 
-The configuration file includes commented examples for various MCP servers that provide tools:
+✅ With the function calling fix, all MCP tools now work with Ollama! The configuration file includes commented examples for various MCP servers that provide tools:
 - filesystem - File system operations
 - github - GitHub integration
 - postgres/sqlite - Database operations
@@ -68,7 +68,7 @@ To enable any MCP server, uncomment the relevant section in `~/.config/codex/con
 - ✅ Models are available and responding
 - ✅ Configuration files are in place
 - ✅ Environment variables are set
-- ⚠️  **Tool/Function calling has limitations** - See [OLLAMA_TOOLS_LIMITATION.md](./OLLAMA_TOOLS_LIMITATION.md)
+- ✅ **Tool/Function calling is now supported!** - See [OLLAMA_TOOLS_SUPPORT.md](./OLLAMA_TOOLS_SUPPORT.md) for details
 
 ### Next Steps
 
