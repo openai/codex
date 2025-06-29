@@ -28,10 +28,19 @@ else
   VERSION=$(printf '0.0.%d' "$(date +%y%m%d%H%M)")
 fi
 TAG="rust-v$VERSION"
+RELEASE_BRANCH="release/$TAG"
+
 git checkout -b "$TAG"
 perl -i -pe "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
 git add Cargo.toml
 git commit -m "Release $VERSION"
 git tag -a "$TAG" -m "Release $VERSION"
+
+# The commit identified by the tag must be reachable from a branch so that
+# when GitHub creates the `Source code (tar.gz)` for the release, it can find
+# the commit. This is a requirement for Homebrew to be able to install the
+# package from the tarball.
+git push origin "$RELEASE_BRANCH"
 git push origin "refs/tags/$TAG"
+
 git checkout "$CURRENT_BRANCH"
