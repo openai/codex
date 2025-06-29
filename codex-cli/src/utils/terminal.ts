@@ -1,6 +1,8 @@
 import type { Instance } from "ink";
 import type React from "react";
 
+import { mcpManager } from "./mcp/core/singleton";
+
 let inkRenderer: Instance | null = null;
 
 // Track whether the clean‑up routine has already executed so repeat calls are
@@ -65,6 +67,9 @@ export function onExit(): void {
   }
 
   didRunOnExit = true;
+
+  // Close all MCP clients
+  mcpManager.disconnectAll();
 
   // First make sure Ink is properly unmounted so it can restore any terminal
   // state it modified (e.g. raw‑mode on stdin). Failing to do so leaves the
