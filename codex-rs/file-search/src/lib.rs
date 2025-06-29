@@ -6,6 +6,7 @@ use nucleo_matcher::pattern::AtomKind;
 use nucleo_matcher::pattern::CaseMatching;
 use nucleo_matcher::pattern::Normalization;
 use nucleo_matcher::pattern::Pattern;
+use serde::Serialize;
 use std::cell::UnsafeCell;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
@@ -21,13 +22,31 @@ mod cli;
 
 pub use cli::Cli;
 
+/// A single match result returned from the search.
+///
+/// * `score` – Relevance score returned by `nucleo_matcher`.
+/// * `path`  – Path to the matched file (relative to the search directory).
+/// * `indices` – Optional list of character indices that matched the query.
+///   These are only filled when the caller of [`run`] sets
+///   `compute_indices` to `true`.  The indices vector follows the
+///   guidance from `nucleo_matcher::Pattern::indices`: they are
+///   unique and sorted in ascending order so that callers can use
+///   them directly for highlighting.
+#[derive(Debug, Clone, Serialize)]
+pub struct FileMatch {
+    pub score: u32,
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub indices: Option<Vec<u32>>, // Sorted & deduplicated when present
+}
+
 pub struct FileSearchResults {
-    pub matches: Vec<(u32, String)>,
+    pub matches: Vec<FileMatch>,
     pub total_match_count: usize,
 }
 
 pub trait Reporter {
-    fn report_match(&self, file: &str, score: u32);
+    fn report_match(&self, file_match: &FileMatch);
     fn warn_matches_truncated(&self, total_match_count: usize, shown_match_count: usize);
     fn warn_no_search_pattern(&self, search_directory: &Path);
 }
@@ -37,6 +56,7 @@ pub async fn run_main<T: Reporter>(
         pattern,
         limit,
         cwd,
+        compute_indices,
         json: _,
         exclude,
         threads,
@@ -84,12 +104,13 @@ pub async fn run_main<T: Reporter>(
         exclude,
         threads,
         cancel_flag,
+        compute_indices,
     )?;
     let match_count = matches.len();
     let matches_truncated = total_match_count > match_count;
 
-    for (score, file) in matches {
-        reporter.report_match(&file, score);
+    for file_match in matches {
+        reporter.report_match(&file_match);
     }
     if matches_truncated {
         reporter.warn_matches_truncated(total_match_count, match_count);
@@ -107,6 +128,7 @@ pub fn run(
     exclude: Vec<String>,
     threads: NonZero<usize>,
     cancel_flag: Arc<AtomicBool>,
+    compute_indices: bool,
 ) -> anyhow::Result<FileSearchResults> {
     let pattern = create_pattern(pattern_text);
     // Create one BestMatchesList per worker thread so that each worker can
@@ -215,8 +237,41 @@ pub fn run(
         }
     }
 
-    let mut matches: Vec<(u32, String)> = global_heap.into_iter().map(|r| r.0).collect();
-    sort_matches(&mut matches);
+    let mut raw_matches: Vec<(u32, String)> = global_heap.into_iter().map(|r| r.0).collect();
+    sort_matches(&mut raw_matches);
+
+    // Transform into `FileMatch`, optionally computing indices.
+    let mut matcher = if compute_indices {
+        Some(Matcher::new(nucleo_matcher::Config::DEFAULT))
+    } else {
+        None
+    };
+
+    let matches: Vec<FileMatch> = raw_matches
+        .into_iter()
+        .map(|(score, path)| {
+            let indices = if compute_indices {
+                let mut buf = Vec::<char>::new();
+                let haystack: Utf32Str<'_> = Utf32Str::new(&path, &mut buf);
+                let mut idx_vec: Vec<u32> = Vec::new();
+                if let Some(ref mut m) = matcher {
+                    // Ignore the score returned from indices – we already have `score`.
+                    pattern.indices(haystack, m, &mut idx_vec);
+                }
+                idx_vec.sort_unstable();
+                idx_vec.dedup();
+                Some(idx_vec)
+            } else {
+                None
+            };
+
+            FileMatch {
+                score,
+                path,
+                indices,
+            }
+        })
+        .collect();
 
     Ok(FileSearchResults {
         matches,

@@ -15,9 +15,6 @@ concurrency:
   group: ${{ github.workflow }}
   cancel-in-progress: true
 
-env:
-  TAG_REGEX: '^rust-v[0-9]+\.[0-9]+\.[0-9]+$'
-
 jobs:
   tag-check:
     runs-on: ubuntu-latest
@@ -33,8 +30,8 @@ jobs:
           # 1. Must be a tag and match the regex
           [[ "${GITHUB_REF_TYPE}" == "tag" ]] \
             || { echo "❌  Not a tag push"; exit 1; }
-          [[ "${GITHUB_REF_NAME}" =~ ${TAG_REGEX} ]] \
-            || { echo "❌  Tag '${GITHUB_REF_NAME}' != ${TAG_REGEX}"; exit 1; }
+          [[ "${GITHUB_REF_NAME}" =~ ^rust-v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)(\.[0-9]+)?)?$ ]] \
+            || { echo "❌  Tag '${GITHUB_REF_NAME}' doesn't match expected format"; exit 1; }
 
           # 2. Extract versions
           tag_ver="${GITHUB_REF_NAME#rust-v}"

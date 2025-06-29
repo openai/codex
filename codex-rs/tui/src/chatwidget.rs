@@ -38,6 +38,7 @@ use crate::bottom_pane::InputResult;
 use crate::conversation_history_widget::ConversationHistoryWidget;
 use crate::history_cell::PatchEventType;
 use crate::user_approval_widget::ApprovalRequest;
+use codex_file_search::FileMatch;
 
 pub(crate) struct ChatWidget<'a> {
     app_event_tx: AppEventSender,
@@ -143,7 +144,7 @@ impl ChatWidget<'_> {
         // However, when the slash-command popup is visible we forward the key
         // to the bottom pane so it can handle auto-completion.
         if matches!(key_event.code, crossterm::event::KeyCode::Tab)
-            && !self.bottom_pane.is_command_popup_visible()
+            && !self.bottom_pane.is_popup_visible()
         {
             self.input_focus = match self.input_focus {
                 InputFocus::HistoryPane => InputFocus::BottomPane,
@@ -402,6 +403,11 @@ impl ChatWidget<'_> {
         };
         self.conversation_history.scroll(magnified_scroll_delta);
         self.request_redraw();
+    }
+
+    /// Forward file-search results to the bottom pane.
+    pub(crate) fn apply_file_search_result(&mut self, query: String, matches: Vec<FileMatch>) {
+        self.bottom_pane.on_file_search_result(query, matches);
     }
 
     /// Handle Ctrl-C key press.

@@ -1,6 +1,7 @@
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::chatwidget::ChatWidget;
+use crate::file_search::FileSearchManager;
 use crate::get_git_diff::get_git_diff;
 use crate::git_warning_screen::GitWarningOutcome;
 use crate::git_warning_screen::GitWarningScreen;
@@ -42,6 +43,8 @@ pub(crate) struct App<'a> {
 
     /// Config is stored here so we can recreate ChatWidgets as needed.
     config: Config,
+
+    file_search: FileSearchManager,
 
     /// Stored parameters needed to instantiate the ChatWidget later, e.g.,
     /// after dismissing the Git-repo warning.
@@ -156,11 +159,13 @@ impl<'a> App<'a> {
             )
         };
 
+        let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
         Self {
             app_event_tx,
             app_event_rx,
             app_state,
             config,
+            file_search,
             chat_args,
         }
     }
@@ -273,6 +278,14 @@ impl<'a> App<'a> {
                         }
                     }
                 },
+                AppEvent::StartFileSearch(query) => {
+                    self.file_search.on_user_query(query);
+                }
+                AppEvent::FileSearchResult { query, matches } => {
+                    if let AppState::Chat { widget } = &mut self.app_state {
+                        widget.apply_file_search_result(query, matches);
+                    }
+                }
             }
         }
         terminal.clear()?;
