@@ -83,7 +83,11 @@ Next, set your OpenAI API key as an environment variable:
 export OPENAI_API_KEY="your-api-key-here"
 ```
 
-> **Note:** This command sets the key only for your current terminal session. You can add the `export` line to your shell's configuration file (e.g., `~/.zshrc`) but we recommend setting for the session. **Tip:** You can also place your API key into a `.env` file at the root of your project:
+> [!NOTE]
+> This command sets the key only for your current terminal session. You can add the `export` line to your shell's configuration file (e.g., `~/.zshrc`) but we recommend setting for the session.
+
+> [!TIP]
+> You can also place your API key into a `.env` file at the root of your project:
 >
 > ```env
 > OPENAI_API_KEY=your-api-key-here
@@ -185,7 +189,6 @@ the network enabled, once we're confident in additional safeguards.
 The hardening mechanism Codex uses depends on your OS:
 
 - **macOS 12+** - commands are wrapped with **Apple Seatbelt** (`sandbox-exec`).
-
   - Everything is placed in a read-only jail except for a small set of
     writable roots (`$PWD`, `$TMPDIR`, `~/.codex`, etc.).
   - Outbound network is _fully blocked_ by default - even if a child process
@@ -209,6 +212,7 @@ The hardening mechanism Codex uses depends on your OS:
 | Git (optional, recommended) | 2.23+ for built-in PR helpers                                   |
 | RAM                         | 4-GB minimum (8-GB recommended)                                 |
 
+> [!IMPORTANT]
 > Never run `sudo npm install -g`; fix npm permissions instead.
 
 ---
