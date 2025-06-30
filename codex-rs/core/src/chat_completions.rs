@@ -114,8 +114,7 @@ pub(crate) async fn stream_chat_completions(
         "tools": tools_json,
     });
 
-    let base_url = provider.base_url.trim_end_matches('/');
-    let url = format!("{}/chat/completions", base_url);
+    let url = provider.get_full_url();
 
     debug!(
         "POST to {url}: {}",

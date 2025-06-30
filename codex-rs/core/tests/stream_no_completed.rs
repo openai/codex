@@ -96,6 +96,7 @@ async fn retries_on_early_close() {
         env_key: Some("PATH".into()),
         env_key_instructions: None,
         wire_api: codex_core::WireApi::Responses,
+        query_params: None,
     };
 
     let ctrl_c = std::sync::Arc::new(tokio::sync::Notify::new());

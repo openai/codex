@@ -107,6 +107,7 @@ async fn keeps_previous_response_id_between_tasks() {
         env_key: Some("PATH".into()),
         env_key_instructions: None,
         wire_api: codex_core::WireApi::Responses,
+        query_params: None,
     };
 
     // Init session
