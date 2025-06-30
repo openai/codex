@@ -125,6 +125,16 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
                 query_params: None,
             },
         ),
+        (
+            "portkey",
+            P {
+                name: "Portkey".into(),
+                base_url: "https://api.portkey.ai/v1".into(),
+                env_key: Some("PORTKEY_API_KEY".into()),
+                env_key_instructions: None,
+                wire_api: WireApi::Chat,
+            },
+        ),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), v))
