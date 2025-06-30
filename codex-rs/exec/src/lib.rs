@@ -31,7 +31,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         model,
         config_profile,
         full_auto,
-        sandbox,
+        dangerously_bypass_approvals_and_sandbox,
         cwd,
         skip_git_repo_check,
         color,
@@ -85,9 +85,11 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     };
 
     let sandbox_policy = if full_auto {
-        Some(SandboxPolicy::new_full_auto_policy())
+        Some(SandboxPolicy::new_workspace_write_policy())
+    } else if dangerously_bypass_approvals_and_sandbox {
+        Some(SandboxPolicy::DangerFullAccess)
     } else {
-        sandbox.permissions.clone().map(Into::into)
+        None
     };
 
     // Load configuration and determine approval policy

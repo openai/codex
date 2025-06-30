@@ -1,4 +1,5 @@
 use codex_common::elapsed::format_elapsed;
+use codex_common::summarize_sandbox_policy;
 use codex_core::WireApi;
 use codex_core::config::Config;
 use codex_core::model_supports_reasoning_summaries;
@@ -15,6 +16,7 @@ use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::SessionConfiguredEvent;
+use codex_core::protocol::TokenUsage;
 use owo_colors::OwoColorize;
 use owo_colors::Style;
 use shlex::try_join;
@@ -134,7 +136,7 @@ impl EventProcessor {
             ("model", config.model.clone()),
             ("provider", config.model_provider_id.clone()),
             ("approval", format!("{:?}", config.approval_policy)),
-            ("sandbox", format!("{:?}", config.sandbox_policy)),
+            ("sandbox", summarize_sandbox_policy(&config.sandbox_policy)),
         ];
         if config.model_provider.wire_api == WireApi::Responses
             && model_supports_reasoning_summaries(&config.model)
@@ -178,6 +180,9 @@ impl EventProcessor {
             }
             EventMsg::TaskStarted | EventMsg::TaskComplete(_) => {
                 // Ignore.
+            }
+            EventMsg::TokenCount(TokenUsage { total_tokens, .. }) => {
+                ts_println!(self, "tokens used: {total_tokens}");
             }
             EventMsg::AgentMessage(AgentMessageEvent { message }) => {
                 ts_println!(

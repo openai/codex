@@ -1,6 +1,8 @@
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::chatwidget::ChatWidget;
+use crate::file_search::FileSearchManager;
+use crate::get_git_diff::get_git_diff;
 use crate::git_warning_screen::GitWarningOutcome;
 use crate::git_warning_screen::GitWarningScreen;
 use crate::login_screen::LoginScreen;
@@ -10,7 +12,6 @@ use crate::slash_command::SlashCommand;
 use crate::tui;
 use codex_core::config::Config;
 use codex_core::protocol::Event;
-use codex_core::protocol::Op;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -42,6 +43,8 @@ pub(crate) struct App<'a> {
 
     /// Config is stored here so we can recreate ChatWidgets as needed.
     config: Config,
+
+    file_search: FileSearchManager,
 
     /// Stored parameters needed to instantiate the ChatWidget later, e.g.,
     /// after dismissing the Git-repo warning.
@@ -156,11 +159,13 @@ impl<'a> App<'a> {
             )
         };
 
+        let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
         Self {
             app_event_tx,
             app_event_rx,
             app_state,
             config,
+            file_search,
             chat_args,
         }
     }
@@ -192,10 +197,11 @@ impl<'a> App<'a> {
                             modifiers: crossterm::event::KeyModifiers::CONTROL,
                             ..
                         } => {
-                            // Forward interrupt to ChatWidget when active.
                             match &mut self.app_state {
                                 AppState::Chat { widget } => {
-                                    widget.submit_op(Op::Interrupt);
+                                    if widget.on_ctrl_c() {
+                                        self.app_event_tx.send(AppEvent::ExitRequest);
+                                    }
                                 }
                                 AppState::Login { .. } | AppState::GitWarning { .. } => {
                                     // No-op.
@@ -250,7 +256,36 @@ impl<'a> App<'a> {
                     SlashCommand::Quit => {
                         break;
                     }
+                    SlashCommand::Diff => {
+                        let (is_git_repo, diff_text) = match get_git_diff() {
+                            Ok(v) => v,
+                            Err(e) => {
+                                let msg = format!("Failed to compute diff: {e}");
+                                if let AppState::Chat { widget } = &mut self.app_state {
+                                    widget.add_diff_output(msg);
+                                }
+                                continue;
+                            }
+                        };
+
+                        if let AppState::Chat { widget } = &mut self.app_state {
+                            let text = if is_git_repo {
+                                diff_text
+                            } else {
+                                "`/diff` — _not inside a git repository_".to_string()
+                            };
+                            widget.add_diff_output(text);
+                        }
+                    }
                 },
+                AppEvent::StartFileSearch(query) => {
+                    self.file_search.on_user_query(query);
+                }
+                AppEvent::FileSearchResult { query, matches } => {
+                    if let AppState::Chat { widget } = &mut self.app_state {
+                        widget.apply_file_search_result(query, matches);
+                    }
+                }
             }
         }
         terminal.clear()?;

@@ -206,6 +206,10 @@ impl ConversationHistoryWidget {
         self.add_to_history(HistoryCell::new_background_event(message));
     }
 
+    pub fn add_diff_output(&mut self, diff_output: String) {
+        self.add_to_history(HistoryCell::new_diff_output(diff_output));
+    }
+
     pub fn add_error(&mut self, message: String) {
         self.add_to_history(HistoryCell::new_error_event(message));
     }

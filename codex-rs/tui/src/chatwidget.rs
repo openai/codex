@@ -18,6 +18,7 @@ use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::TaskCompleteEvent;
+use codex_core::protocol::TokenUsage;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
@@ -37,6 +38,7 @@ use crate::bottom_pane::InputResult;
 use crate::conversation_history_widget::ConversationHistoryWidget;
 use crate::history_cell::PatchEventType;
 use crate::user_approval_widget::ApprovalRequest;
+use codex_file_search::FileMatch;
 
 pub(crate) struct ChatWidget<'a> {
     app_event_tx: AppEventSender,
@@ -46,6 +48,7 @@ pub(crate) struct ChatWidget<'a> {
     input_focus: InputFocus,
     config: Config,
     initial_user_message: Option<UserMessage>,
+    token_usage: TokenUsage,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -131,15 +134,17 @@ impl ChatWidget<'_> {
                 initial_prompt.unwrap_or_default(),
                 initial_images,
             ),
+            token_usage: TokenUsage::default(),
         }
     }
 
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
+        self.bottom_pane.clear_ctrl_c_quit_hint();
         // Special-case <Tab>: normally toggles focus between history and bottom panes.
         // However, when the slash-command popup is visible we forward the key
         // to the bottom pane so it can handle auto-completion.
         if matches!(key_event.code, crossterm::event::KeyCode::Tab)
-            && !self.bottom_pane.is_command_popup_visible()
+            && !self.bottom_pane.is_popup_visible()
         {
             self.input_focus = match self.input_focus {
                 InputFocus::HistoryPane => InputFocus::BottomPane,
@@ -241,6 +246,7 @@ impl ChatWidget<'_> {
                 }
             }
             EventMsg::TaskStarted => {
+                self.bottom_pane.clear_ctrl_c_quit_hint();
                 self.bottom_pane.set_task_running(true);
                 self.request_redraw();
             }
@@ -249,6 +255,11 @@ impl ChatWidget<'_> {
             }) => {
                 self.bottom_pane.set_task_running(false);
                 self.request_redraw();
+            }
+            EventMsg::TokenCount(token_usage) => {
+                self.token_usage = add_token_usage(&self.token_usage, &token_usage);
+                self.bottom_pane
+                    .set_token_usage(self.token_usage.clone(), self.config.model_context_window);
             }
             EventMsg::Error(ErrorEvent { message }) => {
                 self.conversation_history.add_error(message);
@@ -376,6 +387,11 @@ impl ChatWidget<'_> {
         self.app_event_tx.send(AppEvent::Redraw);
     }
 
+    pub(crate) fn add_diff_output(&mut self, diff_output: String) {
+        self.conversation_history.add_diff_output(diff_output);
+        self.request_redraw();
+    }
+
     pub(crate) fn handle_scroll_delta(&mut self, scroll_delta: i32) {
         // If the user is trying to scroll exactly one line, we let them, but
         // otherwise we assume they are trying to scroll in larger increments.
@@ -387,6 +403,27 @@ impl ChatWidget<'_> {
         };
         self.conversation_history.scroll(magnified_scroll_delta);
         self.request_redraw();
+    }
+
+    /// Forward file-search results to the bottom pane.
+    pub(crate) fn apply_file_search_result(&mut self, query: String, matches: Vec<FileMatch>) {
+        self.bottom_pane.on_file_search_result(query, matches);
+    }
+
+    /// Handle Ctrl-C key press.
+    /// Returns true if the key press was handled, false if it was not.
+    /// If the key press was not handled, the caller should handle it (likely by exiting the process).
+    pub(crate) fn on_ctrl_c(&mut self) -> bool {
+        if self.bottom_pane.is_task_running() {
+            self.bottom_pane.clear_ctrl_c_quit_hint();
+            self.submit_op(Op::Interrupt);
+            false
+        } else if self.bottom_pane.ctrl_c_quit_hint_visible() {
+            true
+        } else {
+            self.bottom_pane.show_ctrl_c_quit_hint();
+            false
+        }
     }
 
     /// Forward an `Op` directly to codex.
@@ -408,5 +445,33 @@ impl WidgetRef for &ChatWidget<'_> {
 
         self.conversation_history.render(chunks[0], buf);
         (&self.bottom_pane).render(chunks[1], buf);
+    }
+}
+
+fn add_token_usage(current_usage: &TokenUsage, new_usage: &TokenUsage) -> TokenUsage {
+    let cached_input_tokens = match (
+        current_usage.cached_input_tokens,
+        new_usage.cached_input_tokens,
+    ) {
+        (Some(current), Some(new)) => Some(current + new),
+        (Some(current), None) => Some(current),
+        (None, Some(new)) => Some(new),
+        (None, None) => None,
+    };
+    let reasoning_output_tokens = match (
+        current_usage.reasoning_output_tokens,
+        new_usage.reasoning_output_tokens,
+    ) {
+        (Some(current), Some(new)) => Some(current + new),
+        (Some(current), None) => Some(current),
+        (None, Some(new)) => Some(new),
+        (None, None) => None,
+    };
+    TokenUsage {
+        input_tokens: current_usage.input_tokens + new_usage.input_tokens,
+        cached_input_tokens,
+        output_tokens: current_usage.output_tokens + new_usage.output_tokens,
+        reasoning_output_tokens,
+        total_tokens: current_usage.total_tokens + new_usage.total_tokens,
     }
 }

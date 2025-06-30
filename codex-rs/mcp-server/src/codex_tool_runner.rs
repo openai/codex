@@ -162,6 +162,7 @@ pub async fn run_codex_tool_session(
                     }
                     EventMsg::Error(_)
                     | EventMsg::TaskStarted
+                    | EventMsg::TokenCount(_)
                     | EventMsg::AgentReasoning(_)
                     | EventMsg::McpToolCallBegin(_)
                     | EventMsg::McpToolCallEnd(_)
