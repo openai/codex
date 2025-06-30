@@ -1,5 +1,5 @@
 {
-  "name": "Codex",
+  "name": "Codex Agentic Development Environment",
   "build": {
     "dockerfile": "Dockerfile",
     "context": "..",
@@ -10,18 +10,121 @@
      case your host is x86 (or vice-versa). */
   "runArgs": ["--platform=linux/arm64"],
 
+  "features": {
+    "ghcr.io/devcontainers/features/github-cli:1": {
+      "installDirectlyFromGitHubRelease": true,
+      "version": "latest"
+    },
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {
+      "version": "latest",
+      "enableNonRootDocker": "true",
+      "moby": "true"
+    },
+    "ghcr.io/devcontainers/features/python:1": {
+      "version": "3.11",
+      "installTools": true,
+      "optimize": true
+    },
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "18",
+      "nodeGypDependencies": true,
+      "installYarnUsingApt": true
+    }
+  },
+
   "containerEnv": {
     "RUST_BACKTRACE": "1",
-    "CARGO_TARGET_DIR": "${containerWorkspaceFolder}/codex-rs/target-arm64"
+    "CARGO_TARGET_DIR": "${containerWorkspaceFolder}/codex-rs/target-arm64",
+    "CODEX_ENVIRONMENT": "development",
+    "NODE_ENV": "development",
+    "PYTHONPATH": "/workspaces/codex",
+    "PATH": "/usr/local/bin:/usr/bin:/bin:/home/ubuntu/.cargo/bin:${PATH}"
   },
 
   "remoteUser": "ubuntu",
+
   "customizations": {
     "vscode": {
       "settings": {
-        "terminal.integrated.defaultProfile.linux": "bash"
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": {
+          "source.fixAll.eslint": true,
+          "source.organizeImports": true
+        },
+        "typescript.preferences.importModuleSpecifier": "relative",
+        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "rust-analyzer.cargo.loadOutDirsFromCheck": true,
+        "rust-analyzer.procMacro.enable": true,
+        "git.enableSmartCommit": true,
+        "git.autofetch": true
       },
-      "extensions": ["rust-lang.rust-analyzer"]
+      "extensions": [
+        // Core development
+        "rust-lang.rust-analyzer",
+        "ms-vscode.vscode-typescript-next",
+        "ms-python.python",
+
+        // AI assistance
+        "GitHub.copilot",
+        "GitHub.copilot-chat",
+
+        // Code quality
+        "esbenp.prettier-vscode",
+        "dbaeumer.vscode-eslint",
+        "ms-python.pylint",
+        "timonwong.shellcheck",
+
+        // Git and GitHub
+        "eamodio.gitlens",
+        "GitHub.vscode-pull-request-github",
+        "github.vscode-github-actions",
+
+        // Docker and containers
+        "ms-azuretools.vscode-docker",
+
+        // Documentation and markdown
+        "yzhang.markdown-all-in-one",
+        "bierner.markdown-mermaid",
+
+        // YAML and configuration
+        "redhat.vscode-yaml",
+
+        // Testing
+        "ms-vscode.vscode-jest",
+
+        // Productivity
+        "gruntfuggly.todo-tree",
+        "PKief.material-icon-theme"
+      ]
+    }
+  },
+
+  "postCreateCommand": "chmod +x ~/tool-builder.sh && npm install && pip install -r requirements.txt || echo 'Setup completed with warnings'",
+
+  "forwardPorts": [3000, 8000, 8080, 5432, 6379],
+
+  "portsAttributes": {
+    "3000": {
+      "label": "Development Server",
+      "onAutoForward": "notify"
+    },
+    "8000": {
+      "label": "API Server",
+      "onAutoForward": "silent"
+    },
+    "8080": {
+      "label": "Main Application",
+      "onAutoForward": "openPreview"
+    }
+  },
+
+  "secrets": {
+    "OPENAI_API_KEY": {
+      "description": "OpenAI API key for tool generation"
+    },
+    "GITHUB_TOKEN": {
+      "description": "GitHub personal access token"
     }
   }
 }
