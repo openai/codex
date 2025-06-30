@@ -41,8 +41,11 @@ base_url = "https://api.openai.com/v1"
 # using Codex with this provider. The value of the environment variable must be
 # non-empty and will be used in the `Bearer TOKEN` HTTP header for the POST request.
 env_key = "OPENAI_API_KEY"
-# Valid values for wire_api are "chat" and "responses".
+# Valid values for wire_api are "chat" and "responses". Defaults to "chat" if omitted.
 wire_api = "chat"
+# If necessary, extra query params that need to be added to the URL.
+# See the Azure example below.
+query_params = {}
 ```
 
 Note this makes it possible to use Codex CLI with non-OpenAI models, so long as they use a wire API that is compatible with the OpenAI chat completions API. For example, you could define the following provider to use Codex CLI with Ollama running locally:
@@ -51,7 +54,6 @@ Note this makes it possible to use Codex CLI with non-OpenAI models, so long as 
 [model_providers.ollama]
 name = "Ollama"
 base_url = "http://localhost:11434/v1"
-wire_api = "chat"
 ```
 
 Or a third-party provider (using a distinct environment variable for the API key):
@@ -61,7 +63,17 @@ Or a third-party provider (using a distinct environment variable for the API key
 name = "Mistral"
 base_url = "https://api.mistral.ai/v1"
 env_key = "MISTRAL_API_KEY"
-wire_api = "chat"
+```
+
+Note that Azure requires `api-version` to be passed as a query parameter, so be sure to specify it as part of `query_params` when defining the Azure provider:
+
+```toml
+[model_providers.azure]
+name = "Azure"
+# Make sure you set the appropriate subdomain for this URL.
+base_url = "https://YOUR_PROJECT_NAME.openai.azure.com/openai"
+env_key = "AZURE_OPENAI_API_KEY"  # Or "OPENAI_API_KEY", whichever you use.
+query_params = { api-version = "2025-04-01-preview" }
 ```
 
 ## model_provider
