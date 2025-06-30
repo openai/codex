@@ -21,6 +21,7 @@
 - [CLI reference](#cli-reference)
 - [Memory & project docs](#memory--project-docs)
 - [Non-interactive / CI mode](#non-interactive--ci-mode)
+- [IBM Cloud deployment](#ibm-cloud-deployment)
 - [Tracing / verbose logging](#tracing--verbose-logging)
 - [Recipes](#recipes)
 - [Installation](#installation)
@@ -251,6 +252,17 @@ Run Codex head-less in pipelines. Example GitHub Action step:
 ```
 
 Set `CODEX_QUIET_MODE=1` to silence interactive UI noise.
+
+### IBM Cloud deployment
+
+This repository ships with an example workflow for deploying to IBM Cloud.
+To use `.github/workflows/ibm.yml` you must create two GitHub secrets:
+
+- `IBM_CLOUD_API_KEY` – your IBM Cloud API key
+- `ICR_NAMESPACE` – your container registry namespace
+
+The workflow reads these secrets during the `ibmcloud login` step. Without
+them the job will fail with `BXNIM0109E: Property 'apikey' either missing or empty`.
 
 ## Tracing / verbose logging
 
