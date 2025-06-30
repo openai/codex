@@ -157,9 +157,7 @@ jobs:
   release:
     needs: build
     name: release
-    runs-on: ubuntu-24.04
-    env:
-      RELEASE_TAG: codex-rs-${{ github.sha }}-${{ github.run_attempt }}-${{ github.ref_name }}
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/download-artifact@v4
@@ -169,9 +167,19 @@ jobs:
       - name: List
         run: ls -R dist/
 
-      - uses: softprops/action-gh-release@v2
+      - name: Define release name
+        id: release_name
+        run: |
+          # Extract the version from the tag name, which is in the format
+          # "rust-v0.1.0".
+          version="${GITHUB_REF_NAME#rust-v}"
+          echo "name=${version}" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ env.RELEASE_TAG }}
+          name: ${{ steps.release_name.outputs.name }}
+          tag_name: ${{ github.ref_name }}
           files: dist/**
           # For now, tag releases as "prerelease" because we are not claiming
           # the Rust CLI is stable yet.
@@ -181,5 +189,5 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag: ${{ env.RELEASE_TAG }}
+          tag: ${{ github.ref_name }}
           config: .github/dotslash-config.json

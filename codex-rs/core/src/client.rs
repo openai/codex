@@ -123,9 +123,7 @@ impl ModelClient {
             stream: true,
         };
 
-        let base_url = self.provider.base_url.clone();
-        let base_url = base_url.trim_end_matches('/');
-        let url = format!("{}/responses", base_url);
+        let url = self.provider.get_full_url();
         trace!("POST to {url}: {}", serde_json::to_string(&payload)?);
 
         let mut attempt = 0;

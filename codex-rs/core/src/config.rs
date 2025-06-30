@@ -658,6 +658,7 @@ disable_response_storage = true
             env_key: Some("OPENAI_API_KEY".to_string()),
             wire_api: crate::WireApi::Chat,
             env_key_instructions: None,
+            query_params: None,
         };
         let model_provider_map = {
             let mut model_provider_map = built_in_model_providers();

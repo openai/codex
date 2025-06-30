@@ -23,9 +23,10 @@ use crate::openai_api_key::get_openai_api_key;
 #[serde(rename_all = "lowercase")]
 pub enum WireApi {
     /// The experimental “Responses” API exposed by OpenAI at `/v1/responses`.
-    #[default]
     Responses,
+
     /// Regular Chat Completions compatible with `/v1/chat/completions`.
+    #[default]
     Chat,
 }
 
@@ -44,7 +45,32 @@ pub struct ModelProviderInfo {
     pub env_key_instructions: Option<String>,
 
     /// Which wire protocol this provider expects.
+    #[serde(default)]
     pub wire_api: WireApi,
+
+    /// Optional query parameters to append to the base URL.
+    pub query_params: Option<HashMap<String, String>>,
+}
+
+impl ModelProviderInfo {
+    pub(crate) fn get_full_url(&self) -> String {
+        let query_string = self
+            .query_params
+            .as_ref()
+            .map_or_else(String::new, |params| {
+                let full_params = params
+                    .iter()
+                    .map(|(k, v)| format!("{k}={v}"))
+                    .collect::<Vec<_>>()
+                    .join("&");
+                format!("?{full_params}")
+            });
+        let base_url = &self.base_url;
+        match self.wire_api {
+            WireApi::Responses => format!("{base_url}/responses{query_string}"),
+            WireApi::Chat => format!("{base_url}/chat/completions{query_string}"),
+        }
+    }
 }
 
 impl ModelProviderInfo {
@@ -96,10 +122,59 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
                 env_key: Some("OPENAI_API_KEY".into()),
                 env_key_instructions: Some("Create an API key (https://platform.openai.com) and export it as an environment variable.".into()),
                 wire_api: WireApi::Responses,
+                query_params: None,
             },
         ),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), v))
     .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    #[test]
+    fn test_deserialize_ollama_model_provider_toml() {
+        let azure_provider_toml = r#"
+name = "Ollama"
+base_url = "http://localhost:11434/v1"
+        "#;
+        let expected_provider = ModelProviderInfo {
+            name: "Ollama".into(),
+            base_url: "http://localhost:11434/v1".into(),
+            env_key: None,
+            env_key_instructions: None,
+            wire_api: WireApi::Chat,
+            query_params: None,
+        };
+
+        let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
+        assert_eq!(expected_provider, provider);
+    }
+
+    #[test]
+    fn test_deserialize_azure_model_provider_toml() {
+        let azure_provider_toml = r#"
+name = "Azure"
+base_url = "https://xxxxx.openai.azure.com/openai"
+env_key = "AZURE_OPENAI_API_KEY"
+query_params = { api-version = "2025-04-01-preview" }
+        "#;
+        let expected_provider = ModelProviderInfo {
+            name: "Azure".into(),
+            base_url: "https://xxxxx.openai.azure.com/openai".into(),
+            env_key: Some("AZURE_OPENAI_API_KEY".into()),
+            env_key_instructions: None,
+            wire_api: WireApi::Chat,
+            query_params: Some(maplit::hashmap! {
+                "api-version".to_string() => "2025-04-01-preview".to_string(),
+            }),
+        };
+
+        let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
+        assert_eq!(expected_provider, provider);
+    }
 }
