@@ -715,9 +715,9 @@ If you have direnv installed, you can use the following `.envrc` to automaticall
 
 ```bash
 cd codex-rs
-echo "use flake ../flake.nix#codex-cli" >> .envrc && direnv allow
-cd codex-cli
 echo "use flake ../flake.nix#codex-rs" >> .envrc && direnv allow
+cd codex-cli
+echo "use flake ../flake.nix#codex-cli" >> .envrc && direnv allow
 ```
 
 ---
