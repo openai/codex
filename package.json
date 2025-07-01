@@ -48,5 +48,6 @@
       "cd codex-cli && pnpm run typecheck"
     ]
   },
-  "packageManager": "pnpm@10.8.1"
+  "packageManager": "pnpm@10.8.1",
+  "version": "0.1.2505161708-rust-v0.0.2505161708"
 }
