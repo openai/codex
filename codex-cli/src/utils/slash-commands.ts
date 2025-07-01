@@ -33,4 +33,8 @@ export const SLASH_COMMANDS: Array<SlashCommand> = [
     description:
       "Show git diff of the working directory (or applied patches if not in git)",
   },
+  {
+    command: "/stats",
+    description: "Show file size statistics for the current directory",
+  },
 ];
