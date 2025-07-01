@@ -74,7 +74,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: pnpm stage-release
 
-      - name: Ensure README.md contains only ASCII and certain Unicode code points
+      - name: Ensure root README.md contains only ASCII and certain Unicode code points
         run: ./scripts/asciicheck.py README.md
-      - name: Check README ToC
+      - name: Check root README ToC
         run: python3 scripts/readme_toc.py README.md
+
+      - name: Ensure codex-cli/README.md contains only ASCII and certain Unicode code points
+        run: ./scripts/asciicheck.py codex-cli/README.md
+      - name: Check codex-cli/README ToC
+        run: python3 scripts/readme_toc.py codex-cli/README.md
