@@ -228,11 +228,13 @@ Key flags: `--model/-m`, `--approval-mode/-a`, `--quiet/-q`, and `--notify`.
 
 ## Memory & project docs
 
-You can give Codex extra instructions and guidance using `AGENTS.md` files. Codex looks for `AGENTS.md` files in the following places, and merges them top-down:
+You can give Codex extra instructions and guidance using instruction files. Codex looks for instruction files in the following places, and merges them top-down:
 
-1. `~/.codex/AGENTS.md` - personal global guidance
-2. `AGENTS.md` at repo root - shared project notes
+1. `~/.codex/instructions.md` - personal global guidance
+2. `AGENTS.md` at repo root - shared project notes  
 3. `AGENTS.md` in the current working directory - sub-folder/feature specifics
+
+For project documentation (items 2-3), Codex also supports legacy file names for backward compatibility: `CODEX.md`, `codex.md`, and `.codex.md`.
 
 Disable loading of these files with `--no-project-doc` or the environment variable `CODEX_DISABLE_PROJECT_DOC=1`.
 
@@ -452,7 +454,7 @@ Below is a comprehensive example of `config.json` with multiple custom providers
 
 ### Custom instructions
 
-You can create a `~/.codex/AGENTS.md` file to define custom guidance for the agent:
+You can create a `~/.codex/instructions.md` file to define custom guidance for the agent:
 
 ```markdown
 - Always respond with emojis
