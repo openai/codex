@@ -659,6 +659,7 @@ disable_response_storage = true
             wire_api: crate::WireApi::Chat,
             env_key_instructions: None,
             query_params: None,
+            custom_headers: None,
         };
         let model_provider_map = {
             let mut model_provider_map = built_in_model_providers();

@@ -22,6 +22,7 @@ import {
 } from "../config.js";
 import { log } from "../logger/log.js";
 import { parseToolCallArguments } from "../parsers.js";
+import { providers, getCustomHeaders } from "../providers.js";
 import { responsesCreateViaChatCompletions } from "../responses.js";
 import {
   ORIGIN,
@@ -309,6 +310,12 @@ export class AgentLoop {
     const apiKey = this.config.apiKey ?? process.env["OPENAI_API_KEY"] ?? "";
     const baseURL = getBaseUrl(this.provider);
 
+    // Get custom headers from provider config and environment variables
+    const providerInfo = providers[this.provider.toLowerCase()];
+    const customHeaders = providerInfo
+      ? getCustomHeaders(providerInfo, this.provider.toLowerCase())
+      : {};
+
     this.oai = new OpenAI({
       // The OpenAI JS SDK only requires `apiKey` when making requests against
       // the official API.  When running unit‑tests we stub out all network
@@ -326,6 +333,7 @@ export class AgentLoop {
           ? { "OpenAI-Organization": OPENAI_ORGANIZATION }
           : {}),
         ...(OPENAI_PROJECT ? { "OpenAI-Project": OPENAI_PROJECT } : {}),
+        ...customHeaders,
       },
       httpAgent: PROXY_URL ? new HttpsProxyAgent(PROXY_URL) : undefined,
       ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
@@ -344,6 +352,7 @@ export class AgentLoop {
             ? { "OpenAI-Organization": OPENAI_ORGANIZATION }
             : {}),
           ...(OPENAI_PROJECT ? { "OpenAI-Project": OPENAI_PROJECT } : {}),
+          ...customHeaders,
         },
         httpAgent: PROXY_URL ? new HttpsProxyAgent(PROXY_URL) : undefined,
         ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),

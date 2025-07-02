@@ -8,6 +8,7 @@ import {
   OPENAI_ORGANIZATION,
   OPENAI_PROJECT,
 } from "./config.js";
+import { providers, getCustomHeaders } from "./providers.js";
 import OpenAI, { AzureOpenAI } from "openai";
 
 type OpenAIClientConfig = {
@@ -30,6 +31,14 @@ export function createOpenAIClient(
   }
   if (OPENAI_PROJECT) {
     headers["OpenAI-Project"] = OPENAI_PROJECT;
+  }
+
+  // Add custom headers from provider config and environment variables.
+  const providerName = config.provider?.toLowerCase() || "openai";
+  const providerInfo = providers[providerName];
+  if (providerInfo) {
+    const customHeaders = getCustomHeaders(providerInfo, providerName);
+    Object.assign(headers, customHeaders);
   }
 
   if (config.provider?.toLowerCase() === "azure") {

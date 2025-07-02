@@ -43,6 +43,7 @@ pub struct ModelClient {
     model: String,
     client: reqwest::Client,
     provider: ModelProviderInfo,
+    provider_name: String,
     effort: ReasoningEffortConfig,
     summary: ReasoningSummaryConfig,
 }
@@ -51,6 +52,7 @@ impl ModelClient {
     pub fn new(
         model: impl ToString,
         provider: ModelProviderInfo,
+        provider_name: impl ToString,
         effort: ReasoningEffortConfig,
         summary: ReasoningSummaryConfig,
     ) -> Self {
@@ -58,6 +60,7 @@ impl ModelClient {
             model: model.to_string(),
             client: reqwest::Client::new(),
             provider,
+            provider_name: provider_name.to_string(),
             effort,
             summary,
         }
@@ -72,7 +75,7 @@ impl ModelClient {
             WireApi::Chat => {
                 // Create the raw streaming connection first.
                 let response_stream =
-                    stream_chat_completions(prompt, &self.model, &self.client, &self.provider)
+                    stream_chat_completions(prompt, &self.model, &self.client, &self.provider, &self.provider_name)
                         .await?;
 
                 // Wrap it with the aggregation adapter so callers see *only*
@@ -136,12 +139,19 @@ impl ModelClient {
                     instructions: None,
                 })
             })?;
-            let res = self
+            let mut req_builder = self
                 .client
                 .post(&url)
                 .bearer_auth(api_key)
                 .header("OpenAI-Beta", "responses=experimental")
-                .header(reqwest::header::ACCEPT, "text/event-stream")
+                .header(reqwest::header::ACCEPT, "text/event-stream");
+
+            // Add custom headers
+            for (key, value) in self.provider.get_custom_headers(&self.provider_name) {
+                req_builder = req_builder.header(key, value);
+            }
+
+            let res = req_builder
                 .json(&payload)
                 .send()
                 .await;

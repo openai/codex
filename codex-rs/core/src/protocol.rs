@@ -38,6 +38,9 @@ pub enum Op {
         /// Provider identifier ("openai", "openrouter", ...).
         provider: ModelProviderInfo,
 
+        /// Provider name/key used for environment variable lookup
+        provider_name: String,
+
         /// If not specified, server will use its default model.
         model: String,
 
