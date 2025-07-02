@@ -1,4 +1,5 @@
 use crate::cell_widget::CellWidget;
+use crate::datadog;
 use crate::exec_command::escape_command;
 use crate::markdown::append_markdown;
 use crate::text_block::TextBlock;
@@ -32,6 +33,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
 use tracing::error;
+use tui_scrollview::ScrollViewState;
 
 pub(crate) struct CommandOutput {
     pub(crate) exit_code: i32,
@@ -75,6 +77,8 @@ pub(crate) enum HistoryCell {
 
     /// An MCP tool call that has not finished yet.
     ActiveMcpToolCall {
+        server: String,
+        tool: String,
         call_id: String,
         /// Formatted line that shows the command name and arguments
         invocation: Line<'static>,
@@ -83,7 +87,12 @@ pub(crate) enum HistoryCell {
     },
 
     /// Completed MCP tool call where we show the result serialized as JSON.
-    CompletedMcpToolCall { view: TextBlock },
+    CompletedMcpToolCall {
+        view: TextBlock,
+        server: String,
+        tool: String,
+        tool_result: Option<String>,
+    },
 
     /// Completed MCP tool call where the result is an image.
     /// Admittedly, [mcp_types::CallToolResult] can have multiple content types,
@@ -119,7 +128,7 @@ pub(crate) enum HistoryCell {
     PendingPatch { view: TextBlock },
 }
 
-const TOOL_CALL_MAX_LINES: usize = 5;
+const TOOL_CALL_MAX_LINES: usize = 2;
 
 impl HistoryCell {
     pub(crate) fn new_session_info(
@@ -303,9 +312,9 @@ impl HistoryCell {
             .unwrap_or_default();
 
         let invocation_spans = vec![
-            Span::styled(server, Style::default().fg(Color::Blue)),
+            Span::styled(server.clone(), Style::default().fg(Color::Blue)),
             Span::raw("."),
-            Span::styled(tool, Style::default().fg(Color::Blue)),
+            Span::styled(tool.clone(), Style::default().fg(Color::Blue)),
             Span::raw("("),
             Span::styled(args_str, Style::default().fg(Color::Gray)),
             Span::raw(")"),
@@ -317,6 +326,8 @@ impl HistoryCell {
         let lines: Vec<Line<'static>> = vec![title_line, invocation.clone(), Line::from("")];
 
         HistoryCell::ActiveMcpToolCall {
+            server,
+            tool,
             call_id,
             invocation,
             start,
@@ -371,6 +382,8 @@ impl HistoryCell {
     }
 
     pub(crate) fn new_completed_mcp_tool_call(
+        server: String,
+        tool: String,
         num_cols: u16,
         invocation: Line<'static>,
         start: Instant,
@@ -398,6 +411,11 @@ impl HistoryCell {
         lines.push(title_line);
         lines.push(invocation);
 
+        // HACK: store the result text for the Datadog widgets to use
+        // In the future we should have a more general way to store arbitrary data in the history cell
+        // for adapters to use.
+        let mut result_text = None;
+
         match result {
             Ok(mcp_types::CallToolResult { content, .. }) => {
                 if !content.is_empty() {
@@ -406,6 +424,7 @@ impl HistoryCell {
                     for tool_call_result in content {
                         let line_text = match tool_call_result {
                             mcp_types::CallToolResultContent::TextContent(text) => {
+                                result_text = Some(text.text.clone());
                                 format_and_truncate_tool_result(
                                     &text.text,
                                     TOOL_CALL_MAX_LINES,
@@ -450,6 +469,9 @@ impl HistoryCell {
 
         HistoryCell::CompletedMcpToolCall {
             view: TextBlock::new(lines),
+            server,
+            tool,
+            tool_result: result_text,
         }
     }
 
@@ -572,7 +594,6 @@ impl CellWidget for HistoryCell {
             | HistoryCell::ErrorEvent { view }
             | HistoryCell::SessionInfo { view }
             | HistoryCell::CompletedExecCommand { view }
-            | HistoryCell::CompletedMcpToolCall { view }
             | HistoryCell::PendingPatch { view }
             | HistoryCell::ActiveExecCommand { view, .. }
             | HistoryCell::ActiveMcpToolCall { view, .. } => view.height(width),
@@ -580,6 +601,36 @@ impl CellWidget for HistoryCell {
                 image,
                 render_cache,
             } => ensure_image_cache(image, width, render_cache),
+            HistoryCell::CompletedMcpToolCall {
+                view,
+                server,
+                tool,
+                tool_result,
+            } => {
+                match (server.as_str(), tool.as_str(), tool_result) {
+                    ("datadog", "get_logs", Some(result_text)) => {
+                        match serde_json::from_str::<datadog::LogsResponse>(result_text) {
+                            Ok(response) => {
+                                // Header height + logs content height
+                                let log_rows = if response.data.is_empty() {
+                                    3
+                                } else {
+                                    response.data.len() + 3
+                                };
+                                view.height(width) + log_rows
+                            }
+                            Err(_) => view.height(width) + 3, // Header + error message
+                        }
+                    }
+                    ("datadog", "list_incidents", Some(_)) => {
+                        view.height(width) + 10 // Header + fixed height for incident widget
+                    }
+                    ("datadog", "get_metrics", Some(_)) => {
+                        view.height(width) + 15 // Header + fixed height for chart widget
+                    }
+                    _ => view.height(width),
+                }
+            }
         }
     }
 
@@ -594,7 +645,6 @@ impl CellWidget for HistoryCell {
             | HistoryCell::ErrorEvent { view }
             | HistoryCell::SessionInfo { view }
             | HistoryCell::CompletedExecCommand { view }
-            | HistoryCell::CompletedMcpToolCall { view }
             | HistoryCell::PendingPatch { view }
             | HistoryCell::ActiveExecCommand { view, .. }
             | HistoryCell::ActiveMcpToolCall { view, .. } => {
@@ -629,6 +679,41 @@ impl CellWidget for HistoryCell {
                     img_widget.render(area, buf);
                 }
             }
+            HistoryCell::CompletedMcpToolCall {
+                view,
+                server,
+                tool,
+                tool_result,
+            } => match (server.as_str(), tool.as_str(), tool_result) {
+                ("datadog", "get_logs", Some(result)) => {
+                    let mut state =
+                        ScrollViewState::with_offset(Position::new(0, first_visible_line as u16));
+                    let widget = datadog::ScrollableLogsWidget {
+                        logs: result.clone(),
+                        header_view: view.clone(),
+                    };
+                    widget.render(area, buf, &mut state);
+                }
+                ("datadog", "list_incidents", Some(result)) => {
+                    let mut state =
+                        ScrollViewState::with_offset(Position::new(0, first_visible_line as u16));
+                    let widget = datadog::ScrollableIncidentWidget {
+                        incidents: result.clone(),
+                        header_view: view.clone(),
+                    };
+                    widget.render(area, buf, &mut state);
+                }
+                ("datadog", "get_metrics", Some(result)) => {
+                    let mut state =
+                        ScrollViewState::with_offset(Position::new(0, first_visible_line as u16));
+                    let widget = datadog::ScrollableMetricsWidget {
+                        metrics: result.clone(),
+                        header_view: view.clone(),
+                    };
+                    widget.render(area, buf, &mut state);
+                }
+                _ => view.render_window(first_visible_line, area, buf),
+            },
         }
     }
 }
