@@ -51,7 +51,7 @@ export default function HistoryOverlay({ items, onExit }: Props): JSX.Element {
     } else if (input === "G") {
       setCursor(list.length - 1);
     }
-  });
+  }, { isActive: true });
 
   const rows = process.stdout.rows || 24;
   const headerRows = 2;

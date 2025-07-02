@@ -43,7 +43,7 @@ export default function DiffOverlay({
     } else if (input === "G") {
       setCursor(lines.length - 1);
     }
-  });
+  }, { isActive: true });
 
   const firstVisible = Math.min(
     Math.max(0, cursor - Math.floor(maxVisible / 2)),
