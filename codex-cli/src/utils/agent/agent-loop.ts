@@ -31,7 +31,7 @@ import {
 } from "../session.js";
 import { applyPatchToolInstructions } from "./apply-patch.js";
 import { handleExecCommand } from "./handle-exec-command.js";
-import { HttpsProxyAgent } from "https-proxy-agent";
+import { getHttpAgent } from "../http-agent.js";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import OpenAI, { APIConnectionTimeoutError, AzureOpenAI } from "openai";
@@ -43,7 +43,6 @@ const RATE_LIMIT_RETRY_WAIT_MS = parseInt(
   10,
 );
 
-// See https://github.com/openai/openai-node/tree/v4?tab=readme-ov-file#configuring-an-https-agent-eg-for-proxies
 const PROXY_URL = process.env["HTTPS_PROXY"];
 
 export type CommandConfirmation = {
@@ -309,6 +308,9 @@ export class AgentLoop {
     const apiKey = this.config.apiKey ?? process.env["OPENAI_API_KEY"] ?? "";
     const baseURL = getBaseUrl(this.provider);
 
+    // Use shared getHttpAgent utility for proxy/insecure handling
+    const agent = getHttpAgent(this.config, PROXY_URL);
+
     this.oai = new OpenAI({
       // The OpenAI JS SDK only requires `apiKey` when making requests against
       // the official API.  When running unit‑tests we stub out all network
@@ -327,7 +329,7 @@ export class AgentLoop {
           : {}),
         ...(OPENAI_PROJECT ? { "OpenAI-Project": OPENAI_PROJECT } : {}),
       },
-      httpAgent: PROXY_URL ? new HttpsProxyAgent(PROXY_URL) : undefined,
+      httpAgent: agent,
       ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
     });
 
@@ -345,7 +347,7 @@ export class AgentLoop {
             : {}),
           ...(OPENAI_PROJECT ? { "OpenAI-Project": OPENAI_PROJECT } : {}),
         },
-        httpAgent: PROXY_URL ? new HttpsProxyAgent(PROXY_URL) : undefined,
+        httpAgent: agent,
         ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
       });
     }
