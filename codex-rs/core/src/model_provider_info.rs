@@ -50,6 +50,9 @@ pub struct ModelProviderInfo {
 
     /// Optional query parameters to append to the base URL.
     pub query_params: Option<HashMap<String, String>>,
+
+    /// Optional custom headers to include in API requests.
+    pub custom_headers: Option<HashMap<String, String>>,
 }
 
 impl ModelProviderInfo {
@@ -103,6 +106,36 @@ impl ModelProviderInfo {
             None => Ok(None),
         }
     }
+
+    /// Returns custom headers from both provider config and provider-specific env var.
+    pub fn get_custom_headers(&self, provider_name: &str) -> HashMap<String, String> {
+        let mut headers = HashMap::new();
+        
+        // Add headers from provider config
+        if let Some(provider_headers) = &self.custom_headers {
+            headers.extend(provider_headers.clone());
+        }
+        
+        // Add headers from provider-specific environment variable (e.g., OPENAI_CUSTOM_HEADERS)
+        let env_var_name = format!("{}_CUSTOM_HEADERS", provider_name.to_uppercase());
+        if let Ok(env_headers) = std::env::var(&env_var_name) {
+            for line in env_headers.lines() {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                if let Some((key, value)) = line.split_once(':') {
+                    let key = key.trim();
+                    let value = value.trim();
+                    if !key.is_empty() {
+                        headers.insert(key.to_string(), value.to_string());
+                    }
+                }
+            }
+        }
+        
+        headers
+    }
 }
 
 /// Built-in default provider list.
@@ -123,6 +156,7 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
                 env_key_instructions: Some("Create an API key (https://platform.openai.com) and export it as an environment variable.".into()),
                 wire_api: WireApi::Responses,
                 query_params: None,
+                custom_headers: None,
             },
         ),
     ]
@@ -149,6 +183,7 @@ base_url = "http://localhost:11434/v1"
             env_key_instructions: None,
             wire_api: WireApi::Chat,
             query_params: None,
+            custom_headers: None,
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -172,9 +207,97 @@ query_params = { api-version = "2025-04-01-preview" }
             query_params: Some(maplit::hashmap! {
                 "api-version".to_string() => "2025-04-01-preview".to_string(),
             }),
+            custom_headers: None,
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
+        assert_eq!(expected_provider, provider);
+    }
+
+    #[test]
+    fn test_custom_headers_from_config() {
+        // Ensure no env var interference
+        unsafe {
+            std::env::remove_var("TEST_CUSTOM_HEADERS");
+        }
+        
+        let provider = ModelProviderInfo {
+            name: "Test Provider".into(),
+            base_url: "https://api.example.com".into(),
+            env_key: None,
+            env_key_instructions: None,
+            wire_api: WireApi::Chat,
+            query_params: None,
+            custom_headers: Some(maplit::hashmap! {
+                "X-Custom-Header".to_string() => "static-value".to_string(),
+                "X-Provider-Version".to_string() => "1.0.0".to_string(),
+            }),
+        };
+
+        let headers = provider.get_custom_headers("test");
+        
+        assert_eq!(headers.get("X-Custom-Header"), Some(&"static-value".to_string()));
+        assert_eq!(headers.get("X-Provider-Version"), Some(&"1.0.0".to_string()));
+    }
+
+    #[test]
+    fn test_provider_specific_custom_headers_env_var() {
+        // Set up environment variables for testing
+        unsafe {
+            std::env::set_var("OPENAI_CUSTOM_HEADERS", "X-Custom-Auth: Bearer token123\nX-App-Version: 2.0.0\nX-Extra: some value");
+        }
+        
+        let provider = ModelProviderInfo {
+            name: "Test Provider".into(),
+            base_url: "https://api.example.com".into(),
+            env_key: None,
+            env_key_instructions: None,
+            wire_api: WireApi::Chat,
+            query_params: None,
+            custom_headers: Some(maplit::hashmap! {
+                "X-Provider-Header".to_string() => "provider-value".to_string(),
+            }),
+        };
+
+        let headers = provider.get_custom_headers("openai");
+        
+        // Headers from provider config should be present
+        assert_eq!(headers.get("X-Provider-Header"), Some(&"provider-value".to_string()));
+        
+        // Headers from OPENAI_CUSTOM_HEADERS should be present
+        assert_eq!(headers.get("X-Custom-Auth"), Some(&"Bearer token123".to_string()));
+        assert_eq!(headers.get("X-App-Version"), Some(&"2.0.0".to_string()));
+        assert_eq!(headers.get("X-Extra"), Some(&"some value".to_string()));
+        
+        // Clean up
+        unsafe {
+            std::env::remove_var("OPENAI_CUSTOM_HEADERS");
+        }
+    }
+
+    #[test]
+    fn test_deserialize_custom_headers_toml() {
+        let provider_toml = r#"
+name = "Custom Provider"
+base_url = "https://api.example.com/v1"
+env_key = "CUSTOM_API_KEY"
+custom_headers = { "X-Custom-Auth" = "Bearer token", "X-App-Version" = "1.0.0" }
+        "#;
+        
+        let expected_provider = ModelProviderInfo {
+            name: "Custom Provider".into(),
+            base_url: "https://api.example.com/v1".into(),
+            env_key: Some("CUSTOM_API_KEY".into()),
+            env_key_instructions: None,
+            wire_api: WireApi::Chat,
+            query_params: None,
+            custom_headers: Some(maplit::hashmap! {
+                "X-Custom-Auth".to_string() => "Bearer token".to_string(),
+                "X-App-Version".to_string() => "1.0.0".to_string(),
+            }),
+        };
+
+        let provider: ModelProviderInfo = toml::from_str(provider_toml).unwrap();
         assert_eq!(expected_provider, provider);
     }
 }

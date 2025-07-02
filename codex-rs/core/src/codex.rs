@@ -108,6 +108,7 @@ impl Codex {
         let instructions = get_user_instructions(&config).await;
         let configure_session = Op::ConfigureSession {
             provider: config.model_provider.clone(),
+            provider_name: config.model_provider_id.clone(),
             model: config.model.clone(),
             model_reasoning_effort: config.model_reasoning_effort,
             model_reasoning_summary: config.model_reasoning_summary,
@@ -561,6 +562,7 @@ async fn submission_loop(
             }
             Op::ConfigureSession {
                 provider,
+                provider_name,
                 model,
                 model_reasoning_effort,
                 model_reasoning_summary,
@@ -588,6 +590,7 @@ async fn submission_loop(
                 let client = ModelClient::new(
                     model.clone(),
                     provider.clone(),
+                    provider_name.clone(),
                     model_reasoning_effort,
                     model_reasoning_summary,
                 );

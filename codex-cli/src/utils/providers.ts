@@ -1,7 +1,11 @@
-export const providers: Record<
-  string,
-  { name: string; baseURL: string; envKey: string }
-> = {
+export interface ProviderInfo {
+  name: string;
+  baseURL: string;
+  envKey: string;
+  customHeaders?: Record<string, string>;
+}
+
+export const providers: Record<string, ProviderInfo> = {
   openai: {
     name: "OpenAI",
     baseURL: "https://api.openai.com/v1",
@@ -53,3 +57,44 @@ export const providers: Record<
     envKey: "ARCEEAI_API_KEY",
   },
 };
+
+/**
+ * Parse custom headers from provider-specific environment variable.
+ * Format: "key: value\nkey2: value2"
+ */
+export function parseCustomHeadersFromEnv(
+  providerName: string,
+): Record<string, string> {
+  // Check for a PROVIDER-specific custom headers: e.g. OPENAI_CUSTOM_HEADERS or GROQ_CUSTOM_HEADERS.
+  const envHeaders =
+    process.env[`${providerName.toUpperCase()}_CUSTOM_HEADERS`];
+  if (!envHeaders) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    envHeaders
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line && line.includes(":"))
+      .map((line) => {
+        const [key, ...rest] = line.split(":");
+        return [key?.trim(), rest.join(":").trim()];
+      })
+      .filter(([key]) => key),
+  );
+}
+
+/**
+ * Get merged custom headers from provider config and provider-specific environment variable.
+ * Environment variable headers take precedence over provider config headers.
+ */
+export function getCustomHeaders(
+  provider: ProviderInfo,
+  providerName: string = "openai",
+): Record<string, string> {
+  return {
+    ...provider.customHeaders,
+    ...parseCustomHeadersFromEnv(providerName),
+  };
+}
