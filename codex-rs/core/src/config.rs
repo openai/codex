@@ -20,6 +20,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use toml::Value as TomlValue;
 
+const DEFAULT_CONFIG_TEMPLATE: &str = include_str!("../config_template.toml");
+
 /// Maximum number of bytes of the documentation that will be embedded. Larger
 /// files are *silently truncated* to this size so we do not take up too much of
 /// the context window.
@@ -179,13 +181,27 @@ fn load_config_as_toml(codex_home: &Path) -> std::io::Result<TomlValue> {
             }
         },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            tracing::info!("config.toml not found, using defaults");
+            tracing::info!("config.toml not found, writing template");
+            write_default_config_template(&config_path);
             Ok(TomlValue::Table(Default::default()))
         }
         Err(e) => {
             tracing::error!("Failed to read config.toml: {e}");
             Err(e)
         }
+    }
+}
+
+fn write_default_config_template(config_path: &Path) {
+    if let Some(parent) = config_path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            tracing::error!("Failed to create config dir: {e}");
+            return;
+        }
+    }
+    match std::fs::write(config_path, DEFAULT_CONFIG_TEMPLATE) {
+        Ok(_) => tracing::info!("wrote default config template at {}", config_path.display()),
+        Err(e) => tracing::error!("Failed to write default config template: {e}"),
     }
 }
 
