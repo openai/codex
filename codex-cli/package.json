@@ -28,6 +28,7 @@
   ],
   "dependencies": {
     "@inkjs/ui": "^2.0.0",
+    "boxen": "^8.0.1",
     "chalk": "^5.2.0",
     "diff": "^7.0.0",
     "dotenv": "^16.1.4",
@@ -46,10 +47,12 @@
     "openai": "^4.95.1",
     "package-manager-detector": "^1.2.0",
     "react": "^18.2.0",
+    "semver": "^7.7.1",
     "shell-quote": "^1.8.2",
     "strip-ansi": "^7.1.0",
     "to-rotated": "^1.0.0",
     "use-interval": "1.4.0",
+    "which": "^5.0.0",
     "zod": "^3.24.3"
   },
   "devDependencies": {
@@ -59,12 +62,9 @@
     "@types/js-yaml": "^4.0.9",
     "@types/marked-terminal": "^6.1.1",
     "@types/react": "^18.0.32",
-    "@types/semver": "^7.7.0",
     "@types/shell-quote": "^1.7.5",
-    "@types/which": "^3.0.4",
     "@typescript-eslint/eslint-plugin": "^7.18.0",
     "@typescript-eslint/parser": "^7.18.0",
-    "boxen": "^8.0.1",
     "esbuild": "^0.25.2",
     "eslint-plugin-import": "^2.31.0",
     "eslint-plugin-react": "^7.32.2",
@@ -74,13 +74,11 @@
     "ink-testing-library": "^3.0.0",
     "prettier": "^3.5.3",
     "punycode": "^2.3.1",
-    "semver": "^7.7.1",
     "ts-node": "^10.9.1",
     "typescript": "^5.0.3",
     "vite": "^6.3.4",
     "vitest": "^3.1.2",
-    "whatwg-url": "^14.2.0",
-    "which": "^5.0.0"
+    "whatwg-url": "^14.2.0"
   },
   "repository": {
     "type": "git",
