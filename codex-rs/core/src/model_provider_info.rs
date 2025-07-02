@@ -125,6 +125,17 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
                 query_params: None,
             },
         ),
+        (
+            "stackit",
+            P {
+                name: "STACKIT".into(),
+                base_url: "https://api.openai-compat.model-serving.eu01.onstackit.cloud/v1".into(),
+                env_key: Some("STACKIT_API_KEY".into()),
+                env_key_instructions: Some("Create an API key for STACKIT and export it as an environment variable.".into()),
+                wire_api: WireApi::Chat,
+                query_params: None,
+            },
+        ),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), v))
@@ -176,5 +187,16 @@ query_params = { api-version = "2025-04-01-preview" }
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
         assert_eq!(expected_provider, provider);
+    }
+
+    #[test]
+    fn test_stackit_provider_builtin() {
+        let providers = built_in_model_providers();
+        let stackit_provider = providers.get("stackit").unwrap();
+        
+        assert_eq!(stackit_provider.name, "STACKIT");
+        assert_eq!(stackit_provider.base_url, "https://api.openai-compat.model-serving.eu01.onstackit.cloud/v1");
+        assert_eq!(stackit_provider.env_key, Some("STACKIT_API_KEY".to_string()));
+        assert_eq!(stackit_provider.wire_api, WireApi::Chat);
     }
 }

@@ -106,6 +106,7 @@ export OPENAI_API_KEY="your-api-key-here"
 > - xai
 > - groq
 > - arceeai
+> - stackit
 > - any other provider that is compatible with the OpenAI API
 >
 > If you use a provider other than OpenAI, you will need to set the API key for the provider in the config file or in the environment variable as:
@@ -440,6 +441,11 @@ Below is a comprehensive example of `config.json` with multiple custom providers
       "name": "ArceeAI",
       "baseURL": "https://conductor.arcee.ai/v1",
       "envKey": "ARCEEAI_API_KEY"
+    },
+    "stackit": {
+      "name": "STACKIT",
+      "baseURL": "https://api.openai-compat.model-serving.eu01.onstackit.cloud/v1",
+      "envKey": "STACKIT_API_KEY"
     }
   },
   "history": {

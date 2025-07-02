@@ -52,4 +52,9 @@ export const providers: Record<
     baseURL: "https://conductor.arcee.ai/v1",
     envKey: "ARCEEAI_API_KEY",
   },
+  stackit: {
+    name: "STACKIT",
+    baseURL: "https://api.openai-compat.model-serving.eu01.onstackit.cloud/v1",
+    envKey: "STACKIT_API_KEY",
+  },
 };
