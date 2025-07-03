@@ -49,6 +49,11 @@ DOCS_FOLDER=$(osascript <<EOT
 EOT
 )
 
+# Check if the user canceled the folder picker
+if [ -z "$DOCS_FOLDER" ]; then
+  echo "Error: No folder selected. Please select a documentation folder and try again."
+  exit 1
+fi
 # Remove trailing slash if present
 DOCS_FOLDER="${DOCS_FOLDER%/}"
 
