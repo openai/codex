@@ -20,7 +20,7 @@ auto_mode=false
 cd runs || exit 1
 
 # Grab task name for logging
-task_name=$(yq -o=json '.' ../task.yaml | jq -r '.name')
+task_name=$(yq '.' ../task.yaml | jq -r '.name')
 echo "Checking for runs for task: $task_name"
 
 # Find existing run_N directories
@@ -61,5 +61,5 @@ cd "run_$new_run_number"
 
 # Launch Codex
 echo "Launching..."
-description=$(yq -o=json '.' ../../task.yaml | jq -r '.description')
+description=$(yq '.' ../../task.yaml | jq -r '.description')
 codex "$description"
