@@ -114,8 +114,7 @@ pub(crate) async fn stream_chat_completions(
         "tools": tools_json,
     });
 
-    let base_url = provider.base_url.trim_end_matches('/');
-    let url = format!("{}/chat/completions", base_url);
+    let url = provider.get_full_url();
 
     debug!(
         "POST to {url}: {}",
@@ -215,6 +214,7 @@ where
                 let _ = tx_event
                     .send(Ok(ResponseEvent::Completed {
                         response_id: String::new(),
+                        token_usage: None,
                     }))
                     .await;
                 return;
@@ -232,6 +232,7 @@ where
             let _ = tx_event
                 .send(Ok(ResponseEvent::Completed {
                     response_id: String::new(),
+                    token_usage: None,
                 }))
                 .await;
             return;
@@ -317,6 +318,7 @@ where
                 let _ = tx_event
                     .send(Ok(ResponseEvent::Completed {
                         response_id: String::new(),
+                        token_usage: None,
                     }))
                     .await;
 
@@ -394,7 +396,10 @@ where
                     // Not an assistant message – forward immediately.
                     return Poll::Ready(Some(Ok(ResponseEvent::OutputItemDone(item))));
                 }
-                Poll::Ready(Some(Ok(ResponseEvent::Completed { response_id }))) => {
+                Poll::Ready(Some(Ok(ResponseEvent::Completed {
+                    response_id,
+                    token_usage,
+                }))) => {
                     if !this.cumulative.is_empty() {
                         let aggregated_item = crate::models::ResponseItem::Message {
                             role: "assistant".to_string(),
@@ -404,7 +409,10 @@ where
                         };
 
                         // Buffer Completed so it is returned *after* the aggregated message.
-                        this.pending_completed = Some(ResponseEvent::Completed { response_id });
+                        this.pending_completed = Some(ResponseEvent::Completed {
+                            response_id,
+                            token_usage,
+                        });
 
                         return Poll::Ready(Some(Ok(ResponseEvent::OutputItemDone(
                             aggregated_item,
@@ -412,8 +420,16 @@ where
                     }
 
                     // Nothing aggregated – forward Completed directly.
-                    return Poll::Ready(Some(Ok(ResponseEvent::Completed { response_id })));
-                } // No other `Ok` variants exist at the moment, continue polling.
+                    return Poll::Ready(Some(Ok(ResponseEvent::Completed {
+                        response_id,
+                        token_usage,
+                    })));
+                }
+                Poll::Ready(Some(Ok(ResponseEvent::Created))) => {
+                    // These events are exclusive to the Responses API and
+                    // will never appear in a Chat Completions stream.
+                    continue;
+                }
             }
         }
     }
@@ -427,7 +443,7 @@ pub(crate) trait AggregateStreamExt: Stream<Item = Result<ResponseEvent>> + Size
     ///
     /// ```ignore
     ///     OutputItemDone(<full message>)
-    ///     Completed { .. }
+    ///     Completed
     /// ```
     ///
     /// No other `OutputItemDone` events will be seen by the caller.

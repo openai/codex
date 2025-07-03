@@ -1,0 +1,21 @@
+[package]
+name = "codex-file-search"
+version = { workspace = true }
+edition = "2024"
+
+[[bin]]
+name = "codex-file-search"
+path = "src/main.rs"
+
+[lib]
+name = "codex_file_search"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+ignore = "0.4.23"
+nucleo-matcher = "0.3.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1.0.110"
+tokio = { version = "1", features = ["full"] }

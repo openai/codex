@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
@@ -25,7 +23,7 @@ use ratatui::style::Modifier;
 
 pub(crate) struct CommandPopup {
     command_filter: String,
-    all_commands: HashMap<&'static str, SlashCommand>,
+    all_commands: Vec<(&'static str, SlashCommand)>,
     selected_idx: Option<usize>,
 }
 
@@ -84,23 +82,20 @@ impl CommandPopup {
     /// Return the list of commands that match the current filter. Matching is
     /// performed using a *prefix* comparison on the command name.
     fn filtered_commands(&self) -> Vec<&SlashCommand> {
-        let mut cmds: Vec<&SlashCommand> = self
-            .all_commands
-            .values()
-            .filter(|cmd| {
-                if self.command_filter.is_empty() {
-                    true
-                } else {
-                    cmd.command()
+        self.all_commands
+            .iter()
+            .filter_map(|(_name, cmd)| {
+                if self.command_filter.is_empty()
+                    || cmd
+                        .command()
                         .starts_with(&self.command_filter.to_ascii_lowercase())
+                {
+                    Some(cmd)
+                } else {
+                    None
                 }
             })
-            .collect();
-
-        // Sort the commands alphabetically so the order is stable and
-        // predictable.
-        cmds.sort_by(|a, b| a.command().cmp(b.command()));
-        cmds
+            .collect::<Vec<&SlashCommand>>()
     }
 
     /// Move the selection cursor one step up.

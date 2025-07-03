@@ -10,8 +10,8 @@ use crate::config_types::UriBasedFileOpener;
 use crate::flags::OPENAI_DEFAULT_MODEL;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::built_in_model_providers;
+use crate::openai_model_info::get_model_info;
 use crate::protocol::AskForApproval;
-use crate::protocol::SandboxPermission;
 use crate::protocol::SandboxPolicy;
 use dirs::home_dir;
 use serde::Deserialize;
@@ -30,6 +30,12 @@ pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 pub struct Config {
     /// Optional override of model selection.
     pub model: String,
+
+    /// Size of the context window for the model, in tokens.
+    pub model_context_window: Option<u64>,
+
+    /// Maximum number of output tokens.
+    pub model_max_output_tokens: Option<u64>,
 
     /// Key into the model_providers map that specifies which provider to use.
     pub model_provider_id: String,
@@ -235,17 +241,20 @@ pub struct ConfigToml {
     /// Provider to use from the model_providers map.
     pub model_provider: Option<String>,
 
+    /// Size of the context window for the model, in tokens.
+    pub model_context_window: Option<u64>,
+
+    /// Maximum number of output tokens.
+    pub model_max_output_tokens: Option<u64>,
+
     /// Default approval policy for executing commands.
     pub approval_policy: Option<AskForApproval>,
 
     #[serde(default)]
     pub shell_environment_policy: ShellEnvironmentPolicyToml,
 
-    // The `default` attribute ensures that the field is treated as `None` when
-    // the key is omitted from the TOML. Without it, Serde treats the field as
-    // required because we supply a custom deserializer.
-    #[serde(default, deserialize_with = "deserialize_sandbox_permissions")]
-    pub sandbox_permissions: Option<Vec<SandboxPermission>>,
+    /// If omitted, Codex defaults to the restrictive `read-only` policy.
+    pub sandbox: Option<SandboxPolicy>,
 
     /// Disable server-side response storage (sends the full conversation
     /// context with every request). Currently necessary for OpenAI customers
@@ -296,32 +305,6 @@ pub struct ConfigToml {
     pub model_reasoning_summary: Option<ReasoningSummary>,
 }
 
-fn deserialize_sandbox_permissions<'de, D>(
-    deserializer: D,
-) -> Result<Option<Vec<SandboxPermission>>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let permissions: Option<Vec<String>> = Option::deserialize(deserializer)?;
-
-    match permissions {
-        Some(raw_permissions) => {
-            let base_path = find_codex_home().map_err(serde::de::Error::custom)?;
-
-            let converted = raw_permissions
-                .into_iter()
-                .map(|raw| {
-                    parse_sandbox_permission_with_base_path(&raw, base_path.clone())
-                        .map_err(serde::de::Error::custom)
-                })
-                .collect::<Result<Vec<_>, D::Error>>()?;
-
-            Ok(Some(converted))
-        }
-        None => Ok(None),
-    }
-}
-
 /// Optional overrides for user configuration (e.g., from CLI flags).
 #[derive(Default, Debug, Clone)]
 pub struct ConfigOverrides {
@@ -369,20 +352,10 @@ impl Config {
             None => ConfigProfile::default(),
         };
 
-        let sandbox_policy = match sandbox_policy {
-            Some(sandbox_policy) => sandbox_policy,
-            None => {
-                // Derive a SandboxPolicy from the permissions in the config.
-                match cfg.sandbox_permissions {
-                    // Note this means the user can explicitly set permissions
-                    // to the empty list in the config file, granting it no
-                    // permissions whatsoever.
-                    Some(permissions) => SandboxPolicy::from(permissions),
-                    // Default to read only rather than completely locked down.
-                    None => SandboxPolicy::new_read_only_policy(),
-                }
-            }
-        };
+        let sandbox_policy = sandbox_policy.unwrap_or_else(|| {
+            cfg.sandbox
+                .unwrap_or_else(SandboxPolicy::new_read_only_policy)
+        });
 
         let mut model_providers = built_in_model_providers();
         // Merge user-defined providers into the built-in list.
@@ -427,11 +400,23 @@ impl Config {
 
         let history = cfg.history.unwrap_or_default();
 
+        let model = model
+            .or(config_profile.model)
+            .or(cfg.model)
+            .unwrap_or_else(default_model);
+        let openai_model_info = get_model_info(&model);
+        let model_context_window = cfg
+            .model_context_window
+            .or_else(|| openai_model_info.as_ref().map(|info| info.context_window));
+        let model_max_output_tokens = cfg.model_max_output_tokens.or_else(|| {
+            openai_model_info
+                .as_ref()
+                .map(|info| info.max_output_tokens)
+        });
         let config = Self {
-            model: model
-                .or(config_profile.model)
-                .or(cfg.model)
-                .unwrap_or_else(default_model),
+            model,
+            model_context_window,
+            model_max_output_tokens,
             model_provider_id,
             model_provider,
             cwd: resolved_cwd,
@@ -520,50 +505,6 @@ pub fn log_dir(cfg: &Config) -> std::io::Result<PathBuf> {
     Ok(p)
 }
 
-pub fn parse_sandbox_permission_with_base_path(
-    raw: &str,
-    base_path: PathBuf,
-) -> std::io::Result<SandboxPermission> {
-    use SandboxPermission::*;
-
-    if let Some(path) = raw.strip_prefix("disk-write-folder=") {
-        return if path.is_empty() {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "--sandbox-permission disk-write-folder=<PATH> requires a non-empty PATH",
-            ))
-        } else {
-            use path_absolutize::*;
-
-            let file = PathBuf::from(path);
-            let absolute_path = if file.is_relative() {
-                file.absolutize_from(base_path)
-            } else {
-                file.absolutize()
-            }
-            .map(|path| path.into_owned())?;
-            Ok(DiskWriteFolder {
-                folder: absolute_path,
-            })
-        };
-    }
-
-    match raw {
-        "disk-full-read-access" => Ok(DiskFullReadAccess),
-        "disk-write-platform-user-temp-folder" => Ok(DiskWritePlatformUserTempFolder),
-        "disk-write-platform-global-temp-folder" => Ok(DiskWritePlatformGlobalTempFolder),
-        "disk-write-cwd" => Ok(DiskWriteCwd),
-        "disk-full-write-access" => Ok(DiskFullWriteAccess),
-        "network-full-access" => Ok(NetworkFullAccess),
-        _ => Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!(
-                "`{raw}` is not a recognised permission.\nRun with `--help` to see the accepted values."
-            ),
-        )),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used, clippy::unwrap_used)]
@@ -573,51 +514,14 @@ mod tests {
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
 
-    /// Verify that the `sandbox_permissions` field on `ConfigToml` correctly
-    /// differentiates between a value that is completely absent in the
-    /// provided TOML (i.e. `None`) and one that is explicitly specified as an
-    /// empty array (i.e. `Some(vec![])`). This ensures that downstream logic
-    /// that treats these two cases differently (default read-only policy vs a
-    /// fully locked-down sandbox) continues to function.
-    #[test]
-    fn test_sandbox_permissions_none_vs_empty_vec() {
-        // Case 1: `sandbox_permissions` key is *absent* from the TOML source.
-        let toml_source_without_key = "";
-        let cfg_without_key: ConfigToml = toml::from_str(toml_source_without_key)
-            .expect("TOML deserialization without key should succeed");
-        assert!(cfg_without_key.sandbox_permissions.is_none());
-
-        // Case 2: `sandbox_permissions` is present but set to an *empty array*.
-        let toml_source_with_empty = "sandbox_permissions = []";
-        let cfg_with_empty: ConfigToml = toml::from_str(toml_source_with_empty)
-            .expect("TOML deserialization with empty array should succeed");
-        assert_eq!(Some(vec![]), cfg_with_empty.sandbox_permissions);
-
-        // Case 3: `sandbox_permissions` contains a non-empty list of valid values.
-        let toml_source_with_values = r#"
-            sandbox_permissions = ["disk-full-read-access", "network-full-access"]
-        "#;
-        let cfg_with_values: ConfigToml = toml::from_str(toml_source_with_values)
-            .expect("TOML deserialization with valid permissions should succeed");
-
-        assert_eq!(
-            Some(vec![
-                SandboxPermission::DiskFullReadAccess,
-                SandboxPermission::NetworkFullAccess
-            ]),
-            cfg_with_values.sandbox_permissions
-        );
-    }
-
     #[test]
     fn test_toml_parsing() {
         let history_with_persistence = r#"
 [history]
 persistence = "save-all"
 "#;
-        let history_with_persistence_cfg: ConfigToml =
-            toml::from_str::<ConfigToml>(history_with_persistence)
-                .expect("TOML deserialization should succeed");
+        let history_with_persistence_cfg = toml::from_str::<ConfigToml>(history_with_persistence)
+            .expect("TOML deserialization should succeed");
         assert_eq!(
             Some(History {
                 persistence: HistoryPersistence::SaveAll,
@@ -631,9 +535,8 @@ persistence = "save-all"
 persistence = "none"
 "#;
 
-        let history_no_persistence_cfg: ConfigToml =
-            toml::from_str::<ConfigToml>(history_no_persistence)
-                .expect("TOML deserialization should succeed");
+        let history_no_persistence_cfg = toml::from_str::<ConfigToml>(history_no_persistence)
+            .expect("TOML deserialization should succeed");
         assert_eq!(
             Some(History {
                 persistence: HistoryPersistence::None,
@@ -643,20 +546,47 @@ persistence = "none"
         );
     }
 
-    /// Deserializing a TOML string containing an *invalid* permission should
-    /// fail with a helpful error rather than silently defaulting or
-    /// succeeding.
     #[test]
-    fn test_sandbox_permissions_illegal_value() {
-        let toml_bad = r#"sandbox_permissions = ["not-a-real-permission"]"#;
+    fn test_sandbox_config_parsing() {
+        let sandbox_full_access = r#"
+[sandbox]
+mode = "danger-full-access"
+network_access = false  # This should be ignored.
+"#;
+        let sandbox_full_access_cfg = toml::from_str::<ConfigToml>(sandbox_full_access)
+            .expect("TOML deserialization should succeed");
+        assert_eq!(
+            Some(SandboxPolicy::DangerFullAccess),
+            sandbox_full_access_cfg.sandbox
+        );
 
-        let err = toml::from_str::<ConfigToml>(toml_bad)
-            .expect_err("Deserialization should fail for invalid permission");
+        let sandbox_read_only = r#"
+[sandbox]
+mode = "read-only"
+network_access = true  # This should be ignored.
+"#;
 
-        // Make sure the error message contains the invalid value so users have
-        // useful feedback.
-        let msg = err.to_string();
-        assert!(msg.contains("not-a-real-permission"));
+        let sandbox_read_only_cfg = toml::from_str::<ConfigToml>(sandbox_read_only)
+            .expect("TOML deserialization should succeed");
+        assert_eq!(Some(SandboxPolicy::ReadOnly), sandbox_read_only_cfg.sandbox);
+
+        let sandbox_workspace_write = r#"
+[sandbox]
+mode = "workspace-write"
+writable_roots = [
+    "/tmp",
+]
+"#;
+
+        let sandbox_workspace_write_cfg = toml::from_str::<ConfigToml>(sandbox_workspace_write)
+            .expect("TOML deserialization should succeed");
+        assert_eq!(
+            Some(SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![PathBuf::from("/tmp")],
+                network_access: false
+            }),
+            sandbox_workspace_write_cfg.sandbox
+        );
     }
 
     struct PrecedenceTestFixture {
@@ -681,8 +611,7 @@ persistence = "none"
     fn create_test_fixture() -> std::io::Result<PrecedenceTestFixture> {
         let toml = r#"
 model = "o3"
-approval_policy = "unless-allow-listed"
-sandbox_permissions = ["disk-full-read-access"]
+approval_policy = "untrusted"
 disable_response_storage = false
 
 # Can be used to determine which profile to use if not specified by
@@ -729,6 +658,7 @@ disable_response_storage = true
             env_key: Some("OPENAI_API_KEY".to_string()),
             wire_api: crate::WireApi::Chat,
             env_key_instructions: None,
+            query_params: None,
         };
         let model_provider_map = {
             let mut model_provider_map = built_in_model_providers();
@@ -783,6 +713,8 @@ disable_response_storage = true
         assert_eq!(
             Config {
                 model: "o3".to_string(),
+                model_context_window: Some(200_000),
+                model_max_output_tokens: Some(100_000),
                 model_provider_id: "openai".to_string(),
                 model_provider: fixture.openai_provider.clone(),
                 approval_policy: AskForApproval::Never,
@@ -825,9 +757,11 @@ disable_response_storage = true
         )?;
         let expected_gpt3_profile_config = Config {
             model: "gpt-3.5-turbo".to_string(),
+            model_context_window: Some(16_385),
+            model_max_output_tokens: Some(4_096),
             model_provider_id: "openai-chat-completions".to_string(),
             model_provider: fixture.openai_chat_completions_provider.clone(),
-            approval_policy: AskForApproval::UnlessAllowListed,
+            approval_policy: AskForApproval::UnlessTrusted,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             disable_response_storage: false,
@@ -882,6 +816,8 @@ disable_response_storage = true
         )?;
         let expected_zdr_profile_config = Config {
             model: "o3".to_string(),
+            model_context_window: Some(200_000),
+            model_max_output_tokens: Some(100_000),
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
             approval_policy: AskForApproval::OnFailure,

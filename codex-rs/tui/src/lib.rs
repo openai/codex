@@ -29,6 +29,8 @@ mod citation_regex;
 mod cli;
 mod conversation_history_widget;
 mod exec_command;
+mod file_search;
+mod get_git_diff;
 mod git_warning_screen;
 mod history_cell;
 mod log_layer;
@@ -48,11 +50,16 @@ pub use cli::Cli;
 pub fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> std::io::Result<()> {
     let (sandbox_policy, approval_policy) = if cli.full_auto {
         (
-            Some(SandboxPolicy::new_full_auto_policy()),
+            Some(SandboxPolicy::new_workspace_write_policy()),
             Some(AskForApproval::OnFailure),
         )
+    } else if cli.dangerously_bypass_approvals_and_sandbox {
+        (
+            Some(SandboxPolicy::DangerFullAccess),
+            Some(AskForApproval::Never),
+        )
     } else {
-        let sandbox_policy = cli.sandbox.permissions.clone().map(Into::into);
+        let sandbox_policy = None;
         (sandbox_policy, cli.approval_policy.map(Into::into))
     };
 
