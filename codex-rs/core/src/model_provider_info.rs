@@ -125,6 +125,16 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
                 query_params: None,
             },
         ),
+        (
+            "aihubmix",
+            P {
+                name: "AiHubMix".into(),
+                base_url: "https://aihubmix.com/v1".into(),
+                env_key: Some("AIHUBMIX_API_KEY".into()),
+                env_key_instructions: None,
+                wire_api: WireApi::Chat,
+            },
+        ),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), v))
