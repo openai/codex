@@ -86,14 +86,12 @@ echo "  - Main file:   $MAIN_DOC_FILE"
 print_separator
 
 # Construct the Codex CLI command
-CODEX_CMD="codex --docs-folder \"$DOCS_FOLDER\" --main-doc \"$MAIN_DOC_FILE\""
-
 # Show the command for transparency
 echo "Running command:"
-echo "$CODEX_CMD"
+echo "codex --docs-folder \"$DOCS_FOLDER\" --main-doc \"$MAIN_DOC_FILE\""
 
 # Actually run the command
-eval $CODEX_CMD
+codex --docs-folder "$DOCS_FOLDER" --main-doc "$MAIN_DOC_FILE"
 
 print_separator
 echo "Codex CLI has finished running."
