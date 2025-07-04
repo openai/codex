@@ -1,0 +1,12 @@
+blank_issues_enabled: false
+contact_links:
+
+- name: 📚 Documentation & Context
+  url: https://github.com/your-org/your-repo/blob/main/AGENTS.md
+  about: Review domain context and development patterns before creating issues
+- name: 🤝 Cross-Domain Coordination
+  url: https://github.com/your-org/your-repo/discussions
+  about: Use discussions for cross-domain coordination and architectural decisions
+- name: 🔍 Strategic Analysis
+  url: https://github.com/your-org/your-repo/wiki
+  about: Check project wiki for strategic analysis and domain documentation

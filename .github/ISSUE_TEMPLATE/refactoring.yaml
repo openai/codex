@@ -1,0 +1,303 @@
+name: ♻️ Code Refactoring
+description: Code improvements with safety measures, rollback plans, and domain integrity preservation
+title: “[REFACTOR]: “
+labels: [“type:refactoring”]
+assignees: []
+body:
+
+- type: dropdown
+  id: domain
+  attributes:
+  label: Domain
+  description: Which domain is being refactored?
+  options:
+    - backend
+    - frontend
+    - shared
+    - cross_domain
+    - business_domain
+    - technical_domain
+  validations:
+  required: true
+- type: dropdown
+  id: tech_primary
+  attributes:
+  label: Primary Technology
+  description: Primary technology stack being refactored
+  options:
+    - typescript
+    - javascript
+    - python
+    - deno
+    - react
+    - node
+    - other
+  validations:
+  required: true
+- type: dropdown
+  id: component_type
+  attributes:
+  label: Component Type
+  description: Type of component being refactored
+  options:
+    - ui_component
+    - api_endpoint
+    - edge_function
+    - database_function
+    - page_component
+    - store_module
+    - business_logic
+    - integration
+    - architecture
+    - other
+  validations:
+  required: true
+- type: dropdown
+  id: refactoring_scope
+  attributes:
+  label: Refactoring Scope
+  description: Scope of refactoring work
+  options:
+    - single_component
+    - module_level
+    - domain_level
+    - cross_domain
+    - architecture_wide
+  validations:
+  required: true
+- type: dropdown
+  id: priority
+  attributes:
+  label: Priority
+  description: Refactoring priority level
+  options:
+    - critical
+    - high
+    - medium
+    - low
+  validations:
+  required: true
+- type: dropdown
+  id: estimated_effort
+  attributes:
+  label: Estimated Effort
+  description: Estimated refactoring effort
+  options:
+    - 1-2 hours
+    - half-day
+    - 1 day
+    - 2-3 days
+    - 1 week
+    - 2+ weeks
+  validations:
+  required: true
+- type: input
+  id: depends_on
+  attributes:
+  label: Dependencies
+  description: List any task dependencies (comma-separated issue numbers or task names)
+  placeholder: |
+    #123, #456, feature_completion
+- type: textarea
+  id: refactoring_description
+  attributes:
+  label: Refactoring Description
+  description: Clear description of the refactoring work and its purpose for domain improvement
+  placeholder: Describe what code/architecture will be refactored and why…
+  validations:
+  required: true
+- type: textarea
+  id: current_state_analysis
+  attributes:
+  label: Current State Analysis
+  description: Assessment of current code/architecture state and why refactoring is needed
+  placeholder: |
+    **Technical Debt Assessment**:
+    - Code Quality Issues: Specific code quality problems
+    - Architecture Concerns: Architectural issues or inconsistencies
+    - Performance Problems: Performance-related technical debt
+    - Maintenance Burden: Areas causing high maintenance overhead
+    - Domain Boundary Issues: Problems with domain boundary clarity
+
+    **Business Impact of Current State**:
+    - Development Velocity: How current state slows development
+    - Bug Risk: How current state increases bug risk
+    - Feature Delivery: Impact on feature delivery capability
+    - Team Productivity: Effect on team efficiency
+
+  validations:
+  required: true
+- type: textarea
+  id: refactoring_goals
+  attributes:
+  label: Refactoring Goals
+  description: Clear goals for what the refactoring will achieve
+  placeholder: |
+    **Primary Objectives**:
+    - Code Quality: Specific code quality improvements
+    - Architecture Clarity: Architectural improvements sought
+    - Performance: Performance improvements expected
+    - Maintainability: Maintenance improvements goals
+    - Domain Boundary Clarity: Domain boundary improvements
+
+    **Success Metrics**:
+    - [ ] Measurable improvement metric 1
+    - [ ] Measurable improvement metric 2
+    - [ ] Measurable improvement metric 3
+
+  validations:
+  required: true
+- type: textarea
+  id: technical_approach
+  attributes:
+  label: Technical Approach
+  description: Refactoring approach that maintains domain integrity and business functionality
+  placeholder: |
+    **Refactoring Strategy**:
+    - Approach: Big-bang/Incremental/Strangler Pattern/etc.
+    - Domain Patterns: Domain patterns to apply during refactoring
+    - Architecture Patterns: Architecture patterns to implement
+    - Technology Considerations: Technology stack improvements
+
+    **Domain Considerations**:
+    - Business Rule Preservation: How to maintain domain business rules
+    - Domain Boundary Maintenance: Ensuring domain boundaries remain clear
+    - Integration Contract Stability: Maintaining integration contracts during refactoring
+
+  validations:
+  required: true
+- type: textarea
+  id: risk_assessment
+  attributes:
+  label: Risk Assessment
+  description: Analysis of refactoring risks and mitigation strategies
+  placeholder: |
+    **Technical Risks**:
+    - Functionality Regression: Risk of breaking existing functionality
+    - Performance Degradation: Risk of performance impact
+    - Integration Breakage: Risk of breaking cross-domain integrations
+    - Data Consistency: Risk of data inconsistency during refactoring
+
+    **Mitigation Strategies**:
+    - Specific strategies to mitigate each identified risk
+    - Rollback plans and checkpoints
+    - Testing strategies to validate refactoring
+
+  validations:
+  required: true
+- type: textarea
+  id: implementation_plan
+  attributes:
+  label: Implementation Plan
+  description: Detailed refactoring implementation approach with safety measures
+  placeholder: |
+    **Phase 1: Preparation**
+    - [ ] Comprehensive test coverage for existing functionality
+    - [ ] Domain business rule validation tests
+    - [ ] Integration contract tests
+    - [ ] Performance baseline establishment
+    - [ ] Rollback strategy definition
+
+    **Phase 2: Incremental Refactoring**
+    - [ ] Refactoring step 1 with validation
+    - [ ] Refactoring step 2 with validation
+    - [ ] Refactoring step 3 with validation
+    - [ ] Each step includes testing and validation
+
+    **Phase 3: Validation & Optimization**
+    - [ ] End-to-end functionality validation
+    - [ ] Performance validation against baseline
+    - [ ] Integration contract validation
+    - [ ] Domain business rule validation
+    - [ ] Documentation updates
+
+  validations:
+  required: true
+- type: textarea
+  id: cross_domain_impact_analysis
+  attributes:
+  label: Cross-Domain Impact Analysis
+  description: Analysis of how refactoring affects other domains and integration points
+  placeholder: |
+    **Integration Impact**:
+    - Affected Integrations: Which cross-domain integrations are affected
+    - Contract Changes: Any integration contract changes needed
+    - Coordination Requirements: Cross-domain coordination needed
+
+    **Domain Dependencies**:
+    - How other domains depend on refactored components
+    - Communication and coordination plan for dependent domains
+- type: checkboxes
+  id: testing_strategy
+  attributes:
+  label: Testing Strategy
+  description: Comprehensive testing approach to ensure refactoring safety
+  options:
+  - label: Unit test coverage for all refactored code
+  - label: Domain business rule validation tests
+  - label: Integration tests for cross-domain interactions
+  - label: Performance regression tests
+  - label: End-to-end workflow validation tests
+- type: checkboxes
+  id: definition_of_done
+  attributes:
+  label: Definition of Done
+  description: Refactoring completion criteria
+  options:
+  - label: Refactoring implementation completed
+  - label: All existing functionality preserved and validated
+  - label: Domain business rules maintained and validated
+  - label: Integration contracts maintained (no breaking changes)
+  - label: Performance targets met or improved
+  - label: Comprehensive test coverage for refactored code
+  - label: Code quality metrics improved
+  - label: Architecture documentation updated
+  - label: Domain context updated with new patterns
+  - label: Team knowledge transfer completed
+  - label: No regression issues in production
+- type: textarea
+  id: rollback_plan
+  attributes:
+  label: Rollback Plan
+  description: Detailed plan for rolling back refactoring if issues arise
+  placeholder: |
+    **Rollback Triggers**:
+    - Specific conditions that would trigger rollback
+    - Performance degradation thresholds
+    - Functionality regression criteria
+
+    **Rollback Procedure**:
+    - Step-by-step rollback process
+    - Data consistency restoration if needed
+    - Communication plan for rollback scenarios
+- type: textarea
+  id: knowledge_transfer
+  attributes:
+  label: Knowledge Transfer
+  description: Plan for sharing refactoring insights and new patterns with team
+  placeholder: |
+    **Documentation Updates**:
+    - [ ] Architecture documentation updates
+    - [ ] Code pattern documentation
+    - [ ] Domain development guidelines updates
+    - [ ] Troubleshooting guides updates
+
+    **Team Education**:
+    - Training needed on new patterns or approaches
+    - Knowledge sharing sessions planned
+- type: textarea
+  id: long_term_maintenance
+  attributes:
+  label: Long-term Maintenance
+  description: Considerations for maintaining refactored code and preventing regression
+  placeholder: |
+    **Code Quality Maintenance**:
+    - Strategies to maintain code quality improvements
+    - Automated quality gates and monitoring
+    - Regular review and maintenance schedules
+- type: textarea
+  id: notes
+  attributes:
+  label: Additional Notes
+  description: Additional context, architectural decisions, lessons learned, or future refactoring opportunities
+  placeholder: Include any architectural decisions, lessons learned, or future opportunities…

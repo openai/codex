@@ -1,0 +1,254 @@
+name: 🏗️ Infrastructure Enhancement
+description: Platform improvements with cross-domain considerations and operational excellence
+title: “[INFRA]: “
+labels: [“type:infrastructure”]
+assignees: []
+body:
+
+- type: dropdown
+  id: domain
+  attributes:
+  label: Domain
+  description: Which domain does this infrastructure support?
+  options:
+    - backend
+    - frontend
+    - shared
+    - cross_domain
+    - platform_wide
+    - technical_domain
+  validations:
+  required: true
+- type: dropdown
+  id: tech_primary
+  attributes:
+  label: Primary Technology
+  description: Primary technology for infrastructure implementation
+  options:
+    - supabase
+    - docker
+    - kubernetes
+    - github_actions
+    - terraform
+    - aws
+    - vercel
+    - cloudflare
+    - monitoring
+    - other
+  validations:
+  required: true
+- type: dropdown
+  id: infrastructure_scope
+  attributes:
+  label: Infrastructure Scope
+  description: Scope of infrastructure work
+  options:
+    - domain_specific
+    - cross_domain
+    - platform_wide
+    - external_integration
+  validations:
+  required: true
+- type: dropdown
+  id: infrastructure_type
+  attributes:
+  label: Infrastructure Type
+  description: Type of infrastructure enhancement
+  options:
+    - deployment
+    - monitoring
+    - security
+    - performance
+    - development
+    - backup_recovery
+    - networking
+    - storage
+    - other
+  validations:
+  required: true
+- type: dropdown
+  id: priority
+  attributes:
+  label: Priority
+  description: Infrastructure priority level
+  options:
+    - critical
+    - high
+    - medium
+    - low
+  validations:
+  required: true
+- type: dropdown
+  id: estimated_effort
+  attributes:
+  label: Estimated Effort
+  description: Estimated implementation effort
+  options:
+    - 1-2 hours
+    - half-day
+    - 1 day
+    - 2-3 days
+    - 1 week
+    - 2+ weeks
+  validations:
+  required: true
+- type: textarea
+  id: infrastructure_description
+  attributes:
+  label: Infrastructure Description
+  description: Clear description of the infrastructure work and its purpose for domain capabilities
+  placeholder: Describe what infrastructure will be implemented and why it’s needed…
+  validations:
+  required: true
+- type: textarea
+  id: infrastructure_context
+  attributes:
+  label: Infrastructure Context
+  description: Context and business justification
+  placeholder: |
+    **Domain Support**: How this infrastructure supports domain mission
+    **Scope**: Domain-specific/Cross-domain/Platform-wide
+    **Business Justification**: Why this infrastructure work is needed
+  validations:
+  required: true
+- type: textarea
+  id: current_state_analysis
+  attributes:
+  label: Current State Analysis
+  description: Assessment of current infrastructure state and limitations
+  placeholder: |
+    **Infrastructure Gaps**:
+    - Performance Issues: Current performance limitations
+    - Scalability Constraints: Scaling bottlenecks
+    - Security Concerns: Security improvements needed
+    - Operational Challenges: Operational pain points
+    - Development Friction: Developer experience issues
+  validations:
+  required: true
+- type: textarea
+  id: infrastructure_requirements
+  attributes:
+  label: Infrastructure Requirements
+  description: Detailed requirements for infrastructure enhancement
+  placeholder: |
+    **Performance Targets**: Specific performance requirements
+    **Scalability Goals**: Scaling requirements and targets
+    **Security Standards**: Security compliance and requirements
+    **Reliability Targets**: Uptime and reliability requirements
+    **Compliance Needs**: Regulatory or policy compliance
+  validations:
+  required: true
+- type: textarea
+  id: technical_approach
+  attributes:
+  label: Technical Approach
+  description: Infrastructure implementation approach aligned with domain technology patterns
+  placeholder: |
+    **Technology Stack**:
+    - Primary Technologies: Infrastructure technologies to use
+    - Integration Points: How this integrates with existing infrastructure
+    - Domain Alignment: How this supports domain technology patterns
+
+    **Architecture Considerations**:
+    - Domain Boundaries: How infrastructure respects domain boundaries
+    - Cross-Domain Impact: Effect on other domains
+    - Technology Consistency: Alignment with existing tech choices
+
+  validations:
+  required: true
+- type: textarea
+  id: implementation_plan
+  attributes:
+  label: Implementation Plan
+  description: Detailed implementation approach and phases
+  placeholder: |
+    **Phase 1: Foundation**
+    - [ ] Core infrastructure component setup
+    - [ ] Basic functionality validation
+
+    **Phase 2: Integration**
+    - [ ] Integration with existing systems
+    - [ ] Domain-specific configuration
+
+    **Phase 3: Optimization**
+    - [ ] Performance tuning and optimization
+    - [ ] Monitoring and alerting setup
+
+  validations:
+  required: true
+- type: textarea
+  id: cross_domain_considerations
+  attributes:
+  label: Cross-Domain Considerations
+  description: Impact and coordination needs with other domains
+  placeholder: |
+    **Affected Domains**:
+    - Domain A: How this affects Domain A
+    - Domain B: How this affects Domain B
+
+    **Coordination Requirements**:
+    - Cross-domain coordination needed during implementation
+    - Communication and rollout coordination
+- type: textarea
+  id: risk_assessment
+  attributes:
+  label: Risk Assessment
+  description: Analysis of infrastructure risks and mitigation strategies
+  placeholder: |
+    **Implementation Risks**: Technical risks and mitigation
+    **Operational Risks**: Operational impact and mitigation
+    **Domain Impact Risks**: Domain functionality risks and mitigation
+- type: checkboxes
+  id: testing_validation
+  attributes:
+  label: Testing & Validation
+  description: Infrastructure validation requirements
+  options:
+  - label: Infrastructure component testing
+  - label: Performance benchmark validation
+  - label: Security configuration validation
+  - label: Domain integration testing
+  - label: Cross-domain impact validation
+  - label: Disaster recovery testing (if applicable)
+  - label: Monitoring and alerting validation
+- type: checkboxes
+  id: definition_of_done
+  attributes:
+  label: Definition of Done
+  description: Infrastructure completion criteria
+  options:
+  - label: Infrastructure implemented and configured
+  - label: Performance targets validated
+  - label: Security requirements met
+  - label: Domain integration tested
+  - label: Cross-domain coordination completed
+  - label: Monitoring and alerting operational
+  - label: Documentation updated (runbooks, architecture docs)
+  - label: Team training completed (if needed)
+  - label: Rollback procedures tested
+  - label: Production readiness validated
+- type: textarea
+  id: monitoring_maintenance
+  attributes:
+  label: Monitoring & Maintenance
+  description: Ongoing monitoring, maintenance, and operational requirements
+  placeholder: |
+    **Monitoring Strategy**: How infrastructure health will be monitored
+    **Maintenance Schedule**: Regular maintenance requirements
+    **Operational Procedures**: Day-to-day operational needs
+- type: textarea
+  id: documentation_requirements
+  attributes:
+  label: Documentation Requirements
+  description: Infrastructure documentation needs
+  placeholder: |
+    - [ ] Architecture documentation updated
+    - [ ] Operational runbooks created/updated
+    - [ ] Domain-specific configuration documented
+    - [ ] Troubleshooting guides updated
+- type: textarea
+  id: notes
+  attributes:
+  label: Additional Notes
+  description: Additional context, constraints, dependencies, or operational considerations
+  placeholder: Include any architectural decisions, constraints, or operational notes…

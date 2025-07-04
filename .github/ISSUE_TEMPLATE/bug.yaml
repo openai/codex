@@ -1,0 +1,218 @@
+name: 🐛 Bug Resolution
+description: Comprehensive bug resolution with impact assessment and root cause analysis
+title: “[BUG]: “
+labels: [“type:bug”]
+assignees: []
+body:
+
+- type: dropdown
+  id: domain
+  attributes:
+  label: Domain
+  description: Which domain is affected by this bug?
+  options:
+    - backend
+    - frontend
+    - shared
+    - cross_domain
+    - business_domain
+    - technical_domain
+  validations:
+  required: true
+- type: dropdown
+  id: tech_primary
+  attributes:
+  label: Primary Technology
+  description: Primary technology stack where the bug occurs
+  options:
+    - supabase
+    - svelte
+    - typescript
+    - javascript
+    - python
+    - deno
+    - react
+    - node
+    - other
+  validations:
+  required: true
+- type: dropdown
+  id: component_type
+  attributes:
+  label: Component Type
+  description: Type of component affected by the bug
+  options:
+    - ui_component
+    - api_endpoint
+    - edge_function
+    - database_function
+    - page_component
+    - store_module
+    - business_logic
+    - integration
+    - other
+  validations:
+  required: true
+- type: dropdown
+  id: severity
+  attributes:
+  label: Severity
+  description: Bug severity level
+  options:
+    - critical
+    - high
+    - medium
+    - low
+  validations:
+  required: true
+- type: dropdown
+  id: priority
+  attributes:
+  label: Priority
+  description: Bug resolution priority
+  options:
+    - critical
+    - high
+    - medium
+    - low
+  validations:
+  required: true
+- type: dropdown
+  id: estimated_effort
+  attributes:
+  label: Estimated Effort
+  description: Estimated effort to resolve
+  options:
+    - 1-2 hours
+    - half-day
+    - 1 day
+    - 2-3 days
+    - 1 week
+    - 2+ weeks
+  validations:
+  required: true
+- type: textarea
+  id: problem_description
+  attributes:
+  label: Problem Description
+  description: Clear description of the bug, its symptoms, and impact on domain functionality
+  placeholder: Describe the bug, what’s happening vs what should happen…
+  validations:
+  required: true
+- type: textarea
+  id: impact_assessment
+  attributes:
+  label: Impact Assessment
+  description: Comprehensive impact analysis
+  placeholder: |
+    **Domain Impact**: How this affects domain mission and capabilities
+    **User Impact**: Effect on stakeholders and user experience
+    **Business Impact**: Business consequences if not resolved
+    **System Impact**: Technical system effects and risks
+  validations:
+  required: true
+- type: textarea
+  id: bug_details
+  attributes:
+  label: Bug Details
+  description: Detailed bug information
+  placeholder: |
+    **Frequency**: Always/Often/Sometimes/Rare
+    **Environment**: Where the bug occurs (dev/staging/production)
+    **First Observed**: When first noticed
+    **Related Issues**: Any related bugs or issues
+  validations:
+  required: true
+- type: textarea
+  id: reproduction_steps
+  attributes:
+  label: Reproduction Steps
+  description: Step-by-step instructions to reproduce the bug
+  placeholder: |
+    1. Step 1
+    2. Step 2
+    3. Step 3
+    4. **Expected behavior**: What should happen
+    5. **Actual behavior**: What actually happens
+  validations:
+  required: true
+- type: textarea
+  id: technical_context
+  attributes:
+  label: Technical Context
+  description: Technical context and relevant system information
+  placeholder: |
+    **Domain Boundaries**: How this relates to domain boundaries
+    **Business Rules**: Relevant domain business rules
+    **Integration Points**: Cross-domain interactions involved
+    **Technology Components**: Specific tech stack components affected
+  validations:
+  required: true
+- type: textarea
+  id: root_cause_analysis
+  attributes:
+  label: Root Cause Analysis
+  description: Analysis of underlying cause (to be filled during investigation)
+  placeholder: |
+    **Investigation Areas**:
+    - [ ] Domain business rule validation
+    - [ ] Technology stack component behavior
+    - [ ] Cross-domain integration points
+    - [ ] Data consistency and validation
+    - [ ] Error handling and edge cases
+- type: textarea
+  id: resolution_approach
+  attributes:
+  label: Resolution Approach
+  description: Technical approach to fix the bug while maintaining domain integrity
+  placeholder: |
+    **Fix Strategy**:
+    - Root Cause Address: How to fix the underlying cause
+    - Domain Pattern Compliance: Ensure fix follows domain patterns
+    - Regression Prevention: How to prevent similar issues
+- type: textarea
+  id: cross_domain_considerations
+  attributes:
+  label: Cross-Domain Considerations
+  description: If bug affects multiple domains or integration points
+  placeholder: Impact on other domains and coordination requirements…
+- type: checkboxes
+  id: testing_requirements
+  attributes:
+  label: Testing Requirements
+  description: Comprehensive testing approach
+  options:
+  - label: Reproduce bug in test environment
+  - label: Verify fix resolves the issue
+  - label: Test domain business rule compliance
+  - label: Validate cross-domain integration (if applicable)
+  - label: Regression testing for related functionality
+  - label: Performance impact validation
+- type: checkboxes
+  id: definition_of_done
+  attributes:
+  label: Definition of Done
+  description: Bug resolution completion criteria
+  options:
+  - label: Root cause identified and documented
+  - label: Fix implemented following domain patterns
+  - label: Bug reproduction confirmed resolved
+  - label: Domain business rules validated
+  - label: Unit tests updated/added for bug scenario
+  - label: Integration tests validated (if cross-domain)
+  - label: Regression tests added
+  - label: Documentation updated
+  - label: Code review completed
+  - label: Fix validated in production-like environment
+- type: textarea
+  id: prevention_measures
+  attributes:
+  label: Prevention Measures
+  description: Steps to prevent similar bugs in the future
+  placeholder: What can be done to prevent this type of bug from happening again…
+- type: textarea
+  id: notes
+  attributes:
+  label: Additional Notes
+  description: Additional context, workarounds, or related issues
+  placeholder: Include any workarounds, related issues, or additional context…

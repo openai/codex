@@ -1,0 +1,302 @@
+name: 🔄 Cross-Domain Integration
+description: Cross-domain coordination with proper boundary management and contract definition
+title: “[INTEGRATION]: “
+labels: [“type:integration”, “cross-domain”]
+assignees: []
+body:
+
+- type: dropdown
+  id: integration_type
+  attributes:
+  label: Integration Type
+  description: Type of cross-domain integration
+  options:
+    - api
+    - event
+    - data
+    - batch
+    - real_time
+    - message_queue
+    - shared_service
+    - other
+  validations:
+  required: true
+- type: dropdown
+  id: source_domain
+  attributes:
+  label: Source Domain
+  description: Domain initiating or providing the integration
+  options:
+    - backend
+    - frontend
+    - shared
+    - business_domain
+    - technical_domain
+    - external_system
+    - other
+  validations:
+  required: true
+- type: dropdown
+  id: target_domain
+  attributes:
+  label: Target Domain
+  description: Domain receiving or consuming the integration
+  options:
+    - backend
+    - frontend
+    - shared
+    - business_domain
+    - technical_domain
+    - external_system
+    - other
+  validations:
+  required: true
+- type: dropdown
+  id: tech_primary
+  attributes:
+  label: Primary Technology
+  description: Primary technology for integration implementation
+  options:
+    - rest_api
+    - graphql
+    - grpc
+    - message_queue
+    - event_stream
+    - database
+    - webhook
+    - other
+  validations:
+  required: true
+- type: dropdown
+  id: priority
+  attributes:
+  label: Priority
+  description: Integration priority level
+  options:
+    - critical
+    - high
+    - medium
+    - low
+  validations:
+  required: true
+- type: dropdown
+  id: estimated_effort
+  attributes:
+  label: Estimated Effort
+  description: Estimated integration effort
+  options:
+    - 1-2 hours
+    - half-day
+    - 1 day
+    - 2-3 days
+    - 1 week
+    - 2+ weeks
+  validations:
+  required: true
+- type: input
+  id: depends_on
+  attributes:
+  label: Dependencies
+  description: List any task dependencies (comma-separated issue numbers or task names)
+  placeholder: |
+    #123, #456, domain_setup_task
+- type: textarea
+  id: integration_description
+  attributes:
+  label: Integration Description
+  description: Clear description of the integration work and its purpose for cross-domain coordination
+  placeholder: Describe what will be integrated between domains and why…
+  validations:
+  required: true
+- type: textarea
+  id: integration_context
+  attributes:
+  label: Integration Context
+  description: Context and business purpose for integration
+  placeholder: |
+    **Business Purpose**: Why this integration is needed for business value
+    **Workflow Integration**: How domain workflows coordinate
+    **Timing Requirements**: Synchronous/Asynchronous requirements
+  validations:
+  required: true
+- type: textarea
+  id: integration_requirements
+  attributes:
+  label: Integration Requirements
+  description: Detailed requirements for cross-domain coordination
+  placeholder: |
+    **Functional Requirements**:
+    - Data Exchange: What data needs to be shared between domains
+    - Business Logic: Cross-domain business rules and validation
+    - Workflow Integration: How domain workflows coordinate
+
+    **Non-Functional Requirements**:
+    - Performance: Response time, throughput requirements
+    - Reliability: Availability, fault tolerance requirements
+    - Security: Authentication, authorization, data protection
+    - Scalability: Volume and growth requirements
+
+  validations:
+  required: true
+- type: textarea
+  id: domain_boundary_analysis
+  attributes:
+  label: Domain Boundary Analysis
+  description: Analysis of how integration respects and maintains domain boundaries
+  placeholder: |
+    **Source Domain Responsibilities**:
+    - What the source domain owns and controls
+    - What the source domain exposes to other domains
+    - Source domain integration patterns and constraints
+
+    **Target Domain Responsibilities**:
+    - What the target domain owns and controls
+    - What the target domain needs from other domains
+    - Target domain integration patterns and constraints
+
+    **Boundary Protection**:
+    - Anti-corruption layers needed
+    - Data transformation and validation requirements
+    - Error isolation and handling strategies
+
+  validations:
+  required: true
+- type: textarea
+  id: technical_integration_approach
+  attributes:
+  label: Technical Integration Approach
+  description: Technical implementation approach maintaining domain autonomy
+  placeholder: |
+    **Integration Pattern**:
+    - Pattern Type: Request-Response/Event-Driven/Data Pipeline/etc.
+    - Protocol: HTTP/GraphQL/Message Queue/etc.
+    - Data Format: JSON/XML/Protocol Buffers/etc.
+
+    **Contract Definition**:
+    ```yaml
+    integration_contract:
+      name: "domain_to_domain_integration"
+      version: "1.0.0"
+      source: "source_domain"
+      target: "target_domain"
+    \```
+
+    **Error Handling Strategy**:
+    - Error Categories: Expected error types and handling
+    - Retry Logic: Retry strategies and backoff patterns
+    - Fallback Mechanisms: What happens when integration fails
+    - Circuit Breaker: Protection against cascading failures
+
+  validations:
+  required: true
+- type: textarea
+  id: implementation_plan
+  attributes:
+  label: Implementation Plan
+  description: Detailed implementation phases maintaining domain boundaries
+  placeholder: |
+    **Phase 1: Contract Design**
+    - [ ] Define integration contract between domains
+    - [ ] Design data schemas and validation rules
+    - [ ] Plan anti-corruption layers
+    - [ ] Design error handling strategies
+
+    **Phase 2: Source Domain Implementation**
+    - [ ] Implement source domain integration points
+    - [ ] Add data transformation and validation
+    - [ ] Implement error handling and monitoring
+    - [ ] Add integration testing
+
+    **Phase 3: Target Domain Implementation**
+    - [ ] Implement target domain integration points
+    - [ ] Add anti-corruption layers if needed
+    - [ ] Implement error handling and fallback
+    - [ ] Add integration testing
+
+    **Phase 4: End-to-End Integration**
+    - [ ] Test complete integration flow
+    - [ ] Validate error scenarios
+    - [ ] Performance and load testing
+    - [ ] Security validation
+
+  validations:
+  required: true
+- type: textarea
+  id: cross_domain_coordination
+  attributes:
+  label: Cross-Domain Coordination
+  description: Coordination requirements between domain teams
+  placeholder: |
+    **Development Coordination**:
+    - How domain teams will coordinate during development
+    - Integration testing coordination
+    - Deployment coordination requirements
+
+    **Operational Coordination**:
+    - Monitoring and alerting coordination
+    - Incident response coordination
+    - Maintenance and upgrade coordination
+- type: checkboxes
+  id: testing_strategy
+  attributes:
+  label: Testing Strategy
+  description: Comprehensive integration testing approach
+  options:
+  - label: Contract testing (source domain perspective)
+  - label: Contract testing (target domain perspective)
+  - label: Integration testing (end-to-end flow)
+  - label: Error scenario testing
+  - label: Performance testing
+  - label: Security testing
+  - label: Failover and recovery testing
+- type: checkboxes
+  id: definition_of_done
+  attributes:
+  label: Definition of Done
+  description: Integration completion criteria
+  options:
+  - label: Integration contract defined and agreed upon
+  - label: Source domain integration implemented
+  - label: Target domain integration implemented
+  - label: Anti-corruption layers implemented (if needed)
+  - label: Error handling and fallback mechanisms implemented
+  - label: Contract tests passing (both domains)
+  - label: End-to-end integration tests passing
+  - label: Performance requirements validated
+  - label: Security requirements validated
+  - label: Monitoring and alerting implemented
+  - label: Documentation completed (contract, usage, troubleshooting)
+  - label: Domain context updated with integration patterns
+  - label: Operational runbooks created
+  - label: Teams trained on integration patterns
+- type: textarea
+  id: monitoring_operations
+  attributes:
+  label: Monitoring & Operations
+  description: Ongoing monitoring, maintenance, and operational requirements
+  placeholder: |
+    **Integration Health Monitoring**:
+    - Key metrics to monitor integration health
+    - Alerting on integration failures or degradation
+    - Dashboard requirements for operational visibility
+
+    **Maintenance Considerations**:
+    - Version management for integration contracts
+    - Backward compatibility strategies
+    - Migration strategies for contract changes
+- type: textarea
+  id: risk_mitigation
+  attributes:
+  label: Risk Mitigation
+  description: Integration risks and mitigation strategies
+  placeholder: |
+    **Domain Coupling Risk**: How to prevent tight coupling between domains
+    **Performance Impact**: Mitigation for performance impact on domains
+    **Failure Isolation**: How integration failures are isolated
+    **Data Consistency**: Handling eventual consistency challenges
+- type: textarea
+  id: notes
+  attributes:
+  label: Additional Notes
+  description: Additional context, constraints, architectural decisions, or operational considerations
+  placeholder: Include any architectural decisions, constraints, or operational notes…

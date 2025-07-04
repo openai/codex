@@ -1,0 +1,168 @@
+name: 🚀 Feature Development
+description: Comprehensive feature development with domain context and business impact
+title: “[FEATURE]: “
+labels: [“type:feature”]
+assignees: []
+body:
+
+- type: dropdown
+  id: domain
+  attributes:
+  label: Domain
+  description: Which domain does this feature belong to?
+  options:
+    - backend
+    - frontend
+    - shared
+    - cross_domain
+    - business_domain
+    - technical_domain
+  validations:
+  required: true
+- type: dropdown
+  id: tech_primary
+  attributes:
+  label: Primary Technology
+  description: Primary technology stack for this feature
+  options:
+    - supabase
+    - svelte
+    - typescript
+    - javascript
+    - python
+    - deno
+    - react
+    - node
+    - other
+  validations:
+  required: true
+- type: dropdown
+  id: component_type
+  attributes:
+  label: Component Type
+  description: Type of component being developed
+  options:
+    - ui_component
+    - api_endpoint
+    - edge_function
+    - database_function
+    - page_component
+    - store_module
+    - business_logic
+    - integration
+    - other
+  validations:
+  required: true
+- type: dropdown
+  id: priority
+  attributes:
+  label: Priority
+  description: Feature priority level
+  options:
+    - critical
+    - high
+    - medium
+    - low
+  validations:
+  required: true
+- type: dropdown
+  id: estimated_effort
+  attributes:
+  label: Estimated Effort
+  description: Estimated development effort
+  options:
+    - 1-2 hours
+    - half-day
+    - 1 day
+    - 2-3 days
+    - 1 week
+    - 2+ weeks
+  validations:
+  required: true
+- type: input
+  id: depends_on
+  attributes:
+  label: Dependencies
+  description: List any task dependencies (comma-separated issue numbers or task names)
+  placeholder: |
+    #123, #456, task_name
+- type: textarea
+  id: description
+  attributes:
+  label: Feature Description
+  description: Clear description of the feature and its business value to the domain and stakeholders
+  placeholder: Describe what this feature does and why it’s valuable…
+  validations:
+  required: true
+- type: textarea
+  id: business_context
+  attributes:
+  label: Business Context
+  description: How this feature advances domain mission and provides stakeholder value
+  placeholder: |
+    **Domain Impact**: How this feature advances the domain mission
+    **Stakeholder Value**: What value this provides to users/systems
+    **Success Metrics**: How success will be measured
+  validations:
+  required: true
+- type: textarea
+  id: acceptance_criteria
+  attributes:
+  label: Acceptance Criteria
+  description: Specific measurable criteria that define when this feature is complete
+  placeholder: |
+    - [ ] Specific measurable criterion 1
+    - [ ] Specific measurable criterion 2
+    - [ ] Performance requirements if applicable
+    - [ ] Security requirements if applicable
+  validations:
+  required: true
+- type: textarea
+  id: technical_approach
+  attributes:
+  label: Technical Approach
+  description: High-level technical implementation approach
+  placeholder: |
+    **Domain Considerations**:
+    - Domain Boundaries: How this respects domain boundaries
+    - Business Rules: Domain business rules that apply
+    - Architecture Patterns: Domain architecture patterns to follow
+
+    **Technology Implementation**:
+    - Primary Technology: Technology stack components to use
+    - Performance Targets: Specific performance requirements
+    - Security Requirements: Security patterns and requirements
+
+  validations:
+  required: true
+- type: textarea
+  id: integration_points
+  attributes:
+  label: Integration Points
+  description: Cross-domain integration requirements or coordination needs
+  placeholder: |
+  **Dependencies**:
+  - Internal Dependencies: Dependencies within this domain
+  - Cross-Domain Dependencies: Dependencies on other domains
+  - External Dependencies: External services or systems
+- type: checkboxes
+  id: definition_of_done
+  attributes:
+  label: Definition of Done
+  description: Comprehensive completion criteria
+  options:
+  - label: Implementation completed following domain patterns
+  - label: Unit tests written and passing
+  - label: Integration tests for cross-domain interactions (if applicable)
+  - label: Documentation updated (code comments, domain context)
+  - label: Code review completed
+  - label: Domain business rules validated
+  - label: Performance targets met
+  - label: Security requirements validated
+  - label: Integration contracts maintained (if applicable)
+- type: textarea
+  id: notes
+  attributes:
+  label: Additional Notes
+  description: Any additional context, constraints, or considerations for implementation
+  placeholder: Include any architectural decisions, constraints, or future considerations…
