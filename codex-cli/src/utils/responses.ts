@@ -1,8 +1,14 @@
-import type { OpenAI } from "openai";
+// Type-only imports
+import type OpenAI from "openai";
 import type {
   ResponseCreateParams,
   Response,
 } from "openai/resources/responses/responses";
+
+// Value imports
+// We don't need a direct compile-time dependency on AzureOpenAI – using a
+// duck-typed feature-check allows us to keep the import tree smaller and avoid
+// issues when the SDK eventually promotes the Responses API to stable.
 
 // Define interfaces based on OpenAI API documentation
 type ResponseCreateInput = ResponseCreateParams;
@@ -249,21 +255,80 @@ function getFullMessages(
 function convertTools(
   tools?: ResponseCreateInput["tools"],
 ): Array<OpenAI.Chat.Completions.ChatCompletionTool> | undefined {
-  return tools
-    ?.filter((tool) => tool.type === "function")
-    .map((tool) => ({
-      type: "function" as const,
-      function: {
-        name: tool.name,
-        description: tool.description || undefined,
-        parameters: tool.parameters,
-      },
-    }));
+  if (!tools || tools.length === 0) {
+    return undefined;
+  }
+
+  const converted: Array<OpenAI.Chat.Completions.ChatCompletionTool> = [];
+
+  for (const tool of tools) {
+    // Standard function tool – needs to be nested under a `function` key.
+    if (tool.type === "function") {
+      converted.push({
+        type: "function",
+        function: {
+          name: tool.name,
+          description: tool.description || undefined,
+          parameters: tool.parameters,
+        },
+      } as OpenAI.Chat.Completions.ChatCompletionTool);
+      continue;
+    }
+
+    // Pass through any other tool types (e.g. "web_search_preview", "mcp")
+    // verbatim – the SDK typings may not yet include them so we cast via
+    // `unknown` to avoid compile-time errors.
+    converted.push(
+      tool as unknown as OpenAI.Chat.Completions.ChatCompletionTool,
+    );
+  }
+
+  return converted;
 }
 
 const createCompletion = (openai: OpenAI, input: ResponseCreateInput) => {
   const fullMessages = getFullMessages(input);
-  const chatTools = convertTools(input.tools);
+  // ---------------------------------------------------------------------
+  // Tool handling
+  // ---------------------------------------------------------------------
+  // Convert caller-supplied `function` tools to the shape expected by the
+  // Chat Completions API.  This preserves the existing behaviour where
+  // users can explicitly provide their own tools.
+
+  const chatTools = convertTools(input.tools) ?? [];
+
+  // Deep-research models (e.g. "o3-deep-research") require at least one of
+  // the special built-in tools `web_search_preview` or `mcp`.  Historically
+  // callers were expected to supply these themselves, but this proved error
+  //-prone (manifesting as the 400 error the user encountered).  We now
+  // proactively add a `web_search_preview` tool when talking to a deep-
+  // research model **unless** the user has already provided either of the
+  // required tools.
+
+  const isDeepResearchModel =
+    typeof input.model === "string" && input.model.includes("deep-research");
+
+  if (isDeepResearchModel) {
+    const hasRequiredTool = chatTools.some(
+      (t) =>
+        (t as { type?: string }).type === "web_search_preview" ||
+        (t as { type?: string }).type === "mcp",
+    );
+
+    if (!hasRequiredTool) {
+      // Cast through `unknown` to satisfy the narrower SDK type without
+      // polluting our own type definitions.
+      const deepResearchTool = {
+        type: "web_search_preview",
+      } as unknown as OpenAI.Chat.Completions.ChatCompletionTool;
+
+      chatTools.push(deepResearchTool);
+    }
+  }
+
+  // If we ended up with an empty list keep the property `undefined` so that
+  // we don't send an empty array (which the API rejects in some scenarios).
+  const toolsArg = chatTools.length > 0 ? chatTools : undefined;
   const webSearchOptions = input.tools?.some(
     (tool) => tool.type === "function" && tool.name === "web_search",
   )
@@ -273,7 +338,7 @@ const createCompletion = (openai: OpenAI, input: ResponseCreateInput) => {
   const chatInput: OpenAI.Chat.Completions.ChatCompletionCreateParams = {
     model: input.model,
     messages: fullMessages,
-    tools: chatTools,
+    tools: toolsArg,
     web_search_options: webSearchOptions,
     temperature: input.temperature,
     top_p: input.top_p,
@@ -301,6 +366,31 @@ async function responsesCreateViaChatCompletions(
   openai: OpenAI,
   input: ResponseCreateInput,
 ): Promise<ResponseOutput | AsyncGenerator<ResponseEvent>> {
+  // Prefer the Responses API when it is available on the instantiated client.
+  // This now covers both the standard OpenAI client **and** Azure OpenAI which
+  // recently added first-class support for the /responses endpoint.
+
+  // NB:  The openai-ts SDK does not yet expose full typings for the Responses
+  // API on `AzureOpenAI`.  We therefore use a runtime feature-check to detect
+  // availability instead of relying on `instanceof` or compile-time types.
+
+  const maybeResponses = (
+    openai as unknown as {
+      responses?: { create: (p: ResponseCreateInput) => unknown };
+    }
+  ).responses;
+
+  if (maybeResponses && typeof maybeResponses.create === "function") {
+    // Attempt to use the native Responses API directly.
+    try {
+      return maybeResponses.create(input) as unknown as
+        | ResponseOutput
+        | AsyncGenerator<ResponseEvent>;
+    } catch {
+      // If the call fails (e.g. unsupported deployment or endpoint) fall back
+      // to the Chat-Completions shim below so the CLI continues to function.
+    }
+  }
   const completion = await createCompletion(openai, input);
   if (input.stream) {
     return streamResponses(
@@ -493,7 +583,9 @@ async function* streamResponses(
     }
     if (
       !isToolCall &&
-      (("tool_calls" in choice.delta && choice.delta.tool_calls) ||
+      ((choice.delta &&
+        "tool_calls" in choice.delta &&
+        choice.delta.tool_calls) ||
         choice.finish_reason === "tool_calls")
     ) {
       isToolCall = true;
@@ -511,7 +603,7 @@ async function* streamResponses(
       };
     }
     if (isToolCall) {
-      for (const tcDelta of choice.delta.tool_calls || []) {
+      for (const tcDelta of choice.delta?.tool_calls || []) {
         const tcIndex = tcDelta.index;
         const content_index = textContentAdded ? tcIndex + 1 : tcIndex;
 
@@ -592,15 +684,17 @@ async function* streamResponses(
         };
         textContentAdded = true;
       }
-      if (choice.delta.content?.length) {
+      if (choice.delta?.content?.length) {
         yield {
           type: "response.output_text.delta",
           item_id: outputItemId,
           output_index: 0,
           content_index: 0,
-          delta: choice.delta.content,
+          delta: choice.delta.content ?? "",
         };
-        textContent += choice.delta.content;
+        if (choice.delta?.content) {
+          textContent += choice.delta.content;
+        }
       }
       if (choice.finish_reason) {
         yield {
