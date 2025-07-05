@@ -98,7 +98,7 @@ async fn live_streaming_and_prev_id_reset() {
 
         match ev.msg {
             EventMsg::AgentMessage(_) => saw_message_before_complete = true,
-            EventMsg::TaskComplete => break,
+            EventMsg::TaskComplete(_) => break,
             EventMsg::Error(ErrorEvent { message }) => {
                 panic!("agent reported error in task1: {message}")
             }
@@ -136,7 +136,7 @@ async fn live_streaming_and_prev_id_reset() {
             {
                 got_expected = true;
             }
-            EventMsg::TaskComplete => break,
+            EventMsg::TaskComplete(_) => break,
             EventMsg::Error(ErrorEvent { message }) => {
                 panic!("agent reported error in task2: {message}")
             }
@@ -204,7 +204,7 @@ async fn live_shell_function_call() {
                 assert!(stdout.contains(MARKER));
                 saw_end_with_output = true;
             }
-            EventMsg::TaskComplete => break,
+            EventMsg::TaskComplete(_) => break,
             EventMsg::Error(codex_core::protocol::ErrorEvent { message }) => {
                 panic!("agent error during shell test: {message}")
             }

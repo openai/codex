@@ -28,7 +28,7 @@ use tokio::io::AsyncReadExt;
 use uuid::Uuid;
 
 use crate::config::Config;
-use crate::config::HistoryPersistence;
+use crate::config_types::HistoryPersistence;
 
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;

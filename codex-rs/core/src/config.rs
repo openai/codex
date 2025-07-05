@@ -1,16 +1,24 @@
 use crate::config_profile::ConfigProfile;
+use crate::config_types::History;
+use crate::config_types::McpServerConfig;
+use crate::config_types::ReasoningEffort;
+use crate::config_types::ReasoningSummary;
+use crate::config_types::ShellEnvironmentPolicy;
+use crate::config_types::ShellEnvironmentPolicyToml;
+use crate::config_types::Tui;
+use crate::config_types::UriBasedFileOpener;
 use crate::flags::OPENAI_DEFAULT_MODEL;
-use crate::mcp_server_config::McpServerConfig;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::built_in_model_providers;
+use crate::openai_model_info::get_model_info;
 use crate::protocol::AskForApproval;
-use crate::protocol::SandboxPermission;
 use crate::protocol::SandboxPolicy;
 use dirs::home_dir;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
+use toml::Value as TomlValue;
 
 /// Maximum number of bytes of the documentation that will be embedded. Larger
 /// files are *silently truncated* to this size so we do not take up too much of
@@ -23,6 +31,12 @@ pub struct Config {
     /// Optional override of model selection.
     pub model: String,
 
+    /// Size of the context window for the model, in tokens.
+    pub model_context_window: Option<u64>,
+
+    /// Maximum number of output tokens.
+    pub model_max_output_tokens: Option<u64>,
+
     /// Key into the model_providers map that specifies which provider to use.
     pub model_provider_id: String,
 
@@ -33,6 +47,13 @@ pub struct Config {
     pub approval_policy: AskForApproval,
 
     pub sandbox_policy: SandboxPolicy,
+
+    pub shell_environment_policy: ShellEnvironmentPolicy,
+
+    /// When `true`, `AgentReasoning` events emitted by the backend will be
+    /// suppressed from the frontend output. This can reduce visual noise when
+    /// users are only interested in the final agent responses.
+    pub hide_agent_reasoning: bool,
 
     /// Disable server-side response storage (sends the full conversation
     /// context with every request). Currently necessary for OpenAI customers
@@ -91,73 +112,122 @@ pub struct Config {
 
     /// Collection of settings that are specific to the TUI.
     pub tui: Tui,
-}
 
-/// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
-#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
-pub struct History {
-    /// If true, history entries will not be written to disk.
-    pub persistence: HistoryPersistence,
-
-    /// If set, the maximum size of the history file in bytes.
-    /// TODO(mbolin): Not currently honored.
-    pub max_bytes: Option<usize>,
-}
-
-#[derive(Deserialize, Debug, Copy, Clone, PartialEq, Default)]
-#[serde(rename_all = "kebab-case")]
-pub enum HistoryPersistence {
-    /// Save all history entries to disk.
-    #[default]
-    SaveAll,
-    /// Do not write history to disk.
-    None,
-}
-
-/// Collection of settings that are specific to the TUI.
-#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
-pub struct Tui {
-    /// By default, mouse capture is enabled in the TUI so that it is possible
-    /// to scroll the conversation history with a mouse. This comes at the cost
-    /// of not being able to use the mouse to select text in the TUI.
-    /// (Most terminals support a modifier key to allow this. For example,
-    /// text selection works in iTerm if you hold down the `Option` key while
-    /// clicking and dragging.)
+    /// Path to the `codex-linux-sandbox` executable. This must be set if
+    /// [`crate::exec::SandboxType::LinuxSeccomp`] is used. Note that this
+    /// cannot be set in the config file: it must be set in code via
+    /// [`ConfigOverrides`].
     ///
-    /// Setting this option to `true` disables mouse capture, so scrolling with
-    /// the mouse is not possible, though the keyboard shortcuts e.g. `b` and
-    /// `space` still work. This allows the user to select text in the TUI
-    /// using the mouse without needing to hold down a modifier key.
-    pub disable_mouse_capture: bool,
+    /// When this program is invoked, arg0 will be set to `codex-linux-sandbox`.
+    pub codex_linux_sandbox_exe: Option<PathBuf>,
+
+    /// If not "none", the value to use for `reasoning.effort` when making a
+    /// request using the Responses API.
+    pub model_reasoning_effort: ReasoningEffort,
+
+    /// If not "none", the value to use for `reasoning.summary` when making a
+    /// request using the Responses API.
+    pub model_reasoning_summary: ReasoningSummary,
 }
 
-#[derive(Deserialize, Debug, Copy, Clone, PartialEq)]
-pub enum UriBasedFileOpener {
-    #[serde(rename = "vscode")]
-    VsCode,
+impl Config {
+    /// Load configuration with *generic* CLI overrides (`-c key=value`) applied
+    /// **in between** the values parsed from `config.toml` and the
+    /// strongly-typed overrides specified via [`ConfigOverrides`].
+    ///
+    /// The precedence order is therefore: `config.toml` < `-c` overrides <
+    /// `ConfigOverrides`.
+    pub fn load_with_cli_overrides(
+        cli_overrides: Vec<(String, TomlValue)>,
+        overrides: ConfigOverrides,
+    ) -> std::io::Result<Self> {
+        // Resolve the directory that stores Codex state (e.g. ~/.codex or the
+        // value of $CODEX_HOME) so we can embed it into the resulting
+        // `Config` instance.
+        let codex_home = find_codex_home()?;
 
-    #[serde(rename = "vscode-insiders")]
-    VsCodeInsiders,
+        // Step 1: parse `config.toml` into a generic JSON value.
+        let mut root_value = load_config_as_toml(&codex_home)?;
 
-    #[serde(rename = "windsurf")]
-    Windsurf,
+        // Step 2: apply the `-c` overrides.
+        for (path, value) in cli_overrides.into_iter() {
+            apply_toml_override(&mut root_value, &path, value);
+        }
 
-    #[serde(rename = "cursor")]
-    Cursor,
+        // Step 3: deserialize into `ConfigToml` so that Serde can enforce the
+        // correct types.
+        let cfg: ConfigToml = root_value.try_into().map_err(|e| {
+            tracing::error!("Failed to deserialize overridden config: {e}");
+            std::io::Error::new(std::io::ErrorKind::InvalidData, e)
+        })?;
 
-    /// Option to disable the URI-based file opener.
-    #[serde(rename = "none")]
-    None,
+        // Step 4: merge with the strongly-typed overrides.
+        Self::load_from_base_config_with_overrides(cfg, overrides, codex_home)
+    }
 }
 
-impl UriBasedFileOpener {
-    pub fn get_scheme(&self) -> Option<&str> {
-        match self {
-            UriBasedFileOpener::VsCode => Some("vscode"),
-            UriBasedFileOpener::VsCodeInsiders => Some("vscode-insiders"),
-            UriBasedFileOpener::Windsurf => Some("windsurf"),
-            UriBasedFileOpener::Cursor => Some("cursor"),
-            UriBasedFileOpener::None => None,
+/// Read `CODEX_HOME/config.toml` and return it as a generic TOML value. Returns
+/// an empty TOML table when the file does not exist.
+fn load_config_as_toml(codex_home: &Path) -> std::io::Result<TomlValue> {
+    let config_path = codex_home.join("config.toml");
+    match std::fs::read_to_string(&config_path) {
+        Ok(contents) => match toml::from_str::<TomlValue>(&contents) {
+            Ok(val) => Ok(val),
+            Err(e) => {
+                tracing::error!("Failed to parse config.toml: {e}");
+                Err(std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+            }
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            tracing::info!("config.toml not found, using defaults");
+            Ok(TomlValue::Table(Default::default()))
+        }
+        Err(e) => {
+            tracing::error!("Failed to read config.toml: {e}");
+            Err(e)
+        }
+    }
+}
+
+/// Apply a single dotted-path override onto a TOML value.
+fn apply_toml_override(root: &mut TomlValue, path: &str, value: TomlValue) {
+    use toml::value::Table;
+
+    let segments: Vec<&str> = path.split('.').collect();
+    let mut current = root;
+
+    for (idx, segment) in segments.iter().enumerate() {
+        let is_last = idx == segments.len() - 1;
+
+        if is_last {
+            match current {
+                TomlValue::Table(table) => {
+                    table.insert(segment.to_string(), value);
+                }
+                _ => {
+                    let mut table = Table::new();
+                    table.insert(segment.to_string(), value);
+                    *current = TomlValue::Table(table);
+                }
+            }
+            return;
+        }
+
+        // Traverse or create intermediate object.
+        match current {
+            TomlValue::Table(table) => {
+                current = table
+                    .entry(segment.to_string())
+                    .or_insert_with(|| TomlValue::Table(Table::new()));
+            }
+            _ => {
+                *current = TomlValue::Table(Table::new());
+                if let TomlValue::Table(tbl) = current {
+                    current = tbl
+                        .entry(segment.to_string())
+                        .or_insert_with(|| TomlValue::Table(Table::new()));
+                }
+            }
         }
     }
 }
@@ -171,14 +241,20 @@ pub struct ConfigToml {
     /// Provider to use from the model_providers map.
     pub model_provider: Option<String>,
 
+    /// Size of the context window for the model, in tokens.
+    pub model_context_window: Option<u64>,
+
+    /// Maximum number of output tokens.
+    pub model_max_output_tokens: Option<u64>,
+
     /// Default approval policy for executing commands.
     pub approval_policy: Option<AskForApproval>,
 
-    // The `default` attribute ensures that the field is treated as `None` when
-    // the key is omitted from the TOML. Without it, Serde treats the field as
-    // required because we supply a custom deserializer.
-    #[serde(default, deserialize_with = "deserialize_sandbox_permissions")]
-    pub sandbox_permissions: Option<Vec<SandboxPermission>>,
+    #[serde(default)]
+    pub shell_environment_policy: ShellEnvironmentPolicyToml,
+
+    /// If omitted, Codex defaults to the restrictive `read-only` policy.
+    pub sandbox: Option<SandboxPolicy>,
 
     /// Disable server-side response storage (sends the full conversation
     /// context with every request). Currently necessary for OpenAI customers
@@ -220,55 +296,13 @@ pub struct ConfigToml {
 
     /// Collection of settings that are specific to the TUI.
     pub tui: Option<Tui>,
-}
 
-impl ConfigToml {
-    /// Attempt to parse the file at `~/.codex/config.toml`. If it does not
-    /// exist, return a default config. Though if it exists and cannot be
-    /// parsed, report that to the user and force them to fix it.
-    fn load_from_toml(codex_home: &Path) -> std::io::Result<Self> {
-        let config_toml_path = codex_home.join("config.toml");
-        match std::fs::read_to_string(&config_toml_path) {
-            Ok(contents) => toml::from_str::<Self>(&contents).map_err(|e| {
-                tracing::error!("Failed to parse config.toml: {e}");
-                std::io::Error::new(std::io::ErrorKind::InvalidData, e)
-            }),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                tracing::info!("config.toml not found, using defaults");
-                Ok(Self::default())
-            }
-            Err(e) => {
-                tracing::error!("Failed to read config.toml: {e}");
-                Err(e)
-            }
-        }
-    }
-}
+    /// When set to `true`, `AgentReasoning` events will be hidden from the
+    /// UI/output. Defaults to `false`.
+    pub hide_agent_reasoning: Option<bool>,
 
-fn deserialize_sandbox_permissions<'de, D>(
-    deserializer: D,
-) -> Result<Option<Vec<SandboxPermission>>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let permissions: Option<Vec<String>> = Option::deserialize(deserializer)?;
-
-    match permissions {
-        Some(raw_permissions) => {
-            let base_path = find_codex_home().map_err(serde::de::Error::custom)?;
-
-            let converted = raw_permissions
-                .into_iter()
-                .map(|raw| {
-                    parse_sandbox_permission_with_base_path(&raw, base_path.clone())
-                        .map_err(serde::de::Error::custom)
-                })
-                .collect::<Result<Vec<_>, D::Error>>()?;
-
-            Ok(Some(converted))
-        }
-        None => Ok(None),
-    }
+    pub model_reasoning_effort: Option<ReasoningEffort>,
+    pub model_reasoning_summary: Option<ReasoningSummary>,
 }
 
 /// Optional overrides for user configuration (e.g., from CLI flags).
@@ -278,27 +312,12 @@ pub struct ConfigOverrides {
     pub cwd: Option<PathBuf>,
     pub approval_policy: Option<AskForApproval>,
     pub sandbox_policy: Option<SandboxPolicy>,
-    pub disable_response_storage: Option<bool>,
     pub model_provider: Option<String>,
     pub config_profile: Option<String>,
+    pub codex_linux_sandbox_exe: Option<PathBuf>,
 }
 
 impl Config {
-    /// Load configuration, optionally applying overrides (CLI flags). Merges
-    /// ~/.codex/config.toml, ~/.codex/instructions.md, embedded defaults, and
-    /// any values provided in `overrides` (highest precedence).
-    pub fn load_with_overrides(overrides: ConfigOverrides) -> std::io::Result<Self> {
-        // Resolve the directory that stores Codex state (e.g. ~/.codex or the
-        // value of $CODEX_HOME) so we can embed it into the resulting
-        // `Config` instance.
-        let codex_home = find_codex_home()?;
-
-        let cfg: ConfigToml = ConfigToml::load_from_toml(&codex_home)?;
-        tracing::warn!("Config parsed from config.toml: {cfg:?}");
-
-        Self::load_from_base_config_with_overrides(cfg, overrides, codex_home)
-    }
-
     /// Meant to be used exclusively for tests: `load_with_overrides()` should
     /// be used in all other cases.
     pub fn load_from_base_config_with_overrides(
@@ -314,9 +333,9 @@ impl Config {
             cwd,
             approval_policy,
             sandbox_policy,
-            disable_response_storage,
             model_provider,
             config_profile: config_profile_key,
+            codex_linux_sandbox_exe,
         } = overrides;
 
         let config_profile = match config_profile_key.or(cfg.profile) {
@@ -333,20 +352,10 @@ impl Config {
             None => ConfigProfile::default(),
         };
 
-        let sandbox_policy = match sandbox_policy {
-            Some(sandbox_policy) => sandbox_policy,
-            None => {
-                // Derive a SandboxPolicy from the permissions in the config.
-                match cfg.sandbox_permissions {
-                    // Note this means the user can explicitly set permissions
-                    // to the empty list in the config file, granting it no
-                    // permissions whatsoever.
-                    Some(permissions) => SandboxPolicy::from(permissions),
-                    // Default to read only rather than completely locked down.
-                    None => SandboxPolicy::new_read_only_policy(),
-                }
-            }
-        };
+        let sandbox_policy = sandbox_policy.unwrap_or_else(|| {
+            cfg.sandbox
+                .unwrap_or_else(SandboxPolicy::new_read_only_policy)
+        });
 
         let mut model_providers = built_in_model_providers();
         // Merge user-defined providers into the built-in list.
@@ -367,6 +376,8 @@ impl Config {
                 )
             })?
             .clone();
+
+        let shell_environment_policy = cfg.shell_environment_policy.into();
 
         let resolved_cwd = {
             use std::env;
@@ -389,11 +400,23 @@ impl Config {
 
         let history = cfg.history.unwrap_or_default();
 
+        let model = model
+            .or(config_profile.model)
+            .or(cfg.model)
+            .unwrap_or_else(default_model);
+        let openai_model_info = get_model_info(&model);
+        let model_context_window = cfg
+            .model_context_window
+            .or_else(|| openai_model_info.as_ref().map(|info| info.context_window));
+        let model_max_output_tokens = cfg.model_max_output_tokens.or_else(|| {
+            openai_model_info
+                .as_ref()
+                .map(|info| info.max_output_tokens)
+        });
         let config = Self {
-            model: model
-                .or(config_profile.model)
-                .or(cfg.model)
-                .unwrap_or_else(default_model),
+            model,
+            model_context_window,
+            model_max_output_tokens,
             model_provider_id,
             model_provider,
             cwd: resolved_cwd,
@@ -402,8 +425,9 @@ impl Config {
                 .or(cfg.approval_policy)
                 .unwrap_or_else(AskForApproval::default),
             sandbox_policy,
-            disable_response_storage: disable_response_storage
-                .or(config_profile.disable_response_storage)
+            shell_environment_policy,
+            disable_response_storage: config_profile
+                .disable_response_storage
                 .or(cfg.disable_response_storage)
                 .unwrap_or(false),
             notify: cfg.notify,
@@ -415,6 +439,11 @@ impl Config {
             history,
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
             tui: cfg.tui.unwrap_or_default(),
+            codex_linux_sandbox_exe,
+
+            hide_agent_reasoning: cfg.hide_agent_reasoning.unwrap_or(false),
+            model_reasoning_effort: cfg.model_reasoning_effort.unwrap_or_default(),
+            model_reasoning_summary: cfg.model_reasoning_summary.unwrap_or_default(),
         };
         Ok(config)
     }
@@ -476,92 +505,14 @@ pub fn log_dir(cfg: &Config) -> std::io::Result<PathBuf> {
     Ok(p)
 }
 
-pub fn parse_sandbox_permission_with_base_path(
-    raw: &str,
-    base_path: PathBuf,
-) -> std::io::Result<SandboxPermission> {
-    use SandboxPermission::*;
-
-    if let Some(path) = raw.strip_prefix("disk-write-folder=") {
-        return if path.is_empty() {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "--sandbox-permission disk-write-folder=<PATH> requires a non-empty PATH",
-            ))
-        } else {
-            use path_absolutize::*;
-
-            let file = PathBuf::from(path);
-            let absolute_path = if file.is_relative() {
-                file.absolutize_from(base_path)
-            } else {
-                file.absolutize()
-            }
-            .map(|path| path.into_owned())?;
-            Ok(DiskWriteFolder {
-                folder: absolute_path,
-            })
-        };
-    }
-
-    match raw {
-        "disk-full-read-access" => Ok(DiskFullReadAccess),
-        "disk-write-platform-user-temp-folder" => Ok(DiskWritePlatformUserTempFolder),
-        "disk-write-platform-global-temp-folder" => Ok(DiskWritePlatformGlobalTempFolder),
-        "disk-write-cwd" => Ok(DiskWriteCwd),
-        "disk-full-write-access" => Ok(DiskFullWriteAccess),
-        "network-full-access" => Ok(NetworkFullAccess),
-        _ => Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!(
-                "`{raw}` is not a recognised permission.\nRun with `--help` to see the accepted values."
-            ),
-        )),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used, clippy::unwrap_used)]
+    use crate::config_types::HistoryPersistence;
+
     use super::*;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
-
-    /// Verify that the `sandbox_permissions` field on `ConfigToml` correctly
-    /// differentiates between a value that is completely absent in the
-    /// provided TOML (i.e. `None`) and one that is explicitly specified as an
-    /// empty array (i.e. `Some(vec![])`). This ensures that downstream logic
-    /// that treats these two cases differently (default read-only policy vs a
-    /// fully locked-down sandbox) continues to function.
-    #[test]
-    fn test_sandbox_permissions_none_vs_empty_vec() {
-        // Case 1: `sandbox_permissions` key is *absent* from the TOML source.
-        let toml_source_without_key = "";
-        let cfg_without_key: ConfigToml = toml::from_str(toml_source_without_key)
-            .expect("TOML deserialization without key should succeed");
-        assert!(cfg_without_key.sandbox_permissions.is_none());
-
-        // Case 2: `sandbox_permissions` is present but set to an *empty array*.
-        let toml_source_with_empty = "sandbox_permissions = []";
-        let cfg_with_empty: ConfigToml = toml::from_str(toml_source_with_empty)
-            .expect("TOML deserialization with empty array should succeed");
-        assert_eq!(Some(vec![]), cfg_with_empty.sandbox_permissions);
-
-        // Case 3: `sandbox_permissions` contains a non-empty list of valid values.
-        let toml_source_with_values = r#"
-            sandbox_permissions = ["disk-full-read-access", "network-full-access"]
-        "#;
-        let cfg_with_values: ConfigToml = toml::from_str(toml_source_with_values)
-            .expect("TOML deserialization with valid permissions should succeed");
-
-        assert_eq!(
-            Some(vec![
-                SandboxPermission::DiskFullReadAccess,
-                SandboxPermission::NetworkFullAccess
-            ]),
-            cfg_with_values.sandbox_permissions
-        );
-    }
 
     #[test]
     fn test_toml_parsing() {
@@ -569,9 +520,8 @@ mod tests {
 [history]
 persistence = "save-all"
 "#;
-        let history_with_persistence_cfg: ConfigToml =
-            toml::from_str::<ConfigToml>(history_with_persistence)
-                .expect("TOML deserialization should succeed");
+        let history_with_persistence_cfg = toml::from_str::<ConfigToml>(history_with_persistence)
+            .expect("TOML deserialization should succeed");
         assert_eq!(
             Some(History {
                 persistence: HistoryPersistence::SaveAll,
@@ -585,9 +535,8 @@ persistence = "save-all"
 persistence = "none"
 "#;
 
-        let history_no_persistence_cfg: ConfigToml =
-            toml::from_str::<ConfigToml>(history_no_persistence)
-                .expect("TOML deserialization should succeed");
+        let history_no_persistence_cfg = toml::from_str::<ConfigToml>(history_no_persistence)
+            .expect("TOML deserialization should succeed");
         assert_eq!(
             Some(History {
                 persistence: HistoryPersistence::None,
@@ -597,20 +546,47 @@ persistence = "none"
         );
     }
 
-    /// Deserializing a TOML string containing an *invalid* permission should
-    /// fail with a helpful error rather than silently defaulting or
-    /// succeeding.
     #[test]
-    fn test_sandbox_permissions_illegal_value() {
-        let toml_bad = r#"sandbox_permissions = ["not-a-real-permission"]"#;
+    fn test_sandbox_config_parsing() {
+        let sandbox_full_access = r#"
+[sandbox]
+mode = "danger-full-access"
+network_access = false  # This should be ignored.
+"#;
+        let sandbox_full_access_cfg = toml::from_str::<ConfigToml>(sandbox_full_access)
+            .expect("TOML deserialization should succeed");
+        assert_eq!(
+            Some(SandboxPolicy::DangerFullAccess),
+            sandbox_full_access_cfg.sandbox
+        );
 
-        let err = toml::from_str::<ConfigToml>(toml_bad)
-            .expect_err("Deserialization should fail for invalid permission");
+        let sandbox_read_only = r#"
+[sandbox]
+mode = "read-only"
+network_access = true  # This should be ignored.
+"#;
 
-        // Make sure the error message contains the invalid value so users have
-        // useful feedback.
-        let msg = err.to_string();
-        assert!(msg.contains("not-a-real-permission"));
+        let sandbox_read_only_cfg = toml::from_str::<ConfigToml>(sandbox_read_only)
+            .expect("TOML deserialization should succeed");
+        assert_eq!(Some(SandboxPolicy::ReadOnly), sandbox_read_only_cfg.sandbox);
+
+        let sandbox_workspace_write = r#"
+[sandbox]
+mode = "workspace-write"
+writable_roots = [
+    "/tmp",
+]
+"#;
+
+        let sandbox_workspace_write_cfg = toml::from_str::<ConfigToml>(sandbox_workspace_write)
+            .expect("TOML deserialization should succeed");
+        assert_eq!(
+            Some(SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![PathBuf::from("/tmp")],
+                network_access: false
+            }),
+            sandbox_workspace_write_cfg.sandbox
+        );
     }
 
     struct PrecedenceTestFixture {
@@ -635,8 +611,7 @@ persistence = "none"
     fn create_test_fixture() -> std::io::Result<PrecedenceTestFixture> {
         let toml = r#"
 model = "o3"
-approval_policy = "unless-allow-listed"
-sandbox_permissions = ["disk-full-read-access"]
+approval_policy = "untrusted"
 disable_response_storage = false
 
 # Can be used to determine which profile to use if not specified by
@@ -683,6 +658,7 @@ disable_response_storage = true
             env_key: Some("OPENAI_API_KEY".to_string()),
             wire_api: crate::WireApi::Chat,
             env_key_instructions: None,
+            query_params: None,
         };
         let model_provider_map = {
             let mut model_provider_map = built_in_model_providers();
@@ -737,10 +713,13 @@ disable_response_storage = true
         assert_eq!(
             Config {
                 model: "o3".to_string(),
+                model_context_window: Some(200_000),
+                model_max_output_tokens: Some(100_000),
                 model_provider_id: "openai".to_string(),
                 model_provider: fixture.openai_provider.clone(),
                 approval_policy: AskForApproval::Never,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                shell_environment_policy: ShellEnvironmentPolicy::default(),
                 disable_response_storage: false,
                 instructions: None,
                 notify: None,
@@ -752,6 +731,10 @@ disable_response_storage = true
                 history: History::default(),
                 file_opener: UriBasedFileOpener::VsCode,
                 tui: Tui::default(),
+                codex_linux_sandbox_exe: None,
+                hide_agent_reasoning: false,
+                model_reasoning_effort: ReasoningEffort::default(),
+                model_reasoning_summary: ReasoningSummary::default(),
             },
             o3_profile_config
         );
@@ -774,10 +757,13 @@ disable_response_storage = true
         )?;
         let expected_gpt3_profile_config = Config {
             model: "gpt-3.5-turbo".to_string(),
+            model_context_window: Some(16_385),
+            model_max_output_tokens: Some(4_096),
             model_provider_id: "openai-chat-completions".to_string(),
             model_provider: fixture.openai_chat_completions_provider.clone(),
-            approval_policy: AskForApproval::UnlessAllowListed,
+            approval_policy: AskForApproval::UnlessTrusted,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            shell_environment_policy: ShellEnvironmentPolicy::default(),
             disable_response_storage: false,
             instructions: None,
             notify: None,
@@ -789,6 +775,10 @@ disable_response_storage = true
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
             tui: Tui::default(),
+            codex_linux_sandbox_exe: None,
+            hide_agent_reasoning: false,
+            model_reasoning_effort: ReasoningEffort::default(),
+            model_reasoning_summary: ReasoningSummary::default(),
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -826,10 +816,13 @@ disable_response_storage = true
         )?;
         let expected_zdr_profile_config = Config {
             model: "o3".to_string(),
+            model_context_window: Some(200_000),
+            model_max_output_tokens: Some(100_000),
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
             approval_policy: AskForApproval::OnFailure,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            shell_environment_policy: ShellEnvironmentPolicy::default(),
             disable_response_storage: true,
             instructions: None,
             notify: None,
@@ -841,6 +834,10 @@ disable_response_storage = true
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
             tui: Tui::default(),
+            codex_linux_sandbox_exe: None,
+            hide_agent_reasoning: false,
+            model_reasoning_effort: ReasoningEffort::default(),
+            model_reasoning_summary: ReasoningSummary::default(),
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);

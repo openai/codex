@@ -1,6 +1,6 @@
 #![allow(clippy::expect_used)]
 
-use regex::Regex;
+use regex_lite::Regex;
 
 // This is defined in its own file so we can limit the scope of
 // `allow(clippy::expect_used)` because we cannot scope it to the `lazy_static!`

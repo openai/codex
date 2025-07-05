@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use base64::Engine;
+use mcp_types::CallToolResult;
 use serde::Deserialize;
 use serde::Serialize;
 use serde::ser::Serializer;
@@ -17,6 +18,10 @@ pub enum ResponseInputItem {
     FunctionCallOutput {
         call_id: String,
         output: FunctionCallOutputPayload,
+    },
+    McpToolCallOutput {
+        call_id: String,
+        result: Result<CallToolResult, String>,
     },
 }
 
@@ -77,6 +82,19 @@ impl From<ResponseInputItem> for ResponseItem {
             ResponseInputItem::FunctionCallOutput { call_id, output } => {
                 Self::FunctionCallOutput { call_id, output }
             }
+            ResponseInputItem::McpToolCallOutput { call_id, result } => Self::FunctionCallOutput {
+                call_id,
+                output: FunctionCallOutputPayload {
+                    success: Some(result.is_ok()),
+                    content: result.map_or_else(
+                        |tool_call_err| format!("err: {tool_call_err:?}"),
+                        |result| {
+                            serde_json::to_string(&result)
+                                .unwrap_or_else(|e| format!("JSON serialization error: {e}"))
+                        },
+                    ),
+                },
+            },
         }
     }
 }

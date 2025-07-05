@@ -8,6 +8,9 @@ members = [
     "core",
     "exec",
     "execpolicy",
+    "file-search",
+    "linux-sandbox",
+    "login",
     "mcp-client",
     "mcp-server",
     "mcp-types",
@@ -23,7 +26,7 @@ version = "0.0.0"
 edition = "2024"
 
 [workspace.lints]
-rust = { }
+rust = {}
 
 [workspace.lints.clippy]
 expect_used = "deny"
@@ -34,3 +37,6 @@ lto = "fat"
 # Because we bundle some of these executables with the TypeScript CLI, we
 # remove everything to make the binary as small as possible.
 strip = "symbols"
+
+# See https://github.com/openai/codex/issues/1411 for details.
+codegen-units = 1

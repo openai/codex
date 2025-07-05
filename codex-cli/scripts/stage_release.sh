@@ -17,7 +17,7 @@
 # When --native is supplied we copy the linux-sandbox binaries (as before) and
 # additionally fetch / unpack the two Rust targets that we currently support:
 #   - x86_64-unknown-linux-musl
-#   - aarch64-unknown-linux-gnu
+#   - aarch64-unknown-linux-musl
 #
 # NOTE: This script is intended to be run from the repository root via
 #       `pnpm --filter codex-cli stage-release ...` or inside codex-cli with the
@@ -122,6 +122,7 @@ jq --arg version "$VERSION" \
 
 if [[ "$INCLUDE_NATIVE" -eq 1 ]]; then
   ./scripts/install_native_deps.sh "$TMPDIR" --full-native
+  touch "${TMPDIR}/bin/use-native"
 else
   ./scripts/install_native_deps.sh "$TMPDIR"
 fi
@@ -130,11 +131,12 @@ popd >/dev/null
 
 echo "Staged version $VERSION for release in $TMPDIR"
 
-echo "Test Node:"
-echo "    node ${TMPDIR}/bin/codex.js --help"
 if [[ "$INCLUDE_NATIVE" -eq 1 ]]; then
   echo "Test Rust:"
-  echo "    CODEX_RUST=1 node ${TMPDIR}/bin/codex.js --help"
+  echo "    node ${TMPDIR}/bin/codex.js --help"
+else
+  echo "Test Node:"
+  echo "    node ${TMPDIR}/bin/codex.js --help"
 fi
 
 # Print final hint for convenience

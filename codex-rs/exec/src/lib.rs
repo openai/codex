@@ -2,6 +2,9 @@ mod cli;
 mod event_processor;
 
 use std::io::IsTerminal;
+use std::io::Read;
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 pub use cli::Cli;
@@ -14,6 +17,7 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
+use codex_core::protocol::TaskCompleteEvent;
 use codex_core::util::is_inside_git_repo;
 use event_processor::EventProcessor;
 use tracing::debug;
@@ -21,19 +25,55 @@ use tracing::error;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
+pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
     let Cli {
         images,
         model,
         config_profile,
         full_auto,
-        sandbox,
+        dangerously_bypass_approvals_and_sandbox,
         cwd,
         skip_git_repo_check,
-        disable_response_storage,
         color,
+        last_message_file,
         prompt,
+        config_overrides,
     } = cli;
+
+    // Determine the prompt based on CLI arg and/or stdin.
+    let prompt = match prompt {
+        Some(p) if p != "-" => p,
+        // Either `-` was passed or no positional arg.
+        maybe_dash => {
+            // When no arg (None) **and** stdin is a TTY, bail out early – unless the
+            // user explicitly forced reading via `-`.
+            let force_stdin = matches!(maybe_dash.as_deref(), Some("-"));
+
+            if std::io::stdin().is_terminal() && !force_stdin {
+                eprintln!(
+                    "No prompt provided. Either specify one as an argument or pipe the prompt into stdin."
+                );
+                std::process::exit(1);
+            }
+
+            // Ensure the user knows we are waiting on stdin, as they may
+            // have gotten into this state by mistake. If so, and they are not
+            // writing to stdin, Codex will hang indefinitely, so this should
+            // help them debug in that case.
+            if !force_stdin {
+                eprintln!("Reading prompt from stdin...");
+            }
+            let mut buffer = String::new();
+            if let Err(e) = std::io::stdin().read_to_string(&mut buffer) {
+                eprintln!("Failed to read prompt from stdin: {e}");
+                std::process::exit(1);
+            } else if buffer.trim().is_empty() {
+                eprintln!("No prompt provided via stdin.");
+                std::process::exit(1);
+            }
+            buffer
+        }
+    };
 
     let (stdout_with_ansi, stderr_with_ansi) = match color {
         cli::Color::Always => (true, true),
@@ -45,9 +85,11 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
     };
 
     let sandbox_policy = if full_auto {
-        Some(SandboxPolicy::new_full_auto_policy())
+        Some(SandboxPolicy::new_workspace_write_policy())
+    } else if dangerously_bypass_approvals_and_sandbox {
+        Some(SandboxPolicy::DangerFullAccess)
     } else {
-        sandbox.permissions.clone().map(Into::into)
+        None
     };
 
     // Load configuration and determine approval policy
@@ -58,15 +100,25 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
         // the user for approval.
         approval_policy: Some(AskForApproval::Never),
         sandbox_policy,
-        disable_response_storage: if disable_response_storage {
-            Some(true)
-        } else {
-            None
-        },
         cwd: cwd.map(|p| p.canonicalize().unwrap_or(p)),
         model_provider: None,
+        codex_linux_sandbox_exe,
     };
-    let config = Config::load_with_overrides(overrides)?;
+    // Parse `-c` overrides.
+    let cli_kv_overrides = match config_overrides.parse_overrides() {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("Error parsing -c overrides: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides)?;
+    let mut event_processor =
+        EventProcessor::create_with_ansi(stdout_with_ansi, !config.hide_agent_reasoning);
+    // Print the effective configuration and prompt so users can see what Codex
+    // is using.
+    event_processor.print_config_summary(&config, &prompt);
 
     if !skip_git_repo_check && !is_inside_git_repo(&config) {
         eprintln!("Not inside a Git repo and --skip-git-repo-check was not specified.");
@@ -137,7 +189,14 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
         let initial_images_event_id = codex.submit(Op::UserInput { items }).await?;
         info!("Sent images with event ID: {initial_images_event_id}");
         while let Ok(event) = codex.next_event().await {
-            if event.id == initial_images_event_id && matches!(event.msg, EventMsg::TaskComplete) {
+            if event.id == initial_images_event_id
+                && matches!(
+                    event.msg,
+                    EventMsg::TaskComplete(TaskCompleteEvent {
+                        last_agent_message: _,
+                    })
+                )
+            {
                 break;
             }
         }
@@ -149,15 +208,41 @@ pub async fn run_main(cli: Cli) -> anyhow::Result<()> {
     info!("Sent prompt with event ID: {initial_prompt_task_id}");
 
     // Run the loop until the task is complete.
-    let mut event_processor = EventProcessor::create_with_ansi(stdout_with_ansi);
     while let Some(event) = rx.recv().await {
-        let last_event =
-            event.id == initial_prompt_task_id && matches!(event.msg, EventMsg::TaskComplete);
+        let (is_last_event, last_assistant_message) = match &event.msg {
+            EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) => {
+                (true, last_agent_message.clone())
+            }
+            _ => (false, None),
+        };
         event_processor.process_event(event);
-        if last_event {
+        if is_last_event {
+            handle_last_message(last_assistant_message, last_message_file.as_deref())?;
             break;
         }
     }
 
+    Ok(())
+}
+
+fn handle_last_message(
+    last_agent_message: Option<String>,
+    last_message_file: Option<&Path>,
+) -> std::io::Result<()> {
+    match (last_agent_message, last_message_file) {
+        (Some(last_agent_message), Some(last_message_file)) => {
+            // Last message and a file to write to.
+            std::fs::write(last_message_file, last_agent_message)?;
+        }
+        (None, Some(last_message_file)) => {
+            eprintln!(
+                "Warning: No last message to write to file: {}",
+                last_message_file.to_string_lossy()
+            );
+        }
+        (_, None) => {
+            // No last message and no file to write to.
+        }
+    }
     Ok(())
 }

@@ -25,7 +25,7 @@ const PROJECT_DOC_SEPARATOR: &str = "\n\n--- project-doc ---\n\n";
 
 /// Combines `Config::instructions` and `AGENTS.md` (if present) into a single
 /// string of instructions.
-pub(crate) async fn create_full_instructions(config: &Config) -> Option<String> {
+pub(crate) async fn get_user_instructions(config: &Config) -> Option<String> {
     match find_project_doc(config).await {
         Ok(Some(project_doc)) => match &config.instructions {
             Some(original_instructions) => Some(format!(
@@ -168,7 +168,7 @@ mod tests {
     async fn no_doc_file_returns_none() {
         let tmp = tempfile::tempdir().expect("tempdir");
 
-        let res = create_full_instructions(&make_config(&tmp, 4096, None)).await;
+        let res = get_user_instructions(&make_config(&tmp, 4096, None)).await;
         assert!(
             res.is_none(),
             "Expected None when AGENTS.md is absent and no system instructions provided"
@@ -182,7 +182,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         fs::write(tmp.path().join("AGENTS.md"), "hello world").unwrap();
 
-        let res = create_full_instructions(&make_config(&tmp, 4096, None))
+        let res = get_user_instructions(&make_config(&tmp, 4096, None))
             .await
             .expect("doc expected");
 
@@ -201,7 +201,7 @@ mod tests {
         let huge = "A".repeat(LIMIT * 2); // 2 KiB
         fs::write(tmp.path().join("AGENTS.md"), &huge).unwrap();
 
-        let res = create_full_instructions(&make_config(&tmp, LIMIT, None))
+        let res = get_user_instructions(&make_config(&tmp, LIMIT, None))
             .await
             .expect("doc expected");
 
@@ -233,7 +233,7 @@ mod tests {
         let mut cfg = make_config(&repo, 4096, None);
         cfg.cwd = nested;
 
-        let res = create_full_instructions(&cfg).await.expect("doc expected");
+        let res = get_user_instructions(&cfg).await.expect("doc expected");
         assert_eq!(res, "root level doc");
     }
 
@@ -243,7 +243,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         fs::write(tmp.path().join("AGENTS.md"), "something").unwrap();
 
-        let res = create_full_instructions(&make_config(&tmp, 0, None)).await;
+        let res = get_user_instructions(&make_config(&tmp, 0, None)).await;
         assert!(
             res.is_none(),
             "With limit 0 the function should return None"
@@ -259,7 +259,7 @@ mod tests {
 
         const INSTRUCTIONS: &str = "base instructions";
 
-        let res = create_full_instructions(&make_config(&tmp, 4096, Some(INSTRUCTIONS)))
+        let res = get_user_instructions(&make_config(&tmp, 4096, Some(INSTRUCTIONS)))
             .await
             .expect("should produce a combined instruction string");
 
@@ -276,7 +276,7 @@ mod tests {
 
         const INSTRUCTIONS: &str = "some instructions";
 
-        let res = create_full_instructions(&make_config(&tmp, 4096, Some(INSTRUCTIONS))).await;
+        let res = get_user_instructions(&make_config(&tmp, 4096, Some(INSTRUCTIONS))).await;
 
         assert_eq!(res, Some(INSTRUCTIONS.to_string()));
     }

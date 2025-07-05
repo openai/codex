@@ -19,7 +19,7 @@ use mcp_types::Tool;
 use tokio::task::JoinSet;
 use tracing::info;
 
-use crate::mcp_server_config::McpServerConfig;
+use crate::config_types::McpServerConfig;
 
 /// Delimiter used to separate the server name from the tool name in a fully
 /// qualified tool name.

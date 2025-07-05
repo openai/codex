@@ -107,6 +107,7 @@ async fn keeps_previous_response_id_between_tasks() {
         env_key: Some("PATH".into()),
         env_key_instructions: None,
         wire_api: codex_core::WireApi::Responses,
+        query_params: None,
     };
 
     // Init session
@@ -132,7 +133,7 @@ async fn keeps_previous_response_id_between_tasks() {
             .await
             .unwrap()
             .unwrap();
-        if matches!(ev.msg, EventMsg::TaskComplete) {
+        if matches!(ev.msg, EventMsg::TaskComplete(_)) {
             break;
         }
     }
@@ -154,7 +155,7 @@ async fn keeps_previous_response_id_between_tasks() {
             .unwrap()
             .unwrap();
         match ev.msg {
-            EventMsg::TaskComplete => break,
+            EventMsg::TaskComplete(_) => break,
             EventMsg::Error(ErrorEvent { message }) => {
                 panic!("unexpected error: {message}")
             }

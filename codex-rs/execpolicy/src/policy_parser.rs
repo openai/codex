@@ -7,7 +7,7 @@ use crate::arg_matcher::ArgMatcher;
 use crate::opt::OptMeta;
 use log::info;
 use multimap::MultiMap;
-use regex::Regex;
+use regex_lite::Regex;
 use starlark::any::ProvidesStaticType;
 use starlark::environment::GlobalsBuilder;
 use starlark::environment::LibraryExtension;
@@ -73,7 +73,7 @@ impl PolicyParser {
 
 #[derive(Debug)]
 pub struct ForbiddenProgramRegex {
-    pub regex: regex::Regex,
+    pub regex: regex_lite::Regex,
     pub reason: String,
 }
 
@@ -93,7 +93,7 @@ impl PolicyBuilder {
         }
     }
 
-    fn build(self) -> Result<Policy, regex::Error> {
+    fn build(self) -> Result<Policy, regex_lite::Error> {
         let programs = self.programs.into_inner();
         let forbidden_program_regexes = self.forbidden_program_regexes.into_inner();
         let forbidden_substrings = self.forbidden_substrings.into_inner();
@@ -207,7 +207,7 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
             .unwrap()
             .downcast_ref::<PolicyBuilder>()
             .unwrap();
-        let compiled_regex = regex::Regex::new(&regex)?;
+        let compiled_regex = regex_lite::Regex::new(&regex)?;
         policy_builder.add_forbidden_program_regex(compiled_regex, reason);
         Ok(NoneType)
     }

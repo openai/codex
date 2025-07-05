@@ -37,7 +37,15 @@ const EOF_MARKER: &str = "*** End of File";
 const CHANGE_CONTEXT_MARKER: &str = "@@ ";
 const EMPTY_CHANGE_CONTEXT_MARKER: &str = "@@";
 
-#[derive(Debug, PartialEq, Error)]
+/// Currently, the only OpenAI model that knowingly requires lenient parsing is
+/// gpt-4.1. While we could try to require everyone to pass in a strictness
+/// param when invoking apply_patch, it is a pain to thread it through all of
+/// the call sites, so we resign ourselves allowing lenient parsing for all
+/// models. See [`ParseMode::Lenient`] for details on the exceptions we make for
+/// gpt-4.1.
+const PARSE_IN_STRICT_MODE: bool = false;
+
+#[derive(Debug, PartialEq, Error, Clone)]
 pub enum ParseError {
     #[error("invalid patch: {0}")]
     InvalidPatchError(String),
@@ -46,7 +54,7 @@ pub enum ParseError {
 }
 use ParseError::*;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 #[allow(clippy::enum_variant_names)]
 pub enum Hunk {
     AddFile {
@@ -78,7 +86,7 @@ impl Hunk {
 
 use Hunk::*;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct UpdateFileChunk {
     /// A single line of context used to narrow down the position of the chunk
     /// (this is usually a class, method, or function definition.)
@@ -95,19 +103,68 @@ pub struct UpdateFileChunk {
 }
 
 pub fn parse_patch(patch: &str) -> Result<Vec<Hunk>, ParseError> {
+    let mode = if PARSE_IN_STRICT_MODE {
+        ParseMode::Strict
+    } else {
+        ParseMode::Lenient
+    };
+    parse_patch_text(patch, mode)
+}
+
+enum ParseMode {
+    /// Parse the patch text argument as is.
+    Strict,
+
+    /// GPT-4.1 is known to formulate the `command` array for the `local_shell`
+    /// tool call for `apply_patch` call using something like the following:
+    ///
+    /// ```json
+    /// [
+    ///   "apply_patch",
+    ///   "<<'EOF'\n*** Begin Patch\n*** Update File: README.md\n@@...\n*** End Patch\nEOF\n",
+    /// ]
+    /// ```
+    ///
+    /// This is a problem because `local_shell` is a bit of a misnomer: the
+    /// `command` is not invoked by passing the arguments to a shell like Bash,
+    /// but are invoked using something akin to `execvpe(3)`.
+    ///
+    /// This is significant in this case because where a shell would interpret
+    /// `<<'EOF'...` as a heredoc and pass the contents via stdin (which is
+    /// fine, as `apply_patch` is specified to read from stdin if no argument is
+    /// passed), `execvpe(3)` interprets the heredoc as a literal string. To get
+    /// the `local_shell` tool to run a command the way shell would, the
+    /// `command` array must be something like:
+    ///
+    /// ```json
+    /// [
+    ///   "bash",
+    ///   "-lc",
+    ///   "apply_patch <<'EOF'\n*** Begin Patch\n*** Update File: README.md\n@@...\n*** End Patch\nEOF\n",
+    /// ]
+    /// ```
+    ///
+    /// In lenient mode, we check if the argument to `apply_patch` starts with
+    /// `<<'EOF'` and ends with `EOF\n`. If so, we strip off these markers,
+    /// trim() the result, and treat what is left as the patch text.
+    Lenient,
+}
+
+fn parse_patch_text(patch: &str, mode: ParseMode) -> Result<Vec<Hunk>, ParseError> {
     let lines: Vec<&str> = patch.trim().lines().collect();
-    if lines.is_empty() || lines[0] != BEGIN_PATCH_MARKER {
-        return Err(InvalidPatchError(String::from(
-            "The first line of the patch must be '*** Begin Patch'",
-        )));
-    }
-    let last_line_index = lines.len() - 1;
-    if lines[last_line_index] != END_PATCH_MARKER {
-        return Err(InvalidPatchError(String::from(
-            "The last line of the patch must be '*** End Patch'",
-        )));
-    }
+    let lines: &[&str] = match check_patch_boundaries_strict(&lines) {
+        Ok(()) => &lines,
+        Err(e) => match mode {
+            ParseMode::Strict => {
+                return Err(e);
+            }
+            ParseMode::Lenient => check_patch_boundaries_lenient(&lines, e)?,
+        },
+    };
+
     let mut hunks: Vec<Hunk> = Vec::new();
+    // The above checks ensure that lines.len() >= 2.
+    let last_line_index = lines.len().saturating_sub(1);
     let mut remaining_lines = &lines[1..last_line_index];
     let mut line_number = 2;
     while !remaining_lines.is_empty() {
@@ -117,6 +174,64 @@ pub fn parse_patch(patch: &str) -> Result<Vec<Hunk>, ParseError> {
         remaining_lines = &remaining_lines[hunk_lines..]
     }
     Ok(hunks)
+}
+
+/// Checks the start and end lines of the patch text for `apply_patch`,
+/// returning an error if they do not match the expected markers.
+fn check_patch_boundaries_strict(lines: &[&str]) -> Result<(), ParseError> {
+    let (first_line, last_line) = match lines {
+        [] => (None, None),
+        [first] => (Some(first), Some(first)),
+        [first, .., last] => (Some(first), Some(last)),
+    };
+    check_start_and_end_lines_strict(first_line, last_line)
+}
+
+/// If we are in lenient mode, we check if the first line starts with `<<EOF`
+/// (possibly quoted) and the last line ends with `EOF`. There must be at least
+/// 4 lines total because the heredoc markers take up 2 lines and the patch text
+/// must have at least 2 lines.
+///
+/// If successful, returns the lines of the patch text that contain the patch
+/// contents, excluding the heredoc markers.
+fn check_patch_boundaries_lenient<'a>(
+    original_lines: &'a [&'a str],
+    original_parse_error: ParseError,
+) -> Result<&'a [&'a str], ParseError> {
+    match original_lines {
+        [first, .., last] => {
+            if (first == &"<<EOF" || first == &"<<'EOF'" || first == &"<<\"EOF\"")
+                && last.ends_with("EOF")
+                && original_lines.len() >= 4
+            {
+                let inner_lines = &original_lines[1..original_lines.len() - 1];
+                match check_patch_boundaries_strict(inner_lines) {
+                    Ok(()) => Ok(inner_lines),
+                    Err(e) => Err(e),
+                }
+            } else {
+                Err(original_parse_error)
+            }
+        }
+        _ => Err(original_parse_error),
+    }
+}
+
+fn check_start_and_end_lines_strict(
+    first_line: Option<&&str>,
+    last_line: Option<&&str>,
+) -> Result<(), ParseError> {
+    match (first_line, last_line) {
+        (Some(&first), Some(&last)) if first == BEGIN_PATCH_MARKER && last == END_PATCH_MARKER => {
+            Ok(())
+        }
+        (Some(&first), _) if first != BEGIN_PATCH_MARKER => Err(InvalidPatchError(String::from(
+            "The first line of the patch must be '*** Begin Patch'",
+        ))),
+        _ => Err(InvalidPatchError(String::from(
+            "The last line of the patch must be '*** End Patch'",
+        ))),
+    }
 }
 
 /// Attempts to parse a single hunk from the start of lines.
@@ -312,22 +427,23 @@ fn parse_update_file_chunk(
 #[test]
 fn test_parse_patch() {
     assert_eq!(
-        parse_patch("bad"),
+        parse_patch_text("bad", ParseMode::Strict),
         Err(InvalidPatchError(
             "The first line of the patch must be '*** Begin Patch'".to_string()
         ))
     );
     assert_eq!(
-        parse_patch("*** Begin Patch\nbad"),
+        parse_patch_text("*** Begin Patch\nbad", ParseMode::Strict),
         Err(InvalidPatchError(
             "The last line of the patch must be '*** End Patch'".to_string()
         ))
     );
     assert_eq!(
-        parse_patch(
+        parse_patch_text(
             "*** Begin Patch\n\
              *** Update File: test.py\n\
-             *** End Patch"
+             *** End Patch",
+            ParseMode::Strict
         ),
         Err(InvalidHunkError {
             message: "Update file hunk for path 'test.py' is empty".to_string(),
@@ -335,14 +451,15 @@ fn test_parse_patch() {
         })
     );
     assert_eq!(
-        parse_patch(
+        parse_patch_text(
             "*** Begin Patch\n\
-             *** End Patch"
+             *** End Patch",
+            ParseMode::Strict
         ),
         Ok(Vec::new())
     );
     assert_eq!(
-        parse_patch(
+        parse_patch_text(
             "*** Begin Patch\n\
              *** Add File: path/add.py\n\
              +abc\n\
@@ -353,7 +470,8 @@ fn test_parse_patch() {
              @@ def f():\n\
              -    pass\n\
              +    return 123\n\
-             *** End Patch"
+             *** End Patch",
+            ParseMode::Strict
         ),
         Ok(vec![
             AddFile {
@@ -377,14 +495,15 @@ fn test_parse_patch() {
     );
     // Update hunk followed by another hunk (Add File).
     assert_eq!(
-        parse_patch(
+        parse_patch_text(
             "*** Begin Patch\n\
              *** Update File: file.py\n\
              @@\n\
              +line\n\
              *** Add File: other.py\n\
              +content\n\
-             *** End Patch"
+             *** End Patch",
+            ParseMode::Strict
         ),
         Ok(vec![
             UpdateFile {
@@ -407,12 +526,13 @@ fn test_parse_patch() {
     // Update hunk without an explicit @@ header for the first chunk should parse.
     // Use a raw string to preserve the leading space diff marker on the context line.
     assert_eq!(
-        parse_patch(
+        parse_patch_text(
             r#"*** Begin Patch
 *** Update File: file2.py
  import foo
 +bar
 *** End Patch"#,
+            ParseMode::Strict
         ),
         Ok(vec![UpdateFile {
             path: PathBuf::from("file2.py"),
@@ -424,6 +544,80 @@ fn test_parse_patch() {
                 is_end_of_file: false,
             }],
         }])
+    );
+}
+
+#[test]
+fn test_parse_patch_lenient() {
+    let patch_text = r#"*** Begin Patch
+*** Update File: file2.py
+ import foo
++bar
+*** End Patch"#;
+    let expected_patch = vec![UpdateFile {
+        path: PathBuf::from("file2.py"),
+        move_path: None,
+        chunks: vec![UpdateFileChunk {
+            change_context: None,
+            old_lines: vec!["import foo".to_string()],
+            new_lines: vec!["import foo".to_string(), "bar".to_string()],
+            is_end_of_file: false,
+        }],
+    }];
+    let expected_error =
+        InvalidPatchError("The first line of the patch must be '*** Begin Patch'".to_string());
+
+    let patch_text_in_heredoc = format!("<<EOF\n{patch_text}\nEOF\n");
+    assert_eq!(
+        parse_patch_text(&patch_text_in_heredoc, ParseMode::Strict),
+        Err(expected_error.clone())
+    );
+    assert_eq!(
+        parse_patch_text(&patch_text_in_heredoc, ParseMode::Lenient),
+        Ok(expected_patch.clone())
+    );
+
+    let patch_text_in_single_quoted_heredoc = format!("<<'EOF'\n{patch_text}\nEOF\n");
+    assert_eq!(
+        parse_patch_text(&patch_text_in_single_quoted_heredoc, ParseMode::Strict),
+        Err(expected_error.clone())
+    );
+    assert_eq!(
+        parse_patch_text(&patch_text_in_single_quoted_heredoc, ParseMode::Lenient),
+        Ok(expected_patch.clone())
+    );
+
+    let patch_text_in_double_quoted_heredoc = format!("<<\"EOF\"\n{patch_text}\nEOF\n");
+    assert_eq!(
+        parse_patch_text(&patch_text_in_double_quoted_heredoc, ParseMode::Strict),
+        Err(expected_error.clone())
+    );
+    assert_eq!(
+        parse_patch_text(&patch_text_in_double_quoted_heredoc, ParseMode::Lenient),
+        Ok(expected_patch.clone())
+    );
+
+    let patch_text_in_mismatched_quotes_heredoc = format!("<<\"EOF'\n{patch_text}\nEOF\n");
+    assert_eq!(
+        parse_patch_text(&patch_text_in_mismatched_quotes_heredoc, ParseMode::Strict),
+        Err(expected_error.clone())
+    );
+    assert_eq!(
+        parse_patch_text(&patch_text_in_mismatched_quotes_heredoc, ParseMode::Lenient),
+        Err(expected_error.clone())
+    );
+
+    let patch_text_with_missing_closing_heredoc =
+        "<<EOF\n*** Begin Patch\n*** Update File: file2.py\nEOF\n".to_string();
+    assert_eq!(
+        parse_patch_text(&patch_text_with_missing_closing_heredoc, ParseMode::Strict),
+        Err(expected_error.clone())
+    );
+    assert_eq!(
+        parse_patch_text(&patch_text_with_missing_closing_heredoc, ParseMode::Lenient),
+        Err(InvalidPatchError(
+            "The last line of the patch must be '*** End Patch'".to_string()
+        ))
     );
 }
 

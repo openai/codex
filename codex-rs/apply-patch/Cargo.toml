@@ -12,7 +12,6 @@ workspace = true
 
 [dependencies]
 anyhow = "1"
-regex = "1.11.1"
 serde_json = "1.0.110"
 similar = "2.7.0"
 thiserror = "2.0.12"

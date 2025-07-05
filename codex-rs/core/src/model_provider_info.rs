@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::env::VarError;
 
 use crate::error::EnvVarError;
+use crate::openai_api_key::get_openai_api_key;
 
 /// Wire protocol that the provider speaks. Most third-party services only
 /// implement the classic OpenAI Chat Completions JSON schema, whereas OpenAI
@@ -22,9 +23,10 @@ use crate::error::EnvVarError;
 #[serde(rename_all = "lowercase")]
 pub enum WireApi {
     /// The experimental “Responses” API exposed by OpenAI at `/v1/responses`.
-    #[default]
     Responses,
+
     /// Regular Chat Completions compatible with `/v1/chat/completions`.
+    #[default]
     Chat,
 }
 
@@ -43,7 +45,32 @@ pub struct ModelProviderInfo {
     pub env_key_instructions: Option<String>,
 
     /// Which wire protocol this provider expects.
+    #[serde(default)]
     pub wire_api: WireApi,
+
+    /// Optional query parameters to append to the base URL.
+    pub query_params: Option<HashMap<String, String>>,
+}
+
+impl ModelProviderInfo {
+    pub(crate) fn get_full_url(&self) -> String {
+        let query_string = self
+            .query_params
+            .as_ref()
+            .map_or_else(String::new, |params| {
+                let full_params = params
+                    .iter()
+                    .map(|(k, v)| format!("{k}={v}"))
+                    .collect::<Vec<_>>()
+                    .join("&");
+                format!("?{full_params}")
+            });
+        let base_url = &self.base_url;
+        match self.wire_api {
+            WireApi::Responses => format!("{base_url}/responses{query_string}"),
+            WireApi::Chat => format!("{base_url}/chat/completions{query_string}"),
+        }
+    }
 }
 
 impl ModelProviderInfo {
@@ -52,20 +79,27 @@ impl ModelProviderInfo {
     /// cannot be found, returns an error.
     pub fn api_key(&self) -> crate::error::Result<Option<String>> {
         match &self.env_key {
-            Some(env_key) => std::env::var(env_key)
-                .and_then(|v| {
-                    if v.trim().is_empty() {
-                        Err(VarError::NotPresent)
-                    } else {
-                        Ok(Some(v))
-                    }
-                })
-                .map_err(|_| {
-                    crate::error::CodexErr::EnvVar(EnvVarError {
-                        var: env_key.clone(),
-                        instructions: self.env_key_instructions.clone(),
+            Some(env_key) => {
+                let env_value = if env_key == crate::openai_api_key::OPENAI_API_KEY_ENV_VAR {
+                    get_openai_api_key().map_or_else(|| Err(VarError::NotPresent), Ok)
+                } else {
+                    std::env::var(env_key)
+                };
+                env_value
+                    .and_then(|v| {
+                        if v.trim().is_empty() {
+                            Err(VarError::NotPresent)
+                        } else {
+                            Ok(Some(v))
+                        }
                     })
-                }),
+                    .map_err(|_| {
+                        crate::error::CodexErr::EnvVar(EnvVarError {
+                            var: env_key.clone(),
+                            instructions: self.env_key_instructions.clone(),
+                        })
+                    })
+            }
             None => Ok(None),
         }
     }
@@ -75,6 +109,10 @@ impl ModelProviderInfo {
 pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
     use ModelProviderInfo as P;
 
+    // We do not want to be in the business of adjucating which third-party
+    // providers are bundled with Codex CLI, so we only include the OpenAI
+    // provider by default. Users are encouraged to add to `model_providers`
+    // in config.toml to add their own providers.
     [
         (
             "openai",
@@ -84,80 +122,59 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
                 env_key: Some("OPENAI_API_KEY".into()),
                 env_key_instructions: Some("Create an API key (https://platform.openai.com) and export it as an environment variable.".into()),
                 wire_api: WireApi::Responses,
-            },
-        ),
-        (
-            "openrouter",
-            P {
-                name: "OpenRouter".into(),
-                base_url: "https://openrouter.ai/api/v1".into(),
-                env_key: Some("OPENROUTER_API_KEY".into()),
-                env_key_instructions: None,
-                wire_api: WireApi::Chat,
-            },
-        ),
-        (
-            "gemini",
-            P {
-                name: "Gemini".into(),
-                base_url: "https://generativelanguage.googleapis.com/v1beta/openai".into(),
-                env_key: Some("GEMINI_API_KEY".into()),
-                env_key_instructions: None,
-                wire_api: WireApi::Chat,
-            },
-        ),
-        (
-            "ollama",
-            P {
-                name: "Ollama".into(),
-                base_url: "http://localhost:11434/v1".into(),
-                env_key: None,
-                env_key_instructions: None,
-                wire_api: WireApi::Chat,
-            },
-        ),
-        (
-            "mistral",
-            P {
-                name: "Mistral".into(),
-                base_url: "https://api.mistral.ai/v1".into(),
-                env_key: Some("MISTRAL_API_KEY".into()),
-                env_key_instructions: None,
-                wire_api: WireApi::Chat,
-            },
-        ),
-        (
-            "deepseek",
-            P {
-                name: "DeepSeek".into(),
-                base_url: "https://api.deepseek.com".into(),
-                env_key: Some("DEEPSEEK_API_KEY".into()),
-                env_key_instructions: None,
-                wire_api: WireApi::Chat,
-            },
-        ),
-        (
-            "xai",
-            P {
-                name: "xAI".into(),
-                base_url: "https://api.x.ai/v1".into(),
-                env_key: Some("XAI_API_KEY".into()),
-                env_key_instructions: None,
-                wire_api: WireApi::Chat,
-            },
-        ),
-        (
-            "groq",
-            P {
-                name: "Groq".into(),
-                base_url: "https://api.groq.com/openai/v1".into(),
-                env_key: Some("GROQ_API_KEY".into()),
-                env_key_instructions: None,
-                wire_api: WireApi::Chat,
+                query_params: None,
             },
         ),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), v))
     .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    #[test]
+    fn test_deserialize_ollama_model_provider_toml() {
+        let azure_provider_toml = r#"
+name = "Ollama"
+base_url = "http://localhost:11434/v1"
+        "#;
+        let expected_provider = ModelProviderInfo {
+            name: "Ollama".into(),
+            base_url: "http://localhost:11434/v1".into(),
+            env_key: None,
+            env_key_instructions: None,
+            wire_api: WireApi::Chat,
+            query_params: None,
+        };
+
+        let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
+        assert_eq!(expected_provider, provider);
+    }
+
+    #[test]
+    fn test_deserialize_azure_model_provider_toml() {
+        let azure_provider_toml = r#"
+name = "Azure"
+base_url = "https://xxxxx.openai.azure.com/openai"
+env_key = "AZURE_OPENAI_API_KEY"
+query_params = { api-version = "2025-04-01-preview" }
+        "#;
+        let expected_provider = ModelProviderInfo {
+            name: "Azure".into(),
+            base_url: "https://xxxxx.openai.azure.com/openai".into(),
+            env_key: Some("AZURE_OPENAI_API_KEY".into()),
+            env_key_instructions: None,
+            wire_api: WireApi::Chat,
+            query_params: Some(maplit::hashmap! {
+                "api-version".to_string() => "2025-04-01-preview".to_string(),
+            }),
+        };
+
+        let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
+        assert_eq!(expected_provider, provider);
+    }
 }

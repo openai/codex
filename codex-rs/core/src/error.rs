@@ -74,6 +74,9 @@ pub enum CodexErr {
     #[error("sandbox error: {0}")]
     Sandbox(#[from] SandboxErr),
 
+    #[error("codex-linux-sandbox was required but not provided")]
+    LandlockSandboxExecutableNotProvided,
+
     // -----------------------------------------------------------------
     // Automatic conversions for common external error types
     // -----------------------------------------------------------------

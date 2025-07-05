@@ -1,5 +1,8 @@
-use chrono::Utc;
 use codex_common::elapsed::format_elapsed;
+use codex_common::summarize_sandbox_policy;
+use codex_core::WireApi;
+use codex_core::config::Config;
+use codex_core::model_supports_reasoning_summaries;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::BackgroundEventEvent;
 use codex_core::protocol::ErrorEvent;
@@ -13,6 +16,7 @@ use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::SessionConfiguredEvent;
+use codex_core::protocol::TokenUsage;
 use owo_colors::OwoColorize;
 use owo_colors::Style;
 use shlex::try_join;
@@ -36,15 +40,20 @@ pub(crate) struct EventProcessor {
     // using .style() with one of these fields. If you need a new style, add a
     // new field here.
     bold: Style,
+    italic: Style,
     dimmed: Style,
 
     magenta: Style,
     red: Style,
     green: Style,
+    cyan: Style,
+
+    /// Whether to include `AgentReasoning` events in the output.
+    show_agent_reasoning: bool,
 }
 
 impl EventProcessor {
-    pub(crate) fn create_with_ansi(with_ansi: bool) -> Self {
+    pub(crate) fn create_with_ansi(with_ansi: bool, show_agent_reasoning: bool) -> Self {
         let call_id_to_command = HashMap::new();
         let call_id_to_patch = HashMap::new();
         let call_id_to_tool_call = HashMap::new();
@@ -54,22 +63,28 @@ impl EventProcessor {
                 call_id_to_command,
                 call_id_to_patch,
                 bold: Style::new().bold(),
+                italic: Style::new().italic(),
                 dimmed: Style::new().dimmed(),
                 magenta: Style::new().magenta(),
                 red: Style::new().red(),
                 green: Style::new().green(),
+                cyan: Style::new().cyan(),
                 call_id_to_tool_call,
+                show_agent_reasoning,
             }
         } else {
             Self {
                 call_id_to_command,
                 call_id_to_patch,
                 bold: Style::new(),
+                italic: Style::new(),
                 dimmed: Style::new(),
                 magenta: Style::new(),
                 red: Style::new(),
                 green: Style::new(),
+                cyan: Style::new(),
                 call_id_to_tool_call,
+                show_agent_reasoning,
             }
         }
     }
@@ -93,37 +108,88 @@ struct PatchApplyBegin {
     auto_approved: bool,
 }
 
+// Timestamped println helper. The timestamp is styled with self.dimmed.
+#[macro_export]
 macro_rules! ts_println {
-    ($($arg:tt)*) => {{
-        let now = Utc::now();
-        let formatted = now.format("%Y-%m-%dT%H:%M:%S").to_string();
-        print!("[{}] ", formatted);
+    ($self:ident, $($arg:tt)*) => {{
+        let now = chrono::Utc::now();
+        let formatted = now.format("[%Y-%m-%dT%H:%M:%S]");
+        print!("{} ", formatted.style($self.dimmed));
         println!($($arg)*);
     }};
 }
 
 impl EventProcessor {
+    /// Print a concise summary of the effective configuration that will be used
+    /// for the session. This mirrors the information shown in the TUI welcome
+    /// screen.
+    pub(crate) fn print_config_summary(&mut self, config: &Config, prompt: &str) {
+        const VERSION: &str = env!("CARGO_PKG_VERSION");
+        ts_println!(
+            self,
+            "OpenAI Codex v{} (research preview)\n--------",
+            VERSION
+        );
+
+        let mut entries = vec![
+            ("workdir", config.cwd.display().to_string()),
+            ("model", config.model.clone()),
+            ("provider", config.model_provider_id.clone()),
+            ("approval", format!("{:?}", config.approval_policy)),
+            ("sandbox", summarize_sandbox_policy(&config.sandbox_policy)),
+        ];
+        if config.model_provider.wire_api == WireApi::Responses
+            && model_supports_reasoning_summaries(&config.model)
+        {
+            entries.push((
+                "reasoning effort",
+                config.model_reasoning_effort.to_string(),
+            ));
+            entries.push((
+                "reasoning summaries",
+                config.model_reasoning_summary.to_string(),
+            ));
+        }
+
+        for (key, value) in entries {
+            println!("{} {}", format!("{key}:").style(self.bold), value);
+        }
+
+        println!("--------");
+
+        // Echo the prompt that will be sent to the agent so it is visible in the
+        // transcript/logs before any events come in. Note the prompt may have been
+        // read from stdin, so it may not be visible in the terminal otherwise.
+        ts_println!(
+            self,
+            "{}\n{}",
+            "User instructions:".style(self.bold).style(self.cyan),
+            prompt
+        );
+    }
+
     pub(crate) fn process_event(&mut self, event: Event) {
-        let Event { id, msg } = event;
+        let Event { id: _, msg } = event;
         match msg {
             EventMsg::Error(ErrorEvent { message }) => {
                 let prefix = "ERROR:".style(self.red);
-                ts_println!("{prefix} {message}");
+                ts_println!(self, "{prefix} {message}");
             }
             EventMsg::BackgroundEvent(BackgroundEventEvent { message }) => {
-                ts_println!("{}", message.style(self.dimmed));
+                ts_println!(self, "{}", message.style(self.dimmed));
             }
-            EventMsg::TaskStarted => {
-                let msg = format!("Task started: {id}");
-                ts_println!("{}", msg.style(self.dimmed));
+            EventMsg::TaskStarted | EventMsg::TaskComplete(_) => {
+                // Ignore.
             }
-            EventMsg::TaskComplete => {
-                let msg = format!("Task complete: {id}");
-                ts_println!("{}", msg.style(self.bold));
+            EventMsg::TokenCount(TokenUsage { total_tokens, .. }) => {
+                ts_println!(self, "tokens used: {total_tokens}");
             }
             EventMsg::AgentMessage(AgentMessageEvent { message }) => {
-                let prefix = "Agent message:".style(self.bold);
-                ts_println!("{prefix} {message}");
+                ts_println!(
+                    self,
+                    "{}\n{message}",
+                    "codex".style(self.bold).style(self.magenta)
+                );
             }
             EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
                 call_id,
@@ -138,6 +204,7 @@ impl EventProcessor {
                     },
                 );
                 ts_println!(
+                    self,
                     "{} {} in {}",
                     "exec".style(self.magenta),
                     escape_command(&command).style(self.bold),
@@ -173,11 +240,11 @@ impl EventProcessor {
                 match exit_code {
                     0 => {
                         let title = format!("{call} succeeded{duration}:");
-                        ts_println!("{}", title.style(self.green));
+                        ts_println!(self, "{}", title.style(self.green));
                     }
                     _ => {
                         let title = format!("{call} exited {exit_code}{duration}:");
-                        ts_println!("{}", title.style(self.red));
+                        ts_println!(self, "{}", title.style(self.red));
                     }
                 }
                 println!("{}", truncated_output.style(self.dimmed));
@@ -214,16 +281,15 @@ impl EventProcessor {
                 );
 
                 ts_println!(
+                    self,
                     "{} {}",
                     "tool".style(self.magenta),
                     invocation.style(self.bold),
                 );
             }
-            EventMsg::McpToolCallEnd(McpToolCallEndEvent {
-                call_id,
-                success,
-                result,
-            }) => {
+            EventMsg::McpToolCallEnd(tool_call_end_event) => {
+                let is_success = tool_call_end_event.is_success();
+                let McpToolCallEndEvent { call_id, result } = tool_call_end_event;
                 // Retrieve start time and invocation for duration calculation and labeling.
                 let info = self.call_id_to_tool_call.remove(&call_id);
 
@@ -238,13 +304,13 @@ impl EventProcessor {
                     (String::new(), format!("tool('{call_id}')"))
                 };
 
-                let status_str = if success { "success" } else { "failed" };
-                let title_style = if success { self.green } else { self.red };
+                let status_str = if is_success { "success" } else { "failed" };
+                let title_style = if is_success { self.green } else { self.red };
                 let title = format!("{invocation} {status_str}{duration}:");
 
-                ts_println!("{}", title.style(title_style));
+                ts_println!(self, "{}", title.style(title_style));
 
-                if let Some(res) = result {
+                if let Ok(res) = result {
                     let val: serde_json::Value = res.into();
                     let pretty =
                         serde_json::to_string_pretty(&val).unwrap_or_else(|_| val.to_string());
@@ -270,6 +336,7 @@ impl EventProcessor {
                 );
 
                 ts_println!(
+                    self,
                     "{} auto_approved={}:",
                     "apply_patch".style(self.magenta),
                     auto_approved,
@@ -361,7 +428,7 @@ impl EventProcessor {
                 };
 
                 let title = format!("{label} exited {exit_code}{duration}:");
-                ts_println!("{}", title.style(title_style));
+                ts_println!(self, "{}", title.style(title_style));
                 for line in output.lines() {
                     println!("{}", line.style(self.dimmed));
                 }
@@ -373,7 +440,14 @@ impl EventProcessor {
                 // Should we exit?
             }
             EventMsg::AgentReasoning(agent_reasoning_event) => {
-                println!("thinking: {}", agent_reasoning_event.text);
+                if self.show_agent_reasoning {
+                    ts_println!(
+                        self,
+                        "{}\n{}",
+                        "thinking".style(self.italic).style(self.magenta),
+                        agent_reasoning_event.text
+                    );
+                }
             }
             EventMsg::SessionConfigured(session_configured_event) => {
                 let SessionConfiguredEvent {
@@ -382,7 +456,16 @@ impl EventProcessor {
                     history_log_id: _,
                     history_entry_count: _,
                 } = session_configured_event;
-                println!("session {session_id} with model {model}");
+
+                ts_println!(
+                    self,
+                    "{} {}",
+                    "codex session".style(self.magenta).style(self.bold),
+                    session_id.to_string().style(self.dimmed)
+                );
+
+                ts_println!(self, "model: {}", model);
+                println!();
             }
             EventMsg::GetHistoryEntryResponse(_) => {
                 // Currently ignored in exec output.
