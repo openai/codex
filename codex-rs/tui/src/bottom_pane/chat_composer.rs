@@ -290,14 +290,13 @@ impl ChatComposer<'_> {
         // Guard against out-of-bounds rows.
         let line = textarea.lines().get(row)?.as_str();
 
-        // Clamp the cursor column to the line length to avoid slicing panics
-        // when the cursor is at the end of the line.
-        let col = col.min(line.len());
+        // Calculate byte offset for cursor position
+        let cursor_byte_offset = line.chars().take(col).map(|c| c.len_utf8()).sum::<usize>();
 
         // Split the line at the cursor position so we can search for word
         // boundaries on both sides.
-        let before_cursor = &line[..col];
-        let after_cursor = &line[col..];
+        let before_cursor = &line[..cursor_byte_offset];
+        let after_cursor = &line[cursor_byte_offset..];
 
         // Find start index (first character **after** the previous whitespace).
         let start_idx = before_cursor
@@ -309,7 +308,7 @@ impl ChatComposer<'_> {
         let end_rel_idx = after_cursor
             .find(|c: char| c.is_whitespace())
             .unwrap_or(after_cursor.len());
-        let end_idx = col + end_rel_idx;
+        let end_idx = cursor_byte_offset + end_rel_idx;
 
         if start_idx >= end_idx {
             return None;
@@ -336,10 +335,11 @@ impl ChatComposer<'_> {
         let mut lines: Vec<String> = self.textarea.lines().to_vec();
 
         if let Some(line) = lines.get_mut(row) {
-            let col = col.min(line.len());
+            // Calculate byte offset for cursor position
+            let cursor_byte_offset = line.chars().take(col).map(|c| c.len_utf8()).sum::<usize>();
 
-            let before_cursor = &line[..col];
-            let after_cursor = &line[col..];
+            let before_cursor = &line[..cursor_byte_offset];
+            let after_cursor = &line[cursor_byte_offset..];
 
             // Determine token boundaries.
             let start_idx = before_cursor
@@ -350,7 +350,7 @@ impl ChatComposer<'_> {
             let end_rel_idx = after_cursor
                 .find(|c: char| c.is_whitespace())
                 .unwrap_or(after_cursor.len());
-            let end_idx = col + end_rel_idx;
+            let end_idx = cursor_byte_offset + end_rel_idx;
 
             // Replace the slice `[start_idx, end_idx)` with the chosen path and a trailing space.
             let mut new_line =
