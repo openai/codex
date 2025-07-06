@@ -298,15 +298,18 @@ impl ChatComposer<'_> {
         let before_cursor = &line[..cursor_byte_offset];
         let after_cursor = &line[cursor_byte_offset..];
 
-        // Find start index (first character **after** the previous whitespace).
+        // Find start index (first character **after** the previous multi-byte whitespace).
         let start_idx = before_cursor
-            .rfind(|c: char| c.is_whitespace())
-            .map(|idx| idx + 1)
+            .char_indices() 
+            .rfind(|(_, c)| c.is_whitespace())
+            .map(|(idx, c)| idx + c.len_utf8())
             .unwrap_or(0);
 
-        // Find end index (first whitespace **after** the cursor position).
+        // Find end index (first multi-byte whitespace **after** the cursor position).
         let end_rel_idx = after_cursor
-            .find(|c: char| c.is_whitespace())
+            .char_indices()
+            .find(|(_, c)| c.is_whitespace())
+            .map(|(idx, _)| idx)
             .unwrap_or(after_cursor.len());
         let end_idx = cursor_byte_offset + end_rel_idx;
 
@@ -343,12 +346,15 @@ impl ChatComposer<'_> {
 
             // Determine token boundaries.
             let start_idx = before_cursor
-                .rfind(|c: char| c.is_whitespace())
-                .map(|idx| idx + 1)
+                .char_indices()
+                .rfind(|(_, c)| c.is_whitespace())
+                .map(|(idx, c)| idx + c.len_utf8())
                 .unwrap_or(0);
 
             let end_rel_idx = after_cursor
-                .find(|c: char| c.is_whitespace())
+                .char_indices()
+                .find(|(_, c)| c.is_whitespace())
+                .map(|(idx, _)| idx)
                 .unwrap_or(after_cursor.len());
             let end_idx = cursor_byte_offset + end_rel_idx;
 
