@@ -120,6 +120,7 @@ export function exec(
       killTarget("SIGTERM");
 
       // Escalate to SIGKILL if the group refuses to die.
+      // Use a reasonable timeout value (2 seconds) to avoid Node.js TimeoutOverflowWarning
       setTimeout(() => {
         if (!child.killed) {
           killTarget("SIGKILL");
