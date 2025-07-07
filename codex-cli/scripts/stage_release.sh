@@ -30,11 +30,12 @@ set -euo pipefail
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") [--tmp DIR] [--native]
+Usage: $(basename "$0") [--tmp DIR] [--native] [--version VERSION]
 
 Options
   --tmp DIR   Use DIR to stage the release (defaults to a fresh mktemp dir)
   --native    Bundle Rust binaries for Linux (fat package)
+  --version   Specify the version to release (defaults to a timestamp-based version)
   -h, --help  Show this help
 
 Legacy positional argument: the first non-flag argument is still interpreted
@@ -45,6 +46,8 @@ EOF
 
 TMPDIR=""
 INCLUDE_NATIVE=0
+# Default to a timestamp-based version (keep same scheme as before)
+VERSION="$(printf '0.1.%d' "$(date +%y%m%d%H%M)")"
 
 # Manual flag parser - Bash getopts does not handle GNU long options well.
 while [[ $# -gt 0 ]]; do
@@ -58,6 +61,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --native)
       INCLUDE_NATIVE=1
+      ;;
+    --version)
+      shift || { echo "--version requires an argument"; usage 1; }
+      VERSION="$1"
       ;;
     -h|--help)
       usage 0
@@ -107,9 +114,6 @@ cp -r bin/codex.js "$TMPDIR/bin/codex.js"
 cp -r dist "$TMPDIR/dist"
 cp -r src "$TMPDIR/src" # keep source for TS sourcemaps
 cp ../README.md "$TMPDIR" || true # README is one level up - ignore if missing
-
-# Derive a timestamp-based version (keep same scheme as before)
-VERSION="$(printf '0.1.%d' "$(date +%y%m%d%H%M)")"
 
 # Modify package.json - bump version and optionally add the native directory to
 # the files array so that the binaries are published to npm.
