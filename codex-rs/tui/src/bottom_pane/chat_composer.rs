@@ -635,16 +635,34 @@ mod tests {
         let test_cases = vec![
             // Valid @ tokens
             ("@hello", 3, Some("hello".to_string()), "Basic ASCII token"),
-            ("@file.txt", 4, Some("file.txt".to_string()), "ASCII with extension"),
-            ("hello @world test", 8, Some("world".to_string()), "ASCII token in middle"),
-            ("@test123", 5, Some("test123".to_string()), "ASCII with numbers"),
-            
+            (
+                "@file.txt",
+                4,
+                Some("file.txt".to_string()),
+                "ASCII with extension",
+            ),
+            (
+                "hello @world test",
+                8,
+                Some("world".to_string()),
+                "ASCII token in middle",
+            ),
+            (
+                "@test123",
+                5,
+                Some("test123".to_string()),
+                "ASCII with numbers",
+            ),
             // Unicode examples
             ("@İstanbul", 3, Some("İstanbul".to_string()), "Turkish text"),
-            ("@testЙЦУ.rs", 8, Some("testЙЦУ.rs".to_string()), "Mixed ASCII and Cyrillic"),
+            (
+                "@testЙЦУ.rs",
+                8,
+                Some("testЙЦУ.rs".to_string()),
+                "Mixed ASCII and Cyrillic",
+            ),
             ("@诶", 2, Some("诶".to_string()), "Chinese character"),
             ("@👍", 2, Some("👍".to_string()), "Emoji token"),
-            
             // Invalid cases (should return None)
             ("hello", 2, None, "No @ symbol"),
             ("@", 1, None, "Only @ symbol"),
@@ -656,11 +674,11 @@ mod tests {
             let mut textarea = TextArea::default();
             textarea.insert_str(input);
             textarea.move_cursor(tui_textarea::CursorMove::Jump(0, cursor_pos));
-            
+
             let result = ChatComposer::current_at_token(&textarea);
             assert_eq!(
                 result, expected,
-                "Failed for case: {} - input: '{}', cursor: {}", 
+                "Failed for case: {} - input: '{}', cursor: {}",
                 description, input, cursor_pos
             );
         }
@@ -673,11 +691,14 @@ mod tests {
             ("@test", 0, Some("test".to_string()), "Cursor at @"),
             ("@test", 1, Some("test".to_string()), "Cursor after @"),
             ("@test", 5, Some("test".to_string()), "Cursor at end"),
-            
             // Multiple tokens - cursor determines which token
             ("@file1 @file2", 0, Some("file1".to_string()), "First token"),
-            ("@file1 @file2", 8, Some("file2".to_string()), "Second token"),
-            
+            (
+                "@file1 @file2",
+                8,
+                Some("file2".to_string()),
+                "Second token",
+            ),
             // Edge cases
             ("@", 0, None, "Only @ symbol"),
             ("@a", 2, Some("a".to_string()), "Single character after @"),
@@ -688,12 +709,11 @@ mod tests {
             let mut textarea = TextArea::default();
             textarea.insert_str(input);
             textarea.move_cursor(tui_textarea::CursorMove::Jump(0, cursor_pos));
-            
+
             let result = ChatComposer::current_at_token(&textarea);
             assert_eq!(
                 result, expected,
-                "Failed for cursor position case: {} - input: '{}', cursor: {}", 
-                description, input, cursor_pos
+                "Failed for cursor position case: {description} - input: '{input}', cursor: {cursor_pos}",
             );
         }
     }
@@ -702,28 +722,55 @@ mod tests {
     fn test_current_at_token_whitespace_boundaries() {
         let test_cases = vec![
             // Space boundaries
-            ("aaa@aaa", 4, None, "Connected @ token - no completion by design"),
-            ("aaa @aaa", 5, Some("aaa".to_string()), "@ token after space"),
-            ("test @file.txt", 7, Some("file.txt".to_string()), "@ token after space"),
-            
+            (
+                "aaa@aaa",
+                4,
+                None,
+                "Connected @ token - no completion by design",
+            ),
+            (
+                "aaa @aaa",
+                5,
+                Some("aaa".to_string()),
+                "@ token after space",
+            ),
+            (
+                "test @file.txt",
+                7,
+                Some("file.txt".to_string()),
+                "@ token after space",
+            ),
             // Full-width space boundaries
-            ("test　@İstanbul", 6, Some("İstanbul".to_string()), "@ token after full-width space"),
-            ("@ЙЦУ　@诶", 6, Some("诶".to_string()), "Full-width space between Unicode tokens"),
-            
+            (
+                "test　@İstanbul",
+                6,
+                Some("İstanbul".to_string()),
+                "@ token after full-width space",
+            ),
+            (
+                "@ЙЦУ　@诶",
+                6,
+                Some("诶".to_string()),
+                "Full-width space between Unicode tokens",
+            ),
             // Tab and newline boundaries
-            ("test\t@file", 6, Some("file".to_string()), "@ token after tab"),
+            (
+                "test\t@file",
+                6,
+                Some("file".to_string()),
+                "@ token after tab",
+            ),
         ];
 
         for (input, cursor_pos, expected, description) in test_cases {
             let mut textarea = TextArea::default();
             textarea.insert_str(input);
             textarea.move_cursor(tui_textarea::CursorMove::Jump(0, cursor_pos));
-            
+
             let result = ChatComposer::current_at_token(&textarea);
             assert_eq!(
                 result, expected,
-                "Failed for whitespace boundary case: {} - input: '{}', cursor: {}", 
-                description, input, cursor_pos
+                "Failed for whitespace boundary case: {description} - input: '{input}', cursor: {cursor_pos}",
             );
         }
     }
