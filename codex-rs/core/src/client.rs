@@ -26,7 +26,6 @@ use crate::client_common::create_reasoning_param_for_request;
 use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::error::CodexErr;
-use crate::error::EnvVarError;
 use crate::error::Result;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::flags::OPENAI_REQUEST_MAX_RETRIES;
@@ -123,28 +122,24 @@ impl ModelClient {
             stream: true,
         };
 
-        let url = self.provider.get_full_url();
-        trace!("POST to {url}: {}", serde_json::to_string(&payload)?);
+        trace!(
+            "POST to {}: {}",
+            self.provider.get_full_url(),
+            serde_json::to_string(&payload)?
+        );
 
         let mut attempt = 0;
         loop {
             attempt += 1;
 
-            let api_key = self.provider.api_key()?.ok_or_else(|| {
-                CodexErr::EnvVar(EnvVarError {
-                    var: self.provider.env_key.clone().unwrap_or_default(),
-                    instructions: None,
-                })
-            })?;
-            let res = self
-                .client
-                .post(&url)
-                .bearer_auth(api_key)
+            let req_builder = self
+                .provider
+                .create_request_builder(&self.client)?
                 .header("OpenAI-Beta", "responses=experimental")
                 .header(reqwest::header::ACCEPT, "text/event-stream")
-                .json(&payload)
-                .send()
-                .await;
+                .json(&payload);
+
+            let res = req_builder.send().await;
             match res {
                 Ok(resp) if resp.status().is_success() => {
                     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(16);

@@ -76,6 +76,22 @@ env_key = "AZURE_OPENAI_API_KEY"  # Or "OPENAI_API_KEY", whichever you use.
 query_params = { api-version = "2025-04-01-preview" }
 ```
 
+It is also possible to configure a provider to include extra HTTP headers with a request. These can be hardcoded values (`http_headers`) or values read from environment variables (`env_http_headers`):
+
+```toml
+[model_providers.example]
+# name, base_url, ...
+
+# This will add the HTTP header `X-Example-Header` with value `example-value`
+# to each request to the model provider.
+http_headers = { "X-Example-Header" = "example-value" }
+
+# This will add the HTTP header `X-Example-Features` with the value of the
+# `EXAMPLE_FEATURES` environment variable to each request to the model provider
+# _if_ the environment variable is set and its value is non-empty.
+env_http_headers = { "X-Example-Features": "EXAMPLE_FEATURES" }
+```
+
 ## model_provider
 
 Identifies which provider to use from the `model_providers` map. Defaults to `"openai"`.
