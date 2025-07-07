@@ -114,22 +114,18 @@ pub(crate) async fn stream_chat_completions(
         "tools": tools_json,
     });
 
-    let url = provider.get_full_url();
-
     debug!(
-        "POST to {url}: {}",
+        "POST to {}: {}",
+        provider.get_full_url(),
         serde_json::to_string_pretty(&payload).unwrap_or_default()
     );
 
-    let api_key = provider.api_key()?;
     let mut attempt = 0;
     loop {
         attempt += 1;
 
-        let mut req_builder = client.post(&url);
-        if let Some(api_key) = &api_key {
-            req_builder = req_builder.bearer_auth(api_key.clone());
-        }
+        let req_builder = provider.create_request_builder(client)?;
+
         let res = req_builder
             .header(reqwest::header::ACCEPT, "text/event-stream")
             .json(&payload)
