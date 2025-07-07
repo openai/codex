@@ -290,26 +290,28 @@ impl ChatComposer<'_> {
         // Guard against out-of-bounds rows.
         let line = textarea.lines().get(row)?.as_str();
 
-        // Clamp the cursor column to the line length to avoid slicing panics
-        // when the cursor is at the end of the line.
-        let col = col.min(line.len());
+        // Calculate byte offset for cursor position
+        let cursor_byte_offset = line.chars().take(col).map(|c| c.len_utf8()).sum::<usize>();
 
         // Split the line at the cursor position so we can search for word
         // boundaries on both sides.
-        let before_cursor = &line[..col];
-        let after_cursor = &line[col..];
+        let before_cursor = &line[..cursor_byte_offset];
+        let after_cursor = &line[cursor_byte_offset..];
 
-        // Find start index (first character **after** the previous whitespace).
+        // Find start index (first character **after** the previous multi-byte whitespace).
         let start_idx = before_cursor
-            .rfind(|c: char| c.is_whitespace())
-            .map(|idx| idx + 1)
+            .char_indices()
+            .rfind(|(_, c)| c.is_whitespace())
+            .map(|(idx, c)| idx + c.len_utf8())
             .unwrap_or(0);
 
-        // Find end index (first whitespace **after** the cursor position).
+        // Find end index (first multi-byte whitespace **after** the cursor position).
         let end_rel_idx = after_cursor
-            .find(|c: char| c.is_whitespace())
+            .char_indices()
+            .find(|(_, c)| c.is_whitespace())
+            .map(|(idx, _)| idx)
             .unwrap_or(after_cursor.len());
-        let end_idx = col + end_rel_idx;
+        let end_idx = cursor_byte_offset + end_rel_idx;
 
         if start_idx >= end_idx {
             return None;
@@ -336,21 +338,25 @@ impl ChatComposer<'_> {
         let mut lines: Vec<String> = self.textarea.lines().to_vec();
 
         if let Some(line) = lines.get_mut(row) {
-            let col = col.min(line.len());
+            // Calculate byte offset for cursor position
+            let cursor_byte_offset = line.chars().take(col).map(|c| c.len_utf8()).sum::<usize>();
 
-            let before_cursor = &line[..col];
-            let after_cursor = &line[col..];
+            let before_cursor = &line[..cursor_byte_offset];
+            let after_cursor = &line[cursor_byte_offset..];
 
             // Determine token boundaries.
             let start_idx = before_cursor
-                .rfind(|c: char| c.is_whitespace())
-                .map(|idx| idx + 1)
+                .char_indices()
+                .rfind(|(_, c)| c.is_whitespace())
+                .map(|(idx, c)| idx + c.len_utf8())
                 .unwrap_or(0);
 
             let end_rel_idx = after_cursor
-                .find(|c: char| c.is_whitespace())
+                .char_indices()
+                .find(|(_, c)| c.is_whitespace())
+                .map(|(idx, _)| idx)
                 .unwrap_or(after_cursor.len());
-            let end_idx = col + end_rel_idx;
+            let end_idx = cursor_byte_offset + end_rel_idx;
 
             // Replace the slice `[start_idx, end_idx)` with the chosen path and a trailing space.
             let mut new_line =
@@ -615,6 +621,157 @@ impl WidgetRef for &ChatComposer<'_> {
             ActivePopup::None => {
                 self.textarea.render(area, buf);
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::bottom_pane::ChatComposer;
+    use tui_textarea::TextArea;
+
+    #[test]
+    fn test_current_at_token_basic_cases() {
+        let test_cases = vec![
+            // Valid @ tokens
+            ("@hello", 3, Some("hello".to_string()), "Basic ASCII token"),
+            (
+                "@file.txt",
+                4,
+                Some("file.txt".to_string()),
+                "ASCII with extension",
+            ),
+            (
+                "hello @world test",
+                8,
+                Some("world".to_string()),
+                "ASCII token in middle",
+            ),
+            (
+                "@test123",
+                5,
+                Some("test123".to_string()),
+                "ASCII with numbers",
+            ),
+            // Unicode examples
+            ("@İstanbul", 3, Some("İstanbul".to_string()), "Turkish text"),
+            (
+                "@testЙЦУ.rs",
+                8,
+                Some("testЙЦУ.rs".to_string()),
+                "Mixed ASCII and Cyrillic",
+            ),
+            ("@诶", 2, Some("诶".to_string()), "Chinese character"),
+            ("@👍", 2, Some("👍".to_string()), "Emoji token"),
+            // Invalid cases (should return None)
+            ("hello", 2, None, "No @ symbol"),
+            ("@", 1, None, "Only @ symbol"),
+            ("@ hello", 2, None, "@ followed by space"),
+            ("test @ world", 6, None, "@ with spaces around"),
+        ];
+
+        for (input, cursor_pos, expected, description) in test_cases {
+            let mut textarea = TextArea::default();
+            textarea.insert_str(input);
+            textarea.move_cursor(tui_textarea::CursorMove::Jump(0, cursor_pos));
+
+            let result = ChatComposer::current_at_token(&textarea);
+            assert_eq!(
+                result, expected,
+                "Failed for case: {} - input: '{}', cursor: {}",
+                description, input, cursor_pos
+            );
+        }
+    }
+
+    #[test]
+    fn test_current_at_token_cursor_positions() {
+        let test_cases = vec![
+            // Different cursor positions within a token
+            ("@test", 0, Some("test".to_string()), "Cursor at @"),
+            ("@test", 1, Some("test".to_string()), "Cursor after @"),
+            ("@test", 5, Some("test".to_string()), "Cursor at end"),
+            // Multiple tokens - cursor determines which token
+            ("@file1 @file2", 0, Some("file1".to_string()), "First token"),
+            (
+                "@file1 @file2",
+                8,
+                Some("file2".to_string()),
+                "Second token",
+            ),
+            // Edge cases
+            ("@", 0, None, "Only @ symbol"),
+            ("@a", 2, Some("a".to_string()), "Single character after @"),
+            ("", 0, None, "Empty input"),
+        ];
+
+        for (input, cursor_pos, expected, description) in test_cases {
+            let mut textarea = TextArea::default();
+            textarea.insert_str(input);
+            textarea.move_cursor(tui_textarea::CursorMove::Jump(0, cursor_pos));
+
+            let result = ChatComposer::current_at_token(&textarea);
+            assert_eq!(
+                result, expected,
+                "Failed for cursor position case: {description} - input: '{input}', cursor: {cursor_pos}",
+            );
+        }
+    }
+
+    #[test]
+    fn test_current_at_token_whitespace_boundaries() {
+        let test_cases = vec![
+            // Space boundaries
+            (
+                "aaa@aaa",
+                4,
+                None,
+                "Connected @ token - no completion by design",
+            ),
+            (
+                "aaa @aaa",
+                5,
+                Some("aaa".to_string()),
+                "@ token after space",
+            ),
+            (
+                "test @file.txt",
+                7,
+                Some("file.txt".to_string()),
+                "@ token after space",
+            ),
+            // Full-width space boundaries
+            (
+                "test　@İstanbul",
+                6,
+                Some("İstanbul".to_string()),
+                "@ token after full-width space",
+            ),
+            (
+                "@ЙЦУ　@诶",
+                6,
+                Some("诶".to_string()),
+                "Full-width space between Unicode tokens",
+            ),
+            // Tab and newline boundaries
+            (
+                "test\t@file",
+                6,
+                Some("file".to_string()),
+                "@ token after tab",
+            ),
+        ];
+
+        for (input, cursor_pos, expected, description) in test_cases {
+            let mut textarea = TextArea::default();
+            textarea.insert_str(input);
+            textarea.move_cursor(tui_textarea::CursorMove::Jump(0, cursor_pos));
+
+            let result = ChatComposer::current_at_token(&textarea);
+            assert_eq!(
+                result, expected,
+                "Failed for whitespace boundary case: {description} - input: '{input}', cursor: {cursor_pos}",
+            );
         }
     }
 }
