@@ -157,6 +157,8 @@ wire_api = "chat"
 model = "o3"
 model_provider = "openai"
 approval_policy = "never"
+model_reasoning_effort = "high"
+model_reasoning_summary = "detailed"
 
 [profiles.gpt3]
 model = "gpt-3.5-turbo"
