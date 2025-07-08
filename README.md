@@ -1,7 +1,7 @@
 <h1 align="center">OpenAI Codex CLI</h1>
 <p align="center">Lightweight coding agent that runs in your terminal</p>
 
-<p align="center"><code>brew install codex</code></p>
+<p align="center"><code>npm i -g @openai/codex</code><br />or <code>brew install codex</code></p>
 
 This is the home of the **Codex CLI**, which is a coding agent from OpenAI that runs locally on your computer. If you are looking for the _cloud-based agent_ from OpenAI, **Codex [Web]**, see <https://chatgpt.com/codex>.
 
@@ -66,10 +66,10 @@ Help us improve by filing issues or submitting PRs (see the section below for ho
 
 ## Quickstart
 
-Install globally:
+Install globally with your preferred package manager:
 
 ```shell
-brew install codex
+npm install -g @openai/codex  # Alternatively: `brew install codex`
 ```
 
 Or go to the [latest GitHub Release](https://github.com/openai/codex/releases/latest) and download the appropriate binary for your platform.
@@ -268,7 +268,7 @@ Run Codex head-less in pipelines. Example GitHub Action step:
 ```yaml
 - name: Update changelog via Codex
   run: |
-    npm install -g @openai/codex@native  # Note: we plan to drop the need for `@native`.
+    npm install -g @openai/codex
     export OPENAI_API_KEY="${{ secrets.OPENAI_KEY }}"
     codex exec --full-auto "update CHANGELOG for next release"
 ```
@@ -323,10 +323,18 @@ Below are a few bite-size examples you can copy-paste. Replace the text in quote
 ## Installation
 
 <details open>
-<summary><strong>From brew (Recommended)</strong></summary>
+<summary><strong>Install Codex CLI using your preferred package manager.</strong></summary>
+
+From `brew` (recommended, downloads only the binary for your platform):
 
 ```bash
 brew install codex
+```
+
+From `npm` (generally more readily available, but downloads binaries for all supported platforms):
+
+```bash
+npm i -g @openai/codex
 ```
 
 Or go to the [latest GitHub Release](https://github.com/openai/codex/releases/latest) and download the appropriate binary for your platform.
