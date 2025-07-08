@@ -464,8 +464,14 @@ impl Config {
             codex_linux_sandbox_exe,
 
             hide_agent_reasoning: cfg.hide_agent_reasoning.unwrap_or(false),
-            model_reasoning_effort: cfg.model_reasoning_effort.unwrap_or_default(),
-            model_reasoning_summary: cfg.model_reasoning_summary.unwrap_or_default(),
+            model_reasoning_effort: config_profile
+                .model_reasoning_effort
+                .or(cfg.model_reasoning_effort)
+                .unwrap_or_default(),
+            model_reasoning_summary: config_profile
+                .model_reasoning_summary
+                .or(cfg.model_reasoning_summary)
+                .unwrap_or_default(),
         };
         Ok(config)
     }
@@ -659,6 +665,8 @@ wire_api = "chat"
 model = "o3"
 model_provider = "openai"
 approval_policy = "never"
+model_reasoning_effort = "high"
+model_reasoning_summary = "detailed"
 
 [profiles.gpt3]
 model = "gpt-3.5-turbo"
@@ -766,8 +774,8 @@ disable_response_storage = true
                 tui: Tui::default(),
                 codex_linux_sandbox_exe: None,
                 hide_agent_reasoning: false,
-                model_reasoning_effort: ReasoningEffort::default(),
-                model_reasoning_summary: ReasoningSummary::default(),
+                model_reasoning_effort: ReasoningEffort::High,
+                model_reasoning_summary: ReasoningSummary::Detailed,
             },
             o3_profile_config
         );
