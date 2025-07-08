@@ -8,7 +8,7 @@
 # the native implementation when users set CODEX_RUST=1.
 #
 # Usage
-#   install_native_deps.sh [RELEASE_ROOT] [--full-native]
+#   install_native_deps.sh [--full-native] [--workflow-url URL] [CODEX_CLI_ROOT]
 #
 # The optional RELEASE_ROOT is the path that contains package.json.  Omitting
 # it installs the binaries into the repository's own bin/ folder to support
@@ -20,32 +20,43 @@ set -euo pipefail
 # Parse arguments
 # ------------------
 
-DEST_DIR=""
+CODEX_CLI_ROOT=""
 INCLUDE_RUST=0
 
-for arg in "$@"; do
-  case "$arg" in
+# Until we start publishing stable GitHub releases, we have to grab the binaries
+# from the GitHub Action that created them. Update the URL below to point to the
+# appropriate workflow run:
+WORKFLOW_URL="https://github.com/openai/codex/actions/runs/15981617627"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
     --full-native)
       INCLUDE_RUST=1
       ;;
+    --workflow-url)
+      shift || { echo "--workflow-url requires an argument"; exit 1; }
+      if [ -n "$1" ]; then
+        WORKFLOW_URL="$1"
+      fi
+      ;;
     *)
-      if [[ -z "$DEST_DIR" ]]; then
-        DEST_DIR="$arg"
+      if [[ -z "$CODEX_CLI_ROOT" ]]; then
+        CODEX_CLI_ROOT="$1"
       else
-        echo "Unexpected argument: $arg" >&2
+        echo "Unexpected argument: $1" >&2
         exit 1
       fi
       ;;
   esac
+  shift
 done
 
 # ----------------------------------------------------------------------------
 # Determine where the binaries should be installed.
 # ----------------------------------------------------------------------------
 
-if [[ $# -gt 0 ]]; then
+if [ -n "$CODEX_CLI_ROOT" ]; then
   # The caller supplied a release root directory.
-  CODEX_CLI_ROOT="$1"
   BIN_DIR="$CODEX_CLI_ROOT/bin"
 else
   # No argument; fall back to the repo’s own bin directory.
@@ -62,10 +73,6 @@ mkdir -p "$BIN_DIR"
 # Download and decompress the artifacts from the GitHub Actions workflow.
 # ----------------------------------------------------------------------------
 
-# Until we start publishing stable GitHub releases, we have to grab the binaries
-# from the GitHub Action that created them. Update the URL below to point to the
-# appropriate workflow run:
-WORKFLOW_URL="https://github.com/openai/codex/actions/runs/15981617627"
 WORKFLOW_ID="${WORKFLOW_URL##*/}"
 
 ARTIFACTS_DIR="$(mktemp -d)"

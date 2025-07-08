@@ -48,6 +48,7 @@ TMPDIR=""
 INCLUDE_NATIVE=0
 # Default to a timestamp-based version (keep same scheme as before)
 VERSION="$(printf '0.1.%d' "$(date +%y%m%d%H%M)")"
+WORKFLOW_URL=""
 
 # Manual flag parser - Bash getopts does not handle GNU long options well.
 while [[ $# -gt 0 ]]; do
@@ -65,6 +66,10 @@ while [[ $# -gt 0 ]]; do
     --version)
       shift || { echo "--version requires an argument"; usage 1; }
       VERSION="$1"
+      ;;
+    --workflow-url)
+      shift || { echo "--workflow-url requires an argument"; exit 1; }
+      WORKFLOW_URL="$1"
       ;;
     -h|--help)
       usage 0
@@ -125,7 +130,7 @@ jq --arg version "$VERSION" \
 # 2. Native runtime deps (sandbox plus optional Rust binaries)
 
 if [[ "$INCLUDE_NATIVE" -eq 1 ]]; then
-  ./scripts/install_native_deps.sh "$TMPDIR" --full-native
+  ./scripts/install_native_deps.sh --full-native --workflow-url "$WORKFLOW_URL" "$TMPDIR"
   touch "${TMPDIR}/bin/use-native"
 else
   ./scripts/install_native_deps.sh "$TMPDIR"
