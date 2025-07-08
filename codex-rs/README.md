@@ -39,6 +39,10 @@ You can enable notifications by configuring a script that is run whenever the ag
 
 To run Codex non-interactively, run `codex exec PROMPT` (you can also pass the prompt via `stdin`) and Codex will work on your task until it decides that it is done and exits. Output is printed to the terminal directly. You can set the `RUST_LOG` environment variable to see more about what's going on.
 
+### Use `@` for file search
+
+Typing `@` triggers a fuzzy-filename search over the workspace root. Use up/down to select among the results and Tab or Enter to replace the `@` with the selected path. You can use Esc to cancel the search.
+
 ### `--cd`/`-C` flag
 
 Sometimes it is not convenient to `cd` to the directory you want Codex to use as the "working root" before running Codex. Fortunately, `codex` supports a `--cd` option so you can specify whatever folder you want. You can confirm that Codex is honoring `--cd` by double-checking the **workdir** it reports in the TUI at the start of a new session.
@@ -49,15 +53,28 @@ To test to see what happens when a command is run under the sandbox provided by 
 
 ```
 # macOS
-codex debug seatbelt [-s SANDBOX_PERMISSION]... [COMMAND]...
+codex debug seatbelt [--full-auto] [COMMAND]...
 
 # Linux
-codex debug landlock [-s SANDBOX_PERMISSION]... [COMMAND]...
+codex debug landlock [--full-auto] [COMMAND]...
 ```
 
-You can experiment with different values of `-s` to see what permissions the `COMMAND` needs to execute successfully.
+### Selecting a sandbox policy via `--sandbox`
 
-Note that the exact API for the `-s` flag is currently in flux. See https://github.com/openai/codex/issues/1248 for details.
+The Rust CLI exposes a dedicated `--sandbox` (`-s`) flag that lets you pick the sandbox policy **without** having to reach for the generic `-c/--config` option:
+
+```shell
+# Run Codex with the default, read-only sandbox
+codex --sandbox read-only
+
+# Allow the agent to write within the current workspace while still blocking network access
+codex --sandbox workspace-write
+
+# Danger! Disable sandboxing entirely (only do this if you are already running in a container or other isolated env)
+codex --sandbox danger-full-access
+```
+
+The same setting can be persisted in `~/.codex/config.toml` via the top-level `sandbox_mode = "MODE"` key, e.g. `sandbox_mode = "workspace-write"`.
 
 ## Code Organization
 
