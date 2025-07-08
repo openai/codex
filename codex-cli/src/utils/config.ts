@@ -86,7 +86,21 @@ export function setApiKey(apiKey: string): void {
 }
 
 export function getBaseUrl(provider: string = "openai"): string | undefined {
-  // Check for a PROVIDER-specific override: e.g. OPENAI_BASE_URL or OLLAMA_BASE_URL.
+  // --- Azure special-case --------------------------------------------------
+  if (provider.toLowerCase() === "azure") {
+    // Prefer the canonical Azure OpenAI env-var when it is set.
+    if (process.env["AZURE_OPENAI_BASE_URL"]) {
+      return process.env["AZURE_OPENAI_BASE_URL"];
+    }
+    // Fall back to the historic `AZURE_BASE_URL` if present.
+    if (process.env["AZURE_BASE_URL"]) {
+      return process.env["AZURE_BASE_URL"];
+    }
+  }
+
+  // ------------------------------------------------------------------------
+  // Generic provider-specific override (e.g. OPENAI_BASE_URL, OLLAMA_BASE_URL)
+  // ------------------------------------------------------------------------
   const envKey = `${provider.toUpperCase()}_BASE_URL`;
   if (process.env[envKey]) {
     return process.env[envKey];
@@ -126,8 +140,12 @@ export function getApiKey(provider: string = "openai"): string | undefined {
     return customApiKey;
   }
 
-  // If the provider not found in the providers list and `OPENAI_API_KEY` is set, use it
-  if (OPENAI_API_KEY !== "") {
+  // For the canonical OpenAI provider we still respect the global
+  // `OPENAI_API_KEY`.  For *all other* providers (e.g. `azure`) we do **not**
+  // fall back to it – they must provide their own specific key (e.g.
+  // `AZURE_OPENAI_API_KEY`).  Falling back silently was causing the CLI to
+  // send the wrong key and produce confusing 401 errors.
+  if (provider.toLowerCase() === "openai" && OPENAI_API_KEY !== "") {
     return OPENAI_API_KEY;
   }
 

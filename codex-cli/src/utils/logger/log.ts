@@ -99,9 +99,23 @@ export function initLogger(): Logger {
   // Write the empty string so the file exists and can be tail'd.
   fsSync.writeFileSync(logFile, "");
 
-  // Symlink to codex-cli-latest.log on UNIX because Windows is funny about
-  // symlinks.
-  if (!isWin) {
+  /*
+   * Symlink to "codex-cli-latest.log" so users can always tail the most recent
+   * log file without hunting for the timestamped filename.  When the `fs`
+   * module is mocked (e.g. inside Vitest unit-tests) the mock often provides
+   * only the handful of functions that the specific test interacts with
+   * (mkdirSync, readFileSync, …).  Attempting to call a missing export like
+   * `symlinkSync` then crashes the test runner with an exception similar to
+   *   "No `symlinkSync` export is defined on the `fs` mock".
+   *
+   * To keep the logger robust in such partially-mocked environments we
+   * gracefully skip the symlink logic when the function is unavailable.
+   */
+  if (
+    !isWin &&
+    typeof (fsSync as Partial<typeof fsSync>).symlinkSync === "function" &&
+    typeof (fsSync as Partial<typeof fsSync>).unlinkSync === "function"
+  ) {
     const latestLink = path.join(logDir, "codex-cli-latest.log");
     try {
       fsSync.symlinkSync(logFile, latestLink, "file");
