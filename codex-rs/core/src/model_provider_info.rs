@@ -176,7 +176,15 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
             "openai",
             P {
                 name: "OpenAI".into(),
-                base_url: "https://api.openai.com/v1".into(),
+                // Allow users to override the default OpenAI endpoint by
+                // exporting `OPENAI_BASE_URL`. This is useful when pointing
+                // Codex at a proxy, mock server, or Azure-style deployment
+                // without requiring a full TOML override for the built-in
+                // OpenAI provider.
+                base_url: std::env::var("OPENAI_BASE_URL")
+                    .ok()
+                    .filter(|v| !v.trim().is_empty())
+                    .unwrap_or_else(|| "https://api.openai.com/v1".to_string()),
                 env_key: Some("OPENAI_API_KEY".into()),
                 env_key_instructions: Some("Create an API key (https://platform.openai.com) and export it as an environment variable.".into()),
                 wire_api: WireApi::Responses,
