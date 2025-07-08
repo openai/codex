@@ -3,11 +3,11 @@ use std::path::PathBuf;
 use codex_common::CliConfigOverrides;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
+use codex_core::config_types::SandboxMode;
 use codex_core::exec::StdioPolicy;
 use codex_core::exec::spawn_command_under_linux_sandbox;
 use codex_core::exec::spawn_command_under_seatbelt;
 use codex_core::exec_env::create_env;
-use codex_core::protocol::SandboxPolicy;
 
 use crate::LandlockCommand;
 use crate::SeatbeltCommand;
@@ -63,14 +63,14 @@ async fn run_command_under_sandbox(
     codex_linux_sandbox_exe: Option<PathBuf>,
     sandbox_type: SandboxType,
 ) -> anyhow::Result<()> {
-    let sandbox_policy = create_sandbox_policy(full_auto);
+    let sandbox_mode = create_sandbox_mode(full_auto);
     let cwd = std::env::current_dir()?;
     let config = Config::load_with_cli_overrides(
         config_overrides
             .parse_overrides()
             .map_err(anyhow::Error::msg)?,
         ConfigOverrides {
-            sandbox_policy: Some(sandbox_policy),
+            sandbox_mode: Some(sandbox_mode),
             codex_linux_sandbox_exe,
             ..Default::default()
         },
@@ -104,10 +104,10 @@ async fn run_command_under_sandbox(
     handle_exit_status(status);
 }
 
-pub fn create_sandbox_policy(full_auto: bool) -> SandboxPolicy {
+pub fn create_sandbox_mode(full_auto: bool) -> SandboxMode {
     if full_auto {
-        SandboxPolicy::new_workspace_write_policy()
+        SandboxMode::WorkspaceWrite
     } else {
-        SandboxPolicy::new_read_only_policy()
+        SandboxMode::ReadOnly
     }
 }

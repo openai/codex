@@ -202,12 +202,12 @@ Codex lets you decide _how much autonomy_ you want to grant the agent. The follo
 - [`approval_policy`](./codex-rs/config.md#approval_policy) determines when you should be prompted to approve whether Codex can execute a command
 - [`sandbox`](./codex-rs/config.md#sandbox) determines the _sandbox policy_ that Codex uses to execute untrusted commands
 
-By default, Codex runs with `approval_policy = "untrusted"` and `sandbox.mode = "read-only"`, which means that:
+By default, Codex runs with `--ask-for-approval untrusted` and `--sandbox read-only`, which means that:
 
 - The user is prompted to approve every command not on the set of "trusted" commands built into Codex (`cat`, `ls`, etc.)
 - Approved commands are run outside of a sandbox because user approval implies "trust," in this case.
 
-Though running Codex with the `--full-auto` option changes the configuration to `approval_policy = "on-failure"` and `sandbox.mode = "workspace-write"`, which means that:
+Running Codex with the `--full-auto` convenience flag changes the configuration to `--ask-for-approval on-failure` and `--sandbox workspace-write`, which means that:
 
 - Codex does not initially ask for user approval before running an individual command.
 - Though when it runs a command, it is run under a sandbox in which:
@@ -216,16 +216,16 @@ Though running Codex with the `--full-auto` option changes the configuration to 
   - Network requests are completely disabled.
 - Only if the command exits with a non-zero exit code will it ask the user for approval. If granted, it will re-attempt the command outside of the sandbox. (A common case is when Codex cannot `npm install` a dependency because that requires network access.)
 
-Again, these two options can be configured independently. For example, if you want Codex to perform an "exploration" where you are happy for it to read anything it wants but you never want to be prompted, you could run Codex with `approval_policy = "never"` and `sandbox.mode = "read-only"`.
+Again, these two options can be configured independently. For example, if you want Codex to perform an "exploration" where you are happy for it to read anything it wants but you never want to be prompted, you could run Codex with `--ask-for-approval never` and `--sandbox read-only`.
 
 ### Platform sandboxing details
 
 The mechanism Codex uses to implement the sandbox policy depends on your OS:
 
-- **macOS 12+** uses **Apple Seatbelt** and runs commands using `sandbox-exec` with a profile (`-p`) that corresponds to the `sandbox.mode` that was specified.
+- **macOS 12+** uses **Apple Seatbelt** and runs commands using `sandbox-exec` with a profile (`-p`) that corresponds to the `--sandbox` that was specified.
 - **Linux** uses a combination of Landlock/seccomp APIs to enforce the `sandbox` configuration.
 
-Note that when running Linux in a containerized environment such as Docker, sandboxing may not work if the host/container configuration does not support the necessary Landlock/seccomp APIs. In such cases, we recommend configuring your Docker container so that it provides the sandbox guarantees you are looking for and then running `codex` with `sandbox.mode = "danger-full-access"` (or more simply, the `--dangerously-bypass-approvals-and-sandbox` flag) within your container.
+Note that when running Linux in a containerized environment such as Docker, sandboxing may not work if the host/container configuration does not support the necessary Landlock/seccomp APIs. In such cases, we recommend configuring your Docker container so that it provides the sandbox guarantees you are looking for and then running `codex` with `--sandbox danger-full-access` (or, more simply, the `--dangerously-bypass-approvals-and-sandbox` flag) within your container.
 
 ---
 

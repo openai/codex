@@ -4,6 +4,7 @@
 // definitions that do not contain business logic.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use strum_macros::Display;
 use wildmatch::WildMatchPattern;
 
@@ -88,6 +89,28 @@ pub struct Tui {
     /// `space` still work. This allows the user to select text in the TUI
     /// using the mouse without needing to hold down a modifier key.
     pub disable_mouse_capture: bool,
+}
+
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum SandboxMode {
+    #[serde(rename = "read-only")]
+    #[default]
+    ReadOnly,
+
+    #[serde(rename = "workspace-write")]
+    WorkspaceWrite,
+
+    #[serde(rename = "danger-full-access")]
+    DangerFullAccess,
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct SandboxWorkplaceWrite {
+    #[serde(default)]
+    pub writable_roots: Vec<PathBuf>,
+    #[serde(default)]
+    pub network_access: bool,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]

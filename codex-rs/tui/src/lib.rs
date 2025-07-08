@@ -5,11 +5,11 @@
 use app::App;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
+use codex_core::config_types::SandboxMode;
 use codex_core::openai_api_key::OPENAI_API_KEY_ENV_VAR;
 use codex_core::openai_api_key::get_openai_api_key;
 use codex_core::openai_api_key::set_openai_api_key;
 use codex_core::protocol::AskForApproval;
-use codex_core::protocol::SandboxPolicy;
 use codex_core::util::is_inside_git_repo;
 use codex_login::try_read_openai_api_key;
 use log_layer::TuiLogLayer;
@@ -48,19 +48,21 @@ mod user_approval_widget;
 pub use cli::Cli;
 
 pub fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> std::io::Result<()> {
-    let (sandbox_policy, approval_policy) = if cli.full_auto {
+    let (sandbox_mode, approval_policy) = if cli.full_auto {
         (
-            Some(SandboxPolicy::new_workspace_write_policy()),
+            Some(SandboxMode::WorkspaceWrite),
             Some(AskForApproval::OnFailure),
         )
     } else if cli.dangerously_bypass_approvals_and_sandbox {
         (
-            Some(SandboxPolicy::DangerFullAccess),
+            Some(SandboxMode::DangerFullAccess),
             Some(AskForApproval::Never),
         )
     } else {
-        let sandbox_policy = None;
-        (sandbox_policy, cli.approval_policy.map(Into::into))
+        (
+            cli.sandbox_mode.map(Into::<SandboxMode>::into),
+            cli.approval_policy.map(Into::into),
+        )
     };
 
     let config = {
@@ -68,7 +70,7 @@ pub fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> std::io::
         let overrides = ConfigOverrides {
             model: cli.model.clone(),
             approval_policy,
-            sandbox_policy,
+            sandbox_mode,
             cwd: cli.cwd.clone().map(|p| p.canonicalize().unwrap_or(p)),
             model_provider: None,
             config_profile: cli.config_profile.clone(),

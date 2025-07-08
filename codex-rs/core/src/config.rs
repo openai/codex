@@ -3,6 +3,8 @@ use crate::config_types::History;
 use crate::config_types::McpServerConfig;
 use crate::config_types::ReasoningEffort;
 use crate::config_types::ReasoningSummary;
+use crate::config_types::SandboxMode;
+use crate::config_types::SandboxWorkplaceWrite;
 use crate::config_types::ShellEnvironmentPolicy;
 use crate::config_types::ShellEnvironmentPolicyToml;
 use crate::config_types::Tui;
@@ -253,8 +255,11 @@ pub struct ConfigToml {
     #[serde(default)]
     pub shell_environment_policy: ShellEnvironmentPolicyToml,
 
-    /// If omitted, Codex defaults to the restrictive `read-only` policy.
-    pub sandbox: Option<SandboxPolicy>,
+    /// Sandbox mode to use.
+    pub sandbox_mode: Option<SandboxMode>,
+
+    /// Sandbox configuration to apply if `sandbox` is `WorkspaceWrite`.
+    pub sandbox_workspace_write: Option<SandboxWorkplaceWrite>,
 
     /// Disable server-side response storage (sends the full conversation
     /// context with every request). Currently necessary for OpenAI customers
@@ -305,13 +310,33 @@ pub struct ConfigToml {
     pub model_reasoning_summary: Option<ReasoningSummary>,
 }
 
+impl ConfigToml {
+    /// Derive the effective sandbox policy from the configuration.
+    fn derive_sandbox_policy(&self, sandbox_mode_override: Option<SandboxMode>) -> SandboxPolicy {
+        let resolved_sandbox_mode = sandbox_mode_override
+            .or(self.sandbox_mode)
+            .unwrap_or_default();
+        match resolved_sandbox_mode {
+            SandboxMode::ReadOnly => SandboxPolicy::new_read_only_policy(),
+            SandboxMode::WorkspaceWrite => match self.sandbox_workspace_write.as_ref() {
+                Some(s) => SandboxPolicy::WorkspaceWrite {
+                    writable_roots: s.writable_roots.clone(),
+                    network_access: s.network_access,
+                },
+                None => SandboxPolicy::new_workspace_write_policy(),
+            },
+            SandboxMode::DangerFullAccess => SandboxPolicy::DangerFullAccess,
+        }
+    }
+}
+
 /// Optional overrides for user configuration (e.g., from CLI flags).
 #[derive(Default, Debug, Clone)]
 pub struct ConfigOverrides {
     pub model: Option<String>,
     pub cwd: Option<PathBuf>,
     pub approval_policy: Option<AskForApproval>,
-    pub sandbox_policy: Option<SandboxPolicy>,
+    pub sandbox_mode: Option<SandboxMode>,
     pub model_provider: Option<String>,
     pub config_profile: Option<String>,
     pub codex_linux_sandbox_exe: Option<PathBuf>,
@@ -332,16 +357,16 @@ impl Config {
             model,
             cwd,
             approval_policy,
-            sandbox_policy,
+            sandbox_mode,
             model_provider,
             config_profile: config_profile_key,
             codex_linux_sandbox_exe,
         } = overrides;
 
-        let config_profile = match config_profile_key.or(cfg.profile) {
+        let config_profile = match config_profile_key.as_ref().or(cfg.profile.as_ref()) {
             Some(key) => cfg
                 .profiles
-                .get(&key)
+                .get(key)
                 .ok_or_else(|| {
                     std::io::Error::new(
                         std::io::ErrorKind::NotFound,
@@ -352,10 +377,7 @@ impl Config {
             None => ConfigProfile::default(),
         };
 
-        let sandbox_policy = sandbox_policy.unwrap_or_else(|| {
-            cfg.sandbox
-                .unwrap_or_else(SandboxPolicy::new_read_only_policy)
-        });
+        let sandbox_policy = cfg.derive_sandbox_policy(sandbox_mode);
 
         let mut model_providers = built_in_model_providers();
         // Merge user-defined providers into the built-in list.
@@ -549,30 +571,38 @@ persistence = "none"
     #[test]
     fn test_sandbox_config_parsing() {
         let sandbox_full_access = r#"
-[sandbox]
-mode = "danger-full-access"
+sandbox_mode = "danger-full-access"
+
+[sandbox_workspace_write]
 network_access = false  # This should be ignored.
 "#;
         let sandbox_full_access_cfg = toml::from_str::<ConfigToml>(sandbox_full_access)
             .expect("TOML deserialization should succeed");
+        let sandbox_mode_override = None;
         assert_eq!(
-            Some(SandboxPolicy::DangerFullAccess),
-            sandbox_full_access_cfg.sandbox
+            SandboxPolicy::DangerFullAccess,
+            sandbox_full_access_cfg.derive_sandbox_policy(sandbox_mode_override)
         );
 
         let sandbox_read_only = r#"
-[sandbox]
-mode = "read-only"
+sandbox_mode = "read-only"
+
+[sandbox_workspace_write]
 network_access = true  # This should be ignored.
 "#;
 
         let sandbox_read_only_cfg = toml::from_str::<ConfigToml>(sandbox_read_only)
             .expect("TOML deserialization should succeed");
-        assert_eq!(Some(SandboxPolicy::ReadOnly), sandbox_read_only_cfg.sandbox);
+        let sandbox_mode_override = None;
+        assert_eq!(
+            SandboxPolicy::ReadOnly,
+            sandbox_read_only_cfg.derive_sandbox_policy(sandbox_mode_override)
+        );
 
         let sandbox_workspace_write = r#"
-[sandbox]
-mode = "workspace-write"
+sandbox_mode = "workspace-write"
+
+[sandbox_workspace_write]
 writable_roots = [
     "/tmp",
 ]
@@ -580,12 +610,13 @@ writable_roots = [
 
         let sandbox_workspace_write_cfg = toml::from_str::<ConfigToml>(sandbox_workspace_write)
             .expect("TOML deserialization should succeed");
+        let sandbox_mode_override = None;
         assert_eq!(
-            Some(SandboxPolicy::WorkspaceWrite {
+            SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![PathBuf::from("/tmp")],
-                network_access: false
-            }),
-            sandbox_workspace_write_cfg.sandbox
+                network_access: false,
+            },
+            sandbox_workspace_write_cfg.derive_sandbox_policy(sandbox_mode_override)
         );
     }
 

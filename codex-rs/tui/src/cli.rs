@@ -21,11 +21,16 @@ pub struct Cli {
     #[arg(long = "profile", short = 'p')]
     pub config_profile: Option<String>,
 
+    /// Select the sandbox policy to use when executing model-generated shell
+    /// commands.
+    #[arg(long = "sandbox", short = 's')]
+    pub sandbox_mode: Option<codex_common::SandboxModeCliArg>,
+
     /// Configure when the model requires human approval before executing a command.
     #[arg(long = "ask-for-approval", short = 'a')]
     pub approval_policy: Option<ApprovalModeCliArg>,
 
-    /// Convenience alias for low-friction sandboxed automatic execution (-a on-failure, -c sandbox.mode=workspace-write).
+    /// Convenience alias for low-friction sandboxed automatic execution (-a on-failure, --sandbox workspace-write).
     #[arg(long = "full-auto", default_value_t = false)]
     pub full_auto: bool,
 
