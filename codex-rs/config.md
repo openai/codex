@@ -94,15 +94,15 @@ env_http_headers = { "X-Example-Features": "EXAMPLE_FEATURES" }
 
 ## model_provider
 
-Identifies which provider to use from the `model_providers` map. Defaults to `"openai"`.
+Identifies which provider to use from the `model_providers` map. Defaults to `"openai"`. You can override the `base_url` for the built-in `openai` provider via the `OPENAI_BASE_URL` environment variable.
 
 Note that if you override `model_provider`, then you likely want to override
 `model`, as well. For example, if you are running ollama with Mistral locally,
 then you would need to add the following to your config in addition to the new entry in the `model_providers` map:
 
 ```toml
-model = "mistral"
 model_provider = "ollama"
+model = "mistral"
 ```
 
 ## approval_policy
