@@ -13,7 +13,7 @@ workspace = true
 [dependencies]
 anyhow = "1"
 async-channel = "2.3.1"
-base64 = "0.21"
+base64 = "0.22"
 bytes = "1.10.1"
 codex-apply-patch = { path = "../apply-patch" }
 codex-login = { path = "../login" }
@@ -44,10 +44,10 @@ tokio = { version = "1", features = [
     "signal",
 ] }
 tokio-util = "0.7.14"
-toml = "0.8.20"
+toml = "0.9.0"
 tracing = { version = "0.1.41", features = ["log"] }
 tree-sitter = "0.25.3"
-tree-sitter-bash = "0.23.3"
+tree-sitter-bash = "0.25.0"
 uuid = { version = "1", features = ["serde", "v4"] }
 wildmatch = "2.4.0"
 
