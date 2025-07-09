@@ -155,6 +155,6 @@ fn prepend_config_flags(
 
 fn print_completion(cmd: CompletionCommand) {
     let mut app = MultitoolCli::command();
-    let name = app.get_name().to_string();
+    let name = "codex";
     generate(cmd.shell, &mut app, name, &mut std::io::stdout());
 }
