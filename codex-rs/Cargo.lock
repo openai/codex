@@ -401,12 +401,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "46c5e41b57b8bba42a04676d81cb89e9ee8e859a1a66f80a5a72e1cb76b34d43"
 
 [[package]]
-name = "bytecount"
-version = "0.6.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "175812e0be2bccb6abe50bb8d566126198344f707e304f45c648fd8f2cc0365e"
-
-[[package]]
 name = "bytemuck"
 version = "1.23.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -573,7 +567,6 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "pretty_assertions",
- "serde_json",
  "similar",
  "tempfile",
  "thiserror 2.0.12",
@@ -621,12 +614,10 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "codex-apply-patch",
- "codex-login",
  "codex-mcp-client",
  "dirs",
  "env-flags",
  "eventsource-stream",
- "fs-err",
  "fs2",
  "futures",
  "landlock",
@@ -634,8 +625,6 @@ dependencies = [
  "mcp-types",
  "mime_guess",
  "openssl-sys",
- "patch",
- "path-absolutize",
  "predicates",
  "pretty_assertions",
  "rand 0.9.1",
@@ -643,7 +632,6 @@ dependencies = [
  "seccompiler",
  "serde",
  "serde_json",
- "strum 0.27.1",
  "strum_macros 0.27.1",
  "tempfile",
  "thiserror 2.0.12",
@@ -669,7 +657,6 @@ dependencies = [
  "codex-common",
  "codex-core",
  "codex-linux-sandbox",
- "mcp-types",
  "owo-colors",
  "serde_json",
  "shlex",
@@ -742,7 +729,6 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "mcp-types",
- "pretty_assertions",
  "serde",
  "serde_json",
  "tokio",
@@ -1484,15 +1470,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e13624c2627564efccf4934284bdd98cbaa14e79b0b5a141218e507b3a823456"
 dependencies = [
  "percent-encoding",
-]
-
-[[package]]
-name = "fs-err"
-version = "3.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "88d7be93788013f265201256d58f04936a8079ad5dc898743aa20525f503b683"
-dependencies = [
- "autocfg",
 ]
 
 [[package]]
@@ -2615,17 +2592,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nom_locate"
-version = "4.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e3c83c053b0713da60c5b8de47fe8e494fe3ece5267b2f23090a07a053ba8f3"
-dependencies = [
- "bytecount",
- "memchr",
- "nom",
-]
-
-[[package]]
 name = "noop_proc_macro"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2881,17 +2847,6 @@ name = "paste"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
-
-[[package]]
-name = "patch"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "15c07fdcdd8b05bdcf2a25bc195b6c34cbd52762ada9dba88bf81e7686d14e7a"
-dependencies = [
- "chrono",
- "nom",
- "nom_locate",
-]
 
 [[package]]
 name = "path-absolutize"
