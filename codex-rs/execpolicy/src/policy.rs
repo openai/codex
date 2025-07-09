@@ -63,7 +63,7 @@ impl Policy {
                             arg: arg.clone(),
                             exec_call: exec_call.clone(),
                         },
-                        reason: format!("arg `{}` contains forbidden substring", arg),
+                        reason: format!("arg `{arg}` contains forbidden substring"),
                     });
                 }
             }

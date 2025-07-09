@@ -101,7 +101,7 @@ impl PolicyBuilder {
     }
 
     fn add_program_spec(&self, program_spec: ProgramSpec) {
-        info!("adding program spec: {:?}", program_spec);
+        info!("adding program spec: {program_spec:?}");
         let name = program_spec.program.clone();
         let mut programs = self.programs.borrow_mut();
         programs.insert(name.clone(), program_spec);

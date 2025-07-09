@@ -37,7 +37,7 @@ pub struct Prompt {
 }
 
 impl Prompt {
-    pub(crate) fn get_full_instructions(&self, model: &str) -> Cow<str> {
+    pub(crate) fn get_full_instructions(&self, model: &str) -> Cow<'_, str> {
         let mut sections: Vec<&str> = vec![BASE_INSTRUCTIONS];
         if let Some(ref user) = self.user_instructions {
             sections.push(user);

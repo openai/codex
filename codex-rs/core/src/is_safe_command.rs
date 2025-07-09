@@ -240,8 +240,7 @@ mod tests {
         ] {
             assert!(
                 !is_safe_to_call_with_exec(&args),
-                "expected {:?} to be unsafe",
-                args
+                "expected {args:?} to be unsafe"
             );
         }
     }

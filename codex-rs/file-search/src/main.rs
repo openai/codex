@@ -43,12 +43,12 @@ impl Reporter for StdioReporter {
                 match indices_iter.peek() {
                     Some(next) if **next == i as u32 => {
                         // ANSI escape code for bold: \x1b[1m ... \x1b[0m
-                        print!("\x1b[1m{}\x1b[0m", c);
+                        print!("\x1b[1m{c}\x1b[0m");
                         // advance the iterator since we've consumed this index
                         indices_iter.next();
                     }
                     _ => {
-                        print!("{}", c);
+                        print!("{c}");
                     }
                 }
             }

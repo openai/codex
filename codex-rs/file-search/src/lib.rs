@@ -156,7 +156,7 @@ pub fn run(
         let mut override_builder = OverrideBuilder::new(search_directory);
         for exclude in exclude {
             // The `!` prefix is used to indicate an exclude pattern.
-            let exclude_pattern = format!("!{}", exclude);
+            let exclude_pattern = format!("!{exclude}");
             override_builder.add(&exclude_pattern)?;
         }
         let override_matcher = override_builder.build()?;

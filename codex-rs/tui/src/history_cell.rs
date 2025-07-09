@@ -140,7 +140,7 @@ impl HistoryCell {
                 Line::from(vec![
                     "OpenAI ".into(),
                     "Codex".bold(),
-                    format!(" v{}", VERSION).into(),
+                    format!(" v{VERSION}").into(),
                     " (research preview)".dim(),
                 ]),
                 Line::from(""),
@@ -185,7 +185,7 @@ impl HistoryCell {
             let lines = vec![
                 Line::from("model changed:".magenta().bold()),
                 Line::from(format!("requested: {}", config.model)),
-                Line::from(format!("used: {}", model)),
+                Line::from(format!("used: {model}")),
                 Line::from(""),
             ];
             HistoryCell::SessionInfo {
@@ -276,7 +276,7 @@ impl HistoryCell {
         }
         let remaining = lines_iter.count();
         if remaining > 0 {
-            lines.push(Line::from(format!("... {} additional lines", remaining)).dim());
+            lines.push(Line::from(format!("... {remaining} additional lines")).dim());
         }
         lines.push(Line::from(""));
 
