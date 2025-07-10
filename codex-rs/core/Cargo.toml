@@ -13,26 +13,21 @@ workspace = true
 [dependencies]
 anyhow = "1"
 async-channel = "2.3.1"
-base64 = "0.21"
+base64 = "0.22"
 bytes = "1.10.1"
 codex-apply-patch = { path = "../apply-patch" }
-codex-login = { path = "../login" }
 codex-mcp-client = { path = "../mcp-client" }
 dirs = "6"
 env-flags = "0.1.1"
 eventsource-stream = "0.2.3"
 fs2 = "0.4.3"
-fs-err = "3.1.0"
 futures = "0.3"
 mcp-types = { path = "../mcp-types" }
 mime_guess = "2.0"
-patch = "0.7"
-path-absolutize = "3.1.1"
 rand = "0.9"
 reqwest = { version = "0.12", features = ["json", "stream"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-strum = "0.27.1"
 strum_macros = "0.27.1"
 thiserror = "2.0.12"
 time = { version = "0.3", features = ["formatting", "local-offset", "macros"] }
@@ -44,10 +39,10 @@ tokio = { version = "1", features = [
     "signal",
 ] }
 tokio-util = "0.7.14"
-toml = "0.8.20"
+toml = "0.9.0"
 tracing = { version = "0.1.41", features = ["log"] }
 tree-sitter = "0.25.3"
-tree-sitter-bash = "0.23.3"
+tree-sitter-bash = "0.25.0"
 uuid = { version = "1", features = ["serde", "v4"] }
 wildmatch = "2.4.0"
 

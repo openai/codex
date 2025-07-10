@@ -56,7 +56,7 @@ pub(crate) fn get_git_diff() -> io::Result<(bool, String)> {
         }
     }
 
-    Ok((true, format!("{}{}", tracked_diff, untracked_diff)))
+    Ok((true, format!("{tracked_diff}{untracked_diff}")))
 }
 
 /// Helper that executes `git` with the given `args` and returns `stdout` as a

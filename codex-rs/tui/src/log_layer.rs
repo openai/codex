@@ -53,7 +53,7 @@ where
 
         impl Visit for Visitor<'_> {
             fn record_debug(&mut self, _field: &Field, value: &dyn std::fmt::Debug) {
-                let _ = write!(self.buf, " {:?}", value);
+                let _ = write!(self.buf, " {value:?}");
             }
         }
 

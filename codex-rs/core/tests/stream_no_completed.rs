@@ -29,8 +29,7 @@ fn sse_incomplete() -> String {
 fn sse_completed(id: &str) -> String {
     format!(
         "event: response.completed\n\
-data: {{\"type\":\"response.completed\",\"response\":{{\"id\":\"{}\",\"output\":[]}}}}\n\n\n",
-        id
+data: {{\"type\":\"response.completed\",\"response\":{{\"id\":\"{id}\",\"output\":[]}}}}\n\n\n"
     )
 }
 

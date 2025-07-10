@@ -678,8 +678,7 @@ mod tests {
             let result = ChatComposer::current_at_token(&textarea);
             assert_eq!(
                 result, expected,
-                "Failed for case: {} - input: '{}', cursor: {}",
-                description, input, cursor_pos
+                "Failed for case: {description} - input: '{input}', cursor: {cursor_pos}"
             );
         }
     }
