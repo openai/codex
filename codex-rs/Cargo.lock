@@ -575,12 +575,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-chatgpt"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "codex-common",
+ "codex-core",
+ "codex-login",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "codex-cli"
 version = "0.0.0"
 dependencies = [
  "anyhow",
  "clap",
  "clap_complete",
+ "codex-chatgpt",
  "codex-common",
  "codex-core",
  "codex-exec",

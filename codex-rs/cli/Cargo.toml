@@ -18,6 +18,7 @@ workspace = true
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
+codex-chatgpt = { path = "../chatgpt" }
 codex-core = { path = "../core" }
 codex-common = { path = "../common", features = ["cli"] }
 codex-exec = { path = "../exec" }
