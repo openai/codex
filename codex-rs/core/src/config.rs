@@ -130,6 +130,10 @@ pub struct Config {
     /// If not "none", the value to use for `reasoning.summary` when making a
     /// request using the Responses API.
     pub model_reasoning_summary: ReasoningSummary,
+
+    /// When set to `true`, overrides the default heuristic and forces
+    /// `model_supports_reasoning_summaries()` to return `true`.
+    pub model_supports_reasoning_summaries: bool,
 }
 
 impl Config {
@@ -308,6 +312,9 @@ pub struct ConfigToml {
 
     pub model_reasoning_effort: Option<ReasoningEffort>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
+
+    /// Override to force-enable reasoning summaries for the configured model.
+    pub model_supports_reasoning_summaries: Option<bool>,
 }
 
 impl ConfigToml {
@@ -472,6 +479,10 @@ impl Config {
                 .model_reasoning_summary
                 .or(cfg.model_reasoning_summary)
                 .unwrap_or_default(),
+
+            model_supports_reasoning_summaries: cfg
+                .model_supports_reasoning_summaries
+                .unwrap_or(false),
         };
         Ok(config)
     }
@@ -776,6 +787,7 @@ disable_response_storage = true
                 hide_agent_reasoning: false,
                 model_reasoning_effort: ReasoningEffort::High,
                 model_reasoning_summary: ReasoningSummary::Detailed,
+                model_supports_reasoning_summaries: false,
             },
             o3_profile_config
         );
@@ -820,6 +832,7 @@ disable_response_storage = true
             hide_agent_reasoning: false,
             model_reasoning_effort: ReasoningEffort::default(),
             model_reasoning_summary: ReasoningSummary::default(),
+            model_supports_reasoning_summaries: false,
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -879,6 +892,7 @@ disable_response_storage = true
             hide_agent_reasoning: false,
             model_reasoning_effort: ReasoningEffort::default(),
             model_reasoning_summary: ReasoningSummary::default(),
+            model_supports_reasoning_summaries: false,
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);

@@ -23,6 +23,7 @@ use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
 use crate::client_common::ResponsesApiRequest;
 use crate::client_common::create_reasoning_param_for_request;
+use crate::config::Config;
 use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::error::CodexErr;
@@ -36,9 +37,11 @@ use crate::models::ResponseItem;
 use crate::openai_tools::create_tools_json_for_responses_api;
 use crate::protocol::TokenUsage;
 use crate::util::backoff;
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct ModelClient {
+    config: Arc<Config>,
     model: String,
     client: reqwest::Client,
     provider: ModelProviderInfo,
@@ -48,12 +51,14 @@ pub struct ModelClient {
 
 impl ModelClient {
     pub fn new(
-        model: impl ToString,
+        config: Arc<Config>,
         provider: ModelProviderInfo,
         effort: ReasoningEffortConfig,
         summary: ReasoningSummaryConfig,
     ) -> Self {
+        let model = config.model.clone();
         Self {
+            config,
             model: model.to_string(),
             client: reqwest::Client::new(),
             provider,
@@ -108,7 +113,7 @@ impl ModelClient {
 
         let full_instructions = prompt.get_full_instructions(&self.model);
         let tools_json = create_tools_json_for_responses_api(prompt, &self.model)?;
-        let reasoning = create_reasoning_param_for_request(&self.model, self.effort, self.summary);
+        let reasoning = create_reasoning_param_for_request(&self.config, self.effort, self.summary);
         let payload = ResponsesApiRequest {
             model: &self.model,
             instructions: &full_instructions,

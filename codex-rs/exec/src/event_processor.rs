@@ -139,7 +139,7 @@ impl EventProcessor {
             ("sandbox", summarize_sandbox_policy(&config.sandbox_policy)),
         ];
         if config.model_provider.wire_api == WireApi::Responses
-            && model_supports_reasoning_summaries(&config.model)
+            && model_supports_reasoning_summaries(config)
         {
             entries.push((
                 "reasoning effort",

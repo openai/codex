@@ -131,15 +131,16 @@ pub(crate) struct ResponsesApiRequest<'a> {
     pub(crate) stream: bool,
 }
 
+use crate::config::Config;
+
 pub(crate) fn create_reasoning_param_for_request(
-    model: &str,
+    config: &Config,
     effort: ReasoningEffortConfig,
     summary: ReasoningSummaryConfig,
 ) -> Option<Reasoning> {
-    let effort: Option<OpenAiReasoningEffort> = effort.into();
-    let effort = effort?;
-
-    if model_supports_reasoning_summaries(model) {
+    if model_supports_reasoning_summaries(config) {
+        let effort: Option<OpenAiReasoningEffort> = effort.into();
+        let effort = effort?;
         Some(Reasoning {
             effort,
             summary: summary.into(),
@@ -149,19 +150,24 @@ pub(crate) fn create_reasoning_param_for_request(
     }
 }
 
-pub fn model_supports_reasoning_summaries(model: &str) -> bool {
-    // Currently, we hardcode this rule to decide whether enable reasoning.
+pub fn model_supports_reasoning_summaries(config: &Config) -> bool {
+    // Currently, we hardcode this rule to decide whether to enable reasoning.
     // We expect reasoning to apply only to OpenAI models, but we do not want
     // users to have to mess with their config to disable reasoning for models
     // that do not support it, such as `gpt-4.1`.
     //
     // Though if a user is using Codex with non-OpenAI models that, say, happen
-    // to start with "o", then they can set `model_reasoning_effort = "none` in
+    // to start with "o", then they can set `model_reasoning_effort = "none"` in
     // config.toml to disable reasoning.
     //
-    // Ultimately, this should also be configurable in config.toml, but we
-    // need to have defaults that "just work." Perhaps we could have a
-    // "reasoning models pattern" as part of ModelProviderInfo?
+    // Converseley, if a user has a non-OpenAI provider that supports reasoning,
+    // they can set the top-level `model_supports_reasoning_summaries = true`
+    // config option to enable reasoning.
+    if config.model_supports_reasoning_summaries {
+        return true;
+    }
+
+    let model = &config.model;
     model.starts_with("o") || model.starts_with("codex")
 }
 

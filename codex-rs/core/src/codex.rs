@@ -586,7 +586,7 @@ async fn submission_loop(
                 }
 
                 let client = ModelClient::new(
-                    model.clone(),
+                    config.clone(),
                     provider.clone(),
                     model_reasoning_effort,
                     model_reasoning_summary,
