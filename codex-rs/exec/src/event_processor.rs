@@ -415,7 +415,7 @@ impl EventProcessor {
                 {
                     (
                         format!(" in {}", format_elapsed(start_time)),
-                        format!("apply_patch(auto_approved={})", auto_approved),
+                        format!("apply_patch(auto_approved={auto_approved})"),
                     )
                 } else {
                     (String::new(), format!("apply_patch('{call_id}')"))

@@ -633,7 +633,7 @@ mod tests {
 
     /// Helper to construct a patch with the given body.
     fn wrap_patch(body: &str) -> String {
-        format!("*** Begin Patch\n{}\n*** End Patch", body)
+        format!("*** Begin Patch\n{body}\n*** End Patch")
     }
 
     fn strs_to_strings(strs: &[&str]) -> Vec<String> {
@@ -661,7 +661,7 @@ mod tests {
                     }]
                 );
             }
-            result => panic!("expected MaybeApplyPatch::Body got {:?}", result),
+            result => panic!("expected MaybeApplyPatch::Body got {result:?}"),
         }
     }
 
@@ -688,7 +688,7 @@ PATCH"#,
                     }]
                 );
             }
-            result => panic!("expected MaybeApplyPatch::Body got {:?}", result),
+            result => panic!("expected MaybeApplyPatch::Body got {result:?}"),
         }
     }
 

@@ -89,7 +89,7 @@ fn main() -> Result<()> {
 
     let (output, exit_code) = check_command(&policy, exec, args.require_safe);
     let json = serde_json::to_string(&output)?;
-    println!("{}", json);
+    println!("{json}");
     std::process::exit(exit_code);
 }
 
