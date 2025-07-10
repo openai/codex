@@ -90,13 +90,10 @@ impl ChatComposer<'_> {
                     // percentage.
                     100
                 };
-                if percent_remaining > 25 {
-                    format!("{BASE_PLACEHOLDER_TEXT} — {percent_remaining}% context left")
-                } else {
-                    format!(
-                        "{BASE_PLACEHOLDER_TEXT} — {percent_remaining}% context left (consider /compact)"
-                    )
-                }
+                // When https://github.com/openai/codex/issues/1257 is resolved,
+                // check if `percent_remaining < 25`, and if so, recommend
+                // /compact.
+                format!("{BASE_PLACEHOLDER_TEXT} — {percent_remaining}% context left")
             }
             (total_tokens, None) => {
                 format!("{BASE_PLACEHOLDER_TEXT} — {total_tokens} tokens used")
