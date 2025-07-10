@@ -43,7 +43,7 @@
     "marked-terminal": "^7.3.0",
     "meow": "^13.2.0",
     "open": "^10.1.0",
-    "openai": "^4.95.1",
+    "openai": "^5.8.4",
     "package-manager-detector": "^1.2.0",
     "react": "^18.2.0",
     "shell-quote": "^1.8.2",
