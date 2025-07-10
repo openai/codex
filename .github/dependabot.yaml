@@ -24,9 +24,3 @@ updates:
     directory: /
     schedule:
       interval: weekly
-  - package-ecosystem: npm
-    directories:
-      - /
-      - codex-cli
-    schedule:
-      interval: weekly
