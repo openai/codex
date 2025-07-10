@@ -42,7 +42,6 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub struct ModelClient {
     config: Arc<Config>,
-    model: String,
     client: reqwest::Client,
     provider: ModelProviderInfo,
     effort: ReasoningEffortConfig,
@@ -56,10 +55,8 @@ impl ModelClient {
         effort: ReasoningEffortConfig,
         summary: ReasoningSummaryConfig,
     ) -> Self {
-        let model = config.model.clone();
         Self {
             config,
-            model: model.to_string(),
             client: reqwest::Client::new(),
             provider,
             effort,
@@ -75,9 +72,13 @@ impl ModelClient {
             WireApi::Responses => self.stream_responses(prompt).await,
             WireApi::Chat => {
                 // Create the raw streaming connection first.
-                let response_stream =
-                    stream_chat_completions(prompt, &self.model, &self.client, &self.provider)
-                        .await?;
+                let response_stream = stream_chat_completions(
+                    prompt,
+                    &self.config.model,
+                    &self.client,
+                    &self.provider,
+                )
+                .await?;
 
                 // Wrap it with the aggregation adapter so callers see *only*
                 // the final assistant message per turn (matching the
@@ -111,11 +112,11 @@ impl ModelClient {
             return stream_from_fixture(path).await;
         }
 
-        let full_instructions = prompt.get_full_instructions(&self.model);
-        let tools_json = create_tools_json_for_responses_api(prompt, &self.model)?;
+        let full_instructions = prompt.get_full_instructions(&self.config.model);
+        let tools_json = create_tools_json_for_responses_api(prompt, &self.config.model)?;
         let reasoning = create_reasoning_param_for_request(&self.config, self.effort, self.summary);
         let payload = ResponsesApiRequest {
-            model: &self.model,
+            model: &self.config.model,
             instructions: &full_instructions,
             input: &prompt.input,
             tools: &tools_json,
