@@ -601,7 +601,7 @@ dependencies = [
  "clap",
  "codex-core",
  "serde",
- "toml 0.9.0",
+ "toml 0.9.1",
 ]
 
 [[package]]
@@ -638,7 +638,7 @@ dependencies = [
  "time",
  "tokio",
  "tokio-util",
- "toml 0.9.0",
+ "toml 0.9.1",
  "tracing",
  "tree-sitter",
  "tree-sitter-bash",
@@ -749,7 +749,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "toml 0.9.0",
+ "toml 0.9.1",
  "tracing",
  "tracing-subscriber",
 ]
@@ -4496,9 +4496,9 @@ dependencies = [
 
 [[package]]
 name = "toml"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f271e09bde39ab52250160a67e88577e0559ad77e9085de6e9051a2c4353f8f8"
+checksum = "0207d6ed1852c2a124c1fbec61621acb8330d2bf969a5d0643131e9affd985a5"
 dependencies = [
  "indexmap 2.10.0",
  "serde",
