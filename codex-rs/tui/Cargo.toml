@@ -29,7 +29,7 @@ codex-file-search = { path = "../file-search" }
 codex-linux-sandbox = { path = "../linux-sandbox" }
 codex-login = { path = "../login" }
 color-eyre = "0.6.3"
-crossterm = { version = "0.28.1", features = ["bracketed-paste"] }
+crossterm = { version = "0.29.0", features = ["bracketed-paste"] }
 image = { version = "^0.25.6", default-features = false, features = ["jpeg"] }
 lazy_static = "1"
 mcp-types = { path = "../mcp-types" }
