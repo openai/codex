@@ -20,7 +20,7 @@ pub fn format_duration(duration: Duration) -> String {
 
 fn format_elapsed_millis(millis: i64) -> String {
     if millis < 1000 {
-        format!("{}ms", millis)
+        format!("{millis}ms")
     } else if millis < 60_000 {
         format!("{:.2}s", millis as f64 / 1000.0)
     } else {

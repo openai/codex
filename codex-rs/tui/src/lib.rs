@@ -5,11 +5,11 @@
 use app::App;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
+use codex_core::config_types::SandboxMode;
 use codex_core::openai_api_key::OPENAI_API_KEY_ENV_VAR;
 use codex_core::openai_api_key::get_openai_api_key;
 use codex_core::openai_api_key::set_openai_api_key;
 use codex_core::protocol::AskForApproval;
-use codex_core::protocol::SandboxPolicy;
 use codex_core::util::is_inside_git_repo;
 use codex_login::try_read_openai_api_key;
 use log_layer::TuiLogLayer;
@@ -29,6 +29,8 @@ mod citation_regex;
 mod cli;
 mod conversation_history_widget;
 mod exec_command;
+mod file_search;
+mod get_git_diff;
 mod git_warning_screen;
 mod history_cell;
 mod log_layer;
@@ -46,14 +48,21 @@ mod user_approval_widget;
 pub use cli::Cli;
 
 pub fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> std::io::Result<()> {
-    let (sandbox_policy, approval_policy) = if cli.full_auto {
+    let (sandbox_mode, approval_policy) = if cli.full_auto {
         (
-            Some(SandboxPolicy::new_full_auto_policy()),
+            Some(SandboxMode::WorkspaceWrite),
             Some(AskForApproval::OnFailure),
         )
+    } else if cli.dangerously_bypass_approvals_and_sandbox {
+        (
+            Some(SandboxMode::DangerFullAccess),
+            Some(AskForApproval::Never),
+        )
     } else {
-        let sandbox_policy = cli.sandbox.permissions.clone().map(Into::into);
-        (sandbox_policy, cli.approval_policy.map(Into::into))
+        (
+            cli.sandbox_mode.map(Into::<SandboxMode>::into),
+            cli.approval_policy.map(Into::into),
+        )
     };
 
     let config = {
@@ -61,7 +70,7 @@ pub fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> std::io::
         let overrides = ConfigOverrides {
             model: cli.model.clone(),
             approval_policy,
-            sandbox_policy,
+            sandbox_mode,
             cwd: cli.cwd.clone().map(|p| p.canonicalize().unwrap_or(p)),
             model_provider: None,
             config_profile: cli.config_profile.clone(),
@@ -207,8 +216,7 @@ fn run_ratatui_app(
 fn restore() {
     if let Err(err) = tui::restore() {
         eprintln!(
-            "failed to restore terminal. Run `reset` or restart your terminal to recover: {}",
-            err
+            "failed to restore terminal. Run `reset` or restart your terminal to recover: {err}"
         );
     }
 }

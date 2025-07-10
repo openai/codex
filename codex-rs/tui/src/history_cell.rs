@@ -6,6 +6,7 @@ use crate::text_formatting::format_and_truncate_tool_result;
 use base64::Engine;
 use codex_ansi_escape::ansi_escape_line;
 use codex_common::elapsed::format_duration;
+use codex_common::summarize_sandbox_policy;
 use codex_core::WireApi;
 use codex_core::config::Config;
 use codex_core::model_supports_reasoning_summaries;
@@ -103,6 +104,9 @@ pub(crate) enum HistoryCell {
     /// Background event.
     BackgroundEvent { view: TextBlock },
 
+    /// Output from the `/diff` command.
+    GitDiffOutput { view: TextBlock },
+
     /// Error event from the backend.
     ErrorEvent { view: TextBlock },
 
@@ -136,7 +140,7 @@ impl HistoryCell {
                 Line::from(vec![
                     "OpenAI ".into(),
                     "Codex".bold(),
-                    format!(" v{}", VERSION).into(),
+                    format!(" v{VERSION}").into(),
                     " (research preview)".dim(),
                 ]),
                 Line::from(""),
@@ -152,7 +156,7 @@ impl HistoryCell {
                 ("model", config.model.clone()),
                 ("provider", config.model_provider_id.clone()),
                 ("approval", format!("{:?}", config.approval_policy)),
-                ("sandbox", format!("{:?}", config.sandbox_policy)),
+                ("sandbox", summarize_sandbox_policy(&config.sandbox_policy)),
             ];
             if config.model_provider.wire_api == WireApi::Responses
                 && model_supports_reasoning_summaries(&config.model)
@@ -181,7 +185,7 @@ impl HistoryCell {
             let lines = vec![
                 Line::from("model changed:".magenta().bold()),
                 Line::from(format!("requested: {}", config.model)),
-                Line::from(format!("used: {}", model)),
+                Line::from(format!("used: {model}")),
                 Line::from(""),
             ];
             HistoryCell::SessionInfo {
@@ -272,7 +276,7 @@ impl HistoryCell {
         }
         let remaining = lines_iter.count();
         if remaining > 0 {
-            lines.push(Line::from(format!("... {} additional lines", remaining)).dim());
+            lines.push(Line::from(format!("... {remaining} additional lines")).dim());
         }
         lines.push(Line::from(""));
 
@@ -452,9 +456,25 @@ impl HistoryCell {
     pub(crate) fn new_background_event(message: String) -> Self {
         let mut lines: Vec<Line<'static>> = Vec::new();
         lines.push(Line::from("event".dim()));
-        lines.extend(message.lines().map(|l| Line::from(l.to_string()).dim()));
+        lines.extend(message.lines().map(|line| ansi_escape_line(line).dim()));
         lines.push(Line::from(""));
         HistoryCell::BackgroundEvent {
+            view: TextBlock::new(lines),
+        }
+    }
+
+    pub(crate) fn new_diff_output(message: String) -> Self {
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        lines.push(Line::from("/diff".magenta()));
+
+        if message.trim().is_empty() {
+            lines.push(Line::from("No changes detected.".italic()));
+        } else {
+            lines.extend(message.lines().map(ansi_escape_line));
+        }
+
+        lines.push(Line::from(""));
+        HistoryCell::GitDiffOutput {
             view: TextBlock::new(lines),
         }
     }
@@ -548,6 +568,7 @@ impl CellWidget for HistoryCell {
             | HistoryCell::AgentMessage { view }
             | HistoryCell::AgentReasoning { view }
             | HistoryCell::BackgroundEvent { view }
+            | HistoryCell::GitDiffOutput { view }
             | HistoryCell::ErrorEvent { view }
             | HistoryCell::SessionInfo { view }
             | HistoryCell::CompletedExecCommand { view }
@@ -569,6 +590,7 @@ impl CellWidget for HistoryCell {
             | HistoryCell::AgentMessage { view }
             | HistoryCell::AgentReasoning { view }
             | HistoryCell::BackgroundEvent { view }
+            | HistoryCell::GitDiffOutput { view }
             | HistoryCell::ErrorEvent { view }
             | HistoryCell::SessionInfo { view }
             | HistoryCell::CompletedExecCommand { view }

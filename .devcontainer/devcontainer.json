@@ -15,15 +15,13 @@
     "CARGO_TARGET_DIR": "${containerWorkspaceFolder}/codex-rs/target-arm64"
   },
 
-  "remoteUser": "dev",
+  "remoteUser": "ubuntu",
   "customizations": {
     "vscode": {
       "settings": {
-          "terminal.integrated.defaultProfile.linux": "bash"
+        "terminal.integrated.defaultProfile.linux": "bash"
       },
-      "extensions": [
-          "rust-lang.rust-analyzer"
-      ],
+      "extensions": ["rust-lang.rust-analyzer"]
     }
   }
 }

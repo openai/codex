@@ -41,6 +41,7 @@ if (wantsNative) {
   let targetTriple = null;
   switch (platform) {
     case "linux":
+    case "android":
       switch (arch) {
         case "x64":
           targetTriple = "x86_64-unknown-linux-musl";

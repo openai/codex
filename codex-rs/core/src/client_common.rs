@@ -2,6 +2,7 @@ use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::error::Result;
 use crate::models::ResponseItem;
+use crate::protocol::TokenUsage;
 use codex_apply_patch::APPLY_PATCH_TOOL_INSTRUCTIONS;
 use futures::Stream;
 use serde::Serialize;
@@ -36,7 +37,7 @@ pub struct Prompt {
 }
 
 impl Prompt {
-    pub(crate) fn get_full_instructions(&self, model: &str) -> Cow<str> {
+    pub(crate) fn get_full_instructions(&self, model: &str) -> Cow<'_, str> {
         let mut sections: Vec<&str> = vec![BASE_INSTRUCTIONS];
         if let Some(ref user) = self.user_instructions {
             sections.push(user);
@@ -50,8 +51,12 @@ impl Prompt {
 
 #[derive(Debug)]
 pub enum ResponseEvent {
+    Created,
     OutputItemDone(ResponseItem),
-    Completed { response_id: String },
+    Completed {
+        response_id: String,
+        token_usage: Option<TokenUsage>,
+    },
 }
 
 #[derive(Debug, Serialize)]

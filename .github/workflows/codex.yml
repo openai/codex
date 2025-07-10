@@ -70,7 +70,7 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
-      - uses: dtolnay/rust-toolchain@1.87
+      - uses: dtolnay/rust-toolchain@1.88
         with:
           targets: x86_64-unknown-linux-gnu
           components: clippy

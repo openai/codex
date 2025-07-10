@@ -46,7 +46,10 @@ async fn run_cmd(cmd: &[&str], writable_roots: &[PathBuf], timeout_ms: u64) {
         env: create_env_from_core_vars(),
     };
 
-    let sandbox_policy = SandboxPolicy::new_read_only_policy_with_writable_roots(writable_roots);
+    let sandbox_policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: writable_roots.to_vec(),
+        network_access: false,
+    };
     let sandbox_program = env!("CARGO_BIN_EXE_codex-linux-sandbox");
     let codex_linux_sandbox_exe = Some(PathBuf::from(sandbox_program));
     let ctrl_c = Arc::new(Notify::new());
@@ -78,7 +81,7 @@ async fn test_root_write() {
     let tmpfile = NamedTempFile::new().unwrap();
     let tmpfile_path = tmpfile.path().to_string_lossy();
     run_cmd(
-        &["bash", "-lc", &format!("echo blah > {}", tmpfile_path)],
+        &["bash", "-lc", &format!("echo blah > {tmpfile_path}")],
         &[],
         SHORT_TIMEOUT_MS,
     )
@@ -155,7 +158,7 @@ async fn assert_network_blocked(cmd: &[&str]) {
             (exit_code, stdout, stderr)
         }
         _ => {
-            panic!("expected sandbox denied error, got: {:?}", result);
+            panic!("expected sandbox denied error, got: {result:?}");
         }
     };
 
@@ -168,10 +171,7 @@ async fn assert_network_blocked(cmd: &[&str]) {
     // If—*and only if*—the command exits 0 we consider the sandbox breached.
 
     if exit_code == 0 {
-        panic!(
-            "Network sandbox FAILED - {:?} exited 0\nstdout:\n{}\nstderr:\n{}",
-            cmd, stdout, stderr
-        );
+        panic!("Network sandbox FAILED - {cmd:?} exited 0\nstdout:\n{stdout}\nstderr:\n{stderr}",);
     }
 }
 

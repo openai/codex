@@ -46,8 +46,7 @@ impl Match for HasPrevId {
 fn sse_completed(id: &str) -> String {
     format!(
         "event: response.completed\n\
-data: {{\"type\":\"response.completed\",\"response\":{{\"id\":\"{}\",\"output\":[]}}}}\n\n\n",
-        id
+data: {{\"type\":\"response.completed\",\"response\":{{\"id\":\"{id}\",\"output\":[]}}}}\n\n\n"
     )
 }
 
@@ -107,6 +106,9 @@ async fn keeps_previous_response_id_between_tasks() {
         env_key: Some("PATH".into()),
         env_key_instructions: None,
         wire_api: codex_core::WireApi::Responses,
+        query_params: None,
+        http_headers: None,
+        env_http_headers: None,
     };
 
     // Init session

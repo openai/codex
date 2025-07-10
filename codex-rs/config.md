@@ -20,41 +20,11 @@ The model that Codex should use.
 model = "o3"  # overrides the default of "codex-mini-latest"
 ```
 
-## model_provider
-
-Codex comes bundled with a number of "model providers" predefined. This config value is a string that indicates which provider to use. You can also define your own providers via `model_providers`.
-
-For example, if you are running ollama with Mistral locally, then you would need to add the following to your config:
-
-```toml
-model = "mistral"
-model_provider = "ollama"
-```
-
-because the following definition for `ollama` is included in Codex:
-
-```toml
-[model_providers.ollama]
-name = "Ollama"
-base_url = "http://localhost:11434/v1"
-wire_api = "chat"
-```
-
-This option defaults to `"openai"` and the corresponding provider is defined as follows:
-
-```toml
-[model_providers.openai]
-name = "OpenAI"
-base_url = "https://api.openai.com/v1"
-env_key = "OPENAI_API_KEY"
-wire_api = "responses"
-```
-
 ## model_providers
 
 This option lets you override and amend the default set of model providers bundled with Codex. This value is a map where the key is the value to use with `model_provider` to select the corresponding provider.
 
-For example, if you wanted to add a provider that uses the OpenAI 4o model via the chat completions API, then you can define the provider under model_providers with wire_api = "chat":
+For example, if you wanted to add a provider that uses the OpenAI 4o model via the chat completions API, then you could add the following configuration:
 
 ```toml
 # Recall that in TOML, root keys must be listed before tables.
@@ -71,8 +41,74 @@ base_url = "https://api.openai.com/v1"
 # using Codex with this provider. The value of the environment variable must be
 # non-empty and will be used in the `Bearer TOKEN` HTTP header for the POST request.
 env_key = "OPENAI_API_KEY"
-# valid values for wire_api are "chat" and "responses".
+# Valid values for wire_api are "chat" and "responses". Defaults to "chat" if omitted.
 wire_api = "chat"
+# If necessary, extra query params that need to be added to the URL.
+# See the Azure example below.
+query_params = {}
+```
+
+Note this makes it possible to use Codex CLI with non-OpenAI models, so long as they use a wire API that is compatible with the OpenAI chat completions API. For example, you could define the following provider to use Codex CLI with Ollama running locally:
+
+```toml
+[model_providers.ollama]
+name = "Ollama"
+base_url = "http://localhost:11434/v1"
+```
+
+Or a third-party provider (using a distinct environment variable for the API key):
+
+```toml
+[model_providers.mistral]
+name = "Mistral"
+base_url = "https://api.mistral.ai/v1"
+env_key = "MISTRAL_API_KEY"
+```
+
+Note that Azure requires `api-version` to be passed as a query parameter, so be sure to specify it as part of `query_params` when defining the Azure provider:
+
+
+This option lets you override and amend the default set of model providers bundled with Codex. This value is a map where the key is the value to use with `model_provider` to select the corresponding provider.
+
+For example, if you wanted to add a provider that uses the OpenAI 4o model via the chat completions API, then you can define the provider under model_providers with wire_api = "chat":
+
+```toml
+[model_providers.azure]
+name = "Azure"
+# Make sure you set the appropriate subdomain for this URL.
+base_url = "https://YOUR_PROJECT_NAME.openai.azure.com/openai"
+env_key = "AZURE_OPENAI_API_KEY"  # Or "OPENAI_API_KEY", whichever you use.
+query_params = { api-version = "2025-04-01-preview" }
+```
+
+It is also possible to configure a provider to include extra HTTP headers with a request. These can be hardcoded values (`http_headers`) or values read from environment variables (`env_http_headers`):
+
+
+```toml
+[model_providers.example]
+# name, base_url, ...
+
+# This will add the HTTP header `X-Example-Header` with value `example-value`
+# to each request to the model provider.
+http_headers = { "X-Example-Header" = "example-value" }
+
+# This will add the HTTP header `X-Example-Features` with the value of the
+# `EXAMPLE_FEATURES` environment variable to each request to the model provider
+# _if_ the environment variable is set and its value is non-empty.
+env_http_headers = { "X-Example-Features": "EXAMPLE_FEATURES" }
+```
+
+## model_provider
+
+Identifies which provider to use from the `model_providers` map. Defaults to `"openai"`. You can override the `base_url` for the built-in `openai` provider via the `OPENAI_BASE_URL` environment variable.
+
+Note that if you override `model_provider`, then you likely want to override
+`model`, as well. For example, if you are running ollama with Mistral locally,
+then you would need to add the following to your config in addition to the new entry in the `model_providers` map:
+
+```toml
+model_provider = "ollama"
+model = "mistral"
 ```
 
 ## approval_policy
@@ -80,8 +116,13 @@ wire_api = "chat"
 Determines when the user should be prompted to approve whether Codex can execute a command:
 
 ```toml
-# This is analogous to --suggest in the TypeScript Codex CLI
-approval_policy = "unless-allow-listed"
+# Codex has hardcoded logic that defines a set of "trusted" commands.
+# Setting the approval_policy to `untrusted` means that Codex will prompt the
+# user before running a command not in the "trusted" set.
+#
+# See https://github.com/openai/codex/issues/1260 for the plan to enable
+# end-users to define their own trusted commands.
+approval_policy = "untrusted"
 ```
 
 ```toml
@@ -106,7 +147,6 @@ Here is an example of a `config.toml` that defines multiple profiles:
 ```toml
 model = "o3"
 approval_policy = "unless-allow-listed"
-sandbox_permissions = ["disk-full-read-access"]
 disable_response_storage = false
 
 # Setting `profile` is equivalent to specifying `--profile o3` on the command
@@ -123,6 +163,8 @@ wire_api = "chat"
 model = "o3"
 model_provider = "openai"
 approval_policy = "never"
+model_reasoning_effort = "high"
+model_reasoning_summary = "detailed"
 
 [profiles.gpt3]
 model = "gpt-3.5-turbo"
@@ -170,30 +212,46 @@ To disable reasoning summaries, set `model_reasoning_summary` to `"none"` in you
 model_reasoning_summary = "none"  # disable reasoning summaries
 ```
 
-## sandbox_permissions
+## sandbox_mode
 
-List of permissions to grant to the sandbox that Codex uses to execute untrusted commands:
+Codex executes model-generated shell commands inside an OS-level sandbox.
 
-```toml
-# This is comparable to --full-auto in the TypeScript Codex CLI, though
-# specifying `disk-write-platform-global-temp-folder` adds /tmp as a writable
-# folder in addition to $TMPDIR.
-sandbox_permissions = [
-    "disk-full-read-access",
-    "disk-write-platform-user-temp-folder",
-    "disk-write-platform-global-temp-folder",
-    "disk-write-cwd",
-]
-```
-
-To add additional writable folders, use `disk-write-folder`, which takes a parameter (this can be specified multiple times):
+In most cases you can pick the desired behaviour with a single option:
 
 ```toml
-sandbox_permissions = [
-    # ...
-    "disk-write-folder=/Users/mbolin/.pyenv/shims",
-]
+# same as `--sandbox read-only`
+sandbox_mode = "read-only"
 ```
+
+The default policy is `read-only`, which means commands can read any file on
+disk, but attempts to write a file or access the network will be blocked.
+
+A more relaxed policy is `workspace-write`. When specified, the current working directory for the Codex task will be writable (as well as `$TMPDIR` on macOS). Note that the CLI defaults to using the directory where it was spawned as `cwd`, though this can be overridden using `--cwd/-C`.
+
+```toml
+# same as `--sandbox workspace-write`
+sandbox_mode = "workspace-write"
+
+# Extra settings that only apply when `sandbox = "workspace-write"`.
+[sandbox_workspace_write]
+# By default, only the cwd for the Codex session will be writable (and $TMPDIR
+# on macOS), but you can specify additional writable folders in this array.
+writable_roots = ["/tmp"]
+# Allow the command being run inside the sandbox to make outbound network
+# requests. Disabled by default.
+network_access = false
+```
+
+To disable sandboxing altogether, specify `danger-full-access` like so:
+
+```toml
+# same as `--sandbox danger-full-access`
+sandbox_mode = "danger-full-access"
+```
+
+This is reasonable to use if Codex is running in an environment that provides its own sandboxing (such as a Docker container) such that further sandboxing is unnecessary.
+
+Though using this option may also be necessary if you try to use Codex in environments where its native sandboxing mechanisms are unsupported, such as older Linux kernels or on Windows.
 
 ## mcp_servers
 
@@ -391,6 +449,16 @@ Setting `hide_agent_reasoning` to `true` suppresses these events in **both** the
 ```toml
 hide_agent_reasoning = true   # defaults to false
 ```
+
+## model_context_window
+
+The size of the context window for the model, in tokens.
+
+In general, Codex knows the context window for the most common OpenAI models, but if you are using a new model with an old version of the Codex CLI, then you can use `model_context_window` to tell Codex what value to use to determine how much context is left during a conversation.
+
+## model_max_output_tokens
+
+This is analogous to `model_context_window`, but for the maximum number of output tokens for the model.
 
 ## project_doc_max_bytes
 

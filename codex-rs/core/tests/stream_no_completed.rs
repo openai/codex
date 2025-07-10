@@ -29,8 +29,7 @@ fn sse_incomplete() -> String {
 fn sse_completed(id: &str) -> String {
     format!(
         "event: response.completed\n\
-data: {{\"type\":\"response.completed\",\"response\":{{\"id\":\"{}\",\"output\":[]}}}}\n\n\n",
-        id
+data: {{\"type\":\"response.completed\",\"response\":{{\"id\":\"{id}\",\"output\":[]}}}}\n\n\n"
     )
 }
 
@@ -96,6 +95,9 @@ async fn retries_on_early_close() {
         env_key: Some("PATH".into()),
         env_key_instructions: None,
         wire_api: codex_core::WireApi::Responses,
+        query_params: None,
+        http_headers: None,
+        env_http_headers: None,
     };
 
     let ctrl_c = std::sync::Arc::new(tokio::sync::Notify::new());

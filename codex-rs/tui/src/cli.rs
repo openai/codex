@@ -1,7 +1,6 @@
 use clap::Parser;
 use codex_common::ApprovalModeCliArg;
 use codex_common::CliConfigOverrides;
-use codex_common::SandboxPermissionOption;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -22,16 +21,27 @@ pub struct Cli {
     #[arg(long = "profile", short = 'p')]
     pub config_profile: Option<String>,
 
+    /// Select the sandbox policy to use when executing model-generated shell
+    /// commands.
+    #[arg(long = "sandbox", short = 's')]
+    pub sandbox_mode: Option<codex_common::SandboxModeCliArg>,
+
     /// Configure when the model requires human approval before executing a command.
     #[arg(long = "ask-for-approval", short = 'a')]
     pub approval_policy: Option<ApprovalModeCliArg>,
 
-    /// Convenience alias for low-friction sandboxed automatic execution (-a on-failure, network-disabled sandbox that can write to cwd and TMPDIR)
+    /// Convenience alias for low-friction sandboxed automatic execution (-a on-failure, --sandbox workspace-write).
     #[arg(long = "full-auto", default_value_t = false)]
     pub full_auto: bool,
 
-    #[clap(flatten)]
-    pub sandbox: SandboxPermissionOption,
+    /// Skip all confirmation prompts and execute commands without sandboxing.
+    /// EXTREMELY DANGEROUS. Intended solely for running in environments that are externally sandboxed.
+    #[arg(
+        long = "dangerously-bypass-approvals-and-sandbox",
+        default_value_t = false,
+        conflicts_with_all = ["approval_policy", "full_auto"]
+    )]
+    pub dangerously_bypass_approvals_and_sandbox: bool,
 
     /// Tell the agent to use the specified directory as its working root.
     #[clap(long = "cd", short = 'C', value_name = "DIR")]

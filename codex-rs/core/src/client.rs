@@ -26,7 +26,6 @@ use crate::client_common::create_reasoning_param_for_request;
 use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::error::CodexErr;
-use crate::error::EnvVarError;
 use crate::error::Result;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::flags::OPENAI_REQUEST_MAX_RETRIES;
@@ -35,6 +34,7 @@ use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
 use crate::models::ResponseItem;
 use crate::openai_tools::create_tools_json_for_responses_api;
+use crate::protocol::TokenUsage;
 use crate::util::backoff;
 
 #[derive(Clone)]
@@ -122,30 +122,24 @@ impl ModelClient {
             stream: true,
         };
 
-        let base_url = self.provider.base_url.clone();
-        let base_url = base_url.trim_end_matches('/');
-        let url = format!("{}/responses", base_url);
-        trace!("POST to {url}: {}", serde_json::to_string(&payload)?);
+        trace!(
+            "POST to {}: {}",
+            self.provider.get_full_url(),
+            serde_json::to_string(&payload)?
+        );
 
         let mut attempt = 0;
         loop {
             attempt += 1;
 
-            let api_key = self.provider.api_key()?.ok_or_else(|| {
-                CodexErr::EnvVar(EnvVarError {
-                    var: self.provider.env_key.clone().unwrap_or_default(),
-                    instructions: None,
-                })
-            })?;
-            let res = self
-                .client
-                .post(&url)
-                .bearer_auth(api_key)
+            let req_builder = self
+                .provider
+                .create_request_builder(&self.client)?
                 .header("OpenAI-Beta", "responses=experimental")
                 .header(reqwest::header::ACCEPT, "text/event-stream")
-                .json(&payload)
-                .send()
-                .await;
+                .json(&payload);
+
+            let res = req_builder.send().await;
             match res {
                 Ok(resp) if resp.status().is_success() => {
                     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(16);
@@ -167,7 +161,7 @@ impl ModelClient {
                     // negligible.
                     if !(status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error()) {
                         // Surface the error body to callers. Use `unwrap_or_default` per Clippy.
-                        let body = (res.text().await).unwrap_or_default();
+                        let body = res.text().await.unwrap_or_default();
                         return Err(CodexErr::UnexpectedStatus(status, body));
                     }
 
@@ -208,8 +202,43 @@ struct SseEvent {
 }
 
 #[derive(Debug, Deserialize)]
+struct ResponseCreated {}
+
+#[derive(Debug, Deserialize)]
 struct ResponseCompleted {
     id: String,
+    usage: Option<ResponseCompletedUsage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResponseCompletedUsage {
+    input_tokens: u64,
+    input_tokens_details: Option<ResponseCompletedInputTokensDetails>,
+    output_tokens: u64,
+    output_tokens_details: Option<ResponseCompletedOutputTokensDetails>,
+    total_tokens: u64,
+}
+
+impl From<ResponseCompletedUsage> for TokenUsage {
+    fn from(val: ResponseCompletedUsage) -> Self {
+        TokenUsage {
+            input_tokens: val.input_tokens,
+            cached_input_tokens: val.input_tokens_details.map(|d| d.cached_tokens),
+            output_tokens: val.output_tokens,
+            reasoning_output_tokens: val.output_tokens_details.map(|d| d.reasoning_tokens),
+            total_tokens: val.total_tokens,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct ResponseCompletedInputTokensDetails {
+    cached_tokens: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResponseCompletedOutputTokensDetails {
+    reasoning_tokens: u64,
 }
 
 async fn process_sse<S>(stream: S, tx_event: mpsc::Sender<Result<ResponseEvent>>)
@@ -221,7 +250,7 @@ where
     // If the stream stays completely silent for an extended period treat it as disconnected.
     let idle_timeout = *OPENAI_STREAM_IDLE_TIMEOUT_MS;
     // The response id returned from the "complete" message.
-    let mut response_id = None;
+    let mut response_completed: Option<ResponseCompleted> = None;
 
     loop {
         let sse = match timeout(idle_timeout, stream.next()).await {
@@ -233,9 +262,15 @@ where
                 return;
             }
             Ok(None) => {
-                match response_id {
-                    Some(response_id) => {
-                        let event = ResponseEvent::Completed { response_id };
+                match response_completed {
+                    Some(ResponseCompleted {
+                        id: response_id,
+                        usage,
+                    }) => {
+                        let event = ResponseEvent::Completed {
+                            response_id,
+                            token_usage: usage.map(Into::into),
+                        };
                         let _ = tx_event.send(Ok(event)).await;
                     }
                     None => {
@@ -296,12 +331,17 @@ where
                     return;
                 }
             }
+            "response.created" => {
+                if event.response.is_some() {
+                    let _ = tx_event.send(Ok(ResponseEvent::Created {})).await;
+                }
+            }
             // Final response completed – includes array of output items & id
             "response.completed" => {
                 if let Some(resp_val) = event.response {
                     match serde_json::from_value::<ResponseCompleted>(resp_val) {
                         Ok(r) => {
-                            response_id = Some(r.id);
+                            response_completed = Some(r);
                         }
                         Err(e) => {
                             debug!("failed to parse ResponseCompleted: {e}");
@@ -311,7 +351,6 @@ where
                 };
             }
             "response.content_part.done"
-            | "response.created"
             | "response.function_call_arguments.delta"
             | "response.in_progress"
             | "response.output_item.added"
