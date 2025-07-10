@@ -206,6 +206,14 @@ To disable reasoning summaries, set `model_reasoning_summary` to `"none"` in you
 model_reasoning_summary = "none"  # disable reasoning summaries
 ```
 
+## model_supports_reasoning_summaries
+
+By default, `reasoning` is only set on requests to OpenAI models that are known to support them. To force `reasoning` to set on requests to the current model, you can force this behavior by setting the following in `config.toml`:
+
+```toml
+model_supports_reasoning_summaries = true
+```
+
 ## sandbox_mode
 
 Codex executes model-generated shell commands inside an OS-level sandbox.
