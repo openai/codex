@@ -52,4 +52,9 @@ export const providers: Record<
     baseURL: "https://conductor.arcee.ai/v1",
     envKey: "ARCEEAI_API_KEY",
   },
+  inferencenet: {
+    name: "InferenceNet",
+    baseURL: "https://api.inference.net/v1",
+    envKey: "INFERENCENET_API_KEY",
+  }
 };
