@@ -4,6 +4,7 @@ use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 
 use crate::chatgpt_token::init_chatgpt_token_from_auth;
+use crate::get_task::GetTaskResponse;
 use crate::get_task::OutputItem;
 use crate::get_task::PrOutputItem;
 use crate::get_task::get_task;
@@ -28,7 +29,11 @@ pub async fn run_apply_command(apply_cli: ApplyCommand) -> anyhow::Result<()> {
     init_chatgpt_token_from_auth(&config.codex_home).await?;
 
     let task_response = get_task(&config, apply_cli.task_id).await?;
-    let diff_turn = match task_response.current_assistant_turn {
+    apply_diff_from_task(task_response).await
+}
+
+pub async fn apply_diff_from_task(task_response: GetTaskResponse) -> anyhow::Result<()> {
+    let diff_turn = match task_response.current_diff_task_turn {
         Some(turn) => turn,
         None => anyhow::bail!("No diff turn found"),
     };
@@ -37,11 +42,9 @@ pub async fn run_apply_command(apply_cli: ApplyCommand) -> anyhow::Result<()> {
         _ => None,
     });
     match output_diff {
-        Some(output_diff) => apply_diff(&output_diff.diff).await?,
+        Some(output_diff) => apply_diff(&output_diff.diff).await,
         None => anyhow::bail!("No PR output item found"),
     }
-
-    Ok(())
 }
 
 async fn apply_diff(diff: &str) -> anyhow::Result<()> {

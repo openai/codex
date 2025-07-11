@@ -16,3 +16,6 @@ codex-core = { path = "../core" }
 codex-login = { path = "../login" }
 reqwest = { version = "0.12", features = ["json", "stream"] }
 tokio = { version = "1", features = ["full"] }
+
+[dev-dependencies]
+tempfile = "3"

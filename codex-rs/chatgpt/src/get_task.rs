@@ -5,7 +5,7 @@ use crate::chatgpt_client::chatgpt_get_request;
 
 #[derive(Debug, Deserialize)]
 pub struct GetTaskResponse {
-    pub current_assistant_turn: Option<AssistantTurn>,
+    pub current_diff_task_turn: Option<AssistantTurn>,
 }
 
 // Only relevant fields for our extraction
