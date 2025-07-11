@@ -115,8 +115,7 @@ async fn test_apply_command_creates_fibonacci_file() {
     let line_count = contents.lines().count();
     assert_eq!(
         line_count, 31,
-        "fibonacci.js should have 31 lines, got {}",
-        line_count
+        "fibonacci.js should have 31 lines, got {line_count}",
     );
 }
 
@@ -187,7 +186,6 @@ console.log(fib(10));
         contents.contains("<<<<<<< HEAD")
             || contents.contains("=======")
             || contents.contains(">>>>>>> "),
-        "fibonacci.js should contain merge conflict markers, got: {}",
-        contents
+        "fibonacci.js should contain merge conflict markers, got: {contents}",
     );
 }
