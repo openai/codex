@@ -78,7 +78,15 @@ async fn test_apply_command_creates_fibonacci_file() {
         .await
         .expect("Failed to load fixture");
 
+    let original_dir = std::env::current_dir().expect("Failed to get current dir");
     std::env::set_current_dir(repo_path).expect("Failed to change directory");
+    struct DirGuard(std::path::PathBuf);
+    impl Drop for DirGuard {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.0);
+        }
+    }
+    let _guard = DirGuard(original_dir);
 
     apply_diff_from_task(task_response)
         .await
@@ -109,5 +117,77 @@ async fn test_apply_command_creates_fibonacci_file() {
         line_count, 31,
         "fibonacci.js should have 31 lines, got {}",
         line_count
+    );
+}
+
+#[tokio::test]
+async fn test_apply_command_with_merge_conflicts() {
+    let temp_repo = create_temp_git_repo()
+        .await
+        .expect("Failed to create temp git repo");
+    let repo_path = temp_repo.path();
+
+    // Create conflicting fibonacci.js file first
+    let scripts_dir = repo_path.join("scripts");
+    std::fs::create_dir_all(&scripts_dir).expect("Failed to create scripts directory");
+
+    let conflicting_content = r#"#!/usr/bin/env node
+
+// This is a different fibonacci implementation
+function fib(num) {
+  if (num <= 1) return num;
+  return fib(num - 1) + fib(num - 2);
+}
+
+console.log("Running fibonacci...");
+console.log(fib(10));
+"#;
+
+    let fibonacci_path = scripts_dir.join("fibonacci.js");
+    std::fs::write(&fibonacci_path, conflicting_content).expect("Failed to write conflicting file");
+
+    Command::new("git")
+        .args(["add", "scripts/fibonacci.js"])
+        .current_dir(repo_path)
+        .output()
+        .await
+        .expect("Failed to add fibonacci.js");
+
+    Command::new("git")
+        .args(["commit", "-m", "Add conflicting fibonacci implementation"])
+        .current_dir(repo_path)
+        .output()
+        .await
+        .expect("Failed to commit conflicting file");
+
+    let original_dir = std::env::current_dir().expect("Failed to get current dir");
+    std::env::set_current_dir(repo_path).expect("Failed to change directory");
+    struct DirGuard(std::path::PathBuf);
+    impl Drop for DirGuard {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.0);
+        }
+    }
+    let _guard = DirGuard(original_dir);
+
+    let task_response = mock_get_task_with_fixture()
+        .await
+        .expect("Failed to load fixture");
+
+    let apply_result = apply_diff_from_task(task_response).await;
+
+    assert!(
+        apply_result.is_err(),
+        "Expected apply to fail due to merge conflicts"
+    );
+
+    let contents = std::fs::read_to_string(&fibonacci_path).expect("Failed to read fibonacci.js");
+
+    assert!(
+        contents.contains("<<<<<<< HEAD")
+            || contents.contains("=======")
+            || contents.contains(">>>>>>> "),
+        "fibonacci.js should contain merge conflict markers, got: {}",
+        contents
     );
 }
