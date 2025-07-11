@@ -1,0 +1,78 @@
+# Codex — Repository Overview & Architecture
+
+Codex is an advanced open-source coding agent and CLI developed by OpenAI that runs locally in your terminal, enabling chat-driven, AI-assisted software development. It facilitates seamless interaction with your codebase, project automation, AI task execution, and integrates powerful security controls and extensibility mechanisms.
+
+## Key Features
+- **Local-first agent**: Runs completely locally (no cloud reliance); accepts OpenAI and compatible API providers.
+- **Flexible AI models/providers**: Easily switch among OpenAI, Azure, OpenRouter, Ollama, Mistral, etc., via config/profiles.
+- **Terminal-based UX**: Both TUI (interactive) and non-interactive/headless modes.
+- **Approvals and sandboxing**: Configurable command approval policies keep your environment secure.
+- **Multimodal**: Accepts text, screenshots, diagrams for code generation and editing.
+- **Rich automation support**: Includes support for GitHub Actions, code refactoring, patch application, etc.
+- **Highly extensible**: Agent can be guided via `AGENTS.md`, rich config, or custom instructions.
+- **Rust & TypeScript architecture**: Modern, modular design with critical core logic in Rust for performance and safety, with TypeScript/JS for legacy and CLI UX.
+
+## Repository Structure
+
+- **`codex-cli/`** — Main TypeScript/JavaScript CLI application
+  - `src/` — Source code for the CLI (React components, TS logic, hooks, utils, etc.)
+  - `examples/` — Usage demos, prompting guides
+  - `scripts/` — Dev and deployment scripts
+  - `tests/` — Automated tests
+- **`codex-rs/`** — High-performance Rust core
+  - `core/`, `cli/`, `apply-patch/`, `file-search/`, etc. — Organized Rust crates
+  - Most critical agent logic, protocol, sandboxing, and extensibility is implemented here.
+- **`docs/`** — Project and protocol documentation
+- **`scripts/`** — Project-level helper scripts (e.g., sandboxing, release)
+- **`AGENTS.md`** — Guides agent behavior (project and user-level)
+
+## Example Usage
+
+### Interactively:
+```shell
+codex
+```
+
+### With initial prompt:
+```shell
+codex "explain this codebase to me"
+```
+
+### Full-auto mode for hands-off automation:
+```shell
+codex --full-auto "create the fanciest todo-list app"
+```
+
+### In CI (headless automation):
+```yaml
+- name: Update changelog
+  run: |
+    npm install -g @openai/codex
+    export OPENAI_API_KEY="${{ secrets.OPENAI_KEY }}"
+    codex exec --full-auto "update CHANGELOG for next release"
+```
+
+---
+## Security Model & Sandboxing
+Codex's autonomy and permissions are strictly controlled via approval policies (`--ask-for-approval`, `--sandbox`, etc). It uses OS-specific sandboxing (Apple Seatbelt, Linux seccomp/Landlock, etc) to guarantee safe code execution.
+
+## Configuration & Extensibility
+- Configuration via `~/.codex/config.toml`, environment variables, and command flags.
+- Profiles, providers, and instructions can be set per project, user, or invocation.
+- Further extensible via local/global `AGENTS.md` files for agent guidance.
+
+---
+## Contributing & Development
+See CONTRIBUTING and the [root README](../README.md) for how to:
+- Develop and test (Node, Rust, Nix supported)
+- Add features/CI/tests
+- Write or improve documentation
+- File issues/pull requests
+
+## Related Documentation
+- [CLI Modules and Source Code](./cli_modules.mdx)
+- [Rust Core Architecture](./rust_core.mdx)
+- [Project Configuration](./config.mdx)
+- [Components, Hooks, and Utils](./cli_modules.mdx)
+- [Agent Guidance: AGENTS.md](../AGENTS.md)
+

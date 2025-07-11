@@ -1,0 +1,50 @@
+# Codex CLI — Examples & Prompting Guide
+
+The `codex-cli/examples` directory showcases concrete sample tasks, prompting approaches, and best practices for using Codex CLI to its full potential. These help users, contributors, and AI researchers to understand and leverage advanced features and automation flows.
+
+---
+
+## Example Projects
+
+Each example under `examples/` is self-contained and includes:
+- `run.sh`: launches a reproducible, clean Codex session for the provided task.
+- `task.yaml`: prompt and instructions for that task.
+- `template/`: starter code/files provided to Codex as context.
+- `runs/`: actual outputs and workspaces created with each run.
+
+**Highlighted examples:**
+- **camerascii**: Turns webcam input into animated ASCII art in your browser with Codex-generated code.
+- **build-codex-demo**: Builds the original Codex YouTube demo using the agent.
+- **impossible-pong**: Tasked to generate more challenging pong levels.
+- **prompt-analyzer**: Creates a prompt clustering/data science app from a public dataset.
+
+### Running an Example
+```bash
+cd codex-cli/examples/camerascii
+./run.sh
+# Review, approve, and interact with the CLI session
+open runs/run_1/index.html  # See the result of Codex's work
+```
+
+---
+
+## Prompting Guide
+Codex CLI supports both basic and advanced prompting patterns. See `prompting_guide.md` for ideas and examples.
+
+### Techniques
+- **Small changes**: Precisely specify the file/function and intended edit (e.g., `codex "Modify utils/math.js to add overflow check"`).
+- **Project-sized changes**: Provide Markdown or YAML files as detailed task specs, and reference supporting files in your instructions.
+- **Custom agent guidance**: Use `~/.codex/instructions.md` (global) and `CODEX.md` (project-level) to give the agent persistent preferences or policies. These are auto-injected into agent context.
+
+### Example Prompts
+```bash
+codex "Add a unit test for src/calculator.ts using Jest API"
+codex --full-auto "Convert all PNG images to WebP in ./assets"
+```
+
+---
+
+## Related Documentation
+- [CLI Core Modules](./cli_modules.mdx)
+- [Hooks/Utils/Components](./cli_hooks_utils.mdx)
+- [Repository Overview](./overview.mdx)

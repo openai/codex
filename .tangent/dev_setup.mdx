@@ -1,0 +1,90 @@
+# Global Configuration & Developer Setup Guide
+
+This guide consolidates the key setup, configuration, and developer best practices for working on and using Codex as a developer, contributor, or advanced user.
+
+---
+
+## Monorepo & Tooling
+- **Monorepo**: Node workspace managed via `pnpm` for JS/TS code (`codex-cli`), and Cargo for Rust code (`codex-rs`).
+- **Node**: Requires version 22+ (LTS recommended). See [PNPM.md](../PNPM.md).
+- **Rust**: Ensure latest stable via `rustup`. See [codex-rs/README.md](../codex-rs/README.md), including clippy and fmt for quality checks.
+
+---
+
+## Installation Steps
+
+1. Install pnpm:
+   ```bash
+   npm install -g pnpm@10.8.1
+   # (or use corepack as described in PNPM.md)
+   ```
+2. Install Rust (if contributing to the Rust core):
+   ```bash
+   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+   rustup component add rustfmt clippy
+   ```
+3. Get dependencies:
+   ```bash
+   pnpm install
+   cargo build    # In codex-rs/
+   ```
+4. Test:
+   ```bash
+   pnpm test
+   cargo test     # (Rust)
+   ```
+
+---
+
+## CLI/Agent Configuration
+
+- Main config in `~/.codex/config.toml` (Rust) or `~/.codex/config.json` (legacy TS).
+- Environment: set OpenAI or other model provider API keys as env vars (see `README.md`).
+   ```bash
+   export OPENAI_API_KEY="sk-..."
+   # or for other providers
+   export OLLAMA_API_KEY=...
+   ```
+- Use `~/.codex/instructions.md` and repo-level `AGENTS.md` for custom agent guidance.
+
+**Profiles/Providers Example:**
+```toml
+[profiles.o3]
+model = "o3"
+model_provider = "openai"
+approval_policy = "never"
+```
+
+---
+
+## Release & CI
+- Use pnpm for Node-based CI, and `cargo` for Rust/TOML code.
+- Only contribute if you accept the CLA (see [docs/CLA.md](../docs/CLA.md)).
+- Release admins use `codex-rs/scripts/create_github_release.sh` for version/tagging.
+- All PRs must pass DCO/CLA checks before merging.
+
+---
+
+## Contribution Best Practices
+- Keep PRs well scoped and well documented; refer to contributing section in the mono `README.md`.
+- Include/extend tests for each behavior or bugfix.
+- Follow Rust/TS formatting and linting tools.
+
+---
+
+## Troubleshooting
+- If in doubt, delete `node_modules`/`pnpm-lock.yaml` and re-run `pnpm install`.
+- If contributing on the Rust side, make sure to always `cargo fmt` and `clippy` your code before pushing.
+- For Unicode/ToC hygiene, use project scripts:
+  ```bash
+  python scripts/asciicheck.py --fix *.md
+  python scripts/readme_toc.py --fix README.md
+  ```
+
+---
+
+## Key References
+- [Monorepo/PNPM](../PNPM.md)
+- [Rust Native Core](../codex-rs/README.md)
+- [Configuration Reference](../codex-rs/config.md)
+- [CLA](../docs/CLA.md)

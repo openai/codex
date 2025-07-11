@@ -1,0 +1,39 @@
+# Project Utility Scripts
+
+Codex provides project-wide scripts, outside the CLI/tools, for Markdown/documentation hygiene and Unicode normalization.
+These live in the top-level `scripts/` directory.
+
+---
+
+## Key Scripts
+
+### `asciicheck.py`
+- Checks files for non-ASCII characters (except a small allowed list), identifies UTF-8/unicode issues, and can auto-fix common non-ASCII characters to safe ASCII equivalents.
+- Run with `--fix` to replace inappropriate characters (e.g., smart quotes, non-breaking spaces, unicode dashes) with standard ASCII.
+- Ensures documentation and source files are uniformly readable and compatible across renderers and shells.
+
+### `readme_toc.py`
+- Checks and optionally fixes the Table of Contents (ToC) section of Markdown files, specifically maintaining up-to-date heading structure between `<!-- Begin ToC -->` and `<!-- End ToC -->` markers.
+- Can rewrite README.md with a refreshed ToC when using the `--fix` flag; assists in keeping user/developer documentation navigation clear and reliable.
+
+---
+
+## Usage Examples
+
+**Unicode ASCII lint and (optionally) fix:**
+```bash
+python scripts/asciicheck.py somefile.md  # prints invalid locations
+python scripts/asciicheck.py --fix *.md    # auto-fixes
+```
+
+**README ToC check and fix:**
+```bash
+python scripts/readme_toc.py README.md         # check ToC only
+python scripts/readme_toc.py --fix README.md   # auto-fix ToC section
+```
+
+---
+
+## Related Documentation
+- [Overview & Developer Setup](./overview.mdx)
+- [CLI & Core Modules](./cli_modules.mdx)

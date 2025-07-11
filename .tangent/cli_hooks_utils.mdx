@@ -1,0 +1,39 @@
+# Codex CLI — Hooks & Utilities Documentation
+
+Codex CLI includes custom React hooks to handle TUI event management, terminal information, and prompt/review flows. These keep UI state and interactive workflows robust and maintainable.
+
+---
+
+## Custom Hooks
+
+### `useConfirmation`
+- **File**: `src/hooks/use-confirmation.ts`
+- **Purpose**: Provide an async-friendly mechanism for "are you sure?" style confirmation prompts for shell commands, patches, or destructive actions.
+- **API:**
+  - `confirmationPrompt`: ReactNode of the current prompt to display.
+  - `explanation`: Any explanation string for the current confirmation.
+  - `requestConfirmation(prompt, explanation?)`: Returns a Promise resolved when the user acts.
+  - `submitConfirmation(result)`: Accept or deny the prompt—updates the queue.
+- **Typical usage:**
+```typescript
+const { confirmationPrompt, requestConfirmation, submitConfirmation } = useConfirmation();
+if (await requestConfirmation(<Text>Proceed?</Text>)) { /* ... */ }
+```
+
+### `useTerminalSize`
+- **File**: `src/hooks/use-terminal-size.ts`
+- **Purpose**: Track the size of the terminal (columns/rows, accounting for padding), automatically update state on resize.
+- **API:**
+  - `{ columns, rows } = useTerminalSize()`
+- **Usage:**
+```typescript
+const { columns, rows } = useTerminalSize();
+<Box width={columns} height={rows}>...</Box>
+```
+
+---
+
+## Related Documentation
+- [Components](./cli_components.mdx)
+- [Core Modules](./cli_modules.mdx)
+- [Repository Overview](./overview.mdx)
