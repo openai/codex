@@ -391,3 +391,122 @@ async fn stream_from_fixture(path: impl AsRef<Path>) -> Result<ResponseStream> {
     tokio::spawn(process_sse(stream, tx_event));
     Ok(ResponseStream { rx_event })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::mpsc;
+    use tokio_test::io::Builder as IoBuilder;
+
+    /// Helper that runs the SSE parser on the provided chunks and collects all events.
+    async fn collect_events(chunks: &[&[u8]]) -> Vec<Result<ResponseEvent>> {
+        let mut builder = IoBuilder::new();
+        for chunk in chunks {
+            builder.read(chunk);
+        }
+
+        let reader = builder.build();
+        let stream = ReaderStream::new(reader).map_err(CodexErr::Io);
+        let (tx, mut rx) = mpsc::channel::<Result<ResponseEvent>>(16);
+        tokio::spawn(process_sse(stream, tx));
+
+        let mut events = Vec::new();
+        while let Some(ev) = rx.recv().await {
+            events.push(ev);
+        }
+        events
+    }
+
+    #[tokio::test]
+    async fn parses_items_and_completed() {
+        let item1 = serde_json::json!({
+            "type": "response.output_item.done",
+            "item": {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Hello"}]
+            }
+        })
+        .to_string();
+
+        let item2 = serde_json::json!({
+            "type": "response.output_item.done",
+            "item": {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "World"}]
+            }
+        })
+        .to_string();
+
+        let completed = serde_json::json!({
+            "type": "response.completed",
+            "response": {"id": "resp1"}
+        })
+        .to_string();
+
+        let sse1 = format!("event: response.output_item.done\ndata: {item1}\n\n");
+        let sse2 = format!("event: response.output_item.done\ndata: {item2}\n\n");
+        let sse3 = format!("event: response.completed\ndata: {completed}\n\n");
+
+        let events = collect_events(&[sse1.as_bytes(), sse2.as_bytes(), sse3.as_bytes()]).await;
+
+        assert_eq!(events.len(), 3);
+
+        match &events[0] {
+            Ok(ResponseEvent::OutputItemDone(ResponseItem::Message { role, .. })) => {
+                assert_eq!(role, "assistant")
+            }
+            other => panic!("unexpected first event: {other:?}"),
+        }
+
+        match &events[1] {
+            Ok(ResponseEvent::OutputItemDone(ResponseItem::Message { role, .. })) => {
+                assert_eq!(role, "assistant")
+            }
+            other => panic!("unexpected second event: {other:?}"),
+        }
+
+        match &events[2] {
+            Ok(ResponseEvent::Completed {
+                response_id,
+                token_usage,
+            }) => {
+                assert_eq!(response_id, "resp1");
+                assert!(token_usage.is_none());
+            }
+            other => panic!("unexpected third event: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn error_when_missing_completed() {
+        let item1 = serde_json::json!({
+            "type": "response.output_item.done",
+            "item": {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Hello"}]
+            }
+        })
+        .to_string();
+
+        let sse1 = format!("event: response.output_item.done\ndata: {item1}\n\n");
+
+        let events = collect_events(&[sse1.as_bytes()]).await;
+
+        assert_eq!(events.len(), 2);
+
+        match &events[0] {
+            Ok(ResponseEvent::OutputItemDone(_)) => {}
+            other => panic!("unexpected first event: {other:?}"),
+        }
+
+        match &events[1] {
+            Err(CodexErr::Stream(msg)) => {
+                assert_eq!(msg, "stream closed before response.completed")
+            }
+            other => panic!("unexpected second event: {other:?}"),
+        }
+    }
+}
