@@ -6,7 +6,8 @@ use tempfile::TempDir;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
-use wiremock::matchers::{method, path};
+use wiremock::matchers::method;
+use wiremock::matchers::path;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn chat_mode_stream_cli() {
