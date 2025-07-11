@@ -84,5 +84,6 @@ async fn apply_diff(diff: &str) -> anyhow::Result<()> {
         );
     }
 
+    println!("Successfully applied diff");
     Ok(())
 }
