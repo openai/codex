@@ -25,11 +25,16 @@ use crate::config_types::McpServerConfig;
 /// qualified tool name.
 ///
 /// OpenAI requires tool names to conform to `^[a-zA-Z0-9_-]+$`, so we must
-/// choose a delimiter from this character set.
-const MCP_TOOL_NAME_DELIMITER: &str = "__OAI_CODEX_MCP__";
+/// choose a delimiter from this character set. We use a short delimiter to
+/// maximize the remaining characters available for server and tool names
+/// within OpenAI's 64-character limit.
+const MCP_TOOL_NAME_DELIMITER: &str = "__";
 
 /// Timeout for the `tools/list` request.
 const LIST_TOOLS_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Maximum length for OpenAI tool names.
+const MAX_TOOL_NAME_LENGTH: usize = 64;
 
 /// Map that holds a startup error for every MCP server that could **not** be
 /// spawned successfully.
@@ -193,7 +198,46 @@ pub async fn list_all_tools(
 
         for tool in list_result.tools {
             // TODO(mbolin): escape tool names that contain invalid characters.
-            let fq_name = fully_qualified_tool_name(&server_name, &tool.name);
+            let mut fq_name = fully_qualified_tool_name(&server_name, &tool.name);
+
+            // Ensure the fully qualified name doesn't exceed OpenAI's limit
+            if fq_name.len() > MAX_TOOL_NAME_LENGTH {
+                // Truncate the tool name part to fit within the limit
+                let prefix_len = server_name.len() + MCP_TOOL_NAME_DELIMITER.len();
+                let max_tool_len = MAX_TOOL_NAME_LENGTH.saturating_sub(prefix_len);
+
+                if max_tool_len < 3 {
+                    // Server name alone is too long
+                    tracing::warn!(
+                        "Skipping tool '{}' from server '{}': server name too long for OpenAI limit",
+                        tool.name,
+                        server_name
+                    );
+                    continue;
+                }
+
+                // Truncate tool name and add a hash suffix for uniqueness
+                let truncated_tool = if tool.name.len() > max_tool_len {
+                    // Simple hash based on string bytes
+                    let hash: u32 = tool
+                        .name
+                        .bytes()
+                        .fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32));
+                    let hash_suffix = format!("{:04x}", hash & 0xFFFF); // Use lower 16 bits as 4-char hex
+                    let available_len = max_tool_len.saturating_sub(5); // 4 for hash + 1 for underscore
+                    format!("{}_{}", &tool.name[..available_len], hash_suffix)
+                } else {
+                    tool.name.clone()
+                };
+
+                fq_name = fully_qualified_tool_name(&server_name, &truncated_tool);
+                tracing::info!(
+                    "Truncated tool name from '{}' to '{}' to fit OpenAI limit",
+                    tool.name,
+                    truncated_tool
+                );
+            }
+
             if aggregated.insert(fq_name.clone(), tool).is_some() {
                 panic!("tool name collision for '{fq_name}': suspicious");
             }
@@ -207,4 +251,45 @@ pub async fn list_all_tools(
     );
 
     Ok(aggregated)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_fully_qualified_tool_name_length() {
+        // Test that delimiter is short
+        assert_eq!(MCP_TOOL_NAME_DELIMITER.len(), 2);
+
+        // Test normal case
+        let fq_name = fully_qualified_tool_name("myserver", "mytool");
+        assert_eq!(fq_name, "myserver__mytool");
+        assert!(fq_name.len() <= MAX_TOOL_NAME_LENGTH);
+
+        // Test parsing
+        let parsed = try_parse_fully_qualified_tool_name("myserver__mytool");
+        assert_eq!(parsed, Some(("myserver".to_string(), "mytool".to_string())));
+
+        // Test invalid parsing
+        assert_eq!(try_parse_fully_qualified_tool_name("no_delimiter"), None);
+        assert_eq!(try_parse_fully_qualified_tool_name("__only_tool"), None);
+        assert_eq!(try_parse_fully_qualified_tool_name("only_server__"), None);
+    }
+
+    #[test]
+    fn test_long_tool_names() {
+        // Test that very long server names would be handled
+        let long_server = "a".repeat(50);
+        let long_tool = "b".repeat(50);
+        let fq_name = fully_qualified_tool_name(&long_server, &long_tool);
+
+        // With delimiter of 2 chars, 50 + 2 + 50 = 102 chars, which exceeds 64
+        assert!(fq_name.len() > MAX_TOOL_NAME_LENGTH);
+
+        // The actual truncation logic is in list_all_tools, but we can verify
+        // that our delimiter change helps maximize available space
+        let available_for_names = MAX_TOOL_NAME_LENGTH - MCP_TOOL_NAME_DELIMITER.len();
+        assert_eq!(available_for_names, 62); // Much better than 47 with old delimiter
+    }
 }
