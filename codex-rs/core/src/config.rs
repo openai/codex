@@ -135,7 +135,7 @@ pub struct Config {
     /// `model_supports_reasoning_summaries()` to return `true`.
     pub model_supports_reasoning_summaries: bool,
 
-    /// Base URL for requests to ChatGPT.
+    /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: String,
 }
 
@@ -319,7 +319,7 @@ pub struct ConfigToml {
     /// Override to force-enable reasoning summaries for the configured model.
     pub model_supports_reasoning_summaries: Option<bool>,
 
-    /// Base URL for requests to ChatGPT.
+    /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: Option<String>,
 }
 

@@ -1,5 +1,4 @@
 use codex_core::config::Config;
-use serde::Deserialize;
 
 use crate::chatgpt_token::get_chatgpt_token_data;
 use crate::chatgpt_token::init_chatgpt_token_from_auth;
@@ -7,46 +6,8 @@ use crate::chatgpt_token::init_chatgpt_token_from_auth;
 use anyhow::Context;
 use serde::de::DeserializeOwned;
 
-#[derive(Debug, Deserialize)]
-pub struct GetTaskResponse {
-    pub current_assistant_turn: Option<AssistantTurn>,
-}
-
-// Only relevant fields for our extraction
-#[derive(Debug, Deserialize)]
-pub struct AssistantTurn {
-    pub output_items: Vec<OutputItem>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type")]
-pub enum OutputItem {
-    #[serde(rename = "pr")]
-    Pr(PrOutputItem),
-
-    #[serde(other)]
-    Other,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct PrOutputItem {
-    pub output_diff: OutputDiff,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct OutputDiff {
-    pub diff: String,
-}
-
-pub(crate) async fn get_task_response(
-    config: &Config,
-    task_id: String,
-) -> anyhow::Result<GetTaskResponse> {
-    let path = format!("/wham/tasks/{task_id}");
-    chatgpt_get_request(config, path).await
-}
-
-async fn chatgpt_get_request<T: DeserializeOwned>(
+/// Make a GET request to the ChatGPT backend API.
+pub(crate) async fn chatgpt_get_request<T: DeserializeOwned>(
     config: &Config,
     path: String,
 ) -> anyhow::Result<T> {
@@ -79,10 +40,6 @@ async fn chatgpt_get_request<T: DeserializeOwned>(
     } else {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        Err(anyhow::anyhow!(
-            "Request failed with status {}: {}",
-            status,
-            body
-        ))
+        anyhow::bail!("Request failed with status {}: {}", status, body)
     }
 }

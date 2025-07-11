@@ -3,11 +3,12 @@ use codex_common::CliConfigOverrides;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 
-use crate::chatgpt_client::OutputItem;
-use crate::chatgpt_client::PrOutputItem;
-use crate::chatgpt_client::get_task_response;
 use crate::chatgpt_token::init_chatgpt_token_from_auth;
+use crate::get_task::OutputItem;
+use crate::get_task::PrOutputItem;
+use crate::get_task::get_task;
 
+/// Applies the latest diff from a Codex agent task.
 #[derive(Debug, Parser)]
 pub struct ApplyCommand {
     pub task_id: String,
@@ -26,7 +27,7 @@ pub async fn run_apply_command(apply_cli: ApplyCommand) -> anyhow::Result<()> {
 
     init_chatgpt_token_from_auth(&config.codex_home).await?;
 
-    let task_response = get_task_response(&config, apply_cli.task_id).await?;
+    let task_response = get_task(&config, apply_cli.task_id).await?;
     let diff_turn = match task_response.current_assistant_turn {
         Some(turn) => turn,
         None => anyhow::bail!("No diff turn found"),
@@ -45,16 +46,12 @@ pub async fn run_apply_command(apply_cli: ApplyCommand) -> anyhow::Result<()> {
 
 async fn apply_diff(diff: &str) -> anyhow::Result<()> {
     let toplevel_output = tokio::process::Command::new("git")
-        .args(&["rev-parse", "--show-toplevel"])
+        .args(vec!["rev-parse", "--show-toplevel"])
         .output()
         .await?;
 
     if !toplevel_output.status.success() {
-        anyhow::bail!(
-            "Git rev-parse failed with status {}: {}",
-            toplevel_output.status,
-            String::from_utf8_lossy(&toplevel_output.stderr)
-        );
+        anyhow::bail!("apply must be run from a git repository.");
     }
 
     let repo_root = String::from_utf8(toplevel_output.stdout)?
@@ -62,7 +59,7 @@ async fn apply_diff(diff: &str) -> anyhow::Result<()> {
         .to_string();
 
     let mut git_apply_cmd = tokio::process::Command::new("git")
-        .args(&["apply", "--3way"])
+        .args(vec!["apply", "--3way"])
         .current_dir(&repo_root)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())

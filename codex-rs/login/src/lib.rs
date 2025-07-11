@@ -162,7 +162,7 @@ pub struct AuthDotJson {
     pub last_refresh: DateTime<Utc>,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Deserialize, Serialize, Clone)]
 pub struct TokenData {
     /// This is a JWT.
     pub id_token: String,
