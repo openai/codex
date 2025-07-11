@@ -16,4 +16,5 @@ pub struct ConfigProfile {
     pub disable_response_storage: Option<bool>,
     pub model_reasoning_effort: Option<ReasoningEffort>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
+    pub chatgpt_base_url: Option<String>,
 }

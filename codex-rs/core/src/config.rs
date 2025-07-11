@@ -134,6 +134,9 @@ pub struct Config {
     /// When set to `true`, overrides the default heuristic and forces
     /// `model_supports_reasoning_summaries()` to return `true`.
     pub model_supports_reasoning_summaries: bool,
+
+    /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
+    pub chatgpt_base_url: String,
 }
 
 impl Config {
@@ -315,6 +318,9 @@ pub struct ConfigToml {
 
     /// Override to force-enable reasoning summaries for the configured model.
     pub model_supports_reasoning_summaries: Option<bool>,
+
+    /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
+    pub chatgpt_base_url: Option<String>,
 }
 
 impl ConfigToml {
@@ -483,6 +489,11 @@ impl Config {
             model_supports_reasoning_summaries: cfg
                 .model_supports_reasoning_summaries
                 .unwrap_or(false),
+
+            chatgpt_base_url: config_profile
+                .chatgpt_base_url
+                .or(cfg.chatgpt_base_url)
+                .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
         };
         Ok(config)
     }
@@ -788,6 +799,7 @@ disable_response_storage = true
                 model_reasoning_effort: ReasoningEffort::High,
                 model_reasoning_summary: ReasoningSummary::Detailed,
                 model_supports_reasoning_summaries: false,
+                chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             },
             o3_profile_config
         );
@@ -833,6 +845,7 @@ disable_response_storage = true
             model_reasoning_effort: ReasoningEffort::default(),
             model_reasoning_summary: ReasoningSummary::default(),
             model_supports_reasoning_summaries: false,
+            chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -893,6 +906,7 @@ disable_response_storage = true
             model_reasoning_effort: ReasoningEffort::default(),
             model_reasoning_summary: ReasoningSummary::default(),
             model_supports_reasoning_summaries: false,
+            chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);

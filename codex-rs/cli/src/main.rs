@@ -2,6 +2,8 @@ use clap::CommandFactory;
 use clap::Parser;
 use clap_complete::Shell;
 use clap_complete::generate;
+use codex_chatgpt::apply_command::ApplyCommand;
+use codex_chatgpt::apply_command::run_apply_command;
 use codex_cli::LandlockCommand;
 use codex_cli::SeatbeltCommand;
 use codex_cli::login::run_login_with_chatgpt;
@@ -55,6 +57,10 @@ enum Subcommand {
 
     /// Internal debugging commands.
     Debug(DebugArgs),
+
+    /// Apply the latest diff produced by Codex agent as a `git apply` to your local working tree.
+    #[clap(visible_alias = "a")]
+    Apply(ApplyCommand),
 }
 
 #[derive(Debug, Parser)]
@@ -137,6 +143,10 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 .await?;
             }
         },
+        Some(Subcommand::Apply(mut apply_cli)) => {
+            prepend_config_flags(&mut apply_cli.config_overrides, cli.config_overrides);
+            run_apply_command(apply_cli).await?;
+        }
     }
 
     Ok(())
