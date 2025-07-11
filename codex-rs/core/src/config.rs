@@ -493,7 +493,7 @@ impl Config {
             chatgpt_base_url: config_profile
                 .chatgpt_base_url
                 .or(cfg.chatgpt_base_url)
-                .unwrap_or("https://chatgpt.com/backend-api".to_string()),
+                .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
         };
         Ok(config)
     }
