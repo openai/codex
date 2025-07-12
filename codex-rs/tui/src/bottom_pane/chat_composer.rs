@@ -655,8 +655,10 @@ impl WidgetRef for &ChatComposer<'_> {
 
 #[cfg(test)]
 mod tests {
+    use crate::bottom_pane::AppEventSender;
+    use crate::bottom_pane::ChatComposer;
+    use crate::bottom_pane::InputResult;
     use crate::bottom_pane::chat_composer::LARGE_PASTE_CHAR_THRESHOLD;
-    use crate::bottom_pane::{AppEventSender, ChatComposer, InputResult};
     use tui_textarea::TextArea;
 
     #[test]
@@ -805,7 +807,9 @@ mod tests {
 
     #[test]
     fn handle_paste_small_inserts_text() {
-        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
 
         let (tx, _rx) = std::sync::mpsc::channel();
         let sender = AppEventSender::new(tx);
@@ -826,7 +830,9 @@ mod tests {
 
     #[test]
     fn handle_paste_large_uses_placeholder_and_replaces_on_submit() {
-        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
 
         let large = "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 10);
         let (tx, _rx) = std::sync::mpsc::channel();
@@ -850,8 +856,9 @@ mod tests {
 
     #[test]
     fn edit_clears_pending_paste() {
+        use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
-        use crossterm::event::{KeyCode, KeyModifiers};
+        use crossterm::event::KeyModifiers;
 
         let large = "y".repeat(LARGE_PASTE_CHAR_THRESHOLD + 1);
         let (tx, _rx) = std::sync::mpsc::channel();
@@ -869,7 +876,8 @@ mod tests {
     #[test]
     fn ui_snapshots() {
         use insta::assert_snapshot;
-        use ratatui::{Terminal, backend::TestBackend};
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
 
         let (tx, _rx) = std::sync::mpsc::channel();
         let sender = AppEventSender::new(tx);
