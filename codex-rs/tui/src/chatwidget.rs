@@ -174,6 +174,12 @@ impl ChatWidget<'_> {
         }
     }
 
+    pub(crate) fn handle_paste(&mut self, text: String) {
+        if matches!(self.input_focus, InputFocus::BottomPane) {
+            self.bottom_pane.handle_paste(text);
+        }
+    }
+
     fn submit_user_message(&mut self, user_message: UserMessage) {
         let UserMessage { text, image_paths } = user_message;
         let mut items: Vec<InputItem> = Vec::new();
