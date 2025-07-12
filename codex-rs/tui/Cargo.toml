@@ -61,4 +61,5 @@ unicode-segmentation = "1.12.0"
 uuid = "1"
 
 [dev-dependencies]
+insta = "1.43.1"
 pretty_assertions = "1"

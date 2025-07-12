@@ -655,7 +655,8 @@ impl WidgetRef for &ChatComposer<'_> {
 
 #[cfg(test)]
 mod tests {
-    use crate::bottom_pane::ChatComposer;
+    use crate::bottom_pane::chat_composer::LARGE_PASTE_CHAR_THRESHOLD;
+    use crate::bottom_pane::{AppEventSender, ChatComposer, InputResult};
     use tui_textarea::TextArea;
 
     #[test]
@@ -800,5 +801,96 @@ mod tests {
                 "Failed for whitespace boundary case: {description} - input: '{input}', cursor: {cursor_pos}",
             );
         }
+    }
+
+    #[test]
+    fn handle_paste_small_inserts_text() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(true, sender);
+
+        let needs_redraw = composer.handle_paste("hello".to_string());
+        assert!(needs_redraw);
+        assert_eq!(composer.textarea.lines(), ["hello"]);
+        assert!(composer.pending_paste.is_none());
+
+        let (result, _) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        match result {
+            InputResult::Submitted(text) => assert_eq!(text, "hello"),
+            _ => panic!("expected Submitted"),
+        }
+    }
+
+    #[test]
+    fn handle_paste_large_uses_placeholder_and_replaces_on_submit() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let large = "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 10);
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(true, sender);
+
+        let needs_redraw = composer.handle_paste(large.clone());
+        assert!(needs_redraw);
+        let placeholder = format!("[Pasted Content {} chars]", large.chars().count());
+        assert_eq!(composer.textarea.lines(), [placeholder.as_str()]);
+        assert!(composer.pending_paste.is_some());
+
+        let (result, _) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        match result {
+            InputResult::Submitted(text) => assert_eq!(text, large),
+            _ => panic!("expected Submitted"),
+        }
+        assert!(composer.pending_paste.is_none());
+    }
+
+    #[test]
+    fn edit_clears_pending_paste() {
+        use crossterm::event::KeyEvent;
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let large = "y".repeat(LARGE_PASTE_CHAR_THRESHOLD + 1);
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(true, sender);
+
+        composer.handle_paste(large);
+        assert!(composer.pending_paste.is_some());
+
+        // Any edit that removes the placeholder should clear pending_paste
+        composer.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        assert!(composer.pending_paste.is_none());
+    }
+
+    #[test]
+    fn ui_snapshots() {
+        use insta::assert_snapshot;
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(true, sender);
+
+        let mut terminal = Terminal::new(TestBackend::new(30, 4)).unwrap();
+        terminal
+            .draw(|f| f.render_widget_ref(&composer, f.size()))
+            .unwrap();
+        assert_snapshot!("empty", terminal.backend());
+
+        composer.handle_paste("short".into());
+        terminal
+            .draw(|f| f.render_widget_ref(&composer, f.size()))
+            .unwrap();
+        assert_snapshot!("small", terminal.backend());
+
+        composer.handle_paste("z".repeat(LARGE_PASTE_CHAR_THRESHOLD + 5));
+        terminal
+            .draw(|f| f.render_widget_ref(&composer, f.size()))
+            .unwrap();
+        assert_snapshot!("large", terminal.backend());
     }
 }
