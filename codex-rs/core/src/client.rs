@@ -391,3 +391,108 @@ async fn stream_from_fixture(path: impl AsRef<Path>) -> Result<ResponseStream> {
     tokio::spawn(process_sse(stream, tx_event));
     Ok(ResponseStream { rx_event })
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used)]
+    use super::*;
+    use serde_json::json;
+
+    async fn run_sse(events: Vec<serde_json::Value>) -> Vec<ResponseEvent> {
+        let mut body = String::new();
+        for e in events {
+            let kind = e
+                .get("type")
+                .and_then(|v| v.as_str())
+                .expect("fixture event missing type");
+            if e.as_object().map(|o| o.len() == 1).unwrap_or(false) {
+                body.push_str(&format!("event: {kind}\n\n"));
+            } else {
+                body.push_str(&format!("event: {kind}\ndata: {e}\n\n"));
+            }
+        }
+        let (tx, mut rx) = mpsc::channel::<Result<ResponseEvent>>(8);
+        let stream = ReaderStream::new(std::io::Cursor::new(body)).map_err(CodexErr::Io);
+        tokio::spawn(process_sse(stream, tx));
+        let mut out = Vec::new();
+        while let Some(ev) = rx.recv().await {
+            out.push(ev.expect("channel closed"));
+        }
+        out
+    }
+
+    #[tokio::test]
+    async fn table_driven_event_kinds() {
+        struct Case {
+            name: &'static str,
+            event: serde_json::Value,
+            expect_first: fn(&ResponseEvent) -> bool,
+            expected_len: usize,
+        }
+
+        fn is_created(ev: &ResponseEvent) -> bool {
+            matches!(ev, ResponseEvent::Created)
+        }
+
+        fn is_output(ev: &ResponseEvent) -> bool {
+            matches!(ev, ResponseEvent::OutputItemDone(_))
+        }
+
+        fn is_completed(ev: &ResponseEvent) -> bool {
+            matches!(ev, ResponseEvent::Completed { .. })
+        }
+
+        let completed = json!({
+            "type": "response.completed",
+            "response": {
+                "id": "c",
+                "usage": {
+                    "input_tokens": 0,
+                    "input_tokens_details": null,
+                    "output_tokens": 0,
+                    "output_tokens_details": null,
+                    "total_tokens": 0
+                },
+                "output": []
+            }
+        });
+
+        let cases = vec![
+            Case {
+                name: "created",
+                event: json!({"type": "response.created", "response": {}}),
+                expect_first: is_created,
+                expected_len: 2,
+            },
+            Case {
+                name: "output_item.done",
+                event: json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [
+                            {"type": "output_text", "text": "hi"}
+                        ]
+                    }
+                }),
+                expect_first: is_output,
+                expected_len: 2,
+            },
+            Case {
+                name: "unknown",
+                event: json!({"type": "response.new_tool_event"}),
+                expect_first: is_completed,
+                expected_len: 1,
+            },
+        ];
+
+        for case in cases {
+            let mut evs = vec![case.event];
+            evs.push(completed.clone());
+            let out = run_sse(evs).await;
+            assert_eq!(out.len(), case.expected_len, "case {}", case.name);
+            assert!((case.expect_first)(&out[0]), "case {}", case.name);
+        }
+    }
+}
