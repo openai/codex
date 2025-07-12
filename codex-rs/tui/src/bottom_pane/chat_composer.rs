@@ -883,22 +883,26 @@ mod tests {
         let sender = AppEventSender::new(tx);
         let mut composer = ChatComposer::new(true, sender);
 
-        let mut terminal = Terminal::new(TestBackend::new(30, 4)).unwrap();
-        terminal
-            .draw(|f| f.render_widget_ref(&composer, f.area()))
-            .unwrap();
+        let mut terminal = match Terminal::new(TestBackend::new(30, 4)) {
+            Ok(t) => t,
+            Err(e) => panic!("Failed to create terminal: {}", e),
+        };
+
+        if let Err(e) = terminal.draw(|f| f.render_widget_ref(&composer, f.area())) {
+            panic!("Failed to draw empty composer: {e}");
+        }
         assert_snapshot!("empty", terminal.backend());
 
         composer.handle_paste("short".into());
-        terminal
-            .draw(|f| f.render_widget_ref(&composer, f.area()))
-            .unwrap();
+        if let Err(e) = terminal.draw(|f| f.render_widget_ref(&composer, f.area())) {
+            panic!("Failed to draw small composer: {e}");
+        }
         assert_snapshot!("small", terminal.backend());
 
         composer.handle_paste("z".repeat(LARGE_PASTE_CHAR_THRESHOLD + 5));
-        terminal
-            .draw(|f| f.render_widget_ref(&composer, f.area()))
-            .unwrap();
+        if let Err(e) = terminal.draw(|f| f.render_widget_ref(&composer, f.area())) {
+            panic!("Failed to draw large composer: {e}");
+        }
         assert_snapshot!("large", terminal.backend());
     }
 }
