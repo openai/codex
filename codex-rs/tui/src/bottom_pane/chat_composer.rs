@@ -885,7 +885,7 @@ mod tests {
 
         let mut terminal = match Terminal::new(TestBackend::new(30, 4)) {
             Ok(t) => t,
-            Err(e) => panic!("Failed to create terminal: {}", e),
+            Err(e) => panic!("Failed to create terminal: {e}"),
         };
 
         if let Err(e) = terminal.draw(|f| f.render_widget_ref(&composer, f.area())) {
