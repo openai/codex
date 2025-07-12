@@ -155,3 +155,71 @@ fn mcp_tool_to_openai_tool(
         "type": "function",
     })
 }
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+    use crate::client_common::Prompt;
+    use mcp_types::{Tool, ToolInputSchema};
+
+    fn dummy_tool() -> (String, Tool) {
+        (
+            "srv.dummy".to_string(),
+            Tool {
+                annotations: None,
+                description: Some("dummy".into()),
+                input_schema: ToolInputSchema {
+                    properties: None,
+                    required: None,
+                    r#type: "object".to_string(),
+                },
+                name: "dummy".into(),
+            },
+        )
+    }
+
+    #[test]
+    fn responses_includes_default_and_extra() {
+        let mut prompt = Prompt::default();
+        let (name, tool) = dummy_tool();
+        prompt.extra_tools.insert(name.clone(), tool);
+
+        let tools = create_tools_json_for_responses_api(&prompt, "gpt-4").unwrap();
+        assert_eq!(tools.len(), 2);
+        assert_eq!(tools[0]["type"], "function");
+        assert_eq!(tools[0]["name"], "shell");
+        assert!(
+            tools
+                .iter()
+                .any(|t| t.get("name") == Some(&name.clone().into()))
+        );
+    }
+
+    #[test]
+    fn responses_codex_model_uses_local_shell() {
+        let mut prompt = Prompt::default();
+        let (name, tool) = dummy_tool();
+        prompt.extra_tools.insert(name, tool);
+
+        let tools = create_tools_json_for_responses_api(&prompt, "codex-model").unwrap();
+        assert_eq!(tools[0]["type"], "local_shell");
+    }
+
+    #[test]
+    fn chat_completions_tool_format() {
+        let mut prompt = Prompt::default();
+        let (name, tool) = dummy_tool();
+        prompt.extra_tools.insert(name.clone(), tool);
+
+        let tools = create_tools_json_for_chat_completions_api(&prompt, "gpt-4").unwrap();
+        assert_eq!(tools.len(), 2);
+        for t in tools {
+            assert_eq!(
+                t.get("type"),
+                Some(&serde_json::Value::String("function".into()))
+            );
+            let inner = t.get("function").and_then(|v| v.as_object()).unwrap();
+            assert!(!inner.contains_key("type"));
+        }
+    }
+}

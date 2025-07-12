@@ -391,3 +391,269 @@ async fn stream_from_fixture(path: impl AsRef<Path>) -> Result<ResponseStream> {
     tokio::spawn(process_sse(stream, tx_event));
     Ok(ResponseStream { rx_event })
 }
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::print_stdout)]
+    use super::*;
+    use crate::client_common::Prompt;
+    use crate::config::{Config, ConfigOverrides, ConfigToml};
+    use futures::StreamExt;
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+    use tempfile::TempDir;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+
+    fn default_config(provider: ModelProviderInfo) -> Arc<Config> {
+        let codex_home = TempDir::new().unwrap();
+        let mut cfg = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )
+        .unwrap();
+        cfg.model_provider = provider.clone();
+        cfg.model = "gpt-test".into();
+        Arc::new(cfg)
+    }
+
+    fn sse_completed(id: &str) -> String {
+        format!(
+            "event: response.completed\n\
+ data: {{\"type\":\"response.completed\",\"response\":{{\"id\":\"{id}\",\"output\":[]}}}}\n\n\n"
+        )
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn retries_once_on_server_error() {
+        if std::env::var(crate::exec::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+            println!("Skipping test due to sandbox network restriction");
+            return;
+        }
+        let server = MockServer::start().await;
+        struct SeqResponder;
+        impl Respond for SeqResponder {
+            fn respond(&self, _req: &Request) -> ResponseTemplate {
+                use std::sync::atomic::{AtomicUsize, Ordering};
+                static CALLS: AtomicUsize = AtomicUsize::new(0);
+                let n = CALLS.fetch_add(1, Ordering::SeqCst);
+                if n == 0 {
+                    ResponseTemplate::new(500)
+                } else {
+                    ResponseTemplate::new(200)
+                        .insert_header("content-type", "text/event-stream")
+                        .set_body_raw(sse_completed("ok"), "text/event-stream")
+                }
+            }
+        }
+        Mock::given(method("POST"))
+            .and(path("/v1/responses"))
+            .respond_with(SeqResponder)
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        unsafe { std::env::set_var("OPENAI_REQUEST_MAX_RETRIES", "1") };
+
+        let provider = ModelProviderInfo {
+            name: "openai".into(),
+            base_url: format!("{}/v1", server.uri()),
+            env_key: Some("PATH".into()),
+            env_key_instructions: None,
+            wire_api: WireApi::Responses,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+        };
+
+        let config = default_config(provider.clone());
+        let client = ModelClient::new(
+            config,
+            provider,
+            ReasoningEffortConfig::None,
+            ReasoningSummaryConfig::None,
+        );
+        let prompt = Prompt::default();
+        let mut stream = client.stream(&prompt).await.unwrap();
+        while let Some(ev) = stream.next().await {
+            if matches!(ev.unwrap(), ResponseEvent::Completed { .. }) {
+                break;
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn retry_after_header_delay() {
+        if std::env::var(crate::exec::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+            println!("Skipping test due to sandbox network restriction");
+            return;
+        }
+        let server = MockServer::start().await;
+        let times = Arc::new(Mutex::new(Vec::new()));
+        struct SeqResponder {
+            times: Arc<Mutex<Vec<Instant>>>,
+        }
+        impl Respond for SeqResponder {
+            fn respond(&self, _req: &Request) -> ResponseTemplate {
+                let mut t = self.times.lock().unwrap();
+                t.push(Instant::now());
+                if t.len() == 1 {
+                    ResponseTemplate::new(429).insert_header("retry-after", "1")
+                } else {
+                    ResponseTemplate::new(200)
+                        .insert_header("content-type", "text/event-stream")
+                        .set_body_raw(sse_completed("ok"), "text/event-stream")
+                }
+            }
+        }
+        Mock::given(method("POST"))
+            .and(path("/v1/responses"))
+            .respond_with(SeqResponder {
+                times: times.clone(),
+            })
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        unsafe { std::env::set_var("OPENAI_REQUEST_MAX_RETRIES", "1") };
+
+        let provider = ModelProviderInfo {
+            name: "openai".into(),
+            base_url: format!("{}/v1", server.uri()),
+            env_key: Some("PATH".into()),
+            env_key_instructions: None,
+            wire_api: WireApi::Responses,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+        };
+        let config = default_config(provider.clone());
+        let client = ModelClient::new(
+            config,
+            provider,
+            ReasoningEffortConfig::None,
+            ReasoningSummaryConfig::None,
+        );
+        let prompt = Prompt::default();
+        let mut stream = client.stream(&prompt).await.unwrap();
+        while let Some(ev) = stream.next().await {
+            if matches!(ev.unwrap(), ResponseEvent::Completed { .. }) {
+                break;
+            }
+        }
+        let times = times.lock().unwrap();
+        assert!(times.len() == 2);
+        assert!(times[1] - times[0] >= Duration::from_secs(1));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn retry_backoff_no_header() {
+        if std::env::var(crate::exec::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+            println!("Skipping test due to sandbox network restriction");
+            return;
+        }
+        let server = MockServer::start().await;
+        let times = Arc::new(Mutex::new(Vec::new()));
+        struct SeqResponder {
+            times: Arc<Mutex<Vec<Instant>>>,
+        }
+        impl Respond for SeqResponder {
+            fn respond(&self, _req: &Request) -> ResponseTemplate {
+                let mut t = self.times.lock().unwrap();
+                t.push(Instant::now());
+                if t.len() == 1 {
+                    ResponseTemplate::new(429)
+                } else {
+                    ResponseTemplate::new(200)
+                        .insert_header("content-type", "text/event-stream")
+                        .set_body_raw(sse_completed("ok"), "text/event-stream")
+                }
+            }
+        }
+        Mock::given(method("POST"))
+            .and(path("/v1/responses"))
+            .respond_with(SeqResponder {
+                times: times.clone(),
+            })
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        unsafe { std::env::set_var("OPENAI_REQUEST_MAX_RETRIES", "1") };
+
+        let provider = ModelProviderInfo {
+            name: "openai".into(),
+            base_url: format!("{}/v1", server.uri()),
+            env_key: Some("PATH".into()),
+            env_key_instructions: None,
+            wire_api: WireApi::Responses,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+        };
+        let config = default_config(provider.clone());
+        let client = ModelClient::new(
+            config,
+            provider,
+            ReasoningEffortConfig::None,
+            ReasoningSummaryConfig::None,
+        );
+        let prompt = Prompt::default();
+        let mut stream = client.stream(&prompt).await.unwrap();
+        while let Some(ev) = stream.next().await {
+            if matches!(ev.unwrap(), ResponseEvent::Completed { .. }) {
+                break;
+            }
+        }
+        let times = times.lock().unwrap();
+        assert!(times.len() == 2);
+        assert!(times[1] - times[0] >= Duration::from_millis(100));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn permanent_error_bubbles_body() {
+        if std::env::var(crate::exec::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+            println!("Skipping test due to sandbox network restriction");
+            return;
+        }
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/responses"))
+            .respond_with(ResponseTemplate::new(400).set_body_string("bad"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        unsafe { std::env::set_var("OPENAI_REQUEST_MAX_RETRIES", "0") };
+
+        let provider = ModelProviderInfo {
+            name: "openai".into(),
+            base_url: format!("{}/v1", server.uri()),
+            env_key: Some("PATH".into()),
+            env_key_instructions: None,
+            wire_api: WireApi::Responses,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+        };
+        let config = default_config(provider.clone());
+        let client = ModelClient::new(
+            config,
+            provider,
+            ReasoningEffortConfig::None,
+            ReasoningSummaryConfig::None,
+        );
+        let prompt = Prompt::default();
+        let res = client.stream(&prompt).await;
+        match res {
+            Ok(_) => panic!("expected error"),
+            Err(err) => match err {
+                CodexErr::UnexpectedStatus(code, body) => {
+                    assert_eq!(code, StatusCode::BAD_REQUEST);
+                    assert_eq!(body, "bad");
+                }
+                other => panic!("unexpected error: {other:?}"),
+            },
+        }
+    }
+}

@@ -462,3 +462,106 @@ pub(crate) trait AggregateStreamExt: Stream<Item = Result<ResponseEvent>> + Size
 }
 
 impl<T> AggregateStreamExt for T where T: Stream<Item = Result<ResponseEvent>> + Sized {}
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+    use crate::WireApi;
+    use crate::client_common::Prompt;
+    use crate::config::{Config, ConfigOverrides, ConfigToml};
+    use crate::models::{ContentItem, FunctionCallOutputPayload, ResponseItem};
+    use pretty_assertions::assert_eq;
+    use std::sync::{Arc, Mutex};
+    use tempfile::TempDir;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+
+    struct CaptureResponder {
+        body: Arc<Mutex<Option<serde_json::Value>>>,
+    }
+
+    impl Respond for CaptureResponder {
+        fn respond(&self, req: &Request) -> ResponseTemplate {
+            let v: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
+            *self.body.lock().unwrap() = Some(v);
+            ResponseTemplate::new(200).insert_header("content-type", "text/event-stream")
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn assembles_messages_correctly() {
+        let server = MockServer::start().await;
+        let capture = Arc::new(Mutex::new(None));
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(CaptureResponder {
+                body: capture.clone(),
+            })
+            .mount(&server)
+            .await;
+
+        let provider = ModelProviderInfo {
+            name: "test".into(),
+            base_url: format!("{}/v1", server.uri()),
+            env_key: None,
+            env_key_instructions: None,
+            wire_api: WireApi::Chat,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+        };
+
+        let codex_home = TempDir::new().unwrap();
+        let mut config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )
+        .unwrap();
+        config.model_provider = provider.clone();
+        config.model = "gpt-4".into();
+
+        let client = reqwest::Client::new();
+
+        let prompt = Prompt {
+            input: vec![
+                ResponseItem::Message {
+                    role: "user".into(),
+                    content: vec![ContentItem::InputText { text: "hi".into() }],
+                },
+                ResponseItem::Message {
+                    role: "assistant".into(),
+                    content: vec![ContentItem::OutputText { text: "ok".into() }],
+                },
+                ResponseItem::FunctionCall {
+                    name: "foo".into(),
+                    arguments: "{}".into(),
+                    call_id: "c1".into(),
+                },
+                ResponseItem::FunctionCallOutput {
+                    call_id: "c1".into(),
+                    output: FunctionCallOutputPayload {
+                        content: "out".into(),
+                        success: Some(true),
+                    },
+                },
+            ],
+            ..Default::default()
+        };
+
+        let _ = stream_chat_completions(&prompt, &config.model, &client, &provider)
+            .await
+            .unwrap();
+
+        let body = capture.lock().unwrap().take().unwrap();
+        let messages = body.get("messages").unwrap().as_array().unwrap();
+        assert_eq!(messages[1]["role"], "user");
+        assert_eq!(messages[1]["content"], "hi");
+        assert_eq!(messages[2]["role"], "assistant");
+        assert_eq!(messages[2]["content"], "ok");
+        assert_eq!(messages[3]["tool_calls"][0]["function"]["name"], "foo");
+        assert_eq!(messages[4]["role"], "tool");
+        assert_eq!(messages[4]["tool_call_id"], "c1");
+        assert_eq!(messages[4]["content"], "out");
+    }
+}
