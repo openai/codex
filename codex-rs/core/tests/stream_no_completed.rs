@@ -12,6 +12,8 @@ use codex_core::protocol::Op;
 mod test_support;
 use tempfile::TempDir;
 use test_support::load_default_config_for_test;
+use test_support::load_sse_fixture;
+use test_support::load_sse_fixture_with_id;
 use tokio::time::timeout;
 use wiremock::Mock;
 use wiremock::MockServer;
@@ -22,15 +24,11 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 fn sse_incomplete() -> String {
-    // Only a single line; missing the completed event.
-    "event: response.output_item.done\n\n".to_string()
+    load_sse_fixture("tests/fixtures/incomplete_sse.json")
 }
 
 fn sse_completed(id: &str) -> String {
-    format!(
-        "event: response.completed\n\
-data: {{\"type\":\"response.completed\",\"response\":{{\"id\":\"{id}\",\"output\":[]}}}}\n\n\n"
-    )
+    load_sse_fixture_with_id("tests/fixtures/completed_template.json", id)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
