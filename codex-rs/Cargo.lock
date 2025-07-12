@@ -595,6 +595,7 @@ name = "codex-cli"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "assert_cmd",
  "clap",
  "clap_complete",
  "codex-chatgpt",
@@ -605,10 +606,13 @@ dependencies = [
  "codex-login",
  "codex-mcp-server",
  "codex-tui",
+ "predicates",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "wiremock",
 ]
 
 [[package]]
