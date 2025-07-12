@@ -1,4 +1,5 @@
 import type { ResponseItem } from "openai/resources/responses/responses.mjs";
+import { repairJson } from "./repair-json.js";
 
 /**
  * Extracts the patch texts of all `apply_patch` tool calls from the given
@@ -22,7 +23,15 @@ export function extractAppliedPatches(items: Array<ResponseItem>): string {
     }
 
     try {
-      const args = JSON.parse(argsString) as { patch?: string };
+      // First try to repair the JSON if it's malformed
+      const repaired = repairJson(argsString);
+      let args;
+      if (repaired) {
+        args = JSON.parse(repaired) as { patch?: string };
+      } else {
+        // Fallback to original parsing if repair returns null
+        args = JSON.parse(argsString) as { patch?: string };
+      }
       if (typeof args.patch === "string" && args.patch.length > 0) {
         patches.push(args.patch.trim());
       }
