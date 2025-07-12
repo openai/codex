@@ -1,0 +1,45 @@
+# Codex configuration template
+# See https://github.com/openai/codex/blob/main/codex-rs/config.md for details.
+# All values below represent defaults. Uncomment to override them.
+
+# model = "codex-mini-latest"
+# model_provider = "openai"
+# approval_policy = "unless-allow-listed"
+# disable_response_storage = false
+# project_doc_max_bytes = 32768
+# file_opener = "vscode"
+# hide_agent_reasoning = false
+# model_reasoning_effort = "medium"
+# model_reasoning_summary = "auto"
+
+[shell_environment_policy]
+# inherit = "core"
+# ignore_default_excludes = false
+# exclude = []
+# set = {}
+# include_only = []
+
+[sandbox]
+# mode = "read-only"
+# writable_roots = []
+# network_access = false
+
+[history]
+# persistence = "save-all"
+
+[tui]
+# disable_mouse_capture = false
+
+# Example provider override
+#[model_providers.openai]
+# name = "OpenAI"
+# base_url = "https://api.openai.com/v1"
+# env_key = "OPENAI_API_KEY"
+# wire_api = "chat"
+
+# Example profile
+#[profiles.example]
+# model = "o3"
+# model_provider = "openai"
+# approval_policy = "never"
+
