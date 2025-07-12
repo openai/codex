@@ -486,14 +486,16 @@ async function* streamResponses(
   yield { type: "response.in_progress", response: initialResponse };
   let isToolCall = false;
   for await (const chunk of completion as AsyncIterable<OpenAI.ChatCompletionChunk>) {
-    // console.error('\nCHUNK: ', JSON.stringify(chunk));
     const choice = chunk.choices?.[0];
     if (!choice) {
       continue;
     }
+    
+    const delta = choice.delta || {};
+    
     if (
       !isToolCall &&
-      (("tool_calls" in choice.delta && choice.delta.tool_calls) ||
+      (("tool_calls" in delta && delta.tool_calls) ||
         choice.finish_reason === "tool_calls")
     ) {
       isToolCall = true;
@@ -511,7 +513,8 @@ async function* streamResponses(
       };
     }
     if (isToolCall) {
-      for (const tcDelta of choice.delta.tool_calls || []) {
+      const toolCallDeltas = delta.tool_calls || [];
+      for (const tcDelta of toolCallDeltas) {
         const tcIndex = tcDelta.index;
         const content_index = textContentAdded ? tcIndex + 1 : tcIndex;
 
@@ -592,16 +595,19 @@ async function* streamResponses(
         };
         textContentAdded = true;
       }
-      if (choice.delta.content?.length) {
+
+      const deltaContent = delta.content;
+      if (deltaContent?.length) {
         yield {
           type: "response.output_text.delta",
           item_id: outputItemId,
           output_index: 0,
           content_index: 0,
-          delta: choice.delta.content,
+          delta: deltaContent,
         };
-        textContent += choice.delta.content;
+        textContent += deltaContent;
       }
+      
       if (choice.finish_reason) {
         yield {
           type: "response.output_text.done",
