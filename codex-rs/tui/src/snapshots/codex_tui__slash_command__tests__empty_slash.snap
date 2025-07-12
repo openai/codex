@@ -1,0 +1,14 @@
+---
+source: tui/src/slash_command.rs
+expression: terminal.backend()
+---
+"╭──────────────────────────────────────────────────────────────────────────────────────────────────╮"
+"│ send a message                                                                                   │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"╰───────────────────────────────────────────────Enter to send | Ctrl+D to quit | Ctrl+J for newline╯"

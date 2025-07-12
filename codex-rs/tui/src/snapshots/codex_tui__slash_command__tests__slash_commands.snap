@@ -1,0 +1,14 @@
+---
+source: tui/src/slash_command.rs
+expression: terminal.backend()
+---
+"╭──────────────────────────────────────────────────────────────────────────────────────────────────╮"
+"│/new                Start a new chat.                                                             │"
+"│/compact            Summarize and compact the current conversation to free up context.            │"
+"│/diff               Show git diff of the working directory (including untracked files)            │"
+"│/quit               Exit the application.                                                         │"
+"│/toggle-mouse-mode  Toggle mouse mode (enable for scrolling, disable for text selection)          │"
+"╰──────────────────────────────────────────────────────────────────────────────────────────────────╯"
+"╭──────────────────────────────────────────────────────────────────────────────────────────────────╮"
+"│/                                                                                                 │"
+"╰───────────────────────────────────────────────Enter to send | Ctrl+D to quit | Ctrl+J for newline╯"

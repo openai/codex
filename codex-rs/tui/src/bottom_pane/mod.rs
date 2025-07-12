@@ -14,7 +14,7 @@ use ratatui::widgets::WidgetRef;
 
 mod approval_modal_view;
 mod bottom_pane_view;
-mod chat_composer;
+pub mod chat_composer;
 mod chat_composer_history;
 mod command_popup;
 mod file_search_popup;

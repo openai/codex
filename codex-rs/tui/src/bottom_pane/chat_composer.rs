@@ -35,7 +35,7 @@ pub enum InputResult {
     None,
 }
 
-pub(crate) struct ChatComposer<'a> {
+pub struct ChatComposer<'a> {
     textarea: TextArea<'a>,
     active_popup: ActivePopup,
     app_event_tx: AppEventSender,

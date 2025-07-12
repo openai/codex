@@ -12,6 +12,8 @@ use crate::slash_command::SlashCommand;
 use crate::tui;
 use codex_core::config::Config;
 use codex_core::protocol::Event;
+use codex_core::protocol::EventMsg;
+use codex_core::protocol::Op;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -49,15 +51,9 @@ pub(crate) struct App<'a> {
     /// Stored parameters needed to instantiate the ChatWidget later, e.g.,
     /// after dismissing the Git-repo warning.
     chat_args: Option<ChatWidgetArgs>,
-}
 
-/// Aggregate parameters needed to create a `ChatWidget`, as creation may be
-/// deferred until after the Git warning screen is dismissed.
-#[derive(Clone)]
-struct ChatWidgetArgs {
-    config: Config,
-    initial_prompt: Option<String>,
-    initial_images: Vec<PathBuf>,
+    /// Tracks pending summarization requests for the compact feature.
+    pending_summarization: Option<PendingSummarization>,
 }
 
 impl<'a> App<'a> {
@@ -167,6 +163,7 @@ impl<'a> App<'a> {
             config,
             file_search,
             chat_args,
+            pending_summarization: None,
         }
     }
 
@@ -247,6 +244,18 @@ impl<'a> App<'a> {
                         ));
                         self.app_state = AppState::Chat { widget: new_widget };
                         self.app_event_tx.send(AppEvent::Redraw);
+                    }
+                    SlashCommand::Compact => {
+                        if let AppState::Chat { widget } = &mut self.app_state {
+                            // Submit the summarization request to the current widget
+                            widget.submit_op(Op::SummarizeContext);
+
+                            // Set up tracking for the summary response
+                            self.pending_summarization = Some(PendingSummarization {
+                                summary_buffer: String::new(),
+                                started_receiving: false,
+                            });
+                        }
                     }
                     SlashCommand::ToggleMouseMode => {
                         if let Err(e) = mouse_capture.toggle() {
@@ -351,9 +360,113 @@ impl<'a> App<'a> {
     }
 
     fn dispatch_codex_event(&mut self, event: Event) {
+        // First check if we're waiting for a summarization response
+        if self.pending_summarization.is_some() {
+            self.handle_summarization_response(event);
+            return;
+        }
+
+        // Otherwise dispatch to the current app state
         match &mut self.app_state {
             AppState::Chat { widget } => widget.handle_codex_event(event),
             AppState::Login { .. } | AppState::GitWarning { .. } => {}
         }
+    }
+
+    /// Handles responses during a summarization request.
+    fn handle_summarization_response(&mut self, event: Event) {
+        match &event.msg {
+            EventMsg::AgentMessage(msg) => {
+                // Only collect messages once we've started receiving the summarization
+                if let Some(ref mut pending) = self.pending_summarization {
+                    // Start collecting once we see a message that looks like a summary
+                    if !pending.started_receiving && msg.message.contains("summarize") {
+                        pending.started_receiving = true;
+                    }
+
+                    if pending.started_receiving {
+                        pending.summary_buffer.push_str(&msg.message);
+                        pending.summary_buffer.push('\n');
+                    }
+                }
+            }
+            EventMsg::TaskComplete(_) => {
+                // Task is complete, now create a new widget with the summary
+                if let Some(pending) = self.pending_summarization.take() {
+                    let summary = create_compact_summary_prompt(&pending.summary_buffer);
+
+                    // Create new widget with summary as initial prompt
+                    let new_widget = Box::new(ChatWidget::new(
+                        self.config.clone(),
+                        self.app_event_tx.clone(),
+                        Some(summary),
+                        Vec::new(),
+                    ));
+                    self.app_state = AppState::Chat { widget: new_widget };
+                    self.app_event_tx.send(AppEvent::Redraw);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// State for tracking a pending summarization request.
+struct PendingSummarization {
+    /// Buffer to collect the summary response.
+    summary_buffer: String,
+    /// Whether we've received the first message of the summarization response.
+    started_receiving: bool,
+}
+
+/// Aggregate parameters needed to create a `ChatWidget`, as creation may be
+/// deferred until after the Git warning screen is dismissed.
+#[derive(Clone)]
+struct ChatWidgetArgs {
+    config: Config,
+    initial_prompt: Option<String>,
+    initial_images: Vec<PathBuf>,
+}
+
+/// Creates the initial prompt for a compacted conversation.
+fn create_compact_summary_prompt(summary_text: &str) -> String {
+    if summary_text.trim().is_empty() {
+        "Previous conversation has been summarized.".to_string()
+    } else {
+        format!(
+            r#"This chat is a continuation of a previous conversation. After providing the summary, acknowledge that /compact command has been applied. Here is the summary of the previous conversation:
+
+{}"#,
+            summary_text.trim()
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    #[test]
+    fn test_summary_buffer_accumulation() {
+        let mut buffer = String::new();
+
+        // Simulate the way we accumulate messages in pending_summarization
+        buffer.push_str("First message part");
+        buffer.push('\n');
+        buffer.push_str("Second message part");
+        buffer.push('\n');
+        buffer.push_str("Final message part");
+
+        let prompt = create_compact_summary_prompt(&buffer);
+
+        // Should contain all parts
+        assert!(prompt.contains("First message part"));
+        assert!(prompt.contains("Second message part"));
+        assert!(prompt.contains("Final message part"));
+
+        // Should preserve newlines in the content
+        let trimmed_buffer = buffer.trim();
+        assert!(prompt.contains(trimmed_buffer));
     }
 }

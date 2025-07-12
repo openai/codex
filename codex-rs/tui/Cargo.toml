@@ -62,3 +62,4 @@ uuid = "1"
 
 [dev-dependencies]
 pretty_assertions = "1"
+insta = "1.36.1"
