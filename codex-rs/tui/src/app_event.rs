@@ -12,6 +12,9 @@ pub(crate) enum AppEvent {
 
     KeyEvent(KeyEvent),
 
+    /// Text pasted from the terminal clipboard.
+    Paste(String),
+
     /// Scroll event with a value representing the "scroll delta" as the net
     /// scroll up/down events within a short time window.
     Scroll(i32),

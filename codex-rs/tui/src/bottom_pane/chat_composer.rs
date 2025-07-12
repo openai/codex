@@ -28,6 +28,9 @@ const MIN_TEXTAREA_ROWS: usize = 1;
 const BORDER_LINES: u16 = 2;
 
 const BASE_PLACEHOLDER_TEXT: &str = "send a message";
+/// If the pasted content exceeds this number of characters, replace it with a
+/// placeholder in the UI.
+const LARGE_PASTE_CHAR_THRESHOLD: usize = 100;
 
 /// Result returned when the user interacts with the text area.
 pub enum InputResult {
@@ -43,6 +46,7 @@ pub(crate) struct ChatComposer<'a> {
     ctrl_c_quit_hint: bool,
     dismissed_file_popup_token: Option<String>,
     current_file_query: Option<String>,
+    pending_paste: Option<(String, String)>,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -66,6 +70,7 @@ impl ChatComposer<'_> {
             ctrl_c_quit_hint: false,
             dismissed_file_popup_token: None,
             current_file_query: None,
+            pending_paste: None,
         };
         this.update_border(has_input_focus);
         this
@@ -124,6 +129,20 @@ impl ChatComposer<'_> {
 
     pub fn set_input_focus(&mut self, has_focus: bool) {
         self.update_border(has_focus);
+    }
+
+    pub fn handle_paste(&mut self, pasted: String) -> bool {
+        let char_count = pasted.chars().count();
+        if char_count > LARGE_PASTE_CHAR_THRESHOLD {
+            let placeholder = format!("[Pasted Content {char_count} chars]");
+            self.textarea.insert_str(&placeholder);
+            self.pending_paste = Some((placeholder, pasted));
+        } else {
+            self.textarea.insert_str(&pasted);
+        }
+        self.sync_command_popup();
+        self.sync_file_search_popup();
+        true
     }
 
     /// Integrate results from an asynchronous file search.
@@ -414,9 +433,15 @@ impl ChatComposer<'_> {
                 alt: false,
                 ctrl: false,
             } => {
-                let text = self.textarea.lines().join("\n");
+                let mut text = self.textarea.lines().join("\n");
                 self.textarea.select_all();
                 self.textarea.cut();
+
+                if let Some((placeholder, actual)) = self.pending_paste.take() {
+                    if text.contains(&placeholder) {
+                        text = text.replace(&placeholder, &actual);
+                    }
+                }
 
                 if text.is_empty() {
                     (InputResult::None, true)
@@ -444,6 +469,12 @@ impl ChatComposer<'_> {
     /// Handle generic Input events that modify the textarea content.
     fn handle_input_basic(&mut self, input: Input) -> (InputResult, bool) {
         self.textarea.input(input);
+        if let Some((placeholder, _)) = &self.pending_paste {
+            let text = self.textarea.lines().join("\n");
+            if !text.contains(placeholder) {
+                self.pending_paste = None;
+            }
+        }
         (InputResult::None, true)
     }
 
