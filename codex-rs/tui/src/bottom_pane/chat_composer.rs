@@ -877,19 +877,19 @@ mod tests {
 
         let mut terminal = Terminal::new(TestBackend::new(30, 4)).unwrap();
         terminal
-            .draw(|f| f.render_widget_ref(&composer, f.size()))
+            .draw(|f| f.render_widget_ref(&composer, f.area()))
             .unwrap();
         assert_snapshot!("empty", terminal.backend());
 
         composer.handle_paste("short".into());
         terminal
-            .draw(|f| f.render_widget_ref(&composer, f.size()))
+            .draw(|f| f.render_widget_ref(&composer, f.area()))
             .unwrap();
         assert_snapshot!("small", terminal.backend());
 
         composer.handle_paste("z".repeat(LARGE_PASTE_CHAR_THRESHOLD + 5));
         terminal
-            .draw(|f| f.render_widget_ref(&composer, f.size()))
+            .draw(|f| f.render_widget_ref(&composer, f.area()))
             .unwrap();
         assert_snapshot!("large", terminal.backend());
     }
