@@ -2,7 +2,13 @@
 source: tui/src/bottom_pane/chat_composer.rs
 expression: terminal.backend()
 ---
-"╭────────────────────────────╮"
-"│short                       │"
-"│                            │"
-"╰to quit | Ctrl+J for newline╯"
+"╭──────────────────────────────────────────────────────────────────────────────────────────────────╮"
+"│short                                                                                             │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"╰───────────────────────────────────────────────Enter to send | Ctrl+D to quit | Ctrl+J for newline╯"

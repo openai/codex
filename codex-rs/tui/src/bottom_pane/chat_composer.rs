@@ -30,7 +30,7 @@ const BORDER_LINES: u16 = 2;
 const BASE_PLACEHOLDER_TEXT: &str = "send a message";
 /// If the pasted content exceeds this number of characters, replace it with a
 /// placeholder in the UI.
-const LARGE_PASTE_CHAR_THRESHOLD: usize = 100;
+const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
 
 /// Result returned when the user interacts with the text area.
 pub enum InputResult {
@@ -881,28 +881,38 @@ mod tests {
 
         let (tx, _rx) = std::sync::mpsc::channel();
         let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(true, sender);
-
-        let mut terminal = match Terminal::new(TestBackend::new(30, 4)) {
+        let mut terminal = match Terminal::new(TestBackend::new(100, 10)) {
             Ok(t) => t,
             Err(e) => panic!("Failed to create terminal: {e}"),
         };
 
-        if let Err(e) = terminal.draw(|f| f.render_widget_ref(&composer, f.area())) {
-            panic!("Failed to draw empty composer: {e}");
-        }
-        assert_snapshot!("empty", terminal.backend());
+        let test_cases = vec![
+            ("empty", None),
+            ("small", Some("short".to_string())),
+            ("large", Some("z".repeat(LARGE_PASTE_CHAR_THRESHOLD + 5))),
+            ("multiple_pastes", None),
+        ];
 
-        composer.handle_paste("short".into());
-        if let Err(e) = terminal.draw(|f| f.render_widget_ref(&composer, f.area())) {
-            panic!("Failed to draw small composer: {e}");
-        }
-        assert_snapshot!("small", terminal.backend());
+        for (name, input) in test_cases {
+            // Create a fresh composer for each test case
+            let mut composer = ChatComposer::new(true, sender.clone());
 
-        composer.handle_paste("z".repeat(LARGE_PASTE_CHAR_THRESHOLD + 5));
-        if let Err(e) = terminal.draw(|f| f.render_widget_ref(&composer, f.area())) {
-            panic!("Failed to draw large composer: {e}");
+            if let Some(text) = input {
+                composer.handle_paste(text);
+            } else if name == "multiple_pastes" {
+                // First large paste
+                composer.handle_paste("x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 3));
+                // Second large paste
+                composer.handle_paste("y".repeat(LARGE_PASTE_CHAR_THRESHOLD + 7));
+                // Small paste
+                composer.handle_paste(" another short paste".to_string());
+            }
+
+            terminal
+                .draw(|f| f.render_widget_ref(&composer, f.area()))
+                .unwrap_or_else(|e| panic!("Failed to draw {name} composer: {e}"));
+
+            assert_snapshot!(name, terminal.backend());
         }
-        assert_snapshot!("large", terminal.backend());
     }
 }
