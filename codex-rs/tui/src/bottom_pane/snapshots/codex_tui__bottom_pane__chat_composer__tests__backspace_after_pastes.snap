@@ -1,0 +1,14 @@
+---
+source: tui/src/bottom_pane/chat_composer.rs
+expression: terminal.backend()
+---
+"╭──────────────────────────────────────────────────────────────────────────────────────────────────╮"
+"│[Pasted Content 1002 chars][Pasted Content 1004 chars]                                            │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"╰───────────────────────────────────────────────Enter to send | Ctrl+D to quit | Ctrl+J for newline╯"
