@@ -199,4 +199,25 @@ export const openAiModelInfo = {
     label: "GPT-4 (1106) Preview",
     maxContextLength: 128000,
   },
+  // xAI “grok” family
+  "grok": {
+    label: "Grok",
+    maxContextLength: 8192,
+  },
+  "grok-3": {
+    label: "Grok-3",
+    maxContextLength: 8192,
+  },
+  "grok-3-mini": {
+    label: "Grok-3 Mini",
+    maxContextLength: 8192,
+  },
+  "grok4": {
+    label: "Grok-4",
+    maxContextLength: 8192,
+  },
+  "grok-4": {
+    label: "Grok-4",
+    maxContextLength: 8192,
+  }
 } as const satisfies Record<string, ModelInfo>;
