@@ -136,6 +136,18 @@ export function getApiKey(provider: string = "openai"): string | undefined {
 }
 
 export type FileOpenerScheme = "vscode" | "cursor" | "windsurf";
+export interface MCPConfig {
+  /** The name of the server */
+  name: string;
+  /** The command to run the server (for local servers) */
+  command?: string;
+  /** Arguments for the command (for local servers) */
+  args?: Array<string>;
+  /** URL to connect to the server (for remote servers) */
+  url?: string;
+  /** Environment variables to pass to the server */
+  env?: Record<string, string>;
+}
 
 // Represents config as persisted in config.json.
 export type StoredConfig = {
@@ -170,6 +182,7 @@ export type StoredConfig = {
    * terminal output.
    */
   fileOpener?: FileOpenerScheme;
+  mcpServers?: Record<string, MCPConfig>;
 };
 
 // Minimal config written on first run.  An *empty* model string ensures that
@@ -215,6 +228,7 @@ export type AppConfig = {
     };
   };
   fileOpener?: FileOpenerScheme;
+  mcpServers?: Record<string, MCPConfig>;
 };
 
 // Formatting (quiet mode-only).
@@ -523,6 +537,9 @@ export const loadConfig = (
   // Merge default providers with user configured providers in the config.
   config.providers = { ...providers, ...storedConfig.providers };
 
+  // Merge default MCP servers with user configured MCP servers in the config.
+  config.mcpServers = { ...storedConfig.mcpServers };
+
   return config;
 };
 
@@ -583,6 +600,11 @@ export const saveConfig = (
     };
   }
 
+  // MCP servers
+  if (config.mcpServers) {
+    configToSave.mcpServers = config.mcpServers;
+  }
+
   if (ext === ".yaml" || ext === ".yml") {
     writeFileSync(targetPath, dumpYaml(configToSave), "utf-8");
   } else {
@@ -593,5 +615,11 @@ export const saveConfig = (
   const [userInstructions = ""] = config.instructions.split(
     PROJECT_DOC_SEPARATOR,
   );
+
   writeFileSync(instructionsPath, userInstructions, "utf-8");
+};
+
+export const getMcpServers = (): Record<string, MCPConfig> => {
+  const config = loadConfig();
+  return config.mcpServers ?? {};
 };
