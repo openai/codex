@@ -210,16 +210,51 @@ impl ChatComposer<'_> {
                 ctrl: false,
             } => {
                 if let Some(cmd) = popup.selected_command() {
-                    // Send command to the app layer.
-                    self.app_event_tx.send(AppEvent::DispatchCommand(*cmd));
+                    match cmd {
+                        crate::bottom_pane::command_popup::CommandEntry::BuiltIn(builtin) => {
+                            // Send command to the app layer.
+                            self.app_event_tx.send(AppEvent::DispatchCommand(*builtin));
 
-                    // Clear textarea so no residual text remains.
-                    self.textarea.select_all();
-                    self.textarea.cut();
+                            // Clear textarea so no residual text remains.
+                            self.textarea.select_all();
+                            self.textarea.cut();
 
-                    // Hide popup since the command has been dispatched.
-                    self.active_popup = ActivePopup::None;
-                    return (InputResult::None, true);
+                            // Hide popup since the command has been dispatched.
+                            self.active_popup = ActivePopup::None;
+                            return (InputResult::None, true);
+                        }
+                        crate::bottom_pane::command_popup::CommandEntry::Custom { name } => {
+                            // Determine if command already typed.
+                            let first_line = self
+                                .textarea
+                                .lines()
+                                .first()
+                                .map(|s| s.as_str())
+                                .unwrap_or("");
+
+                            let cmd_with_slash = format!("/{name}");
+                            let starts_with_cmd =
+                                first_line.trim_start().starts_with(&cmd_with_slash);
+
+                            if !starts_with_cmd {
+                                // Autocomplete: replace existing text with the chosen command.
+                                self.textarea.select_all();
+                                self.textarea.cut();
+                                let _ = self.textarea.insert_str(format!("{cmd_with_slash} "));
+                                // Keep popup hidden; user can now add args and press Enter again.
+                                self.active_popup = ActivePopup::None;
+                                return (InputResult::None, true);
+                            } else {
+                                // Command already present -> let default handling submit the message.
+                                self.active_popup = ActivePopup::None;
+                                // Delegate to default handling to submit the message.
+                                return self.handle_key_event_without_popup(KeyEvent::new(
+                                    crossterm::event::KeyCode::Enter,
+                                    crossterm::event::KeyModifiers::NONE,
+                                ));
+                            }
+                        }
+                    }
                 }
                 // Fallback to default newline handling if no command selected.
                 self.handle_key_event_without_popup(key_event)
@@ -462,16 +497,20 @@ impl ChatComposer<'_> {
             .unwrap_or("");
 
         let input_starts_with_slash = first_line.starts_with('/');
+
+        // Always show popup when text starts with a slash so users can
+        // discover both built-in *and* custom commands (e.g. "/project:").
+        let skip_popup = false;
         match &mut self.active_popup {
             ActivePopup::Command(popup) => {
-                if input_starts_with_slash {
+                if input_starts_with_slash && !skip_popup {
                     popup.on_composer_text_change(first_line.to_string());
                 } else {
                     self.active_popup = ActivePopup::None;
                 }
             }
             _ => {
-                if input_starts_with_slash {
+                if input_starts_with_slash && !skip_popup {
                     let mut command_popup = CommandPopup::new();
                     command_popup.on_composer_text_change(first_line.to_string());
                     self.active_popup = ActivePopup::Command(command_popup);

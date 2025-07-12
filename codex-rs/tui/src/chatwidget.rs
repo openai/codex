@@ -176,10 +176,24 @@ impl ChatWidget<'_> {
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
         let UserMessage { text, image_paths } = user_message;
+        use crate::custom_slash_command::expand_custom_command;
+        use std::path::Path;
+
         let mut items: Vec<InputItem> = Vec::new();
 
-        if !text.is_empty() {
-            items.push(InputItem::Text { text: text.clone() });
+        let expanded_text = if text.starts_with('/') {
+            // Attempt to expand custom command. If expansion fails, fall back
+            // to original text.
+            let cwd = Path::new(&self.config.cwd);
+            expand_custom_command(&text, cwd).unwrap_or(text.clone())
+        } else {
+            text.clone()
+        };
+
+        if !expanded_text.is_empty() {
+            items.push(InputItem::Text {
+                text: expanded_text.clone(),
+            });
         }
 
         for path in image_paths {
@@ -196,7 +210,7 @@ impl ChatWidget<'_> {
                 tracing::error!("failed to send message: {e}");
             });
 
-        // Persist the text to cross-session message history.
+        // Persist the original text (the slash command, if any) to cross-session history.
         if !text.is_empty() {
             self.codex_op_tx
                 .send(Op::AddToHistory { text: text.clone() })

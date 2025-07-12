@@ -798,6 +798,7 @@ dependencies = [
  "shlex",
  "strum 0.27.1",
  "strum_macros 0.27.1",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-appender",
