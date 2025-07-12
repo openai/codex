@@ -1,0 +1,53 @@
+# Codex CLI — Utilities Documentation
+
+Codex CLI includes a powerful set of utility modules under `src/utils/`. These implement configuration management, model information, API keys, sandbox policy, logging, OpenAI integration, and more—essential for extensibility, robustness, and agent workflow.
+
+---
+
+## Major Utility Modules
+
+### `config.ts`
+Centralizes CLI configuration, supporting YAML/JSON, env var layering, and per-user/project scope. Handles loading, writing, and accessing config values/directories.
+- Exports: `loadConfig`, config constants/paths, provider lookup, shell output limits, etc.
+
+### `auto-approval-mode.ts`
+Defines enums and helpers for agent approval and error handling policies:
+- `AutoApprovalMode`: `suggest`, `auto-edit`, `full-auto`
+- `FullAutoErrorMode`: `ask-user`, `ignore-and-continue`
+
+### `model-utils.ts`
+Manages available model lookup, model validation, context window sizing, and caching. Integrates with OpenAI endpoints to fetch and filter model options for a given provider.
+- Exports: `getAvailableModels`, `isModelSupportedForResponses`, `maxTokensForModel`, etc.
+
+### `get-api-key.tsx`
+Implements API key fetching, OAuth login, and OpenID setup for OpenAI and alternate providers. Integrates with the CLI React/TUI while also supporting local `auth.json`, token refresh, and user onboarding flows.
+
+### Plus: More reusable helpers...
+- `logger/`: Logging helpers
+- `providers.ts`: Supported/composable API provider registry
+- `file-system-suggestions.ts`, `file-tag-utils.ts`: UX for file completion and input experience
+- `parsers.ts`, `input-utils.ts`: Text parsing and command input construction
+- `terminal.ts`: Terminal rendering and UX helpers
+- `responsive/`, `storage/`, `singlepass/`, etc.: Storage, advanced context, session, and performance logic
+
+---
+
+## Example: Loading Config in the CLI
+```typescript
+import { loadConfig } from './utils/config';
+const config = loadConfig();
+```
+
+## Example: Check Model Support
+```typescript
+import { isModelSupportedForResponses } from './utils/model-utils';
+const ok = await isModelSupportedForResponses('openai', 'gpt-4.1');
+```
+
+---
+
+## Related Documentation
+- [Hooks & Custom Logic](./cli_hooks_utils.mdx)
+- [CLI Core Modules](./cli_modules.mdx)
+- [Components](./cli_components.mdx)
+- [Repository Overview](./overview.mdx)

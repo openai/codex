@@ -1,0 +1,83 @@
+# Codex CLI — Core Modules Documentation
+
+This document covers the main modules and logic that power the Codex Command Line Interface (CLI), which delivers the agent and user experience in the terminal.
+
+## CLI Entry Points & Composition
+
+### `app.tsx`
+* The React entry point for the TUI/CLI, providing user workflow, context information, Git-check safety, and interactive chat.
+* Selects between rolling out a historical session (`TerminalChatPastRollout`) and the main chat experience (`TerminalChat`).
+* Prompts for acceptance if not in a Git repository to safeguard edits.
+
+**Example:**
+```typescript
+import App from './app';
+import { render } from 'ink';
+render(<App config={config} approvalPolicy="suggest" ... />);
+```
+
+### `cli.tsx`
+* The main command-line process—handles argument parsing, config loading, API key management, update checks, and selects execution modes.
+* Supports:
+  - Standard interactive mode
+  - Full-context/batch-edit mode
+  - Session resume/history view
+  - Batch/CI automation
+* Safeguards against invalid Node versions and missing config/API keys.
+
+**Example:**
+```bash
+codex --model gpt-4.1 "Write tests"
+```
+
+### `cli-singlepass.tsx`
+* Runs Codex in a single-pass (batch edit) mode, loading the entire repo for one-shot model changes.
+* Entry: `runSinglePass({ originalPrompt, config, rootPath })`.
+
+### `format-command.ts`
+* Formats shell commands for display, with special logic to unwrap `bash -lc` wrappers and present readable commands.
+* Exports: `formatCommandForDisplay(command: string[]): string`.
+
+### `approvals.ts`
+* Core of sandbox/approval model. Implements `ApprovalPolicy` logic:
+  - Modes: `suggest`, `auto-edit`, `full-auto`
+  - Checks shell & patch commands for safe/auto-approvable vs. needing user approval
+  - Handles precise security, writable-root checks, and command parsing
+* Exports: `canAutoApprove`, `isSafeCommand`, type safety logic
+
+### `text-buffer.ts`
+* Provides a full-featured, Unicode-aware, undo/redo-enabled text buffer to enable rich in-terminal editing.
+* Exports: `TextBuffer` class, helpers for word/line wise navigation, multi-line selection, viewport rendering, and command shortcuts.
+
+### `parse-apply-patch.ts`
+* Implements parsing for Codex AI-generated text patches; recognizes and processes add, delete, update, and file move operations in the Codex patch format.
+* Exports: `parseApplyPatch`.
+
+### `version.ts`
+* Loads and exposes the Codex CLI version directly from `package.json` as `CLI_VERSION`.
+
+---
+
+## Usage Patterns
+
+**Launching the CLI:**
+```shell
+codex "Refactor main loop to TypeScript"
+```
+
+**Advanced automation:**
+```shell
+codex exec --full-auto "run linter on all files"
+```
+
+**CI/CD scripts:**
+```yaml
+- run: codex exec -q --model o4-mini "update docs"
+```
+
+---
+
+## Related Documentation
+- [Repository Overview and Architecture](./overview.mdx)
+- [Codex CLI Components, Hooks & Utils](./cli_modules.mdx)
+- [Rust Core Architecture](./rust_core.mdx)
