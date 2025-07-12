@@ -44,7 +44,6 @@ const RATE_LIMIT_RETRY_WAIT_MS = parseInt(
 );
 
 // See https://github.com/openai/openai-node/tree/v4?tab=readme-ov-file#configuring-an-https-agent-eg-for-proxies
-const PROXY_URL = process.env["HTTPS_PROXY"];
 
 export type CommandConfirmation = {
   review: ReviewDecision;
@@ -308,34 +307,15 @@ export class AgentLoop {
     const timeoutMs = OPENAI_TIMEOUT_MS;
     const apiKey = this.config.apiKey ?? process.env["OPENAI_API_KEY"] ?? "";
     const baseURL = getBaseUrl(this.provider);
+    const proxy = this.config.proxy;
 
-    this.oai = new OpenAI({
-      // The OpenAI JS SDK only requires `apiKey` when making requests against
-      // the official API.  When running unit‑tests we stub out all network
-      // calls so an undefined key is perfectly fine.  We therefore only set
-      // the property if we actually have a value to avoid triggering runtime
-      // errors inside the SDK (it validates that `apiKey` is a non‑empty
-      // string when the field is present).
-      ...(apiKey ? { apiKey } : {}),
-      baseURL,
-      defaultHeaders: {
-        originator: ORIGIN,
-        version: CLI_VERSION,
-        session_id: this.sessionId,
-        ...(OPENAI_ORGANIZATION
-          ? { "OpenAI-Organization": OPENAI_ORGANIZATION }
-          : {}),
-        ...(OPENAI_PROJECT ? { "OpenAI-Project": OPENAI_PROJECT } : {}),
-      },
-      httpAgent: PROXY_URL ? new HttpsProxyAgent(PROXY_URL) : undefined,
-      ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
-    });
-
-    if (this.provider.toLowerCase() === "azure") {
-      this.oai = new AzureOpenAI({
-        apiKey,
+    const getClientOptions = (isAzure: boolean) => {
+      const agent = proxy ? new HttpsProxyAgent(proxy) : undefined;
+      const options: OpenAI.ClientOptions = {
+        ...(apiKey ? { apiKey } : {}),
         baseURL,
-        apiVersion: AZURE_OPENAI_API_VERSION,
+        httpAgent: agent,
+        ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
         defaultHeaders: {
           originator: ORIGIN,
           version: CLI_VERSION,
@@ -345,9 +325,18 @@ export class AgentLoop {
             : {}),
           ...(OPENAI_PROJECT ? { "OpenAI-Project": OPENAI_PROJECT } : {}),
         },
-        httpAgent: PROXY_URL ? new HttpsProxyAgent(PROXY_URL) : undefined,
-        ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
-      });
+      };
+      if (isAzure) {
+        (options as AzureOpenAI.ClientOptions).apiVersion =
+          AZURE_OPENAI_API_VERSION;
+      }
+      return options;
+    };
+
+    if (this.provider.toLowerCase() === "azure") {
+      this.oai = new AzureOpenAI(getClientOptions(true));
+    } else {
+      this.oai = new OpenAI(getClientOptions(false));
     }
 
     setSessionId(this.sessionId);

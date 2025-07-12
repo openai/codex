@@ -247,7 +247,7 @@ Note that when running Linux in a containerized environment such as Docker, sand
 | `codex "..."`      | Initial prompt for interactive TUI | `codex "fix lint errors"`       |
 | `codex exec "..."` | Non-interactive "automation mode"  | `codex exec "explain utils.ts"` |
 
-Key flags: `--model/-m`, `--ask-for-approval/-a`.
+Key flags: `--model/-m`, `--ask-for-approval/-a`, `--proxy`.
 
 ---
 

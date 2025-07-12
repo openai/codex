@@ -102,6 +102,7 @@ const cli = meow(
                               with models o3 and o4-mini)
 
     --reasoning <effort>      Set the reasoning effort level (low, medium, high) (default: high)
+    --proxy <url>                   Use a proxy for all network requests
 
   Dangerous options
     --dangerously-auto-approve-everything
@@ -194,6 +195,11 @@ const cli = meow(
         choices: ["low", "medium", "high"],
         default: "high",
       },
+      proxy: {
+        type: "string",
+        description: "Use a proxy for all network requests",
+      },
+
       // Notification
       notify: {
         type: "boolean",
@@ -421,6 +427,8 @@ const disableResponseStorage = flagPresent
   ? Boolean(cli.flags.disableResponseStorage) // value user actually passed
   : (config.disableResponseStorage ?? false); // fall back to YAML, default to false
 
+const proxy = cli.flags.proxy;
+
 config = {
   apiKey,
   ...config,
@@ -431,6 +439,7 @@ config = {
   flexMode: cli.flags.flexMode || (config.flexMode ?? false),
   provider,
   disableResponseStorage,
+  proxy,
 };
 
 // Check for updates after loading config. This is important because we write state file in
