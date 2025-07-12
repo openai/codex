@@ -149,7 +149,18 @@ export type StoredConfig = {
   /** Disable server-side response storage (send full transcript each request) */
   disableResponseStorage?: boolean;
   flexMode?: boolean;
-  providers?: Record<string, { name: string; baseURL: string; envKey: string }>;
+  providers?: Record<
+    string,
+    {
+      name: string;
+      baseURL: string;
+      envKey: string;
+      /** Default model to use for this provider */
+      defaultModel?: string;
+    }
+  >;
+  /** Map of provider IDs to their default models */
+  providerDefaultModels?: Record<string, string>;
   history?: {
     maxSize?: number;
     saveHistory?: boolean;
@@ -202,7 +213,18 @@ export type AppConfig = {
 
   /** Enable the "flex-mode" processing mode for supported models (o3, o4-mini) */
   flexMode?: boolean;
-  providers?: Record<string, { name: string; baseURL: string; envKey: string }>;
+  providers?: Record<
+    string,
+    {
+      name: string;
+      baseURL: string;
+      envKey: string;
+      /** Default model to use for this provider */
+      defaultModel?: string;
+    }
+  >;
+  /** Map of provider IDs to their default models */
+  providerDefaultModels?: Record<string, string>;
   history?: {
     maxSize: number;
     saveHistory: boolean;
@@ -439,6 +461,7 @@ export const loadConfig = (
     disableResponseStorage: storedConfig.disableResponseStorage === true,
     reasoningEffort: storedConfig.reasoningEffort,
     fileOpener: storedConfig.fileOpener,
+    providerDefaultModels: storedConfig.providerDefaultModels,
   };
 
   // -----------------------------------------------------------------------
@@ -560,6 +583,7 @@ export const saveConfig = (
     disableResponseStorage: config.disableResponseStorage,
     flexMode: config.flexMode,
     reasoningEffort: config.reasoningEffort,
+    providerDefaultModels: config.providerDefaultModels,
   };
 
   // Add history settings if they exist
