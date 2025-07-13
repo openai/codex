@@ -25,9 +25,11 @@ async fn chat_mode_stream_cli() {
     }
 
     let server = MockServer::start().await;
-    let sse = r#"data: {"choices":[{"delta":{"content":"hi"}}]}\n\n
-data: {"choices":[{"delta":{}}]}\n\n
-data: [DONE]\n\n"#;
+    let sse = concat!(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{}}]}\n\n",
+        "data: [DONE]\n\n"
+    );
     Mock::given(method("POST"))
         .and(path("/v1/chat/completions"))
         .respond_with(
@@ -35,6 +37,7 @@ data: [DONE]\n\n"#;
                 .insert_header("content-type", "text/event-stream")
                 .set_body_raw(sse, "text/event-stream"),
         )
+        .expect(1)
         .mount(&server)
         .await;
 
@@ -63,10 +66,15 @@ data: [DONE]\n\n"#;
         .env("OPENAI_BASE_URL", format!("{}/v1", server.uri()));
 
     let output = cmd.output().unwrap();
+    println!("Status: {}", output.status);
+    println!("Stdout:\n{}", String::from_utf8_lossy(&output.stdout));
+    println!("Stderr:\n{}", String::from_utf8_lossy(&output.stderr));
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("hi"));
     assert_eq!(stdout.matches("hi").count(), 1);
+
+    server.verify().await;
 }
 
 /// Tests streaming responses through the CLI using a local SSE fixture file.
