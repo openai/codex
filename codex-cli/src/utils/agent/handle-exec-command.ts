@@ -12,6 +12,7 @@ import { ReviewDecision } from "./review.js";
 import { isLoggingEnabled, log } from "../logger/log.js";
 import { SandboxType } from "./sandbox/interface.js";
 import { PATH_TO_SEATBELT_EXECUTABLE } from "./sandbox/macos-seatbelt.js";
+import { getWorkspaceLogger } from "../logger/workspace-logger.js";
 import fs from "fs/promises";
 
 // ---------------------------------------------------------------------------
@@ -82,6 +83,7 @@ export async function handleExecCommand(
   ) => Promise<CommandConfirmation>,
   abortSignal?: AbortSignal,
 ): Promise<HandleExecCommandResult> {
+  const startTime = Date.now();
   const { cmd: command, workdir } = args;
 
   const key = deriveCommandKey(command);
@@ -89,14 +91,25 @@ export async function handleExecCommand(
   // 1) If the user has already said "always approve", skip
   //    any policy & never sandbox.
   if (alwaysApprovedCommands.has(key)) {
-    return execCommand(
+    const summary = await execCommand(
       args,
       /* applyPatch */ undefined,
       /* runInSandbox */ false,
       additionalWritableRoots,
       config,
       abortSignal,
-    ).then(convertSummaryToResult);
+    );
+    const duration = (Date.now() - startTime) / 1000;
+    const logger = getWorkspaceLogger();
+    if (logger) {
+      await logger.logCommand(
+        args.cmd.join(" "),
+        summary.exitCode,
+        duration,
+        summary.stdout || summary.stderr,
+      );
+    }
+    return convertSummaryToResult(summary);
   }
 
   // 2) Otherwise fall back to the normal policy
@@ -184,9 +197,29 @@ export async function handleExecCommand(
         config,
         abortSignal,
       );
+      const duration = (Date.now() - startTime) / 1000;
+      const logger = getWorkspaceLogger();
+      if (logger) {
+        await logger.logCommand(
+          args.cmd.join(" "),
+          summary.exitCode,
+          duration,
+          summary.stdout || summary.stderr,
+        );
+      }
       return convertSummaryToResult(summary);
     }
   } else {
+    const duration = (Date.now() - startTime) / 1000;
+    const logger = getWorkspaceLogger();
+    if (logger) {
+      await logger.logCommand(
+        args.cmd.join(" "),
+        summary.exitCode,
+        duration,
+        summary.stdout || summary.stderr,
+      );
+    }
     return convertSummaryToResult(summary);
   }
 }
