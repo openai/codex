@@ -21,6 +21,7 @@ import {
   loadCommandHistory,
   addToHistory,
 } from "../../utils/storage/command-history.js";
+import { useSpinner } from "../../utils/terminal-chat-utils.js";
 import { clearTerminal, onExit } from "../../utils/terminal.js";
 import { Box, Text, useApp, useInput, useStdin } from "ink";
 import { fileURLToPath } from "node:url";
@@ -896,28 +897,7 @@ function TerminalChatInputThinking({
     setDots((prev) => (prev.length < 3 ? prev + "." : ""));
   }, 500);
 
-  // Spinner frames with embedded seconds
-  const ballFrames = [
-    "( ●    )",
-    "(  ●   )",
-    "(   ●  )",
-    "(    ● )",
-    "(     ●)",
-    "(    ● )",
-    "(   ●  )",
-    "(  ●   )",
-    "( ●    )",
-    "(●     )",
-  ];
-  const [frame, setFrame] = useState(0);
-
-  useInterval(() => {
-    setFrame((idx) => (idx + 1) % ballFrames.length);
-  }, 80);
-
-  // Keep the elapsed‑seconds text fixed while the ball animation moves.
-  const frameTemplate = ballFrames[frame] ?? ballFrames[0];
-  const frameWithSeconds = `${frameTemplate} ${thinkingSeconds}s`;
+  const frameWithSeconds = useSpinner(thinkingSeconds);
 
   // ---------------------------------------------------------------------
   // Raw stdin listener to catch the case where the terminal delivers two
