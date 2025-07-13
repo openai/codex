@@ -9,6 +9,7 @@ use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
+use codex_core::protocol::Submission;
 use codex_core::protocol::TaskCompleteEvent;
 use mcp_types::CallToolResult;
 use mcp_types::CallToolResultContent;
@@ -66,14 +67,24 @@ pub async fn run_codex_tool_session(
         .send(codex_event_to_notification(&first_event))
         .await;
 
-    if let Err(e) = codex
-        .submit(Op::UserInput {
+    // Use the original MCP request ID as the `sub_id` for the Codex submission so that
+    // any events emitted for this tool-call can be correlated with the
+    // originating `tools/call` request.
+    let sub_id = match &id {
+        RequestId::String(s) => s.clone(),
+        RequestId::Integer(n) => n.to_string(),
+    };
+
+    let submission = Submission {
+        id: sub_id,
+        op: Op::UserInput {
             items: vec![InputItem::Text {
                 text: initial_prompt.clone(),
             }],
-        })
-        .await
-    {
+        },
+    };
+
+    if let Err(e) = codex.submit_with_id(submission).await {
         tracing::error!("Failed to submit initial prompt: {e}");
     }
 

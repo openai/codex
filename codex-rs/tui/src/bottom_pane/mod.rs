@@ -82,6 +82,15 @@ impl BottomPane<'_> {
         }
     }
 
+    pub fn handle_paste(&mut self, pasted: String) {
+        if self.active_view.is_none() {
+            let needs_redraw = self.composer.handle_paste(pasted);
+            if needs_redraw {
+                self.request_redraw();
+            }
+        }
+    }
+
     /// Update the status indicator text (only when the `StatusIndicatorView` is
     /// active).
     pub(crate) fn update_status_text(&mut self, text: String) {

@@ -394,11 +394,20 @@ async fn stream_from_fixture(path: impl AsRef<Path>) -> Result<ResponseStream> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used)]
+
     use super::*;
+    use serde_json::json;
     use tokio::sync::mpsc;
     use tokio_test::io::Builder as IoBuilder;
+    use tokio_util::io::ReaderStream;
 
-    /// Helper that runs the SSE parser on the provided chunks and collects all events.
+    // ────────────────────────────
+    // Helpers
+    // ────────────────────────────
+
+    /// Runs the SSE parser on pre-chunked byte slices and returns every event
+    /// (including any final `Err` from a stream-closure check).
     async fn collect_events(chunks: &[&[u8]]) -> Vec<Result<ResponseEvent>> {
         let mut builder = IoBuilder::new();
         for chunk in chunks {
@@ -417,9 +426,41 @@ mod tests {
         events
     }
 
+    /// Builds an in-memory SSE stream from JSON fixtures and returns only the
+    /// successfully parsed events (panics on internal channel errors).
+    async fn run_sse(events: Vec<serde_json::Value>) -> Vec<ResponseEvent> {
+        let mut body = String::new();
+        for e in events {
+            let kind = e
+                .get("type")
+                .and_then(|v| v.as_str())
+                .expect("fixture event missing type");
+            if e.as_object().map(|o| o.len() == 1).unwrap_or(false) {
+                body.push_str(&format!("event: {kind}\n\n"));
+            } else {
+                body.push_str(&format!("event: {kind}\ndata: {e}\n\n"));
+            }
+        }
+
+        let (tx, mut rx) = mpsc::channel::<Result<ResponseEvent>>(8);
+        let stream =
+            ReaderStream::new(std::io::Cursor::new(body)).map_err(CodexErr::Io);
+        tokio::spawn(process_sse(stream, tx));
+
+        let mut out = Vec::new();
+        while let Some(ev) = rx.recv().await {
+            out.push(ev.expect("channel closed"));
+        }
+        out
+    }
+
+    // ────────────────────────────
+    // Tests from `implement-test-for-responses-api-sse-parser`
+    // ────────────────────────────
+
     #[tokio::test]
     async fn parses_items_and_completed() {
-        let item1 = serde_json::json!({
+        let item1 = json!({
             "type": "response.output_item.done",
             "item": {
                 "type": "message",
@@ -429,7 +470,7 @@ mod tests {
         })
         .to_string();
 
-        let item2 = serde_json::json!({
+        let item2 = json!({
             "type": "response.output_item.done",
             "item": {
                 "type": "message",
@@ -439,33 +480,39 @@ mod tests {
         })
         .to_string();
 
-        let completed = serde_json::json!({
+        let completed = json!({
             "type": "response.completed",
-            "response": {"id": "resp1"}
+            "response": { "id": "resp1" }
         })
         .to_string();
 
-        let sse1 = format!("event: response.output_item.done\ndata: {item1}\n\n");
-        let sse2 = format!("event: response.output_item.done\ndata: {item2}\n\n");
-        let sse3 = format!("event: response.completed\ndata: {completed}\n\n");
+        let sse1 =
+            format!("event: response.output_item.done\ndata: {item1}\n\n");
+        let sse2 =
+            format!("event: response.output_item.done\ndata: {item2}\n\n");
+        let sse3 =
+            format!("event: response.completed\ndata: {completed}\n\n");
 
-        let events = collect_events(&[sse1.as_bytes(), sse2.as_bytes(), sse3.as_bytes()]).await;
+        let events = collect_events(&[
+            sse1.as_bytes(),
+            sse2.as_bytes(),
+            sse3.as_bytes(),
+        ])
+        .await;
 
         assert_eq!(events.len(), 3);
 
-        match &events[0] {
-            Ok(ResponseEvent::OutputItemDone(ResponseItem::Message { role, .. })) => {
-                assert_eq!(role, "assistant")
-            }
-            other => panic!("unexpected first event: {other:?}"),
-        }
+        matches!(
+            &events[0],
+            Ok(ResponseEvent::OutputItemDone(ResponseItem::Message { role, .. }))
+                if role == "assistant"
+        );
 
-        match &events[1] {
-            Ok(ResponseEvent::OutputItemDone(ResponseItem::Message { role, .. })) => {
-                assert_eq!(role, "assistant")
-            }
-            other => panic!("unexpected second event: {other:?}"),
-        }
+        matches!(
+            &events[1],
+            Ok(ResponseEvent::OutputItemDone(ResponseItem::Message { role, .. }))
+                if role == "assistant"
+        );
 
         match &events[2] {
             Ok(ResponseEvent::Completed {
@@ -481,7 +528,7 @@ mod tests {
 
     #[tokio::test]
     async fn error_when_missing_completed() {
-        let item1 = serde_json::json!({
+        let item1 = json!({
             "type": "response.output_item.done",
             "item": {
                 "type": "message",
@@ -491,22 +538,104 @@ mod tests {
         })
         .to_string();
 
-        let sse1 = format!("event: response.output_item.done\ndata: {item1}\n\n");
+        let sse1 =
+            format!("event: response.output_item.done\ndata: {item1}\n\n");
 
         let events = collect_events(&[sse1.as_bytes()]).await;
 
         assert_eq!(events.len(), 2);
 
-        match &events[0] {
-            Ok(ResponseEvent::OutputItemDone(_)) => {}
-            other => panic!("unexpected first event: {other:?}"),
-        }
+        matches!(events[0], Ok(ResponseEvent::OutputItemDone(_)));
 
         match &events[1] {
             Err(CodexErr::Stream(msg)) => {
                 assert_eq!(msg, "stream closed before response.completed")
             }
             other => panic!("unexpected second event: {other:?}"),
+        }
+    }
+
+    // ────────────────────────────
+    // Table-driven test from `main`
+    // ────────────────────────────
+
+    /// Verifies that the adapter produces the right `ResponseEvent` for a
+    /// variety of incoming `type` values.
+    #[tokio::test]
+    async fn table_driven_event_kinds() {
+        struct TestCase {
+            name: &'static str,
+            event: serde_json::Value,
+            expect_first: fn(&ResponseEvent) -> bool,
+            expected_len: usize,
+        }
+
+        fn is_created(ev: &ResponseEvent) -> bool {
+            matches!(ev, ResponseEvent::Created)
+        }
+        fn is_output(ev: &ResponseEvent) -> bool {
+            matches!(ev, ResponseEvent::OutputItemDone(_))
+        }
+        fn is_completed(ev: &ResponseEvent) -> bool {
+            matches!(ev, ResponseEvent::Completed { .. })
+        }
+
+        let completed = json!({
+            "type": "response.completed",
+            "response": {
+                "id": "c",
+                "usage": {
+                    "input_tokens": 0,
+                    "input_tokens_details": null,
+                    "output_tokens": 0,
+                    "output_tokens_details": null,
+                    "total_tokens": 0
+                },
+                "output": []
+            }
+        });
+
+        let cases = vec![
+            TestCase {
+                name: "created",
+                event: json!({"type": "response.created", "response": {}}),
+                expect_first: is_created,
+                expected_len: 2,
+            },
+            TestCase {
+                name: "output_item.done",
+                event: json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [
+                            {"type": "output_text", "text": "hi"}
+                        ]
+                    }
+                }),
+                expect_first: is_output,
+                expected_len: 2,
+            },
+            TestCase {
+                name: "unknown",
+                event: json!({"type": "response.new_tool_event"}),
+                expect_first: is_completed,
+                expected_len: 1,
+            },
+        ];
+
+        for case in cases {
+            let mut evs = vec![case.event];
+            evs.push(completed.clone());
+
+            let out = run_sse(evs).await;
+            assert_eq!(out.len(), case.expected_len, "case {}", case.name);
+            assert!(
+                (case.expect_first)(&out[0]),
+                "first event mismatch in case {}",
+                case.name
+            );
         }
     }
 }
