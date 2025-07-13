@@ -443,8 +443,7 @@ mod tests {
         }
 
         let (tx, mut rx) = mpsc::channel::<Result<ResponseEvent>>(8);
-        let stream =
-            ReaderStream::new(std::io::Cursor::new(body)).map_err(CodexErr::Io);
+        let stream = ReaderStream::new(std::io::Cursor::new(body)).map_err(CodexErr::Io);
         tokio::spawn(process_sse(stream, tx));
 
         let mut out = Vec::new();
@@ -486,19 +485,11 @@ mod tests {
         })
         .to_string();
 
-        let sse1 =
-            format!("event: response.output_item.done\ndata: {item1}\n\n");
-        let sse2 =
-            format!("event: response.output_item.done\ndata: {item2}\n\n");
-        let sse3 =
-            format!("event: response.completed\ndata: {completed}\n\n");
+        let sse1 = format!("event: response.output_item.done\ndata: {item1}\n\n");
+        let sse2 = format!("event: response.output_item.done\ndata: {item2}\n\n");
+        let sse3 = format!("event: response.completed\ndata: {completed}\n\n");
 
-        let events = collect_events(&[
-            sse1.as_bytes(),
-            sse2.as_bytes(),
-            sse3.as_bytes(),
-        ])
-        .await;
+        let events = collect_events(&[sse1.as_bytes(), sse2.as_bytes(), sse3.as_bytes()]).await;
 
         assert_eq!(events.len(), 3);
 
@@ -538,8 +529,7 @@ mod tests {
         })
         .to_string();
 
-        let sse1 =
-            format!("event: response.output_item.done\ndata: {item1}\n\n");
+        let sse1 = format!("event: response.output_item.done\ndata: {item1}\n\n");
 
         let events = collect_events(&[sse1.as_bytes()]).await;
 
