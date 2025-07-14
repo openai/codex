@@ -297,11 +297,11 @@ mod tests {
         let qualified_tools = qualify_tools(tools);
 
         assert_eq!(qualified_tools.len(), 1);
-        let qualified_name = qualified_tools.keys()[0];
+        let keys: Vec<_> = qualified_tools.keys().cloned().collect();
 
-        assert_eq!(qualified_name.len(), 64);
+        assert_eq!(keys[0].len(), 64);
         assert_eq!(
-            qualified_name,
+            keys[0],
             "very_long_server_name_that_exceeds_limits__very_long_tool_name_t"
         );
     }
