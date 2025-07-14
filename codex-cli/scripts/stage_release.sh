@@ -4,10 +4,7 @@
 # -----------------------------------------------------------------------------
 # Stages an npm release for @openai/codex.
 #
-# The script used to accept a single optional positional argument that indicated
-# the temporary directory in which to stage the package.  We now support a
-# flag-based interface so that we can extend the command with further options
-# without breaking the call-site contract.
+# Usage:
 #
 #   --tmp <dir>  : Use <dir> instead of a freshly created temp directory.
 #   --native     : Bundle the pre-built Rust CLI binaries for Linux alongside
@@ -141,7 +138,8 @@ popd >/dev/null
 echo "Staged version $VERSION for release in $TMPDIR"
 
 if [[ "$INCLUDE_NATIVE" -eq 1 ]]; then
-  echo "Test Rust:"
+  echo "Verify the CLI:"
+  echo "    node ${TMPDIR}/bin/codex.js --version"
   echo "    node ${TMPDIR}/bin/codex.js --help"
 else
   echo "Test Node:"
