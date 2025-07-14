@@ -297,7 +297,7 @@ mod tests {
         let qualified_tools = qualify_tools(tools);
 
         assert_eq!(qualified_tools.len(), 1);
-        let qualified_name = qualified_tools.keys().next().unwrap();
+        let qualified_name = qualified_tools.keys()[0];
 
         assert_eq!(qualified_name.len(), 64);
         assert_eq!(
