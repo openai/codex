@@ -1,0 +1,99 @@
+version: '3.8'
+
+services:
+  # Tool Builder Web UI
+  tool-builder-ui:
+    build:
+      context: ./services/tool-builder-ui
+      dockerfile: Dockerfile
+    container_name: tool-builder-ui
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - API_URL=http://tool-builder-api:8000
+    depends_on:
+      - tool-builder-api
+    networks:
+      - tool-builder-network
+    volumes:
+      - ./services/tool-builder-ui:/app
+      - /app/node_modules
+    restart: unless-stopped
+
+  # Tool Builder API Backend
+  tool-builder-api:
+    build:
+      context: ./services/tool-builder-api
+      dockerfile: Dockerfile
+    container_name: tool-builder-api
+    ports:
+      - "8000:8000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - DATABASE_URL=postgresql://postgres:postgres@tool-builder-db:5432/tool_builder
+      - REDIS_URL=redis://tool-builder-redis:6379
+    depends_on:
+      - tool-builder-db
+      - tool-builder-redis
+    networks:
+      - tool-builder-network
+    volumes:
+      - ./tools:/app/tools
+      - ./generated-tools:/app/generated-tools
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+
+  # PostgreSQL Database
+  tool-builder-db:
+    image: postgres:15-alpine
+    container_name: tool-builder-db
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=tool_builder
+    volumes:
+      - tool-builder-db-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - tool-builder-network
+    restart: unless-stopped
+
+  # Redis Cache
+  tool-builder-redis:
+    image: redis:7-alpine
+    container_name: tool-builder-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - tool-builder-network
+    volumes:
+      - tool-builder-redis-data:/data
+    restart: unless-stopped
+
+  # Nginx Reverse Proxy
+  tool-builder-nginx:
+    image: nginx:alpine
+    container_name: tool-builder-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./services/nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ./services/nginx/ssl:/etc/nginx/ssl
+    depends_on:
+      - tool-builder-ui
+      - tool-builder-api
+    networks:
+      - tool-builder-network
+    restart: unless-stopped
+
+networks:
+  tool-builder-network:
+    driver: bridge
+
+volumes:
+  tool-builder-db-data:
+  tool-builder-redis-data:
