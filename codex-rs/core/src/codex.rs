@@ -1330,14 +1330,18 @@ fn parse_container_exec_arguments(
     call_id: &str,
 ) -> Result<ExecParams, ResponseInputItem> {
     // parse command
+    debug!("Parsing shell arguments: {}", arguments);
     match serde_json::from_str::<ShellToolCallParams>(&arguments) {
-        Ok(shell_tool_call_params) => Ok(to_exec_params(shell_tool_call_params, sess)),
+        Ok(shell_tool_call_params) => {
+            debug!("Parsed shell params: {:?}", shell_tool_call_params);
+            Ok(to_exec_params(shell_tool_call_params, sess))
+        }
         Err(e) => {
             // allow model to re-sample
             let output = ResponseInputItem::FunctionCallOutput {
                 call_id: call_id.to_string(),
                 output: FunctionCallOutputPayload {
-                    content: format!("failed to parse function arguments: {e}"),
+                    content: format!("failed to parse function arguments: {e}\nArguments were: {arguments}"),
                     success: None,
                 },
             };
@@ -1485,21 +1489,56 @@ async fn handle_container_exec_with_params(
 
 async fn handle_sandbox_error(
     error: SandboxErr,
-    sandbox_type: SandboxType,
+    _sandbox_type: SandboxType,
     params: ExecParams,
     sess: &Session,
     sub_id: String,
     call_id: String,
 ) -> ResponseInputItem {
-    // Early out if the user never wants to be asked for approval; just return to the model immediately
+    // Early out if the user never wants to be asked for approval; retry without sandbox immediately
     if sess.approval_policy == AskForApproval::Never {
-        return ResponseInputItem::FunctionCallOutput {
-            call_id,
-            output: FunctionCallOutputPayload {
-                content: format!(
-                    "failed in sandbox {sandbox_type:?} with execution error: {error}"
-                ),
-                success: Some(false),
+        sess.notify_background_event(&sub_id, "retrying command without sandbox")
+            .await;
+
+        let retry_output_result = process_exec_tool_call(
+            params,
+            SandboxType::None,
+            sess.ctrl_c.clone(),
+            &sess.sandbox_policy,
+            &sess.codex_linux_sandbox_exe,
+        )
+        .await;
+
+        return match retry_output_result {
+            Ok(retry_output) => {
+                let ExecToolCallOutput {
+                    exit_code,
+                    stdout,
+                    stderr,
+                    duration,
+                } = retry_output;
+
+                let is_success = exit_code == 0;
+                let content = format_exec_output(
+                    if is_success { &stdout } else { &stderr },
+                    exit_code,
+                    duration,
+                );
+
+                ResponseInputItem::FunctionCallOutput {
+                    call_id,
+                    output: FunctionCallOutputPayload {
+                        content,
+                        success: Some(is_success),
+                    },
+                }
+            }
+            Err(e) => ResponseInputItem::FunctionCallOutput {
+                call_id,
+                output: FunctionCallOutputPayload {
+                    content: format!("retry failed: {e}"),
+                    success: Some(false),
+                },
             },
         };
     }
