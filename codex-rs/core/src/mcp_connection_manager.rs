@@ -172,8 +172,7 @@ impl McpConnectionManager {
     /// Returns a single map that contains **all** tools. Each key is the
     /// fully-qualified name for the tool.
     pub fn list_all_tools(&self) -> HashMap<String, Tool> {
-        self
-            .tools
+        self.tools
             .iter()
             .map(|(name, tool)| (name.clone(), tool.tool.clone()))
             .collect()
@@ -200,8 +199,7 @@ impl McpConnectionManager {
     }
 
     pub fn parse_tool_name(&self, tool_name: &str) -> Option<(String, String)> {
-        self
-            .tools
+        self.tools
             .get(tool_name)
             .map(|tool| (tool.server_name.clone(), tool.tool_name.clone()))
     }
