@@ -59,7 +59,7 @@ fn qualify_tools(tools: Vec<ToolInfo>) -> HashMap<String, ToolInfo> {
                 std::cmp::min(MAX_TOOL_NAME_LENGTH - RANDOM_SUFFIX_LENGTH, base_name.len());
             deduplicated_name = format!(
                 "{}{}",
-                base_name[..trim_length].to_string(),
+                &base_name[..trim_length],
                 random_suffix.to_lowercase()
             );
         }
@@ -68,7 +68,7 @@ fn qualify_tools(tools: Vec<ToolInfo>) -> HashMap<String, ToolInfo> {
         qualified_tools.insert(deduplicated_name, tool);
     }
 
-    return qualified_tools;
+    qualified_tools
 }
 
 struct ToolInfo {
@@ -172,11 +172,11 @@ impl McpConnectionManager {
     /// Returns a single map that contains **all** tools. Each key is the
     /// fully-qualified name for the tool.
     pub fn list_all_tools(&self) -> HashMap<String, Tool> {
-        return self
+        self
             .tools
             .iter()
             .map(|(name, tool)| (name.clone(), tool.tool.clone()))
-            .collect();
+            .collect()
     }
 
     /// Invoke the tool indicated by the (server, tool) pair.
@@ -200,10 +200,10 @@ impl McpConnectionManager {
     }
 
     pub fn parse_tool_name(&self, tool_name: &str) -> Option<(String, String)> {
-        return self
+        self
             .tools
             .get(tool_name)
-            .map(|tool| (tool.server_name.clone(), tool.tool_name.clone()));
+            .map(|tool| (tool.server_name.clone(), tool.tool_name.clone()))
     }
 }
 
@@ -238,7 +238,7 @@ async fn list_all_tools(
             let tool_info = ToolInfo {
                 server_name: server_name.clone(),
                 tool_name: tool.name.clone(),
-                tool: tool,
+                tool,
             };
             aggregated.push(tool_info);
         }
@@ -344,8 +344,8 @@ mod tests {
         let server_name = "server";
 
         let tools = vec![
-            create_test_tool(server_name, &tool_name),
-            create_test_tool(server_name, &tool_name),
+            create_test_tool(server_name, tool_name),
+            create_test_tool(server_name, tool_name),
         ];
 
         let qualified_tools = qualify_tools(tools);
