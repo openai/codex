@@ -262,7 +262,7 @@ mod tests {
             tool_name: tool_name.to_string(),
             tool: Tool {
                 annotations: None,
-                description: Some(format!("Test tool: {}", tool_name)),
+                description: Some(format!("Test tool: {tool_name}")),
                 input_schema: ToolInputSchema {
                     properties: None,
                     required: None,
