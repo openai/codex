@@ -24,6 +24,8 @@ mod app_event;
 mod app_event_sender;
 mod bottom_pane;
 mod cell_widget;
+
+mod bug_report;
 mod chatwidget;
 mod citation_regex;
 mod cli;

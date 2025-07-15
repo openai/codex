@@ -33,6 +33,7 @@ crossterm = { version = "0.28.1", features = ["bracketed-paste"] }
 image = { version = "^0.25.6", default-features = false, features = ["jpeg"] }
 lazy_static = "1"
 mcp-types = { path = "../mcp-types" }
+open = "5.3.2"
 path-clean = "1.0.1"
 ratatui = { version = "0.29.0", features = [
     "unstable-widget-ref",
@@ -59,6 +60,8 @@ tui-markdown = "0.3.3"
 tui-textarea = "0.7.0"
 unicode-segmentation = "1.12.0"
 uuid = "1"
+url = "2.5.4"
+sysinfo = "0.36.0"
 
 [dev-dependencies]
 insta = "1.43.1"

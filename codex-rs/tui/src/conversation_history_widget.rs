@@ -214,6 +214,11 @@ impl ConversationHistoryWidget {
         self.add_to_history(HistoryCell::new_error_event(message));
     }
 
+    /// Add link from the `/bug` command.
+    pub fn add_bug_report_link(&mut self, link: String) {
+        self.add_to_history(HistoryCell::new_bug_report_link(link));
+    }
+
     /// Add a pending patch entry (before user approval).
     pub fn add_patch_event(
         &mut self,

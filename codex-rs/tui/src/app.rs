@@ -1,5 +1,6 @@
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use crate::bug_report;
 use crate::chatwidget::ChatWidget;
 use crate::file_search::FileSearchManager;
 use crate::get_git_diff::get_git_diff;
@@ -244,6 +245,19 @@ impl<'a> App<'a> {
                     }
                     SlashCommand::Quit => {
                         break;
+                    }
+                    SlashCommand::Bug => {
+                        if let AppState::Chat { widget } = &mut self.app_state {
+                            let url = bug_report::build_bug_report_url(
+                                widget.bug_report_entries(),
+                                &self.config.model,
+                            );
+                            widget.add_bug_report_link(format!("🔗 Bug report URL: {url}"));
+                            // Try to open in browser
+                            if let Err(e) = open::that(&url) {
+                                tracing::warn!("Failed to open browser: {e}");
+                            }
+                        }
                     }
                     SlashCommand::Diff => {
                         let (is_git_repo, diff_text) = match get_git_diff() {

@@ -14,6 +14,7 @@ pub enum SlashCommand {
     // more frequently used commands should be listed first.
     New,
     Diff,
+    Bug,
     Quit,
     ToggleMouseMode,
 }
@@ -27,6 +28,7 @@ impl SlashCommand {
                 "Toggle mouse mode (enable for scrolling, disable for text selection)"
             }
             SlashCommand::Quit => "Exit the application.",
+            SlashCommand::Bug => "Generate a pre-filled GitHub bug-report link for this session.",
             SlashCommand::Diff => {
                 "Show git diff of the working directory (including untracked files)"
             }

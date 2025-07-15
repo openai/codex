@@ -35,6 +35,7 @@ use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
 use crate::bottom_pane::InputResult;
+use crate::bug_report::BugReportEntry;
 use crate::conversation_history_widget::ConversationHistoryWidget;
 use crate::history_cell::PatchEventType;
 use crate::user_approval_widget::ApprovalRequest;
@@ -49,6 +50,7 @@ pub(crate) struct ChatWidget<'a> {
     config: Config,
     initial_user_message: Option<UserMessage>,
     token_usage: TokenUsage,
+    bug_report_entries: Vec<BugReportEntry>,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -135,6 +137,7 @@ impl ChatWidget<'_> {
                 initial_images,
             ),
             token_usage: TokenUsage::default(),
+            bug_report_entries: Vec::new(),
         }
     }
 
@@ -213,7 +216,12 @@ impl ChatWidget<'_> {
 
         // Only show text portion in conversation history for now.
         if !text.is_empty() {
-            self.conversation_history.add_user_message(text);
+            self.conversation_history.add_user_message(text.clone());
+            // Record for bug report entries.
+            self.bug_report_entries.push(BugReportEntry {
+                prompt: text,
+                ..Default::default()
+            });
         }
         self.conversation_history.scroll_to_bottom();
     }
@@ -242,12 +250,20 @@ impl ChatWidget<'_> {
             EventMsg::AgentMessage(AgentMessageEvent { message }) => {
                 self.conversation_history
                     .add_agent_message(&self.config, message);
+                // Count as reasoning in bug_report_entries.
+                if let Some(entry) = self.bug_report_entries.last_mut() {
+                    entry.reasoning += 1;
+                }
                 self.request_redraw();
             }
             EventMsg::AgentReasoning(AgentReasoningEvent { text }) => {
                 if !self.config.hide_agent_reasoning {
                     self.conversation_history
-                        .add_agent_reasoning(&self.config, text);
+                        .add_agent_reasoning(&self.config, text.clone());
+
+                    if let Some(entry) = self.bug_report_entries.last_mut() {
+                        entry.reasoning += 1;
+                    }
                     self.request_redraw();
                 }
             }
@@ -302,7 +318,6 @@ impl ChatWidget<'_> {
 
                 self.conversation_history
                     .add_patch_event(PatchEventType::ApprovalRequest, changes);
-
                 self.conversation_history.scroll_to_bottom();
 
                 // Now surface the approval request in the BottomPane as before.
@@ -321,6 +336,9 @@ impl ChatWidget<'_> {
             }) => {
                 self.conversation_history
                     .add_active_exec_command(call_id, command);
+                if let Some(entry) = self.bug_report_entries.last_mut() {
+                    entry.tools += 1;
+                }
                 self.request_redraw();
             }
             EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
@@ -332,6 +350,9 @@ impl ChatWidget<'_> {
                 // summary so the user can follow along.
                 self.conversation_history
                     .add_patch_event(PatchEventType::ApplyBegin { auto_approved }, changes);
+                if let Some(entry) = self.bug_report_entries.last_mut() {
+                    entry.tools += 1;
+                }
                 if !auto_approved {
                     self.conversation_history.scroll_to_bottom();
                 }
@@ -355,6 +376,9 @@ impl ChatWidget<'_> {
             }) => {
                 self.conversation_history
                     .add_active_mcp_tool_call(call_id, server, tool, arguments);
+                if let Some(entry) = self.bug_report_entries.last_mut() {
+                    entry.tools += 1;
+                }
                 self.request_redraw();
             }
             EventMsg::McpToolCallEnd(mcp_tool_call_end_event) => {
@@ -398,6 +422,11 @@ impl ChatWidget<'_> {
         self.request_redraw();
     }
 
+    pub(crate) fn add_bug_report_link(&mut self, link: String) {
+        self.conversation_history.add_bug_report_link(link);
+        self.request_redraw();
+    }
+
     pub(crate) fn handle_scroll_delta(&mut self, scroll_delta: i32) {
         // If the user is trying to scroll exactly one line, we let them, but
         // otherwise we assume they are trying to scroll in larger increments.
@@ -414,6 +443,12 @@ impl ChatWidget<'_> {
     /// Forward file-search results to the bottom pane.
     pub(crate) fn apply_file_search_result(&mut self, query: String, matches: Vec<FileMatch>) {
         self.bottom_pane.on_file_search_result(query, matches);
+    }
+
+    /// Return the collected entries that make up the reproduction log for the
+    /// `/bug` command.
+    pub(crate) fn bug_report_entries(&self) -> &[BugReportEntry] {
+        &self.bug_report_entries
     }
 
     /// Handle Ctrl-C key press.
