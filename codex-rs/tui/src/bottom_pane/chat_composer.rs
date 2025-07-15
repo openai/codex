@@ -629,7 +629,7 @@ impl ChatComposer<'_> {
                 }
             } else {
                 BlockState {
-                    right_title: Line::from("Enter to send | Ctrl+D to quit | Ctrl+J for newline")
+                    right_title: Line::from("Enter to send | Ctrl+C to quit | Ctrl+J for newline")
                         .alignment(Alignment::Right),
                     border_style: Style::default(),
                 }

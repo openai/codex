@@ -11,4 +11,4 @@ expression: terminal.backend()
 "│                                                                                                  │"
 "│                                                                                                  │"
 "│                                                                                                  │"
-"╰───────────────────────────────────────────────Enter to send | Ctrl+D to quit | Ctrl+J for newline╯"
+"╰───────────────────────────────────────────────Enter to send | Ctrl+C to quit | Ctrl+J for newline╯"

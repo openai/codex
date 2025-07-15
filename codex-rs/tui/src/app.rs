@@ -194,13 +194,6 @@ impl<'a> App<'a> {
                                 }
                             }
                         }
-                        KeyEvent {
-                            code: KeyCode::Char('d'),
-                            modifiers: crossterm::event::KeyModifiers::CONTROL,
-                            ..
-                        } => {
-                            self.app_event_tx.send(AppEvent::ExitRequest);
-                        }
                         _ => {
                             self.dispatch_key_event(key_event);
                         }
