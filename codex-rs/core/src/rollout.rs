@@ -28,6 +28,7 @@ struct SessionMeta {
     timestamp: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     instructions: Option<String>,
+    model: String,
 }
 
 /// Records all [`ResponseItem`]s for a session and flushes them to disk after
@@ -71,6 +72,7 @@ impl RolloutRecorder {
             timestamp,
             id: session_id.to_string(),
             instructions,
+            model: config.model.to_string(),
         };
 
         // A reasonably-sized bounded channel. If the buffer fills up the send

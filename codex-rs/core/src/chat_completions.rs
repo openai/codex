@@ -43,7 +43,7 @@ pub(crate) async fn stream_chat_completions(
 
     for item in &prompt.input {
         match item {
-            ResponseItem::Message { role, content } => {
+            ResponseItem::Message { role, content, .. } => {
                 let mut text = String::new();
                 for c in content {
                     match c {
@@ -255,6 +255,8 @@ where
                     content: vec![ContentItem::OutputText {
                         text: content.to_string(),
                     }],
+                    token_usage: None,
+                    timestamp: Some(crate::models::generate_timestamp()),
                 };
 
                 let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
@@ -402,6 +404,8 @@ where
                             content: vec![crate::models::ContentItem::OutputText {
                                 text: std::mem::take(&mut this.cumulative),
                             }],
+                            token_usage: token_usage.clone(),
+                            timestamp: Some(crate::models::generate_timestamp()),
                         };
 
                         // Buffer Completed so it is returned *after* the aggregated message.

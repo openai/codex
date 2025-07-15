@@ -5,8 +5,12 @@ use mcp_types::CallToolResult;
 use serde::Deserialize;
 use serde::Serialize;
 use serde::ser::Serializer;
+use time::OffsetDateTime;
+use time::format_description::FormatItem;
+use time::macros::format_description;
 
 use crate::protocol::InputItem;
+use crate::protocol::TokenUsage;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -39,6 +43,10 @@ pub enum ResponseItem {
     Message {
         role: String,
         content: Vec<ContentItem>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        token_usage: Option<TokenUsage>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        timestamp: Option<String>,
     },
     Reasoning {
         id: String,
@@ -78,7 +86,12 @@ pub enum ResponseItem {
 impl From<ResponseInputItem> for ResponseItem {
     fn from(item: ResponseInputItem) -> Self {
         match item {
-            ResponseInputItem::Message { role, content } => Self::Message { role, content },
+            ResponseInputItem::Message { role, content } => Self::Message {
+                role,
+                content,
+                token_usage: None,
+                timestamp: Some(generate_timestamp()),
+            },
             ResponseInputItem::FunctionCallOutput { call_id, output } => {
                 Self::FunctionCallOutput { call_id, output }
             }
@@ -222,6 +235,16 @@ impl std::ops::Deref for FunctionCallOutputPayload {
     }
 }
 
+/// Generate a timestamp string in the same format as session timestamps.
+/// Format: "YYYY-MM-DDTHH:MM:SS.sssZ" (ISO 8601 with millisecond precision in UTC)
+pub fn generate_timestamp() -> String {
+    let timestamp_format: &[FormatItem] =
+        format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z");
+    OffsetDateTime::now_utc()
+        .format(timestamp_format)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00.000Z".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
@@ -258,6 +281,120 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
 
         assert_eq!(v.get("output").unwrap().as_str().unwrap(), "bad");
+    }
+
+    #[test]
+    fn message_with_token_usage_and_timestamp() {
+        let usage = TokenUsage {
+            input_tokens: 100,
+            output_tokens: 50,
+            total_tokens: 150,
+            cached_input_tokens: Some(25),
+            reasoning_output_tokens: None,
+        };
+
+        let timestamp = "2025-07-15T10:30:45.123Z".to_string();
+
+        let message = ResponseItem::Message {
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "Hello".to_string(),
+            }],
+            token_usage: Some(usage.clone()),
+            timestamp: Some(timestamp.clone()),
+        };
+
+        // Test serialization
+        let json = serde_json::to_string(&message).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed["type"], "message");
+        assert_eq!(parsed["role"], "assistant");
+        assert_eq!(parsed["content"][0]["text"], "Hello");
+        assert_eq!(parsed["token_usage"]["input_tokens"], 100);
+        assert_eq!(parsed["token_usage"]["output_tokens"], 50);
+        assert_eq!(parsed["token_usage"]["total_tokens"], 150);
+        assert_eq!(parsed["timestamp"], timestamp);
+
+        // Test deserialization
+        let deserialized: ResponseItem = serde_json::from_str(&json).unwrap();
+        if let ResponseItem::Message {
+            role,
+            content,
+            token_usage: Some(token_usage),
+            timestamp: Some(ts),
+            ..
+        } = deserialized
+        {
+            assert_eq!(role, "assistant");
+            assert_eq!(content.len(), 1);
+            assert_eq!(token_usage.input_tokens, 100);
+            assert_eq!(token_usage.output_tokens, 50);
+            assert_eq!(ts, timestamp);
+        } else {
+            panic!("Expected Message with token_usage and timestamp");
+        }
+    }
+
+    #[test]
+    fn message_without_optional_fields() {
+        let message = ResponseItem::Message {
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "Hi".to_string(),
+            }],
+            token_usage: None,
+            timestamp: None,
+        };
+
+        // Test serialization - optional fields should be omitted
+        let json = serde_json::to_string(&message).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed["type"], "message");
+        assert_eq!(parsed["role"], "user");
+        assert!(parsed.get("token_usage").is_none());
+        assert!(parsed.get("timestamp").is_none());
+
+        // Test deserialization - should work with missing fields
+        let deserialized: ResponseItem = serde_json::from_str(&json).unwrap();
+        if let ResponseItem::Message {
+            role,
+            token_usage,
+            timestamp,
+            ..
+        } = deserialized
+        {
+            assert_eq!(role, "user");
+            assert!(token_usage.is_none());
+            assert!(timestamp.is_none());
+        } else {
+            panic!("Expected Message without optional fields");
+        }
+    }
+
+    #[test]
+    fn generate_timestamp_format() {
+        let timestamp = generate_timestamp();
+
+        // Should be valid ISO 8601 format: YYYY-MM-DDTHH:MM:SS.sssZ
+        let parts: Vec<&str> = timestamp.split('T').collect();
+        assert_eq!(parts.len(), 2);
+
+        let date_part = parts[0];
+        let time_part = parts[1];
+
+        // Date should be YYYY-MM-DD format
+        assert_eq!(date_part.len(), 10);
+        assert!(date_part.contains('-'));
+
+        // Time should end with Z and have milliseconds
+        assert!(time_part.ends_with('Z'));
+        assert!(time_part.contains('.'));
+
+        // Should be able to parse as a valid timestamp
+        assert!(timestamp.len() >= 20); // Minimum ISO format length
+        assert!(timestamp.len() <= 30); // Maximum reasonable length
     }
 
     #[test]
