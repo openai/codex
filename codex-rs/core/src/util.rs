@@ -5,6 +5,9 @@ use rand::Rng;
 use tokio::sync::Notify;
 use tracing::debug;
 
+use regex_lite::Regex;
+use once_cell::sync::Lazy;
+
 use crate::config::Config;
 
 const INITIAL_DELAY_MS: u64 = 200;
@@ -63,4 +66,12 @@ pub fn is_inside_git_repo(config: &Config) -> bool {
     }
 
     false
+}
+
+pub fn validate_server_name(server_name: &str) -> bool {
+    static SERVER_NAME_REGEX: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"^[a-zA-Z0-9_-]+$").expect("failed to compile server name regex")
+    });
+    
+    SERVER_NAME_REGEX.is_match(server_name)
 }
