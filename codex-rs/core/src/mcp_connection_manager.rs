@@ -351,17 +351,19 @@ mod tests {
         assert_eq!(qualified_tools.len(), 2);
 
         let mut keys: Vec<_> = qualified_tools.keys().cloned().collect();
-        keys.sort();
 
         assert_ne!(keys[0], keys[1]);
 
-        assert_eq!(
-            keys[0],
-            "server__very_long_tool_name_that_definitely_exceeds_the_maximum_"
-        );
-        assert!(keys[1].starts_with("server__very_long_tool_name_that_definitely_exceeds_th"));
+        let pos = keys
+            .iter()
+            .position(|k| k == "server__very_long_tool_name_that_definitely_exceeds_the_maximum_")
+            .unwrap();
 
-        let suffix = &keys[1][54..];
+        keys.remove(pos);
+
+        assert!(keys[0].starts_with("server__very_long_tool_name_that_definitely_exceeds_th"));
+
+        let suffix = &keys[0][54..];
         assert_eq!(suffix.len(), 10);
         assert!(
             suffix
