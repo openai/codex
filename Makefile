@@ -7,5 +7,5 @@ format:
 	cd codex-rs && cargo fmt
 
 test:
-	cd codex-rs && cargo test --tests
+	cd codex-rs && cargo test --all-features
 

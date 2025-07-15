@@ -6,4 +6,4 @@ In the codex-rs folder where the rust code lives:
 
 After making changes to the rust code run `make format` to format the code and `make fix` to fix the code.
 
-Ensure the test suite passses by running `make test`
+Ensure the test suite passes by running `make test`
