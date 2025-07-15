@@ -167,7 +167,11 @@ impl ChatWidget<'_> {
             }
             InputFocus::BottomPane => match self.bottom_pane.handle_key_event(key_event) {
                 InputResult::Submitted(text) => {
-                    self.submit_user_message(text.into());
+                    if text.trim().eq_ignore_ascii_case("exit") {
+                        self.app_event_tx.send(AppEvent::ExitRequest);
+                    } else {
+                        self.submit_user_message(text.into());
+                    }
                 }
                 InputResult::None => {}
             },
