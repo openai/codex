@@ -220,6 +220,7 @@ pub async fn list_all_tools(
 
 fn is_valid_server_name(s: &server_name) -> bool {
     !server_name.is_empty()
-        && server_name.chars()
+        && server_name
+            .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
