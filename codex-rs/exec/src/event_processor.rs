@@ -197,10 +197,13 @@ impl EventProcessor {
             EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
                 if !self.answer_started {
                     ts_println!(self, "{}\n", "codex".style(self.italic).style(self.magenta),);
-
                     self.answer_started = true;
                 }
                 print!("{delta}");
+                use std::io::Write;
+                if let Err(e) = std::io::stdout().flush() {
+                    eprintln!("Failed to flush stdout: {e}");
+                }
             }
             EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta }) => {
                 if !self.show_agent_reasoning {
@@ -215,6 +218,10 @@ impl EventProcessor {
                     self.reasoning_started = true;
                 }
                 print!("{delta}");
+                use std::io::Write;
+                if let Err(e) = std::io::stdout().flush() {
+                    eprintln!("Failed to flush stdout: {e}");
+                }
             }
             EventMsg::AgentMessage(AgentMessageEvent { message: _ }) => {
                 self.answer_started = false;

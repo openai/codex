@@ -405,12 +405,6 @@ impl ChatWidget<'_> {
                 self.bottom_pane
                     .on_history_entry_response(log_id, offset, entry.map(|e| e.text));
             }
-            EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta: _ }) => {
-                // TODO: think how we want to support this in the TUI
-            }
-            EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta: _ }) => {
-                // TODO: think how we want to support this in the TUI
-            }
             event => {
                 self.conversation_history
                     .add_background_event(format!("{event:?}"));
