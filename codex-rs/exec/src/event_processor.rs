@@ -52,10 +52,13 @@ pub(crate) struct EventProcessor {
 
     /// Whether to include `AgentReasoning` events in the output.
     show_agent_reasoning: bool,
+
+    /// stream the agent message deltas
+    stream: bool,
 }
 
 impl EventProcessor {
-    pub(crate) fn create_with_ansi(with_ansi: bool, show_agent_reasoning: bool) -> Self {
+    pub(crate) fn create_with_ansi(with_ansi: bool, config: &Config) -> Self {
         let call_id_to_command = HashMap::new();
         let call_id_to_patch = HashMap::new();
         let call_id_to_tool_call = HashMap::new();
@@ -72,7 +75,8 @@ impl EventProcessor {
                 green: Style::new().green(),
                 cyan: Style::new().cyan(),
                 call_id_to_tool_call,
-                show_agent_reasoning,
+                show_agent_reasoning: !config.hide_agent_reasoning,
+                stream: config.stream,
             }
         } else {
             Self {
@@ -86,7 +90,8 @@ impl EventProcessor {
                 green: Style::new(),
                 cyan: Style::new(),
                 call_id_to_tool_call,
-                show_agent_reasoning,
+                show_agent_reasoning: !config.hide_agent_reasoning,
+                stream: config.stream,
             }
         }
     }
@@ -186,11 +191,15 @@ impl EventProcessor {
             EventMsg::TokenCount(TokenUsage { total_tokens, .. }) => {
                 ts_println!(self, "tokens used: {total_tokens}");
             }
-            EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta: _ }) => {
-                // TODO: think how we want to support this in the CLI
+            EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
+                if self.stream {
+                    println!("{}", delta.style(self.dimmed));
+                }
             }
-            EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta: _ }) => {
-                // TODO: think how we want to support this in the CLI
+            EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta }) => {
+                if self.stream {
+                    println!("{}", delta.style(self.dimmed));
+                }
             }
             EventMsg::AgentMessage(AgentMessageEvent { message }) => {
                 ts_println!(
@@ -351,7 +360,7 @@ impl EventProcessor {
                 );
 
                 // Pretty-print the patch summary with colored diff markers so
-                // it’s easy to scan in the terminal output.
+                // it's easy to scan in the terminal output.
                 for (path, change) in changes.iter() {
                     match change {
                         FileChange::Add { content } => {
@@ -448,7 +457,12 @@ impl EventProcessor {
                 // Should we exit?
             }
             EventMsg::AgentReasoning(agent_reasoning_event) => {
-                if self.show_agent_reasoning {
+                if !self.show_agent_reasoning {
+                    return;
+                }
+                if self.stream {
+                    println!("{}", agent_reasoning_event.text.style(self.dimmed));
+                } else {
                     ts_println!(
                         self,
                         "{}\n{}",
