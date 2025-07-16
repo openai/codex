@@ -1,6 +1,4 @@
 [
-  {"type": "response.output_item.text", "text": "Hello"},
-  {"type": "response.output_item.done"},
   {
     "type": "response.completed",
     "response": {
@@ -12,9 +10,7 @@
         "output_tokens_details": null,
         "total_tokens": 0
       },
-      "output": [
-        {"type": "output_text", "text": "Hello"}
-      ]
+      "output": []
     }
   }
 ]
