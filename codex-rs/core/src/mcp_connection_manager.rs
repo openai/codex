@@ -20,7 +20,6 @@ use tokio::task::JoinSet;
 use tracing::info;
 
 use crate::config_types::McpServerConfig;
-use crate::util::is_valid_server_name;
 
 /// Delimiter used to separate the server name from the tool name in a fully
 /// qualified tool name.
@@ -39,7 +38,12 @@ pub type ClientStartErrors = HashMap<String, anyhow::Error>;
 fn fully_qualified_tool_name(server: &str, tool: &str) -> String {
     format!("{server}{MCP_TOOL_NAME_DELIMITER}{tool}")
 }
-
+// Validate MCPserver name
+fn is_valid_server_name(s: &str) -> bool {
+    !s.is_empty() && s.chars().all(|c| {
+        c.is_ascii_alphanumeric() || c == '_' || c == '-'
+    })
+}
 pub(crate) fn try_parse_fully_qualified_tool_name(fq_name: &str) -> Option<(String, String)> {
     let (server, tool) = fq_name.split_once(MCP_TOOL_NAME_DELIMITER)?;
     if server.is_empty() || tool.is_empty() {
@@ -90,7 +94,6 @@ impl McpConnectionManager {
                 continue;
             }
             
-            let server_name_cloned = server_name.clone();
             join_set.spawn(async move {
                 let McpServerConfig { command, args, env } = cfg;
                 let client_res = McpClient::new_stdio_client(command, args, env).await;
@@ -115,11 +118,11 @@ impl McpConnectionManager {
                             .initialize(params, initialize_notification_params, timeout)
                             .await
                         {
-                            Ok(_response) => (server_name_cloned, Ok(client)),
-                            Err(e) => (server_name_cloned, Err(e)),
+                            Ok(_response) => (server_name, Ok(client)),
+                            Err(e) => (server_name, Err(e)),
                         }
                     }
-                    Err(e) => (server_name_cloned, Err(e.into())),
+                    Err(e) => (server_name, Err(e.into())),
                 }
             });
         }

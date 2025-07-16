@@ -64,9 +64,3 @@ pub fn is_inside_git_repo(config: &Config) -> bool {
 
     false
 }
-
-pub fn is_valid_server_name(server_name: &str) -> bool {
-    !server_name.is_empty() && server_name.chars().all(|c| {
-        c.is_ascii_alphanumeric() || c == '_' || c == '-'
-    })
-}
