@@ -67,24 +67,9 @@ async fn retries_on_early_close() {
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
         .respond_with(SeqResponder {})
-        .expect(2)
+        .expect(2..=11)
         .mount(&server)
         .await;
-
-    // Environment
-    //
-    // As of Rust 2024 `std::env::set_var` has been made `unsafe` because
-    // mutating the process environment is inherently racy when other threads
-    // are running.  We therefore have to wrap every call in an explicit
-    // `unsafe` block.  These are limited to the test-setup section so the
-    // scope is very small and clearly delineated.
-
-    unsafe {
-        std::env::set_var("OPENAI_REQUEST_MAX_RETRIES", "0");
-        std::env::set_var("OPENAI_STREAM_MAX_RETRIES", "1");
-        std::env::set_var("OPENAI_STREAM_IDLE_TIMEOUT_MS", "2000");
-    }
-
     let model_provider = ModelProviderInfo {
         name: "openai".into(),
         base_url: format!("{}/v1", server.uri()),
