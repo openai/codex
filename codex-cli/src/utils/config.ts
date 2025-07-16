@@ -63,8 +63,13 @@ export const CONFIG_YML_FILEPATH = join(CONFIG_DIR, "config.yml");
 export const CONFIG_FILEPATH = CONFIG_JSON_FILEPATH;
 export const INSTRUCTIONS_FILEPATH = join(CONFIG_DIR, "instructions.md");
 
-export const OPENAI_TIMEOUT_MS =
-  parseInt(process.env["OPENAI_TIMEOUT_MS"] || "0", 10) || undefined;
+// Cap timeout to avoid Node.js TimeoutOverflowWarning (max safe 32-bit signed integer)
+const MAX_SAFE_TIMEOUT = 2147483647;
+export const OPENAI_TIMEOUT_MS = (() => {
+  const parsed = parseInt(process.env["OPENAI_TIMEOUT_MS"] || "0", 10);
+  if (!parsed) return undefined;
+  return parsed > MAX_SAFE_TIMEOUT ? MAX_SAFE_TIMEOUT : parsed;
+})();
 export const OPENAI_BASE_URL = process.env["OPENAI_BASE_URL"] || "";
 export let OPENAI_API_KEY = process.env["OPENAI_API_KEY"] || "";
 
