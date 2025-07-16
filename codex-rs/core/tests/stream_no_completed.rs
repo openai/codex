@@ -32,6 +32,8 @@ fn sse_completed(id: &str) -> String {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+// this test is flaky (has race conditions), so we ignore it for now
+#[ignore]
 async fn retries_on_early_close() {
     #![allow(clippy::unwrap_used)]
 

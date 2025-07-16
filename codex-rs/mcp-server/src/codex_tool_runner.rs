@@ -171,6 +171,12 @@ pub async fn run_codex_tool_session(
                     EventMsg::SessionConfigured(_) => {
                         tracing::error!("unexpected SessionConfigured event");
                     }
+                    EventMsg::AgentMessageDelta(_) => {
+                        // TODO: think how we want to support this in the MCP
+                    }
+                    EventMsg::AgentReasoningDelta(_) => {
+                        // TODO: think how we want to support this in the MCP
+                    }
                     EventMsg::Error(_)
                     | EventMsg::TaskStarted
                     | EventMsg::TokenCount(_)
