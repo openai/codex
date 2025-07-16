@@ -1,0 +1,8 @@
+# This is a sample .codexignore file for Codex CLI
+# List files or folders you want Codex to ignore, one per line.
+# You can use * for wildcards, like in .gitignore.
+
+.env
+secrets/*.json
+private_key.pem
+node_modules/ 

@@ -482,6 +482,21 @@ export OPENROUTER_API_KEY="your-openrouter-key-here"
 
 ---
 
+## .codexignore: Hide Files from Codex
+
+If you want Codex to ignore some files or folders, just make a file called `.codexignore` in your project. Write the names or patterns of files you want to hide, one per line. It works like `.gitignore`.
+
+**Example:**
+```
+.env
+secrets/*.json
+private_key.pem
+```
+
+If you don't make a `.codexignore`, Codex will still skip common files like big binaries, build folders, and secret files by default.
+
+---
+
 ## FAQ
 
 <details>
@@ -734,3 +749,19 @@ Have you discovered a vulnerability or have concerns about model output? Please 
 ## License
 
 This repository is licensed under the [Apache-2.0 License](LICENSE).
+
+---
+
+## Contributing this change
+
+This pull request adds support for a `.codexignore` file, so users can hide sensitive files (like `.env` or secrets) from the Codex agent. If you add a `.codexignore` file to your project, Codex will skip any files or folders you list there. This helps keep private stuff safe. If you don’t make a `.codexignore`, Codex still ignores common secret and build files by default.
+
+This fixes [Issue #85](https://github.com/openai/codex/issues/85).
+
+**What was changed:**
+- Codex now checks for a `.codexignore` file at the project root.
+- If it finds one, it uses the patterns inside to skip files and folders.
+- If not, it uses a default list of things to ignore.
+- Added docs and a sample `.codexignore` file.
+
+Let me know if you have any questions or want changes!

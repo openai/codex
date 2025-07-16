@@ -174,16 +174,26 @@ function _read_default_patterns_file(filePath?: string): string {
   return fsSync.readFileSync(filePath, "utf-8");
 }
 
-/** Loads ignore patterns from a file (or a default list) and returns a list of RegExp patterns. */
-export function loadIgnorePatterns(filePath?: string): Array<RegExp> {
+/**
+ * Loads ignore patterns from a .codexignore file at the project root if it exists.
+ * If not, uses a default list. This helps Codex skip files you don't want it to see.
+ */
+export function loadIgnorePatterns(rootPath?: string): Array<RegExp> {
+  let ignoreFilePath: string | undefined = undefined;
+  if (rootPath) {
+    const candidate = path.join(rootPath, ".codexignore");
+    if (fsSync.existsSync(candidate)) {
+      ignoreFilePath = candidate;
+    }
+  }
   try {
-    const raw = _read_default_patterns_file(filePath);
+    const raw = _read_default_patterns_file(ignoreFilePath);
     const lines = raw.split(/\r?\n/);
     const cleaned = lines
       .map((l: string) => l.trim())
       .filter((l: string) => l && !l.startsWith("#"));
 
-    // Convert each pattern to a RegExp with a leading '*/'.
+    // Turn each pattern into something the computer can check.
     const regs = cleaned.map((pattern: string) => {
       const escaped = pattern
         .replace(/[.+^${}()|[\]\\]/g, "\\$&")
