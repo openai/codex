@@ -137,6 +137,9 @@ pub struct Config {
 
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: String,
+
+    /// streaming is enabled by default
+    pub stream: bool,
 }
 
 impl Config {
@@ -321,6 +324,9 @@ pub struct ConfigToml {
 
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: Option<String>,
+
+    /// streaming is enabled by default
+    pub stream: Option<bool>,
 }
 
 impl ConfigToml {
@@ -494,6 +500,8 @@ impl Config {
                 .chatgpt_base_url
                 .or(cfg.chatgpt_base_url)
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
+
+            stream: cfg.stream.unwrap_or(true),
         };
         Ok(config)
     }
@@ -800,6 +808,7 @@ disable_response_storage = true
                 model_reasoning_summary: ReasoningSummary::Detailed,
                 model_supports_reasoning_summaries: false,
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+                stream: true,
             },
             o3_profile_config
         );
@@ -846,6 +855,7 @@ disable_response_storage = true
             model_reasoning_summary: ReasoningSummary::default(),
             model_supports_reasoning_summaries: false,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+            stream: true,
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -907,6 +917,7 @@ disable_response_storage = true
             model_reasoning_summary: ReasoningSummary::default(),
             model_supports_reasoning_summaries: false,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+            stream: true,
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);
