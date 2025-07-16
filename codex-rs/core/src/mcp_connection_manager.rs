@@ -40,9 +40,9 @@ fn fully_qualified_tool_name(server: &str, tool: &str) -> String {
 }
 // Validate MCPserver name
 fn is_valid_server_name(s: &str) -> bool {
-    !s.is_empty() && s.chars().all(|c| {
-        c.is_ascii_alphanumeric() || c == '_' || c == '-'
-    })
+    !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 pub(crate) fn try_parse_fully_qualified_tool_name(fq_name: &str) -> Option<(String, String)> {
     let (server, tool) = fq_name.split_once(MCP_TOOL_NAME_DELIMITER)?;
@@ -89,11 +89,14 @@ impl McpConnectionManager {
         for (server_name, cfg) in mcp_servers {
             // Validate server name before spawning
             if !is_valid_server_name(&server_name) {
-                let error = anyhow::anyhow!("invalid server name '{}': must match pattern ^[a-zA-Z0-9_-]+$", server_name);
+                let error = anyhow::anyhow!(
+                    "invalid server name '{}': must match pattern ^[a-zA-Z0-9_-]+$",
+                    server_name
+                );
                 errors.insert(server_name, error);
                 continue;
             }
-            
+
             join_set.spawn(async move {
                 let McpServerConfig { command, args, env } = cfg;
                 let client_res = McpClient::new_stdio_client(command, args, env).await;
