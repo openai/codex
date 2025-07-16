@@ -72,8 +72,7 @@ impl ChatComposerHistory {
             return false;
         }
 
-        let lines = textarea.lines();
-        if lines.len() == 1 && lines[0].is_empty() {
+        if textarea.is_empty() {
             return true;
         }
 
@@ -85,6 +84,7 @@ impl ChatComposerHistory {
             return false;
         }
 
+        let lines = textarea.lines();
         matches!(&self.last_history_text, Some(prev) if prev == &lines.join("\n"))
     }
 
