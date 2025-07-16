@@ -125,7 +125,8 @@ impl ModelClient {
             reasoning,
             previous_response_id: prompt.prev_id.clone(),
             store: prompt.store,
-            stream: self.config.stream,
+            // TODO: make this configurable
+            stream: true,
         };
 
         trace!(
