@@ -426,6 +426,12 @@ where
                     // will never appear in a Chat Completions stream.
                     continue;
                 }
+                Poll::Ready(Some(Ok(ResponseEvent::OutputTextDelta(_))))
+                | Poll::Ready(Some(Ok(ResponseEvent::ReasoningSummaryDelta(_)))) => {
+                    // Deltas are ignored here since aggregation waits for the
+                    // final OutputItemDone.
+                    continue;
+                }
             }
         }
     }

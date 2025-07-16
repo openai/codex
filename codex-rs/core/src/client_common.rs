@@ -57,6 +57,8 @@ pub enum ResponseEvent {
         response_id: String,
         token_usage: Option<TokenUsage>,
     },
+    OutputTextDelta(String),
+    ReasoningSummaryDelta(String),
 }
 
 #[derive(Debug, Serialize)]

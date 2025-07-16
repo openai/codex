@@ -3,7 +3,9 @@ use codex_common::summarize_sandbox_policy;
 use codex_core::WireApi;
 use codex_core::config::Config;
 use codex_core::model_supports_reasoning_summaries;
+use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
+use codex_core::protocol::AgentReasoningDeltaEvent;
 use codex_core::protocol::BackgroundEventEvent;
 use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::Event;
@@ -183,6 +185,12 @@ impl EventProcessor {
             }
             EventMsg::TokenCount(TokenUsage { total_tokens, .. }) => {
                 ts_println!(self, "tokens used: {total_tokens}");
+            }
+            EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta: _ }) => {
+                // TODO: think how we want to support this in the CLI
+            }
+            EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta: _ }) => {
+                // TODO: think how we want to support this in the CLI
             }
             EventMsg::AgentMessage(AgentMessageEvent { message }) => {
                 ts_println!(
