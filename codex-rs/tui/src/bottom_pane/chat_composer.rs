@@ -76,6 +76,11 @@ impl ChatComposer<'_> {
         this
     }
 
+    /// Returns true if the composer currently contains no user input.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.textarea.is_empty()
+    }
+
     /// Update the cached *context-left* percentage and refresh the placeholder
     /// text. The UI relies on the placeholder to convey the remaining
     /// context when the composer is empty.
