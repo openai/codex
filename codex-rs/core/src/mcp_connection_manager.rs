@@ -20,6 +20,7 @@ use tokio::task::JoinSet;
 use tracing::info;
 
 use crate::config_types::McpServerConfig;
+use crate::util::is_valid_server_name;
 
 /// Delimiter used to separate the server name from the tool name in a fully
 /// qualified tool name.
@@ -79,9 +80,17 @@ impl McpConnectionManager {
 
         // Launch all configured servers concurrently.
         let mut join_set = JoinSet::new();
+        let mut errors = ClientStartErrors::new();
 
         for (server_name, cfg) in mcp_servers {
-            // TODO: Verify server name: require `^[a-zA-Z0-9_-]+$`?
+            // Validate server name before spawning
+            if !is_valid_server_name(&server_name) {
+                let error = anyhow::anyhow!("invalid server name '{}': must match pattern ^[a-zA-Z0-9_-]+$", server_name);
+                errors.insert(server_name, error);
+                continue;
+            }
+            
+            let server_name_cloned = server_name.clone();
             join_set.spawn(async move {
                 let McpServerConfig { command, args, env } = cfg;
                 let client_res = McpClient::new_stdio_client(command, args, env).await;
@@ -106,18 +115,17 @@ impl McpConnectionManager {
                             .initialize(params, initialize_notification_params, timeout)
                             .await
                         {
-                            Ok(_response) => (server_name, Ok(client)),
-                            Err(e) => (server_name, Err(e)),
+                            Ok(_response) => (server_name_cloned, Ok(client)),
+                            Err(e) => (server_name_cloned, Err(e)),
                         }
                     }
-                    Err(e) => (server_name, Err(e.into())),
+                    Err(e) => (server_name_cloned, Err(e.into())),
                 }
             });
         }
 
         let mut clients: HashMap<String, std::sync::Arc<McpClient>> =
             HashMap::with_capacity(join_set.len());
-        let mut errors = ClientStartErrors::new();
 
         while let Some(res) = join_set.join_next().await {
             let (server_name, client_res) = res?; // JoinError propagation
