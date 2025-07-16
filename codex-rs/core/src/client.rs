@@ -125,7 +125,8 @@ impl ModelClient {
             reasoning,
             previous_response_id: prompt.prev_id.clone(),
             store: prompt.store,
-            stream: self.config.stream,
+            // TODO: make this configurable
+            stream: true,
         };
 
         trace!(
@@ -148,7 +149,7 @@ impl ModelClient {
             let res = req_builder.send().await;
             match res {
                 Ok(resp) if resp.status().is_success() => {
-                    let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(16);
+                    let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
 
                     // spawn task to process SSE
                     let stream = resp.bytes_stream().map_err(CodexErr::Reqwest);
@@ -390,7 +391,7 @@ where
 
 /// used in tests to stream from a text SSE file
 async fn stream_from_fixture(path: impl AsRef<Path>) -> Result<ResponseStream> {
-    let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(16);
+    let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
     let f = std::fs::File::open(path.as_ref())?;
     let lines = std::io::BufReader::new(f).lines();
 
