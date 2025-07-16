@@ -3,7 +3,9 @@ use std::sync::Arc;
 
 use codex_core::codex_wrapper::init_codex;
 use codex_core::config::Config;
+use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
+use codex_core::protocol::AgentReasoningDeltaEvent;
 use codex_core::protocol::AgentReasoningEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::ErrorEvent;
@@ -374,6 +376,12 @@ impl ChatWidget<'_> {
                 // Inform bottom pane / composer.
                 self.bottom_pane
                     .on_history_entry_response(log_id, offset, entry.map(|e| e.text));
+            }
+            EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta: _ }) => {
+                // TODO: think how we want to support this in the TUI
+            }
+            EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta: _ }) => {
+                // TODO: think how we want to support this in the TUI
             }
             event => {
                 self.conversation_history
