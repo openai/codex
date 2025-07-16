@@ -79,9 +79,19 @@ impl McpConnectionManager {
 
         // Launch all configured servers concurrently.
         let mut join_set = JoinSet::new();
+        let mut errors = ClientStartErrors::new();
 
         for (server_name, cfg) in mcp_servers {
-            // TODO: Verify server name: require `^[a-zA-Z0-9_-]+$`?
+            // Validate server name before spawning
+            if !is_valid_mcp_server_name(&server_name) {
+                let error = anyhow::anyhow!(
+                    "invalid server name '{}': must match pattern ^[a-zA-Z0-9_-]+$",
+                    server_name
+                );
+                errors.insert(server_name, error);
+                continue;
+            }
+
             join_set.spawn(async move {
                 let McpServerConfig { command, args, env } = cfg;
                 let client_res = McpClient::new_stdio_client(command, args, env).await;
@@ -117,7 +127,6 @@ impl McpConnectionManager {
 
         let mut clients: HashMap<String, std::sync::Arc<McpClient>> =
             HashMap::with_capacity(join_set.len());
-        let mut errors = ClientStartErrors::new();
 
         while let Some(res) = join_set.join_next().await {
             let (server_name, client_res) = res?; // JoinError propagation
@@ -207,4 +216,11 @@ pub async fn list_all_tools(
     );
 
     Ok(aggregated)
+}
+
+fn is_valid_mcp_server_name(server_name: &str) -> bool {
+    !server_name.is_empty()
+        && server_name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
