@@ -52,9 +52,10 @@ pub(crate) struct EventProcessor {
 
     /// Whether to include `AgentReasoning` events in the output.
     show_agent_reasoning: bool,
-
-    /// stream the agent message deltas
-    stream: bool,
+    /// answer started
+    answer_started: bool,
+    /// reasoning started
+    reasoning_started: bool,
 }
 
 impl EventProcessor {
@@ -76,7 +77,8 @@ impl EventProcessor {
                 cyan: Style::new().cyan(),
                 call_id_to_tool_call,
                 show_agent_reasoning: !config.hide_agent_reasoning,
-                stream: config.stream,
+                answer_started: false,
+                reasoning_started: false,
             }
         } else {
             Self {
@@ -91,7 +93,8 @@ impl EventProcessor {
                 cyan: Style::new(),
                 call_id_to_tool_call,
                 show_agent_reasoning: !config.hide_agent_reasoning,
-                stream: config.stream,
+                answer_started: false,
+                reasoning_started: false,
             }
         }
     }
@@ -192,21 +195,30 @@ impl EventProcessor {
                 ts_println!(self, "tokens used: {total_tokens}");
             }
             EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
-                if self.stream {
-                    println!("{}", delta.style(self.dimmed));
+                if !self.answer_started {
+                    ts_println!(self, "{}\n", "codex".style(self.italic).style(self.magenta),);
+
+                    self.answer_started = true;
                 }
+                print!("{delta}");
             }
             EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta }) => {
-                if self.stream {
-                    println!("{}", delta.style(self.dimmed));
+                if !self.show_agent_reasoning {
+                    return;
                 }
+                if !self.reasoning_started {
+                    ts_println!(
+                        self,
+                        "{}\n",
+                        "thinking".style(self.italic).style(self.magenta),
+                    );
+                    self.reasoning_started = true;
+                }
+                print!("{delta}");
             }
-            EventMsg::AgentMessage(AgentMessageEvent { message }) => {
-                ts_println!(
-                    self,
-                    "{}\n{message}",
-                    "codex".style(self.bold).style(self.magenta)
-                );
+            EventMsg::AgentMessage(AgentMessageEvent { message: _ }) => {
+                self.answer_started = false;
+                println!();
             }
             EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
                 call_id,
@@ -456,20 +468,12 @@ impl EventProcessor {
             EventMsg::ApplyPatchApprovalRequest(_) => {
                 // Should we exit?
             }
-            EventMsg::AgentReasoning(agent_reasoning_event) => {
+            EventMsg::AgentReasoning(_) => {
                 if !self.show_agent_reasoning {
                     return;
                 }
-                if self.stream {
-                    println!("{}", agent_reasoning_event.text.style(self.dimmed));
-                } else {
-                    ts_println!(
-                        self,
-                        "{}\n{}",
-                        "thinking".style(self.italic).style(self.magenta),
-                        agent_reasoning_event.text
-                    );
-                }
+                self.reasoning_started = false;
+                println!();
             }
             EventMsg::SessionConfigured(session_configured_event) => {
                 let SessionConfiguredEvent {

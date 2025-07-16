@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
+use std::time::Instant;
 
 use codex_core::codex_wrapper::init_codex;
 use codex_core::config::Config;
@@ -51,6 +53,9 @@ pub(crate) struct ChatWidget<'a> {
     config: Config,
     initial_user_message: Option<UserMessage>,
     token_usage: TokenUsage,
+    reasoning_buffer: String,
+    answer_buffer: String,
+    last_redraw_time: Instant,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -137,6 +142,9 @@ impl ChatWidget<'_> {
                 initial_images,
             ),
             token_usage: TokenUsage::default(),
+            reasoning_buffer: String::new(),
+            answer_buffer: String::new(),
+            last_redraw_time: Instant::now() - Duration::from_millis(100),
         }
     }
 
@@ -243,15 +251,35 @@ impl ChatWidget<'_> {
             }
             EventMsg::AgentMessage(AgentMessageEvent { message }) => {
                 self.conversation_history
-                    .add_agent_message(&self.config, message);
+                    .replace_prev_agent_message(&self.config, message);
+                self.answer_buffer.clear();
+                self.request_redraw();
+            }
+            EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
+                if self.answer_buffer.is_empty() {
+                    self.conversation_history
+                        .add_agent_message(&self.config, "".to_string());
+                }
+                self.answer_buffer.push_str(&delta.clone());
+                self.conversation_history
+                    .replace_prev_agent_message(&self.config, self.answer_buffer.clone());
+                self.request_redraw();
+            }
+            EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta }) => {
+                if self.reasoning_buffer.is_empty() {
+                    self.conversation_history
+                        .add_agent_reasoning(&self.config, "".to_string());
+                }
+                self.reasoning_buffer.push_str(&delta.clone());
+                self.conversation_history
+                    .replace_prev_agent_reasoning(&self.config, self.reasoning_buffer.clone());
                 self.request_redraw();
             }
             EventMsg::AgentReasoning(AgentReasoningEvent { text }) => {
-                if !self.config.hide_agent_reasoning {
-                    self.conversation_history
-                        .add_agent_reasoning(&self.config, text);
-                    self.request_redraw();
-                }
+                self.conversation_history
+                    .replace_prev_agent_reasoning(&self.config, text);
+                self.reasoning_buffer.clear();
+                self.request_redraw();
             }
             EventMsg::TaskStarted => {
                 self.bottom_pane.clear_ctrl_c_quit_hint();
@@ -377,12 +405,6 @@ impl ChatWidget<'_> {
                 self.bottom_pane
                     .on_history_entry_response(log_id, offset, entry.map(|e| e.text));
             }
-            EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta: _ }) => {
-                // TODO: think how we want to support this in the TUI
-            }
-            EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta: _ }) => {
-                // TODO: think how we want to support this in the TUI
-            }
             event => {
                 self.conversation_history
                     .add_background_event(format!("{event:?}"));
@@ -398,7 +420,10 @@ impl ChatWidget<'_> {
     }
 
     fn request_redraw(&mut self) {
-        self.app_event_tx.send(AppEvent::Redraw);
+        if Instant::now().duration_since(self.last_redraw_time) > Duration::from_millis(100) {
+            self.app_event_tx.send(AppEvent::Redraw);
+            self.last_redraw_time = Instant::now();
+        }
     }
 
     pub(crate) fn add_diff_output(&mut self, diff_output: String) {

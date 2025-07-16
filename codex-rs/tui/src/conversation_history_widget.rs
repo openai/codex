@@ -198,8 +198,16 @@ impl ConversationHistoryWidget {
         self.add_to_history(HistoryCell::new_agent_message(config, message));
     }
 
+    pub fn replace_prev_agent_message(&mut self, config: &Config, text: String) {
+        self.replace_last_agent_message(config, text);
+    }
+
     pub fn add_agent_reasoning(&mut self, config: &Config, text: String) {
         self.add_to_history(HistoryCell::new_agent_reasoning(config, text));
+    }
+
+    pub fn replace_prev_agent_reasoning(&mut self, config: &Config, text: String) {
+        self.replace_last_agent_reasoning(config, text);
     }
 
     pub fn add_background_event(&mut self, message: String) {
@@ -247,6 +255,35 @@ impl ConversationHistoryWidget {
             cell,
             line_count: Cell::new(count),
         });
+    }
+
+    pub fn replace_last_agent_reasoning(&mut self, config: &Config, text: String) {
+        if let Some(idx) = self
+            .entries
+            .iter()
+            .rposition(|entry| matches!(entry.cell, HistoryCell::AgentReasoning { .. }))
+        {
+            let width = self.cached_width.get();
+            let entry = &mut self.entries[idx];
+            entry.cell = HistoryCell::new_agent_reasoning(config, text);
+            if width > 0 {
+                entry.line_count.set(entry.cell.height(width));
+            }
+        }
+    }
+    pub fn replace_last_agent_message(&mut self, config: &Config, text: String) {
+        if let Some(idx) = self
+            .entries
+            .iter()
+            .rposition(|entry| matches!(entry.cell, HistoryCell::AgentMessage { .. }))
+        {
+            let width = self.cached_width.get();
+            let entry = &mut self.entries[idx];
+            entry.cell = HistoryCell::new_agent_message(config, text);
+            if width > 0 {
+                entry.line_count.set(entry.cell.height(width));
+            }
+        }
     }
 
     pub fn record_completed_exec_command(
