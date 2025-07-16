@@ -105,7 +105,7 @@ impl Codex {
     /// submitted to start the session.
     pub async fn spawn(config: Config, ctrl_c: Arc<Notify>) -> CodexResult<(Codex, String)> {
         let (tx_sub, rx_sub) = async_channel::bounded(64);
-        let (tx_event, rx_event) = async_channel::bounded(64);
+        let (tx_event, rx_event) = async_channel::bounded(1600);
 
         let instructions = get_user_instructions(&config).await;
         let configure_session = Op::ConfigureSession {
