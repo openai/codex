@@ -83,7 +83,7 @@ impl McpConnectionManager {
 
         for (server_name, cfg) in mcp_servers {
             // Validate server name before spawning
-            if !is_valid_server_name(&server_name) {
+            if !is_valid_mcp_server_name(&server_name) {
                 let error = anyhow::anyhow!(
                     "invalid server name '{}': must match pattern ^[a-zA-Z0-9_-]+$",
                     server_name
@@ -218,7 +218,7 @@ pub async fn list_all_tools(
     Ok(aggregated)
 }
 
-fn is_valid_server_name(s: &server_name) -> bool {
+fn is_valid_mcp_server_name(server_name: &str) -> bool {
     !server_name.is_empty()
         && server_name
             .chars()
