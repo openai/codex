@@ -38,12 +38,7 @@ pub type ClientStartErrors = HashMap<String, anyhow::Error>;
 fn fully_qualified_tool_name(server: &str, tool: &str) -> String {
     format!("{server}{MCP_TOOL_NAME_DELIMITER}{tool}")
 }
-// Validate MCPserver name
-fn is_valid_server_name(s: &str) -> bool {
-    !s.is_empty()
-        && s.chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-}
+
 pub(crate) fn try_parse_fully_qualified_tool_name(fq_name: &str) -> Option<(String, String)> {
     let (server, tool) = fq_name.split_once(MCP_TOOL_NAME_DELIMITER)?;
     if server.is_empty() || tool.is_empty() {
@@ -221,4 +216,10 @@ pub async fn list_all_tools(
     );
 
     Ok(aggregated)
+}
+
+fn is_valid_server_name(s: &server_name) -> bool {
+    !server_name.is_empty()
+        && server_name.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
