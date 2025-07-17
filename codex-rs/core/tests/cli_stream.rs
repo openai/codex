@@ -3,6 +3,8 @@
 use assert_cmd::Command as AssertCommand;
 use codex_core::exec::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use serde_json::Value;
+use std::time::Duration;
+use std::time::Instant;
 use tempfile::TempDir;
 use uuid::Uuid;
 use walkdir::WalkDir;
@@ -158,7 +160,7 @@ async fn integration_creates_and_checks_session_file() {
     cmd.env("CODEX_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy")
         .env("CODEX_RS_SSE_FIXTURE", &fixture)
-        // Required for CLI arg parsing even though fixture short‑circuits network usage.
+        // Required for CLI arg parsing even though fixture short-circuits network usage.
         .env("OPENAI_BASE_URL", "http://unused.local");
 
     let output = cmd.output().unwrap();
@@ -169,8 +171,6 @@ async fn integration_creates_and_checks_session_file() {
     );
 
     // 5. Sessions are written asynchronously; wait briefly for the directory to appear.
-    use std::time::Duration;
-    use std::time::Instant;
     let sessions_dir = home.path().join("sessions");
     let start = Instant::now();
     while !sessions_dir.exists() && start.elapsed() < Duration::from_secs(2) {
@@ -208,7 +208,44 @@ async fn integration_creates_and_checks_session_file() {
     );
     let path = &matching_files[0];
 
-    // 7. Parse SessionMeta line and basic sanity checks.
+    // 7. Verify directory structure: sessions/YYYY/MM/DD/filename.jsonl
+    let rel = match path.strip_prefix(&sessions_dir) {
+        Ok(r) => r,
+        Err(_) => panic!("session file should live under sessions/"),
+    };
+    let comps: Vec<String> = rel
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        comps.len(),
+        4,
+        "Expected sessions/YYYY/MM/DD/<file>, got {rel:?}"
+    );
+    let year = &comps[0];
+    let month = &comps[1];
+    let day = &comps[2];
+    assert!(
+        year.len() == 4 && year.chars().all(|c| c.is_ascii_digit()),
+        "Year dir not 4-digit numeric: {year}"
+    );
+    assert!(
+        month.len() == 2 && month.chars().all(|c| c.is_ascii_digit()),
+        "Month dir not zero-padded 2-digit numeric: {month}"
+    );
+    assert!(
+        day.len() == 2 && day.chars().all(|c| c.is_ascii_digit()),
+        "Day dir not zero-padded 2-digit numeric: {day}"
+    );
+    // Range checks (best-effort; won't fail on leading zeros)
+    if let Ok(m) = month.parse::<u8>() {
+        assert!((1..=12).contains(&m), "Month out of range: {m}");
+    }
+    if let Ok(d) = day.parse::<u8>() {
+        assert!((1..=31).contains(&d), "Day out of range: {d}");
+    }
+
+    // 8. Parse SessionMeta line and basic sanity checks.
     let content = std::fs::read_to_string(path).unwrap();
     let mut lines = content.lines();
     let meta: Value = serde_json::from_str(lines.next().unwrap()).unwrap();
@@ -218,7 +255,7 @@ async fn integration_creates_and_checks_session_file() {
         "SessionMeta missing timestamp"
     );
 
-    // 8. Confirm at least one message contains the marker.
+    // 9. Confirm at least one message contains the marker.
     let mut found_message = false;
     for line in lines {
         let item: Value = serde_json::from_str(line).unwrap();
