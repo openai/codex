@@ -683,6 +683,7 @@ dependencies = [
  "tree-sitter",
  "tree-sitter-bash",
  "uuid",
+ "walkdir",
  "wildmatch",
  "wiremock",
 ]
