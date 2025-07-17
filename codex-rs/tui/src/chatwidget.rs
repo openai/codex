@@ -250,6 +250,14 @@ impl ChatWidget<'_> {
                 self.request_redraw();
             }
             EventMsg::AgentMessage(AgentMessageEvent { message }) => {
+                // if the answer buffer is empty, this means we haven't received any
+                // delta. Thus, we need to print the message as a new answer.
+                if self.answer_buffer.is_empty() {
+                    self.conversation_history
+                        .add_agent_message(&self.config, message);
+                    return;
+                }
+                // else, we rerender one last time.
                 self.conversation_history
                     .replace_prev_agent_message(&self.config, message);
                 self.answer_buffer.clear();
@@ -276,6 +284,13 @@ impl ChatWidget<'_> {
                 self.request_redraw();
             }
             EventMsg::AgentReasoning(AgentReasoningEvent { text }) => {
+                // if the reasoning buffer is empty, this means we haven't received any
+                // delta. Thus, we need to print the message as a new reasoning.
+                if self.reasoning_buffer.is_empty() {
+                    self.conversation_history
+                        .add_agent_reasoning(&self.config, "".to_string());
+                }
+                // else, we rerender one last time.
                 self.conversation_history
                     .replace_prev_agent_reasoning(&self.config, text);
                 self.reasoning_buffer.clear();
