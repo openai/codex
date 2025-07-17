@@ -60,7 +60,7 @@ struct ChatWidgetArgs {
     initial_images: Vec<PathBuf>,
 }
 
-impl<'a> App<'a> {
+impl App<'_> {
     pub(crate) fn new(
         config: Config,
         initial_prompt: Option<String>,
