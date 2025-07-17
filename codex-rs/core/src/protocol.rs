@@ -282,8 +282,14 @@ pub enum EventMsg {
     /// Agent text output message
     AgentMessage(AgentMessageEvent),
 
+    /// Agent text output delta message
+    AgentMessageDelta(AgentMessageDeltaEvent),
+
     /// Reasoning event from agent.
     AgentReasoning(AgentReasoningEvent),
+
+    /// Agent reasoning delta event from agent.
+    AgentReasoningDelta(AgentReasoningDeltaEvent),
 
     /// Ack the client's configure message.
     SessionConfigured(SessionConfiguredEvent),
@@ -341,8 +347,18 @@ pub struct AgentMessageEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AgentMessageDeltaEvent {
+    pub delta: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AgentReasoningEvent {
     pub text: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AgentReasoningDeltaEvent {
+    pub delta: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

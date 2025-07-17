@@ -3,7 +3,9 @@ use codex_common::summarize_sandbox_policy;
 use codex_core::WireApi;
 use codex_core::config::Config;
 use codex_core::model_supports_reasoning_summaries;
+use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
+use codex_core::protocol::AgentReasoningDeltaEvent;
 use codex_core::protocol::BackgroundEventEvent;
 use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::Event;
@@ -21,6 +23,7 @@ use owo_colors::OwoColorize;
 use owo_colors::Style;
 use shlex::try_join;
 use std::collections::HashMap;
+use std::io::Write;
 use std::time::Instant;
 
 /// This should be configurable. When used in CI, users may not want to impose
@@ -50,10 +53,12 @@ pub(crate) struct EventProcessor {
 
     /// Whether to include `AgentReasoning` events in the output.
     show_agent_reasoning: bool,
+    answer_started: bool,
+    reasoning_started: bool,
 }
 
 impl EventProcessor {
-    pub(crate) fn create_with_ansi(with_ansi: bool, show_agent_reasoning: bool) -> Self {
+    pub(crate) fn create_with_ansi(with_ansi: bool, config: &Config) -> Self {
         let call_id_to_command = HashMap::new();
         let call_id_to_patch = HashMap::new();
         let call_id_to_tool_call = HashMap::new();
@@ -70,7 +75,9 @@ impl EventProcessor {
                 green: Style::new().green(),
                 cyan: Style::new().cyan(),
                 call_id_to_tool_call,
-                show_agent_reasoning,
+                show_agent_reasoning: !config.hide_agent_reasoning,
+                answer_started: false,
+                reasoning_started: false,
             }
         } else {
             Self {
@@ -84,7 +91,9 @@ impl EventProcessor {
                 green: Style::new(),
                 cyan: Style::new(),
                 call_id_to_tool_call,
-                show_agent_reasoning,
+                show_agent_reasoning: !config.hide_agent_reasoning,
+                answer_started: false,
+                reasoning_started: false,
             }
         }
     }
@@ -184,12 +193,45 @@ impl EventProcessor {
             EventMsg::TokenCount(TokenUsage { total_tokens, .. }) => {
                 ts_println!(self, "tokens used: {total_tokens}");
             }
+            EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
+                if !self.answer_started {
+                    ts_println!(self, "{}\n", "codex".style(self.italic).style(self.magenta));
+                    self.answer_started = true;
+                }
+                print!("{delta}");
+                #[allow(clippy::expect_used)]
+                std::io::stdout().flush().expect("could not flush stdout");
+            }
+            EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta }) => {
+                if !self.show_agent_reasoning {
+                    return;
+                }
+                if !self.reasoning_started {
+                    ts_println!(
+                        self,
+                        "{}\n",
+                        "thinking".style(self.italic).style(self.magenta),
+                    );
+                    self.reasoning_started = true;
+                }
+                print!("{delta}");
+                #[allow(clippy::expect_used)]
+                std::io::stdout().flush().expect("could not flush stdout");
+            }
             EventMsg::AgentMessage(AgentMessageEvent { message }) => {
-                ts_println!(
-                    self,
-                    "{}\n{message}",
-                    "codex".style(self.bold).style(self.magenta)
-                );
+                // if answer_started is false, this means we haven't received any
+                // delta. Thus, we need to print the message as a new answer.
+                if !self.answer_started {
+                    ts_println!(
+                        self,
+                        "{}\n{}",
+                        "codex".style(self.italic).style(self.magenta),
+                        message,
+                    );
+                } else {
+                    println!();
+                    self.answer_started = false;
+                }
             }
             EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
                 call_id,
@@ -343,7 +385,7 @@ impl EventProcessor {
                 );
 
                 // Pretty-print the patch summary with colored diff markers so
-                // it’s easy to scan in the terminal output.
+                // it's easy to scan in the terminal output.
                 for (path, change) in changes.iter() {
                     match change {
                         FileChange::Add { content } => {
@@ -441,12 +483,17 @@ impl EventProcessor {
             }
             EventMsg::AgentReasoning(agent_reasoning_event) => {
                 if self.show_agent_reasoning {
-                    ts_println!(
-                        self,
-                        "{}\n{}",
-                        "thinking".style(self.italic).style(self.magenta),
-                        agent_reasoning_event.text
-                    );
+                    if !self.reasoning_started {
+                        ts_println!(
+                            self,
+                            "{}\n{}",
+                            "codex".style(self.italic).style(self.magenta),
+                            agent_reasoning_event.text,
+                        );
+                    } else {
+                        println!();
+                        self.reasoning_started = false;
+                    }
                 }
             }
             EventMsg::SessionConfigured(session_configured_event) => {

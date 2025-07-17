@@ -134,7 +134,7 @@ pub(crate) async fn stream_chat_completions(
 
         match res {
             Ok(resp) if resp.status().is_success() => {
-                let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(16);
+                let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
                 let stream = resp.bytes_stream().map_err(CodexErr::Reqwest);
                 tokio::spawn(process_chat_sse(stream, tx_event));
                 return Ok(ResponseStream { rx_event });
@@ -424,6 +424,12 @@ where
                 Poll::Ready(Some(Ok(ResponseEvent::Created))) => {
                     // These events are exclusive to the Responses API and
                     // will never appear in a Chat Completions stream.
+                    continue;
+                }
+                Poll::Ready(Some(Ok(ResponseEvent::OutputTextDelta(_))))
+                | Poll::Ready(Some(Ok(ResponseEvent::ReasoningSummaryDelta(_)))) => {
+                    // Deltas are ignored here since aggregation waits for the
+                    // final OutputItemDone.
                     continue;
                 }
             }
