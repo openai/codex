@@ -153,13 +153,15 @@ struct LogFileInfo {
 }
 
 fn create_log_file(config: &Config, session_id: Uuid) -> std::io::Result<LogFileInfo> {
-    // Resolve ~/.codex/sessions and create it if missing.
-    let mut dir = config.codex_home.clone();
-    dir.push(SESSIONS_SUBDIR);
-    fs::create_dir_all(&dir)?;
-
+    // Resolve ~/.codex/sessions/YYYY/MM/DD and create it if missing.
     let timestamp = OffsetDateTime::now_local()
         .map_err(|e| IoError::other(format!("failed to get local time: {e}")))?;
+    let mut dir = config.codex_home.clone();
+    dir.push(SESSIONS_SUBDIR);
+    dir.push(timestamp.year().to_string());
+    dir.push(format!("{:02}", u8::from(timestamp.month())));
+    dir.push(format!("{:02}", timestamp.day()));
+    fs::create_dir_all(&dir)?;
 
     // Custom format for YYYY-MM-DDThh-mm-ss. Use `-` instead of `:` for
     // compatibility with filesystems that do not allow colons in filenames.
