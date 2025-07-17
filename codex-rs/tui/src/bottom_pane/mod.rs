@@ -212,7 +212,7 @@ impl BottomPane<'_> {
     }
 
     pub(crate) fn request_redraw(&self) {
-        self.app_event_tx.send(AppEvent::Redraw)
+        self.app_event_tx.send(AppEvent::RequestRedraw)
     }
 
     /// Returns true when a popup inside the composer is visible.

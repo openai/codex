@@ -431,7 +431,7 @@ impl ChatWidget<'_> {
     }
 
     fn request_redraw(&mut self) {
-        self.app_event_tx.send(AppEvent::Redraw);
+        self.app_event_tx.send(AppEvent::RequestRedraw);
     }
 
     pub(crate) fn add_diff_output(&mut self, diff_output: String) {
