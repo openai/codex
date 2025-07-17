@@ -16,7 +16,7 @@ export default function HelpOverlay({
     if (key.escape || input === "q") {
       onExit();
     }
-  });
+  }, { isActive: true });
 
   return (
     <Box

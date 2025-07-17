@@ -81,7 +81,7 @@ export default function ModelOverlay({
         setMode(mode === "model" ? "provider" : "model");
       }
     }
-  });
+  }, { isActive: true });
 
   if (hasLastResponse) {
     return (
