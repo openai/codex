@@ -170,35 +170,31 @@ async fn integration_creates_and_checks_session_file() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    // 5. Sessions are written asynchronously; wait briefly for the directory to appear.
+    // 5. Sessions are written asynchronously; wait for the file containing the marker to appear.
     let sessions_dir = home.path().join("sessions");
     let start = Instant::now();
-    while !sessions_dir.exists() && start.elapsed() < Duration::from_secs(2) {
-        std::thread::sleep(Duration::from_millis(50));
-    }
-
-    // 6. Scan all session files and find the one that contains our marker.
     let mut matching_files = vec![];
-    for entry in WalkDir::new(&sessions_dir) {
-        let entry = entry.unwrap();
-        if entry.file_type().is_file() && entry.file_name().to_string_lossy().ends_with(".jsonl") {
-            let path = entry.path();
-            let content = std::fs::read_to_string(path).unwrap();
-            let mut lines = content.lines();
-            // Skip SessionMeta (first line)
-            let _ = lines.next();
-            for line in lines {
-                let item: Value = serde_json::from_str(line).unwrap();
-                if let Some("message") = item.get("type").and_then(|t| t.as_str()) {
-                    if let Some(content) = item.get("content") {
-                        if content.to_string().contains(&marker) {
+    while start.elapsed() < Duration::from_secs(5) {
+        if sessions_dir.exists() {
+            matching_files.clear();
+            for entry in WalkDir::new(&sessions_dir) {
+                let entry = entry.unwrap();
+                if entry.file_type().is_file()
+                    && entry.file_name().to_string_lossy().ends_with(".jsonl")
+                {
+                    let path = entry.path();
+                    if let Ok(content) = std::fs::read_to_string(path) {
+                        if content.contains(&marker) {
                             matching_files.push(path.to_owned());
-                            break;
                         }
                     }
                 }
             }
+            if matching_files.len() == 1 {
+                break;
+            }
         }
+        std::thread::sleep(Duration::from_millis(50));
     }
     assert_eq!(
         matching_files.len(),
@@ -208,7 +204,7 @@ async fn integration_creates_and_checks_session_file() {
     );
     let path = &matching_files[0];
 
-    // 7. Verify directory structure: sessions/YYYY/MM/DD/filename.jsonl
+    // 6. Verify directory structure: sessions/YYYY/MM/DD/filename.jsonl
     let rel = match path.strip_prefix(&sessions_dir) {
         Ok(r) => r,
         Err(_) => panic!("session file should live under sessions/"),
@@ -245,7 +241,7 @@ async fn integration_creates_and_checks_session_file() {
         assert!((1..=31).contains(&d), "Day out of range: {d}");
     }
 
-    // 8. Parse SessionMeta line and basic sanity checks.
+    // 7. Parse SessionMeta line and basic sanity checks.
     let content = std::fs::read_to_string(path).unwrap();
     let mut lines = content.lines();
     let meta: Value = serde_json::from_str(lines.next().unwrap()).unwrap();
@@ -255,7 +251,7 @@ async fn integration_creates_and_checks_session_file() {
         "SessionMeta missing timestamp"
     );
 
-    // 9. Confirm at least one message contains the marker.
+    // 8. Confirm at least one message contains the marker.
     let mut found_message = false;
     for line in lines {
         let item: Value = serde_json::from_str(line).unwrap();
