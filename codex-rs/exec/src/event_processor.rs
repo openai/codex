@@ -218,7 +218,6 @@ impl EventProcessor {
                     self.reasoning_started = true;
                 }
                 print!("{delta}");
-                use std::io::Write;
                 if let Err(e) = std::io::stdout().flush() {
                     eprintln!("Failed to flush stdout: {e}");
                 }
@@ -233,11 +232,10 @@ impl EventProcessor {
                         "codex".style(self.italic).style(self.magenta),
                         message,
                     );
-                    return;
+                } else {
+                    println!();
+                    self.answer_started = false;
                 }
-                println!();
-                // reset answer_started to false so we can print the next message as a new answer.
-                self.answer_started = false;
             }
             EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
                 call_id,
@@ -488,23 +486,19 @@ impl EventProcessor {
                 // Should we exit?
             }
             EventMsg::AgentReasoning(agent_reasoning_event) => {
-                if !self.show_agent_reasoning {
-                    return;
+                if self.show_agent_reasoning {
+                    if !self.reasoning_started {
+                        ts_println!(
+                            self,
+                            "{}\n{}",
+                            "codex".style(self.italic).style(self.magenta),
+                            agent_reasoning_event.text,
+                        );
+                    } else {
+                        println!();
+                        self.reasoning_started = false;
+                    }
                 }
-                // if reasoning_started is false, this means we haven't received any
-                // delta. Thus, we need to print the message as a new answer.
-                if !self.reasoning_started {
-                    ts_println!(
-                        self,
-                        "{}\n{}",
-                        "codex".style(self.italic).style(self.magenta),
-                        agent_reasoning_event.text,
-                    );
-                    return;
-                }
-                // reset reasoning_started to false so we can print the next message as a new answer.
-                self.reasoning_started = false;
-                println!();
             }
             EventMsg::SessionConfigured(session_configured_event) => {
                 let SessionConfiguredEvent {

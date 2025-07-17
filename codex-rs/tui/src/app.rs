@@ -20,6 +20,8 @@ use crossterm::event::MouseEventKind;
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 use std::sync::mpsc::channel;
+use std::time::Duration;
+use std::time::Instant;
 
 /// Top-level application state: which full-screen view is currently active.
 #[allow(clippy::large_enum_variant)]
@@ -49,6 +51,9 @@ pub(crate) struct App<'a> {
     /// Stored parameters needed to instantiate the ChatWidget later, e.g.,
     /// after dismissing the Git-repo warning.
     chat_args: Option<ChatWidgetArgs>,
+
+    /// last time the app was redrawn
+    last_redraw_time: Instant,
 }
 
 /// Aggregate parameters needed to create a `ChatWidget`, as creation may be
@@ -153,6 +158,7 @@ impl<'a> App<'a> {
             config,
             file_search,
             chat_args,
+            last_redraw_time: Instant::now(),
         }
     }
 
@@ -297,6 +303,12 @@ impl<'a> App<'a> {
     }
 
     fn draw_next_frame(&mut self, terminal: &mut tui::Tui) -> Result<()> {
+        // skip if the last redraw was less than 100ms ago
+        if Instant::now().duration_since(self.last_redraw_time) < Duration::from_millis(100) {
+            return Ok(());
+        }
+        self.last_redraw_time = Instant::now();
+
         match &mut self.app_state {
             AppState::Chat { widget } => {
                 terminal.draw(|frame| frame.render_widget_ref(&**widget, frame.area()))?;

@@ -1,7 +1,5 @@
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
-use std::time::Instant;
 
 use codex_core::codex_wrapper::init_codex;
 use codex_core::config::Config;
@@ -55,7 +53,6 @@ pub(crate) struct ChatWidget<'a> {
     token_usage: TokenUsage,
     reasoning_buffer: String,
     answer_buffer: String,
-    last_redraw_time: Instant,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -144,7 +141,6 @@ impl ChatWidget<'_> {
             token_usage: TokenUsage::default(),
             reasoning_buffer: String::new(),
             answer_buffer: String::new(),
-            last_redraw_time: Instant::now() - Duration::from_millis(100),
         }
     }
 
@@ -255,11 +251,10 @@ impl ChatWidget<'_> {
                 if self.answer_buffer.is_empty() {
                     self.conversation_history
                         .add_agent_message(&self.config, message);
-                    return;
+                } else {
+                    self.conversation_history
+                        .replace_prev_agent_message(&self.config, message);
                 }
-                // else, we rerender one last time.
-                self.conversation_history
-                    .replace_prev_agent_message(&self.config, message);
                 self.answer_buffer.clear();
                 self.request_redraw();
             }
@@ -289,10 +284,11 @@ impl ChatWidget<'_> {
                 if self.reasoning_buffer.is_empty() {
                     self.conversation_history
                         .add_agent_reasoning(&self.config, "".to_string());
+                } else {
+                    // else, we rerender one last time.
+                    self.conversation_history
+                        .replace_prev_agent_reasoning(&self.config, text);
                 }
-                // else, we rerender one last time.
-                self.conversation_history
-                    .replace_prev_agent_reasoning(&self.config, text);
                 self.reasoning_buffer.clear();
                 self.request_redraw();
             }
@@ -435,10 +431,7 @@ impl ChatWidget<'_> {
     }
 
     fn request_redraw(&mut self) {
-        if Instant::now().duration_since(self.last_redraw_time) > Duration::from_millis(100) {
-            self.app_event_tx.send(AppEvent::Redraw);
-            self.last_redraw_time = Instant::now();
-        }
+        self.app_event_tx.send(AppEvent::Redraw);
     }
 
     pub(crate) fn add_diff_output(&mut self, diff_output: String) {
