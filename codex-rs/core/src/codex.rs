@@ -51,7 +51,6 @@ use crate::exec::process_exec_tool_call;
 use crate::exec_env::create_env;
 use crate::flags::OPENAI_STREAM_MAX_RETRIES;
 use crate::mcp_connection_manager::McpConnectionManager;
-use crate::mcp_connection_manager::try_parse_fully_qualified_tool_name;
 use crate::mcp_tool_call::handle_mcp_tool_call;
 use crate::models::ContentItem;
 use crate::models::FunctionCallOutputPayload;
@@ -1292,7 +1291,7 @@ async fn handle_function_call(
             handle_container_exec_with_params(params, sess, sub_id, call_id).await
         }
         _ => {
-            match try_parse_fully_qualified_tool_name(&name) {
+            match sess.mcp_connection_manager.parse_tool_name(&name) {
                 Some((server, tool_name)) => {
                     // TODO(mbolin): Determine appropriate timeout for tool call.
                     let timeout = None;

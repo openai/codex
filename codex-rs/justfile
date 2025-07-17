@@ -23,3 +23,9 @@ file-search *args:
 # format code
 fmt:
     cargo fmt -- --config imports_granularity=Item
+
+fix:
+    cargo clippy --fix --all-features --tests --allow-dirty
+
+install:
+    cargo fetch
