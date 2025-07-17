@@ -67,16 +67,42 @@ enum RolloutCmd {
     UpdateState(SessionStateSnapshot),
 }
 
+/// Write the in-memory `SavedSession` out as **JSONL**:
+///  1. SessionMeta line
+///  2. One line per `ResponseItem`
+///  3. SessionStateSnapshot line
+///
+/// Each line is compact (no pretty formatting) so callers that do
+/// `for line in content.lines()` can parse each line independently.
 async fn write_session(file: &mut tokio::fs::File, data: &SavedSession) {
+    // Start from scratch each time (simple & safe for small files).
     if file.seek(std::io::SeekFrom::Start(0)).await.is_err() {
         return;
     }
     if file.set_len(0).await.is_err() {
         return;
     }
-    if let Ok(json) = serde_json::to_vec_pretty(data) {
-        let _ = file.write_all(&json).await;
+
+    // Session meta
+    if let Ok(json) = serde_json::to_string(&data.session) {
+        let _ = file.write_all(json.as_bytes()).await;
+        let _ = file.write_all(b"\n").await;
     }
+
+    // Items
+    for item in &data.items {
+        if let Ok(json) = serde_json::to_string(item) {
+            let _ = file.write_all(json.as_bytes()).await;
+            let _ = file.write_all(b"\n").await;
+        }
+    }
+
+    // State (always last)
+    if let Ok(json) = serde_json::to_string(&data.state) {
+        let _ = file.write_all(json.as_bytes()).await;
+        let _ = file.write_all(b"\n").await;
+    }
+
     let _ = file.flush().await;
 }
 
@@ -166,10 +192,61 @@ impl RolloutRecorder {
             .map_err(|e| IoError::other(format!("failed to queue rollout state: {e}")))
     }
 
+    /// Reopen an existing JSONL session file.
+    ///
+    /// Format expected (see `write_session`):
+    ///   line 0: `SessionMeta`
+    ///   lines 1..N-1: `ResponseItem`
+    ///   last line: `SessionStateSnapshot`
     pub async fn resume(path: &std::path::Path) -> std::io::Result<(Self, SavedSession)> {
-        let bytes = tokio::fs::read(path).await?;
-        let saved: SavedSession = serde_json::from_slice(&bytes)
-            .map_err(|e| IoError::other(format!("failed to parse session: {e}")))?;
+        let text = tokio::fs::read_to_string(path).await?;
+        let mut lines = text.lines();
+
+        // Session meta (required)
+        let meta_line = lines
+            .next()
+            .ok_or_else(|| IoError::other("empty session file"))?;
+        let session: SessionMeta = serde_json::from_str(meta_line)
+            .map_err(|e| IoError::other(format!("failed to parse session meta: {e}")))?;
+
+        let mut items = Vec::new();
+        let mut state = SessionStateSnapshot::default();
+
+        for line in lines {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            // Try ResponseItem first.
+            match serde_json::from_str::<ResponseItem>(line) {
+                Ok(item) => {
+                    items.push(item);
+                    continue;
+                }
+                Err(_) => {
+                    // Fallback: maybe it's the state line.
+                    match serde_json::from_str::<SessionStateSnapshot>(line) {
+                        Ok(s) => {
+                            state = s;
+                            // Don't `continue` early; keep scanning in case of junk,
+                            // but typically this is the last line.
+                        }
+                        Err(e) => {
+                            // Ignore junk lines silently? For now: error (helps during dev/tests).
+                            return Err(IoError::other(format!(
+                                "unrecognized JSONL line in session file: {e}; line={line:?}"
+                            )));
+                        }
+                    }
+                }
+            }
+        }
+
+        let saved = SavedSession {
+            session,
+            items,
+            state,
+        };
 
         let file = std::fs::OpenOptions::new()
             .write(true)
