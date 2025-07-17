@@ -1,6 +1,7 @@
 {
     "rust-analyzer.checkOnSave": true,
     "rust-analyzer.check.command": "clippy",
+    "rust-analyzer.check.extraArgs": ["--all-features", "--tests"],
   
     "[rust]": {
         "editor.defaultFormatter": "rust-lang.rust-analyzer",
