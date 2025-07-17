@@ -5,7 +5,7 @@ use crossterm::event::KeyEvent;
 use crate::slash_command::SlashCommand;
 
 #[allow(clippy::large_enum_variant)]
-pub(crate) enum AppEvent {
+pub enum AppEvent {
     CodexEvent(Event),
 
     Redraw,
