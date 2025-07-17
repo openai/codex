@@ -18,7 +18,8 @@ use mcp_types::ClientCapabilities;
 use mcp_types::Implementation;
 use mcp_types::Tool;
 
-use sha1::{Digest, Sha1};
+use sha1::Digest;
+use sha1::Sha1;
 use tokio::task::JoinSet;
 use tracing::info;
 use tracing::warn;
