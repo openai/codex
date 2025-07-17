@@ -40,7 +40,7 @@ pub async fn run_codex_tool_session(
     config: CodexConfig,
     outgoing: Sender<JSONRPCMessage>,
 ) {
-    let (codex, first_event, _ctrl_c) = match init_codex(config).await {
+    let (codex, first_event, _ctrl_c) = match init_codex(config, None).await {
         Ok(res) => res,
         Err(e) => {
             let result = CallToolResult {

@@ -34,6 +34,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         dangerously_bypass_approvals_and_sandbox,
         cwd,
         skip_git_repo_check,
+        resume,
         color,
         last_message_file,
         sandbox_mode: sandbox_mode_cli_arg,
@@ -139,7 +140,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         .with_writer(std::io::stderr)
         .try_init();
 
-    let (codex_wrapper, event, ctrl_c) = codex_wrapper::init_codex(config).await?;
+    let (codex_wrapper, event, ctrl_c) = codex_wrapper::init_codex(config, resume).await?;
     let codex = Arc::new(codex_wrapper);
     info!("Codex initialized with event: {event:?}");
 

@@ -51,6 +51,10 @@ pub struct Cli {
     #[arg(long = "skip-git-repo-check", default_value_t = false)]
     pub skip_git_repo_check: bool,
 
+    /// Resume a previous session using the given rollout file.
+    #[arg(long = "resume")]
+    pub resume: Option<PathBuf>,
+
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 }

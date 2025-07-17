@@ -97,6 +97,9 @@ pub enum Op {
         decision: ReviewDecision,
     },
 
+    /// Load a previously saved session from disk and resume from it.
+    LoadSession { path: std::path::PathBuf },
+
     /// Append an entry to the persistent cross-session message history.
     ///
     /// Note the entry is not guaranteed to be logged if the user has
