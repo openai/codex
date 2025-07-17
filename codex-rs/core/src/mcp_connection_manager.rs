@@ -53,7 +53,7 @@ fn qualify_tools(tools: Vec<ToolInfo>) -> HashMap<String, ToolInfo> {
             let mut hasher = Sha1::new();
             hasher.update(qualified_name.as_bytes());
             let sha1 = hasher.finalize();
-            let sha1_str = format!("{:x}", sha1);
+            let sha1_str = format!("{sha1:x}");
 
             // Truncate to make room for the hash suffix
             let prefix_len = MAX_TOOL_NAME_LENGTH - sha1_str.len();
