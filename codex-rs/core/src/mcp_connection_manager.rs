@@ -17,10 +17,11 @@ use codex_mcp_client::McpClient;
 use mcp_types::ClientCapabilities;
 use mcp_types::Implementation;
 use mcp_types::Tool;
-use rand::distr::Alphanumeric;
-use rand::distr::SampleString;
+
+use sha1::{Digest, Sha1};
 use tokio::task::JoinSet;
 use tracing::info;
+use tracing::warn;
 
 use crate::config_types::McpServerConfig;
 
@@ -31,7 +32,6 @@ use crate::config_types::McpServerConfig;
 /// choose a delimiter from this character set.
 const MCP_TOOL_NAME_DELIMITER: &str = "__";
 const MAX_TOOL_NAME_LENGTH: usize = 64;
-const RANDOM_SUFFIX_LENGTH: usize = 10;
 
 /// Timeout for the `tools/list` request.
 const LIST_TOOLS_TIMEOUT: Duration = Duration::from_secs(10);
@@ -44,28 +44,29 @@ fn qualify_tools(tools: Vec<ToolInfo>) -> HashMap<String, ToolInfo> {
     let mut used_names = HashSet::new();
     let mut qualified_tools = HashMap::new();
     for tool in tools {
-        let mut base_name = format!(
+        let mut qualified_name = format!(
             "{}{}{}",
             tool.server_name, MCP_TOOL_NAME_DELIMITER, tool.tool_name
         );
-        if base_name.len() > MAX_TOOL_NAME_LENGTH {
-            base_name = base_name[..MAX_TOOL_NAME_LENGTH].to_string();
+        if qualified_name.len() > MAX_TOOL_NAME_LENGTH {
+            let mut hasher = Sha1::new();
+            hasher.update(qualified_name.as_bytes());
+            let sha1 = hasher.finalize();
+            let sha1_str = format!("{:x}", sha1);
+
+            // Truncate to make room for the hash suffix
+            let prefix_len = MAX_TOOL_NAME_LENGTH - sha1_str.len();
+
+            qualified_name = format!("{}{}", &qualified_name[..prefix_len], sha1_str);
         }
 
-        let mut deduplicated_name = base_name.clone();
-        while used_names.contains(&deduplicated_name) {
-            let random_suffix = Alphanumeric.sample_string(&mut rand::rng(), RANDOM_SUFFIX_LENGTH);
-            let trim_length =
-                std::cmp::min(MAX_TOOL_NAME_LENGTH - RANDOM_SUFFIX_LENGTH, base_name.len());
-            deduplicated_name = format!(
-                "{}{}",
-                &base_name[..trim_length],
-                random_suffix.to_lowercase()
-            );
+        if used_names.contains(&qualified_name) {
+            warn!("skipping duplicated tool {}", qualified_name);
+            continue;
         }
 
-        used_names.insert(deduplicated_name.clone());
-        qualified_tools.insert(deduplicated_name, tool);
+        used_names.insert(qualified_name.clone());
+        qualified_tools.insert(qualified_name, tool);
     }
 
     qualified_tools
@@ -305,87 +306,49 @@ mod tests {
     }
 
     #[test]
-    fn test_qualify_tools_long_names_trimmed() {
-        let tools = vec![create_test_tool(
-            "very_long_server_name_that_exceeds_limits",
-            "very_long_tool_name_that_also_exceeds_limits",
-        )];
+    fn test_qualify_tools_duplicated_names_skipped() {
+        let tools = vec![
+            create_test_tool("server1", "duplicate_tool"),
+            create_test_tool("server1", "duplicate_tool"),
+        ];
 
         let qualified_tools = qualify_tools(tools);
 
+        // Only the first tool should remain, the second is skipped
         assert_eq!(qualified_tools.len(), 1);
-        let keys: Vec<_> = qualified_tools.keys().cloned().collect();
+        assert!(qualified_tools.contains_key("server1__duplicate_tool"));
+    }
 
+    #[test]
+    fn test_qualify_tools_long_names_same_server() {
+        let server_name = "my_server";
+
+        let tools = vec![
+            create_test_tool(
+                server_name,
+                "extremely_lengthy_function_name_that_absolutely_surpasses_all_reasonable_limits",
+            ),
+            create_test_tool(
+                server_name,
+                "yet_another_extremely_lengthy_function_name_that_absolutely_surpasses_all_reasonable_limits",
+            ),
+        ];
+
+        let qualified_tools = qualify_tools(tools);
+
+        assert_eq!(qualified_tools.len(), 2);
+
+        let keys: Vec<_> = qualified_tools.keys().cloned().collect();
         assert_eq!(keys[0].len(), 64);
         assert_eq!(
             keys[0],
-            "very_long_server_name_that_exceeds_limits__very_long_tool_name_t"
+            "my_server__yet_another_e1c3987bd9c50b826cbe1687966f79f0c602d19ca"
         );
-    }
 
-    #[test]
-    fn test_qualify_tools_duplicated_names_with_suffix() {
-        let tools = vec![
-            create_test_tool("server1", "duplicate_tool"),
-            create_test_tool("server1", "duplicate_tool"),
-        ];
-
-        let qualified_tools = qualify_tools(tools);
-
-        assert_eq!(qualified_tools.len(), 2);
-
-        let mut keys: Vec<_> = qualified_tools.keys().cloned().collect();
-        keys.sort();
-
-        assert_ne!(keys[0], keys[1]);
-
-        assert_eq!(keys[0], "server1__duplicate_tool");
-
-        assert!(keys[1].starts_with("server1__duplicate_tool"));
-
-        let suffix = &keys[1][23..];
-        assert_eq!(suffix.len(), 10);
-        assert!(
-            suffix
-                .chars()
-                .all(|c| c.is_alphanumeric() && !c.is_uppercase())
-        );
-    }
-
-    #[test]
-    fn test_qualify_tools_long_duplicated_names_conflict() {
-        let tool_name =
-            "very_long_tool_name_that_definitely_exceeds_the_maximum_length_of_64_characters";
-        let server_name = "server";
-
-        let tools = vec![
-            create_test_tool(server_name, tool_name),
-            create_test_tool(server_name, tool_name),
-        ];
-
-        let qualified_tools = qualify_tools(tools);
-
-        assert_eq!(qualified_tools.len(), 2);
-
-        let mut keys: Vec<_> = qualified_tools.keys().cloned().collect();
-
-        assert_ne!(keys[0], keys[1]);
-
-        let pos = keys
-            .iter()
-            .position(|k| k == "server__very_long_tool_name_that_definitely_exceeds_the_maximum_")
-            .unwrap();
-
-        keys.remove(pos);
-
-        assert!(keys[0].starts_with("server__very_long_tool_name_that_definitely_exceeds_th"));
-
-        let suffix = &keys[0][54..];
-        assert_eq!(suffix.len(), 10);
-        assert!(
-            suffix
-                .chars()
-                .all(|c| c.is_alphanumeric() && !c.is_uppercase())
+        assert_eq!(keys[1].len(), 64);
+        assert_eq!(
+            keys[1],
+            "my_server__extremely_lena02e507efc5a9de88637e436690364fd4219e4ef"
         );
     }
 }
