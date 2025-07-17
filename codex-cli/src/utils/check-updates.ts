@@ -93,7 +93,7 @@ export async function checkForUpdates(): Promise<void> {
   }
 
   // Fetch current vs latest from the registry
-  const { name: packageName } = await import("../../package.json");
+  const { name: packageName } = await import("../package.json");
   const packageInfo = await getUpdateCheckInfo(packageName);
 
   await writeState(stateFile, {
