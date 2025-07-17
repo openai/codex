@@ -53,9 +53,7 @@ pub(crate) struct EventProcessor {
 
     /// Whether to include `AgentReasoning` events in the output.
     show_agent_reasoning: bool,
-    /// answer started
     answer_started: bool,
-    /// reasoning started
     reasoning_started: bool,
 }
 
@@ -201,9 +199,8 @@ impl EventProcessor {
                     self.answer_started = true;
                 }
                 print!("{delta}");
-                if let Err(e) = std::io::stdout().flush() {
-                    eprintln!("Failed to flush stdout: {e}");
-                }
+                #[allow(clippy::expect_used)]
+                std::io::stdout().flush().expect("could not flush stdout");
             }
             EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta }) => {
                 if !self.show_agent_reasoning {
@@ -218,9 +215,8 @@ impl EventProcessor {
                     self.reasoning_started = true;
                 }
                 print!("{delta}");
-                if let Err(e) = std::io::stdout().flush() {
-                    eprintln!("Failed to flush stdout: {e}");
-                }
+                #[allow(clippy::expect_used)]
+                std::io::stdout().flush().expect("could not flush stdout");
             }
             EventMsg::AgentMessage(AgentMessageEvent { message }) => {
                 // if answer_started is false, this means we haven't received any
