@@ -187,12 +187,12 @@ impl App<'_> {
         }
 
         let tx = self.app_event_tx.clone();
-        let pending_redraw = &self.pending_redraw.clone();
+        let pending_redraw = Arc::clone(&self.pending_redraw);
         thread::spawn(move || {
             thread::sleep(REDRAW_DEBOUNCE);
             tx.send(AppEvent::Redraw);
             #[allow(clippy::unwrap_used)]
-            let mut f = pending.lock().unwrap();
+            let mut f = pending_redraw.lock().unwrap();
             *f = false;
         });
     }
