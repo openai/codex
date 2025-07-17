@@ -138,7 +138,7 @@ async fn integration_creates_and_checks_session_file() {
 
     // 2. Unique marker we'll look for in the session log.
     let marker = format!("integration-test-{}", Uuid::new_v4());
-    let prompt = format!("echo {}", marker);
+    let prompt = format!("echo {marker}");
 
     // 3. Use the same offline SSE fixture as responses_api_stream_cli so the test is hermetic.
     let fixture =
