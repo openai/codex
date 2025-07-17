@@ -187,7 +187,7 @@ impl App<'_> {
         }
 
         let tx = self.app_event_tx.clone();
-        let pending_redraw = Arc::clone(&self.pending_redraw);
+        let pending_redraw = self.pending_redraw.clone();
         thread::spawn(move || {
             thread::sleep(REDRAW_DEBOUNCE);
             tx.send(AppEvent::Redraw);
