@@ -177,13 +177,17 @@ impl<'a> App<'a> {
     /// Schedule a redraw if one is not already pending.
     #[allow(clippy::unwrap_used)]
     fn schedule_redraw(&self) {
-        let mut flag = self.pending_redraw.lock().unwrap();
-        if *flag {
-            return;
+        {
+            #[allow(clippy::unwrap_used)]
+            let mut flag = self.pending_redraw.lock().unwrap();
+            if *flag {
+                return;
+            }
+            *flag = true;
         }
-        *flag = true;
+
         let tx = self.app_event_tx.clone();
-        let pending = Arc::clone(&self.pending_redraw);
+        let pending_redraw = &self.pending_redraw.clone();
         thread::spawn(move || {
             thread::sleep(REDRAW_DEBOUNCE);
             tx.send(AppEvent::Redraw);
