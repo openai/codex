@@ -198,10 +198,6 @@ impl ConversationHistoryWidget {
         self.add_to_history(HistoryCell::new_agent_message(config, message));
     }
 
-    pub fn replace_prev_agent_message(&mut self, config: &Config, text: String) {
-        self.replace_last_agent_message(config, text);
-    }
-
     pub fn add_agent_reasoning(&mut self, config: &Config, text: String) {
         self.add_to_history(HistoryCell::new_agent_reasoning(config, text));
     }
@@ -266,9 +262,11 @@ impl ConversationHistoryWidget {
             let width = self.cached_width.get();
             let entry = &mut self.entries[idx];
             entry.cell = HistoryCell::new_agent_reasoning(config, text);
-            if width > 0 {
-                entry.line_count.set(entry.cell.height(width));
-            }
+            entry.line_count.set(if width > 0 {
+                entry.cell.height(width)
+            } else {
+                0
+            });
         }
     }
     pub fn replace_last_agent_message(&mut self, config: &Config, text: String) {
@@ -280,9 +278,11 @@ impl ConversationHistoryWidget {
             let width = self.cached_width.get();
             let entry = &mut self.entries[idx];
             entry.cell = HistoryCell::new_agent_message(config, text);
-            if width > 0 {
-                entry.line_count.set(entry.cell.height(width));
-            }
+            entry.line_count.set(if width > 0 {
+                entry.cell.height(width)
+            } else {
+                0
+            });
         }
     }
 
@@ -491,7 +491,7 @@ impl WidgetRef for ConversationHistoryWidget {
 
         {
             // Choose a thumb color that stands out only when this pane has focus so that the
-            // user’s attention is naturally drawn to the active viewport. When unfocused we show
+            // user's attention is naturally drawn to the active viewport. When unfocused we show
             // a low-contrast thumb so the scrollbar fades into the background without becoming
             // invisible.
             let thumb_style = if self.has_input_focus {

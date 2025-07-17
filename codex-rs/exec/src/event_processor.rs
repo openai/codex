@@ -23,6 +23,7 @@ use owo_colors::OwoColorize;
 use owo_colors::Style;
 use shlex::try_join;
 use std::collections::HashMap;
+use std::io::Write;
 use std::time::Instant;
 
 /// This should be configurable. When used in CI, users may not want to impose
@@ -196,11 +197,10 @@ impl EventProcessor {
             }
             EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
                 if !self.answer_started {
-                    ts_println!(self, "{}\n", "codex".style(self.italic).style(self.magenta),);
+                    ts_println!(self, "{}\n", "codex".style(self.italic).style(self.magenta));
                     self.answer_started = true;
                 }
                 print!("{delta}");
-                use std::io::Write;
                 if let Err(e) = std::io::stdout().flush() {
                     eprintln!("Failed to flush stdout: {e}");
                 }
