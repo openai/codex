@@ -28,14 +28,13 @@ const __dirname = path.dirname(__filename);
 // For the @native release of the Node module, the `use-native` file is added,
 // indicating we should default to the native binary. For other releases,
 // setting CODEX_RUST=1 will opt-in to the native binary, if included.
-const wantsNative =
-  fs.existsSync(path.join(__dirname, "use-native")) ||
+const wantsNative = fs.existsSync(path.join(__dirname, "use-native")) ||
   (process.env.CODEX_RUST != null
     ? ["1", "true", "yes"].includes(process.env.CODEX_RUST.toLowerCase())
     : false);
 
 // Try native binary if requested.
-if (wantsNative && process.platform !== "win32") {
+if (wantsNative && process.platform !== 'win32') {
   const { platform, arch } = process;
 
   let targetTriple = null;
