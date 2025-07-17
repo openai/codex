@@ -223,9 +223,21 @@ impl EventProcessor {
                     eprintln!("Failed to flush stdout: {e}");
                 }
             }
-            EventMsg::AgentMessage(AgentMessageEvent { message: _ }) => {
-                self.answer_started = false;
+            EventMsg::AgentMessage(AgentMessageEvent { message }) => {
+                // if answer_started is false, this means we haven't received any
+                // delta. Thus, we need to print the message as a new answer.
+                if !self.answer_started {
+                    ts_println!(
+                        self,
+                        "{}\n{}",
+                        "codex".style(self.italic).style(self.magenta),
+                        message,
+                    );
+                    return;
+                }
                 println!();
+                // reset answer_started to false so we can print the next message as a new answer.
+                self.answer_started = false;
             }
             EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
                 call_id,
@@ -475,10 +487,22 @@ impl EventProcessor {
             EventMsg::ApplyPatchApprovalRequest(_) => {
                 // Should we exit?
             }
-            EventMsg::AgentReasoning(_) => {
+            EventMsg::AgentReasoning(agent_reasoning_event) => {
                 if !self.show_agent_reasoning {
                     return;
                 }
+                // if reasoning_started is false, this means we haven't received any
+                // delta. Thus, we need to print the message as a new answer.
+                if !self.reasoning_started {
+                    ts_println!(
+                        self,
+                        "{}\n{}",
+                        "codex".style(self.italic).style(self.magenta),
+                        agent_reasoning_event.text,
+                    );
+                    return;
+                }
+                // reset reasoning_started to false so we can print the next message as a new answer.
                 self.reasoning_started = false;
                 println!();
             }

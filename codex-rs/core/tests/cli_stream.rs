@@ -15,8 +15,6 @@ use wiremock::matchers::path;
 /// 2. Configures codex to use this mock server via a custom provider
 /// 3. Sends a simple "hello?" prompt and verifies the streamed response
 /// 4. Ensures the response is received exactly once and contains "hi"
-/// This test is flaky. Ignore it for now.
-#[ignore]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn chat_mode_stream_cli() {
     if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
@@ -85,8 +83,6 @@ async fn chat_mode_stream_cli() {
 /// 2. Configures codex to read from this fixture via CODEX_RS_SSE_FIXTURE env var
 /// 3. Sends a "hello?" prompt and verifies the response
 /// 4. Ensures the fixture content is correctly streamed through the CLI
-/// This test is flaky. Ignore it for now.
-#[ignore]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_api_stream_cli() {
     if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
