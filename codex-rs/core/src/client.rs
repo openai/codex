@@ -125,6 +125,7 @@ impl ModelClient {
             reasoning,
             previous_response_id: prompt.prev_id.clone(),
             store: prompt.store,
+            // TODO: make this configurable
             stream: true,
         };
 
@@ -148,7 +149,7 @@ impl ModelClient {
             let res = req_builder.send().await;
             match res {
                 Ok(resp) if resp.status().is_success() => {
-                    let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(16);
+                    let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
 
                     // spawn task to process SSE
                     let stream = resp.bytes_stream().map_err(CodexErr::Reqwest);
@@ -205,6 +206,7 @@ struct SseEvent {
     kind: String,
     response: Option<Value>,
     item: Option<Value>,
+    delta: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -337,6 +339,22 @@ where
                     return;
                 }
             }
+            "response.output_text.delta" => {
+                if let Some(delta) = event.delta {
+                    let event = ResponseEvent::OutputTextDelta(delta);
+                    if tx_event.send(Ok(event)).await.is_err() {
+                        return;
+                    }
+                }
+            }
+            "response.reasoning_summary_text.delta" => {
+                if let Some(delta) = event.delta {
+                    let event = ResponseEvent::ReasoningSummaryDelta(delta);
+                    if tx_event.send(Ok(event)).await.is_err() {
+                        return;
+                    }
+                }
+            }
             "response.created" => {
                 if event.response.is_some() {
                     let _ = tx_event.send(Ok(ResponseEvent::Created {})).await;
@@ -360,10 +378,8 @@ where
             | "response.function_call_arguments.delta"
             | "response.in_progress"
             | "response.output_item.added"
-            | "response.output_text.delta"
             | "response.output_text.done"
             | "response.reasoning_summary_part.added"
-            | "response.reasoning_summary_text.delta"
             | "response.reasoning_summary_text.done" => {
                 // Currently, we ignore these events, but we handle them
                 // separately to skip the logging message in the `other` case.
@@ -375,7 +391,7 @@ where
 
 /// used in tests to stream from a text SSE file
 async fn stream_from_fixture(path: impl AsRef<Path>) -> Result<ResponseStream> {
-    let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(16);
+    let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
     let f = std::fs::File::open(path.as_ref())?;
     let lines = std::io::BufReader::new(f).lines();
 

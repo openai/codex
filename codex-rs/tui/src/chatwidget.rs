@@ -3,7 +3,9 @@ use std::sync::Arc;
 
 use codex_core::codex_wrapper::init_codex;
 use codex_core::config::Config;
+use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
+use codex_core::protocol::AgentReasoningDeltaEvent;
 use codex_core::protocol::AgentReasoningEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::ErrorEvent;
@@ -49,6 +51,8 @@ pub(crate) struct ChatWidget<'a> {
     config: Config,
     initial_user_message: Option<UserMessage>,
     token_usage: TokenUsage,
+    reasoning_buffer: String,
+    answer_buffer: String,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -135,6 +139,8 @@ impl ChatWidget<'_> {
                 initial_images,
             ),
             token_usage: TokenUsage::default(),
+            reasoning_buffer: String::new(),
+            answer_buffer: String::new(),
         }
     }
 
@@ -240,16 +246,51 @@ impl ChatWidget<'_> {
                 self.request_redraw();
             }
             EventMsg::AgentMessage(AgentMessageEvent { message }) => {
+                // if the answer buffer is empty, this means we haven't received any
+                // delta. Thus, we need to print the message as a new answer.
+                if self.answer_buffer.is_empty() {
+                    self.conversation_history
+                        .add_agent_message(&self.config, message);
+                } else {
+                    self.conversation_history
+                        .replace_prev_agent_message(&self.config, message);
+                }
+                self.answer_buffer.clear();
+                self.request_redraw();
+            }
+            EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
+                if self.answer_buffer.is_empty() {
+                    self.conversation_history
+                        .add_agent_message(&self.config, "".to_string());
+                }
+                self.answer_buffer.push_str(&delta.clone());
                 self.conversation_history
-                    .add_agent_message(&self.config, message);
+                    .replace_prev_agent_message(&self.config, self.answer_buffer.clone());
+                self.request_redraw();
+            }
+            EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta }) => {
+                if self.reasoning_buffer.is_empty() {
+                    self.conversation_history
+                        .add_agent_reasoning(&self.config, "".to_string());
+                }
+                self.reasoning_buffer.push_str(&delta.clone());
+                self.conversation_history
+                    .replace_prev_agent_reasoning(&self.config, self.reasoning_buffer.clone());
                 self.request_redraw();
             }
             EventMsg::AgentReasoning(AgentReasoningEvent { text }) => {
-                if !self.config.hide_agent_reasoning {
+                // if the reasoning buffer is empty, this means we haven't received any
+                // delta. Thus, we need to print the message as a new reasoning.
+                if self.reasoning_buffer.is_empty() {
                     self.conversation_history
-                        .add_agent_reasoning(&self.config, text);
-                    self.request_redraw();
+                        .add_agent_reasoning(&self.config, "".to_string());
+                } else {
+                    // else, we rerender one last time.
+                    self.conversation_history
+                        .replace_prev_agent_reasoning(&self.config, text);
                 }
+                self.reasoning_buffer.clear();
+                self.request_redraw();
             }
             EventMsg::TaskStarted => {
                 self.bottom_pane.clear_ctrl_c_quit_hint();
@@ -430,6 +471,10 @@ impl ChatWidget<'_> {
             self.bottom_pane.show_ctrl_c_quit_hint();
             false
         }
+    }
+
+    pub(crate) fn composer_is_empty(&self) -> bool {
+        self.bottom_pane.composer_is_empty()
     }
 
     /// Forward an `Op` directly to codex.
