@@ -7,11 +7,13 @@ use std::fs::File;
 use std::fs::{self};
 use std::io::Error as IoError;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use time::OffsetDateTime;
 use time::format_description::FormatItem;
 use time::macros::format_description;
-use tokio::io::{AsyncSeekExt, AsyncWriteExt};
+use tokio::io::AsyncSeekExt;
+use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::mpsc::{self};
 use uuid::Uuid;
@@ -189,13 +191,6 @@ impl RolloutRecorder {
         });
 
         Ok((Self { tx }, saved))
-    }
-
-    pub async fn load(path: &std::path::Path) -> std::io::Result<SavedSession> {
-        let bytes = tokio::fs::read(path).await?;
-        let saved: SavedSession = serde_json::from_slice(&bytes)
-            .map_err(|e| IoError::other(format!("failed to parse session: {e}")))?;
-        Ok(saved)
     }
 }
 
