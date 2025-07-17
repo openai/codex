@@ -147,7 +147,14 @@ pub fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> std::io::
     let show_git_warning = !cli.skip_git_repo_check && !is_inside_git_repo(&config);
 
     let resume = cli.resume.clone();
-    try_run_ratatui_app(cli, config, resume, show_login_screen, show_git_warning, log_rx);
+    try_run_ratatui_app(
+        cli,
+        config,
+        resume,
+        show_login_screen,
+        show_git_warning,
+        log_rx,
+    );
     Ok(())
 }
 
@@ -163,7 +170,14 @@ fn try_run_ratatui_app(
     show_git_warning: bool,
     log_rx: tokio::sync::mpsc::UnboundedReceiver<String>,
 ) {
-    if let Err(report) = run_ratatui_app(cli, config, resume, show_login_screen, show_git_warning, log_rx) {
+    if let Err(report) = run_ratatui_app(
+        cli,
+        config,
+        resume,
+        show_login_screen,
+        show_git_warning,
+        log_rx,
+    ) {
         eprintln!("Error: {report:?}");
     }
 }

@@ -798,7 +798,9 @@ async fn submission_loop(
                 if let Err(e) = sess.load_rollout(path).await {
                     let event = Event {
                         id: sub.id,
-                        msg: EventMsg::Error(ErrorEvent { message: e.to_string() }),
+                        msg: EventMsg::Error(ErrorEvent {
+                            message: e.to_string(),
+                        }),
                     };
                     tx_event.send(event).await.ok();
                 }

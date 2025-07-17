@@ -98,14 +98,15 @@ impl ChatWidget<'_> {
         let config_for_agent_loop = config.clone();
         let resume_path = resume.clone();
         tokio::spawn(async move {
-            let (codex, session_event, _ctrl_c) = match init_codex(config_for_agent_loop, resume_path).await {
-                Ok(vals) => vals,
-                Err(e) => {
-                    // TODO: surface this error to the user.
-                    tracing::error!("failed to initialize codex: {e}");
-                    return;
-                }
-            };
+            let (codex, session_event, _ctrl_c) =
+                match init_codex(config_for_agent_loop, resume_path).await {
+                    Ok(vals) => vals,
+                    Err(e) => {
+                        // TODO: surface this error to the user.
+                        tracing::error!("failed to initialize codex: {e}");
+                        return;
+                    }
+                };
 
             // Forward the captured `SessionInitialized` event that was consumed
             // inside `init_codex()` so it can be rendered in the UI.
