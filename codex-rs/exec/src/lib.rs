@@ -1,5 +1,7 @@
 mod cli;
 mod event_processor;
+mod event_processor_with_human_output;
+mod event_processor_with_json_output;
 
 use std::io::IsTerminal;
 use std::io::Read;
@@ -19,11 +21,14 @@ use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::util::is_inside_git_repo;
-use event_processor::EventProcessor;
+use event_processor_with_human_output::EventProcessorWithHumanOutput;
+use event_processor_with_json_output::EventProcessorWithJsonOutput;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
+
+use crate::event_processor::EventProcessor;
 
 pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
     let Cli {
@@ -36,6 +41,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         skip_git_repo_check,
         color,
         last_message_file,
+        json: json_mode,
         sandbox_mode: sandbox_mode_cli_arg,
         prompt,
         config_overrides,
@@ -115,7 +121,15 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     };
 
     let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides)?;
-    let mut event_processor = EventProcessor::create_with_ansi(stdout_with_ansi, &config);
+    let mut event_processor: Box<dyn EventProcessor> = if json_mode {
+        Box::new(EventProcessorWithJsonOutput::new())
+    } else {
+        Box::new(EventProcessorWithHumanOutput::create_with_ansi(
+            stdout_with_ansi,
+            &config,
+        ))
+    };
+
     // Print the effective configuration and prompt so users can see what Codex
     // is using.
     event_processor.print_config_summary(&config, &prompt);

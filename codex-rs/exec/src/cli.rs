@@ -51,6 +51,10 @@ pub struct Cli {
     #[arg(long = "color", value_enum, default_value_t = Color::Auto)]
     pub color: Color,
 
+    /// Print events to stdout as JSONL.
+    #[arg(long = "json", default_value_t = false)]
+    pub json: bool,
+
     /// Specifies file where the last message from the agent should be written.
     #[arg(long = "output-last-message")]
     pub last_message_file: Option<PathBuf>,
