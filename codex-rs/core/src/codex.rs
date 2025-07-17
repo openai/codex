@@ -122,7 +122,7 @@ impl Codex {
             disable_response_storage: config.disable_response_storage,
             notify: config.notify.clone(),
             cwd: config.cwd.clone(),
-            resume_path,
+            resume_path: resume_path.clone(),
         };
 
         let config = Arc::new(config);
@@ -613,7 +613,9 @@ async fn submission_loop(
                 cwd,
                 resume_path,
             } => {
-                info!("Configuring session: model={model}; provider={provider:?}");
+                info!(
+                    "Configuring session: model={model}; provider={provider:?}; resume_path={resume_path:?}"
+                );
                 if !cwd.is_absolute() {
                     let message = format!("cwd is not absolute: {cwd:?}");
                     error!(message);
@@ -686,24 +688,32 @@ async fn submission_loop(
                     }
                 }
                 let mut resume_success = false;
-                let rollout_recorder: Option<RolloutRecorder> = if let Some(path) =
-                    resume_path.clone()
-                {
+                let rollout_recorder = if let Some(path) = resume_path.clone() {
                     match RolloutRecorder::resume(&path).await {
                         Ok((recorder, _saved)) => {
                             resume_success = true;
                             Some(recorder)
                         }
                         Err(e) => {
-                            warn!("failed to resume rollout recorder from {path:?}: {e}");
-                            None
+                            error!(
+                                "failed to resume rollout recorder from {path:?}: {e}; creating new session instead"
+                            );
+                            match RolloutRecorder::new(&config, session_id, instructions.clone())
+                                .await
+                            {
+                                Ok(r) => Some(r),
+                                Err(e) => {
+                                    error!("failed to initialise rollout recorder: {e}");
+                                    None
+                                }
+                            }
                         }
                     }
                 } else {
                     match RolloutRecorder::new(&config, session_id, instructions.clone()).await {
                         Ok(r) => Some(r),
                         Err(e) => {
-                            warn!("failed to initialise rollout recorder: {e}");
+                            error!("failed to initialise rollout recorder: {e}");
                             None
                         }
                     }
@@ -725,7 +735,7 @@ async fn submission_loop(
                     codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
                 }));
                 if resume_success {
-                    if let Some(path) = resume_path {
+                    if let Some(path) = resume_path.clone() {
                         if let Err(e) = sess.as_ref().unwrap().load_rollout(path).await {
                             warn!("failed to resume rollout: {e}");
                         }
