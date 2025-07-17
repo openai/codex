@@ -1,7 +1,7 @@
 .PHONY: fix format test install
 
 fix:
-	cd codex-rs && cargo clippy --fix --tests --allow-dirty
+	cd codex-rs && cargo clippy --fix --all-features --tests --allow-dirty
 
 format:
 	cd codex-rs && cargo fmt
@@ -11,5 +11,4 @@ test:
 
 install: 
 	cd codex-rs && cargo fetch
-	cd codex-rs && rustup component add clippy rustfmt rust-src rust-analyzer
 
