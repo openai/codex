@@ -211,6 +211,7 @@ where
                     .send(Ok(ResponseEvent::Completed {
                         response_id: String::new(),
                         token_usage: None,
+                        timestamp: None,
                     }))
                     .await;
                 return;
@@ -229,6 +230,7 @@ where
                 .send(Ok(ResponseEvent::Completed {
                     response_id: String::new(),
                     token_usage: None,
+                    timestamp: None,
                 }))
                 .await;
             return;
@@ -256,7 +258,7 @@ where
                         text: content.to_string(),
                     }],
                     token_usage: None,
-                    timestamp: Some(crate::models::generate_timestamp()),
+                    timestamp: None,
                 };
 
                 let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
@@ -317,6 +319,7 @@ where
                     .send(Ok(ResponseEvent::Completed {
                         response_id: String::new(),
                         token_usage: None,
+                        timestamp: None,
                     }))
                     .await;
 
@@ -397,6 +400,7 @@ where
                 Poll::Ready(Some(Ok(ResponseEvent::Completed {
                     response_id,
                     token_usage,
+                    timestamp,
                 }))) => {
                     if !this.cumulative.is_empty() {
                         let aggregated_item = crate::models::ResponseItem::Message {
@@ -405,13 +409,14 @@ where
                                 text: std::mem::take(&mut this.cumulative),
                             }],
                             token_usage: token_usage.clone(),
-                            timestamp: Some(crate::models::generate_timestamp()),
+                            timestamp: timestamp.clone(),
                         };
 
                         // Buffer Completed so it is returned *after* the aggregated message.
                         this.pending_completed = Some(ResponseEvent::Completed {
                             response_id,
                             token_usage,
+                            timestamp,
                         });
 
                         return Poll::Ready(Some(Ok(ResponseEvent::OutputItemDone(
@@ -423,6 +428,7 @@ where
                     return Poll::Ready(Some(Ok(ResponseEvent::Completed {
                         response_id,
                         token_usage,
+                        timestamp,
                     })));
                 }
                 Poll::Ready(Some(Ok(ResponseEvent::Created))) => {

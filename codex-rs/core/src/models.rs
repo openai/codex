@@ -18,6 +18,8 @@ pub enum ResponseInputItem {
     Message {
         role: String,
         content: Vec<ContentItem>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        timestamp: Option<String>,
     },
     FunctionCallOutput {
         call_id: String,
@@ -86,11 +88,11 @@ pub enum ResponseItem {
 impl From<ResponseInputItem> for ResponseItem {
     fn from(item: ResponseInputItem) -> Self {
         match item {
-            ResponseInputItem::Message { role, content } => Self::Message {
+            ResponseInputItem::Message { role, content, timestamp } => Self::Message {
                 role,
                 content,
                 token_usage: None,
-                timestamp: Some(generate_timestamp()),
+                timestamp,
             },
             ResponseInputItem::FunctionCallOutput { call_id, output } => {
                 Self::FunctionCallOutput { call_id, output }
@@ -172,6 +174,7 @@ impl From<Vec<InputItem>> for ResponseInputItem {
                     },
                 })
                 .collect::<Vec<ContentItem>>(),
+            timestamp: Some(generate_timestamp()),
         }
     }
 }
@@ -395,6 +398,57 @@ mod tests {
         // Should be able to parse as a valid timestamp
         assert!(timestamp.len() >= 20); // Minimum ISO format length
         assert!(timestamp.len() <= 30); // Maximum reasonable length
+    }
+
+    #[test]
+    fn user_message_from_input_items_has_timestamp() {
+        use crate::protocol::InputItem;
+
+        let input = vec![InputItem::Text {
+            text: "Hello, world!".to_string(),
+        }];
+
+        let response_input_item = ResponseInputItem::from(input);
+
+        if let ResponseInputItem::Message { role, content, timestamp } = response_input_item {
+            assert_eq!(role, "user");
+            assert_eq!(content.len(), 1);
+            assert!(timestamp.is_some());
+
+            // Verify timestamp format
+            let ts = timestamp.unwrap();
+            assert!(ts.ends_with('Z'));
+            assert!(ts.contains('T'));
+            assert!(ts.len() >= 20);
+        } else {
+            panic!("Expected ResponseInputItem::Message");
+        }
+    }
+
+    #[test]
+    fn user_message_timestamp_preserved_in_conversion() {
+        use crate::protocol::InputItem;
+
+        let input = vec![InputItem::Text {
+            text: "Test message".to_string(),
+        }];
+
+        let response_input_item = ResponseInputItem::from(input);
+        let response_item = ResponseItem::from(response_input_item);
+
+        if let ResponseItem::Message { role, content, timestamp, token_usage } = response_item {
+            assert_eq!(role, "user");
+            assert_eq!(content.len(), 1);
+            assert!(timestamp.is_some());
+            assert!(token_usage.is_none());
+
+            // Verify timestamp format is preserved
+            let ts = timestamp.unwrap();
+            assert!(ts.ends_with('Z'));
+            assert!(ts.contains('T'));
+        } else {
+            panic!("Expected ResponseItem::Message");
+        }
     }
 
     #[test]

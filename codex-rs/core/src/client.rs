@@ -34,6 +34,7 @@ use crate::flags::OPENAI_STREAM_IDLE_TIMEOUT_MS;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
 use crate::models::ResponseItem;
+use crate::models::generate_timestamp;
 use crate::openai_tools::create_tools_json_for_responses_api;
 use crate::protocol::TokenUsage;
 use crate::util::backoff;
@@ -115,10 +116,27 @@ impl ModelClient {
         let full_instructions = prompt.get_full_instructions(&self.config.model);
         let tools_json = create_tools_json_for_responses_api(prompt, &self.config.model)?;
         let reasoning = create_reasoning_param_for_request(&self.config, self.effort, self.summary);
+
+        // Make an API-safe copy of the input without the timestamp and token_usage fields; otherwise
+        // the API will complain "Unknown parameter: 'input[0].timestamp'".
+        let api_safe_input: Vec<ResponseItem> = prompt
+            .input
+            .iter()
+            .map(|item| match item {
+                ResponseItem::Message { role, content, .. } => ResponseItem::Message {
+                    role: role.clone(),
+                    content: content.clone(),
+                    token_usage: None,
+                    timestamp: None,
+                },
+                other => other.clone(),
+            })
+            .collect();
+
         let payload = ResponsesApiRequest {
             model: &self.config.model,
             instructions: &full_instructions,
-            input: &prompt.input,
+            input: &api_safe_input,
             tools: &tools_json,
             tool_choice: "auto",
             parallel_tool_calls: false,
@@ -150,7 +168,6 @@ impl ModelClient {
             match res {
                 Ok(resp) if resp.status().is_success() => {
                     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
-
                     // spawn task to process SSE
                     let stream = resp.bytes_stream().map_err(CodexErr::Reqwest);
                     tokio::spawn(process_sse(stream, tx_event));
@@ -278,6 +295,7 @@ where
                         let event = ResponseEvent::Completed {
                             response_id,
                             token_usage: usage.map(Into::into),
+                            timestamp: Some(generate_timestamp()),
                         };
                         let _ = tx_event.send(Ok(event)).await;
                     }
@@ -525,9 +543,11 @@ mod tests {
             Ok(ResponseEvent::Completed {
                 response_id,
                 token_usage,
+                timestamp,
             }) => {
                 assert_eq!(response_id, "resp1");
                 assert!(token_usage.is_none());
+                assert!(timestamp.is_some());
             }
             other => panic!("unexpected third event: {other:?}"),
         }

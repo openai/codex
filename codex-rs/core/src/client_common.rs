@@ -49,13 +49,14 @@ impl Prompt {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum ResponseEvent {
     Created,
     OutputItemDone(ResponseItem),
     Completed {
         response_id: String,
         token_usage: Option<TokenUsage>,
+        timestamp: Option<String>,
     },
     OutputTextDelta(String),
     ReasoningSummaryDelta(String),
