@@ -18,8 +18,15 @@ use crossterm::event::KeyEvent;
 use crossterm::event::MouseEvent;
 use crossterm::event::MouseEventKind;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::mpsc::Receiver;
 use std::sync::mpsc::channel;
+use std::thread;
+use std::time::Duration;
+
+/// Time window for debouncing redraw requests.
+const REDRAW_DEBOUNCE: Duration = Duration::from_millis(100);
 
 /// Top-level application state: which full-screen view is currently active.
 #[allow(clippy::large_enum_variant)]
@@ -46,6 +53,9 @@ pub(crate) struct App<'a> {
 
     file_search: FileSearchManager,
 
+    /// True when a redraw has been scheduled but not yet executed.
+    pending_redraw: Arc<Mutex<bool>>,
+
     /// Stored parameters needed to instantiate the ChatWidget later, e.g.,
     /// after dismissing the Git-repo warning.
     chat_args: Option<ChatWidgetArgs>,
@@ -61,7 +71,7 @@ struct ChatWidgetArgs {
     resume: Option<PathBuf>,
 }
 
-impl<'a> App<'a> {
+impl App<'_> {
     pub(crate) fn new(
         config: Config,
         initial_prompt: Option<String>,
@@ -72,6 +82,7 @@ impl<'a> App<'a> {
     ) -> Self {
         let (app_event_tx, app_event_rx) = channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
+        let pending_redraw = Arc::new(Mutex::new(false));
         let scroll_event_helper = ScrollEventHelper::new(app_event_tx.clone());
 
         // Spawn a dedicated thread for reading the crossterm event loop and
@@ -85,7 +96,7 @@ impl<'a> App<'a> {
                             app_event_tx.send(AppEvent::KeyEvent(key_event));
                         }
                         crossterm::event::Event::Resize(_, _) => {
-                            app_event_tx.send(AppEvent::Redraw);
+                            app_event_tx.send(AppEvent::RequestRedraw);
                         }
                         crossterm::event::Event::Mouse(MouseEvent {
                             kind: MouseEventKind::ScrollUp,
@@ -157,6 +168,7 @@ impl<'a> App<'a> {
             app_state,
             config,
             file_search,
+            pending_redraw,
             chat_args,
         }
     }
@@ -167,6 +179,29 @@ impl<'a> App<'a> {
         self.app_event_tx.clone()
     }
 
+    /// Schedule a redraw if one is not already pending.
+    #[allow(clippy::unwrap_used)]
+    fn schedule_redraw(&self) {
+        {
+            #[allow(clippy::unwrap_used)]
+            let mut flag = self.pending_redraw.lock().unwrap();
+            if *flag {
+                return;
+            }
+            *flag = true;
+        }
+
+        let tx = self.app_event_tx.clone();
+        let pending_redraw = self.pending_redraw.clone();
+        thread::spawn(move || {
+            thread::sleep(REDRAW_DEBOUNCE);
+            tx.send(AppEvent::Redraw);
+            #[allow(clippy::unwrap_used)]
+            let mut f = pending_redraw.lock().unwrap();
+            *f = false;
+        });
+    }
+
     pub(crate) fn run(
         &mut self,
         terminal: &mut tui::Tui,
@@ -174,10 +209,13 @@ impl<'a> App<'a> {
     ) -> Result<()> {
         // Insert an event to trigger the first render.
         let app_event_tx = self.app_event_tx.clone();
-        app_event_tx.send(AppEvent::Redraw);
+        app_event_tx.send(AppEvent::RequestRedraw);
 
         while let Ok(event) = self.app_event_rx.recv() {
             match event {
+                AppEvent::RequestRedraw => {
+                    self.schedule_redraw();
+                }
                 AppEvent::Redraw => {
                     self.draw_next_frame(terminal)?;
                 }
@@ -255,7 +293,7 @@ impl<'a> App<'a> {
                             None,
                         ));
                         self.app_state = AppState::Chat { widget: new_widget };
-                        self.app_event_tx.send(AppEvent::Redraw);
+                        self.app_event_tx.send(AppEvent::RequestRedraw);
                     }
                     SlashCommand::ToggleMouseMode => {
                         if let Err(e) = mouse_capture.toggle() {
@@ -343,7 +381,7 @@ impl<'a> App<'a> {
                         args.resume,
                     ));
                     self.app_state = AppState::Chat { widget };
-                    self.app_event_tx.send(AppEvent::Redraw);
+                    self.app_event_tx.send(AppEvent::RequestRedraw);
                 }
                 GitWarningOutcome::Quit => {
                     self.app_event_tx.send(AppEvent::ExitRequest);

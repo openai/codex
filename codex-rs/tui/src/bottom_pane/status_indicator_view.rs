@@ -24,7 +24,7 @@ impl StatusIndicatorView {
     }
 }
 
-impl<'a> BottomPaneView<'a> for StatusIndicatorView {
+impl BottomPaneView<'_> for StatusIndicatorView {
     fn update_status_text(&mut self, text: String) -> ConditionalUpdate {
         self.update_text(text);
         ConditionalUpdate::NeedsRedraw

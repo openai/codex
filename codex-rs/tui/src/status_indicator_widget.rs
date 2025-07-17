@@ -65,7 +65,7 @@ impl StatusIndicatorWidget {
                     std::thread::sleep(Duration::from_millis(200));
                     counter = counter.wrapping_add(1);
                     frame_idx_clone.store(counter, Ordering::Relaxed);
-                    app_event_tx_clone.send(AppEvent::Redraw);
+                    app_event_tx_clone.send(AppEvent::RequestRedraw);
                 }
             });
         }
