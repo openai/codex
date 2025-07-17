@@ -339,17 +339,19 @@ mod tests {
 
         assert_eq!(qualified_tools.len(), 2);
 
-        let keys: Vec<_> = qualified_tools.keys().cloned().collect();
+        let mut keys: Vec<_> = qualified_tools.keys().cloned().collect();
+        keys.sort();
+
         assert_eq!(keys[0].len(), 64);
         assert_eq!(
             keys[0],
-            "my_server__yet_another_e1c3987bd9c50b826cbe1687966f79f0c602d19ca"
+            "my_server__extremely_lena02e507efc5a9de88637e436690364fd4219e4ef"
         );
 
         assert_eq!(keys[1].len(), 64);
         assert_eq!(
             keys[1],
-            "my_server__extremely_lena02e507efc5a9de88637e436690364fd4219e4ef"
+            "my_server__yet_another_e1c3987bd9c50b826cbe1687966f79f0c602d19ca"
         );
     }
 }
