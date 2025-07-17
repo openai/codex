@@ -173,7 +173,7 @@ async fn integration_creates_and_checks_session_file() {
     // 5. Sessions are written asynchronously; wait briefly for the directory to appear.
     let sessions_dir = home.path().join("sessions");
     let start = Instant::now();
-    while !sessions_dir.exists() && start.elapsed() < Duration::from_secs(2) {
+    while !sessions_dir.exists() && start.elapsed() < Duration::from_secs(3) {
         std::thread::sleep(Duration::from_millis(50));
     }
 

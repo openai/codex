@@ -105,7 +105,7 @@ impl Codex {
     pub async fn spawn(
         config: Config,
         ctrl_c: Arc<Notify>,
-        resume: Option<std::path::PathBuf>,
+        resume_path: Option<std::path::PathBuf>,
     ) -> CodexResult<(Codex, String)> {
         let (tx_sub, rx_sub) = async_channel::bounded(64);
         let (tx_event, rx_event) = async_channel::bounded(1600);
@@ -122,6 +122,7 @@ impl Codex {
             disable_response_storage: config.disable_response_storage,
             notify: config.notify.clone(),
             cwd: config.cwd.clone(),
+            resume_path,
         };
 
         let config = Arc::new(config);
@@ -132,10 +133,6 @@ impl Codex {
             rx_event,
         };
         let init_id = codex.submit(configure_session).await?;
-
-        if let Some(path) = resume {
-            let _ = codex.submit(Op::LoadSession { path }).await?;
-        }
 
         Ok((codex, init_id))
     }
@@ -614,6 +611,7 @@ async fn submission_loop(
                 disable_response_storage,
                 notify,
                 cwd,
+                resume_path,
             } => {
                 info!("Configuring session: model={model}; provider={provider:?}");
                 if !cwd.is_absolute() {
@@ -687,21 +685,29 @@ async fn submission_loop(
                         });
                     }
                 }
-
-                // Attempt to create a RolloutRecorder *before* moving the
-                // `instructions` value into the Session struct.
-                // TODO: if ConfigureSession is sent twice, we will create an
-                // overlapping rollout file. Consider passing RolloutRecorder
-                // from above.
-                let rollout_recorder =
+                let mut resume_success = false;
+                let rollout_recorder: Option<RolloutRecorder> = if let Some(path) =
+                    resume_path.clone()
+                {
+                    match RolloutRecorder::resume(&path).await {
+                        Ok((recorder, _saved)) => {
+                            resume_success = true;
+                            Some(recorder)
+                        }
+                        Err(e) => {
+                            warn!("failed to resume rollout recorder from {path:?}: {e}");
+                            None
+                        }
+                    }
+                } else {
                     match RolloutRecorder::new(&config, session_id, instructions.clone()).await {
                         Ok(r) => Some(r),
                         Err(e) => {
                             warn!("failed to initialise rollout recorder: {e}");
                             None
                         }
-                    };
-
+                    }
+                };
                 sess = Some(Arc::new(Session {
                     client,
                     tx_event: tx_event.clone(),
@@ -718,6 +724,13 @@ async fn submission_loop(
                     rollout: Mutex::new(rollout_recorder),
                     codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
                 }));
+                if resume_success {
+                    if let Some(path) = resume_path {
+                        if let Err(e) = sess.as_ref().unwrap().load_rollout(path).await {
+                            warn!("failed to resume rollout: {e}");
+                        }
+                    }
+                }
 
                 // Gather history metadata for SessionConfiguredEvent.
                 let (history_log_id, history_entry_count) =
@@ -784,24 +797,6 @@ async fn submission_loop(
                         sess.abort();
                     }
                     other => sess.notify_approval(&id, other),
-                }
-            }
-            Op::LoadSession { path } => {
-                let sess = match sess.as_ref() {
-                    Some(sess) => sess,
-                    None => {
-                        send_no_session_event(sub.id).await;
-                        continue;
-                    }
-                };
-                if let Err(e) = sess.load_rollout(path).await {
-                    let event = Event {
-                        id: sub.id,
-                        msg: EventMsg::Error(ErrorEvent {
-                            message: e.to_string(),
-                        }),
-                    };
-                    tx_event.send(event).await.ok();
                 }
             }
             Op::AddToHistory { text } => {

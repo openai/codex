@@ -69,6 +69,10 @@ pub enum Op {
         /// `ConfigureSession` operation so that the business-logic layer can
         /// operate deterministically.
         cwd: std::path::PathBuf,
+
+        /// Path to a rollout file to resume from.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        resume_path: Option<std::path::PathBuf>,
     },
 
     /// Abort current task.
@@ -96,9 +100,6 @@ pub enum Op {
         /// The user's decision in response to the request.
         decision: ReviewDecision,
     },
-
-    /// Load a previously saved session from disk and resume from it.
-    LoadSession { path: std::path::PathBuf },
 
     /// Append an entry to the persistent cross-session message history.
     ///
