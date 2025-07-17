@@ -144,15 +144,10 @@ async fn integration_creates_and_checks_session_file() {
     let fixture =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/cli_responses_fixture.sse");
 
-    // 4. Run the codex CLI through cargo (ensures the right bin is built) and invoke `exec`,
+    // 4. Run the codex CLI directly using cargo_bin (ensures the right bin is built) and invoke `exec`,
     //    which is what records a session.
-    let mut cmd = AssertCommand::new("cargo");
-    cmd.arg("run")
-        .arg("-p")
-        .arg("codex-cli")
-        .arg("--quiet")
-        .arg("--")
-        .arg("exec")
+    let mut cmd = AssertCommand::cargo_bin("codex").unwrap();
+    cmd.arg("exec")
         .arg("--skip-git-repo-check")
         .arg("-C")
         .arg(env!("CARGO_MANIFEST_DIR"))
