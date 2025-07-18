@@ -326,16 +326,13 @@ async fn integration_creates_and_checks_session_file() {
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut content2 = String::new();
     while Instant::now() < deadline {
-        match std::fs::read_to_string(&path) {
-            Ok(c) => {
-                let count = c.lines().count();
-                if count > orig_len {
-                    content2 = c;
-                    new_len = count;
-                    break;
-                }
+        if let Ok(c) = std::fs::read_to_string(&path) {
+            let count = c.lines().count();
+            if count > orig_len {
+                content2 = c;
+                new_len = count;
+                break;
             }
-            Err(_) => {}
         }
         std::thread::sleep(Duration::from_millis(50));
     }
