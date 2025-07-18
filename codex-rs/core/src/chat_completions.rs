@@ -21,8 +21,6 @@ use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
 use crate::error::CodexErr;
 use crate::error::Result;
-use crate::flags::OPENAI_REQUEST_MAX_RETRIES;
-use crate::flags::OPENAI_STREAM_IDLE_TIMEOUT_MS;
 use crate::models::ContentItem;
 use crate::models::ResponseItem;
 use crate::openai_tools::create_tools_json_for_chat_completions_api;
@@ -121,6 +119,7 @@ pub(crate) async fn stream_chat_completions(
     );
 
     let mut attempt = 0;
+    let max_retries = provider.request_max_retries();
     loop {
         attempt += 1;
 
@@ -136,7 +135,11 @@ pub(crate) async fn stream_chat_completions(
             Ok(resp) if resp.status().is_success() => {
                 let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
                 let stream = resp.bytes_stream().map_err(CodexErr::Reqwest);
-                tokio::spawn(process_chat_sse(stream, tx_event));
+                tokio::spawn(process_chat_sse(
+                    stream,
+                    tx_event,
+                    provider.stream_idle_timeout(),
+                ));
                 return Ok(ResponseStream { rx_event });
             }
             Ok(res) => {
@@ -146,7 +149,7 @@ pub(crate) async fn stream_chat_completions(
                     return Err(CodexErr::UnexpectedStatus(status, body));
                 }
 
-                if attempt > *OPENAI_REQUEST_MAX_RETRIES {
+                if attempt > max_retries {
                     return Err(CodexErr::RetryLimit(status));
                 }
 
@@ -162,7 +165,7 @@ pub(crate) async fn stream_chat_completions(
                 tokio::time::sleep(delay).await;
             }
             Err(e) => {
-                if attempt > *OPENAI_REQUEST_MAX_RETRIES {
+                if attempt > max_retries {
                     return Err(e.into());
                 }
                 let delay = backoff(attempt);
@@ -175,13 +178,14 @@ pub(crate) async fn stream_chat_completions(
 /// Lightweight SSE processor for the Chat Completions streaming format. The
 /// output is mapped onto Codex's internal [`ResponseEvent`] so that the rest
 /// of the pipeline can stay agnostic of the underlying wire format.
-async fn process_chat_sse<S>(stream: S, tx_event: mpsc::Sender<Result<ResponseEvent>>)
-where
+async fn process_chat_sse<S>(
+    stream: S,
+    tx_event: mpsc::Sender<Result<ResponseEvent>>,
+    idle_timeout: Duration,
+) where
     S: Stream<Item = Result<Bytes>> + Unpin,
 {
     let mut stream = stream.eventsource();
-
-    let idle_timeout = *OPENAI_STREAM_IDLE_TIMEOUT_MS;
 
     // State to accumulate a function call across streaming chunks.
     // OpenAI may split the `arguments` string over multiple `delta` events
