@@ -682,6 +682,9 @@ name = "OpenAI using Chat Completions"
 base_url = "https://api.openai.com/v1"
 env_key = "OPENAI_API_KEY"
 wire_api = "chat"
+request_max_retries = 4            # retry failed HTTP requests
+stream_max_retries = 10            # retry dropped SSE streams
+stream_idle_timeout_ms = 300000    # 5m idle timeout
 
 [profiles.o3]
 model = "o3"
@@ -722,6 +725,9 @@ disable_response_storage = true
             query_params: None,
             http_headers: None,
             env_http_headers: None,
+            request_max_retries: Some(4),
+            stream_max_retries: Some(10),
+            stream_idle_timeout_ms: Some(300_000),
         };
         let model_provider_map = {
             let mut model_provider_map = built_in_model_providers();

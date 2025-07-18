@@ -49,9 +49,7 @@ use crate::exec::ExecToolCallOutput;
 use crate::exec::SandboxType;
 use crate::exec::process_exec_tool_call;
 use crate::exec_env::create_env;
-use crate::flags::OPENAI_STREAM_MAX_RETRIES;
 use crate::mcp_connection_manager::McpConnectionManager;
-use crate::mcp_connection_manager::try_parse_fully_qualified_tool_name;
 use crate::mcp_tool_call::handle_mcp_tool_call;
 use crate::models::ContentItem;
 use crate::models::FunctionCallOutputPayload;
@@ -593,6 +591,7 @@ async fn submission_loop(
                     provider.clone(),
                     model_reasoning_effort,
                     model_reasoning_summary,
+                    session_id,
                 );
 
                 // abort any current running session and clone its state
@@ -1028,12 +1027,13 @@ async fn run_turn(
             Err(CodexErr::Interrupted) => return Err(CodexErr::Interrupted),
             Err(CodexErr::EnvVar(var)) => return Err(CodexErr::EnvVar(var)),
             Err(e) => {
-                if retries < *OPENAI_STREAM_MAX_RETRIES {
+                // Use the configured provider-specific stream retry budget.
+                let max_retries = sess.client.get_provider().stream_max_retries();
+                if retries < max_retries {
                     retries += 1;
                     let delay = backoff(retries);
                     warn!(
-                        "stream disconnected - retrying turn ({retries}/{} in {delay:?})...",
-                        *OPENAI_STREAM_MAX_RETRIES
+                        "stream disconnected - retrying turn ({retries}/{max_retries} in {delay:?})...",
                     );
 
                     // Surface retry information to any UI/front‑end so the
@@ -1042,8 +1042,7 @@ async fn run_turn(
                     sess.notify_background_event(
                         &sub_id,
                         format!(
-                            "stream error: {e}; retrying {retries}/{} in {:?}…",
-                            *OPENAI_STREAM_MAX_RETRIES, delay
+                            "stream error: {e}; retrying {retries}/{max_retries} in {delay:?}…"
                         ),
                     )
                     .await;
@@ -1125,7 +1124,28 @@ async fn try_run_turn(
     let mut stream = sess.client.clone().stream(&prompt).await?;
 
     let mut output = Vec::new();
-    while let Some(Ok(event)) = stream.next().await {
+    loop {
+        // Poll the next item from the model stream. We must inspect *both* Ok and Err
+        // cases so that transient stream failures (e.g., dropped SSE connection before
+        // `response.completed`) bubble up and trigger the caller's retry logic.
+        let event = stream.next().await;
+        let Some(event) = event else {
+            // Channel closed without yielding a final Completed event or explicit error.
+            // Treat as a disconnected stream so the caller can retry.
+            return Err(CodexErr::Stream(
+                "stream closed before response.completed".into(),
+            ));
+        };
+
+        let event = match event {
+            Ok(ev) => ev,
+            Err(e) => {
+                // Propagate the underlying stream error to the caller (run_turn), which
+                // will apply the configured `stream_max_retries` policy.
+                return Err(e);
+            }
+        };
+
         match event {
             ResponseEvent::Created => {
                 let mut state = sess.state.lock().unwrap();
@@ -1174,7 +1194,7 @@ async fn try_run_turn(
 
                 let mut state = sess.state.lock().unwrap();
                 state.previous_response_id = Some(response_id);
-                break;
+                return Ok(output);
             }
             ResponseEvent::OutputTextDelta(delta) => {
                 let event = Event {
@@ -1192,7 +1212,6 @@ async fn try_run_turn(
             }
         }
     }
-    Ok(output)
 }
 
 async fn handle_response_item(
@@ -1301,7 +1320,7 @@ async fn handle_function_call(
             handle_container_exec_with_params(params, sess, sub_id, call_id).await
         }
         _ => {
-            match try_parse_fully_qualified_tool_name(&name) {
+            match sess.mcp_connection_manager.parse_tool_name(&name) {
                 Some((server, tool_name)) => {
                     // TODO(mbolin): Determine appropriate timeout for tool call.
                     let timeout = None;

@@ -28,6 +28,7 @@ rand = "0.9"
 reqwest = { version = "0.12", features = ["json", "stream"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha1 = "0.10.6"
 strum_macros = "0.27.1"
 thiserror = "2.0.12"
 time = { version = "0.3", features = ["formatting", "local-offset", "macros"] }
@@ -65,4 +66,5 @@ predicates = "3"
 pretty_assertions = "1.4.1"
 tempfile = "3"
 tokio-test = "0.4"
+walkdir = "2.5.0"
 wiremock = "0.6"
