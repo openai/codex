@@ -103,7 +103,7 @@ async fn responses_api_stream_cli() {
         .arg("hello?");
     cmd.env("CODEX_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy")
-        .env("CODEX_RS_SSE_FIXTURE", fixture)
+        .env("CODEX_RS_SSE_FIXTURE", &fixture)
         .env("OPENAI_BASE_URL", "http://unused.local");
 
     let output = cmd.output().unwrap();
@@ -112,6 +112,7 @@ async fn responses_api_stream_cli() {
     assert!(stdout.contains("fixture hello"));
 }
 
+/// End-to-end: create a session (writes rollout), verify the file, then resume and confirm append.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn integration_creates_and_checks_session_file() {
     if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
@@ -127,6 +128,7 @@ async fn integration_creates_and_checks_session_file() {
     let fixture =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/cli_responses_fixture.sse");
 
+    // First run: create a new session.
     let mut cmd = AssertCommand::new("cargo");
     cmd.arg("run")
         .arg("-p")
@@ -150,6 +152,7 @@ async fn integration_creates_and_checks_session_file() {
         String::from_utf8_lossy(&output.stderr)
     );
 
+    // Wait for sessions dir to appear.
     let sessions_dir = home.path().join("sessions");
     let dir_deadline = Instant::now() + Duration::from_secs(5);
     while !sessions_dir.exists() && Instant::now() < dir_deadline {
@@ -157,9 +160,9 @@ async fn integration_creates_and_checks_session_file() {
     }
     assert!(sessions_dir.exists(), "sessions directory never appeared");
 
+    // Find the session file that contains `marker`.
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut matching_path: Option<std::path::PathBuf> = None;
-
     while Instant::now() < deadline && matching_path.is_none() {
         for entry in WalkDir::new(&sessions_dir) {
             let entry = match entry {
@@ -215,6 +218,7 @@ async fn integration_creates_and_checks_session_file() {
         None => panic!("No session file containing the marker was found"),
     };
 
+    // Basic sanity checks on location and metadata.
     let rel = match path.strip_prefix(&sessions_dir) {
         Ok(r) => r,
         Err(_) => panic!("session file should live under sessions/"),
@@ -251,7 +255,7 @@ async fn integration_creates_and_checks_session_file() {
     }
 
     let content =
-        std::fs::read_to_string(path).unwrap_or_else(|_| panic!("Failed to read session file"));
+        std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("Failed to read session file"));
     let mut lines = content.lines();
     let meta_line = lines
         .next()
@@ -285,5 +289,39 @@ async fn integration_creates_and_checks_session_file() {
     assert!(
         found_message,
         "No message found in session file containing the marker"
+    );
+
+    // Second run: resume and append.
+    let orig_len = content.lines().count();
+    let marker2 = format!("integration-resume-{}", Uuid::new_v4());
+    let prompt2 = format!("echo {marker2}");
+    let resume_override = format!("experimental_resume=\"{}\"", path.display());
+    let mut cmd2 = AssertCommand::new("cargo");
+    cmd2.arg("run")
+        .arg("-p")
+        .arg("codex-cli")
+        .arg("--quiet")
+        .arg("--")
+        .arg("exec")
+        .arg("--skip-git-repo-check")
+        .arg("-c")
+        .arg(&resume_override)
+        .arg("-C")
+        .arg(env!("CARGO_MANIFEST_DIR"))
+        .arg(&prompt2);
+    cmd2.env("CODEX_HOME", home.path())
+        .env("OPENAI_API_KEY", "dummy")
+        .env("CODEX_RS_SSE_FIXTURE", &fixture)
+        .env("OPENAI_BASE_URL", "http://unused.local");
+    let output2 = cmd2.output().unwrap();
+    assert!(output2.status.success(), "resume codex-cli run failed");
+
+    let content2 = std::fs::read_to_string(&path).unwrap();
+    let new_len = content2.lines().count();
+    assert!(new_len > orig_len, "rollout file did not grow after resume");
+    assert!(content2.contains(&marker), "rollout lost original marker");
+    assert!(
+        content2.contains(&marker2),
+        "rollout missing resumed marker"
     );
 }
