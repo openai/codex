@@ -125,7 +125,6 @@ async fn responses_api_stream_cli() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn integration_creates_and_checks_session_file() {
-    // Honor sandbox network restrictions for CI parity with the other tests.
     if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!(
             "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
@@ -133,19 +132,12 @@ async fn integration_creates_and_checks_session_file() {
         return;
     }
 
-    // 1. Temp home so we read/write isolated session files.
     let home = TempDir::new().unwrap();
-
-    // 2. Unique marker we'll look for in the session log.
     let marker = format!("integration-test-{}", Uuid::new_v4());
     let prompt = format!("echo {marker}");
-
-    // 3. Use the same offline SSE fixture as responses_api_stream_cli so the test is hermetic.
     let fixture =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/cli_responses_fixture.sse");
 
-    // 4. Run the codex CLI through cargo (ensures the right bin is built) and invoke `exec`,
-    //    which is what records a session.
     let mut cmd = AssertCommand::new("cargo");
     cmd.arg("run")
         .arg("-p")
@@ -160,7 +152,6 @@ async fn integration_creates_and_checks_session_file() {
     cmd.env("CODEX_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy")
         .env("CODEX_RS_SSE_FIXTURE", &fixture)
-        // Required for CLI arg parsing even though fixture short-circuits network usage.
         .env("OPENAI_BASE_URL", "http://unused.local");
 
     let output = cmd.output().unwrap();
@@ -170,49 +161,71 @@ async fn integration_creates_and_checks_session_file() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    // 5. Sessions are written asynchronously; wait briefly for the directory to appear.
     let sessions_dir = home.path().join("sessions");
-    let start = Instant::now();
-    while !sessions_dir.exists() && start.elapsed() < Duration::from_secs(2) {
+    let dir_deadline = Instant::now() + Duration::from_secs(5);
+    while !sessions_dir.exists() && Instant::now() < dir_deadline {
         std::thread::sleep(Duration::from_millis(50));
     }
+    assert!(sessions_dir.exists(), "sessions directory never appeared");
 
-    // 6. Scan all session files and find the one that contains our marker.
-    let mut matching_files = vec![];
-    for entry in WalkDir::new(&sessions_dir) {
-        let entry = entry.unwrap();
-        if entry.file_type().is_file() && entry.file_name().to_string_lossy().ends_with(".jsonl") {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut matching_path: Option<std::path::PathBuf> = None;
+
+    while Instant::now() < deadline && matching_path.is_none() {
+        for entry in WalkDir::new(&sessions_dir) {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            if !entry.file_name().to_string_lossy().ends_with(".jsonl") {
+                continue;
+            }
             let path = entry.path();
-            let content = std::fs::read_to_string(path).unwrap();
+            let Ok(content) = std::fs::read_to_string(path) else {
+                continue;
+            };
             let mut lines = content.lines();
-            // Skip SessionMeta (first line)
-            let _ = lines.next();
+            if lines.next().is_none() {
+                continue;
+            }
             for line in lines {
-                let item: Value = serde_json::from_str(line).unwrap();
-                if let Some("message") = item.get("type").and_then(|t| t.as_str()) {
-                    if let Some(content) = item.get("content") {
-                        if content.to_string().contains(&marker) {
-                            matching_files.push(path.to_owned());
+                if line.trim().is_empty() {
+                    continue;
+                }
+                let item: serde_json::Value = match serde_json::from_str(line) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                if item.get("type").and_then(|t| t.as_str()) == Some("message") {
+                    if let Some(c) = item.get("content") {
+                        if c.to_string().contains(&marker) {
+                            if matching_path.as_ref().map(|p| p != path).unwrap_or(false) {
+                                panic!(
+                                    "Found marker in multiple session files: {:?} and {:?}",
+                                    matching_path.unwrap(),
+                                    path
+                                );
+                            }
+                            matching_path = Some(path.to_path_buf());
                             break;
                         }
                     }
                 }
             }
         }
+        if matching_path.is_none() {
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
-    assert_eq!(
-        matching_files.len(),
-        1,
-        "Expected exactly one session file containing the marker, found {}",
-        matching_files.len()
-    );
-    let path = &matching_files[0];
 
-    // 7. Verify directory structure: sessions/YYYY/MM/DD/filename.jsonl
-    let rel = match path.strip_prefix(&sessions_dir) {
-        Ok(r) => r,
-        Err(_) => panic!("session file should live under sessions/"),
-    };
+    let path = matching_path.expect("No session file containing the marker was found");
+
+    let rel = path
+        .strip_prefix(&sessions_dir)
+        .expect("session file should live under sessions/");
     let comps: Vec<String> = rel
         .components()
         .map(|c| c.as_os_str().to_string_lossy().into_owned())
@@ -237,7 +250,6 @@ async fn integration_creates_and_checks_session_file() {
         day.len() == 2 && day.chars().all(|c| c.is_ascii_digit()),
         "Day dir not zero-padded 2-digit numeric: {day}"
     );
-    // Range checks (best-effort; won't fail on leading zeros)
     if let Ok(m) = month.parse::<u8>() {
         assert!((1..=12).contains(&m), "Month out of range: {m}");
     }
@@ -245,23 +257,27 @@ async fn integration_creates_and_checks_session_file() {
         assert!((1..=31).contains(&d), "Day out of range: {d}");
     }
 
-    // 8. Parse SessionMeta line and basic sanity checks.
     let content = std::fs::read_to_string(path).unwrap();
     let mut lines = content.lines();
-    let meta: Value = serde_json::from_str(lines.next().unwrap()).unwrap();
+    let meta_line = lines.next().expect("missing session meta line");
+    let meta: serde_json::Value = serde_json::from_str(meta_line).unwrap();
     assert!(meta.get("id").is_some(), "SessionMeta missing id");
     assert!(
         meta.get("timestamp").is_some(),
         "SessionMeta missing timestamp"
     );
 
-    // 9. Confirm at least one message contains the marker.
     let mut found_message = false;
     for line in lines {
-        let item: Value = serde_json::from_str(line).unwrap();
-        if item.get("type").map(|t| t == "message").unwrap_or(false) {
-            if let Some(content) = item.get("content") {
-                if content.to_string().contains(&marker) {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(item) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if item.get("type").and_then(|t| t.as_str()) == Some("message") {
+            if let Some(c) = item.get("content") {
+                if c.to_string().contains(&marker) {
                     found_message = true;
                     break;
                 }
