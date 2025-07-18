@@ -101,6 +101,13 @@ pub(crate) async fn stream_chat_completions(
                 // Omit these items from the conversation history.
                 continue;
             }
+            ResponseItem::UserFeedback { call_id, feedback } => {
+                messages.push(json!({
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": feedback,
+                }));
+            }
         }
     }
 

@@ -23,6 +23,10 @@ pub enum ResponseInputItem {
         call_id: String,
         result: Result<CallToolResult, String>,
     },
+    UserFeedback {
+        call_id: String,
+        feedback: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,6 +75,10 @@ pub enum ResponseItem {
         call_id: String,
         output: FunctionCallOutputPayload,
     },
+    UserFeedback {
+        call_id: String,
+        feedback: String,
+    },
     #[serde(other)]
     Other,
 }
@@ -95,6 +103,26 @@ impl From<ResponseInputItem> for ResponseItem {
                     ),
                 },
             },
+            ResponseInputItem::UserFeedback { call_id, feedback } => {
+                Self::UserFeedback { call_id, feedback }
+            }
+        }
+    }
+}
+
+impl ResponseItem {
+    /// Converts UserFeedback items to FunctionCallOutput for LLM API compatibility,
+    /// leaving other items unchanged.
+    pub(crate) fn to_llm_compatible(&self) -> Self {
+        match self {
+            Self::UserFeedback { call_id, feedback } => Self::FunctionCallOutput {
+                call_id: call_id.clone(),
+                output: FunctionCallOutputPayload {
+                    content: feedback.clone(),
+                    success: None,
+                },
+            },
+            _ => self.clone(),
         }
     }
 }
@@ -180,7 +208,7 @@ pub struct ShellToolCallParams {
 #[derive(Deserialize, Debug, Clone)]
 pub struct FunctionCallOutputPayload {
     pub content: String,
-    #[expect(dead_code)]
+    #[allow(dead_code)]
     pub success: Option<bool>,
 }
 
@@ -277,5 +305,72 @@ mod tests {
             },
             params
         );
+    }
+
+    #[test]
+    fn deserialize_user_feedback() {
+        let json = r#"{"type": "user_feedback", "call_id": "call_123", "feedback": "This is a test feedback"}"#;
+        let feedback: ResponseItem = serde_json::from_str(json).unwrap();
+        if let ResponseItem::UserFeedback { call_id, feedback } = feedback {
+            assert_eq!(call_id, "call_123");
+            assert_eq!(feedback, "This is a test feedback");
+        } else {
+            panic!("Expected UserFeedback variant");
+        }
+    }
+
+    #[test]
+    fn serialize_deserialize_response_input_user_feedback() {
+        let user_feedback = ResponseInputItem::UserFeedback {
+            call_id: "call_456".to_string(),
+            feedback: "Test user feedback".to_string(),
+        };
+
+        let json = serde_json::to_string(&user_feedback).unwrap();
+        let deserialized: ResponseInputItem = serde_json::from_str(&json).unwrap();
+
+        if let ResponseInputItem::UserFeedback { call_id, feedback } = deserialized {
+            assert_eq!(call_id, "call_456");
+            assert_eq!(feedback, "Test user feedback");
+        } else {
+            panic!("Expected UserFeedback variant");
+        }
+    }
+
+    #[test]
+    fn user_feedback_to_llm_compatible_conversion() {
+        let user_feedback = ResponseItem::UserFeedback {
+            call_id: "call_6789".to_string(),
+            feedback: "This is user feedback".to_string(),
+        };
+
+        let llm_compatible = user_feedback.to_llm_compatible();
+
+        if let ResponseItem::FunctionCallOutput { call_id, output } = llm_compatible {
+            assert_eq!(call_id, "call_6789");
+            assert_eq!(output.content, "This is user feedback");
+            assert_eq!(output.success, None);
+        } else {
+            panic!("Expected FunctionCallOutput variant");
+        }
+    }
+
+    #[test]
+    fn non_user_feedback_to_llm_compatible_unchanged() {
+        let message = ResponseItem::Message {
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "Hello".to_string(),
+            }],
+        };
+
+        let llm_compatible = message.to_llm_compatible();
+
+        if let ResponseItem::Message { role, content } = llm_compatible {
+            assert_eq!(role, "user");
+            assert_eq!(content.len(), 1);
+        } else {
+            panic!("Expected Message variant to remain unchanged");
+        }
     }
 }

@@ -117,7 +117,8 @@ impl RolloutRecorder {
                 ResponseItem::Message { .. }
                 | ResponseItem::LocalShellCall { .. }
                 | ResponseItem::FunctionCall { .. }
-                | ResponseItem::FunctionCallOutput { .. } => {}
+                | ResponseItem::FunctionCallOutput { .. }
+                | ResponseItem::UserFeedback { .. } => {}
                 ResponseItem::Reasoning { .. } | ResponseItem::Other => {
                     // These should never be serialized.
                     continue;

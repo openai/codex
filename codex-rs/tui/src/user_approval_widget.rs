@@ -291,19 +291,27 @@ impl UserApprovalWidget<'_> {
         self.send_decision_with_feedback(decision, String::new())
     }
 
-    fn send_decision_with_feedback(&mut self, decision: ReviewDecision, _feedback: String) {
+    fn send_decision_with_feedback(&mut self, decision: ReviewDecision, feedback: String) {
         let op = match &self.approval_request {
             ApprovalRequest::Exec { id, .. } => Op::ExecApproval {
                 id: id.clone(),
                 decision,
+                feedback: if feedback.is_empty() {
+                    None
+                } else {
+                    Some(feedback)
+                },
             },
             ApprovalRequest::ApplyPatch { id, .. } => Op::PatchApproval {
                 id: id.clone(),
                 decision,
+                feedback: if feedback.is_empty() {
+                    None
+                } else {
+                    Some(feedback)
+                },
             },
         };
-
-        // Ignore feedback for now – the current `Op` variants do not carry it.
 
         // Forward the Op to the agent. The caller (ChatWidget) will trigger a
         // redraw after it processes the resulting state change, so we avoid

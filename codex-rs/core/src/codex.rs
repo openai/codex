@@ -202,6 +202,12 @@ impl Session {
     }
 }
 
+#[derive(Default)]
+pub struct Approval {
+    pub decision: ReviewDecision,
+    pub feedback: Option<String>,
+}
+
 /// Mutable state of the agent
 #[derive(Default)]
 struct State {
@@ -211,7 +217,7 @@ struct State {
     /// You CANNOT send a Responses API follow-up message unless you have sent back the output for all pending calls or else it will 400.
     pending_call_ids: HashSet<String>,
     previous_response_id: Option<String>,
-    pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
+    pending_approvals: HashMap<String, oneshot::Sender<Approval>>,
     pending_input: Vec<ResponseInputItem>,
     zdr_transcript: Option<ConversationHistory>,
 }
@@ -248,7 +254,7 @@ impl Session {
         command: Vec<String>,
         cwd: PathBuf,
         reason: Option<String>,
-    ) -> oneshot::Receiver<ReviewDecision> {
+    ) -> oneshot::Receiver<Approval> {
         let (tx_approve, rx_approve) = oneshot::channel();
         let event = Event {
             id: sub_id.clone(),
@@ -272,7 +278,7 @@ impl Session {
         action: &ApplyPatchAction,
         reason: Option<String>,
         grant_root: Option<PathBuf>,
-    ) -> oneshot::Receiver<ReviewDecision> {
+    ) -> oneshot::Receiver<Approval> {
         let (tx_approve, rx_approve) = oneshot::channel();
         let event = Event {
             id: sub_id.clone(),
@@ -290,10 +296,15 @@ impl Session {
         rx_approve
     }
 
-    pub fn notify_approval(&self, sub_id: &str, decision: ReviewDecision) {
+    pub fn notify_approval(
+        &self,
+        sub_id: &str,
+        decision: ReviewDecision,
+        feedback: Option<String>,
+    ) {
         let mut state = self.state.lock().unwrap();
         if let Some(tx_approve) = state.pending_approvals.remove(sub_id) {
-            tx_approve.send(decision).ok();
+            tx_approve.send(Approval { decision, feedback }).ok();
         }
     }
 
@@ -713,7 +724,11 @@ async fn submission_loop(
                     sess.set_task(task);
                 }
             }
-            Op::ExecApproval { id, decision } => {
+            Op::ExecApproval {
+                id,
+                decision,
+                feedback,
+            } => {
                 let sess = match sess.as_ref() {
                     Some(sess) => sess,
                     None => {
@@ -725,10 +740,14 @@ async fn submission_loop(
                     ReviewDecision::Abort => {
                         sess.abort();
                     }
-                    other => sess.notify_approval(&id, other),
+                    other => sess.notify_approval(&id, other, feedback.clone()),
                 }
             }
-            Op::PatchApproval { id, decision } => {
+            Op::PatchApproval {
+                id,
+                decision,
+                feedback,
+            } => {
                 let sess = match sess.as_ref() {
                     Some(sess) => sess,
                     None => {
@@ -740,7 +759,7 @@ async fn submission_loop(
                     ReviewDecision::Abort => {
                         sess.abort();
                     }
-                    other => sess.notify_approval(&id, other),
+                    other => sess.notify_approval(&id, other, feedback.clone()),
                 }
             }
             Op::AddToHistory { text } => {
@@ -902,6 +921,18 @@ async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
                             );
                         }
                         (
+                            ResponseItem::LocalShellCall { .. },
+                            Some(ResponseInputItem::UserFeedback { call_id, feedback }),
+                        ) => {
+                            items_to_record_in_conversation_history.push(item);
+                            items_to_record_in_conversation_history.push(
+                                ResponseItem::UserFeedback {
+                                    call_id: call_id.clone(),
+                                    feedback: feedback.clone(),
+                                },
+                            );
+                        }
+                        (
                             ResponseItem::FunctionCall { .. },
                             Some(ResponseInputItem::FunctionCallOutput { call_id, output }),
                         ) => {
@@ -910,6 +941,18 @@ async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
                                 ResponseItem::FunctionCallOutput {
                                     call_id: call_id.clone(),
                                     output: output.clone(),
+                                },
+                            );
+                        }
+                        (
+                            ResponseItem::FunctionCall { .. },
+                            Some(ResponseInputItem::UserFeedback { call_id, feedback }),
+                        ) => {
+                            items_to_record_in_conversation_history.push(item);
+                            items_to_record_in_conversation_history.push(
+                                ResponseItem::UserFeedback {
+                                    call_id: call_id.clone(),
+                                    feedback: feedback.clone(),
                                 },
                             );
                         }
@@ -939,6 +982,15 @@ async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
                         }
                         (ResponseItem::Reasoning { .. }, None) => {
                             // Omit from conversation history.
+                        }
+                        (_, Some(ResponseInputItem::UserFeedback { call_id, feedback })) => {
+                            // Record the original user feedback item in the rollout as UserFeedback
+                            items_to_record_in_conversation_history.push(
+                                ResponseItem::UserFeedback {
+                                    call_id: call_id.clone(),
+                                    feedback: feedback.clone(),
+                                },
+                            );
                         }
                         _ => {
                             warn!("Unexpected response item: {item:?} with response: {response:?}");
@@ -1288,6 +1340,10 @@ async fn handle_response_item(
             debug!("unexpected FunctionCallOutput from stream");
             None
         }
+        ResponseItem::UserFeedback { .. } => {
+            debug!("unexpected UserFeedback from stream");
+            None
+        }
         ResponseItem::Other => None,
     };
     Ok(output)
@@ -1416,18 +1472,18 @@ async fn handle_container_exec_with_params(
                     None,
                 )
                 .await;
-            match rx_approve.await.unwrap_or_default() {
+            let Approval { decision, feedback } = rx_approve.await.unwrap_or_default();
+            match decision {
                 ReviewDecision::Approved => (),
                 ReviewDecision::ApprovedForSession => {
                     sess.add_approved_command(params.command.clone());
                 }
                 ReviewDecision::Denied | ReviewDecision::Abort => {
-                    return ResponseInputItem::FunctionCallOutput {
-                        call_id,
-                        output: FunctionCallOutputPayload {
-                            content: "exec command rejected by user".to_string(),
-                            success: None,
-                        },
+                    return ResponseInputItem::UserFeedback {
+                        call_id: call_id.clone(),
+                        feedback: feedback
+                            .map(|f| format!("exec command rejected by user with feedback: `{f}`"))
+                            .unwrap_or_else(|| "exec command rejected by user".to_string()),
                     };
                 }
             }
@@ -1544,7 +1600,8 @@ async fn handle_sandbox_error(
         )
         .await;
 
-    match rx_approve.await.unwrap_or_default() {
+    let Approval { decision, feedback } = rx_approve.await.unwrap_or_default();
+    match decision {
         ReviewDecision::Approved | ReviewDecision::ApprovedForSession => {
             // Persist this command as pre‑approved for the
             // remainder of the session so future
@@ -1618,12 +1675,11 @@ async fn handle_sandbox_error(
         }
         ReviewDecision::Denied | ReviewDecision::Abort => {
             // Fall through to original failure handling.
-            ResponseInputItem::FunctionCallOutput {
-                call_id,
-                output: FunctionCallOutputPayload {
-                    content: "exec command rejected by user".to_string(),
-                    success: None,
-                },
+            ResponseInputItem::UserFeedback {
+                call_id: call_id.clone(),
+                feedback: feedback
+                    .map(|f| format!("exec command rejected by user with feedback: `{f}`"))
+                    .unwrap_or_else(|| "exec command rejected by user".to_string()),
             }
         }
     }
@@ -1653,15 +1709,15 @@ async fn apply_patch(
             let rx_approve = sess
                 .request_patch_approval(sub_id.clone(), &action, None, None)
                 .await;
-            match rx_approve.await.unwrap_or_default() {
+            let Approval { decision, feedback } = rx_approve.await.unwrap_or_default();
+            match decision {
                 ReviewDecision::Approved | ReviewDecision::ApprovedForSession => false,
                 ReviewDecision::Denied | ReviewDecision::Abort => {
-                    return ResponseInputItem::FunctionCallOutput {
+                    return ResponseInputItem::UserFeedback {
                         call_id,
-                        output: FunctionCallOutputPayload {
-                            content: "patch rejected by user".to_string(),
-                            success: Some(false),
-                        },
+                        feedback: feedback
+                            .map(|f| format!("patch rejected by user with feedback: `{f}`"))
+                            .unwrap_or_else(|| "patch rejected by user".to_string()),
                     };
                 }
             }
@@ -1691,17 +1747,16 @@ async fn apply_patch(
         let rx = sess
             .request_patch_approval(sub_id.clone(), &action, reason.clone(), Some(root.clone()))
             .await;
-
+        let Approval { decision, feedback } = rx.await.unwrap_or_default();
         if !matches!(
-            rx.await.unwrap_or_default(),
+            decision,
             ReviewDecision::Approved | ReviewDecision::ApprovedForSession
         ) {
-            return ResponseInputItem::FunctionCallOutput {
+            return ResponseInputItem::UserFeedback {
                 call_id,
-                output: FunctionCallOutputPayload {
-                    content: "patch rejected by user".to_string(),
-                    success: Some(false),
-                },
+                feedback: feedback
+                    .map(|f| format!("patch rejected by user with feedback: `{f}`"))
+                    .unwrap_or_else(|| "patch rejected by user".to_string()),
             };
         }
 
@@ -1778,8 +1833,12 @@ async fn apply_patch(
                         Some(root.clone()),
                     )
                     .await;
+                let Approval {
+                    decision,
+                    feedback: _,
+                } = rx.await.unwrap_or_default();
                 if matches!(
-                    rx.await.unwrap_or_default(),
+                    decision,
                     ReviewDecision::Approved | ReviewDecision::ApprovedForSession
                 ) {
                     // Extend writable roots.
