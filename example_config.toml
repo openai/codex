@@ -1,0 +1,35 @@
+# Example configuration showing how to use alternate providers
+# This demonstrates the fixes for API key requirement and tool calling issues
+
+# Use Ollama as the default provider
+model_provider = "ollama"
+model = "qwen2.5:7b"  # Tools will work correctly with any model name
+approval_policy = "never"  # Required for tools to execute automatically
+
+# Define providers - note that Ollama doesn't require an API key
+[model_providers.ollama]
+name = "Ollama"
+base_url = "http://localhost:11434/v1"
+# No env_key needed for local providers
+
+[model_providers.mistral]
+name = "Mistral AI"
+base_url = "https://api.mistral.ai/v1"
+env_key = "MISTRAL_API_KEY"  # Optional - will work even if not set
+
+# OpenAI still requires API key (unchanged behavior)
+[model_providers.openai]
+name = "OpenAI"
+base_url = "https://api.openai.com/v1"
+env_key = "OPENAI_API_KEY"  # Required for OpenAI
+
+# Example profiles for easy switching
+[profiles.local]
+model_provider = "ollama"
+model = "qwen2.5:7b"
+approval_policy = "never"
+
+[profiles.cloud]
+model_provider = "mistral"
+model = "mistral-large-latest"
+approval_policy = "on-failure"

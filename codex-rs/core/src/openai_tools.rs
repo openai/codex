@@ -101,30 +101,35 @@ pub(crate) fn create_tools_json_for_responses_api(
 /// https://platform.openai.com/docs/guides/function-calling?api-mode=chat
 pub(crate) fn create_tools_json_for_chat_completions_api(
     prompt: &Prompt,
-    model: &str,
+    _model: &str,
 ) -> crate::error::Result<Vec<serde_json::Value>> {
-    // We start with the JSON for the Responses API and than rewrite it to match
-    // the chat completions tool call format.
-    let responses_api_tools_json = create_tools_json_for_responses_api(prompt, model)?;
-    let tools_json = responses_api_tools_json
-        .into_iter()
-        .filter_map(|mut tool| {
-            if tool.get("type") != Some(&serde_json::Value::String("function".to_string())) {
-                return None;
+    // For Chat Completions API, always use DEFAULT_TOOLS (shell function) regardless of model name
+    // This ensures non-OpenAI providers get tools even with default "codex-mini-latest" model
+    let mut tools_json = Vec::with_capacity(DEFAULT_TOOLS.len() + prompt.extra_tools.len());
+    for t in DEFAULT_TOOLS.iter() {
+        if let Ok(tool_value) = serde_json::to_value(t) {
+            if tool_value.get("type") == Some(&serde_json::Value::String("function".to_string())) {
+                if let Some(map) = tool_value.as_object() {
+                    let mut function_map = map.clone();
+                    function_map.remove("type");
+                    tools_json.push(json!({
+                        "type": "function",
+                        "function": function_map,
+                    }));
+                }
             }
+        }
+    }
+    
+    // Add MCP tools
+    tools_json.extend(
+        prompt
+            .extra_tools
+            .clone()
+            .into_iter()
+            .map(|(name, tool)| mcp_tool_to_openai_tool(name, tool)),
+    );
 
-            if let Some(map) = tool.as_object_mut() {
-                // Remove "type" field as it is not needed in chat completions.
-                map.remove("type");
-                Some(json!({
-                    "type": "function",
-                    "function": map,
-                }))
-            } else {
-                None
-            }
-        })
-        .collect::<Vec<serde_json::Value>>();
     Ok(tools_json)
 }
 
@@ -154,4 +159,86 @@ fn mcp_tool_to_openai_tool(
         "parameters": input_schema,
         "type": "function",
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client_common::Prompt;
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_chat_completions_api_always_gets_shell_tools() {
+        let prompt = Prompt {
+            input: vec![],
+            prev_id: None,
+            user_instructions: None,
+            store: false,
+            extra_tools: HashMap::new(),
+        };
+
+        // Test with default "codex-mini-latest" model (the problematic case)
+        let tools = create_tools_json_for_chat_completions_api(&prompt, "codex-mini-latest")
+            .expect("Should create tools successfully");
+        
+        assert!(!tools.is_empty(), "Chat Completions API should always get tools");
+        
+        // Verify we have the shell tool
+        let has_shell_tool = tools.iter().any(|tool| {
+            tool.get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(|n| n.as_str())
+                == Some("shell")
+        });
+        assert!(has_shell_tool, "Should have shell tool for Chat Completions API");
+    }
+
+    #[test]
+    fn test_chat_completions_api_works_with_non_codex_models() {
+        let prompt = Prompt {
+            input: vec![],
+            prev_id: None,
+            user_instructions: None,
+            store: false,
+            extra_tools: HashMap::new(),
+        };
+
+        // Test with non-codex model names
+        for model in ["qwen2", "llama3", "mistral-7b", "gpt-4"] {
+            let tools = create_tools_json_for_chat_completions_api(&prompt, model)
+                .expect(&format!("Should create tools for model {}", model));
+            
+            assert!(!tools.is_empty(), "Model {} should get tools", model);
+            
+            // Verify we have the shell tool
+            let has_shell_tool = tools.iter().any(|tool| {
+                tool.get("function")
+                    .and_then(|f| f.get("name"))
+                    .and_then(|n| n.as_str())
+                    == Some("shell")
+            });
+            assert!(has_shell_tool, "Model {} should have shell tool", model);
+        }
+    }
+
+    #[test]
+    fn test_responses_api_still_respects_model_name() {
+        let prompt = Prompt {
+            input: vec![],
+            prev_id: None,
+            user_instructions: None,
+            store: false,
+            extra_tools: HashMap::new(),
+        };
+
+        // Test that Responses API still uses model-based logic
+        let codex_tools = create_tools_json_for_responses_api(&prompt, "codex-mini-latest")
+            .expect("Should create tools for codex model");
+        let non_codex_tools = create_tools_json_for_responses_api(&prompt, "qwen2")
+            .expect("Should create tools for non-codex model");
+        
+        // Both should have tools, but potentially different ones
+        assert!(!codex_tools.is_empty(), "Codex model should get tools");
+        assert!(!non_codex_tools.is_empty(), "Non-codex model should get tools");
+    }
 }

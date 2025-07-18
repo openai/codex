@@ -15,6 +15,7 @@ use tokio::time::timeout;
 use tracing::debug;
 use tracing::trace;
 
+
 use crate::ModelProviderInfo;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
@@ -107,12 +108,17 @@ pub(crate) async fn stream_chat_completions(
     }
 
     let tools_json = create_tools_json_for_chat_completions_api(prompt, model)?;
-    let payload = json!({
+    let mut payload = json!({
         "model": model,
         "messages": messages,
         "stream": true,
         "tools": tools_json,
     });
+    
+    // Add tool_choice if tools are present to ensure model uses them
+    if !tools_json.is_empty() {
+        payload["tool_choice"] = json!("auto");
+    }
 
     debug!(
         "POST to {}: {}",
@@ -136,7 +142,7 @@ pub(crate) async fn stream_chat_completions(
             Ok(resp) if resp.status().is_success() => {
                 let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
                 let stream = resp.bytes_stream().map_err(CodexErr::Reqwest);
-                tokio::spawn(process_chat_sse(stream, tx_event));
+                tokio::spawn(process_chat_sse(stream, tx_event, provider.name.clone()));
                 return Ok(ResponseStream { rx_event });
             }
             Ok(res) => {
@@ -175,7 +181,7 @@ pub(crate) async fn stream_chat_completions(
 /// Lightweight SSE processor for the Chat Completions streaming format. The
 /// output is mapped onto Codex's internal [`ResponseEvent`] so that the rest
 /// of the pipeline can stay agnostic of the underlying wire format.
-async fn process_chat_sse<S>(stream: S, tx_event: mpsc::Sender<Result<ResponseEvent>>)
+async fn process_chat_sse<S>(stream: S, tx_event: mpsc::Sender<Result<ResponseEvent>>, provider_name: String)
 where
     S: Stream<Item = Result<Bytes>> + Unpin,
 {
@@ -250,6 +256,24 @@ where
                 .and_then(|d| d.get("content"))
                 .and_then(|c| c.as_str())
             {
+                // Check if this is Ollama and the content looks like a function call
+                if provider_name.to_lowercase() == "ollama" && content.trim_start().starts_with('{') {
+                    // Try to parse as JSON function call
+                    if let Ok(json_content) = serde_json::from_str::<serde_json::Value>(content) {
+                        if let (Some(name), Some(args)) = (
+                            json_content.get("name").and_then(|n| n.as_str()),
+                            json_content.get("arguments")
+                        ) {
+                            // This is an Ollama function call
+                            fn_call_state.active = true;
+                            fn_call_state.name = Some(name.to_string());
+                            fn_call_state.arguments = serde_json::to_string(args).unwrap_or_default();
+                            fn_call_state.call_id = Some(format!("ollama_call_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos()));
+                            continue; // Skip regular content processing
+                        }
+                    }
+                }
+
                 let item = ResponseItem::Message {
                     role: "assistant".to_string(),
                     content: vec![ContentItem::OutputText {
@@ -305,7 +329,15 @@ where
                         let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
                     }
                     "stop" => {
-                        // Regular turn without tool-call.
+                        // For Ollama, also check if we have an active function call on stop
+                        if fn_call_state.active {
+                            let item = ResponseItem::FunctionCall {
+                                name: fn_call_state.name.clone().unwrap_or_else(|| "".to_string()),
+                                arguments: fn_call_state.arguments.clone(),
+                                call_id: fn_call_state.call_id.clone().unwrap_or_else(String::new),
+                            };
+                            let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
+                        }
                     }
                     _ => {}
                 }

@@ -133,8 +133,8 @@ impl ModelProviderInfo {
     }
 
     /// If `env_key` is Some, returns the API key for this provider if present
-    /// (and non-empty) in the environment. If `env_key` is required but
-    /// cannot be found, returns an error.
+    /// (and non-empty) in the environment. Returns None if the key is not found,
+    /// allowing providers to work without API keys (e.g., local providers like Ollama).
     fn api_key(&self) -> crate::error::Result<Option<String>> {
         match &self.env_key {
             Some(env_key) => {
@@ -143,20 +143,21 @@ impl ModelProviderInfo {
                 } else {
                     std::env::var(env_key)
                 };
-                env_value
-                    .and_then(|v| {
-                        if v.trim().is_empty() {
-                            Err(VarError::NotPresent)
+                match env_value {
+                    Ok(v) if !v.trim().is_empty() => Ok(Some(v)),
+                    _ => {
+                        // For OpenAI provider, missing API key is still an error
+                        // For other providers, missing API key is allowed (e.g., local providers)
+                        if env_key == crate::openai_api_key::OPENAI_API_KEY_ENV_VAR {
+                            Err(crate::error::CodexErr::EnvVar(EnvVarError {
+                                var: env_key.clone(),
+                                instructions: self.env_key_instructions.clone(),
+                            }))
                         } else {
-                            Ok(Some(v))
+                            Ok(None)
                         }
-                    })
-                    .map_err(|_| {
-                        crate::error::CodexErr::EnvVar(EnvVarError {
-                            var: env_key.clone(),
-                            instructions: self.env_key_instructions.clone(),
-                        })
-                    })
+                    }
+                }
             }
             None => Ok(None),
         }
@@ -218,6 +219,7 @@ mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
     use pretty_assertions::assert_eq;
+    use std::env;
 
     #[test]
     fn test_deserialize_ollama_model_provider_toml() {
@@ -291,5 +293,117 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
         assert_eq!(expected_provider, provider);
+    }
+
+    #[test]
+    fn test_non_openai_provider_works_without_api_key() {
+        // Test that non-OpenAI providers work even when their env_key is not set
+        let ollama_provider = ModelProviderInfo {
+            name: "Ollama".to_string(),
+            base_url: "http://localhost:11434/v1".to_string(),
+            env_key: Some("NONEXISTENT_API_KEY".to_string()),
+            env_key_instructions: None,
+            wire_api: WireApi::Chat,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+        };
+
+        // Ensure the env var is not set
+        unsafe {
+            env::remove_var("NONEXISTENT_API_KEY");
+        }
+
+        let client = reqwest::Client::new();
+        let result = ollama_provider.create_request_builder(&client);
+        
+        // Should succeed even without the API key
+        assert!(result.is_ok(), "Non-OpenAI provider should work without API key");
+    }
+
+    #[test]
+    fn test_openai_provider_requires_api_key() {
+        // Test that OpenAI provider still requires API key
+        let openai_provider = ModelProviderInfo {
+            name: "OpenAI".to_string(),
+            base_url: "https://api.openai.com/v1".to_string(),
+            env_key: Some("OPENAI_API_KEY".to_string()),
+            env_key_instructions: Some("Create an API key".to_string()),
+            wire_api: WireApi::Responses,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+        };
+
+        // Ensure OPENAI_API_KEY is not set for this test
+        let original_key = env::var("OPENAI_API_KEY").ok();
+        unsafe {
+            env::remove_var("OPENAI_API_KEY");
+        }
+
+        let client = reqwest::Client::new();
+        let result = openai_provider.create_request_builder(&client);
+        
+        // Should fail without the API key
+        assert!(result.is_err(), "OpenAI provider should require API key");
+
+        // Restore original key if it existed
+        if let Some(key) = original_key {
+            unsafe {
+                env::set_var("OPENAI_API_KEY", key);
+            }
+        }
+    }
+
+    #[test]
+    fn test_provider_with_valid_api_key_works() {
+        // Test that providers work when API key is provided
+        let provider = ModelProviderInfo {
+            name: "Test".to_string(),
+            base_url: "https://api.test.com/v1".to_string(),
+            env_key: Some("TEST_API_KEY".to_string()),
+            env_key_instructions: None,
+            wire_api: WireApi::Chat,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+        };
+
+        // Set the API key
+        unsafe {
+            env::set_var("TEST_API_KEY", "test-key-value");
+        }
+
+        let client = reqwest::Client::new();
+        let result = provider.create_request_builder(&client);
+        
+        // Should succeed with the API key
+        assert!(result.is_ok(), "Provider should work with valid API key");
+
+        // Clean up
+        unsafe {
+            env::remove_var("TEST_API_KEY");
+        }
+    }
+
+    #[test]
+    fn test_provider_without_env_key_works() {
+        // Test that providers without env_key work
+        let provider = ModelProviderInfo {
+            name: "Local".to_string(),
+            base_url: "http://localhost:8080/v1".to_string(),
+            env_key: None,
+            env_key_instructions: None,
+            wire_api: WireApi::Chat,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+        };
+
+        let client = reqwest::Client::new();
+        let result = provider.create_request_builder(&client);
+        
+        // Should succeed without any API key requirement
+        assert!(result.is_ok(), "Provider without env_key should work");
     }
 }
