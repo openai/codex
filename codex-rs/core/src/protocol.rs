@@ -414,6 +414,8 @@ pub struct ExecCommandEndEvent {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ExecApprovalRequestEvent {
+    /// Identifier to tie the tool call events together
+    pub call_id: String,
     /// The command to be executed.
     pub command: Vec<String>,
     /// The command's working directory.
