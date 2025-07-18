@@ -92,6 +92,32 @@ http_headers = { "X-Example-Header" = "example-value" }
 env_http_headers = { "X-Example-Features": "EXAMPLE_FEATURES" }
 ```
 
+### Per-provider network tuning
+
+The following optional settings control retry behaviour and streaming idle timeouts **per model provider**. They must be specified inside the corresponding `[model_providers.<id>]` block in `config.toml`. (Older releases accepted top‑level keys; those are now ignored.)
+
+Example:
+
+```toml
+[model_providers.openai]
+name = "OpenAI"
+base_url = "https://api.openai.com/v1"
+env_key = "OPENAI_API_KEY"
+# network tuning overrides (all optional; falls back to built‑in defaults)
+request_max_retries = 4            # retry failed HTTP requests
+stream_max_retries = 10            # retry dropped SSE streams
+stream_idle_timeout_ms = 300000    # 5m idle timeout
+```
+
+#### request_max_retries
+How many times Codex will retry a failed HTTP request to the model provider. Defaults to `4`.
+
+#### stream_max_retries
+Number of times Codex will attempt to reconnect when a streaming response is interrupted. Defaults to `10`.
+
+#### stream_idle_timeout_ms
+How long Codex will wait for activity on a streaming response before treating the connection as lost. Defaults to `300_000` (5 minutes).
+
 ## model_provider
 
 Identifies which provider to use from the `model_providers` map. Defaults to `"openai"`. You can override the `base_url` for the built-in `openai` provider via the `OPENAI_BASE_URL` environment variable.
@@ -444,7 +470,7 @@ Currently, `"vscode"` is the default, though Codex does not verify VS Code is in
 
 ## hide_agent_reasoning
 
-Codex intermittently emits "reasoning" events that show the model’s internal "thinking" before it produces a final answer. Some users may find these events distracting, especially in CI logs or minimal terminal output.
+Codex intermittently emits "reasoning" events that show the model's internal "thinking" before it produces a final answer. Some users may find these events distracting, especially in CI logs or minimal terminal output.
 
 Setting `hide_agent_reasoning` to `true` suppresses these events in **both** the TUI as well as the headless `exec` sub-command:
 

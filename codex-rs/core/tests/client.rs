@@ -49,13 +49,6 @@ async fn includes_session_id_and_model_headers_in_request() {
         .mount(&server)
         .await;
 
-    // Environment
-    // Update environment – `set_var` is `unsafe` starting with the 2024
-    // edition so we group the calls into a single `unsafe { … }` block.
-    unsafe {
-        std::env::set_var("OPENAI_REQUEST_MAX_RETRIES", "0");
-        std::env::set_var("OPENAI_STREAM_MAX_RETRIES", "0");
-    }
     let model_provider = ModelProviderInfo {
         name: "openai".into(),
         base_url: format!("{}/v1", server.uri()),
@@ -72,6 +65,9 @@ async fn includes_session_id_and_model_headers_in_request() {
                 .collect(),
         ),
         env_http_headers: None,
+        request_max_retries: Some(0),
+        stream_max_retries: Some(0),
+        stream_idle_timeout_ms: None,
     };
 
     // Init session

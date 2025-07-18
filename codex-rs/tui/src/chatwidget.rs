@@ -464,6 +464,8 @@ impl ChatWidget<'_> {
         if self.bottom_pane.is_task_running() {
             self.bottom_pane.clear_ctrl_c_quit_hint();
             self.submit_op(Op::Interrupt);
+            self.answer_buffer.clear();
+            self.reasoning_buffer.clear();
             false
         } else if self.bottom_pane.ctrl_c_quit_hint_visible() {
             true
