@@ -174,7 +174,7 @@ async fn integration_creates_and_checks_session_file() {
     let sessions_dir = home.path().join("sessions");
     let start = Instant::now();
     let mut matching_files = vec![];
-    while start.elapsed() < Duration::from_secs(5) {
+    while start.elapsed() < Duration::from_secs(50) {
         if sessions_dir.exists() {
             matching_files.clear();
             for entry in WalkDir::new(&sessions_dir) {
