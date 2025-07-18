@@ -204,20 +204,6 @@ impl Session {
             .map(PathBuf::from)
             .map_or_else(|| self.cwd.clone(), |p| self.cwd.join(p))
     }
-
-    pub async fn load_rollout(&self, path: std::path::PathBuf) -> std::io::Result<()> {
-        let (rec, saved) = crate::rollout::RolloutRecorder::resume(&path).await?;
-        {
-            let mut state = self.state.lock().unwrap();
-            state.previous_response_id = saved.state.previous_response_id;
-            if let Some(transcript) = state.zdr_transcript.as_mut() {
-                transcript.record_items(saved.items.iter());
-            }
-        }
-        let mut guard = self.rollout.lock().unwrap();
-        *guard = Some(rec);
-        Ok(())
-    }
 }
 
 /// Mutable state of the agent

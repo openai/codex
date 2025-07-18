@@ -45,7 +45,6 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         sandbox_mode: sandbox_mode_cli_arg,
         prompt,
         config_overrides,
-        ..
     } = cli;
 
     // Determine the prompt based on CLI arg and/or stdin.
