@@ -81,7 +81,6 @@ impl ModelClient {
                     &self.config.model,
                     &self.client,
                     &self.provider,
-                    &self.session_id,
                 )
                 .await?;
 
@@ -148,7 +147,7 @@ impl ModelClient {
                 .provider
                 .create_request_builder(&self.client)?
                 .header("OpenAI-Beta", "responses=experimental")
-                .header("session_id", self.session_id.as_hyphenated().to_string())
+                .header("session_id", self.session_id.to_string())
                 .header(reqwest::header::ACCEPT, "text/event-stream")
                 .json(&payload);
 

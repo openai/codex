@@ -14,7 +14,6 @@ use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tracing::debug;
 use tracing::trace;
-use uuid::Uuid;
 
 use crate::ModelProviderInfo;
 use crate::client_common::Prompt;
@@ -35,7 +34,6 @@ pub(crate) async fn stream_chat_completions(
     model: &str,
     client: &reqwest::Client,
     provider: &ModelProviderInfo,
-    session_id: &Uuid,
 ) -> Result<ResponseStream> {
     // Build messages array
     let mut messages = Vec::<serde_json::Value>::new();
@@ -130,7 +128,6 @@ pub(crate) async fn stream_chat_completions(
 
         let res = req_builder
             .header(reqwest::header::ACCEPT, "text/event-stream")
-            .header("session_id", session_id.as_hyphenated().to_string())
             .json(&payload)
             .send()
             .await;
