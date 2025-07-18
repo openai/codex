@@ -222,8 +222,6 @@ impl ChatWidget<'_> {
             self.conversation_history.add_user_message(text);
         }
         self.conversation_history.scroll_to_bottom();
-        self.answer_buffer.clear();
-        self.reasoning_buffer.clear();
     }
 
     pub(crate) fn handle_codex_event(&mut self, event: Event) {
