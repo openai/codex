@@ -300,7 +300,7 @@ async fn integration_creates_and_checks_session_file() {
     // to Config, which in turn breaks resume because the path is invalid. Normalize to forward slashes
     // to sidestep the issue.
     let resume_path_str = path.to_string_lossy().replace('\\', "/");
-    let resume_override = format!("experimental_resume=\"{}\"", resume_path_str);
+    let resume_override = format!("experimental_resume=\"{resume_path_str}\"");
     let mut cmd2 = AssertCommand::new("cargo");
     cmd2.arg("run")
         .arg("-p")
