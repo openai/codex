@@ -15,6 +15,7 @@ use tokio_util::io::ReaderStream;
 use tracing::debug;
 use tracing::trace;
 use tracing::warn;
+use uuid::Uuid;
 
 use crate::chat_completions::AggregateStreamExt;
 use crate::chat_completions::stream_chat_completions;
@@ -44,6 +45,7 @@ pub struct ModelClient {
     config: Arc<Config>,
     client: reqwest::Client,
     provider: ModelProviderInfo,
+    session_id: Uuid,
     effort: ReasoningEffortConfig,
     summary: ReasoningSummaryConfig,
 }
@@ -54,11 +56,13 @@ impl ModelClient {
         provider: ModelProviderInfo,
         effort: ReasoningEffortConfig,
         summary: ReasoningSummaryConfig,
+        session_id: Uuid,
     ) -> Self {
         Self {
             config,
             client: reqwest::Client::new(),
             provider,
+            session_id,
             effort,
             summary,
         }
@@ -143,6 +147,7 @@ impl ModelClient {
                 .provider
                 .create_request_builder(&self.client)?
                 .header("OpenAI-Beta", "responses=experimental")
+                .header("session_id", self.session_id.to_string())
                 .header(reqwest::header::ACCEPT, "text/event-stream")
                 .json(&payload);
 
