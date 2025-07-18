@@ -310,32 +310,14 @@ impl Session {
     /// transcript, if enabled.
     async fn record_conversation_items(&self, items: &[ResponseItem]) {
         debug!("Recording items for conversation: {items:?}");
-        self.record_rollout_items(items).await;
-        self.record_state_snapshot().await;
+        self.record_state_snapshot(items).await;
 
         if let Some(transcript) = self.state.lock().unwrap().zdr_transcript.as_mut() {
             transcript.record_items(items);
         }
     }
 
-    /// Append the given items to the session's rollout transcript (if enabled)
-    /// and persist them to disk.
-    async fn record_rollout_items(&self, items: &[ResponseItem]) {
-        // Clone the recorder outside of the mutex so we don't hold the lock
-        // across an await point (MutexGuard is not Send).
-        let recorder = {
-            let guard = self.rollout.lock().unwrap();
-            guard.as_ref().cloned()
-        };
-
-        if let Some(rec) = recorder {
-            if let Err(e) = rec.record_items(items).await {
-                error!("failed to record rollout items: {e:#}");
-            }
-        }
-    }
-
-    async fn record_state_snapshot(&self) {
+    async fn record_state_snapshot(&self, items: &[ResponseItem]) {
         let snapshot = {
             let state = self.state.lock().unwrap();
             crate::rollout::SessionStateSnapshot {
@@ -351,6 +333,9 @@ impl Session {
         if let Some(rec) = recorder {
             if let Err(e) = rec.record_state(snapshot).await {
                 error!("failed to record rollout state: {e:#}");
+            }
+            if let Err(e) = rec.record_items(items).await {
+                error!("failed to record rollout items: {e:#}");
             }
         }
     }
@@ -676,8 +661,8 @@ async fn submission_loop(
                 // Optionally resume an existing rollout.
                 let mut restored_items: Option<Vec<ResponseItem>> = None;
                 let mut restored_prev_id: Option<String> = None;
-                let rollout_recorder = match resume_path.as_ref() {
-                    Some(path) => match RolloutRecorder::resume(path).await {
+                let rollout_recorder = if let Some(path) = resume_path.as_ref() {
+                    match RolloutRecorder::resume(path).await {
                         Ok((rec, saved)) => {
                             restored_prev_id = saved.state.previous_response_id;
                             if !saved.items.is_empty() {
@@ -687,17 +672,15 @@ async fn submission_loop(
                         }
                         Err(e) => {
                             warn!("failed to resume rollout from {path:?}: {e}");
-                            match RolloutRecorder::new(&config, session_id, instructions.clone())
-                                .await
-                            {
-                                Ok(r) => Some(r),
-                                Err(e) => {
-                                    warn!("failed to initialise rollout recorder: {e}");
-                                    None
-                                }
-                            }
+                            None
                         }
-                    },
+                    }
+                } else {
+                    None
+                };
+
+                let rollout_recorder = match rollout_recorder {
+                    Some(rec) => Some(rec),
                     None => match RolloutRecorder::new(&config, session_id, instructions.clone())
                         .await
                     {

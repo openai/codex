@@ -14,6 +14,7 @@ use time::macros::format_description;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::mpsc::{self};
+use tracing::info;
 use uuid::Uuid;
 
 use crate::config::Config;
@@ -80,54 +81,13 @@ impl RolloutRecorder {
             instructions,
         };
 
-        let (tx, mut rx) = mpsc::channel::<RolloutCmd>(256);
+        let (tx, rx) = mpsc::channel::<RolloutCmd>(256);
 
-        tokio::task::spawn(async move {
-            let mut file = tokio::fs::File::from_std(file);
-            if let Ok(json) = serde_json::to_string(&meta) {
-                let _ = file.write_all(json.as_bytes()).await;
-                let _ = file.write_all(b"\n").await;
-                let _ = file.flush().await;
-            }
-
-            while let Some(cmd) = rx.recv().await {
-                match cmd {
-                    RolloutCmd::AddItems(items) => {
-                        for item in items {
-                            match item {
-                                ResponseItem::Message { .. }
-                                | ResponseItem::LocalShellCall { .. }
-                                | ResponseItem::FunctionCall { .. }
-                                | ResponseItem::FunctionCallOutput { .. } => {
-                                    if let Ok(json) = serde_json::to_string(&item) {
-                                        let _ = file.write_all(json.as_bytes()).await;
-                                        let _ = file.write_all(b"\n").await;
-                                    }
-                                }
-                                ResponseItem::Reasoning { .. } | ResponseItem::Other => {}
-                            }
-                        }
-                        let _ = file.flush().await;
-                    }
-                    RolloutCmd::UpdateState(state) => {
-                        #[derive(Serialize)]
-                        struct StateLine<'a> {
-                            record_type: &'static str,
-                            #[serde(flatten)]
-                            state: &'a SessionStateSnapshot,
-                        }
-                        if let Ok(json) = serde_json::to_string(&StateLine {
-                            record_type: "state",
-                            state: &state,
-                        }) {
-                            let _ = file.write_all(json.as_bytes()).await;
-                            let _ = file.write_all(b"\n").await;
-                            let _ = file.flush().await;
-                        }
-                    }
-                }
-            }
-        });
+        tokio::task::spawn(rollout_writer(
+            tokio::fs::File::from_std(file),
+            rx,
+            Some(meta),
+        ));
 
         Ok(Self { tx })
     }
@@ -160,6 +120,7 @@ impl RolloutRecorder {
     }
 
     pub async fn resume(path: &Path) -> std::io::Result<(Self, SavedSession)> {
+        info!("Resuming rollout from {path:?}");
         let text = tokio::fs::read_to_string(path).await?;
         let mut lines = text.lines();
         let meta_line = lines
@@ -167,7 +128,6 @@ impl RolloutRecorder {
             .ok_or_else(|| IoError::other("empty session file"))?;
         let session: SessionMeta = serde_json::from_str(meta_line)
             .map_err(|e| IoError::other(format!("failed to parse session meta: {e}")))?;
-
         let mut items = Vec::new();
         let mut state = SessionStateSnapshot::default();
 
@@ -211,48 +171,9 @@ impl RolloutRecorder {
             .read(true)
             .open(path)?;
 
-        let (tx, mut rx) = mpsc::channel::<RolloutCmd>(256);
-        tokio::task::spawn(async move {
-            let mut file = tokio::fs::File::from_std(file);
-            while let Some(cmd) = rx.recv().await {
-                match cmd {
-                    RolloutCmd::AddItems(items) => {
-                        for item in items {
-                            match item {
-                                ResponseItem::Message { .. }
-                                | ResponseItem::LocalShellCall { .. }
-                                | ResponseItem::FunctionCall { .. }
-                                | ResponseItem::FunctionCallOutput { .. } => {
-                                    if let Ok(json) = serde_json::to_string(&item) {
-                                        let _ = file.write_all(json.as_bytes()).await;
-                                        let _ = file.write_all(b"\n").await;
-                                    }
-                                }
-                                ResponseItem::Reasoning { .. } | ResponseItem::Other => {}
-                            }
-                        }
-                        let _ = file.flush().await;
-                    }
-                    RolloutCmd::UpdateState(state) => {
-                        #[derive(Serialize)]
-                        struct StateLine<'a> {
-                            record_type: &'static str,
-                            #[serde(flatten)]
-                            state: &'a SessionStateSnapshot,
-                        }
-                        if let Ok(json) = serde_json::to_string(&StateLine {
-                            record_type: "state",
-                            state: &state,
-                        }) {
-                            let _ = file.write_all(json.as_bytes()).await;
-                            let _ = file.write_all(b"\n").await;
-                            let _ = file.flush().await;
-                        }
-                    }
-                }
-            }
-        });
-
+        let (tx, rx) = mpsc::channel::<RolloutCmd>(256);
+        tokio::task::spawn(rollout_writer(tokio::fs::File::from_std(file), rx, None));
+        info!("Resumed rollout successfully from {path:?}");
         Ok((Self { tx }, saved))
     }
 }
@@ -291,4 +212,55 @@ fn create_log_file(config: &Config, session_id: Uuid) -> std::io::Result<LogFile
         session_id,
         timestamp,
     })
+}
+
+async fn rollout_writer(
+    mut file: tokio::fs::File,
+    mut rx: mpsc::Receiver<RolloutCmd>,
+    meta: Option<SessionMeta>,
+) {
+    if let Some(meta) = meta {
+        if let Ok(json) = serde_json::to_string(&meta) {
+            let _ = file.write_all(json.as_bytes()).await;
+            let _ = file.write_all(b"\n").await;
+            let _ = file.flush().await;
+        }
+    }
+    while let Some(cmd) = rx.recv().await {
+        match cmd {
+            RolloutCmd::AddItems(items) => {
+                for item in items {
+                    match item {
+                        ResponseItem::Message { .. }
+                        | ResponseItem::LocalShellCall { .. }
+                        | ResponseItem::FunctionCall { .. }
+                        | ResponseItem::FunctionCallOutput { .. } => {
+                            if let Ok(json) = serde_json::to_string(&item) {
+                                let _ = file.write_all(json.as_bytes()).await;
+                                let _ = file.write_all(b"\n").await;
+                            }
+                        }
+                        ResponseItem::Reasoning { .. } | ResponseItem::Other => {}
+                    }
+                }
+                let _ = file.flush().await;
+            }
+            RolloutCmd::UpdateState(state) => {
+                #[derive(Serialize)]
+                struct StateLine<'a> {
+                    record_type: &'static str,
+                    #[serde(flatten)]
+                    state: &'a SessionStateSnapshot,
+                }
+                if let Ok(json) = serde_json::to_string(&StateLine {
+                    record_type: "state",
+                    state: &state,
+                }) {
+                    let _ = file.write_all(json.as_bytes()).await;
+                    let _ = file.write_all(b"\n").await;
+                    let _ = file.flush().await;
+                }
+            }
+        }
+    }
 }
