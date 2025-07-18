@@ -104,6 +104,7 @@ impl Codex {
     pub async fn spawn(config: Config, ctrl_c: Arc<Notify>) -> CodexResult<(Codex, String)> {
         // experimental resume path (undocumented)
         let resume_path = config.experimental_resume.clone();
+        info!("resume_path: {resume_path:?}");
         let (tx_sub, rx_sub) = async_channel::bounded(64);
         let (tx_event, rx_event) = async_channel::bounded(1600);
 
@@ -526,7 +527,7 @@ async fn submission_loop(
     ctrl_c: Arc<Notify>,
 ) {
     // Generate a unique ID for the lifetime of this Codex session.
-    let session_id = Uuid::new_v4();
+    let mut session_id = Uuid::new_v4();
 
     let mut sess: Option<Arc<Session>> = None;
     // shorthand - send an event when there is no active session
@@ -660,23 +661,25 @@ async fn submission_loop(
                 // Optionally resume an existing rollout.
                 let mut restored_items: Option<Vec<ResponseItem>> = None;
                 let mut restored_prev_id: Option<String> = None;
-                let rollout_recorder = if let Some(path) = resume_path.as_ref() {
-                    match RolloutRecorder::resume(path).await {
-                        Ok((rec, saved)) => {
-                            restored_prev_id = saved.state.previous_response_id;
-                            if !saved.items.is_empty() {
-                                restored_items = Some(saved.items);
+                let rollout_recorder: Option<RolloutRecorder> =
+                    if let Some(path) = resume_path.as_ref() {
+                        match RolloutRecorder::resume(path).await {
+                            Ok((rec, saved)) => {
+                                session_id = saved.session_id;
+                                restored_prev_id = saved.state.previous_response_id;
+                                if !saved.items.is_empty() {
+                                    restored_items = Some(saved.items);
+                                }
+                                Some(rec)
                             }
-                            Some(rec)
+                            Err(e) => {
+                                warn!("failed to resume rollout from {path:?}: {e}");
+                                None
+                            }
                         }
-                        Err(e) => {
-                            warn!("failed to resume rollout from {path:?}: {e}");
-                            None
-                        }
-                    }
-                } else {
-                    None
-                };
+                    } else {
+                        None
+                    };
 
                 let rollout_recorder = match rollout_recorder {
                     Some(rec) => Some(rec),

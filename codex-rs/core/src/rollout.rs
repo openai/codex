@@ -24,15 +24,13 @@ const SESSIONS_SUBDIR: &str = "sessions";
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct SessionMeta {
-    pub id: String,
+    pub id: Uuid,
     pub timestamp: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub instructions: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Default, Clone)]
 pub struct SessionStateSnapshot {
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub previous_response_id: Option<String>,
 }
 
@@ -43,6 +41,7 @@ pub struct SavedSession {
     pub items: Vec<ResponseItem>,
     #[serde(default)]
     pub state: SessionStateSnapshot,
+    pub session_id: Uuid,
 }
 
 /// Records all [`ResponseItem`]s for a session and flushes them to disk after
@@ -89,7 +88,7 @@ impl RolloutRecorder {
 
         let meta = SessionMeta {
             timestamp,
-            id: session_id.to_string(),
+            id: session_id,
             instructions,
         };
 
@@ -188,6 +187,7 @@ impl RolloutRecorder {
             session: session.clone(),
             items: items.clone(),
             state: state.clone(),
+            session_id: session.id,
         };
 
         let file = std::fs::OpenOptions::new()
