@@ -597,6 +597,41 @@ async fn submission_loop(
                     }
                     return;
                 }
+                // Optionally resume an existing rollout.
+                let mut restored_items: Option<Vec<ResponseItem>> = None;
+                let mut restored_prev_id: Option<String> = None;
+                let rollout_recorder: Option<RolloutRecorder> =
+                    if let Some(path) = resume_path.as_ref() {
+                        match RolloutRecorder::resume(path).await {
+                            Ok((rec, saved)) => {
+                                session_id = saved.session_id;
+                                restored_prev_id = saved.state.previous_response_id;
+                                if !saved.items.is_empty() {
+                                    restored_items = Some(saved.items);
+                                }
+                                Some(rec)
+                            }
+                            Err(e) => {
+                                warn!("failed to resume rollout from {path:?}: {e}");
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    };
+
+                let rollout_recorder = match rollout_recorder {
+                    Some(rec) => Some(rec),
+                    None => match RolloutRecorder::new(&config, session_id, instructions.clone())
+                        .await
+                    {
+                        Ok(r) => Some(r),
+                        Err(e) => {
+                            warn!("failed to initialise rollout recorder: {e}");
+                            None
+                        }
+                    },
+                };
 
                 let client = ModelClient::new(
                     config.clone(),
@@ -657,43 +692,6 @@ async fn submission_loop(
                         });
                     }
                 }
-
-                // Optionally resume an existing rollout.
-                let mut restored_items: Option<Vec<ResponseItem>> = None;
-                let mut restored_prev_id: Option<String> = None;
-                let rollout_recorder: Option<RolloutRecorder> =
-                    if let Some(path) = resume_path.as_ref() {
-                        match RolloutRecorder::resume(path).await {
-                            Ok((rec, saved)) => {
-                                session_id = saved.session_id;
-                                restored_prev_id = saved.state.previous_response_id;
-                                if !saved.items.is_empty() {
-                                    restored_items = Some(saved.items);
-                                }
-                                Some(rec)
-                            }
-                            Err(e) => {
-                                warn!("failed to resume rollout from {path:?}: {e}");
-                                None
-                            }
-                        }
-                    } else {
-                        None
-                    };
-
-                let rollout_recorder = match rollout_recorder {
-                    Some(rec) => Some(rec),
-                    None => match RolloutRecorder::new(&config, session_id, instructions.clone())
-                        .await
-                    {
-                        Ok(r) => Some(r),
-                        Err(e) => {
-                            warn!("failed to initialise rollout recorder: {e}");
-                            None
-                        }
-                    },
-                };
-
                 sess = Some(Arc::new(Session {
                     client,
                     tx_event: tx_event.clone(),
@@ -792,6 +790,8 @@ async fn submission_loop(
                 }
             }
             Op::AddToHistory { text } => {
+                // TODO: What should we do if we got AddToHistory before ConfigureSession?
+                // currently, if ConfigureSession has resume path, this history will be ignored
                 let id = session_id;
                 let config = config.clone();
                 tokio::spawn(async move {
