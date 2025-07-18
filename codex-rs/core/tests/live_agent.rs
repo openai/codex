@@ -1,12 +1,18 @@
 #![expect(clippy::unwrap_used, clippy::expect_used)]
 
-//! Live integration tests that hit the real OpenAI Responses API. Ignored by default; run locally with `OPENAI_API_KEY=... cargo test --test live_agent -- --ignored`.
-//!
-//! These tests complement the lightweight mock‑based
+//! Live integration tests that exercise the full [`Agent`] stack **against the real
+//! OpenAI `/v1/responses` API**.  These tests complement the lightweight mock‑based
 //! unit tests by verifying that the agent can drive an end‑to‑end conversation,
 //! stream incremental events, execute function‑call tool invocations and safely
 //! chain multiple turns inside a single session – the exact scenarios that have
 //! historically been brittle.
+//!
+//! The live tests are **ignored by default** so CI remains deterministic and free
+//! of external dependencies.  Developers can opt‑in locally with e.g.
+//!
+//! ```bash
+//! OPENAI_API_KEY=sk‑... cargo test --test live_agent -- --ignored --nocapture
+//! ```
 //!
 //! Make sure your key has access to the experimental *Responses* API and that
 //! any billable usage is acceptable.
@@ -38,20 +44,6 @@ async fn spawn_codex() -> Result<Codex, CodexErr> {
         api_key_available(),
         "OPENAI_API_KEY must be set for live tests"
     );
-
-    // Environment tweaks to keep the tests snappy and inexpensive while still
-    // exercising retry/robustness logic.
-    //
-    // NOTE: Starting with the 2024 edition `std::env::set_var` is `unsafe`
-    // because changing the process environment races with any other threads
-    // that might be performing environment look-ups at the same time.
-    // Restrict the unsafety to this tiny block that happens at the very
-    // beginning of the test, before we spawn any background tasks that could
-    // observe the environment.
-    unsafe {
-        std::env::set_var("OPENAI_REQUEST_MAX_RETRIES", "2");
-        std::env::set_var("OPENAI_STREAM_MAX_RETRIES", "2");
-    }
 
     let codex_home = TempDir::new().unwrap();
     let config = load_default_config_for_test(&codex_home);
