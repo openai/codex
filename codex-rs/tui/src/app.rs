@@ -19,7 +19,8 @@ use crossterm::event::MouseEvent;
 use crossterm::event::MouseEventKind;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::Receiver;
 use std::sync::mpsc::channel;
 use std::thread;
@@ -54,7 +55,7 @@ pub(crate) struct App<'a> {
     file_search: FileSearchManager,
 
     /// True when a redraw has been scheduled but not yet executed.
-    pending_redraw: Arc<Mutex<bool>>,
+    pending_redraw: Arc<AtomicBool>,
 
     /// Stored parameters needed to instantiate the ChatWidget later, e.g.,
     /// after dismissing the Git-repo warning.
@@ -80,7 +81,7 @@ impl App<'_> {
     ) -> Self {
         let (app_event_tx, app_event_rx) = channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
-        let pending_redraw = Arc::new(Mutex::new(false));
+        let pending_redraw = Arc::new(AtomicBool::new(false));
         let scroll_event_helper = ScrollEventHelper::new(app_event_tx.clone());
 
         // Spawn a dedicated thread for reading the crossterm event loop and
@@ -177,13 +178,14 @@ impl App<'_> {
     /// Schedule a redraw if one is not already pending.
     #[allow(clippy::unwrap_used)]
     fn schedule_redraw(&self) {
+        // Attempt to set the flag to `true`. If it was already `true`, another
+        // redraw is already pending so we can return early.
+        if self
+            .pending_redraw
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
         {
-            #[allow(clippy::unwrap_used)]
-            let mut flag = self.pending_redraw.lock().unwrap();
-            if *flag {
-                return;
-            }
-            *flag = true;
+            return;
         }
 
         let tx = self.app_event_tx.clone();
@@ -191,9 +193,7 @@ impl App<'_> {
         thread::spawn(move || {
             thread::sleep(REDRAW_DEBOUNCE);
             tx.send(AppEvent::Redraw);
-            #[allow(clippy::unwrap_used)]
-            let mut f = pending_redraw.lock().unwrap();
-            *f = false;
+            pending_redraw.store(false, Ordering::SeqCst);
         });
     }
 
