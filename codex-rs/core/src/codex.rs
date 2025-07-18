@@ -591,6 +591,7 @@ async fn submission_loop(
                     provider.clone(),
                     model_reasoning_effort,
                     model_reasoning_summary,
+                    session_id,
                 );
 
                 // abort any current running session and clone its state
