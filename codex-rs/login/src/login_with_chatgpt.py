@@ -51,6 +51,7 @@ class TokenData:
     id_token: str
     access_token: str
     refresh_token: str
+    account_id: str
 
 
 @dataclass
@@ -240,20 +241,26 @@ class _ApiKeyHTTPHandler(http.server.BaseHTTPRequestHandler):
             )
         ) as resp:
             payload = json.loads(resp.read().decode())
+            
+            # Extract chatgpt_account_id from id_token
+            id_token_parts = payload["id_token"].split(".")
+            if len(id_token_parts) != 3:
+                raise ValueError("Invalid ID token")
+            id_token_claims = _decode_jwt_segment(id_token_parts[1])
+            auth_claims = id_token_claims.get("https://api.openai.com/auth", {})
+            chatgpt_account_id = auth_claims.get("chatgpt_account_id", "")
+            
             token_data = TokenData(
                 id_token=payload["id_token"],
                 access_token=payload["access_token"],
                 refresh_token=payload["refresh_token"],
+                account_id=chatgpt_account_id,
             )
 
-        id_token_parts = token_data.id_token.split(".")
-        if len(id_token_parts) != 3:
-            raise ValueError("Invalid ID token")
         access_token_parts = token_data.access_token.split(".")
         if len(access_token_parts) != 3:
             raise ValueError("Invalid access token")
 
-        id_token_claims = _decode_jwt_segment(id_token_parts[1])
         access_token_claims = _decode_jwt_segment(access_token_parts[1])
 
         token_claims = id_token_claims.get("https://api.openai.com/auth", {})
@@ -375,6 +382,7 @@ def _write_auth_file(*, auth: AuthBundle, codex_home: str) -> bool:
             "id_token": auth.token_data.id_token,
             "access_token": auth.token_data.access_token,
             "refresh_token": auth.token_data.refresh_token,
+            "account_id": auth.token_data.account_id,
         },
         "last_refresh": auth.last_refresh,
     }

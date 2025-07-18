@@ -14,11 +14,16 @@ pub struct Cli {
     #[arg(long, short = 'm')]
     pub model: Option<String>,
 
+    /// Select the sandbox policy to use when executing model-generated shell
+    /// commands.
+    #[arg(long = "sandbox", short = 's')]
+    pub sandbox_mode: Option<codex_common::SandboxModeCliArg>,
+
     /// Configuration profile from config.toml to specify default options.
     #[arg(long = "profile", short = 'p')]
     pub config_profile: Option<String>,
 
-    /// Convenience alias for low-friction sandboxed automatic execution (-a on-failure, -c sandbox.mode=workspace-write).
+    /// Convenience alias for low-friction sandboxed automatic execution (-a on-failure, --sandbox workspace-write).
     #[arg(long = "full-auto", default_value_t = false)]
     pub full_auto: bool,
 
@@ -45,6 +50,10 @@ pub struct Cli {
     /// Specifies color settings for use in the output.
     #[arg(long = "color", value_enum, default_value_t = Color::Auto)]
     pub color: Color,
+
+    /// Print events to stdout as JSONL.
+    #[arg(long = "json", default_value_t = false)]
+    pub json: bool,
 
     /// Specifies file where the last message from the agent should be written.
     #[arg(long = "output-last-message")]

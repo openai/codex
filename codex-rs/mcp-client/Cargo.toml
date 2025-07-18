@@ -21,6 +21,3 @@ tokio = { version = "1", features = [
     "sync",
     "time",
 ] }
-
-[dev-dependencies]
-pretty_assertions = "1.4.1"

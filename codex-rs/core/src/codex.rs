@@ -51,7 +51,6 @@ use crate::exec::process_exec_tool_call;
 use crate::exec_env::create_env;
 use crate::flags::OPENAI_STREAM_MAX_RETRIES;
 use crate::mcp_connection_manager::McpConnectionManager;
-use crate::mcp_connection_manager::try_parse_fully_qualified_tool_name;
 use crate::mcp_tool_call::handle_mcp_tool_call;
 use crate::models::ContentItem;
 use crate::models::FunctionCallOutputPayload;
@@ -61,7 +60,9 @@ use crate::models::ResponseInputItem;
 use crate::models::ResponseItem;
 use crate::models::ShellToolCallParams;
 use crate::project_doc::get_user_instructions;
+use crate::protocol::AgentMessageDeltaEvent;
 use crate::protocol::AgentMessageEvent;
+use crate::protocol::AgentReasoningDeltaEvent;
 use crate::protocol::AgentReasoningEvent;
 use crate::protocol::ApplyPatchApprovalRequestEvent;
 use crate::protocol::AskForApproval;
@@ -103,7 +104,7 @@ impl Codex {
     /// submitted to start the session.
     pub async fn spawn(config: Config, ctrl_c: Arc<Notify>) -> CodexResult<(Codex, String)> {
         let (tx_sub, rx_sub) = async_channel::bounded(64);
-        let (tx_event, rx_event) = async_channel::bounded(64);
+        let (tx_event, rx_event) = async_channel::bounded(1600);
 
         let instructions = get_user_instructions(&config).await;
         let configure_session = Op::ConfigureSession {
@@ -586,7 +587,7 @@ async fn submission_loop(
                 }
 
                 let client = ModelClient::new(
-                    model.clone(),
+                    config.clone(),
                     provider.clone(),
                     model_reasoning_effort,
                     model_reasoning_summary,
@@ -1121,15 +1122,8 @@ async fn try_run_turn(
 
     let mut stream = sess.client.clone().stream(&prompt).await?;
 
-    // Buffer all the incoming messages from the stream first, then execute them.
-    // If we execute a function call in the middle of handling the stream, it can time out.
-    let mut input = Vec::new();
-    while let Some(event) = stream.next().await {
-        input.push(event?);
-    }
-
     let mut output = Vec::new();
-    for event in input {
+    while let Some(Ok(event)) = stream.next().await {
         match event {
             ResponseEvent::Created => {
                 let mut state = sess.state.lock().unwrap();
@@ -1171,6 +1165,20 @@ async fn try_run_turn(
                 let mut state = sess.state.lock().unwrap();
                 state.previous_response_id = Some(response_id);
                 break;
+            }
+            ResponseEvent::OutputTextDelta(delta) => {
+                let event = Event {
+                    id: sub_id.to_string(),
+                    msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }),
+                };
+                sess.tx_event.send(event).await.ok();
+            }
+            ResponseEvent::ReasoningSummaryDelta(delta) => {
+                let event = Event {
+                    id: sub_id.to_string(),
+                    msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta }),
+                };
+                sess.tx_event.send(event).await.ok();
             }
         }
     }
@@ -1283,7 +1291,7 @@ async fn handle_function_call(
             handle_container_exec_with_params(params, sess, sub_id, call_id).await
         }
         _ => {
-            match try_parse_fully_qualified_tool_name(&name) {
+            match sess.mcp_connection_manager.parse_tool_name(&name) {
                 Some((server, tool_name)) => {
                     // TODO(mbolin): Determine appropriate timeout for tool call.
                     let timeout = None;
@@ -1297,7 +1305,7 @@ async fn handle_function_call(
                     ResponseInputItem::FunctionCallOutput {
                         call_id,
                         output: FunctionCallOutputPayload {
-                            content: format!("unsupported call: {}", name),
+                            content: format!("unsupported call: {name}"),
                             success: None,
                         },
                     }
@@ -1489,8 +1497,7 @@ async fn handle_sandbox_error(
             call_id,
             output: FunctionCallOutputPayload {
                 content: format!(
-                    "failed in sandbox {:?} with execution error: {error}",
-                    sandbox_type
+                    "failed in sandbox {sandbox_type:?} with execution error: {error}"
                 ),
                 success: Some(false),
             },

@@ -1,5 +1,7 @@
 mod cli;
 mod event_processor;
+mod event_processor_with_human_output;
+mod event_processor_with_json_output;
 
 use std::io::IsTerminal;
 use std::io::Read;
@@ -11,19 +13,22 @@ pub use cli::Cli;
 use codex_core::codex_wrapper;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
+use codex_core::config_types::SandboxMode;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::util::is_inside_git_repo;
-use event_processor::EventProcessor;
+use event_processor_with_human_output::EventProcessorWithHumanOutput;
+use event_processor_with_json_output::EventProcessorWithJsonOutput;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
+
+use crate::event_processor::EventProcessor;
 
 pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
     let Cli {
@@ -36,6 +41,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         skip_git_repo_check,
         color,
         last_message_file,
+        json: json_mode,
+        sandbox_mode: sandbox_mode_cli_arg,
         prompt,
         config_overrides,
     } = cli;
@@ -84,12 +91,12 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         ),
     };
 
-    let sandbox_policy = if full_auto {
-        Some(SandboxPolicy::new_workspace_write_policy())
+    let sandbox_mode = if full_auto {
+        Some(SandboxMode::WorkspaceWrite)
     } else if dangerously_bypass_approvals_and_sandbox {
-        Some(SandboxPolicy::DangerFullAccess)
+        Some(SandboxMode::DangerFullAccess)
     } else {
-        None
+        sandbox_mode_cli_arg.map(Into::<SandboxMode>::into)
     };
 
     // Load configuration and determine approval policy
@@ -99,7 +106,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         // This CLI is intended to be headless and has no affordances for asking
         // the user for approval.
         approval_policy: Some(AskForApproval::Never),
-        sandbox_policy,
+        sandbox_mode,
         cwd: cwd.map(|p| p.canonicalize().unwrap_or(p)),
         model_provider: None,
         codex_linux_sandbox_exe,
@@ -114,8 +121,15 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     };
 
     let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides)?;
-    let mut event_processor =
-        EventProcessor::create_with_ansi(stdout_with_ansi, !config.hide_agent_reasoning);
+    let mut event_processor: Box<dyn EventProcessor> = if json_mode {
+        Box::new(EventProcessorWithJsonOutput::new())
+    } else {
+        Box::new(EventProcessorWithHumanOutput::create_with_ansi(
+            stdout_with_ansi,
+            &config,
+        ))
+    };
+
     // Print the effective configuration and prompt so users can see what Codex
     // is using.
     event_processor.print_config_summary(&config, &prompt);

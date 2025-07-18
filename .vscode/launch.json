@@ -1,0 +1,18 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Cargo launch",
+            "cargo": {
+                "cwd": "${workspaceFolder}/codex-rs",
+                "args": [
+                    "build",
+                    "--bin=codex-tui"
+                ]
+            },
+            "args": []
+        }
+    ]
+}

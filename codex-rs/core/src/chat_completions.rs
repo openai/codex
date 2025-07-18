@@ -115,23 +115,18 @@ pub(crate) async fn stream_chat_completions(
         "tools": tools_json,
     });
 
-    let base_url = provider.base_url.trim_end_matches('/');
-    let url = format!("{}/chat/completions", base_url);
-
     debug!(
-        "POST to {url}: {}",
+        "POST to {}: {}",
+        provider.get_full_url(),
         serde_json::to_string_pretty(&payload).unwrap_or_default()
     );
 
-    let api_key = provider.api_key()?;
     let mut attempt = 0;
     loop {
         attempt += 1;
 
-        let mut req_builder = client.post(&url);
-        if let Some(api_key) = &api_key {
-            req_builder = req_builder.bearer_auth(api_key.clone());
-        }
+        let req_builder = provider.create_request_builder(client)?;
+
         let res = req_builder
             .header(reqwest::header::ACCEPT, "text/event-stream")
             .json(&payload)
@@ -140,7 +135,7 @@ pub(crate) async fn stream_chat_completions(
 
         match res {
             Ok(resp) if resp.status().is_success() => {
-                let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(16);
+                let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
                 let stream = resp.bytes_stream().map_err(CodexErr::Reqwest);
                 let provider_name = provider.name.clone();
                 tokio::spawn(process_chat_sse(stream, tx_event, provider_name));
@@ -461,6 +456,12 @@ where
                 Poll::Ready(Some(Ok(ResponseEvent::Created))) => {
                     // These events are exclusive to the Responses API and
                     // will never appear in a Chat Completions stream.
+                    continue;
+                }
+                Poll::Ready(Some(Ok(ResponseEvent::OutputTextDelta(_))))
+                | Poll::Ready(Some(Ok(ResponseEvent::ReasoningSummaryDelta(_)))) => {
+                    // Deltas are ignored here since aggregation waits for the
+                    // final OutputItemDone.
                     continue;
                 }
             }

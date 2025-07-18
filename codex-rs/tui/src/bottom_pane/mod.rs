@@ -1,22 +1,23 @@
 //! Bottom pane: shows the ChatComposer or a BottomPaneView, if one is active.
 
+use crate::app_event::AppEvent;
+use crate::app_event_sender::AppEventSender;
+use crate::user_approval_widget::ApprovalRequest;
 use bottom_pane_view::BottomPaneView;
 use bottom_pane_view::ConditionalUpdate;
 use codex_core::protocol::TokenUsage;
+use codex_file_search::FileMatch;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::widgets::WidgetRef;
-
-use crate::app_event::AppEvent;
-use crate::app_event_sender::AppEventSender;
-use crate::user_approval_widget::ApprovalRequest;
 
 mod approval_modal_view;
 mod bottom_pane_view;
 mod chat_composer;
 mod chat_composer_history;
 mod command_popup;
+mod file_search_popup;
 mod status_indicator_view;
 
 pub(crate) use chat_composer::ChatComposer;
@@ -78,6 +79,15 @@ impl BottomPane<'_> {
                 self.request_redraw();
             }
             input_result
+        }
+    }
+
+    pub fn handle_paste(&mut self, pasted: String) {
+        if self.active_view.is_none() {
+            let needs_redraw = self.composer.handle_paste(pasted);
+            if needs_redraw {
+                self.request_redraw();
+            }
         }
     }
 
@@ -152,6 +162,10 @@ impl BottomPane<'_> {
         }
     }
 
+    pub(crate) fn composer_is_empty(&self) -> bool {
+        self.composer.is_empty()
+    }
+
     pub(crate) fn is_task_running(&self) -> bool {
         self.is_task_running
     }
@@ -198,12 +212,12 @@ impl BottomPane<'_> {
     }
 
     pub(crate) fn request_redraw(&self) {
-        self.app_event_tx.send(AppEvent::Redraw)
+        self.app_event_tx.send(AppEvent::RequestRedraw)
     }
 
-    /// Returns true when the slash-command popup inside the composer is visible.
-    pub(crate) fn is_command_popup_visible(&self) -> bool {
-        self.active_view.is_none() && self.composer.is_command_popup_visible()
+    /// Returns true when a popup inside the composer is visible.
+    pub(crate) fn is_popup_visible(&self) -> bool {
+        self.active_view.is_none() && self.composer.is_popup_visible()
     }
 
     // --- History helpers ---
@@ -225,6 +239,11 @@ impl BottomPane<'_> {
         if updated {
             self.request_redraw();
         }
+    }
+
+    pub(crate) fn on_file_search_result(&mut self, query: String, matches: Vec<FileMatch>) {
+        self.composer.on_file_search_result(query, matches);
+        self.request_redraw();
     }
 }
 

@@ -81,7 +81,7 @@ async fn test_root_write() {
     let tmpfile = NamedTempFile::new().unwrap();
     let tmpfile_path = tmpfile.path().to_string_lossy();
     run_cmd(
-        &["bash", "-lc", &format!("echo blah > {}", tmpfile_path)],
+        &["bash", "-lc", &format!("echo blah > {tmpfile_path}")],
         &[],
         SHORT_TIMEOUT_MS,
     )
@@ -158,7 +158,7 @@ async fn assert_network_blocked(cmd: &[&str]) {
             (exit_code, stdout, stderr)
         }
         _ => {
-            panic!("expected sandbox denied error, got: {:?}", result);
+            panic!("expected sandbox denied error, got: {result:?}");
         }
     };
 
@@ -171,10 +171,7 @@ async fn assert_network_blocked(cmd: &[&str]) {
     // If—*and only if*—the command exits 0 we consider the sandbox breached.
 
     if exit_code == 0 {
-        panic!(
-            "Network sandbox FAILED - {:?} exited 0\nstdout:\n{}\nstderr:\n{}",
-            cmd, stdout, stderr
-        );
+        panic!("Network sandbox FAILED - {cmd:?} exited 0\nstdout:\n{stdout}\nstderr:\n{stderr}",);
     }
 }
 

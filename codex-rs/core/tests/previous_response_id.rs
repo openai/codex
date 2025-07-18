@@ -11,6 +11,7 @@ mod test_support;
 use serde_json::Value;
 use tempfile::TempDir;
 use test_support::load_default_config_for_test;
+use test_support::load_sse_fixture_with_id;
 use tokio::time::timeout;
 use wiremock::Match;
 use wiremock::Mock;
@@ -42,13 +43,9 @@ impl Match for HasPrevId {
     }
 }
 
-/// Build minimal SSE stream with completed marker.
+/// Build minimal SSE stream with completed marker using the JSON fixture.
 fn sse_completed(id: &str) -> String {
-    format!(
-        "event: response.completed\n\
-data: {{\"type\":\"response.completed\",\"response\":{{\"id\":\"{}\",\"output\":[]}}}}\n\n\n",
-        id
-    )
+    load_sse_fixture_with_id("tests/fixtures/completed_template.json", id)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -107,6 +104,9 @@ async fn keeps_previous_response_id_between_tasks() {
         env_key: Some("PATH".into()),
         env_key_instructions: None,
         wire_api: codex_core::WireApi::Responses,
+        query_params: None,
+        http_headers: None,
+        env_http_headers: None,
     };
 
     // Init session

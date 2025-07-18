@@ -1,4 +1,9 @@
+use clap::CommandFactory;
 use clap::Parser;
+use clap_complete::Shell;
+use clap_complete::generate;
+use codex_chatgpt::apply_command::ApplyCommand;
+use codex_chatgpt::apply_command::run_apply_command;
 use codex_cli::LandlockCommand;
 use codex_cli::SeatbeltCommand;
 use codex_cli::login::run_login_with_chatgpt;
@@ -47,8 +52,22 @@ enum Subcommand {
     #[clap(visible_alias = "p")]
     Proto(ProtoCli),
 
+    /// Generate shell completion scripts.
+    Completion(CompletionCommand),
+
     /// Internal debugging commands.
     Debug(DebugArgs),
+
+    /// Apply the latest diff produced by Codex agent as a `git apply` to your local working tree.
+    #[clap(visible_alias = "a")]
+    Apply(ApplyCommand),
+}
+
+#[derive(Debug, Parser)]
+struct CompletionCommand {
+    /// Shell to generate completions for
+    #[clap(value_enum, default_value_t = Shell::Bash)]
+    shell: Shell,
 }
 
 #[derive(Debug, Parser)]
@@ -103,6 +122,9 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             prepend_config_flags(&mut proto_cli.config_overrides, cli.config_overrides);
             proto::run_main(proto_cli).await?;
         }
+        Some(Subcommand::Completion(completion_cli)) => {
+            print_completion(completion_cli);
+        }
         Some(Subcommand::Debug(debug_args)) => match debug_args.cmd {
             DebugCommand::Seatbelt(mut seatbelt_cli) => {
                 prepend_config_flags(&mut seatbelt_cli.config_overrides, cli.config_overrides);
@@ -121,6 +143,10 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 .await?;
             }
         },
+        Some(Subcommand::Apply(mut apply_cli)) => {
+            prepend_config_flags(&mut apply_cli.config_overrides, cli.config_overrides);
+            run_apply_command(apply_cli).await?;
+        }
     }
 
     Ok(())
@@ -135,4 +161,10 @@ fn prepend_config_flags(
     subcommand_config_overrides
         .raw_overrides
         .splice(0..0, cli_config_overrides.raw_overrides);
+}
+
+fn print_completion(cmd: CompletionCommand) {
+    let mut app = MultitoolCli::command();
+    let name = "codex";
+    generate(cmd.shell, &mut app, name, &mut std::io::stdout());
 }

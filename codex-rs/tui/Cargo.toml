@@ -25,6 +25,7 @@ codex-common = { path = "../common", features = [
     "elapsed",
     "sandbox_summary",
 ] }
+codex-file-search = { path = "../file-search" }
 codex-linux-sandbox = { path = "../linux-sandbox" }
 codex-login = { path = "../login" }
 color-eyre = "0.6.3"
@@ -53,11 +54,12 @@ tokio = { version = "1", features = [
 tracing = { version = "0.1.41", features = ["log"] }
 tracing-appender = "0.2.3"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
-tui-input = "0.11.1"
+tui-input = "0.14.0"
 tui-markdown = "0.3.3"
 tui-textarea = "0.7.0"
 unicode-segmentation = "1.12.0"
 uuid = "1"
 
 [dev-dependencies]
+insta = "1.43.1"
 pretty_assertions = "1"

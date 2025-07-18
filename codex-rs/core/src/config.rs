@@ -3,6 +3,8 @@ use crate::config_types::History;
 use crate::config_types::McpServerConfig;
 use crate::config_types::ReasoningEffort;
 use crate::config_types::ReasoningSummary;
+use crate::config_types::SandboxMode;
+use crate::config_types::SandboxWorkplaceWrite;
 use crate::config_types::ShellEnvironmentPolicy;
 use crate::config_types::ShellEnvironmentPolicyToml;
 use crate::config_types::Tui;
@@ -128,6 +130,13 @@ pub struct Config {
     /// If not "none", the value to use for `reasoning.summary` when making a
     /// request using the Responses API.
     pub model_reasoning_summary: ReasoningSummary,
+
+    /// When set to `true`, overrides the default heuristic and forces
+    /// `model_supports_reasoning_summaries()` to return `true`.
+    pub model_supports_reasoning_summaries: bool,
+
+    /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
+    pub chatgpt_base_url: String,
 }
 
 impl Config {
@@ -253,8 +262,11 @@ pub struct ConfigToml {
     #[serde(default)]
     pub shell_environment_policy: ShellEnvironmentPolicyToml,
 
-    /// If omitted, Codex defaults to the restrictive `read-only` policy.
-    pub sandbox: Option<SandboxPolicy>,
+    /// Sandbox mode to use.
+    pub sandbox_mode: Option<SandboxMode>,
+
+    /// Sandbox configuration to apply if `sandbox` is `WorkspaceWrite`.
+    pub sandbox_workspace_write: Option<SandboxWorkplaceWrite>,
 
     /// Disable server-side response storage (sends the full conversation
     /// context with every request). Currently necessary for OpenAI customers
@@ -303,6 +315,32 @@ pub struct ConfigToml {
 
     pub model_reasoning_effort: Option<ReasoningEffort>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
+
+    /// Override to force-enable reasoning summaries for the configured model.
+    pub model_supports_reasoning_summaries: Option<bool>,
+
+    /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
+    pub chatgpt_base_url: Option<String>,
+}
+
+impl ConfigToml {
+    /// Derive the effective sandbox policy from the configuration.
+    fn derive_sandbox_policy(&self, sandbox_mode_override: Option<SandboxMode>) -> SandboxPolicy {
+        let resolved_sandbox_mode = sandbox_mode_override
+            .or(self.sandbox_mode)
+            .unwrap_or_default();
+        match resolved_sandbox_mode {
+            SandboxMode::ReadOnly => SandboxPolicy::new_read_only_policy(),
+            SandboxMode::WorkspaceWrite => match self.sandbox_workspace_write.as_ref() {
+                Some(s) => SandboxPolicy::WorkspaceWrite {
+                    writable_roots: s.writable_roots.clone(),
+                    network_access: s.network_access,
+                },
+                None => SandboxPolicy::new_workspace_write_policy(),
+            },
+            SandboxMode::DangerFullAccess => SandboxPolicy::DangerFullAccess,
+        }
+    }
 }
 
 /// Optional overrides for user configuration (e.g., from CLI flags).
@@ -311,7 +349,7 @@ pub struct ConfigOverrides {
     pub model: Option<String>,
     pub cwd: Option<PathBuf>,
     pub approval_policy: Option<AskForApproval>,
-    pub sandbox_policy: Option<SandboxPolicy>,
+    pub sandbox_mode: Option<SandboxMode>,
     pub model_provider: Option<String>,
     pub config_profile: Option<String>,
     pub codex_linux_sandbox_exe: Option<PathBuf>,
@@ -332,16 +370,16 @@ impl Config {
             model,
             cwd,
             approval_policy,
-            sandbox_policy,
+            sandbox_mode,
             model_provider,
             config_profile: config_profile_key,
             codex_linux_sandbox_exe,
         } = overrides;
 
-        let config_profile = match config_profile_key.or(cfg.profile) {
+        let config_profile = match config_profile_key.as_ref().or(cfg.profile.as_ref()) {
             Some(key) => cfg
                 .profiles
-                .get(&key)
+                .get(key)
                 .ok_or_else(|| {
                     std::io::Error::new(
                         std::io::ErrorKind::NotFound,
@@ -352,10 +390,7 @@ impl Config {
             None => ConfigProfile::default(),
         };
 
-        let sandbox_policy = sandbox_policy.unwrap_or_else(|| {
-            cfg.sandbox
-                .unwrap_or_else(SandboxPolicy::new_read_only_policy)
-        });
+        let sandbox_policy = cfg.derive_sandbox_policy(sandbox_mode);
 
         let mut model_providers = built_in_model_providers();
         // Merge user-defined providers into the built-in list.
@@ -442,8 +477,23 @@ impl Config {
             codex_linux_sandbox_exe,
 
             hide_agent_reasoning: cfg.hide_agent_reasoning.unwrap_or(false),
-            model_reasoning_effort: cfg.model_reasoning_effort.unwrap_or_default(),
-            model_reasoning_summary: cfg.model_reasoning_summary.unwrap_or_default(),
+            model_reasoning_effort: config_profile
+                .model_reasoning_effort
+                .or(cfg.model_reasoning_effort)
+                .unwrap_or_default(),
+            model_reasoning_summary: config_profile
+                .model_reasoning_summary
+                .or(cfg.model_reasoning_summary)
+                .unwrap_or_default(),
+
+            model_supports_reasoning_summaries: cfg
+                .model_supports_reasoning_summaries
+                .unwrap_or(false),
+
+            chatgpt_base_url: config_profile
+                .chatgpt_base_url
+                .or(cfg.chatgpt_base_url)
+                .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
         };
         Ok(config)
     }
@@ -549,30 +599,38 @@ persistence = "none"
     #[test]
     fn test_sandbox_config_parsing() {
         let sandbox_full_access = r#"
-[sandbox]
-mode = "danger-full-access"
+sandbox_mode = "danger-full-access"
+
+[sandbox_workspace_write]
 network_access = false  # This should be ignored.
 "#;
         let sandbox_full_access_cfg = toml::from_str::<ConfigToml>(sandbox_full_access)
             .expect("TOML deserialization should succeed");
+        let sandbox_mode_override = None;
         assert_eq!(
-            Some(SandboxPolicy::DangerFullAccess),
-            sandbox_full_access_cfg.sandbox
+            SandboxPolicy::DangerFullAccess,
+            sandbox_full_access_cfg.derive_sandbox_policy(sandbox_mode_override)
         );
 
         let sandbox_read_only = r#"
-[sandbox]
-mode = "read-only"
+sandbox_mode = "read-only"
+
+[sandbox_workspace_write]
 network_access = true  # This should be ignored.
 "#;
 
         let sandbox_read_only_cfg = toml::from_str::<ConfigToml>(sandbox_read_only)
             .expect("TOML deserialization should succeed");
-        assert_eq!(Some(SandboxPolicy::ReadOnly), sandbox_read_only_cfg.sandbox);
+        let sandbox_mode_override = None;
+        assert_eq!(
+            SandboxPolicy::ReadOnly,
+            sandbox_read_only_cfg.derive_sandbox_policy(sandbox_mode_override)
+        );
 
         let sandbox_workspace_write = r#"
-[sandbox]
-mode = "workspace-write"
+sandbox_mode = "workspace-write"
+
+[sandbox_workspace_write]
 writable_roots = [
     "/tmp",
 ]
@@ -580,12 +638,13 @@ writable_roots = [
 
         let sandbox_workspace_write_cfg = toml::from_str::<ConfigToml>(sandbox_workspace_write)
             .expect("TOML deserialization should succeed");
+        let sandbox_mode_override = None;
         assert_eq!(
-            Some(SandboxPolicy::WorkspaceWrite {
+            SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![PathBuf::from("/tmp")],
-                network_access: false
-            }),
-            sandbox_workspace_write_cfg.sandbox
+                network_access: false,
+            },
+            sandbox_workspace_write_cfg.derive_sandbox_policy(sandbox_mode_override)
         );
     }
 
@@ -628,6 +687,8 @@ wire_api = "chat"
 model = "o3"
 model_provider = "openai"
 approval_policy = "never"
+model_reasoning_effort = "high"
+model_reasoning_summary = "detailed"
 
 [profiles.gpt3]
 model = "gpt-3.5-turbo"
@@ -658,6 +719,9 @@ disable_response_storage = true
             env_key: Some("OPENAI_API_KEY".to_string()),
             wire_api: crate::WireApi::Chat,
             env_key_instructions: None,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
         };
         let model_provider_map = {
             let mut model_provider_map = built_in_model_providers();
@@ -732,8 +796,10 @@ disable_response_storage = true
                 tui: Tui::default(),
                 codex_linux_sandbox_exe: None,
                 hide_agent_reasoning: false,
-                model_reasoning_effort: ReasoningEffort::default(),
-                model_reasoning_summary: ReasoningSummary::default(),
+                model_reasoning_effort: ReasoningEffort::High,
+                model_reasoning_summary: ReasoningSummary::Detailed,
+                model_supports_reasoning_summaries: false,
+                chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             },
             o3_profile_config
         );
@@ -778,6 +844,8 @@ disable_response_storage = true
             hide_agent_reasoning: false,
             model_reasoning_effort: ReasoningEffort::default(),
             model_reasoning_summary: ReasoningSummary::default(),
+            model_supports_reasoning_summaries: false,
+            chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -837,6 +905,8 @@ disable_response_storage = true
             hide_agent_reasoning: false,
             model_reasoning_effort: ReasoningEffort::default(),
             model_reasoning_summary: ReasoningSummary::default(),
+            model_supports_reasoning_summaries: false,
+            chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);
