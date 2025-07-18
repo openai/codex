@@ -24,7 +24,7 @@ fn sse_completed(id: &str) -> String {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn includes_session_id_in_request() {
+async fn includes_session_id_and_model_headers_in_request() {
     #![allow(clippy::unwrap_used)]
 
     if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
@@ -66,7 +66,11 @@ async fn includes_session_id_in_request() {
         env_key_instructions: None,
         wire_api: codex_core::WireApi::Responses,
         query_params: None,
-        http_headers: None,
+        http_headers: Some(
+            [("originator".to_string(), "codex_cli_rs".to_string())]
+                .into_iter()
+                .collect(),
+        ),
         env_http_headers: None,
     };
 
@@ -105,7 +109,9 @@ async fn includes_session_id_in_request() {
     // get request from the server
     let request = &server.received_requests().await.unwrap()[0];
     let request_body = request.headers.get("session_id").unwrap();
+    let originator = request.headers.get("originator").unwrap();
 
     assert!(current_session_id.is_some());
     assert_eq!(request_body.to_str().unwrap(), &current_session_id.unwrap());
+    assert_eq!(originator.to_str().unwrap(), "codex_cli_rs");
 }
