@@ -212,7 +212,6 @@ impl RolloutRecorder {
 
         let file = std::fs::OpenOptions::new()
             .append(true)
-            .write(true)
             .read(true)
             .open(path)?;
 
@@ -288,7 +287,6 @@ fn create_log_file(config: &Config, session_id: Uuid) -> std::io::Result<LogFile
     let path = dir.join(filename);
     let file = std::fs::OpenOptions::new()
         .append(true)
-        .write(true)
         .create(true)
         .open(&path)?;
 
