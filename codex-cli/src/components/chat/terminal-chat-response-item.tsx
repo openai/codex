@@ -89,6 +89,92 @@ export default function TerminalChatResponseItem({
 //   return Math.max(1, Math.ceil(totalTextLength / 300));
 // }
 
+// Helper function to filter out Ollama JSON function calls from text
+function filterOllamaJsonCalls(text: string): string {
+  // Strategy: Find JSON blocks that look like function calls and remove them
+  // This handles both single-line and multi-line JSON
+  
+  let result = text;
+  let foundJson = true;
+  
+  // Keep looking for JSON function calls until we can't find any more
+  while (foundJson) {
+    foundJson = false;
+    
+    // Look for the start of a JSON function call
+    const startMatch = result.match(/\{\s*"name"\s*:\s*"[^"]+"\s*,\s*"arguments"\s*:/);
+    
+    if (startMatch && startMatch.index !== undefined) {
+      const startIdx = startMatch.index;
+      let braceCount = 0;
+      let inString = false;
+      let escapeNext = false;
+      let endIdx = -1;
+      
+      // Parse from the start to find the matching closing brace
+      for (let i = startIdx; i < result.length; i++) {
+        const char = result[i];
+        
+        if (escapeNext) {
+          escapeNext = false;
+          continue;
+        }
+        
+        if (char === '\\') {
+          escapeNext = true;
+          continue;
+        }
+        
+        if (char === '"' && !escapeNext) {
+          inString = !inString;
+          continue;
+        }
+        
+        if (!inString) {
+          if (char === '{') {
+            braceCount++;
+          } else if (char === '}') {
+            braceCount--;
+            if (braceCount === 0) {
+              endIdx = i;
+              break;
+            }
+          }
+        }
+      }
+      
+      if (endIdx !== -1) {
+        const jsonStr = result.substring(startIdx, endIdx + 1);
+        
+        // Check if this looks like a function call even if JSON parsing fails
+        if (jsonStr.includes('"name"') && jsonStr.includes('"arguments"')) {
+          // Remove it even if it's not perfectly valid JSON (Ollama sometimes outputs malformed JSON)
+          result = result.substring(0, startIdx) + result.substring(endIdx + 1);
+          foundJson = true;
+        } else {
+          // Try to parse as valid JSON
+          try {
+            const parsed = JSON.parse(jsonStr);
+            if (parsed.name && (parsed.arguments || parsed.parameters)) {
+              // It's a function call, remove it
+              result = result.substring(0, startIdx) + result.substring(endIdx + 1);
+              foundJson = true;
+            }
+          } catch {
+            // Not valid JSON and doesn't look like a function call, keep it
+          }
+        }
+      }
+    }
+  }
+  
+  // Clean up extra whitespace and blank lines
+  result = result.trim();
+  result = result.replace(/\n\s*\n\s*\n/g, '\n\n'); // Replace 3+ newlines with 2
+  
+  return result;
+}
+
 export function TerminalChatResponseReasoning({
   message,
   fileOpener,
@@ -151,7 +237,7 @@ function TerminalChatResponseMessage({
           .map(
             (c) =>
               c.type === "output_text"
-                ? c.text
+                ? message.role === "assistant" ? filterOllamaJsonCalls(c.text) : c.text
                 : c.type === "refusal"
                   ? c.refusal
                   : c.type === "input_text"

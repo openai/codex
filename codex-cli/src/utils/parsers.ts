@@ -6,6 +6,7 @@ import type { ResponseFunctionToolCall } from "openai/resources/responses/respon
 
 import { log } from "node:console";
 import { formatCommandForDisplay } from "src/format-command.js";
+import { repairJson } from "./repair-json.js";
 
 // The console utility import is intentionally explicit to avoid bundlers from
 // including the entire `console` module when only the `log` function is
@@ -16,7 +17,16 @@ export function parseToolCallOutput(toolCallOutput: string): {
   metadata: ExecOutputMetadata;
 } {
   try {
-    const { output, metadata } = JSON.parse(toolCallOutput);
+    // First try to repair the JSON if it's malformed
+    const repaired = repairJson(toolCallOutput);
+    let parsed;
+    if (repaired) {
+      parsed = JSON.parse(repaired);
+    } else {
+      // Fallback to original parsing if repair returns null
+      parsed = JSON.parse(toolCallOutput);
+    }
+    const { output, metadata } = parsed;
     return {
       output,
       metadata,
@@ -72,9 +82,16 @@ export function parseToolCallArguments(
 ): ExecInput | undefined {
   let json: unknown;
   try {
-    json = JSON.parse(toolCallArguments);
+    // First try to repair the JSON if it's malformed
+    const repaired = repairJson(toolCallArguments);
+    if (repaired) {
+      json = JSON.parse(repaired);
+    } else {
+      // Fallback to original parsing if repair returns null
+      json = JSON.parse(toolCallArguments);
+    }
   } catch (err) {
-    log(`Failed to parse toolCall.arguments: ${toolCallArguments}`);
+    log(`Failed to parse toolCall.arguments even after repair attempt: ${toolCallArguments}`);
     return undefined;
   }
 

@@ -3,6 +3,7 @@ import type { ResponseItem } from "openai/resources/responses/responses.mjs";
 import { approximateTokensUsed } from "./approximate-tokens-used.js";
 import { getApiKey } from "./config.js";
 import { type SupportedModelId, openAiModelInfo } from "./model-info.js";
+import { getOllamaModelContextWindow } from "./ollama-models.js";
 import { createOpenAIClient } from "./openai-client.js";
 
 const MODEL_LIST_TIMEOUT_MS = 2_000; // 2 seconds
@@ -92,20 +93,39 @@ export function maxTokensForModel(model: string): number {
     return openAiModelInfo[model as SupportedModelId].maxContextLength;
   }
 
+  // Check Ollama models registry
+  const ollamaContext = getOllamaModelContextWindow(model);
+  if (ollamaContext > 0) {
+    return ollamaContext;
+  }
+
   // fallback to heuristics for models not in the registry
   const lower = model.toLowerCase();
-  if (lower.includes("32k")) {
+  
+  // Check for context window in model name (e.g., "128k", "32k")
+  const contextMatch = lower.match(/(\d+)k/);
+  if (contextMatch) {
+    const contextSize = parseInt(contextMatch[1], 10);
+    return contextSize * 1000;
+  }
+  
+  // Additional Ollama-specific heuristics
+  if (lower.includes("qwen") && lower.includes("128k")) {
+    return 128000;
+  }
+  if (lower.includes("qwen") && lower.includes("32k")) {
     return 32000;
   }
-  if (lower.includes("16k")) {
-    return 16000;
+  if (lower.includes("deepseek")) {
+    return 32000; // DeepSeek models typically have 32k context
   }
-  if (lower.includes("8k")) {
-    return 8000;
+  if (lower.includes("llama") && lower.includes("3.1")) {
+    return 128000; // Llama 3.1 models have 128k context
   }
-  if (lower.includes("4k")) {
-    return 4000;
+  if (lower.includes("llama")) {
+    return 8000; // Default Llama context
   }
+  
   return 128000; // Default to 128k for any other model.
 }
 
