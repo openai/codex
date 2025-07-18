@@ -187,9 +187,8 @@ impl RolloutRecorder {
                 .map(|s| s == "state")
                 .unwrap_or(false)
             {
-                match serde_json::from_value::<SessionStateSnapshot>(v.clone()) {
-                    Ok(s) => state = s,
-                    Err(_) => {}
+                if let Ok(s) = serde_json::from_value::<SessionStateSnapshot>(v.clone()) {
+                    state = s
                 }
                 continue;
             }

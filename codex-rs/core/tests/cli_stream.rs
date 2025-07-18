@@ -2,7 +2,6 @@
 
 use assert_cmd::Command as AssertCommand;
 use codex_core::exec::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
-use serde_json::Value;
 use std::time::Duration;
 use std::time::Instant;
 use tempfile::TempDir;
@@ -221,11 +220,15 @@ async fn integration_creates_and_checks_session_file() {
         }
     }
 
-    let path = matching_path.expect("No session file containing the marker was found");
+    let path = match matching_path {
+        Some(p) => p,
+        None => panic!("No session file containing the marker was found"),
+    };
 
-    let rel = path
-        .strip_prefix(&sessions_dir)
-        .expect("session file should live under sessions/");
+    let rel = match path.strip_prefix(&sessions_dir) {
+        Ok(r) => r,
+        Err(_) => panic!("session file should live under sessions/"),
+    };
     let comps: Vec<String> = rel
         .components()
         .map(|c| c.as_os_str().to_string_lossy().into_owned())
@@ -257,10 +260,15 @@ async fn integration_creates_and_checks_session_file() {
         assert!((1..=31).contains(&d), "Day out of range: {d}");
     }
 
-    let content = std::fs::read_to_string(path).unwrap();
+    let content =
+        std::fs::read_to_string(path).unwrap_or_else(|_| panic!("Failed to read session file"));
     let mut lines = content.lines();
-    let meta_line = lines.next().expect("missing session meta line");
-    let meta: serde_json::Value = serde_json::from_str(meta_line).unwrap();
+    let meta_line = lines
+        .next()
+        .ok_or("missing session meta line")
+        .unwrap_or_else(|_| panic!("missing session meta line"));
+    let meta: serde_json::Value = serde_json::from_str(meta_line)
+        .unwrap_or_else(|_| panic!("Failed to parse session meta line as JSON"));
     assert!(meta.get("id").is_some(), "SessionMeta missing id");
     assert!(
         meta.get("timestamp").is_some(),
