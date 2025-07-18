@@ -5,6 +5,7 @@ import type { AppConfig } from "../../utils/config.js";
 import type { ColorName } from "chalk";
 import type { ResponseItem } from "openai/resources/responses/responses.mjs";
 
+
 import TerminalChatInput from "./terminal-chat-input.js";
 import TerminalChatPastRollout from "./terminal-chat-past-rollout.js";
 import { TerminalChatToolCallCommand } from "./terminal-chat-tool-call-command.js";
@@ -104,7 +105,6 @@ async function generateCommandExplanation(
         },
       ],
     });
-
     // Extract the explanation from the response
     const explanation =
       response.choices[0]?.message.content || "Unable to generate explanation.";
@@ -147,6 +147,8 @@ export default function TerminalChat({
   const notify = Boolean(config.notify);
   const [model, setModel] = useState<string>(config.model);
   const [provider, setProvider] = useState<string>(config.provider || "openai");
+  const [availableModels, setAvailableModels] = useState<Array<string>>([]);
+
   const [lastResponseId, setLastResponseId] = useState<string | null>(null);
   const [items, setItems] = useState<Array<ResponseItem>>([]);
   const [loading, setLoading] = useState<boolean>(false);
@@ -161,8 +163,7 @@ export default function TerminalChat({
       const summary = await generateCompactSummary(
         items,
         model,
-        Boolean(config.flexMode),
-        config,
+        Boolean(config.flexMode)
       );
       setItems([
         {
@@ -198,7 +199,7 @@ export default function TerminalChat({
   const [overlayMode, setOverlayMode] = useState<OverlayModeType>("none");
   const [viewRollout, setViewRollout] = useState<AppRollout | null>(null);
 
-  // Store the diff text when opening the diff overlay so the view isn’t
+  // Store the diff text when opening the diff overlay so the view isn't
   // recomputed on every re‑render while it is open.
   // diffText is passed down to the DiffOverlay component. The setter is
   // currently unused but retained for potential future updates. Prefix with
@@ -215,10 +216,11 @@ export default function TerminalChat({
   // recreate only when model/instructions/approvalPolicy change.
   const agentRef = React.useRef<AgentLoop>();
   const [, forceUpdate] = React.useReducer((c) => c + 1, 0); // trigger re‑render
-
-  // ────────────────────────────────────────────────────────────────
-  // DEBUG: log every render w/ key bits of state
-  // ────────────────────────────────────────────────────────────────
+  
+    // ────────────────────────────────────────────────────────────────
+    // DEBUG: log every render w/ key bits of state
+   // ────────────────────────────────────────────────────────────────
+  
   log(
     `render - agent? ${Boolean(agentRef.current)} loading=${loading} items=${
       items.length
@@ -316,7 +318,7 @@ export default function TerminalChat({
       forceUpdate(); // re‑render after teardown too
     };
     // We intentionally omit 'approvalPolicy' and 'confirmationPrompt' from the deps
-    // so switching modes or showing confirmation dialogs doesn’t tear down the loop.
+    // so switching modes or showing confirmation dialogs doesn't tear down the loop.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model, provider, config, requestConfirmation, additionalWritableRoots]);
 
@@ -395,11 +397,11 @@ export default function TerminalChat({
   useEffect(() => {
     log(`agentRef.current is now ${Boolean(agent)}`);
   }, [agent]);
-
+  
   // ---------------------------------------------------------------------
-  // Dynamic layout constraints – keep total rendered rows <= terminal rows
-  // ---------------------------------------------------------------------
-
+   // Dynamic layout constraints – keep total rendered rows <= terminal rows
+   // ---------------------------------------------------------------------
+  
   const { rows: terminalRows } = useTerminalSize();
 
   useEffect(() => {
@@ -421,12 +423,14 @@ export default function TerminalChat({
     processInitialInputItems();
   }, [agent, initialPrompt, initialImagePaths]);
 
-  // ────────────────────────────────────────────────────────────────
-  // In-app warning if CLI --model isn't in fetched list
-  // ────────────────────────────────────────────────────────────────
+   // ────────────────────────────────────────────────────────────────
+   // In-app warning if CLI --model isn't in fetched list
+   // ────────────────────────────────────────────────────────────────
+  
   useEffect(() => {
     (async () => {
       const available = await getAvailableModels(provider);
+      setAvailableModels(available);
       if (model && available.length > 0 && !available.includes(model)) {
         setItems((prev) => [
           ...prev,
@@ -444,9 +448,9 @@ export default function TerminalChat({
         ]);
       }
     })();
-    // run once on mount
+    // Run this effect when provider changes
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [provider]);
 
   // Just render every item in order, no grouping/collapse.
   const lastMessageBatch = items.map((item) => ({ item }));
@@ -541,9 +545,8 @@ export default function TerminalChat({
                   type: "message",
                   role: "system",
                   content: [{ type: "input_text", text }],
-                },
+                } as ResponseItem,
               ]);
-              // Ensure no overlay is shown.
               setOverlayMode("none");
             }}
             onCompact={handleCompact}
@@ -607,20 +610,46 @@ export default function TerminalChat({
         {overlayMode === "model" && (
           <ModelOverlay
             currentModel={model}
-            providers={config.providers}
             currentProvider={provider}
             hasLastResponse={Boolean(lastResponseId)}
-            onSelect={(allModels, newModel) => {
+            onSelect={(newModel: string) => {
               log(
-                "TerminalChat: interruptAgent invoked – calling agent.cancel()",
+                "TerminalChat: Switching model - cancelling agent and updating state",
               );
               if (!agent) {
-                log("TerminalChat: agent is not ready yet");
+                log("TerminalChat: agent is not ready yet during model switch");
               }
-              agent?.cancel();
-              setLoading(false);
+              agent?.cancel(); // Cancel any ongoing agent activity
+              setLoading(false); // Stop loading indicator
 
-              if (!allModels?.includes(newModel)) {
+              // Check if the selected model is available
+              if (!availableModels.includes(newModel)) {
+                // Display error message in chat history
+                setItems(
+                  (prev) =>
+                    [
+                      ...prev,
+                      {
+                        id: `model-not-available-${Date.now()}`,
+                        type: "message",
+                        role: "system",
+                        content: [
+                          {
+                            type: "input_text",
+                            text: `${chalk.red("Error:")} Model "${chalk.bold(
+                              newModel,
+                            )}" is not available for provider "${chalk.yellow(
+                              provider,
+                            )}".\nAvailable models: ${chalk.green(
+                              availableModels.join(", "),
+                            )}`,
+                          },
+                        ],
+                      },
+                    ] as Array<ResponseItem>,
+                );
+                
+                // Also log to console for CLI feedback
                 // eslint-disable-next-line no-console
                 console.error(
                   chalk.bold.red(
@@ -631,13 +660,14 @@ export default function TerminalChat({
                     )}".`,
                   ),
                 );
-                return;
+                
+                // Close the overlay without changing the model
+                setOverlayMode("none");
+                return; // Exit the handler
               }
 
-              setModel(newModel);
-              setLastResponseId((prev) =>
-                prev && newModel !== model ? null : prev,
-              );
+              // If model is available, proceed with switching
+              setModel(newModel); // Update the model state
 
               // Save model to config
               saveConfig({
@@ -646,24 +676,34 @@ export default function TerminalChat({
                 provider: provider,
               });
 
-              setItems((prev) => [
-                ...prev,
-                {
-                  id: `switch-model-${Date.now()}`,
-                  type: "message",
-                  role: "system",
-                  content: [
-                    {
-                      type: "input_text",
-                      text: `Switched model to ${newModel}`,
-                    },
-                  ],
-                },
-              ]);
+              // Reset lastResponseId if the model actually changed
+              setLastResponseId((prev) =>
+                prev && newModel !== model ? null : prev,
+              );
 
+              // Add a system message to indicate the model switch
+              setItems(
+                (prev) =>
+                  [
+                    ...prev,
+                    {
+                      id: `switch-model-${Date.now()}`,
+                      type: "message",
+                      role: "system",
+                      content: [
+                        {
+                          type: "input_text",
+                          text: `Switched model to ${newModel}`,
+                        },
+                      ],
+                    },
+                  ] as Array<ResponseItem>,
+              );
+
+              // Close the overlay
               setOverlayMode("none");
             }}
-            onSelectProvider={(newProvider) => {
+            onSelectProvider={(newProvider: string) => {
               log(
                 "TerminalChat: interruptAgent invoked – calling agent.cancel()",
               );
@@ -706,9 +746,9 @@ export default function TerminalChat({
               ]);
 
               // Don't close the overlay so user can select a model for the new provider
-              // setOverlayMode("none");
             }}
             onExit={() => setOverlayMode("none")}
+            availableModels={availableModels}
           />
         )}
 
@@ -729,20 +769,23 @@ export default function TerminalChat({
                   }
                 ).approvalPolicy = newMode as ApprovalPolicy;
               }
-              setItems((prev) => [
-                ...prev,
-                {
-                  id: `switch-approval-${Date.now()}`,
-                  type: "message",
-                  role: "system",
-                  content: [
+              setItems(
+                (prev) =>
+                  [
+                    ...prev,
                     {
-                      type: "input_text",
-                      text: `Switched approval mode to ${newMode}`,
+                      id: `switch-approval-${Date.now()}`,
+                      type: "message",
+                      role: "system",
+                      content: [
+                        {
+                          type: "input_text",
+                          text: `Switched approval mode to ${newMode}`,
+                        },
+                      ],
                     },
-                  ],
-                },
-              ]);
+                  ] as Array<ResponseItem>,
+              );
 
               setOverlayMode("none");
             }}
