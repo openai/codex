@@ -38,6 +38,19 @@ describe("parseApplyPatch", () => {
     ]);
   });
 
+  test("accepts trailing newline after patch", () => {
+    const patchWithNewline =
+      `*** Begin Patch\n*** Add File: foo.txt\n+bar\n*** End Patch\n`;
+    const ops = mustParse(patchWithNewline);
+    expect(ops).toEqual([
+      {
+        type: "create",
+        path: "foo.txt",
+        content: "bar",
+      },
+    ]);
+  });
+
   test("returns null for an invalid patch (missing prefix)", () => {
     const invalid = `*** Add File: foo.txt\n+bar\n*** End Patch`;
     expect(parseApplyPatch(invalid)).toBeNull();
