@@ -88,13 +88,8 @@ async fn keeps_previous_response_id_between_tasks() {
         .mount(&server)
         .await;
 
-    // Environment
-    // Update environment – `set_var` is `unsafe` starting with the 2024
-    // edition so we group the calls into a single `unsafe { … }` block.
-    unsafe {
-        std::env::set_var("OPENAI_REQUEST_MAX_RETRIES", "0");
-        std::env::set_var("OPENAI_STREAM_MAX_RETRIES", "0");
-    }
+    // Configure retry behavior explicitly to avoid mutating process-wide
+    // environment variables.
     let model_provider = ModelProviderInfo {
         name: "openai".into(),
         base_url: format!("{}/v1", server.uri()),
@@ -107,6 +102,10 @@ async fn keeps_previous_response_id_between_tasks() {
         query_params: None,
         http_headers: None,
         env_http_headers: None,
+        // disable retries so we don't get duplicate calls in this test
+        request_max_retries: Some(0),
+        stream_max_retries: Some(0),
+        stream_idle_timeout_ms: None,
     };
 
     // Init session
