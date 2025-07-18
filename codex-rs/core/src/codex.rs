@@ -651,7 +651,9 @@ async fn submission_loop(
                 // overlapping rollout file. Consider passing RolloutRecorder
                 // from above.
                 let rollout_recorder =
-                    match RolloutRecorder::new(&config, session_id, instructions.clone()).await {
+                    match RolloutRecorder::new(&config, session_id, instructions.clone(), &cwd)
+                        .await
+                    {
                         Ok(r) => Some(r),
                         Err(e) => {
                             warn!("failed to initialise rollout recorder: {e}");
