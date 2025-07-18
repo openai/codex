@@ -295,7 +295,12 @@ async fn integration_creates_and_checks_session_file() {
     let orig_len = content.lines().count();
     let marker2 = format!("integration-resume-{}", Uuid::new_v4());
     let prompt2 = format!("echo {marker2}");
-    let resume_override = format!("experimental_resume=\"{}\"", path.display());
+    // Cross‑platform safe resume override.  On Windows, backslashes in a TOML string must be escaped
+    // or the parse will fail and the raw literal (including quotes) may be preserved all the way down
+    // to Config, which in turn breaks resume because the path is invalid. Normalize to forward slashes
+    // to sidestep the issue.
+    let resume_path_str = path.to_string_lossy().replace('\\', "/");
+    let resume_override = format!("experimental_resume=\"{}\"", resume_path_str);
     let mut cmd2 = AssertCommand::new("cargo");
     cmd2.arg("run")
         .arg("-p")
@@ -316,8 +321,29 @@ async fn integration_creates_and_checks_session_file() {
     let output2 = cmd2.output().unwrap();
     assert!(output2.status.success(), "resume codex-cli run failed");
 
-    let content2 = std::fs::read_to_string(&path).unwrap();
-    let new_len = content2.lines().count();
+    // The rollout writer runs on a background async task; give it a moment to flush.
+    let mut new_len = orig_len;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut content2 = String::new();
+    while Instant::now() < deadline {
+        match std::fs::read_to_string(&path) {
+            Ok(c) => {
+                let count = c.lines().count();
+                if count > orig_len {
+                    content2 = c;
+                    new_len = count;
+                    break;
+                }
+            }
+            Err(_) => {}
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    if content2.is_empty() {
+        // last attempt
+        content2 = std::fs::read_to_string(&path).unwrap();
+        new_len = content2.lines().count();
+    }
     assert!(new_len > orig_len, "rollout file did not grow after resume");
     assert!(content2.contains(&marker), "rollout lost original marker");
     assert!(

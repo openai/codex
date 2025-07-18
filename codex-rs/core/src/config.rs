@@ -454,6 +454,25 @@ impl Config {
                 .as_ref()
                 .map(|info| info.max_output_tokens)
         });
+
+        // Best-effort sanitization of the experimental_resume path. When a user specifies
+        // a Windows path via `-c experimental_resume="C:\\foo\\bar"`, the CLI override
+        // parser may fall back to treating the raw string as a literal, which can leave the
+        // surrounding quotes *in* the deserialized value (e.g., `"C:\\foo\\bar"`). This in
+        // turn causes downstream resume attempts to fail because the path is not found. Strip any
+        // leading/trailing single or double quotes here before storing it in the final Config.
+        let experimental_resume = cfg.experimental_resume.map(|p| {
+            use std::path::PathBuf;
+            let s = p.to_string_lossy();
+            let trimmed = s.trim().trim_matches(|c| c == '"' || c == '\'');
+            // If trimming removed characters, rebuild from trimmed; otherwise reuse `p`.
+            if trimmed.len() != s.len() {
+                PathBuf::from(trimmed)
+            } else {
+                p
+            }
+        });
+
         let config = Self {
             model,
             model_context_window,
@@ -501,7 +520,7 @@ impl Config {
                 .or(cfg.chatgpt_base_url)
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
 
-            experimental_resume: cfg.experimental_resume,
+            experimental_resume,
         };
         Ok(config)
     }
