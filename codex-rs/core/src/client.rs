@@ -317,7 +317,7 @@ where
             // duplicated `output` array embedded in the `response.completed`
             // payload.  That produced two concrete issues:
             //   1. No real‑time streaming – the user only saw output after the
-            //      entire turn had finished, which broke the “typing” UX and
+            //      entire turn had finished, which broke the "typing" UX and
             //      made long‑running turns look stalled.
             //   2. Duplicate `function_call_output` items – both the
             //      individual *and* the completed array were forwarded, which
@@ -390,6 +390,7 @@ where
 }
 
 /// used in tests to stream from a text SSE file
+#[allow(dead_code)]
 async fn stream_from_fixture(path: impl AsRef<Path>) -> Result<ResponseStream> {
     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
     let f = std::fs::File::open(path.as_ref())?;
@@ -413,6 +414,8 @@ mod tests {
     #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use super::*;
+    use crate::models::LocalShellAction;
+    use crate::models::LocalShellStatus;
     use serde_json::json;
     use tokio::sync::mpsc;
     use tokio_test::io::Builder as IoBuilder;
@@ -421,6 +424,17 @@ mod tests {
     // ────────────────────────────
     // Helpers
     // ────────────────────────────
+
+    /// Build a tiny SSE string with the provided *raw* event chunks (already formatted as
+    /// `"event: ...\ndata: ..."` lines). Each chunk is separated by a blank line.
+    fn build_sse(chunks: &[&str]) -> String {
+        let mut out = String::new();
+        for c in chunks {
+            out.push_str(c);
+            out.push_str("\n\n");
+        }
+        out
+    }
 
     /// Runs the SSE parser on pre-chunked byte slices and returns every event
     /// (including any final `Err` from a stream-closure check).
@@ -467,6 +481,65 @@ mod tests {
             out.push(ev.expect("channel closed"));
         }
         out
+    }
+
+    // ────────────────────────────
+    // Tests from `implement-unit-tests-for-event-aggregation-and-tool-calls`
+    // ────────────────────────────
+
+    #[tokio::test]
+    async fn parses_function_and_local_shell_items() {
+        let func = "event: response.output_item.done\n\
+data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call_output\",\"call_id\":\"call1\",\"output\":{\"content\":\"ok\",\"success\":true}}}";
+        let shell = "event: response.output_item.done\n\
+data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"local_shell_call\",\"id\":\"ls1\",\"call_id\":\"call2\",\"status\":\"in_progress\",\"action\":{\"type\":\"exec\",\"command\":[\"echo\",\"hi\"],\"timeout_ms\":123,\"working_directory\":null,\"env\":null,\"user\":null}}}";
+        let done = "event: response.completed\n\
+data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp\",\"output\":[]}}";
+
+        let content = build_sse(&[func, shell, done]);
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<Result<ResponseEvent>>(8);
+        let stream = ReaderStream::new(std::io::Cursor::new(content)).map_err(CodexErr::Io);
+        tokio::spawn(super::process_sse(stream, tx));
+
+        // function_call_output
+        match rx.recv().await.unwrap().unwrap() {
+            ResponseEvent::OutputItemDone(ResponseItem::FunctionCallOutput { call_id, output }) => {
+                assert_eq!(call_id, "call1");
+                assert_eq!(output.content, "ok");
+                assert_eq!(output.success, Some(true));
+            }
+            other => panic!("unexpected first event: {other:?}"),
+        }
+
+        // local_shell_call
+        match rx.recv().await.unwrap().unwrap() {
+            ResponseEvent::OutputItemDone(ResponseItem::LocalShellCall {
+                id,
+                call_id,
+                status,
+                action,
+            }) => {
+                assert_eq!(id.as_deref(), Some("ls1"));
+                assert_eq!(call_id.as_deref(), Some("call2"));
+                if !matches!(status, LocalShellStatus::InProgress) {
+                    panic!("unexpected status: {status:?}");
+                }
+                match action {
+                    LocalShellAction::Exec(act) => {
+                        assert_eq!(act.command, vec!["echo".to_string(), "hi".to_string()]);
+                        assert_eq!(act.timeout_ms, Some(123));
+                    }
+                }
+            }
+            other => panic!("unexpected second event: {other:?}"),
+        }
+
+        // completed
+        assert!(matches!(
+            rx.recv().await.unwrap().unwrap(),
+            ResponseEvent::Completed { response_id, .. } if response_id == "resp"
+        ));
     }
 
     // ────────────────────────────
@@ -549,6 +622,7 @@ mod tests {
 
         let events = collect_events(&[sse1.as_bytes()]).await;
 
+        // We expect the item + a final Err complaining about the missing completed event.
         assert_eq!(events.len(), 2);
 
         matches!(events[0], Ok(ResponseEvent::OutputItemDone(_)));

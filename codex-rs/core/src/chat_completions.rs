@@ -458,6 +458,9 @@ pub(crate) trait AggregateStreamExt: Stream<Item = Result<ResponseEvent>> + Size
     ///     // event now contains cumulative text
     /// }
     /// ```
+    ///
+    /// See [`tests::aggregates_consecutive_message_chunks`] for an example.
+    /// ```
     fn aggregate(self) -> AggregatedChatStream<Self> {
         AggregatedChatStream {
             inner: self,
@@ -468,3 +471,237 @@ pub(crate) trait AggregateStreamExt: Stream<Item = Result<ResponseEvent>> + Size
 }
 
 impl<T> AggregateStreamExt for T where T: Stream<Item = Result<ResponseEvent>> + Sized {}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+    use crate::models::FunctionCallOutputPayload;
+    use crate::models::LocalShellAction;
+    use crate::models::LocalShellExecAction;
+    use crate::models::LocalShellStatus;
+    use crate::openai_tools::create_tools_json_for_chat_completions_api;
+    use futures::StreamExt;
+    use futures::stream;
+    use serde_json::json;
+
+    /// Helper constructing a minimal assistant text chunk.
+    fn text_chunk(txt: &str) -> ResponseEvent {
+        ResponseEvent::OutputItemDone(ResponseItem::Message {
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText { text: txt.into() }],
+        })
+    }
+
+    #[tokio::test]
+    async fn aggregates_consecutive_message_chunks() {
+        let events = vec![
+            Ok(text_chunk("Hello")),
+            Ok(text_chunk(", world")),
+            Ok(ResponseEvent::Completed {
+                response_id: "r1".to_string(),
+                token_usage: None,
+            }),
+        ];
+
+        let stream = stream::iter(events).aggregate();
+        let collected: Vec<_> = stream.map(Result::unwrap).collect().await;
+
+        let expected = vec![
+            ResponseEvent::OutputItemDone(ResponseItem::Message {
+                role: "assistant".into(),
+                content: vec![ContentItem::OutputText {
+                    text: "Hello, world".into(),
+                }],
+            }),
+            ResponseEvent::Completed {
+                response_id: "r1".into(),
+                token_usage: None,
+            },
+        ];
+
+        assert_eq!(
+            collected, expected,
+            "aggregated assistant message + Completed"
+        );
+    }
+
+    #[tokio::test]
+    async fn forwards_non_text_items_without_merging() {
+        let func_call = ResponseItem::FunctionCall {
+            name: "shell".to_string(),
+            arguments: "{}".to_string(),
+            call_id: "call1".to_string(),
+        };
+
+        let events = vec![
+            Ok(text_chunk("foo")),
+            Ok(ResponseEvent::OutputItemDone(func_call.clone())),
+            Ok(text_chunk("bar")),
+            Ok(ResponseEvent::Completed {
+                response_id: "r2".to_string(),
+                token_usage: None,
+            }),
+        ];
+
+        let stream = stream::iter(events).aggregate();
+        let collected: Vec<_> = stream.map(Result::unwrap).collect().await;
+
+        let expected = vec![
+            ResponseEvent::OutputItemDone(func_call.clone()),
+            ResponseEvent::OutputItemDone(ResponseItem::Message {
+                role: "assistant".into(),
+                content: vec![ContentItem::OutputText {
+                    text: "foobar".into(),
+                }],
+            }),
+            ResponseEvent::Completed {
+                response_id: "r2".into(),
+                token_usage: None,
+            },
+        ];
+
+        assert_eq!(
+            collected, expected,
+            "non-text items forwarded intact; text merged"
+        );
+    }
+
+    #[tokio::test]
+    async fn formats_tool_calls_in_chat_payload() {
+        use std::sync::Arc;
+        use std::sync::Mutex;
+        use wiremock::Mock;
+        use wiremock::MockServer;
+        use wiremock::Request;
+        use wiremock::Respond;
+        use wiremock::ResponseTemplate;
+        use wiremock::matchers::method;
+        use wiremock::matchers::path;
+
+        struct CaptureResponder(Arc<Mutex<Option<serde_json::Value>>>);
+        impl Respond for CaptureResponder {
+            fn respond(&self, req: &Request) -> ResponseTemplate {
+                let v: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
+                *self.0.lock().unwrap() = Some(v);
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_raw(
+                        "event: response.completed\n\
+data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp\",\"output\":[]}}\n\n",
+                        "text/event-stream",
+                    )
+            }
+        }
+
+        let server = MockServer::start().await;
+        let captured = Arc::new(Mutex::new(None));
+
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(CaptureResponder(captured.clone()))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        // Build provider pointing at mock server; no need to mutate global env vars.
+        let provider = ModelProviderInfo {
+            name: "openai".into(),
+            base_url: format!("{}/v1", server.uri()),
+            env_key: Some("PATH".into()),
+            env_key_instructions: None,
+            wire_api: crate::WireApi::Chat,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+        };
+
+        let mut prompt = Prompt::default();
+        prompt.input.push(ResponseItem::Message {
+            role: "user".into(),
+            content: vec![ContentItem::InputText { text: "hi".into() }],
+        });
+        prompt.input.push(ResponseItem::FunctionCall {
+            name: "shell".into(),
+            arguments: "[]".into(),
+            call_id: "call123".into(),
+        });
+        prompt.input.push(ResponseItem::FunctionCallOutput {
+            call_id: "call123".into(),
+            output: FunctionCallOutputPayload {
+                content: "ok".into(),
+                success: Some(true),
+            },
+        });
+        prompt.input.push(ResponseItem::LocalShellCall {
+            id: Some("ls1".into()),
+            call_id: Some("call456".into()),
+            status: LocalShellStatus::Completed,
+            action: LocalShellAction::Exec(LocalShellExecAction {
+                command: vec!["echo".into(), "hi".into()],
+                timeout_ms: Some(1),
+                working_directory: None,
+                env: None,
+                user: None,
+            }),
+        });
+
+        let client = reqwest::Client::new();
+        let _ = stream_chat_completions(&prompt, "model", &client, &provider)
+            .await
+            .unwrap();
+
+        let body = captured.lock().unwrap().take().unwrap();
+
+        // Build the expected payload exactly as stream_chat_completions() should.
+        let full_instructions = prompt.get_full_instructions("model");
+        let expected_messages = vec![
+            json!({"role":"system","content":full_instructions}),
+            json!({"role":"user","content":"hi"}),
+            json!({
+                "role":"assistant",
+                "content":null,
+                "tool_calls":[{
+                    "id":"call123",
+                    "type":"function",
+                    "function":{
+                        "name":"shell",
+                        "arguments":"[]"
+                    }
+                }]
+            }),
+            json!({
+                "role":"tool",
+                "tool_call_id":"call123",
+                "content":"ok"
+            }),
+            json!({
+                "role":"assistant",
+                "content":null,
+                "tool_calls":[{
+                    "id":"ls1",
+                    "type":"local_shell_call",
+                    "status":"completed",
+                    "action":{
+                        "type":"exec",
+                        "command":["echo","hi"],
+                        "timeout_ms":1,
+                        "working_directory":null,
+                        "env":null,
+                        "user":null
+                    }
+                }]
+            }),
+        ];
+        let tools_json = create_tools_json_for_chat_completions_api(&prompt, "model").unwrap();
+        let expected_body = json!({
+            "model":"model",
+            "messages": expected_messages,
+            "stream": true,
+            "tools": tools_json,
+        });
+
+        assert_eq!(body, expected_body, "chat payload encoded incorrectly");
+    }
+}

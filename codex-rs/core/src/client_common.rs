@@ -49,7 +49,7 @@ impl Prompt {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ResponseEvent {
     Created,
     OutputItemDone(ResponseItem),
