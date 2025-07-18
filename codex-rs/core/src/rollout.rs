@@ -45,6 +45,15 @@ pub struct SavedSession {
     pub state: SessionStateSnapshot,
 }
 
+/// Records all [`ResponseItem`]s for a session and flushes them to disk after
+/// every update.
+///
+/// Rollouts are recorded as JSONL and can be inspected with tools such as:
+///
+/// ```ignore
+/// $ jq -C . ~/.codex/sessions/rollout-2025-05-07T17-24-21-5973b6c0-94b8-487b-a530-2aeb6098ae0e.jsonl
+/// $ fx ~/.codex/sessions/rollout-2025-05-07T17-24-21-5973b6c0-94b8-487b-a530-2aeb6098ae0e.jsonl
+/// ```
 #[derive(Clone)]
 pub(crate) struct RolloutRecorder {
     tx: Sender<RolloutCmd>,
@@ -57,6 +66,9 @@ enum RolloutCmd {
 }
 
 impl RolloutRecorder {
+    /// Attempt to create a new [`RolloutRecorder`]. If the sessions directory
+    /// cannot be created or the rollout file cannot be opened we return the
+    /// error so the caller can decide whether to disable persistence.
     pub async fn new(
         config: &Config,
         uuid: Uuid,
@@ -81,8 +93,14 @@ impl RolloutRecorder {
             instructions,
         };
 
+        // A reasonably-sized bounded channel. If the buffer fills up the send
+        // future will yield, which is fine – we only need to ensure we do not
+        // perform *blocking* I/O on the caller’s thread.
         let (tx, rx) = mpsc::channel::<RolloutCmd>(256);
 
+        // Spawn a Tokio task that owns the file handle and performs async
+        // writes. Using `tokio::fs::File` keeps everything on the async I/O
+        // driver instead of blocking the runtime.
         tokio::task::spawn(rollout_writer(
             tokio::fs::File::from_std(file),
             rx,
@@ -96,11 +114,17 @@ impl RolloutRecorder {
         let mut filtered = Vec::new();
         for item in items {
             match item {
+                // Note that function calls may look a bit strange if they are
+                // "fully qualified MCP tool calls," so we could consider
+                // reformatting them in that case.
                 ResponseItem::Message { .. }
                 | ResponseItem::LocalShellCall { .. }
                 | ResponseItem::FunctionCall { .. }
                 | ResponseItem::FunctionCallOutput { .. } => filtered.push(item.clone()),
-                ResponseItem::Reasoning { .. } | ResponseItem::Other => {}
+                ResponseItem::Reasoning { .. } | ResponseItem::Other => {
+                    // These should never be serialized.
+                    continue;
+                }
             }
         }
         if filtered.is_empty() {
@@ -179,12 +203,18 @@ impl RolloutRecorder {
 }
 
 struct LogFileInfo {
+    /// Opened file handle to the rollout file.
     file: File,
+
+    /// Session ID (also embedded in filename).
     session_id: Uuid,
+
+    /// Timestamp for the start of the session.
     timestamp: OffsetDateTime,
 }
 
 fn create_log_file(config: &Config, session_id: Uuid) -> std::io::Result<LogFileInfo> {
+    // Resolve ~/.codex/sessions/YYYY/MM/DD and create it if missing.
     let timestamp = OffsetDateTime::now_local()
         .map_err(|e| IoError::other(format!("failed to get local time: {e}")))?;
     let mut dir = config.codex_home.clone();
@@ -194,6 +224,8 @@ fn create_log_file(config: &Config, session_id: Uuid) -> std::io::Result<LogFile
     dir.push(format!("{:02}", timestamp.day()));
     fs::create_dir_all(&dir)?;
 
+    // Custom format for YYYY-MM-DDThh-mm-ss. Use `-` instead of `:` for
+    // compatibility with filesystems that do not allow colons in filenames.
     let format: &[FormatItem] =
         format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
     let date_str = timestamp
@@ -201,6 +233,7 @@ fn create_log_file(config: &Config, session_id: Uuid) -> std::io::Result<LogFile
         .map_err(|e| IoError::other(format!("failed to format timestamp: {e}")))?;
 
     let filename = format!("rollout-{date_str}-{session_id}.jsonl");
+
     let path = dir.join(filename);
     let file = std::fs::OpenOptions::new()
         .append(true)

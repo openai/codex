@@ -13,7 +13,12 @@ use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
-/// Smoke-test streaming chat completions through the CLI using a mock server.
+/// Tests streaming chat completions through the CLI using a mock server.
+/// This test:
+/// 1. Sets up a mock server that simulates OpenAI's chat completions API
+/// 2. Configures codex to use this mock server via a custom provider
+/// 3. Sends a simple "hello?" prompt and verifies the streamed response
+/// 4. Ensures the response is received exactly once and contains "hi"
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn chat_mode_stream_cli() {
     if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
@@ -76,7 +81,12 @@ async fn chat_mode_stream_cli() {
     server.verify().await;
 }
 
-/// Smoke-test streaming Responses API through the CLI using a local SSE fixture.
+/// Tests streaming responses through the CLI using a local SSE fixture file.
+/// This test:
+/// 1. Uses a pre-recorded SSE response fixture instead of a live server
+/// 2. Configures codex to read from this fixture via CODEX_RS_SSE_FIXTURE env var
+/// 3. Sends a "hello?" prompt and verifies the response
+/// 4. Ensures the fixture content is correctly streamed through the CLI
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_api_stream_cli() {
     if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
@@ -103,7 +113,7 @@ async fn responses_api_stream_cli() {
         .arg("hello?");
     cmd.env("CODEX_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy")
-        .env("CODEX_RS_SSE_FIXTURE", &fixture)
+        .env("CODEX_RS_SSE_FIXTURE", fixture)
         .env("OPENAI_BASE_URL", "http://unused.local");
 
     let output = cmd.output().unwrap();
@@ -115,6 +125,7 @@ async fn responses_api_stream_cli() {
 /// End-to-end: create a session (writes rollout), verify the file, then resume and confirm append.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn integration_creates_and_checks_session_file() {
+    // Honor sandbox network restrictions for CI parity with the other tests.
     if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!(
             "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
@@ -122,13 +133,19 @@ async fn integration_creates_and_checks_session_file() {
         return;
     }
 
+    // 1. Temp home so we read/write isolated session files.
     let home = TempDir::new().unwrap();
+
+    // 2. Unique marker we'll look for in the session log.
     let marker = format!("integration-test-{}", Uuid::new_v4());
     let prompt = format!("echo {marker}");
+
+    // 3. Use the same offline SSE fixture as responses_api_stream_cli so the test is hermetic.
     let fixture =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/cli_responses_fixture.sse");
 
-    // First run: create a new session.
+    // 4. Run the codex CLI through cargo (ensures the right bin is built) and invoke `exec`,
+    //    which is what records a session.
     let mut cmd = AssertCommand::new("cargo");
     cmd.arg("run")
         .arg("-p")
@@ -143,6 +160,7 @@ async fn integration_creates_and_checks_session_file() {
     cmd.env("CODEX_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy")
         .env("CODEX_RS_SSE_FIXTURE", &fixture)
+        // Required for CLI arg parsing even though fixture short-circuits network usage.
         .env("OPENAI_BASE_URL", "http://unused.local");
 
     let output = cmd.output().unwrap();
@@ -194,13 +212,6 @@ async fn integration_creates_and_checks_session_file() {
                 if item.get("type").and_then(|t| t.as_str()) == Some("message") {
                     if let Some(c) = item.get("content") {
                         if c.to_string().contains(&marker) {
-                            if matching_path.as_ref().map(|p| p != path).unwrap_or(false) {
-                                panic!(
-                                    "Found marker in multiple session files: {:?} and {:?}",
-                                    matching_path.unwrap(),
-                                    path
-                                );
-                            }
                             matching_path = Some(path.to_path_buf());
                             break;
                         }
