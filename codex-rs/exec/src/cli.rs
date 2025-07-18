@@ -44,8 +44,6 @@ pub struct Cli {
     #[arg(long = "skip-git-repo-check", default_value_t = false)]
     pub skip_git_repo_check: bool,
 
-    // NOTE: Session resumption is intentionally not exposed as a stable CLI flag.
-    // Use `-c experimental_resume=/abs/path/to/rollout.jsonl` to test via config overrides.
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 

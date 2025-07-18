@@ -138,9 +138,7 @@ pub struct Config {
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: String,
 
-    /// Experimental: absolute path to a rollout (.jsonl) file to resume a previous
-    /// Codex session from. This is intentionally undocumented and may change without notice.
-    /// Specify via `-c experimental_resume=/abs/path/to/rollout.jsonl` when testing from the CLI.
+    /// Experimental rollout resume path (absolute path to .jsonl; undocumented).
     pub experimental_resume: Option<PathBuf>,
 }
 
@@ -327,8 +325,7 @@ pub struct ConfigToml {
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: Option<String>,
 
-    /// Experimental: absolute path to a rollout (.jsonl) file to resume from.
-    /// This is intentionally undocumented and may change without notice.
+    /// Experimental rollout resume path (absolute path to .jsonl; undocumented).
     pub experimental_resume: Option<PathBuf>,
 }
 

@@ -1,7 +1,4 @@
-//! Functionality to persist a Codex conversation *rollout* – a linear list of
-//! [`ResponseItem`] objects exchanged during a session – to disk so that
-//! sessions can be replayed or inspected later (mirrors the behaviour of the
-//! upstream TypeScript implementation).
+//! Persist Codex session rollouts (.jsonl) so sessions can be replayed or inspected later.
 
 use std::fs::File;
 use std::fs::{self};

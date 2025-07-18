@@ -1,18 +1,12 @@
 #![expect(clippy::unwrap_used, clippy::expect_used)]
 
-//! Live integration tests that exercise the full [`Agent`] stack **against the real
-//! OpenAI `/v1/responses` API**.  These tests complement the lightweight mock‑based
+//! Live integration tests that hit the real OpenAI Responses API. Ignored by default; run locally with `OPENAI_API_KEY=... cargo test --test live_agent -- --ignored`.
+//!
+//! These tests complement the lightweight mock‑based
 //! unit tests by verifying that the agent can drive an end‑to‑end conversation,
 //! stream incremental events, execute function‑call tool invocations and safely
 //! chain multiple turns inside a single session – the exact scenarios that have
 //! historically been brittle.
-//!
-//! The live tests are **ignored by default** so CI remains deterministic and free
-//! of external dependencies.  Developers can opt‑in locally with e.g.
-//!
-//! ```bash
-//! OPENAI_API_KEY=sk‑... cargo test --test live_agent -- --ignored --nocapture
-//! ```
 //!
 //! Make sure your key has access to the experimental *Responses* API and that
 //! any billable usage is acceptable.

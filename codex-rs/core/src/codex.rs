@@ -103,8 +103,7 @@ impl Codex {
     /// of `Codex` and the ID of the `SessionInitialized` event that was
     /// submitted to start the session.
     pub async fn spawn(config: Config, ctrl_c: Arc<Notify>) -> CodexResult<(Codex, String)> {
-        // Pull any experimental resume path from the config.  This lets us test session
-        // resumption via `-c experimental_resume=/abs/path` without adding a stable CLI flag.
+        // experimental resume path (undocumented)
         let resume_path = config.experimental_resume.clone();
         let (tx_sub, rx_sub) = async_channel::bounded(64);
         let (tx_event, rx_event) = async_channel::bounded(1600);
@@ -613,7 +612,7 @@ async fn submission_loop(
                 resume_path,
             } => {
                 info!(
-                    "Configuring session: model={model}; provider={provider:?}; resume_path={resume_path:?}"
+                    "Configuring session: model={model}; provider={provider:?}; resume={resume_path:?}"
                 );
                 if !cwd.is_absolute() {
                     let message = format!("cwd is not absolute: {cwd:?}");
@@ -686,37 +685,43 @@ async fn submission_loop(
                         });
                     }
                 }
-                let mut resume_success = false;
-                let rollout_recorder = if let Some(path) = resume_path.clone() {
-                    match RolloutRecorder::resume(&path).await {
-                        Ok((recorder, _saved)) => {
-                            resume_success = true;
-                            Some(recorder)
+
+                // Optionally resume an existing rollout.
+                let mut restored_items: Option<Vec<ResponseItem>> = None;
+                let mut restored_prev_id: Option<String> = None;
+                let rollout_recorder = match resume_path.as_ref() {
+                    Some(path) => match RolloutRecorder::resume(path).await {
+                        Ok((rec, saved)) => {
+                            restored_prev_id = saved.state.previous_response_id;
+                            if !saved.items.is_empty() {
+                                restored_items = Some(saved.items);
+                            }
+                            Some(rec)
                         }
                         Err(e) => {
-                            error!(
-                                "failed to resume rollout recorder from {path:?}: {e}; creating new session instead"
-                            );
+                            warn!("failed to resume rollout from {path:?}: {e}");
                             match RolloutRecorder::new(&config, session_id, instructions.clone())
                                 .await
                             {
                                 Ok(r) => Some(r),
                                 Err(e) => {
-                                    error!("failed to initialise rollout recorder: {e}");
+                                    warn!("failed to initialise rollout recorder: {e}");
                                     None
                                 }
                             }
                         }
-                    }
-                } else {
-                    match RolloutRecorder::new(&config, session_id, instructions.clone()).await {
+                    },
+                    None => match RolloutRecorder::new(&config, session_id, instructions.clone())
+                        .await
+                    {
                         Ok(r) => Some(r),
                         Err(e) => {
-                            error!("failed to initialise rollout recorder: {e}");
+                            warn!("failed to initialise rollout recorder: {e}");
                             None
                         }
-                    }
+                    },
                 };
+
                 sess = Some(Arc::new(Session {
                     client,
                     tx_event: tx_event.clone(),
@@ -733,10 +738,16 @@ async fn submission_loop(
                     rollout: Mutex::new(rollout_recorder),
                     codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
                 }));
-                if resume_success {
-                    if let Some(path) = resume_path.clone() {
-                        if let Err(e) = sess.as_ref().unwrap().load_rollout(path).await {
-                            warn!("failed to resume rollout: {e}");
+
+                // Patch restored state into the newly created session.
+                if let Some(sess_arc) = &sess {
+                    if restored_prev_id.is_some() || restored_items.is_some() {
+                        let mut st = sess_arc.state.lock().unwrap();
+                        st.previous_response_id = restored_prev_id;
+                        if let (Some(hist), Some(items)) =
+                            (st.zdr_transcript.as_mut(), restored_items.as_ref())
+                        {
+                            hist.record_items(items.iter());
                         }
                     }
                 }

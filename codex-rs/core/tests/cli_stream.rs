@@ -13,12 +13,7 @@ use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
-/// Tests streaming chat completions through the CLI using a mock server.
-/// This test:
-/// 1. Sets up a mock server that simulates OpenAI's chat completions API
-/// 2. Configures codex to use this mock server via a custom provider
-/// 3. Sends a simple "hello?" prompt and verifies the streamed response
-/// 4. Ensures the response is received exactly once and contains "hi"
+/// Smoke-test streaming chat completions through the CLI using a mock server.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn chat_mode_stream_cli() {
     if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
@@ -81,12 +76,7 @@ async fn chat_mode_stream_cli() {
     server.verify().await;
 }
 
-/// Tests streaming responses through the CLI using a local SSE fixture file.
-/// This test:
-/// 1. Uses a pre-recorded SSE response fixture instead of a live server
-/// 2. Configures codex to read from this fixture via CODEX_RS_SSE_FIXTURE env var
-/// 3. Sends a "hello?" prompt and verifies the response
-/// 4. Ensures the fixture content is correctly streamed through the CLI
+/// Smoke-test streaming Responses API through the CLI using a local SSE fixture.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_api_stream_cli() {
     if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
