@@ -146,15 +146,7 @@ pub fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> std::io::
     // `--allow-no-git-exec` flag.
     let show_git_warning = !cli.skip_git_repo_check && !is_inside_git_repo(&config);
 
-    let resume = cli.resume.clone();
-    try_run_ratatui_app(
-        cli,
-        config,
-        resume,
-        show_login_screen,
-        show_git_warning,
-        log_rx,
-    );
+    try_run_ratatui_app(cli, config, show_login_screen, show_git_warning, log_rx);
     Ok(())
 }
 
@@ -165,19 +157,11 @@ pub fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> std::io::
 fn try_run_ratatui_app(
     cli: Cli,
     config: Config,
-    resume: Option<PathBuf>,
     show_login_screen: bool,
     show_git_warning: bool,
     log_rx: tokio::sync::mpsc::UnboundedReceiver<String>,
 ) {
-    if let Err(report) = run_ratatui_app(
-        cli,
-        config,
-        resume,
-        show_login_screen,
-        show_git_warning,
-        log_rx,
-    ) {
+    if let Err(report) = run_ratatui_app(cli, config, show_login_screen, show_git_warning, log_rx) {
         eprintln!("Error: {report:?}");
     }
 }
@@ -185,7 +169,6 @@ fn try_run_ratatui_app(
 fn run_ratatui_app(
     cli: Cli,
     config: Config,
-    resume: Option<PathBuf>,
     show_login_screen: bool,
     show_git_warning: bool,
     mut log_rx: tokio::sync::mpsc::UnboundedReceiver<String>,
@@ -208,7 +191,6 @@ fn run_ratatui_app(
         show_login_screen,
         show_git_warning,
         images,
-        resume,
     );
 
     // Bridge log receiver into the AppEvent channel so latest log lines update the UI.

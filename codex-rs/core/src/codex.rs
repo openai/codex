@@ -102,11 +102,10 @@ impl Codex {
     /// Spawn a new [`Codex`] and initialize the session. Returns the instance
     /// of `Codex` and the ID of the `SessionInitialized` event that was
     /// submitted to start the session.
-    pub async fn spawn(
-        config: Config,
-        ctrl_c: Arc<Notify>,
-        resume_path: Option<std::path::PathBuf>,
-    ) -> CodexResult<(Codex, String)> {
+    pub async fn spawn(config: Config, ctrl_c: Arc<Notify>) -> CodexResult<(Codex, String)> {
+        // Pull any experimental resume path from the config.  This lets us test session
+        // resumption via `-c experimental_resume=/abs/path` without adding a stable CLI flag.
+        let resume_path = config.experimental_resume.clone();
         let (tx_sub, rx_sub) = async_channel::bounded(64);
         let (tx_event, rx_event) = async_channel::bounded(1600);
 

@@ -44,10 +44,8 @@ pub struct Cli {
     #[arg(long = "skip-git-repo-check", default_value_t = false)]
     pub skip_git_repo_check: bool,
 
-    /// Resume a previous session using the given rollout file.
-    #[arg(long = "experimental-resume")]
-    pub resume: Option<PathBuf>,
-
+    // NOTE: Session resumption is intentionally not exposed as a stable CLI flag.
+    // Use `-c experimental_resume=/abs/path/to/rollout.jsonl` to test via config overrides.
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 

@@ -68,7 +68,6 @@ struct ChatWidgetArgs {
     config: Config,
     initial_prompt: Option<String>,
     initial_images: Vec<PathBuf>,
-    resume: Option<PathBuf>,
 }
 
 impl App<'_> {
@@ -78,7 +77,6 @@ impl App<'_> {
         show_login_screen: bool,
         show_git_warning: bool,
         initial_images: Vec<std::path::PathBuf>,
-        resume: Option<PathBuf>,
     ) -> Self {
         let (app_event_tx, app_event_rx) = channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
@@ -130,7 +128,6 @@ impl App<'_> {
                     config: config.clone(),
                     initial_prompt,
                     initial_images,
-                    resume: resume.clone(),
                 }),
             )
         } else if show_git_warning {
@@ -142,7 +139,6 @@ impl App<'_> {
                     config: config.clone(),
                     initial_prompt,
                     initial_images,
-                    resume: resume.clone(),
                 }),
             )
         } else {
@@ -151,7 +147,6 @@ impl App<'_> {
                 app_event_tx.clone(),
                 initial_prompt,
                 initial_images,
-                resume.clone(),
             );
             (
                 AppState::Chat {
@@ -290,7 +285,6 @@ impl App<'_> {
                             self.app_event_tx.clone(),
                             None,
                             Vec::new(),
-                            None,
                         ));
                         self.app_state = AppState::Chat { widget: new_widget };
                         self.app_event_tx.send(AppEvent::RequestRedraw);
@@ -378,7 +372,6 @@ impl App<'_> {
                         self.app_event_tx.clone(),
                         args.initial_prompt,
                         args.initial_images,
-                        args.resume,
                     ));
                     self.app_state = AppState::Chat { widget };
                     self.app_event_tx.send(AppEvent::RequestRedraw);
