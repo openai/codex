@@ -967,15 +967,17 @@ async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
                         ) => {
                             items_to_record_in_conversation_history.push(item);
                             let (content, success): (String, Option<bool>) = match result {
-                                Ok(CallToolResult { content, is_error }) => {
-                                    match serde_json::to_string(content) {
-                                        Ok(content) => (content, *is_error),
-                                        Err(e) => {
-                                            warn!("Failed to serialize MCP tool call output: {e}");
-                                            (e.to_string(), Some(true))
-                                        }
+                                Ok(CallToolResult {
+                                    content,
+                                    is_error,
+                                    structured_content: _,
+                                }) => match serde_json::to_string(content) {
+                                    Ok(content) => (content, *is_error),
+                                    Err(e) => {
+                                        warn!("Failed to serialize MCP tool call output: {e}");
+                                        (e.to_string(), Some(true))
                                     }
-                                }
+                                },
                                 Err(e) => (e.clone(), Some(true)),
                             };
                             items_to_record_in_conversation_history.push(
@@ -1353,7 +1355,7 @@ async fn handle_function_call(
             let params = match parse_container_exec_arguments(arguments, sess, &call_id) {
                 Ok(params) => params,
                 Err(output) => {
-                    return output;
+                    return *output;
                 }
             };
             handle_container_exec_with_params(params, sess, sub_id, call_id).await
@@ -1396,7 +1398,7 @@ fn parse_container_exec_arguments(
     arguments: String,
     sess: &Session,
     call_id: &str,
-) -> Result<ExecParams, ResponseInputItem> {
+) -> Result<ExecParams, Box<ResponseInputItem>> {
     // parse command
     match serde_json::from_str::<ShellToolCallParams>(&arguments) {
         Ok(shell_tool_call_params) => Ok(to_exec_params(shell_tool_call_params, sess)),
@@ -1409,7 +1411,7 @@ fn parse_container_exec_arguments(
                     success: None,
                 },
             };
-            Err(output)
+            Err(Box::new(output))
         }
     }
 }

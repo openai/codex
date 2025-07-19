@@ -12,7 +12,7 @@ use codex_core::protocol::Op;
 use codex_core::protocol::Submission;
 use codex_core::protocol::TaskCompleteEvent;
 use mcp_types::CallToolResult;
-use mcp_types::CallToolResultContent;
+use mcp_types::ContentBlock;
 use mcp_types::JSONRPC_VERSION;
 use mcp_types::JSONRPCMessage;
 use mcp_types::JSONRPCResponse;
@@ -44,12 +44,13 @@ pub async fn run_codex_tool_session(
         Ok(res) => res,
         Err(e) => {
             let result = CallToolResult {
-                content: vec![CallToolResultContent::TextContent(TextContent {
+                content: vec![ContentBlock::TextContent(TextContent {
                     r#type: "text".to_string(),
                     text: format!("Failed to start Codex session: {e}"),
                     annotations: None,
                 })],
                 is_error: Some(true),
+                structured_content: None,
             };
             let _ = outgoing
                 .send(JSONRPCMessage::Response(JSONRPCResponse {
@@ -88,8 +89,6 @@ pub async fn run_codex_tool_session(
         tracing::error!("Failed to submit initial prompt: {e}");
     }
 
-    let mut last_agent_message: Option<String> = None;
-
     // Stream events until the task needs to pause for user interaction or
     // completes.
     loop {
@@ -98,17 +97,15 @@ pub async fn run_codex_tool_session(
                 let _ = outgoing.send(codex_event_to_notification(&event)).await;
 
                 match &event.msg {
-                    EventMsg::AgentMessage(AgentMessageEvent { message }) => {
-                        last_agent_message = Some(message.clone());
-                    }
                     EventMsg::ExecApprovalRequest(_) => {
                         let result = CallToolResult {
-                            content: vec![CallToolResultContent::TextContent(TextContent {
+                            content: vec![ContentBlock::TextContent(TextContent {
                                 r#type: "text".to_string(),
                                 text: "EXEC_APPROVAL_REQUIRED".to_string(),
                                 annotations: None,
                             })],
                             is_error: None,
+                            structured_content: None,
                         };
                         let _ = outgoing
                             .send(JSONRPCMessage::Response(JSONRPCResponse {
@@ -121,12 +118,13 @@ pub async fn run_codex_tool_session(
                     }
                     EventMsg::ApplyPatchApprovalRequest(_) => {
                         let result = CallToolResult {
-                            content: vec![CallToolResultContent::TextContent(TextContent {
+                            content: vec![ContentBlock::TextContent(TextContent {
                                 r#type: "text".to_string(),
                                 text: "PATCH_APPROVAL_REQUIRED".to_string(),
                                 annotations: None,
                             })],
                             is_error: None,
+                            structured_content: None,
                         };
                         let _ = outgoing
                             .send(JSONRPCMessage::Response(JSONRPCResponse {
@@ -137,27 +135,19 @@ pub async fn run_codex_tool_session(
                             .await;
                         break;
                     }
-                    EventMsg::TaskComplete(TaskCompleteEvent {
-                        last_agent_message: _,
-                    }) => {
-                        let result = if let Some(msg) = last_agent_message {
-                            CallToolResult {
-                                content: vec![CallToolResultContent::TextContent(TextContent {
-                                    r#type: "text".to_string(),
-                                    text: msg,
-                                    annotations: None,
-                                })],
-                                is_error: None,
-                            }
-                        } else {
-                            CallToolResult {
-                                content: vec![CallToolResultContent::TextContent(TextContent {
-                                    r#type: "text".to_string(),
-                                    text: String::new(),
-                                    annotations: None,
-                                })],
-                                is_error: None,
-                            }
+                    EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) => {
+                        let text = match last_agent_message {
+                            Some(msg) => msg.clone(),
+                            None => "".to_string(),
+                        };
+                        let result = CallToolResult {
+                            content: vec![ContentBlock::TextContent(TextContent {
+                                r#type: "text".to_string(),
+                                text,
+                                annotations: None,
+                            })],
+                            is_error: None,
+                            structured_content: None,
                         };
                         let _ = outgoing
                             .send(JSONRPCMessage::Response(JSONRPCResponse {
@@ -175,6 +165,9 @@ pub async fn run_codex_tool_session(
                         // TODO: think how we want to support this in the MCP
                     }
                     EventMsg::AgentReasoningDelta(_) => {
+                        // TODO: think how we want to support this in the MCP
+                    }
+                    EventMsg::AgentMessage(AgentMessageEvent { .. }) => {
                         // TODO: think how we want to support this in the MCP
                     }
                     EventMsg::Error(_)
@@ -200,12 +193,15 @@ pub async fn run_codex_tool_session(
             }
             Err(e) => {
                 let result = CallToolResult {
-                    content: vec![CallToolResultContent::TextContent(TextContent {
+                    content: vec![ContentBlock::TextContent(TextContent {
                         r#type: "text".to_string(),
                         text: format!("Codex runtime error: {e}"),
                         annotations: None,
                     })],
                     is_error: Some(true),
+                    // TODO(mbolin): Could present the error in a more
+                    // structured way.
+                    structured_content: None,
                 };
                 let _ = outgoing
                     .send(JSONRPCMessage::Response(JSONRPCResponse {

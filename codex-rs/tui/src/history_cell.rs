@@ -17,6 +17,7 @@ use image::GenericImageView;
 use image::ImageReader;
 use lazy_static::lazy_static;
 use mcp_types::EmbeddedResourceResource;
+use mcp_types::ResourceLink;
 use ratatui::prelude::*;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
@@ -331,8 +332,7 @@ impl HistoryCell {
     ) -> Option<Self> {
         match result {
             Ok(mcp_types::CallToolResult { content, .. }) => {
-                if let Some(mcp_types::CallToolResultContent::ImageContent(image)) = content.first()
-                {
+                if let Some(mcp_types::ContentBlock::ImageContent(image)) = content.first() {
                     let raw_data =
                         match base64::engine::general_purpose::STANDARD.decode(&image.data) {
                             Ok(data) => data,
@@ -405,21 +405,21 @@ impl HistoryCell {
 
                     for tool_call_result in content {
                         let line_text = match tool_call_result {
-                            mcp_types::CallToolResultContent::TextContent(text) => {
+                            mcp_types::ContentBlock::TextContent(text) => {
                                 format_and_truncate_tool_result(
                                     &text.text,
                                     TOOL_CALL_MAX_LINES,
                                     num_cols as usize,
                                 )
                             }
-                            mcp_types::CallToolResultContent::ImageContent(_) => {
+                            mcp_types::ContentBlock::ImageContent(_) => {
                                 // TODO show images even if they're not the first result, will require a refactor of `CompletedMcpToolCall`
                                 "<image content>".to_string()
                             }
-                            mcp_types::CallToolResultContent::AudioContent(_) => {
+                            mcp_types::ContentBlock::AudioContent(_) => {
                                 "<audio content>".to_string()
                             }
-                            mcp_types::CallToolResultContent::EmbeddedResource(resource) => {
+                            mcp_types::ContentBlock::EmbeddedResource(resource) => {
                                 let uri = match resource.resource {
                                     EmbeddedResourceResource::TextResourceContents(text) => {
                                         text.uri
@@ -429,6 +429,9 @@ impl HistoryCell {
                                     }
                                 };
                                 format!("embedded resource: {uri}")
+                            }
+                            mcp_types::ContentBlock::ResourceLink(ResourceLink { uri, .. }) => {
+                                format!("link: {uri}")
                             }
                         };
                         lines.push(Line::styled(line_text, Style::default().fg(Color::Gray)));

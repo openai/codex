@@ -135,10 +135,12 @@ impl McpConnectionManager {
                                 experimental: None,
                                 roots: None,
                                 sampling: None,
+                                elicitation: None,
                             },
                             client_info: Implementation {
                                 name: "codex-mcp-client".to_owned(),
                                 version: env!("CARGO_PKG_VERSION").to_owned(),
+                                title: Some("Codex".into()),
                             },
                             protocol_version: mcp_types::MCP_SCHEMA_VERSION.to_owned(),
                         };
@@ -288,6 +290,8 @@ mod tests {
                     r#type: "object".to_string(),
                 },
                 name: tool_name.to_string(),
+                output_schema: None,
+                title: None,
             },
         }
     }

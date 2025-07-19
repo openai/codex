@@ -6,11 +6,9 @@ use crate::codex_tool_config::create_tool_for_codex_tool_call_param;
 use codex_core::config::Config as CodexConfig;
 use mcp_types::CallToolRequestParams;
 use mcp_types::CallToolResult;
-use mcp_types::CallToolResultContent;
 use mcp_types::ClientRequest;
+use mcp_types::ContentBlock;
 use mcp_types::JSONRPC_VERSION;
-use mcp_types::JSONRPCBatchRequest;
-use mcp_types::JSONRPCBatchResponse;
 use mcp_types::JSONRPCError;
 use mcp_types::JSONRPCErrorError;
 use mcp_types::JSONRPCMessage;
@@ -145,39 +143,9 @@ impl MessageProcessor {
         }
     }
 
-    /// Handle a batch of requests and/or notifications.
-    pub(crate) fn process_batch_request(&mut self, batch: JSONRPCBatchRequest) {
-        tracing::info!("<- batch request containing {} item(s)", batch.len());
-        for item in batch {
-            match item {
-                mcp_types::JSONRPCBatchRequestItem::JSONRPCRequest(req) => {
-                    self.process_request(req);
-                }
-                mcp_types::JSONRPCBatchRequestItem::JSONRPCNotification(note) => {
-                    self.process_notification(note);
-                }
-            }
-        }
-    }
-
     /// Handle an error object received from the peer.
     pub(crate) fn process_error(&mut self, err: JSONRPCError) {
         tracing::error!("<- error: {:?}", err);
-    }
-
-    /// Handle a batch of responses/errors.
-    pub(crate) fn process_batch_response(&mut self, batch: JSONRPCBatchResponse) {
-        tracing::info!("<- batch response containing {} item(s)", batch.len());
-        for item in batch {
-            match item {
-                mcp_types::JSONRPCBatchResponseItem::JSONRPCResponse(resp) => {
-                    self.process_response(resp);
-                }
-                mcp_types::JSONRPCBatchResponseItem::JSONRPCError(err) => {
-                    self.process_error(err);
-                }
-            }
-        }
     }
 
     fn handle_initialize(
@@ -224,6 +192,7 @@ impl MessageProcessor {
             server_info: mcp_types::Implementation {
                 name: "codex-mcp-server".to_string(),
                 version: mcp_types::MCP_SCHEMA_VERSION.to_string(),
+                title: Some("Codex".to_string()),
             },
         };
 
@@ -333,12 +302,13 @@ impl MessageProcessor {
         if name != "codex" {
             // Tool not found – return error result so the LLM can react.
             let result = CallToolResult {
-                content: vec![CallToolResultContent::TextContent(TextContent {
+                content: vec![ContentBlock::TextContent(TextContent {
                     r#type: "text".to_string(),
                     text: format!("Unknown tool '{name}'"),
                     annotations: None,
                 })],
                 is_error: Some(true),
+                structured_content: None,
             };
             self.send_response::<mcp_types::CallToolRequest>(id, result);
             return;
@@ -350,7 +320,7 @@ impl MessageProcessor {
                     Ok(cfg) => cfg,
                     Err(e) => {
                         let result = CallToolResult {
-                            content: vec![CallToolResultContent::TextContent(TextContent {
+                            content: vec![ContentBlock::TextContent(TextContent {
                                 r#type: "text".to_owned(),
                                 text: format!(
                                     "Failed to load Codex configuration from overrides: {e}"
@@ -358,6 +328,7 @@ impl MessageProcessor {
                                 annotations: None,
                             })],
                             is_error: Some(true),
+                            structured_content: None,
                         };
                         self.send_response::<mcp_types::CallToolRequest>(id, result);
                         return;
@@ -365,12 +336,13 @@ impl MessageProcessor {
                 },
                 Err(e) => {
                     let result = CallToolResult {
-                        content: vec![CallToolResultContent::TextContent(TextContent {
+                        content: vec![ContentBlock::TextContent(TextContent {
                             r#type: "text".to_owned(),
                             text: format!("Failed to parse configuration for Codex tool: {e}"),
                             annotations: None,
                         })],
                         is_error: Some(true),
+                        structured_content: None,
                     };
                     self.send_response::<mcp_types::CallToolRequest>(id, result);
                     return;
@@ -378,7 +350,7 @@ impl MessageProcessor {
             },
             None => {
                 let result = CallToolResult {
-                    content: vec![CallToolResultContent::TextContent(TextContent {
+                    content: vec![ContentBlock::TextContent(TextContent {
                         r#type: "text".to_string(),
                         text:
                             "Missing arguments for codex tool-call; the `prompt` field is required."
@@ -386,6 +358,7 @@ impl MessageProcessor {
                         annotations: None,
                     })],
                     is_error: Some(true),
+                    structured_content: None,
                 };
                 self.send_response::<mcp_types::CallToolRequest>(id, result);
                 return;
@@ -398,7 +371,7 @@ impl MessageProcessor {
         // Spawn an async task to handle the Codex session so that we do not
         // block the synchronous message-processing loop.
         task::spawn(async move {
-            // Run the Codex session and stream events back to the client.
+            // Run the Codex session and stream events Fck to the client.
             crate::codex_tool_runner::run_codex_tool_session(id, initial_prompt, config, outgoing)
                 .await;
         });
