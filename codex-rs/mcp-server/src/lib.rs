@@ -18,8 +18,11 @@ mod codex_tool_config;
 mod codex_tool_runner;
 mod json_to_toml;
 mod message_processor;
+mod outgoing_message;
 
 use crate::message_processor::MessageProcessor;
+use crate::outgoing_message::OutgoingMessage;
+use crate::outgoing_message::OutgoingMessageSender;
 
 /// Size of the bounded channels used to communicate between tasks. The value
 /// is a balance between throughput and memory usage – 128 messages should be
@@ -35,7 +38,7 @@ pub async fn run_main(codex_linux_sandbox_exe: Option<PathBuf>) -> IoResult<()> 
 
     // Set up channels.
     let (incoming_tx, mut incoming_rx) = mpsc::channel::<JSONRPCMessage>(CHANNEL_CAPACITY);
-    let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<JSONRPCMessage>(CHANNEL_CAPACITY);
+    let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingMessage>(CHANNEL_CAPACITY);
 
     // Task: read from stdin, push to `incoming_tx`.
     let stdin_reader_handle = tokio::spawn({
@@ -63,11 +66,12 @@ pub async fn run_main(codex_linux_sandbox_exe: Option<PathBuf>) -> IoResult<()> 
 
     // Task: process incoming messages.
     let processor_handle = tokio::spawn({
-        let mut processor = MessageProcessor::new(outgoing_tx.clone(), codex_linux_sandbox_exe);
+        let outgoing_message_sender = OutgoingMessageSender::new(outgoing_tx);
+        let mut processor = MessageProcessor::new(outgoing_message_sender, codex_linux_sandbox_exe);
         async move {
             while let Some(msg) = incoming_rx.recv().await {
                 match msg {
-                    JSONRPCMessage::Request(r) => processor.process_request(r),
+                    JSONRPCMessage::Request(r) => processor.process_request(r).await,
                     JSONRPCMessage::Response(r) => processor.process_response(r),
                     JSONRPCMessage::Notification(n) => processor.process_notification(n),
                     JSONRPCMessage::Error(e) => processor.process_error(e),
@@ -81,7 +85,8 @@ pub async fn run_main(codex_linux_sandbox_exe: Option<PathBuf>) -> IoResult<()> 
     // Task: write outgoing messages to stdout.
     let stdout_writer_handle = tokio::spawn(async move {
         let mut stdout = io::stdout();
-        while let Some(msg) = outgoing_rx.recv().await {
+        while let Some(outgoing_message) = outgoing_rx.recv().await {
+            let msg: JSONRPCMessage = outgoing_message.into();
             match serde_json::to_string(&msg) {
                 Ok(json) => {
                     if let Err(e) = stdout.write_all(json.as_bytes()).await {
