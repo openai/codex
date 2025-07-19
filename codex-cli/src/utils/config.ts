@@ -149,6 +149,7 @@ export type StoredConfig = {
   /** Disable server-side response storage (send full transcript each request) */
   disableResponseStorage?: boolean;
   flexMode?: boolean;
+  proxy?: string;
   providers?: Record<string, { name: string; baseURL: string; envKey: string }>;
   history?: {
     maxSize?: number;
@@ -202,6 +203,7 @@ export type AppConfig = {
 
   /** Enable the "flex-mode" processing mode for supported models (o3, o4-mini) */
   flexMode?: boolean;
+  proxy?: string;
   providers?: Record<string, { name: string; baseURL: string; envKey: string }>;
   history?: {
     maxSize: number;
@@ -439,6 +441,7 @@ export const loadConfig = (
     disableResponseStorage: storedConfig.disableResponseStorage === true,
     reasoningEffort: storedConfig.reasoningEffort,
     fileOpener: storedConfig.fileOpener,
+    proxy: storedConfig.proxy,
   };
 
   // -----------------------------------------------------------------------
@@ -559,6 +562,7 @@ export const saveConfig = (
     approvalMode: config.approvalMode,
     disableResponseStorage: config.disableResponseStorage,
     flexMode: config.flexMode,
+    proxy: config.proxy,
     reasoningEffort: config.reasoningEffort,
   };
 
