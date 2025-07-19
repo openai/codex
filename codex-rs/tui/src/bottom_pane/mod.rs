@@ -162,6 +162,10 @@ impl BottomPane<'_> {
         }
     }
 
+    pub(crate) fn composer_is_empty(&self) -> bool {
+        self.composer.is_empty()
+    }
+
     pub(crate) fn is_task_running(&self) -> bool {
         self.is_task_running
     }
@@ -208,7 +212,7 @@ impl BottomPane<'_> {
     }
 
     pub(crate) fn request_redraw(&self) {
-        self.app_event_tx.send(AppEvent::Redraw)
+        self.app_event_tx.send(AppEvent::RequestRedraw)
     }
 
     /// Returns true when a popup inside the composer is visible.

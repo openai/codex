@@ -3,45 +3,20 @@ use std::time::Duration;
 use codex_core::Codex;
 use codex_core::ModelProviderInfo;
 use codex_core::exec::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
-use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
+use codex_core::protocol::SessionConfiguredEvent;
 mod test_support;
-use serde_json::Value;
 use tempfile::TempDir;
 use test_support::load_default_config_for_test;
 use test_support::load_sse_fixture_with_id;
 use tokio::time::timeout;
-use wiremock::Match;
 use wiremock::Mock;
 use wiremock::MockServer;
-use wiremock::Request;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
-
-/// Matcher asserting that JSON body has NO `previous_response_id` field.
-struct NoPrevId;
-
-impl Match for NoPrevId {
-    fn matches(&self, req: &Request) -> bool {
-        serde_json::from_slice::<Value>(&req.body)
-            .map(|v| v.get("previous_response_id").is_none())
-            .unwrap_or(false)
-    }
-}
-
-/// Matcher asserting that JSON body HAS a `previous_response_id` field.
-struct HasPrevId;
-
-impl Match for HasPrevId {
-    fn matches(&self, req: &Request) -> bool {
-        serde_json::from_slice::<Value>(&req.body)
-            .map(|v| v.get("previous_response_id").is_some())
-            .unwrap_or(false)
-    }
-}
 
 /// Build minimal SSE stream with completed marker using the JSON fixture.
 fn sse_completed(id: &str) -> String {
@@ -49,7 +24,7 @@ fn sse_completed(id: &str) -> String {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn keeps_previous_response_id_between_tasks() {
+async fn includes_session_id_and_model_headers_in_request() {
     #![allow(clippy::unwrap_used)]
 
     if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
@@ -69,27 +44,11 @@ async fn keeps_previous_response_id_between_tasks() {
 
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
-        .and(NoPrevId)
         .respond_with(first)
         .expect(1)
         .mount(&server)
         .await;
 
-    // Second request – MUST include `previous_response_id`.
-    let second = ResponseTemplate::new(200)
-        .insert_header("content-type", "text/event-stream")
-        .set_body_raw(sse_completed("resp2"), "text/event-stream");
-
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .and(HasPrevId)
-        .respond_with(second)
-        .expect(1)
-        .mount(&server)
-        .await;
-
-    // Configure retry behavior explicitly to avoid mutating process-wide
-    // environment variables.
     let model_provider = ModelProviderInfo {
         name: "openai".into(),
         base_url: format!("{}/v1", server.uri()),
@@ -100,9 +59,12 @@ async fn keeps_previous_response_id_between_tasks() {
         env_key_instructions: None,
         wire_api: codex_core::WireApi::Responses,
         query_params: None,
-        http_headers: None,
+        http_headers: Some(
+            [("originator".to_string(), "codex_cli_rs".to_string())]
+                .into_iter()
+                .collect(),
+        ),
         env_http_headers: None,
-        // disable retries so we don't get duplicate calls in this test
         request_max_retries: Some(0),
         stream_max_retries: Some(0),
         stream_idle_timeout_ms: None,
@@ -115,7 +77,6 @@ async fn keeps_previous_response_id_between_tasks() {
     let ctrl_c = std::sync::Arc::new(tokio::sync::Notify::new());
     let (codex, _init_id) = Codex::spawn(config, ctrl_c.clone()).await.unwrap();
 
-    // Task 1 – triggers first request (no previous_response_id)
     codex
         .submit(Op::UserInput {
             items: vec![InputItem::Text {
@@ -125,41 +86,28 @@ async fn keeps_previous_response_id_between_tasks() {
         .await
         .unwrap();
 
+    let mut current_session_id = None;
     // Wait for TaskComplete
     loop {
         let ev = timeout(Duration::from_secs(1), codex.next_event())
             .await
             .unwrap()
             .unwrap();
+
+        if let EventMsg::SessionConfigured(SessionConfiguredEvent { session_id, .. }) = ev.msg {
+            current_session_id = Some(session_id.to_string());
+        }
         if matches!(ev.msg, EventMsg::TaskComplete(_)) {
             break;
         }
     }
 
-    // Task 2 – should include `previous_response_id` (triggers second request)
-    codex
-        .submit(Op::UserInput {
-            items: vec![InputItem::Text {
-                text: "again".into(),
-            }],
-        })
-        .await
-        .unwrap();
+    // get request from the server
+    let request = &server.received_requests().await.unwrap()[0];
+    let request_body = request.headers.get("session_id").unwrap();
+    let originator = request.headers.get("originator").unwrap();
 
-    // Wait for TaskComplete or error
-    loop {
-        let ev = timeout(Duration::from_secs(1), codex.next_event())
-            .await
-            .unwrap()
-            .unwrap();
-        match ev.msg {
-            EventMsg::TaskComplete(_) => break,
-            EventMsg::Error(ErrorEvent { message }) => {
-                panic!("unexpected error: {message}")
-            }
-            _ => {
-                // Ignore other events.
-            }
-        }
-    }
+    assert!(current_session_id.is_some());
+    assert_eq!(request_body.to_str().unwrap(), &current_session_id.unwrap());
+    assert_eq!(originator.to_str().unwrap(), "codex_cli_rs");
 }

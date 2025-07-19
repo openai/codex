@@ -108,7 +108,10 @@ pub(crate) fn create_tool_for_codex_tool_call_param() -> Tool {
 
     Tool {
         name: "codex".to_string(),
+        title: Some("Codex".to_string()),
         input_schema: tool_input_schema,
+        // TODO(mbolin): This should be defined.
+        output_schema: None,
         description: Some(
             "Run a Codex session. Accepts configuration parameters matching the Codex Config struct.".to_string(),
         ),
@@ -179,6 +182,7 @@ mod tests {
         let tool_json = serde_json::to_value(&tool).expect("tool serializes");
         let expected_tool_json = serde_json::json!({
           "name": "codex",
+          "title": "Codex",
           "description": "Run a Codex session. Accepts configuration parameters matching the Codex Config struct.",
           "inputSchema": {
             "type": "object",

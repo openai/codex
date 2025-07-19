@@ -69,6 +69,10 @@ pub enum Op {
         /// `ConfigureSession` operation so that the business-logic layer can
         /// operate deterministically.
         cwd: std::path::PathBuf,
+
+        /// Path to a rollout file to resume from.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        resume_path: Option<std::path::PathBuf>,
     },
 
     /// Abort current task.
@@ -282,8 +286,14 @@ pub enum EventMsg {
     /// Agent text output message
     AgentMessage(AgentMessageEvent),
 
+    /// Agent text output delta message
+    AgentMessageDelta(AgentMessageDeltaEvent),
+
     /// Reasoning event from agent.
     AgentReasoning(AgentReasoningEvent),
+
+    /// Agent reasoning delta event from agent.
+    AgentReasoningDelta(AgentReasoningDeltaEvent),
 
     /// Ack the client's configure message.
     SessionConfigured(SessionConfiguredEvent),
@@ -341,8 +351,18 @@ pub struct AgentMessageEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AgentMessageDeltaEvent {
+    pub delta: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AgentReasoningEvent {
     pub text: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AgentReasoningDeltaEvent {
+    pub delta: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
