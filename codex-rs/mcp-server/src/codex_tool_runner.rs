@@ -2,10 +2,11 @@
 //! Tokio task. Separated from `message_processor.rs` to keep that file small
 //! and to make future feature-growth easier to manage.
 
+use std::sync::Arc;
+
 use codex_core::codex_wrapper::init_codex;
 use codex_core::config::Config as CodexConfig;
 use codex_core::protocol::AgentMessageEvent;
-use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
@@ -13,22 +14,10 @@ use codex_core::protocol::Submission;
 use codex_core::protocol::TaskCompleteEvent;
 use mcp_types::CallToolResult;
 use mcp_types::ContentBlock;
-use mcp_types::JSONRPC_VERSION;
-use mcp_types::JSONRPCMessage;
-use mcp_types::JSONRPCResponse;
 use mcp_types::RequestId;
 use mcp_types::TextContent;
-use tokio::sync::mpsc::Sender;
 
-/// Convert a Codex [`Event`] to an MCP notification.
-fn codex_event_to_notification(event: &Event) -> JSONRPCMessage {
-    #[expect(clippy::expect_used)]
-    JSONRPCMessage::Notification(mcp_types::JSONRPCNotification {
-        jsonrpc: JSONRPC_VERSION.into(),
-        method: "codex/event".into(),
-        params: Some(serde_json::to_value(event).expect("Event must serialize")),
-    })
-}
+use crate::outgoing_message::OutgoingMessageSender;
 
 /// Run a complete Codex session and stream events back to the client.
 ///
@@ -38,7 +27,7 @@ pub async fn run_codex_tool_session(
     id: RequestId,
     initial_prompt: String,
     config: CodexConfig,
-    outgoing: Sender<JSONRPCMessage>,
+    outgoing: Arc<OutgoingMessageSender>,
 ) {
     let (codex, first_event, _ctrl_c) = match init_codex(config).await {
         Ok(res) => res,
@@ -52,21 +41,13 @@ pub async fn run_codex_tool_session(
                 is_error: Some(true),
                 structured_content: None,
             };
-            let _ = outgoing
-                .send(JSONRPCMessage::Response(JSONRPCResponse {
-                    jsonrpc: JSONRPC_VERSION.into(),
-                    id,
-                    result: result.into(),
-                }))
-                .await;
+            outgoing.send_response(id.clone(), result.into()).await;
             return;
         }
     };
 
     // Send initial SessionConfigured event.
-    let _ = outgoing
-        .send(codex_event_to_notification(&first_event))
-        .await;
+    outgoing.send_event_as_notification(&first_event).await;
 
     // Use the original MCP request ID as the `sub_id` for the Codex submission so that
     // any events emitted for this tool-call can be correlated with the
@@ -94,7 +75,7 @@ pub async fn run_codex_tool_session(
     loop {
         match codex.next_event().await {
             Ok(event) => {
-                let _ = outgoing.send(codex_event_to_notification(&event)).await;
+                outgoing.send_event_as_notification(&event).await;
 
                 match &event.msg {
                     EventMsg::ExecApprovalRequest(_) => {
@@ -107,13 +88,7 @@ pub async fn run_codex_tool_session(
                             is_error: None,
                             structured_content: None,
                         };
-                        let _ = outgoing
-                            .send(JSONRPCMessage::Response(JSONRPCResponse {
-                                jsonrpc: JSONRPC_VERSION.into(),
-                                id: id.clone(),
-                                result: result.into(),
-                            }))
-                            .await;
+                        outgoing.send_response(id.clone(), result.into()).await;
                         break;
                     }
                     EventMsg::ApplyPatchApprovalRequest(_) => {
@@ -126,13 +101,7 @@ pub async fn run_codex_tool_session(
                             is_error: None,
                             structured_content: None,
                         };
-                        let _ = outgoing
-                            .send(JSONRPCMessage::Response(JSONRPCResponse {
-                                jsonrpc: JSONRPC_VERSION.into(),
-                                id: id.clone(),
-                                result: result.into(),
-                            }))
-                            .await;
+                        outgoing.send_response(id.clone(), result.into()).await;
                         break;
                     }
                     EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) => {
@@ -149,13 +118,7 @@ pub async fn run_codex_tool_session(
                             is_error: None,
                             structured_content: None,
                         };
-                        let _ = outgoing
-                            .send(JSONRPCMessage::Response(JSONRPCResponse {
-                                jsonrpc: JSONRPC_VERSION.into(),
-                                id: id.clone(),
-                                result: result.into(),
-                            }))
-                            .await;
+                        outgoing.send_response(id.clone(), result.into()).await;
                         break;
                     }
                     EventMsg::SessionConfigured(_) => {
@@ -203,13 +166,7 @@ pub async fn run_codex_tool_session(
                     // structured way.
                     structured_content: None,
                 };
-                let _ = outgoing
-                    .send(JSONRPCMessage::Response(JSONRPCResponse {
-                        jsonrpc: JSONRPC_VERSION.into(),
-                        id: id.clone(),
-                        result: result.into(),
-                    }))
-                    .await;
+                outgoing.send_response(id.clone(), result.into()).await;
                 break;
             }
         }
