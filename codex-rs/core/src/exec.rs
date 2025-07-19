@@ -384,6 +384,31 @@ async fn spawn_child_async(
         cmd.env(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR, "1");
     }
 
+    // If this Codex process dies (including being killed via SIGKILL), we want
+    // any child processes that were spawned as part of a `"shell"` tool call
+    // to also be terminated.
+
+    // This relies on prctl(2), so it only works on Linux.
+    #[cfg(target_os = "linux")]
+    unsafe {
+        cmd.pre_exec(|| {
+            // This prctl call effectively requests, "deliver SIGTERM when my
+            // current parent dies."
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) == -1 {
+                return Err(io::Error::last_os_error());
+            }
+
+            // Though if there was a race condition and this pre_exec() block is
+            // run _after_ the parent (i.e., the Codex process) has already
+            // exited, then the parent is the _init_ process (which will never
+            // die), so we should just terminate the child process now.
+            if libc::getppid() == 1 {
+                libc::raise(libc::SIGTERM);
+            }
+            Ok(())
+        });
+    }
+
     match stdio_policy {
         StdioPolicy::RedirectForShellTool => {
             // Do not create a file descriptor for stdin because otherwise some

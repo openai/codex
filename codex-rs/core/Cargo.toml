@@ -22,6 +22,7 @@ env-flags = "0.1.1"
 eventsource-stream = "0.2.3"
 fs2 = "0.4.3"
 futures = "0.3"
+libc = "0.2.174"
 mcp-types = { path = "../mcp-types" }
 mime_guess = "2.0"
 rand = "0.9"

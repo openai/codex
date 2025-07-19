@@ -669,6 +669,7 @@ dependencies = [
  "fs2",
  "futures",
  "landlock",
+ "libc",
  "maplit",
  "mcp-types",
  "mime_guess",
