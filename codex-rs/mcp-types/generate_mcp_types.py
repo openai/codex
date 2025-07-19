@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # flake8: noqa: E501
 
+import argparse
 import json
 import subprocess
 import sys
@@ -26,19 +27,27 @@ DEFINITIONS: dict[str, Any] = {}
 CLIENT_REQUEST_TYPE_NAMES: list[str] = []
 # Concrete *Notification types that make up the ServerNotification enum.
 SERVER_NOTIFICATION_TYPE_NAMES: list[str] = []
+# Enum types that will need a `allow(clippy::large_enum_variant)` annotation in
+# order to compile without warnings.
+LARGE_ENUMS = {"ServerResult"}
 
 
 def main() -> int:
-    num_args = len(sys.argv)
-    if num_args == 1:
-        schema_file = (
-            Path(__file__).resolve().parent / "schema" / SCHEMA_VERSION / "schema.json"
-        )
-    elif num_args == 2:
-        schema_file = Path(sys.argv[1])
-    else:
-        print("Usage: python3 codegen.py <schema.json>")
-        return 1
+    parser = argparse.ArgumentParser(
+        description="Embed, cluster and analyse text prompts via the OpenAI API.",
+    )
+
+    default_schema_file = (
+        Path(__file__).resolve().parent / "schema" / SCHEMA_VERSION / "schema.json"
+    )
+    parser.add_argument(
+        "schema_file",
+        nargs="?",
+        default=default_schema_file,
+        help="schema.json file to process",
+    )
+    args = parser.parse_args()
+    schema_file = args.schema_file
 
     lib_rs = Path(__file__).resolve().parent / "src/lib.rs"
 
@@ -197,6 +206,8 @@ def add_definition(name: str, definition: dict[str, Any], out: list[str]) -> Non
         if name.endswith("Result"):
             out.extend(f"impl From<{name}> for serde_json::Value {{\n")
             out.append(f"    fn from(value: {name}) -> Self {{\n")
+            out.append("        // Leave this as it should never fail\n")
+            out.append("        #[expect(clippy::unwrap_used)]\n")
             out.append("        serde_json::to_value(value).unwrap()\n")
             out.append("    }\n")
             out.append("}\n\n")
@@ -439,6 +450,8 @@ def define_any_of(
     if serde := get_serde_annotation_for_anyof_type(name):
         out.append(serde + "\n")
 
+    if name in LARGE_ENUMS:
+        out.append("#[allow(clippy::large_enum_variant)]\n")
     out.append(f"pub enum {name} {{\n")
 
     if name == "ClientRequest":
