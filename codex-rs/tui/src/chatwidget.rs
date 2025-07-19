@@ -316,6 +316,7 @@ impl ChatWidget<'_> {
                 command,
                 cwd,
                 reason,
+                call_id: _,
             }) => {
                 let request = ApprovalRequest::Exec {
                     id,

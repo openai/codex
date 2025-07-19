@@ -249,6 +249,7 @@ impl Session {
     pub async fn request_command_approval(
         &self,
         sub_id: String,
+        call_id: String,
         command: Vec<String>,
         cwd: PathBuf,
         reason: Option<String>,
@@ -260,6 +261,7 @@ impl Session {
                 command,
                 cwd,
                 reason,
+                call_id,
             }),
         };
         let _ = self.tx_event.send(event).await;
@@ -1461,6 +1463,7 @@ async fn handle_container_exec_with_params(
             let rx_approve = sess
                 .request_command_approval(
                     sub_id.clone(),
+                    call_id.clone(),
                     params.command.clone(),
                     params.cwd.clone(),
                     None,
@@ -1588,6 +1591,7 @@ async fn handle_sandbox_error(
     let rx_approve = sess
         .request_command_approval(
             sub_id.clone(),
+            call_id.clone(),
             params.command.clone(),
             params.cwd.clone(),
             Some("command failed; retry without sandbox?".to_string()),
