@@ -35,8 +35,9 @@ import { useInterval } from "use-interval";
 
 const suggestions = [
   "explain this codebase to me",
-  "fix any build errors",
+  "fix any build errors", 
   "are there any bugs in my code?",
+  "hey, how can you help me with my code?",
 ];
 
 export default function TerminalChatInput({
