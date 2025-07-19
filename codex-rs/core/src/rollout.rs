@@ -27,6 +27,7 @@ pub struct SessionMeta {
     pub id: Uuid,
     pub timestamp: String,
     pub instructions: Option<String>,
+    pub model: String,
 }
 
 #[derive(Serialize, Deserialize, Default, Clone)]
@@ -90,6 +91,7 @@ impl RolloutRecorder {
             timestamp,
             id: session_id,
             instructions,
+            model: config.model.to_string(),
         };
 
         // A reasonably-sized bounded channel. If the buffer fills up the send
