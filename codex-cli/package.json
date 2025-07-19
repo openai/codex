@@ -63,7 +63,7 @@
     "@types/shell-quote": "^1.7.5",
     "@types/which": "^3.0.4",
     "@typescript-eslint/eslint-plugin": "^7.18.0",
-    "@typescript-eslint/parser": "^7.18.0",
+    "@typescript-eslint/parser": "^8.36.0",
     "boxen": "^8.0.1",
     "esbuild": "^0.25.2",
     "eslint-plugin-import": "^2.31.0",
