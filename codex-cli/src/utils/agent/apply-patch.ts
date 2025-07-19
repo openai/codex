@@ -95,6 +95,8 @@ export class DiffError extends Error {}
 // Parser (patch text -> Patch)
 // -----------------------------------------------------------------------------
 
+const CHUNK_DELIMITER = '@@';
+
 class Parser {
   current_files: Record<string, string>;
   lines: Array<string>;
@@ -200,16 +202,12 @@ class Parser {
         END_OF_FILE_PREFIX,
       ])
     ) {
-      const defStr = this.read_str("@@ ");
-      let sectionStr = "";
-      if (!defStr && this.lines[this.index] === "@@") {
-        sectionStr = this.lines[this.index]!;
-        this.index += 1;
-      }
-      if (!(defStr || sectionStr || index === 0)) {
-        throw new DiffError(`Invalid Line:\n${this.lines[this.index]}`);
-      }
-      if (defStr.trim()) {
+			const sectionStr = this.read_str("@@", true);
+			const defStr = sectionStr.slice(CHUNK_DELIMITER.length).trim();
+			if (!(sectionStr || index === 0)) {
+				throw new DiffError(`Invalid Line:\n${this.lines[this.index]}`);
+			}
+      if (defStr) {
         let found = false;
         // ------------------------------------------------------------------
         // Equality helpers using the canonicalisation from find_context_core.
@@ -261,11 +259,11 @@ class Parser {
           !found &&
           !fileLines
             .slice(0, index)
-            .some((s) => canonLocal(s.trim()) === canonLocal(defStr.trim()))
+            .some((s) => canonLocal(s.trim()) === canonLocal(defStr))
         ) {
           for (let i = index; i < fileLines.length; i++) {
             if (
-              canonLocal(fileLines[i]!.trim()) === canonLocal(defStr.trim())
+              canonLocal(fileLines[i]!.trim()) === canonLocal(defStr)
             ) {
               index = i + 1;
               this.fuzz += 1;
