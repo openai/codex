@@ -18,6 +18,9 @@ SCHEMA_VERSION = "2025-06-18"
 JSONRPC_VERSION = "2.0"
 
 STANDARD_DERIVE = "#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]\n"
+STANDARD_HASHABLE_DERIVE = (
+    "#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Hash, Eq)]\n"
+)
 
 # Will be populated with the schema's `definitions` map in `main()` so that
 # helper functions (for example `define_any_of`) can perform look-ups while
@@ -391,7 +394,7 @@ def define_string_enum(
 
 
 def define_untagged_enum(name: str, type_list: list[str], out: list[str]) -> None:
-    out.append(STANDARD_DERIVE)
+    out.append(STANDARD_HASHABLE_DERIVE)
     out.append("#[serde(untagged)]\n")
     out.append(f"pub enum {name} {{\n")
     for simple_type in type_list:

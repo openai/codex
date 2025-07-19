@@ -18,6 +18,7 @@ use mcp_types::ClientCapabilities;
 use mcp_types::Implementation;
 use mcp_types::Tool;
 
+use serde_json::json;
 use sha1::Digest;
 use sha1::Sha1;
 use tokio::task::JoinSet;
@@ -135,7 +136,9 @@ impl McpConnectionManager {
                                 experimental: None,
                                 roots: None,
                                 sampling: None,
-                                elicitation: None,
+                                // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation#capabilities
+                                // indicates this should be an empty object.
+                                elicitation: Some(json!({})),
                             },
                             client_info: Implementation {
                                 name: "codex-mcp-client".to_owned(),

@@ -4,18 +4,27 @@
 
 use std::sync::Arc;
 
+use codex_core::Codex;
 use codex_core::codex_wrapper::init_codex;
 use codex_core::config::Config as CodexConfig;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::EventMsg;
+use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
+use codex_core::protocol::ReviewDecision;
 use codex_core::protocol::Submission;
 use codex_core::protocol::TaskCompleteEvent;
 use mcp_types::CallToolResult;
 use mcp_types::ContentBlock;
+use mcp_types::ElicitRequest;
+use mcp_types::ElicitRequestParamsRequestedSchema;
+use mcp_types::ModelContextProtocolRequest;
 use mcp_types::RequestId;
 use mcp_types::TextContent;
+use serde::Deserialize;
+use serde_json::json;
+use tracing::error;
 
 use crate::outgoing_message::OutgoingMessageSender;
 
@@ -45,6 +54,7 @@ pub async fn run_codex_tool_session(
             return;
         }
     };
+    let codex = Arc::new(codex);
 
     // Send initial SessionConfigured event.
     outgoing.send_event_as_notification(&first_event).await;
@@ -58,7 +68,7 @@ pub async fn run_codex_tool_session(
     };
 
     let submission = Submission {
-        id: sub_id,
+        id: sub_id.clone(),
         op: Op::UserInput {
             items: vec![InputItem::Text {
                 text: initial_prompt.clone(),
@@ -77,18 +87,50 @@ pub async fn run_codex_tool_session(
             Ok(event) => {
                 outgoing.send_event_as_notification(&event).await;
 
-                match &event.msg {
-                    EventMsg::ExecApprovalRequest(_) => {
-                        let result = CallToolResult {
-                            content: vec![ContentBlock::TextContent(TextContent {
-                                r#type: "text".to_string(),
-                                text: "EXEC_APPROVAL_REQUIRED".to_string(),
-                                annotations: None,
-                            })],
-                            is_error: None,
-                            structured_content: None,
-                        };
-                        outgoing.send_response(id.clone(), result.into()).await;
+                match event.msg {
+                    EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
+                        command,
+                        cwd,
+                        reason: _,
+                    }) => {
+                        let escaped_command = shlex::try_join(command.iter().map(|s| s.as_str()))
+                            .unwrap_or_else(|_| command.join(" "));
+                        let message = format!("Allow Codex to run `{escaped_command}` in {cwd:?}?");
+
+                        let params = json!({
+                            // These fields are required so that `params`
+                            // conforms to ElicitRequestParams.
+                            "message": message,
+                            "requestedSchema": ElicitRequestParamsRequestedSchema {
+                                r#type: "object".to_string(),
+                                properties: json!({}),
+                                required: None,
+                            },
+
+                            // These are additional fields the client can use to
+                            // correlate the request with the codex tool call.
+                            "codex_elicitation": "exec-approval",
+                            "codex_mcp_tool_call_id": sub_id,
+                            "codex_event_id": event.id,
+                            "codex_command": command,
+                            // Could convert it to base64 encoded bytes if we
+                            // don't want to use to_string_lossy() here?
+                            "codex_cwd": cwd.to_string_lossy().to_string()
+                        });
+                        let on_response = outgoing
+                            .send_request(ElicitRequest::METHOD, Some(params))
+                            .await;
+
+                        // Listen for the response on a separate task so we do
+                        // not block the main loop of this function.
+                        {
+                            let codex = codex.clone();
+                            let event_id = event.id.clone();
+                            tokio::spawn(async move {
+                                on_exec_approval_response(event_id, on_response, codex).await;
+                            });
+                        }
+
                         break;
                     }
                     EventMsg::ApplyPatchApprovalRequest(_) => {
@@ -171,4 +213,43 @@ pub async fn run_codex_tool_session(
             }
         }
     }
+}
+
+async fn on_exec_approval_response(
+    event_id: String,
+    receiver: tokio::sync::oneshot::Receiver<mcp_types::Result>,
+    codex: Arc<Codex>,
+) {
+    let response = receiver.await;
+    let value = match response {
+        Ok(value) => value,
+        Err(err) => {
+            error!("request failed: {err:?}");
+            return;
+        }
+    };
+
+    // Try to deserialize `value` and then make the appropriate call to `codex`.
+    let response = match serde_json::from_value::<ExecApprovalResponse>(value) {
+        Ok(response) => response,
+        Err(err) => {
+            error!("failed to deserialize ExecApprovalResponse: {err}");
+            return;
+        }
+    };
+
+    if let Err(err) = codex
+        .submit(Op::ExecApproval {
+            id: event_id,
+            decision: response.decision,
+        })
+        .await
+    {
+        error!("failed to submit ExecApproval: {err}");
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ExecApprovalResponse {
+    pub decision: ReviewDecision,
 }

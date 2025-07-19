@@ -799,6 +799,7 @@ dependencies = [
  "schemars 0.8.22",
  "serde",
  "serde_json",
+ "shlex",
  "tokio",
  "toml 0.9.1",
  "tracing",
