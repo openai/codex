@@ -14,7 +14,7 @@ workspace = true
 anyhow = "1"
 similar = "2.7.0"
 thiserror = "2.0.12"
-tree-sitter = "0.25.3"
+tree-sitter = "0.25.8"
 tree-sitter-bash = "0.25.0"
 
 [dev-dependencies]
