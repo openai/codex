@@ -50,7 +50,7 @@
     "strip-ansi": "^7.1.0",
     "to-rotated": "^1.0.0",
     "use-interval": "1.4.0",
-    "zod": "^3.24.3"
+    "zod": "^4.0.2"
   },
   "devDependencies": {
     "@eslint/js": "^9.22.0",
