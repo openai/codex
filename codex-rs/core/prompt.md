@@ -40,16 +40,16 @@ You MUST adhere to the following criteria when executing the task:
 
 Your patch language is a stripped‑down, file‑oriented diff format designed to be easy to parse and safe to apply. You can think of it as a high‑level envelope:
 
-**_ Begin Patch
+*** Begin Patch
 [ one or more file sections ]
-_** End Patch
+*** End Patch
 
 Within that envelope, you get a sequence of file operations.
 You MUST include a header to specify the action you are taking.
 Each operation starts with one of three headers:
 
-**_ Add File: <path> - create a new file. Every following line is a + line (the initial contents).
-_** Delete File: <path> - remove an existing file. Nothing follows.
+*** Add File: <path> - create a new file. Every following line is a + line (the initial contents).
+*** Delete File: <path> - remove an existing file. Nothing follows.
 \*\*\* Update File: <path> - patch an existing file in place (optionally with a rename).
 
 May be immediately followed by \*\*\* Move to: <new path> if you want to rename the file.
@@ -63,28 +63,28 @@ Within a hunk each line starts with:
   At the end of a truncated hunk you can emit \*\*\* End of File.
 
 Patch := Begin { FileOp } End
-Begin := "**_ Begin Patch" NEWLINE
-End := "_** End Patch" NEWLINE
+Begin := "*** Begin Patch" NEWLINE
+End := "*** End Patch" NEWLINE
 FileOp := AddFile | DeleteFile | UpdateFile
-AddFile := "**_ Add File: " path NEWLINE { "+" line NEWLINE }
-DeleteFile := "_** Delete File: " path NEWLINE
-UpdateFile := "**_ Update File: " path NEWLINE [ MoveTo ] { Hunk }
-MoveTo := "_** Move to: " newPath NEWLINE
+AddFile := "*** Add File: " path NEWLINE { "+" line NEWLINE }
+DeleteFile := "*** Delete File: " path NEWLINE
+UpdateFile := "*** Update File: " path NEWLINE [ MoveTo ] { Hunk }
+MoveTo := "*** Move to: " newPath NEWLINE
 Hunk := "@@" [ header ] NEWLINE { HunkLine } [ "*** End of File" NEWLINE ]
 HunkLine := (" " | "-" | "+") text NEWLINE
 
 A full patch can combine several operations:
 
-**_ Begin Patch
-_** Add File: hello.txt
+*** Begin Patch
+*** Add File: hello.txt
 +Hello world
-**_ Update File: src/app.py
-_** Move to: src/main.py
+*** Update File: src/app.py
+*** Move to: src/main.py
 @@ def greet():
 -print("Hi")
 +print("Hello, world!")
-**_ Delete File: obsolete.txt
-_** End Patch
+*** Delete File: obsolete.txt
+*** End Patch
 
 It is important to remember:
 
