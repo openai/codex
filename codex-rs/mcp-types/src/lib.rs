@@ -931,7 +931,7 @@ pub struct ProgressNotificationParams {
     pub total: Option<f64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Hash, Eq)]
 #[serde(untagged)]
 pub enum ProgressToken {
     String(String),
@@ -1031,7 +1031,7 @@ pub struct Request {
     pub params: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Hash, Eq)]
 #[serde(untagged)]
 pub enum RequestId {
     String(String),

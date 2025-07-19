@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 
@@ -12,11 +13,15 @@ use mcp_types::JSONRPCResponse;
 use mcp_types::RequestId;
 use mcp_types::Result;
 use serde::Serialize;
+use tokio::sync::Mutex;
 use tokio::sync::mpsc;
+use tokio::sync::oneshot;
+use tracing::warn;
 
 pub(crate) struct OutgoingMessageSender {
     next_request_id: AtomicI64,
     sender: mpsc::Sender<OutgoingMessage>,
+    request_id_to_callback: Mutex<HashMap<RequestId, oneshot::Sender<Result>>>,
 }
 
 impl OutgoingMessageSender {
@@ -24,17 +29,48 @@ impl OutgoingMessageSender {
         Self {
             next_request_id: AtomicI64::new(0),
             sender,
+            request_id_to_callback: Mutex::new(HashMap::new()),
         }
     }
 
-    #[allow(dead_code)]
-    pub(crate) async fn send_request(&self, method: &str, params: Option<serde_json::Value>) {
+    pub(crate) async fn send_request(
+        &self,
+        method: &str,
+        params: Option<serde_json::Value>,
+    ) -> oneshot::Receiver<Result> {
+        let id = RequestId::Integer(self.next_request_id.fetch_add(1, Ordering::Relaxed));
+        let outgoing_message_id = id.clone();
+        let (tx_approve, rx_approve) = oneshot::channel();
+        {
+            let mut request_id_to_callback = self.request_id_to_callback.lock().await;
+            request_id_to_callback.insert(id, tx_approve);
+        }
+
         let outgoing_message = OutgoingMessage::Request(OutgoingRequest {
-            id: RequestId::Integer(self.next_request_id.fetch_add(1, Ordering::Relaxed)),
+            id: outgoing_message_id,
             method: method.to_string(),
             params,
         });
         let _ = self.sender.send(outgoing_message).await;
+        rx_approve
+    }
+
+    pub(crate) async fn notify_client_response(&self, id: RequestId, result: Result) {
+        let entry = {
+            let mut request_id_to_callback = self.request_id_to_callback.lock().await;
+            request_id_to_callback.remove_entry(&id)
+        };
+
+        match entry {
+            Some((id, sender)) => {
+                if let Err(err) = sender.send(result) {
+                    warn!("could not notify callback for {id:?} due to: {err:?}");
+                }
+            }
+            None => {
+                warn!("could not find callback for {id:?}");
+            }
+        }
     }
 
     pub(crate) async fn send_response(&self, id: RequestId, result: Result) {
