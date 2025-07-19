@@ -70,9 +70,7 @@ pub async fn run_main(codex_linux_sandbox_exe: Option<PathBuf>) -> IoResult<()> 
                     JSONRPCMessage::Request(r) => processor.process_request(r),
                     JSONRPCMessage::Response(r) => processor.process_response(r),
                     JSONRPCMessage::Notification(n) => processor.process_notification(n),
-                    JSONRPCMessage::BatchRequest(b) => processor.process_batch_request(b),
                     JSONRPCMessage::Error(e) => processor.process_error(e),
-                    JSONRPCMessage::BatchResponse(b) => processor.process_batch_response(b),
                 }
             }
 

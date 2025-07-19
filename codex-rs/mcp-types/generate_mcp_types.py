@@ -14,7 +14,7 @@ from pathlib import Path
 # Helper first so it is defined when other functions call it.
 from typing import Any, Literal
 
-SCHEMA_VERSION = "2025-03-26"
+SCHEMA_VERSION = "2025-06-18"
 JSONRPC_VERSION = "2.0"
 
 STANDARD_DERIVE = "#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]\n"
@@ -222,20 +222,7 @@ def add_definition(name: str, definition: dict[str, Any], out: list[str]) -> Non
     any_of = definition.get("anyOf", [])
     if any_of:
         assert isinstance(any_of, list)
-        if name == "JSONRPCMessage":
-            # Special case for JSONRPCMessage because its definition in the
-            # JSON schema does not quite match how we think about this type
-            # definition in Rust.
-            deep_copied_any_of = json.loads(json.dumps(any_of))
-            deep_copied_any_of[2] = {
-                "$ref": "#/definitions/JSONRPCBatchRequest",
-            }
-            deep_copied_any_of[5] = {
-                "$ref": "#/definitions/JSONRPCBatchResponse",
-            }
-            out.extend(define_any_of(name, deep_copied_any_of, description))
-        else:
-            out.extend(define_any_of(name, any_of, description))
+        out.extend(define_any_of(name, any_of, description))
         return
 
     type_prop = definition.get("type", None)
@@ -609,6 +596,8 @@ def rust_prop_name(name: str, is_optional: bool) -> RustProp:
         prop_name = "r#type"
     elif name == "ref":
         prop_name = "r#ref"
+    elif name == "enum":
+        prop_name = "r#enum"
     elif snake_case := to_snake_case(name):
         prop_name = snake_case
         is_rename = True
