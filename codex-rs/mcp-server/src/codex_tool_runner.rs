@@ -131,7 +131,8 @@ pub async fn run_codex_tool_session(
                             });
                         }
 
-                        break;
+                        // Continue, don't break so the session continues.
+                        continue;
                     }
                     EventMsg::ApplyPatchApprovalRequest(_) => {
                         let result = CallToolResult {
@@ -144,7 +145,8 @@ pub async fn run_codex_tool_session(
                             structured_content: None,
                         };
                         outgoing.send_response(id.clone(), result.into()).await;
-                        break;
+                        // Continue, don't break so the session continues.
+                        continue;
                     }
                     EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) => {
                         let text = match last_agent_message {
