@@ -169,8 +169,9 @@ async fn test_anchor_pagination() {
 
     let cfg = make_config(home);
 
-    // Use the 2nd session as anchor.
-    let (anchor_dt, anchor_id) = anchors[1];
+    // Newest-first ordering: anchor represents the last item of a previous page.
+    // Use the 4th (2025-03-04) session as anchor; expect to receive strictly older sessions.
+    let (anchor_dt, anchor_id) = anchors[3];
     let token = format!(
         "{}|{}",
         anchor_dt
@@ -185,8 +186,8 @@ async fn test_anchor_pagination() {
         .await
         .unwrap();
 
-    // Should return sessions strictly after the anchor => 3 remaining.
+    // Should return sessions strictly older than the anchor => 3 remaining (03, 02, 01).
     assert_eq!(page.sessions.len(), 3);
-    // Verify the first returned session matches the third original timestamp.
+    // Verify the first returned session is 2025-03-03 (the next older).
     assert_eq!(page.sessions[0][0].as_str().unwrap(), "2025-03-03T09-00-00");
 }

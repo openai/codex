@@ -1,3 +1,4 @@
+use std::cmp::Reverse;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::fs;
@@ -97,7 +98,7 @@ pub async fn get_sessions(
 /// Directory layout: `~/.codex/sessions/YYYY/MM/DD/rollout-YYYY-MM-DDThh-mm-ss-<uuid>.jsonl`
 /// The first JSONL line is a `SessionMeta` object; subsequent lines are response/state records.
 ///
-/// Returned structure (earliest first):
+/// Returned structure (latest (newest) first):
 fn traverse_directories(
     root: PathBuf,
     mode: SessionsMode,
@@ -123,23 +124,23 @@ fn traverse_directories(
                 .map(|y| (y, e.path()))
         })
         .collect();
-    year_dirs.sort_by_key(|(y, _)| *y);
+    year_dirs.sort_by_key(|(y, _)| Reverse(*y));
 
-    'outer: for (year, year_path) in year_dirs {
+    'outer: for (year, year_path) in year_dirs.iter() {
         if scanned >= MAX_SCAN_FILES {
             break;
         }
-        if let Some(start_ts) = start {
-            if year < start_ts.year() {
-                continue;
-            }
-        }
         if let Some(end_ts) = end {
-            if year > end_ts.year() {
-                break;
+            if *year > end_ts.year() {
+                continue; // outside upper bound, skip newer year
             }
         }
-        let mut month_dirs: Vec<_> = fs::read_dir(&year_path)?
+        if let Some(start_ts) = start {
+            if *year < start_ts.year() {
+                break; // remaining years older than start bound
+            }
+        }
+        let mut month_dirs: Vec<_> = fs::read_dir(year_path)?
             .filter_map(|e| e.ok())
             .filter(|e| e.file_type().map(|ft| ft.is_dir()).unwrap_or(false))
             .filter_map(|e| {
@@ -149,22 +150,22 @@ fn traverse_directories(
                     .map(|m| (m, e.path()))
             })
             .collect();
-        month_dirs.sort_by_key(|(m, _)| *m);
-        for (month, month_path) in month_dirs {
+        month_dirs.sort_by_key(|(m, _)| Reverse(*m));
+        for (month, month_path) in month_dirs.iter() {
             if scanned >= MAX_SCAN_FILES {
                 break 'outer;
             }
-            if let Some(start_ts) = start {
-                if year == start_ts.year() && month < u8::from(start_ts.month()) {
-                    continue;
-                }
-            }
             if let Some(end_ts) = end {
-                if year == end_ts.year() && month > u8::from(end_ts.month()) {
-                    break 'outer;
+                if *year == end_ts.year() && *month > u8::from(end_ts.month()) {
+                    continue; // newer month beyond upper bound
                 }
             }
-            let mut day_dirs: Vec<_> = fs::read_dir(&month_path)?
+            if let Some(start_ts) = start {
+                if *year == start_ts.year() && *month < u8::from(start_ts.month()) {
+                    break; // remaining months older than start bound
+                }
+            }
+            let mut day_dirs: Vec<_> = fs::read_dir(month_path)?
                 .filter_map(|e| e.ok())
                 .filter(|e| e.file_type().map(|ft| ft.is_dir()).unwrap_or(false))
                 .filter_map(|e| {
@@ -174,28 +175,28 @@ fn traverse_directories(
                         .map(|d| (d, e.path()))
                 })
                 .collect();
-            day_dirs.sort_by_key(|(d, _)| *d);
-            for (day, day_path) in day_dirs {
+            day_dirs.sort_by_key(|(d, _)| Reverse(*d));
+            for (day, day_path) in day_dirs.iter() {
                 if scanned >= MAX_SCAN_FILES {
                     break 'outer;
                 }
-                if let Some(start_ts) = start {
-                    if year == start_ts.year()
-                        && month == u8::from(start_ts.month())
-                        && day < start_ts.day()
-                    {
-                        continue;
-                    }
-                }
                 if let Some(end_ts) = end {
-                    if year == end_ts.year()
-                        && month == u8::from(end_ts.month())
-                        && day > end_ts.day()
+                    if *year == end_ts.year()
+                        && *month == u8::from(end_ts.month())
+                        && *day > end_ts.day()
                     {
-                        break 'outer;
+                        continue; // newer day beyond upper bound
                     }
                 }
-                let mut files: Vec<_> = fs::read_dir(&day_path)?
+                if let Some(start_ts) = start {
+                    if *year == start_ts.year()
+                        && *month == u8::from(start_ts.month())
+                        && *day < start_ts.day()
+                    {
+                        break; // remaining days older than start bound
+                    }
+                }
+                let mut files: Vec<_> = fs::read_dir(day_path)?
                     .filter_map(|e| e.ok())
                     .filter(|e| e.file_type().map(|ft| ft.is_file()).unwrap_or(false))
                     .filter_map(|e| {
@@ -208,27 +209,29 @@ fn traverse_directories(
                             .map(|(ts, id)| (ts, id, name_str.to_string(), e.path()))
                     })
                     .collect();
-                files.sort_by_key(|(ts, _, _, _)| *ts);
-                for (ts, sid, _name_str, path) in files {
+                files.sort_by_key(|(ts, _, _, _)| Reverse(*ts));
+                for (ts, sid, _name_str, path) in files.into_iter() {
                     scanned += 1;
                     if scanned >= MAX_SCAN_FILES && sessions.len() >= page_size {
                         break 'outer;
                     }
-                    // Anchor logic: skip until strictly after (anchor_ts, anchor_id)
+                    // Anchor logic (descending): skip until strictly older than anchor
                     if !after_anchor {
-                        if ts > anchor_ts || (ts == anchor_ts && sid > anchor_id) {
+                        if ts < anchor_ts || (ts == anchor_ts && sid < anchor_id) {
                             after_anchor = true;
                         } else {
+                            continue; // still at or above anchor
+                        }
+                    }
+                    if let Some(end_ts) = end {
+                        if ts > end_ts {
+                            // newer than upper bound
                             continue;
                         }
                     }
                     if let Some(start_ts) = start {
                         if ts < start_ts {
-                            continue;
-                        }
-                    }
-                    if let Some(end_ts) = end {
-                        if ts > end_ts {
+                            // older than lower bound; remaining files even older
                             break 'outer;
                         }
                     }
