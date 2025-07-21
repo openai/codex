@@ -94,6 +94,37 @@ pub async fn run_codex_tool_session(
         tracing::error!("Failed to submit initial prompt: {e}");
     }
 
+    run_codex_tool_session_inner(codex, outgoing, id).await;
+}
+
+pub async fn run_codex_tool_session_reply(
+    codex: Arc<Codex>,
+    outgoing: Arc<OutgoingMessageSender>,
+    request_id: RequestId,
+    prompt: String,
+) {
+    if let Err(e) = codex
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text { text: prompt }],
+        })
+        .await
+    {
+        tracing::error!("Failed to submit user input: {e}");
+    }
+
+    run_codex_tool_session_inner(codex, outgoing, request_id).await;
+}
+
+async fn run_codex_tool_session_inner(
+    codex: Arc<Codex>,
+    outgoing: Arc<OutgoingMessageSender>,
+    request_id: RequestId,
+) {
+    let sub_id = match &request_id {
+        RequestId::String(s) => s.clone(),
+        RequestId::Integer(n) => n.to_string(),
+    };
+
     // Stream events until the task needs to pause for user interaction or
     // completes.
     loop {
@@ -137,7 +168,7 @@ pub async fn run_codex_tool_session(
 
                                 outgoing
                                     .send_error(
-                                        id.clone(),
+                                        request_id.clone(),
                                         JSONRPCErrorError {
                                             code: INVALID_PARAMS_ERROR_CODE,
                                             message,
@@ -177,7 +208,9 @@ pub async fn run_codex_tool_session(
                             is_error: None,
                             structured_content: None,
                         };
-                        outgoing.send_response(id.clone(), result.into()).await;
+                        outgoing
+                            .send_response(request_id.clone(), result.into())
+                            .await;
                         // Continue, don't break so the session continues.
                         continue;
                     }
@@ -195,7 +228,9 @@ pub async fn run_codex_tool_session(
                             is_error: None,
                             structured_content: None,
                         };
-                        outgoing.send_response(id.clone(), result.into()).await;
+                        outgoing
+                            .send_response(request_id.clone(), result.into())
+                            .await;
                         break;
                     }
                     EventMsg::SessionConfigured(_) => {
@@ -243,7 +278,9 @@ pub async fn run_codex_tool_session(
                     // structured way.
                     structured_content: None,
                 };
-                outgoing.send_response(id.clone(), result.into()).await;
+                outgoing
+                    .send_response(request_id.clone(), result.into())
+                    .await;
                 break;
             }
         }

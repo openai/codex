@@ -9,8 +9,6 @@ use crate::outgoing_message::OutgoingMessageSender;
 
 use codex_core::Codex;
 use codex_core::config::Config as CodexConfig;
-use codex_core::protocol::InputItem;
-use codex_core::protocol::Op;
 use mcp_types::CallToolRequestParams;
 use mcp_types::CallToolResult;
 use mcp_types::ClientRequest;
@@ -374,7 +372,7 @@ impl MessageProcessor {
             }
         };
 
-        // Clone outgoing sender to move into async task.
+        // Clone outgoing and session map to move into async task.
         let outgoing = self.outgoing.clone();
         let session_map = self.session_map.clone();
 
@@ -395,7 +393,7 @@ impl MessageProcessor {
 
     async fn handle_tool_call_codex_session_reply(
         &self,
-        _id: RequestId,
+        request_id: RequestId,
         arguments: Option<serde_json::Value>,
     ) {
         tracing::info!("tools/call -> params: {:?}", arguments);
@@ -425,24 +423,31 @@ impl MessageProcessor {
         };
 
         // load codex from session map
-        let session_map = self.session_map.lock().await;
-        let codex = match session_map.get(&session_id) {
-            Some(codex) => codex,
-            None => {
-                tracing::warn!("Session not found for session_id: {session_id}");
-                return;
-            }
-        };
+        let session_map_mutex = Arc::clone(&self.session_map);
 
-        // submit user input
-        if let Err(e) = codex
-            .submit(Op::UserInput {
-                items: vec![InputItem::Text { text: prompt }],
-            })
-            .await
-        {
-            tracing::error!("Failed to submit user input: {e}");
-        }
+        // Clone outgoing and session map to move into async task.
+        let outgoing = self.outgoing.clone();
+
+        // Spawn an async task to handle the Codex session so that we do not
+        // block the synchronous message-processing loop.
+        task::spawn(async move {
+            let session_map = session_map_mutex.lock().await;
+            let codex = match session_map.get(&session_id) {
+                Some(codex) => codex,
+                None => {
+                    tracing::warn!("Session not found for session_id: {session_id}");
+                    return;
+                }
+            };
+
+            crate::codex_tool_runner::run_codex_tool_session_reply(
+                codex.clone(),
+                outgoing,
+                request_id,
+                prompt.clone(),
+            )
+            .await;
+        });
     }
 
     fn handle_set_level(
