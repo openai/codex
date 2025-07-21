@@ -258,7 +258,7 @@ async fn rollout_writer(
         if let Ok(json) = serde_json::to_string(&meta) {
             let _ = file.write_all(json.as_bytes()).await;
             let _ = file.write_all(b"\n").await;
-            let _ = file.flush().await;
+            let _ = file.sync_all().await;
         }
     }
     while let Some(cmd) = rx.recv().await {
@@ -278,7 +278,7 @@ async fn rollout_writer(
                         ResponseItem::Reasoning { .. } | ResponseItem::Other => {}
                     }
                 }
-                let _ = file.flush().await;
+                let _ = file.sync_all().await;
             }
             RolloutCmd::UpdateState(state) => {
                 #[derive(Serialize)]
@@ -293,7 +293,7 @@ async fn rollout_writer(
                 }) {
                     let _ = file.write_all(json.as_bytes()).await;
                     let _ = file.write_all(b"\n").await;
-                    let _ = file.flush().await;
+                    let _ = file.sync_all().await;
                 }
             }
         }
