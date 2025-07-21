@@ -48,9 +48,7 @@ fn parse_page_token(token: &str) -> Option<(OffsetDateTime, Uuid)> {
     Some((ts, uuid))
 }
 
-/// Retrieve recorded sessions with filtering + token pagination. If an index manifest exists
-/// (`sessions/index.jsonl`) it is used for O(page_size) discovery; otherwise we fall back to
-/// directory traversal (performed inside a blocking thread). The returned `next_page_token`
+/// Retrieve recorded sessions with filtering + token pagination. The returned `next_page_token`
 /// can be supplied on the next call to resume after the last returned session, resilient to
 /// concurrent new sessions being appended.
 pub async fn get_sessions(
@@ -83,10 +81,8 @@ pub async fn get_sessions(
         });
     }
 
-    // If page token supplied, decode anchor.
     let anchor = page_token.and_then(parse_page_token);
 
-    // Fallback: spawn blocking traversal.
     let result = tokio::task::spawn_blocking({
         let root = root.clone();
         move || traverse_directories(root, mode, page_size, anchor, start, end, ids_set)
@@ -252,13 +248,24 @@ fn traverse_directories(
             }
         }
     }
-    let next = if sessions.len() == page_size && scanned < MAX_SCAN_FILES {
-        // We need the token of the LAST returned session, which came from its filename. We can recover
-        // the filename timestamp from the first element (timestamp in meta) is not guaranteed to match
-        // the file_ts format we use, so recompute using anchor + traversal or just re-parse path again
-        // is more complex here. For directory traversal fallback we cannot easily reconstruct file_ts
-        // without reopening. Skip next token generation in fallback if ambiguous.
-        None
+    // Compute next page token if we returned exactly `page_size` sessions –
+    // in that case there *may* be more sessions after the last one we just
+    // returned. We encode the token as "<timestamp>|<uuid>", matching the
+    // `parse_page_token` format used for the incoming anchor argument.
+    let next = if sessions.len() == page_size {
+        sessions.last().and_then(|v| {
+            if let Value::Array(arr) = v {
+                if arr.len() >= 2 {
+                    let ts = arr[0].as_str()?;
+                    let id = arr[1].as_str()?;
+                    Some(format!("{ts}|{id}"))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
     } else {
         None
     };
