@@ -150,7 +150,7 @@ fn create_config_toml(codex_home: &Path, server_uri: String) -> std::io::Result<
         config_toml,
         format!(
             r#"
-model = "mock-model"
+model = "gpt-4.1-mock-model"
 approval_policy = "untrusted"
 sandbox_policy = "read-only"
 
@@ -166,7 +166,6 @@ stream_max_retries = 0
         ),
     )
 }
-
 
 fn create_expected_elicitation_request(
     elicitation_request_id: RequestId,
@@ -218,13 +217,13 @@ async fn test_patch_approval_triggers_elicitation() {
 
 async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
     // Use a hard-coded path that should be outside writable roots
-    let test_file = std::path::PathBuf::from("/usr/local/test_patch_file.txt");
+    let temp_dir = TempDir::new()?;
+    let test_file = temp_dir.path().join("test_patch_file.txt");
+    std::fs::write(&test_file, "original content")?;
 
     // Create the patch content in the V4A format expected by apply_patch
     let patch_content = format!(
-        "*** Begin Patch\n*** Update File: {}\n--- a{}\n+++ b{}\n@@ -1 +1 @@\n-original content\n+modified content\n*** End Patch",
-        test_file.to_string_lossy(),
-        test_file.to_string_lossy(),
+        "*** Begin Patch\n*** Update File: {}\n-original content\n+modified content\n*** End Patch",
         test_file.to_string_lossy()
     );
 
@@ -236,7 +235,6 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
     ])
     .await;
 
-    // Run `codex mcp` with a specific config.toml 
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), server.uri())?;
     let mut mcp_process = McpProcess::new(codex_home.path()).await?;
@@ -260,9 +258,9 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
     expected_changes.insert(
         test_file.clone(),
         FileChange::Update {
-            unified_diff: format!("--- a{}\n+++ b{}\n@@ -1 +1 @@\n-original content\n+modified content", test_file.to_string_lossy(), test_file.to_string_lossy()),
+            unified_diff: "@@ -1 +1 @@\n-original content\n\\ No newline at end of file\n+modified content\n".to_string(),
             move_path: None,
-        }
+        },
     );
 
     let expected_elicitation_request = create_expected_patch_approval_elicitation_request(
