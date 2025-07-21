@@ -365,7 +365,7 @@ impl MessageProcessor {
         // Spawn an async task to handle the Codex session so that we do not
         // block the synchronous message-processing loop.
         task::spawn(async move {
-            // Run the Codex session and stream events Fck to the client.
+            // Run the Codex session and stream events back to the client.
             crate::codex_tool_runner::run_codex_tool_session(id, initial_prompt, config, outgoing)
                 .await;
         });
