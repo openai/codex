@@ -6,7 +6,7 @@ use crate::models::ResponseItem;
 ///   `function_call` and its corresponding `function_call_output`.
 /// - for clients using the "chat completions" API as opposed to the
 ///   "responses" API.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct ConversationHistory {
     /// The oldest items are at the beginning of the vector.
     items: Vec<ResponseItem>,
@@ -44,7 +44,8 @@ fn is_api_message(message: &ResponseItem) -> bool {
         ResponseItem::Message { role, .. } => role.as_str() != "system",
         ResponseItem::FunctionCallOutput { .. }
         | ResponseItem::FunctionCall { .. }
-        | ResponseItem::LocalShellCall { .. } => true,
-        ResponseItem::Reasoning { .. } | ResponseItem::Other => false,
+        | ResponseItem::LocalShellCall { .. }
+        | ResponseItem::Reasoning { .. } => true,
+        ResponseItem::Other => false,
     }
 }

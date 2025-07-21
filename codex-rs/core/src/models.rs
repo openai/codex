@@ -43,6 +43,7 @@ pub enum ResponseItem {
     Reasoning {
         id: String,
         summary: Vec<ReasoningItemReasoningSummary>,
+        encrypted_content: Option<String>,
     },
     LocalShellCall {
         /// Set when using the chat completions API.

@@ -30,9 +30,7 @@ pub struct SessionMeta {
 }
 
 #[derive(Serialize, Deserialize, Default, Clone)]
-pub struct SessionStateSnapshot {
-    pub previous_response_id: Option<String>,
-}
+pub struct SessionStateSnapshot {}
 
 #[derive(Serialize, Deserialize, Default, Clone)]
 pub struct SavedSession {
