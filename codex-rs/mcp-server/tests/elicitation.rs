@@ -167,38 +167,6 @@ stream_max_retries = 0
     )
 }
 
-fn create_config_toml_with_cwd(
-    codex_home: &Path,
-    server_uri: String,
-    cwd: Option<&Path>,
-) -> std::io::Result<()> {
-    let config_toml = codex_home.join("config.toml");
-    let cwd_line = if let Some(cwd) = cwd {
-        format!("cwd = \"{}\"", cwd.to_string_lossy())
-    } else {
-        String::new()
-    };
-    std::fs::write(
-        config_toml,
-        format!(
-            r#"
-model = "mock-model"
-approval_policy = "untrusted"
-sandbox_policy = "none"
-{cwd_line}
-
-model_provider = "mock_provider"
-
-[model_providers.mock_provider]
-name = "Mock provider for test"
-base_url = "{server_uri}/v1"
-wire_api = "chat"
-request_max_retries = 0
-stream_max_retries = 0
-"#
-        ),
-    )
-}
 
 fn create_expected_elicitation_request(
     elicitation_request_id: RequestId,
@@ -249,13 +217,15 @@ async fn test_patch_approval_triggers_elicitation() {
 }
 
 async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
-    // Create the test file in the current directory where the MCP server will run
-    let test_file = std::env::current_dir()?.join("tests/test_patch_file.txt");
-    std::fs::write(&test_file, "original content")?;
+    // Use a hard-coded path that should be outside writable roots
+    let test_file = std::path::PathBuf::from("/usr/local/test_patch_file.txt");
 
     // Create the patch content in the V4A format expected by apply_patch
     let patch_content = format!(
-        "*** Begin Patch\n*** Update File: test_patch_file.txt\n--- a/test_patch_file.txt\n+++ b/test_patch_file.txt\n@@ -1 +1 @@\n-original content\n+modified content\n*** End Patch"
+        "*** Begin Patch\n*** Update File: {}\n--- a{}\n+++ b{}\n@@ -1 +1 @@\n-original content\n+modified content\n*** End Patch",
+        test_file.to_string_lossy(),
+        test_file.to_string_lossy(),
+        test_file.to_string_lossy()
     );
 
     // Configure the mock server for patch approval flow
@@ -266,9 +236,9 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
     ])
     .await;
 
-    // Run `codex mcp` with a specific config.toml
+    // Run `codex mcp` with a specific config.toml 
     let codex_home = TempDir::new()?;
-    create_config_toml_with_cwd(codex_home.path(), server.uri(), None)?;
+    create_config_toml(codex_home.path(), server.uri())?;
     let mut mcp_process = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp_process.initialize()).await??;
 
@@ -290,7 +260,7 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
     expected_changes.insert(
         test_file.clone(),
         FileChange::Update {
-            unified_diff: "--- a/test_patch_file.txt\n+++ b/test_patch_file.txt\n@@ -1 +1 @@\n-original content\n+modified content".to_string(),
+            unified_diff: format!("--- a{}\n+++ b{}\n@@ -1 +1 @@\n-original content\n+modified content", test_file.to_string_lossy(), test_file.to_string_lossy()),
             move_path: None,
         }
     );
@@ -337,8 +307,7 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
         codex_response
     );
 
-    // Clean up the test file
-    std::fs::remove_file(&test_file).ok();
+    // Note: No file cleanup needed as we didn't create the file
 
     Ok(())
 }

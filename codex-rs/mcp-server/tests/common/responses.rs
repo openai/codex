@@ -62,10 +62,9 @@ pub fn create_apply_patch_sse_response(
     patch_content: &str,
     call_id: &str,
 ) -> anyhow::Result<String> {
-    // Create apply_patch command in the expected format
-    let apply_patch_command = format!("apply_patch <<'EOF'\n{}\nEOF", patch_content);
+    // Use direct apply_patch tool call instead of shell wrapper
     let tool_call_arguments = serde_json::to_string(&json!({
-        "command": ["bash", "-lc", apply_patch_command]
+        "patch": patch_content
     }))?;
     
     let tool_call = json!({
@@ -76,7 +75,7 @@ pub fn create_apply_patch_sse_response(
                         {
                             "id": call_id,
                             "function": {
-                                "name": "shell",
+                                "name": "apply_patch",
                                 "arguments": tool_call_arguments
                             }
                         }
