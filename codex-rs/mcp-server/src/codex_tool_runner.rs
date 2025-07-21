@@ -2,6 +2,7 @@
 //! Tokio task. Separated from `message_processor.rs` to keep that file small
 //! and to make future feature-growth easier to manage.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -27,7 +28,9 @@ use mcp_types::TextContent;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::json;
+use tokio::sync::Mutex;
 use tracing::error;
+use uuid::Uuid;
 
 use crate::outgoing_message::OutgoingMessageSender;
 
@@ -42,8 +45,9 @@ pub async fn run_codex_tool_session(
     initial_prompt: String,
     config: CodexConfig,
     outgoing: Arc<OutgoingMessageSender>,
+    session_map: Arc<Mutex<HashMap<Uuid, Arc<Codex>>>>,
 ) {
-    let (codex, first_event, _ctrl_c) = match init_codex(config).await {
+    let (codex, first_event, _ctrl_c, session_id) = match init_codex(config).await {
         Ok(res) => res,
         Err(e) => {
             let result = CallToolResult {
@@ -60,6 +64,8 @@ pub async fn run_codex_tool_session(
         }
     };
     let codex = Arc::new(codex);
+
+    session_map.lock().await.insert(session_id, codex.clone());
 
     // Send initial SessionConfigured event.
     outgoing.send_event_as_notification(&first_event).await;

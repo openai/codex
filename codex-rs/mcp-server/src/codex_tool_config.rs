@@ -160,6 +160,15 @@ impl CodexToolCallParam {
     }
 }
 
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub(crate) struct CodexToolCallReplyParam {
+    /// The *session id* for this conversation.
+    pub session_id: String,
+
+    /// The *next user prompt* to continue the Codex conversation.
+    pub prompt: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
