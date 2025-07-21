@@ -16,21 +16,12 @@ use codex_core::protocol::Submission;
 use codex_core::protocol::TaskCompleteEvent;
 use mcp_types::CallToolResult;
 use mcp_types::ContentBlock;
-use mcp_types::ElicitRequest;
-use mcp_types::ElicitRequestParamsRequestedSchema;
-use mcp_types::JSONRPCErrorError;
-use mcp_types::ModelContextProtocolRequest;
 use mcp_types::RequestId;
 use mcp_types::TextContent;
-use serde_json::json;
 
-use crate::exec_approval::ExecApprovalElicitRequestParams;
-use crate::exec_approval::on_exec_approval_response;
+use crate::exec_approval::handle_exec_approval_request;
 use crate::outgoing_message::OutgoingMessageSender;
-use crate::patch_approval::PatchApprovalElicitRequestParams;
-use crate::patch_approval::on_patch_approval_response;
-
-const INVALID_PARAMS_ERROR_CODE: i64 = -32602;
+use crate::patch_approval::handle_patch_approval_request;
 
 /// Run a complete Codex session and stream events back to the client.
 ///
@@ -97,129 +88,32 @@ pub async fn run_codex_tool_session(
                         cwd,
                         reason: _,
                     }) => {
-                        let escaped_command = shlex::try_join(command.iter().map(|s| s.as_str()))
-                            .unwrap_or_else(|_| command.join(" "));
-                        let message = format!("Allow Codex to run `{escaped_command}` in {cwd:?}?");
-
-                        let params = ExecApprovalElicitRequestParams {
-                            message,
-                            requested_schema: ElicitRequestParamsRequestedSchema {
-                                r#type: "object".to_string(),
-                                properties: json!({}),
-                                required: None,
-                            },
-                            codex_elicitation: "exec-approval".to_string(),
-                            codex_mcp_tool_call_id: sub_id.clone(),
-                            codex_event_id: event.id.clone(),
-                            codex_command: command,
-                            codex_cwd: cwd,
-                        };
-                        let params_json = match serde_json::to_value(&params) {
-                            Ok(value) => value,
-                            Err(err) => {
-                                let message = format!(
-                                    "Failed to serialize ExecApprovalElicitRequestParams: {err}"
-                                );
-                                tracing::error!("{message}");
-
-                                outgoing
-                                    .send_error(
-                                        id.clone(),
-                                        JSONRPCErrorError {
-                                            code: INVALID_PARAMS_ERROR_CODE,
-                                            message,
-                                            data: None,
-                                        },
-                                    )
-                                    .await;
-
-                                continue;
-                            }
-                        };
-
-                        let on_response = outgoing
-                            .send_request(ElicitRequest::METHOD, Some(params_json))
-                            .await;
-
-                        // Listen for the response on a separate task so we do
-                        // not block the main loop of this function.
-                        {
-                            let codex = codex.clone();
-                            let event_id = event.id.clone();
-                            tokio::spawn(async move {
-                                on_exec_approval_response(event_id, on_response, codex).await;
-                            });
-                        }
-
-                        // Continue, don't break so the session continues.
+                        handle_exec_approval_request(
+                            command,
+                            cwd,
+                            outgoing.clone(),
+                            codex.clone(),
+                            sub_id.clone(),
+                            event.id.clone(),
+                        )
+                        .await;
                         continue;
                     }
                     EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
                         reason,
                         grant_root,
                         changes,
-                        ..
                     }) => {
-                        // Compose a concise message similar to the TUI prompt.
-                        let mut message_lines = Vec::new();
-                        if let Some(r) = &reason {
-                            message_lines.push(r.clone());
-                        }
-                        let mut allow_line =
-                            "Allow Codex to apply proposed code changes?".to_string();
-                        if let Some(root) = &grant_root {
-                            allow_line.push_str(&format!(" This will grant write access to {} for the remainder of this session.", root.display()));
-                        }
-                        message_lines.push(allow_line);
-                        let message = message_lines.join("\n\n");
-
-                        let params = PatchApprovalElicitRequestParams {
-                            message,
-                            requested_schema: ElicitRequestParamsRequestedSchema {
-                                r#type: "object".to_string(),
-                                properties: json!({}),
-                                required: None,
-                            },
-                            codex_elicitation: "patch-approval".to_string(),
-                            codex_mcp_tool_call_id: sub_id.clone(),
-                            codex_event_id: event.id.clone(),
-                            codex_reason: reason,
-                            codex_grant_root: grant_root,
-                            codex_changes: changes,
-                        };
-                        let params_json = match serde_json::to_value(&params) {
-                            Ok(value) => value,
-                            Err(err) => {
-                                let message = format!(
-                                    "Failed to serialize PatchApprovalElicitRequestParams: {err}"
-                                );
-                                tracing::error!("{message}");
-
-                                outgoing
-                                    .send_error(
-                                        id.clone(),
-                                        JSONRPCErrorError {
-                                            code: INVALID_PARAMS_ERROR_CODE,
-                                            message,
-                                            data: None,
-                                        },
-                                    )
-                                    .await;
-                                continue;
-                            }
-                        };
-
-                        let on_response = outgoing
-                            .send_request(ElicitRequest::METHOD, Some(params_json))
-                            .await;
-
-                        {
-                            let codex = codex.clone();
-                            let event_id = event.id.clone();
-                            tokio::spawn(async move {
-                                on_patch_approval_response(event_id, on_response, codex).await;
-                            });
-                        }
+                        handle_patch_approval_request(
+                            reason,
+                            grant_root,
+                            changes,
+                            outgoing.clone(),
+                            codex.clone(),
+                            sub_id.clone(),
+                            event.id.clone(),
+                        )
+                        .await;
                         continue;
                     }
                     EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) => {
