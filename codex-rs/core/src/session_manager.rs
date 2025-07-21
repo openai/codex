@@ -49,6 +49,79 @@ fn parse_page_token(token: &str) -> Option<(OffsetDateTime, Uuid)> {
     Some((ts, uuid))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DescendDecision {
+    /// Current element is newer than upper bound; continue scanning siblings.
+    SkipNewer,
+    /// Current element is older than lower bound; remaining (older) elements can be skipped entirely.
+    StopOlder,
+    Include,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Interval {
+    start: Option<OffsetDateTime>,
+    end: Option<OffsetDateTime>,
+}
+impl Interval {
+    fn new(start: Option<OffsetDateTime>, end: Option<OffsetDateTime>) -> Self {
+        Self { start, end }
+    }
+
+    fn year(&self, year: i32) -> DescendDecision {
+        if let Some(end) = self.end {
+            if year > end.year() {
+                return DescendDecision::SkipNewer;
+            }
+        }
+        if let Some(start) = self.start {
+            if year < start.year() {
+                return DescendDecision::StopOlder;
+            }
+        }
+        DescendDecision::Include
+    }
+    fn month(&self, year: i32, month: u8) -> DescendDecision {
+        if let Some(end) = self.end {
+            if year == end.year() && month > u8::from(end.month()) {
+                return DescendDecision::SkipNewer;
+            }
+        }
+        if let Some(start) = self.start {
+            if year == start.year() && month < u8::from(start.month()) {
+                return DescendDecision::StopOlder;
+            }
+        }
+        DescendDecision::Include
+    }
+    fn day(&self, year: i32, month: u8, day: u8) -> DescendDecision {
+        if let Some(end) = self.end {
+            if year == end.year() && month == u8::from(end.month()) && day > end.day() {
+                return DescendDecision::SkipNewer;
+            }
+        }
+        if let Some(start) = self.start {
+            if year == start.year() && month == u8::from(start.month()) && day < start.day() {
+                return DescendDecision::StopOlder;
+            }
+        }
+        DescendDecision::Include
+    }
+    fn timestamp(&self, ts: OffsetDateTime) -> DescendDecision {
+        if let Some(end) = self.end {
+            if ts > end {
+                return DescendDecision::SkipNewer;
+            }
+        }
+        if let Some(start) = self.start {
+            if ts < start {
+                return DescendDecision::StopOlder;
+            }
+        }
+        DescendDecision::Include
+    }
+}
+
 /// Retrieve recorded sessions with filtering + token pagination. The returned `next_page_token`
 /// can be supplied on the next call to resume after the last returned session, resilient to
 /// concurrent new sessions being appended.
@@ -113,127 +186,63 @@ fn traverse_directories(
     let mut after_anchor = anchor.is_none();
     let (anchor_ts, anchor_id) =
         anchor.unwrap_or_else(|| (OffsetDateTime::UNIX_EPOCH, Uuid::nil()));
+    let interval = Interval::new(start, end);
 
-    let mut year_dirs: Vec<_> = fs::read_dir(&root)?
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().map(|ft| ft.is_dir()).unwrap_or(false))
-        .filter_map(|e| {
-            e.file_name()
-                .to_str()
-                .and_then(|s| s.parse::<i32>().ok())
-                .map(|y| (y, e.path()))
-        })
-        .collect();
-    year_dirs.sort_by_key(|(y, _)| Reverse(*y));
+    let year_dirs = collect_dirs_desc(&root, |s| s.parse::<i32>().ok())?;
 
     'outer: for (year, year_path) in year_dirs.iter() {
         if scanned >= MAX_SCAN_FILES {
             break;
         }
-        if let Some(end_ts) = end {
-            if *year > end_ts.year() {
-                continue; // outside upper bound, skip newer year
-            }
+        match interval.year(*year) {
+            DescendDecision::SkipNewer => continue,
+            DescendDecision::StopOlder => break,
+            DescendDecision::Include => {}
         }
-        if let Some(start_ts) = start {
-            if *year < start_ts.year() {
-                break; // remaining years older than start bound
-            }
-        }
-        let mut month_dirs: Vec<_> = fs::read_dir(year_path)?
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().map(|ft| ft.is_dir()).unwrap_or(false))
-            .filter_map(|e| {
-                e.file_name()
-                    .to_str()
-                    .and_then(|s| s.parse::<u8>().ok())
-                    .map(|m| (m, e.path()))
-            })
-            .collect();
-        month_dirs.sort_by_key(|(m, _)| Reverse(*m));
+        let month_dirs = collect_dirs_desc(year_path, |s| s.parse::<u8>().ok())?;
         for (month, month_path) in month_dirs.iter() {
             if scanned >= MAX_SCAN_FILES {
                 break 'outer;
             }
-            if let Some(end_ts) = end {
-                if *year == end_ts.year() && *month > u8::from(end_ts.month()) {
-                    continue; // newer month beyond upper bound
-                }
+            match interval.month(*year, *month) {
+                DescendDecision::SkipNewer => continue,
+                DescendDecision::StopOlder => break, // older months exhausted for this year
+                DescendDecision::Include => {}
             }
-            if let Some(start_ts) = start {
-                if *year == start_ts.year() && *month < u8::from(start_ts.month()) {
-                    break; // remaining months older than start bound
-                }
-            }
-            let mut day_dirs: Vec<_> = fs::read_dir(month_path)?
-                .filter_map(|e| e.ok())
-                .filter(|e| e.file_type().map(|ft| ft.is_dir()).unwrap_or(false))
-                .filter_map(|e| {
-                    e.file_name()
-                        .to_str()
-                        .and_then(|s| s.parse::<u8>().ok())
-                        .map(|d| (d, e.path()))
-                })
-                .collect();
-            day_dirs.sort_by_key(|(d, _)| Reverse(*d));
+            let day_dirs = collect_dirs_desc(month_path, |s| s.parse::<u8>().ok())?;
             for (day, day_path) in day_dirs.iter() {
                 if scanned >= MAX_SCAN_FILES {
                     break 'outer;
                 }
-                if let Some(end_ts) = end {
-                    if *year == end_ts.year()
-                        && *month == u8::from(end_ts.month())
-                        && *day > end_ts.day()
-                    {
-                        continue; // newer day beyond upper bound
-                    }
+                match interval.day(*year, *month, *day) {
+                    DescendDecision::SkipNewer => continue,
+                    DescendDecision::StopOlder => break, // older days exhausted for this month
+                    DescendDecision::Include => {}
                 }
-                if let Some(start_ts) = start {
-                    if *year == start_ts.year()
-                        && *month == u8::from(start_ts.month())
-                        && *day < start_ts.day()
-                    {
-                        break; // remaining days older than start bound
+                let mut files = collect_files(day_path, |name_str, path| {
+                    if !name_str.starts_with("rollout-") || !name_str.ends_with(".jsonl") {
+                        return None;
                     }
-                }
-                let mut files: Vec<_> = fs::read_dir(day_path)?
-                    .filter_map(|e| e.ok())
-                    .filter(|e| e.file_type().map(|ft| ft.is_file()).unwrap_or(false))
-                    .filter_map(|e| {
-                        let name = e.file_name();
-                        let name_str = name.to_str()?;
-                        if !name_str.starts_with("rollout-") || !name_str.ends_with(".jsonl") {
-                            return None;
-                        }
-                        parse_timestamp_uuid_from_filename(name_str)
-                            .map(|(ts, id)| (ts, id, name_str.to_string(), e.path()))
-                    })
-                    .collect();
+                    parse_timestamp_uuid_from_filename(name_str)
+                        .map(|(ts, id)| (ts, id, name_str.to_string(), path.to_path_buf()))
+                })?;
                 files.sort_by_key(|(ts, _, _, _)| Reverse(*ts));
                 for (ts, sid, _name_str, path) in files.into_iter() {
                     scanned += 1;
                     if scanned >= MAX_SCAN_FILES && sessions.len() >= page_size {
                         break 'outer;
                     }
-                    // Anchor logic (descending): skip until strictly older than anchor
                     if !after_anchor {
                         if ts < anchor_ts || (ts == anchor_ts && sid < anchor_id) {
                             after_anchor = true;
                         } else {
-                            continue; // still at or above anchor
-                        }
-                    }
-                    if let Some(end_ts) = end {
-                        if ts > end_ts {
-                            // newer than upper bound
                             continue;
                         }
                     }
-                    if let Some(start_ts) = start {
-                        if ts < start_ts {
-                            // older than lower bound; remaining files even older
-                            break 'outer;
-                        }
+                    match interval.timestamp(ts) {
+                        DescendDecision::SkipNewer => continue,
+                        DescendDecision::StopOlder => break 'outer,
+                        DescendDecision::Include => {}
                     }
                     if let Some(ref ids) = ids_set {
                         if !ids.contains(&sid) {
@@ -278,6 +287,43 @@ fn traverse_directories(
         scanned_files: scanned,
         reached_scan_cap: scanned >= MAX_SCAN_FILES,
     })
+}
+
+// Helper: collect immediate subdirectories of `parent`, parse their (string) names with `parse`,
+// and return them sorted descending by the parsed key.
+fn collect_dirs_desc<T, F>(parent: &Path, parse: F) -> io::Result<Vec<(T, PathBuf)>>
+where
+    T: Ord + Copy,
+    F: Fn(&str) -> Option<T>,
+{
+    let mut vec: Vec<(T, PathBuf)> = fs::read_dir(parent)?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().map(|ft| ft.is_dir()).unwrap_or(false))
+        .filter_map(|e| {
+            let name = e.file_name();
+            let s = name.to_str()?;
+            parse(s).map(|v| (v, e.path()))
+        })
+        .collect();
+    vec.sort_by_key(|(v, _)| Reverse(*v));
+    Ok(vec)
+}
+
+// Helper: collect files in `parent`, parse with `parse(name_str, path)` into arbitrary value.
+fn collect_files<T, F>(parent: &Path, parse: F) -> io::Result<Vec<T>>
+where
+    F: Fn(&str, &Path) -> Option<T>,
+{
+    let vec: Vec<T> = fs::read_dir(parent)?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().map(|ft| ft.is_file()).unwrap_or(false))
+        .filter_map(|e| {
+            let name = e.file_name();
+            let s = name.to_str()?;
+            parse(s, &e.path())
+        })
+        .collect();
+    Ok(vec)
 }
 
 fn parse_timestamp_uuid_from_filename(name: &str) -> Option<(OffsetDateTime, Uuid)> {
