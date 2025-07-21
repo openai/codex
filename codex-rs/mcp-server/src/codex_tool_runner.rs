@@ -9,8 +9,10 @@ use codex_core::Codex;
 use codex_core::codex_wrapper::init_codex;
 use codex_core::config::Config as CodexConfig;
 use codex_core::protocol::AgentMessageEvent;
+use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
+use codex_core::protocol::FileChange;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
@@ -155,18 +157,72 @@ pub async fn run_codex_tool_session(
                         // Continue, don't break so the session continues.
                         continue;
                     }
-                    EventMsg::ApplyPatchApprovalRequest(_) => {
-                        let result = CallToolResult {
-                            content: vec![ContentBlock::TextContent(TextContent {
-                                r#type: "text".to_string(),
-                                text: "PATCH_APPROVAL_REQUIRED".to_string(),
-                                annotations: None,
-                            })],
-                            is_error: None,
-                            structured_content: None,
+                    EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
+                        reason,
+                        grant_root,
+                        changes,
+                        ..
+                    }) => {
+                        // Compose a concise message similar to the TUI prompt.
+                        let mut message_lines = Vec::new();
+                        if let Some(r) = &reason {
+                            message_lines.push(r.clone());
+                        }
+                        let mut allow_line =
+                            "Allow Codex to apply proposed code changes?".to_string();
+                        if let Some(root) = &grant_root {
+                            allow_line.push_str(&format!(" This will grant write access to {} for the remainder of this session.", root.display()));
+                        }
+                        message_lines.push(allow_line);
+                        let message = message_lines.join("\n\n");
+
+                        let params = PatchApprovalElicitRequestParams {
+                            message,
+                            requested_schema: ElicitRequestParamsRequestedSchema {
+                                r#type: "object".to_string(),
+                                properties: json!({}),
+                                required: None,
+                            },
+                            codex_elicitation: "patch-approval".to_string(),
+                            codex_mcp_tool_call_id: sub_id.clone(),
+                            codex_event_id: event.id.clone(),
+                            codex_reason: reason,
+                            codex_grant_root: grant_root,
+                            codex_changes: changes,
                         };
-                        outgoing.send_response(id.clone(), result.into()).await;
-                        // Continue, don't break so the session continues.
+                        let params_json = match serde_json::to_value(&params) {
+                            Ok(value) => value,
+                            Err(err) => {
+                                let message = format!(
+                                    "Failed to serialize PatchApprovalElicitRequestParams: {err}"
+                                );
+                                tracing::error!("{message}");
+
+                                outgoing
+                                    .send_error(
+                                        id.clone(),
+                                        JSONRPCErrorError {
+                                            code: INVALID_PARAMS_ERROR_CODE,
+                                            message,
+                                            data: None,
+                                        },
+                                    )
+                                    .await;
+                                continue;
+                            }
+                        };
+
+                        let on_response = outgoing
+                            .send_request(ElicitRequest::METHOD, Some(params_json))
+                            .await;
+
+                        {
+                            let codex = codex.clone();
+                            let event_id = event.id.clone();
+                            tokio::spawn(async move {
+                                on_patch_approval_response(event_id, on_response, codex).await;
+                            });
+                        }
                         continue;
                     }
                     EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) => {
@@ -276,8 +332,48 @@ async fn on_exec_approval_response(
     }
 }
 
+async fn on_patch_approval_response(
+    event_id: String,
+    receiver: tokio::sync::oneshot::Receiver<mcp_types::Result>,
+    codex: Arc<Codex>,
+) {
+    let response = receiver.await;
+    let value = match response {
+        Ok(value) => value,
+        Err(err) => {
+            error!("request failed: {err:?}");
+            return;
+        }
+    };
+
+    let response = match serde_json::from_value::<PatchApprovalResponse>(value) {
+        Ok(response) => response,
+        Err(err) => {
+            error!("failed to deserialize PatchApprovalResponse: {err}");
+            PatchApprovalResponse {
+                decision: ReviewDecision::Denied,
+            }
+        }
+    };
+
+    if let Err(err) = codex
+        .submit(Op::PatchApproval {
+            id: event_id,
+            decision: response.decision,
+        })
+        .await
+    {
+        error!("failed to submit PatchApproval: {err}");
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ExecApprovalResponse {
+    pub decision: ReviewDecision,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PatchApprovalResponse {
     pub decision: ReviewDecision,
 }
 
@@ -299,4 +395,19 @@ struct ExecApprovalElicitRequestParams {
     codex_event_id: String,
     codex_command: Vec<String>,
     codex_cwd: PathBuf,
+}
+
+#[derive(Debug, Serialize)]
+struct PatchApprovalElicitRequestParams {
+    message: String,
+    #[serde(rename = "requestedSchema")]
+    requested_schema: ElicitRequestParamsRequestedSchema,
+    codex_elicitation: String,
+    codex_mcp_tool_call_id: String,
+    codex_event_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    codex_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    codex_grant_root: Option<PathBuf>,
+    codex_changes: std::collections::HashMap<PathBuf, FileChange>,
 }
