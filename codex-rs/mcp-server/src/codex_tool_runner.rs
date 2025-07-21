@@ -2,20 +2,16 @@
 //! Tokio task. Separated from `message_processor.rs` to keep that file small
 //! and to make future feature-growth easier to manage.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
-use codex_core::Codex;
 use codex_core::codex_wrapper::init_codex;
 use codex_core::config::Config as CodexConfig;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
-use codex_core::protocol::FileChange;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
-use codex_core::protocol::ReviewDecision;
 use codex_core::protocol::Submission;
 use codex_core::protocol::TaskCompleteEvent;
 use mcp_types::CallToolResult;
@@ -26,12 +22,13 @@ use mcp_types::JSONRPCErrorError;
 use mcp_types::ModelContextProtocolRequest;
 use mcp_types::RequestId;
 use mcp_types::TextContent;
-use serde::Deserialize;
-use serde::Serialize;
 use serde_json::json;
-use tracing::error;
 
+use crate::exec_approval::ExecApprovalElicitRequestParams;
+use crate::exec_approval::on_exec_approval_response;
 use crate::outgoing_message::OutgoingMessageSender;
+use crate::patch_approval::PatchApprovalElicitRequestParams;
+use crate::patch_approval::on_patch_approval_response;
 
 const INVALID_PARAMS_ERROR_CODE: i64 = -32602;
 
@@ -292,122 +289,4 @@ pub async fn run_codex_tool_session(
             }
         }
     }
-}
-
-async fn on_exec_approval_response(
-    event_id: String,
-    receiver: tokio::sync::oneshot::Receiver<mcp_types::Result>,
-    codex: Arc<Codex>,
-) {
-    let response = receiver.await;
-    let value = match response {
-        Ok(value) => value,
-        Err(err) => {
-            error!("request failed: {err:?}");
-            return;
-        }
-    };
-
-    // Try to deserialize `value` and then make the appropriate call to `codex`.
-    let response = match serde_json::from_value::<ExecApprovalResponse>(value) {
-        Ok(response) => response,
-        Err(err) => {
-            error!("failed to deserialize ExecApprovalResponse: {err}");
-            // If we cannot deserialize the response, we deny the request to be
-            // conservative.
-            ExecApprovalResponse {
-                decision: ReviewDecision::Denied,
-            }
-        }
-    };
-
-    if let Err(err) = codex
-        .submit(Op::ExecApproval {
-            id: event_id,
-            decision: response.decision,
-        })
-        .await
-    {
-        error!("failed to submit ExecApproval: {err}");
-    }
-}
-
-async fn on_patch_approval_response(
-    event_id: String,
-    receiver: tokio::sync::oneshot::Receiver<mcp_types::Result>,
-    codex: Arc<Codex>,
-) {
-    let response = receiver.await;
-    let value = match response {
-        Ok(value) => value,
-        Err(err) => {
-            error!("request failed: {err:?}");
-            return;
-        }
-    };
-
-    let response = match serde_json::from_value::<PatchApprovalResponse>(value) {
-        Ok(response) => response,
-        Err(err) => {
-            error!("failed to deserialize PatchApprovalResponse: {err}");
-            PatchApprovalResponse {
-                decision: ReviewDecision::Denied,
-            }
-        }
-    };
-
-    if let Err(err) = codex
-        .submit(Op::PatchApproval {
-            id: event_id,
-            decision: response.decision,
-        })
-        .await
-    {
-        error!("failed to submit PatchApproval: {err}");
-    }
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ExecApprovalResponse {
-    pub decision: ReviewDecision,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct PatchApprovalResponse {
-    pub decision: ReviewDecision,
-}
-
-/// Conforms to [`mcp_types::ElicitRequestParams`] so that it can be used as the
-/// `params` field of an [`mcp_types::ElicitRequest`].
-#[derive(Debug, Serialize)]
-struct ExecApprovalElicitRequestParams {
-    // These fields are required so that `params`
-    // conforms to ElicitRequestParams.
-    message: String,
-
-    #[serde(rename = "requestedSchema")]
-    requested_schema: ElicitRequestParamsRequestedSchema,
-
-    // These are additional fields the client can use to
-    // correlate the request with the codex tool call.
-    codex_elicitation: String,
-    codex_mcp_tool_call_id: String,
-    codex_event_id: String,
-    codex_command: Vec<String>,
-    codex_cwd: PathBuf,
-}
-
-#[derive(Debug, Serialize)]
-struct PatchApprovalElicitRequestParams {
-    message: String,
-    #[serde(rename = "requestedSchema")]
-    requested_schema: ElicitRequestParamsRequestedSchema,
-    codex_elicitation: String,
-    codex_mcp_tool_call_id: String,
-    codex_event_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    codex_reason: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    codex_grant_root: Option<PathBuf>,
-    codex_changes: std::collections::HashMap<PathBuf, FileChange>,
 }

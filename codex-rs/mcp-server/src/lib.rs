@@ -16,9 +16,11 @@ use tracing::info;
 
 mod codex_tool_config;
 mod codex_tool_runner;
+mod exec_approval;
 mod json_to_toml;
 mod message_processor;
 mod outgoing_message;
+mod patch_approval;
 
 use crate::message_processor::MessageProcessor;
 use crate::outgoing_message::OutgoingMessage;
