@@ -35,4 +35,8 @@ tokio = { version = "1", features = [
 ] }
 
 [dev-dependencies]
+assert_cmd = "2"
 pretty_assertions = "1.4.1"
+tempfile = "3"
+tokio-test = "0.4"
+wiremock = "0.6"

@@ -7,15 +7,16 @@ use mcp_types::ToolInputSchema;
 use schemars::JsonSchema;
 use schemars::r#gen::SchemaSettings;
 use serde::Deserialize;
+use serde::Serialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::json_to_toml::json_to_toml;
 
 /// Client-supplied configuration for a `codex` tool-call.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
-pub(crate) struct CodexToolCallParam {
+pub struct CodexToolCallParam {
     /// The *initial user prompt* to start the Codex conversation.
     pub prompt: String,
 
@@ -49,9 +50,9 @@ pub(crate) struct CodexToolCallParam {
 
 /// Custom enum mirroring [`AskForApproval`], but has an extra dependency on
 /// [`JsonSchema`].
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
-pub(crate) enum CodexToolCallApprovalPolicy {
+pub enum CodexToolCallApprovalPolicy {
     Untrusted,
     OnFailure,
     Never,
@@ -69,9 +70,9 @@ impl From<CodexToolCallApprovalPolicy> for AskForApproval {
 
 /// Custom enum mirroring [`SandboxMode`] from config_types.rs, but with
 /// `JsonSchema` support.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
-pub(crate) enum CodexToolCallSandboxMode {
+pub enum CodexToolCallSandboxMode {
     ReadOnly,
     WorkspaceWrite,
     DangerFullAccess,

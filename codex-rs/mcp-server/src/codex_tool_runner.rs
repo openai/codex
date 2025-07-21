@@ -100,7 +100,10 @@ pub async fn run_codex_tool_session(
                     }) => {
                         let escaped_command = shlex::try_join(command.iter().map(|s| s.as_str()))
                             .unwrap_or_else(|_| command.join(" "));
-                        let message = format!("Allow Codex to run `{escaped_command}` in {cwd:?}?");
+                        let message = format!(
+                            "Allow Codex to run `{escaped_command}` in `{cwd}`?",
+                            cwd = cwd.to_string_lossy()
+                        );
 
                         let params = ExecApprovalElicitRequestParams {
                             message,
@@ -276,7 +279,12 @@ async fn on_exec_approval_response(
     }
 }
 
-#[derive(Debug, Deserialize)]
+// TODO(mbolin): ExecApprovalResponse does not conform to ElicitResult. See:
+// - https://github.com/modelcontextprotocol/modelcontextprotocol/blob/f962dc1780fa5eed7fb7c8a0232f1fc83ef220cd/schema/2025-06-18/schema.json#L617-L636
+// - https://modelcontextprotocol.io/specification/draft/client/elicitation#protocol-messages
+// It should have "action" and "content" fields.
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ExecApprovalResponse {
     pub decision: ReviewDecision,
 }
@@ -284,19 +292,19 @@ pub struct ExecApprovalResponse {
 /// Conforms to [`mcp_types::ElicitRequestParams`] so that it can be used as the
 /// `params` field of an [`mcp_types::ElicitRequest`].
 #[derive(Debug, Serialize)]
-struct ExecApprovalElicitRequestParams {
+pub struct ExecApprovalElicitRequestParams {
     // These fields are required so that `params`
     // conforms to ElicitRequestParams.
-    message: String,
+    pub message: String,
 
     #[serde(rename = "requestedSchema")]
-    requested_schema: ElicitRequestParamsRequestedSchema,
+    pub requested_schema: ElicitRequestParamsRequestedSchema,
 
     // These are additional fields the client can use to
     // correlate the request with the codex tool call.
-    codex_elicitation: String,
-    codex_mcp_tool_call_id: String,
-    codex_event_id: String,
-    codex_command: Vec<String>,
-    codex_cwd: PathBuf,
+    pub codex_elicitation: String,
+    pub codex_mcp_tool_call_id: String,
+    pub codex_event_id: String,
+    pub codex_command: Vec<String>,
+    pub codex_cwd: PathBuf,
 }
