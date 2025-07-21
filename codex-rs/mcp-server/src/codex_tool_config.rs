@@ -161,6 +161,7 @@ impl CodexToolCallParam {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
 pub(crate) struct CodexToolCallReplyParam {
     /// The *session id* for this conversation.
     pub session_id: String,
