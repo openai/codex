@@ -1,11 +1,15 @@
 mod common;
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use codex_core::exec::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use codex_core::protocol::FileChange;
 use codex_core::protocol::ReviewDecision;
 use codex_mcp_server::ExecApprovalElicitRequestParams;
 use codex_mcp_server::ExecApprovalResponse;
+use codex_mcp_server::PatchApprovalElicitRequestParams;
+use codex_mcp_server::PatchApprovalResponse;
 use mcp_types::ElicitRequest;
 use mcp_types::ElicitRequestParamsRequestedSchema;
 use mcp_types::JSONRPC_VERSION;
@@ -19,6 +23,7 @@ use tempfile::TempDir;
 use tokio::time::timeout;
 
 use crate::common::McpProcess;
+use crate::common::create_apply_patch_sse_response;
 use crate::common::create_final_assistant_message_sse_response;
 use crate::common::create_mock_chat_completions_server;
 use crate::common::create_shell_sse_response;
@@ -162,6 +167,39 @@ stream_max_retries = 0
     )
 }
 
+fn create_config_toml_with_cwd(
+    codex_home: &Path,
+    server_uri: String,
+    cwd: Option<&Path>,
+) -> std::io::Result<()> {
+    let config_toml = codex_home.join("config.toml");
+    let cwd_line = if let Some(cwd) = cwd {
+        format!("cwd = \"{}\"", cwd.to_string_lossy())
+    } else {
+        String::new()
+    };
+    std::fs::write(
+        config_toml,
+        format!(
+            r#"
+model = "mock-model"
+approval_policy = "untrusted"
+sandbox_policy = "none"
+{cwd_line}
+
+model_provider = "mock_provider"
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "{server_uri}/v1"
+wire_api = "chat"
+request_max_retries = 0
+stream_max_retries = 0
+"#
+        ),
+    )
+}
+
 fn create_expected_elicitation_request(
     elicitation_request_id: RequestId,
     command: Vec<String>,
@@ -190,6 +228,152 @@ fn create_expected_elicitation_request(
             codex_event_id,
             codex_command: command,
             codex_cwd: workdir.to_path_buf(),
+        })?),
+    })
+}
+
+/// Test that patch approval triggers an elicitation request to the MCP and that
+/// sending the approval applies the patch, as expected.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_patch_approval_triggers_elicitation() {
+    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+        println!(
+            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+        );
+        return;
+    }
+
+    if let Err(err) = patch_approval_triggers_elicitation().await {
+        panic!("failure: {err}");
+    }
+}
+
+async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
+    // Create the test file in the current directory where the MCP server will run
+    let test_file = std::env::current_dir()?.join("tests/test_patch_file.txt");
+    std::fs::write(&test_file, "original content")?;
+
+    // Create the patch content in the V4A format expected by apply_patch
+    let patch_content = format!(
+        "*** Begin Patch\n*** Update File: test_patch_file.txt\n--- a/test_patch_file.txt\n+++ b/test_patch_file.txt\n@@ -1 +1 @@\n-original content\n+modified content\n*** End Patch"
+    );
+
+    // Configure the mock server for patch approval flow
+    // First response triggers the apply_patch command, second is the completion
+    let server = create_mock_chat_completions_server(vec![
+        create_apply_patch_sse_response(&patch_content, "call1234")?,
+        create_final_assistant_message_sse_response("Patch has been applied successfully!")?,
+    ])
+    .await;
+
+    // Run `codex mcp` with a specific config.toml
+    let codex_home = TempDir::new()?;
+    create_config_toml_with_cwd(codex_home.path(), server.uri(), None)?;
+    let mut mcp_process = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp_process.initialize()).await??;
+
+    // Send a "codex" tool request that will trigger the apply_patch command
+    let codex_request_id = mcp_process
+        .send_codex_tool_call("please modify the test file")
+        .await?;
+    let elicitation_request = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp_process.read_stream_until_request_message(),
+    )
+    .await??;
+
+    // This is the first request from the server, so the id should be 0
+    let elicitation_request_id = RequestId::Integer(0);
+
+    // Create the expected changes for the elicitation request
+    let mut expected_changes = HashMap::new();
+    expected_changes.insert(
+        test_file.clone(),
+        FileChange::Update {
+            unified_diff: "--- a/test_patch_file.txt\n+++ b/test_patch_file.txt\n@@ -1 +1 @@\n-original content\n+modified content".to_string(),
+            move_path: None,
+        }
+    );
+
+    let expected_elicitation_request = create_expected_patch_approval_elicitation_request(
+        elicitation_request_id.clone(),
+        expected_changes,
+        None, // No grant_root expected
+        None, // No reason expected
+        codex_request_id.to_string(),
+        "1".to_string(),
+    )?;
+    assert_eq!(expected_elicitation_request, elicitation_request);
+
+    // Accept the patch approval request by responding to the elicitation
+    mcp_process
+        .send_response(
+            elicitation_request_id,
+            serde_json::to_value(PatchApprovalResponse {
+                decision: ReviewDecision::Approved,
+            })?,
+        )
+        .await?;
+
+    // Verify the original `codex` tool call completes
+    let codex_response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp_process.read_stream_until_response_message(RequestId::Integer(codex_request_id)),
+    )
+    .await??;
+    assert_eq!(
+        JSONRPCResponse {
+            jsonrpc: JSONRPC_VERSION.into(),
+            id: RequestId::Integer(codex_request_id),
+            result: json!({
+                "content": [
+                    {
+                        "text": "Patch has been applied successfully!",
+                        "type": "text"
+                    }
+                ]
+            }),
+        },
+        codex_response
+    );
+
+    // Clean up the test file
+    std::fs::remove_file(&test_file).ok();
+
+    Ok(())
+}
+
+fn create_expected_patch_approval_elicitation_request(
+    elicitation_request_id: RequestId,
+    changes: HashMap<std::path::PathBuf, FileChange>,
+    grant_root: Option<std::path::PathBuf>,
+    reason: Option<String>,
+    codex_mcp_tool_call_id: String,
+    codex_event_id: String,
+) -> anyhow::Result<JSONRPCRequest> {
+    let mut message_lines = Vec::new();
+    if let Some(r) = &reason {
+        message_lines.push(r.clone());
+    }
+    message_lines.push("Allow Codex to apply proposed code changes?".to_string());
+
+    Ok(JSONRPCRequest {
+        jsonrpc: JSONRPC_VERSION.into(),
+        id: elicitation_request_id,
+        method: ElicitRequest::METHOD.to_string(),
+        params: Some(serde_json::to_value(&PatchApprovalElicitRequestParams {
+            message: message_lines.join("\n"),
+            requested_schema: ElicitRequestParamsRequestedSchema {
+                r#type: "object".to_string(),
+                properties: json!({}),
+                required: None,
+            },
+            codex_elicitation: "patch-approval".to_string(),
+            codex_mcp_tool_call_id,
+            codex_event_id,
+            codex_reason: reason,
+            codex_grant_root: grant_root,
+            codex_changes: changes,
         })?),
     })
 }

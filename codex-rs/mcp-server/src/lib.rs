@@ -29,6 +29,8 @@ use crate::outgoing_message::OutgoingMessageSender;
 pub use crate::codex_tool_config::CodexToolCallParam;
 pub use crate::exec_approval::ExecApprovalElicitRequestParams;
 pub use crate::exec_approval::ExecApprovalResponse;
+pub use crate::patch_approval::PatchApprovalElicitRequestParams;
+pub use crate::patch_approval::PatchApprovalResponse;
 
 /// Size of the bounded channels used to communicate between tasks. The value
 /// is a balance between throughput and memory usage – 128 messages should be

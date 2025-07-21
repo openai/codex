@@ -57,3 +57,39 @@ pub fn create_final_assistant_message_sse_response(message: &str) -> anyhow::Res
     );
     Ok(sse)
 }
+
+pub fn create_apply_patch_sse_response(
+    patch_content: &str,
+    call_id: &str,
+) -> anyhow::Result<String> {
+    // Create apply_patch command in the expected format
+    let apply_patch_command = format!("apply_patch <<'EOF'\n{}\nEOF", patch_content);
+    let tool_call_arguments = serde_json::to_string(&json!({
+        "command": ["bash", "-lc", apply_patch_command]
+    }))?;
+    
+    let tool_call = json!({
+        "choices": [
+            {
+                "delta": {
+                    "tool_calls": [
+                        {
+                            "id": call_id,
+                            "function": {
+                                "name": "shell",
+                                "arguments": tool_call_arguments
+                            }
+                        }
+                    ]
+                },
+                "finish_reason": "tool_calls"
+            }
+        ]
+    });
+
+    let sse = format!(
+        "data: {}\n\ndata: DONE\n\n",
+        serde_json::to_string(&tool_call)?
+    );
+    Ok(sse)
+}

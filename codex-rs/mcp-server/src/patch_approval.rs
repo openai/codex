@@ -14,23 +14,23 @@ use serde_json::json;
 use tracing::error;
 
 #[derive(Debug, Serialize)]
-pub(crate) struct PatchApprovalElicitRequestParams {
-    pub(crate) message: String,
+pub struct PatchApprovalElicitRequestParams {
+    pub message: String,
     #[serde(rename = "requestedSchema")]
-    pub(crate) requested_schema: ElicitRequestParamsRequestedSchema,
-    pub(crate) codex_elicitation: String,
-    pub(crate) codex_mcp_tool_call_id: String,
-    pub(crate) codex_event_id: String,
+    pub requested_schema: ElicitRequestParamsRequestedSchema,
+    pub codex_elicitation: String,
+    pub codex_mcp_tool_call_id: String,
+    pub codex_event_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) codex_reason: Option<String>,
+    pub codex_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) codex_grant_root: Option<PathBuf>,
-    pub(crate) codex_changes: std::collections::HashMap<PathBuf, FileChange>,
+    pub codex_grant_root: Option<PathBuf>,
+    pub codex_changes: std::collections::HashMap<PathBuf, FileChange>,
 }
 
-#[derive(Debug, Deserialize)]
-pub(crate) struct PatchApprovalResponse {
-    pub(crate) decision: ReviewDecision,
+#[derive(Debug, Deserialize, Serialize)]
+pub struct PatchApprovalResponse {
+    pub decision: ReviewDecision,
 }
 
 pub(crate) async fn handle_patch_approval_request(
