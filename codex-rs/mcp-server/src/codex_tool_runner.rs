@@ -65,7 +65,10 @@ pub async fn run_codex_tool_session(
     };
     let codex = Arc::new(codex);
 
+    // update the session map so we can retrieve the session in a reply, and then drop it, since
+    // we no longer need it for this function
     session_map.lock().await.insert(session_id, codex.clone());
+    drop(session_map);
 
     // Send initial SessionConfigured event.
     outgoing.send_event_as_notification(&first_event).await;
