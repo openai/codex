@@ -185,7 +185,7 @@ impl MessageProcessor {
             protocol_version: params.protocol_version.clone(),
             server_info: mcp_types::Implementation {
                 name: "codex-mcp-server".to_string(),
-                version: mcp_types::MCP_SCHEMA_VERSION.to_string(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
                 title: Some("Codex".to_string()),
             },
         };
@@ -365,7 +365,7 @@ impl MessageProcessor {
         // Spawn an async task to handle the Codex session so that we do not
         // block the synchronous message-processing loop.
         task::spawn(async move {
-            // Run the Codex session and stream events Fck to the client.
+            // Run the Codex session and stream events back to the client.
             crate::codex_tool_runner::run_codex_tool_session(id, initial_prompt, config, outgoing)
                 .await;
         });
