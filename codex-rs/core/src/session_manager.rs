@@ -1,3 +1,7 @@
+//! Session listing + pagination over on-disk rollout JSONL session files.
+//! Public entry point: `get_sessions` returning newest-first sessions with optional
+//! time window, id filtering, and pagination via opaque page tokens.
+
 use std::cmp::Reverse;
 use std::collections::HashSet;
 use std::collections::VecDeque;
@@ -35,6 +39,54 @@ pub struct SessionsPage {
 }
 
 const MAX_SCAN_FILES: usize = 50_000; // Hard cap to bound worst‑case work per request.
+
+// Lite mode shaping constants.
+pub(crate) const LITE_HEAD: usize = 5;
+pub(crate) const LITE_TAIL: usize = 5;
+
+/// Retrieve recorded sessions with filtering + token pagination. The returned `next_page_token`
+/// can be supplied on the next call to resume after the last returned session, resilient to
+/// concurrent new sessions being appended.
+pub async fn get_sessions(
+    config: &Config,
+    mode: SessionsMode,
+    page_size: usize,
+    page_token: Option<&str>,
+    start: Option<OffsetDateTime>,
+    end: Option<OffsetDateTime>,
+    filter_ids: Option<&[Uuid]>,
+) -> io::Result<SessionsPage> {
+    if page_size == 0 {
+        return Ok(SessionsPage {
+            sessions: Vec::new(),
+            next_page_token: None,
+            scanned_files: 0,
+            reached_scan_cap: false,
+        });
+    }
+
+    let ids_set: Option<HashSet<Uuid>> = filter_ids.map(|ids| ids.iter().cloned().collect());
+    let mut root = config.codex_home.clone();
+    root.push(SESSIONS_SUBDIR);
+    if !root.exists() {
+        return Ok(SessionsPage {
+            sessions: Vec::new(),
+            next_page_token: None,
+            scanned_files: 0,
+            reached_scan_cap: false,
+        });
+    }
+
+    let anchor = page_token.and_then(parse_page_token);
+
+    let result = tokio::task::spawn_blocking({
+        let root = root.clone();
+        move || traverse_directories(root, mode, page_size, anchor, start, end, ids_set)
+    })
+    .await
+    .map_err(|e| io::Error::other(format!("join error: {e}")))??;
+    Ok(result)
+}
 
 /// Pagination token format: "<file_ts>|<uuid>" where `file_ts` matches the
 /// filename timestamp portion (YYYY-MM-DDThh-mm-ss) used in rollout filenames.
@@ -122,50 +174,6 @@ impl Interval {
     }
 }
 
-/// Retrieve recorded sessions with filtering + token pagination. The returned `next_page_token`
-/// can be supplied on the next call to resume after the last returned session, resilient to
-/// concurrent new sessions being appended.
-pub async fn get_sessions(
-    config: &Config,
-    mode: SessionsMode,
-    page_size: usize,
-    page_token: Option<&str>,
-    start: Option<OffsetDateTime>,
-    end: Option<OffsetDateTime>,
-    filter_ids: Option<&[Uuid]>,
-) -> io::Result<SessionsPage> {
-    if page_size == 0 {
-        return Ok(SessionsPage {
-            sessions: Vec::new(),
-            next_page_token: None,
-            scanned_files: 0,
-            reached_scan_cap: false,
-        });
-    }
-
-    let ids_set: Option<HashSet<Uuid>> = filter_ids.map(|ids| ids.iter().cloned().collect());
-    let mut root = config.codex_home.clone();
-    root.push(SESSIONS_SUBDIR);
-    if !root.exists() {
-        return Ok(SessionsPage {
-            sessions: Vec::new(),
-            next_page_token: None,
-            scanned_files: 0,
-            reached_scan_cap: false,
-        });
-    }
-
-    let anchor = page_token.and_then(parse_page_token);
-
-    let result = tokio::task::spawn_blocking({
-        let root = root.clone();
-        move || traverse_directories(root, mode, page_size, anchor, start, end, ids_set)
-    })
-    .await
-    .map_err(|e| io::Error::other(format!("join error: {e}")))??;
-    Ok(result)
-}
-
 /// Load sessions from disk using directory traversal.
 ///
 /// Directory layout: `~/.codex/sessions/YYYY/MM/DD/rollout-YYYY-MM-DDThh-mm-ss-<uuid>.jsonl`
@@ -182,8 +190,8 @@ fn traverse_directories(
     ids_set: Option<HashSet<Uuid>>,
 ) -> io::Result<SessionsPage> {
     let mut sessions = Vec::with_capacity(page_size);
-    let mut scanned = 0usize;
-    let mut after_anchor = anchor.is_none();
+    let mut scanned_files = 0usize;
+    let mut anchor_passed = anchor.is_none();
     let (anchor_ts, anchor_id) =
         anchor.unwrap_or_else(|| (OffsetDateTime::UNIX_EPOCH, Uuid::nil()));
     let interval = Interval::new(start, end);
@@ -191,7 +199,7 @@ fn traverse_directories(
     let year_dirs = collect_dirs_desc(&root, |s| s.parse::<i32>().ok())?;
 
     'outer: for (year, year_path) in year_dirs.iter() {
-        if scanned >= MAX_SCAN_FILES {
+        if scanned_files >= MAX_SCAN_FILES {
             break;
         }
         match interval.year(*year) {
@@ -201,7 +209,7 @@ fn traverse_directories(
         }
         let month_dirs = collect_dirs_desc(year_path, |s| s.parse::<u8>().ok())?;
         for (month, month_path) in month_dirs.iter() {
-            if scanned >= MAX_SCAN_FILES {
+            if scanned_files >= MAX_SCAN_FILES {
                 break 'outer;
             }
             match interval.month(*year, *month) {
@@ -211,7 +219,7 @@ fn traverse_directories(
             }
             let day_dirs = collect_dirs_desc(month_path, |s| s.parse::<u8>().ok())?;
             for (day, day_path) in day_dirs.iter() {
-                if scanned >= MAX_SCAN_FILES {
+                if scanned_files >= MAX_SCAN_FILES {
                     break 'outer;
                 }
                 match interval.day(*year, *month, *day) {
@@ -219,22 +227,22 @@ fn traverse_directories(
                     DescendDecision::StopOlder => break, // older days exhausted for this month
                     DescendDecision::Include => {}
                 }
-                let mut files = collect_files(day_path, |name_str, path| {
+                let mut day_files = collect_files(day_path, |name_str, path| {
                     if !name_str.starts_with("rollout-") || !name_str.ends_with(".jsonl") {
                         return None;
                     }
                     parse_timestamp_uuid_from_filename(name_str)
                         .map(|(ts, id)| (ts, id, name_str.to_string(), path.to_path_buf()))
                 })?;
-                files.sort_by_key(|(ts, _, _, _)| Reverse(*ts));
-                for (ts, sid, _name_str, path) in files.into_iter() {
-                    scanned += 1;
-                    if scanned >= MAX_SCAN_FILES && sessions.len() >= page_size {
+                day_files.sort_by_key(|(ts, _, _, _)| Reverse(*ts));
+                for (ts, sid, _name_str, path) in day_files.into_iter() {
+                    scanned_files += 1;
+                    if scanned_files >= MAX_SCAN_FILES && sessions.len() >= page_size {
                         break 'outer;
                     }
-                    if !after_anchor {
+                    if !anchor_passed {
                         if ts < anchor_ts || (ts == anchor_ts && sid < anchor_id) {
-                            after_anchor = true;
+                            anchor_passed = true;
                         } else {
                             continue;
                         }
@@ -260,11 +268,18 @@ fn traverse_directories(
             }
         }
     }
-    // Compute next page token if we returned exactly `page_size` sessions –
-    // in that case there *may* be more sessions after the last one we just
-    // returned. We encode the token as "<timestamp>|<uuid>", matching the
-    // `parse_page_token` format used for the incoming anchor argument.
-    let next = if sessions.len() == page_size {
+
+    let next = build_next_page_token(&sessions, page_size);
+    Ok(SessionsPage {
+        sessions,
+        next_page_token: next,
+        scanned_files,
+        reached_scan_cap: scanned_files >= MAX_SCAN_FILES,
+    })
+}
+
+fn build_next_page_token(sessions: &[Value], page_size: usize) -> Option<String> {
+    if sessions.len() == page_size {
         sessions.last().and_then(|v| {
             if let Value::Array(arr) = v {
                 if arr.len() >= 2 {
@@ -280,13 +295,7 @@ fn traverse_directories(
         })
     } else {
         None
-    };
-    Ok(SessionsPage {
-        sessions,
-        next_page_token: next,
-        scanned_files: scanned,
-        reached_scan_cap: scanned >= MAX_SCAN_FILES,
-    })
+    }
 }
 
 // Helper: collect immediate subdirectories of `parent`, parse their (string) names with `parse`,
@@ -388,10 +397,8 @@ fn load_single_session(path: &Path, mode: SessionsMode) -> io::Result<Value> {
             ]))
         }
         SessionsMode::Lite => {
-            const HEAD: usize = 5;
-            const TAIL: usize = 5;
-            let mut head: Vec<Value> = Vec::with_capacity(HEAD);
-            let mut tail: VecDeque<Value> = VecDeque::with_capacity(TAIL);
+            let mut head: Vec<Value> = Vec::with_capacity(LITE_HEAD);
+            let mut tail: VecDeque<Value> = VecDeque::with_capacity(LITE_TAIL);
             let mut last_state: Option<Value> = None;
             for line_res in reader.lines() {
                 let line = match line_res {
@@ -410,10 +417,10 @@ fn load_single_session(path: &Path, mode: SessionsMode) -> io::Result<Value> {
                     last_state = Some(v);
                     continue;
                 }
-                if head.len() < HEAD {
+                if head.len() < LITE_HEAD {
                     head.push(v);
                 } else {
-                    if tail.len() == TAIL {
+                    if tail.len() == LITE_TAIL {
                         tail.pop_front();
                     }
                     tail.push_back(v);
