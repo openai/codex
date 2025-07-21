@@ -1211,6 +1211,7 @@ async fn handle_response_item(
             name,
             arguments,
             call_id,
+            ..
         } => {
             info!("FunctionCall: {arguments}");
             Some(handle_function_call(sess, sub_id.to_string(), name, arguments, call_id).await)
@@ -2001,7 +2002,7 @@ fn format_exec_output(output: &str, exit_code: i32, duration: Duration) -> Strin
 
 fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -> Option<String> {
     responses.iter().rev().find_map(|item| {
-        if let ResponseItem::Message { role, content } = item {
+        if let ResponseItem::Message { role, content, .. } = item {
             if role == "assistant" {
                 content.iter().rev().find_map(|ci| {
                     if let ContentItem::OutputText { text } = ci {

@@ -120,10 +120,10 @@ impl ModelClient {
 
         // Request encrypted COT if we are not storing responses,
         // otherwise reasoning items will be referenced by ID
-        let include = if prompt.store {
-            vec![]
-        } else {
+        let include = if !prompt.store && reasoning.is_some() {
             vec!["reasoning.encrypted_content".to_string()]
+        } else {
+            vec![]
         };
 
         let payload = ResponsesApiRequest {
