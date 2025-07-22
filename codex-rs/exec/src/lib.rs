@@ -134,7 +134,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         // Ensure provider is OpenAI.
         if config.model_provider_id != "openai" {
             eprintln!(
-                "--flex is only supported with the built-in `openai` provider (got `{}`)",
+                "--flex-mode is only supported with the built-in `openai` provider (got `{}`)",
                 config.model_provider_id
             );
             std::process::exit(1);
@@ -147,7 +147,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             || config.model.starts_with("o4-mini-"))
         {
             eprintln!(
-                "--flex can only be used with `o3` or `o4-mini` models (got `{}`)",
+                "--flex-mode can only be used with `o3` or `o4-mini` models (got `{}`)",
                 config.model
             );
             std::process::exit(1);

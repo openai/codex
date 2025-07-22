@@ -170,6 +170,11 @@ impl HistoryCell {
                     "reasoning summaries",
                     config.model_reasoning_summary.to_string(),
                 ));
+
+                // Display Flex mode status directly under reasoning summaries when enabled.
+                if config.flex_mode {
+                    entries.push(("flex mode", "enabled".to_string()));
+                }
             }
             for (key, value) in entries {
                 lines.push(Line::from(vec![format!("{key}: ").bold(), value.into()]));

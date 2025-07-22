@@ -62,8 +62,8 @@ pub struct Cli {
     /// Enable Flex processing when using supported OpenAI models (o3 and o4-mini).
     /// This results in lower costs at the expense of higher latency and potential
     /// unavailability. Only valid when the selected provider is `openai` and the
-    /// model is `o3` or `o4-mini`.
-    #[arg(long = "flex", default_value_t = false)]
+    /// model is `o3` or `o4-mini`. Activate with `--flex-mode`
+    #[arg(long = "flex-mode", default_value_t = false)]
     pub flex: bool,
 
     /// Initial instructions for the agent. If not provided as an argument (or

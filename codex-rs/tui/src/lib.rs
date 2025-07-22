@@ -99,11 +99,11 @@ pub fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> std::io::
 
     // Apply Flex flag from CLI.
     config.flex_mode = cli.flex;
-
+    #[allow(clippy::print_stderr)]
     if config.flex_mode {
         if config.model_provider_id != "openai" {
             eprintln!(
-                "--flex is only supported with the built-in `openai` provider (got `{}`)",
+                "--flex-mode is only supported with the built-in `openai` provider (got `{}`)",
                 config.model_provider_id
             );
             std::process::exit(1);
@@ -115,7 +115,7 @@ pub fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> std::io::
             || config.model.starts_with("o4-mini-"))
         {
             eprintln!(
-                "--flex can only be used with `o3` or `o4-mini` models (got `{}`)",
+                "--flex-mode can only be used with `o3` or `o4-mini` models (got `{}`)",
                 config.model
             );
             std::process::exit(1);
