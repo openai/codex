@@ -31,6 +31,18 @@ async fn test_shell_command_interruption() {
 }
 
 async fn shell_command_interruption() -> anyhow::Result<()> {
+    // Use a cross-platform blocking command. On Windows plain `sleep` is not guaranteed to exist
+    // (MSYS/GNU coreutils may be absent) and the failure causes the tool call to finish immediately,
+    // which triggers a second model request before the test sends the explicit follow-up. That
+    // prematurely consumes the second mocked SSE response and leads to a third POST (panic: no response for 2).
+    // Powershell Start-Sleep is always available on Windows runners. On Unix we keep using `sleep`.
+    #[cfg(target_os = "windows")]
+    let shell_command = vec![
+        "powershell".to_string(),
+        "-Command".to_string(),
+        "Start-Sleep -Seconds 60".to_string(),
+    ];
+    #[cfg(not(target_os = "windows"))]
     let shell_command = vec!["sleep".to_string(), "60".to_string()];
     let workdir_for_shell_function_call = TempDir::new()?;
 
