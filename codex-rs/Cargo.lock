@@ -807,6 +807,7 @@ dependencies = [
  "toml 0.9.1",
  "tracing",
  "tracing-subscriber",
+ "uuid",
  "wiremock",
 ]
 

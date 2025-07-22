@@ -75,7 +75,7 @@ async fn includes_session_id_and_model_headers_in_request() {
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider = model_provider;
     let ctrl_c = std::sync::Arc::new(tokio::sync::Notify::new());
-    let (codex, _init_id) = Codex::spawn(config, ctrl_c.clone()).await.unwrap();
+    let (codex, _init_id, _session_id) = Codex::spawn(config, ctrl_c.clone()).await.unwrap();
 
     codex
         .submit(Op::UserInput {

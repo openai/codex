@@ -49,7 +49,8 @@ async fn spawn_codex() -> Result<Codex, CodexErr> {
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider.request_max_retries = Some(2);
     config.model_provider.stream_max_retries = Some(2);
-    let (agent, _init_id) = Codex::spawn(config, std::sync::Arc::new(Notify::new())).await?;
+    let (agent, _init_id, _session_id) =
+        Codex::spawn(config, std::sync::Arc::new(Notify::new())).await?;
 
     Ok(agent)
 }

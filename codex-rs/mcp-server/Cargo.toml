@@ -33,6 +33,7 @@ tokio = { version = "1", features = [
     "rt-multi-thread",
     "signal",
 ] }
+uuid = { version = "1", features = ["serde", "v4"] }
 
 [dev-dependencies]
 assert_cmd = "2"
