@@ -143,11 +143,7 @@ async fn includes_base_instructions_override_in_request() {
     let codex_home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&codex_home);
 
-    let instructions_file = TempDir::new().unwrap();
-    let instructions_file_path = instructions_file.path().join("instructions.md");
-    std::fs::write(&instructions_file_path, "test instructions").unwrap();
-
-    config.experimental_instructions_file = Some(instructions_file_path);
+    config.base_instructions = Some("test instructions".to_string());
     config.model_provider = model_provider;
 
     let ctrl_c = std::sync::Arc::new(tokio::sync::Notify::new());

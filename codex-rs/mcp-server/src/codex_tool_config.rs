@@ -233,6 +233,10 @@ mod tests {
                 "description": "The *initial user prompt* to start the Codex conversation.",
                 "type": "string"
               },
+              "base-instructions": {
+                "description": "The set of instructions to use instead of the default ones.",
+                "type": "string"
+              },
             },
             "required": [
               "prompt"
