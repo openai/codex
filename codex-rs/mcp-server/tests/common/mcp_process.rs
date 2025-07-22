@@ -139,14 +139,18 @@ impl McpProcess {
 
     /// Returns the id used to make the request so it can be used when
     /// correlating notifications.
-    pub async fn send_codex_tool_call(&mut self, prompt: &str) -> anyhow::Result<i64> {
+    pub async fn send_codex_tool_call(
+        &mut self,
+        cwd: Option<String>,
+        prompt: &str,
+    ) -> anyhow::Result<i64> {
         let codex_tool_call_params = CallToolRequestParams {
             name: "codex".to_string(),
             arguments: Some(serde_json::to_value(CodexToolCallParam {
+                cwd,
                 prompt: prompt.to_string(),
                 model: None,
                 profile: None,
-                cwd: None,
                 approval_policy: None,
                 sandbox: None,
                 config: None,
