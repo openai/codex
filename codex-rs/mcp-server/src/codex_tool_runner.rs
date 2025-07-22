@@ -20,6 +20,7 @@ use mcp_types::CallToolResult;
 use mcp_types::ContentBlock;
 use mcp_types::RequestId;
 use mcp_types::TextContent;
+use serde_json::json;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
@@ -175,11 +176,6 @@ async fn run_codex_tool_session_inner(
                             "error": err_event.message,
                         });
                         outgoing.send_response(request_id.clone(), result).await;
-                        // unregister the id so we don't keep it in the map
-                        running_requests_id_to_codex_uuid
-                            .lock()
-                            .await
-                            .remove(&request_id);
                         break;
                     }
                     EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {

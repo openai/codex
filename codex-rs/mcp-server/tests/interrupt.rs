@@ -34,12 +34,20 @@ async fn shell_command_interruption() -> anyhow::Result<()> {
     let workdir_for_shell_function_call = TempDir::new()?;
 
     // Create mock server with a single SSE response: the long sleep command
-    let server = create_mock_chat_completions_server(vec![create_shell_sse_response(
-        shell_command.clone(),
-        Some(workdir_for_shell_function_call.path()),
-        Some(60_000), // 60 seconds timeout in ms
-        "call_sleep",
-    )?])
+    let server = create_mock_chat_completions_server(vec![
+        create_shell_sse_response(
+            shell_command.clone(),
+            Some(workdir_for_shell_function_call.path()),
+            Some(60_000), // 60 seconds timeout in ms
+            "call_sleep",
+        )?,
+        create_shell_sse_response(
+            shell_command.clone(),
+            Some(workdir_for_shell_function_call.path()),
+            Some(60_000), // 60 seconds timeout in ms
+            "call_sleep",
+        )?,
+    ])
     .await;
 
     // Create Codex configuration
@@ -49,7 +57,13 @@ async fn shell_command_interruption() -> anyhow::Result<()> {
     timeout(DEFAULT_READ_TIMEOUT, mcp_process.initialize()).await??;
 
     // Send codex tool call that triggers "sleep 60"
-    let codex_request_id = mcp_process.send_codex_tool_call("run `sleep 60`").await?;
+    let codex_request_id = mcp_process
+        .send_codex_tool_call(None, "hi run `sleep 60`")
+        .await?;
+
+    let session_id = mcp_process
+        .read_stream_until_configured_response_message()
+        .await?;
 
     // Give the command a moment to start
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
@@ -78,6 +92,36 @@ async fn shell_command_interruption() -> anyhow::Result<()> {
         "Expected an interruption or error result, got: {codex_response:?}"
     );
 
+    let codex_reply_request_id = mcp_process
+        .send_codex_reply_tool_call(&session_id, "run `sleep 60` please")
+        .await?;
+
+    // Give the command a moment to start
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
+    // Send interrupt notification
+    mcp_process
+        .send_notification(
+            "notifications/cancelled",
+            Some(json!({ "requestId": codex_reply_request_id })),
+        )
+        .await?;
+
+    // Expect Codex to return an error or interruption response
+    let codex_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp_process.read_stream_until_response_message(RequestId::Integer(codex_reply_request_id)),
+    )
+    .await??;
+
+    assert!(
+        codex_response
+            .result
+            .as_object()
+            .map(|o| o.contains_key("error"))
+            .unwrap_or(false),
+        "Expected an interruption or error result, got: {codex_response:?}"
+    );
     Ok(())
 }
 

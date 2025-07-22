@@ -60,6 +60,8 @@ pub fn create_final_assistant_message_sse_response(message: &str) -> anyhow::Res
     Ok(sse)
 }
 
+// allow dead code
+#[allow(dead_code)]
 pub fn create_apply_patch_sse_response(
     patch_content: &str,
     call_id: &str,

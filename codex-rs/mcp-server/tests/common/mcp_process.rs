@@ -12,6 +12,7 @@ use tokio::process::ChildStdout;
 use anyhow::Context;
 use assert_cmd::prelude::*;
 use codex_mcp_server::CodexToolCallParam;
+use codex_mcp_server::CodexToolCallReplyParam;
 use mcp_types::CallToolRequestParams;
 use mcp_types::ClientCapabilities;
 use mcp_types::Implementation;
@@ -163,6 +164,25 @@ impl McpProcess {
         .await
     }
 
+    pub async fn send_codex_reply_tool_call(
+        &mut self,
+        session_id: &str,
+        prompt: &str,
+    ) -> anyhow::Result<i64> {
+        let codex_tool_call_params = CallToolRequestParams {
+            name: "codex-reply".to_string(),
+            arguments: Some(serde_json::to_value(CodexToolCallReplyParam {
+                prompt: prompt.to_string(),
+                session_id: session_id.to_string(),
+            })?),
+        };
+        self.send_request(
+            mcp_types::CallToolRequest::METHOD,
+            Some(serde_json::to_value(codex_tool_call_params)?),
+        )
+        .await
+    }
+
     async fn send_request(
         &mut self,
         method: &str,
@@ -261,6 +281,46 @@ impl McpProcess {
             }
         }
     }
+
+    pub async fn read_stream_until_configured_response_message(
+        &mut self,
+    ) -> anyhow::Result<String> {
+        loop {
+            let message = self.read_jsonrpc_message().await?;
+            eprint!("message: {message:?}");
+
+            match message {
+                JSONRPCMessage::Notification(notification) => {
+                    if notification.method == "codex/event" {
+                        if let Some(params) = notification.params {
+                            if let Some(msg) = params.get("msg") {
+                                if let Some(msg_type) = msg.get("type") {
+                                    if msg_type == "session_configured" {
+                                        if let Some(session_id) = msg.get("session_id") {
+                                            return Ok(session_id
+                                                .to_string()
+                                                .trim_matches('"')
+                                                .to_string());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                JSONRPCMessage::Request(_) => {
+                    anyhow::bail!("unexpected JSONRPCMessage::Request: {message:?}");
+                }
+                JSONRPCMessage::Error(_) => {
+                    anyhow::bail!("unexpected JSONRPCMessage::Error: {message:?}");
+                }
+                JSONRPCMessage::Response(_) => {
+                    anyhow::bail!("unexpected JSONRPCMessage::Response: {message:?}");
+                }
+            }
+        }
+    }
+
     // allow dead code
     #[allow(dead_code)]
     pub async fn send_notification(

@@ -471,12 +471,10 @@ impl MessageProcessor {
         let outgoing = self.outgoing.clone();
         let running_requests_id_to_codex_uuid = self.running_requests_id_to_codex_uuid.clone();
 
-        // Spawn an async task to handle the Codex session so that we do not
-        // block the synchronous message-processing loop.
-        task::spawn(async move {
+        let codex = {
             let session_map = session_map_mutex.lock().await;
-            let codex = match session_map.get(&session_id) {
-                Some(codex) => codex,
+            match session_map.get(&session_id).cloned() {
+                Some(c) => c,
                 None => {
                     tracing::warn!("Session not found for session_id: {session_id}");
                     let result = CallToolResult {
@@ -488,23 +486,32 @@ impl MessageProcessor {
                         is_error: Some(true),
                         structured_content: None,
                     };
-                    // unwrap_or_default is fine here because we know the result is valid JSON
                     outgoing
                         .send_response(request_id, serde_json::to_value(result).unwrap_or_default())
                         .await;
                     return;
                 }
-            };
+            }
+        };
 
-            crate::codex_tool_runner::run_codex_tool_session_reply(
-                codex.clone(),
-                outgoing,
-                request_id,
-                prompt.clone(),
-                running_requests_id_to_codex_uuid,
-                session_id,
-            )
-            .await;
+        // Spawn the long-running reply handler.
+        tokio::spawn({
+            let codex = codex.clone();
+            let outgoing = outgoing.clone();
+            let prompt = prompt.clone();
+            let running_requests_id_to_codex_uuid = running_requests_id_to_codex_uuid.clone();
+
+            async move {
+                crate::codex_tool_runner::run_codex_tool_session_reply(
+                    codex,
+                    outgoing,
+                    request_id,
+                    prompt,
+                    running_requests_id_to_codex_uuid,
+                    session_id,
+                )
+                .await;
+            }
         });
     }
 
@@ -530,7 +537,6 @@ impl MessageProcessor {
         &self,
         params: <mcp_types::CancelledNotification as mcp_types::ModelContextProtocolNotification>::Params,
     ) {
-        tracing::info!("notifications/cancelled -> params: {:?}", params);
         let request_id = params.request_id;
         // Create a stable string form early for logging and submission id.
         let request_id_string = match &request_id {
@@ -549,6 +555,7 @@ impl MessageProcessor {
                 }
             }
         };
+        tracing::info!("session_id: {session_id}");
 
         // Obtain the Codex Arc while holding the session_map lock, then release.
         let codex_arc = {
