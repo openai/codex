@@ -404,6 +404,17 @@ impl MessageProcessor {
                 Ok(params) => params,
                 Err(e) => {
                     tracing::error!("Failed to parse Codex tool call reply parameters: {e}");
+                    let result = CallToolResult {
+                        content: vec![ContentBlock::TextContent(TextContent {
+                            r#type: "text".to_owned(),
+                            text: format!("Failed to parse configuration for Codex tool: {e}"),
+                            annotations: None,
+                        })],
+                        is_error: Some(true),
+                        structured_content: None,
+                    };
+                    self.send_response::<mcp_types::CallToolRequest>(request_id, result)
+                        .await;
                     return;
                 }
             },
@@ -411,6 +422,17 @@ impl MessageProcessor {
                 tracing::error!(
                     "Missing arguments for codex-reply tool-call; the `session_id` and `prompt` fields are required."
                 );
+                let result = CallToolResult {
+                    content: vec![ContentBlock::TextContent(TextContent {
+                        r#type: "text".to_owned(),
+                        text: "Missing arguments for codex-reply tool-call; the `session_id` and `prompt` fields are required.".to_owned(),
+                        annotations: None,
+                    })],
+                    is_error: Some(true),
+                    structured_content: None,
+                };
+                self.send_response::<mcp_types::CallToolRequest>(request_id, result)
+                    .await;
                 return;
             }
         };
@@ -418,6 +440,17 @@ impl MessageProcessor {
             Ok(id) => id,
             Err(e) => {
                 tracing::error!("Failed to parse session_id: {e}");
+                let result = CallToolResult {
+                    content: vec![ContentBlock::TextContent(TextContent {
+                        r#type: "text".to_owned(),
+                        text: format!("Failed to parse session_id: {e}"),
+                        annotations: None,
+                    })],
+                    is_error: Some(true),
+                    structured_content: None,
+                };
+                self.send_response::<mcp_types::CallToolRequest>(request_id, result)
+                    .await;
                 return;
             }
         };
@@ -436,6 +469,19 @@ impl MessageProcessor {
                 Some(codex) => codex,
                 None => {
                     tracing::warn!("Session not found for session_id: {session_id}");
+                    let result = CallToolResult {
+                        content: vec![ContentBlock::TextContent(TextContent {
+                            r#type: "text".to_owned(),
+                            text: format!("Session not found for session_id: {session_id}"),
+                            annotations: None,
+                        })],
+                        is_error: Some(true),
+                        structured_content: None,
+                    };
+                    // unwrap_or_default is fine here because we know the result is valid JSON
+                    outgoing
+                        .send_response(request_id, serde_json::to_value(result).unwrap_or_default())
+                        .await;
                     return;
                 }
             };
