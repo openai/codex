@@ -669,6 +669,7 @@ dependencies = [
  "fs2",
  "futures",
  "landlock",
+ "libc",
  "maplit",
  "mcp-types",
  "mime_guess",
@@ -807,6 +808,7 @@ dependencies = [
  "toml 0.9.1",
  "tracing",
  "tracing-subscriber",
+ "uuid",
  "wiremock",
 ]
 
