@@ -2,6 +2,7 @@
 //! Tokio task. Separated from `message_processor.rs` to keep that file small
 //! and to make future feature-growth easier to manage.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -27,7 +28,9 @@ use mcp_types::TextContent;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::json;
+use tokio::sync::Mutex;
 use tracing::error;
+use uuid::Uuid;
 
 use crate::outgoing_message::OutgoingMessageSender;
 
@@ -42,8 +45,9 @@ pub async fn run_codex_tool_session(
     initial_prompt: String,
     config: CodexConfig,
     outgoing: Arc<OutgoingMessageSender>,
+    session_map: Arc<Mutex<HashMap<Uuid, Arc<Codex>>>>,
 ) {
-    let (codex, first_event, _ctrl_c) = match init_codex(config).await {
+    let (codex, first_event, _ctrl_c, session_id) = match init_codex(config).await {
         Ok(res) => res,
         Err(e) => {
             let result = CallToolResult {
@@ -60,6 +64,11 @@ pub async fn run_codex_tool_session(
         }
     };
     let codex = Arc::new(codex);
+
+    // update the session map so we can retrieve the session in a reply, and then drop it, since
+    // we no longer need it for this function
+    session_map.lock().await.insert(session_id, codex.clone());
+    drop(session_map);
 
     // Send initial SessionConfigured event.
     outgoing.send_event_as_notification(&first_event).await;
@@ -84,6 +93,37 @@ pub async fn run_codex_tool_session(
     if let Err(e) = codex.submit_with_id(submission).await {
         tracing::error!("Failed to submit initial prompt: {e}");
     }
+
+    run_codex_tool_session_inner(codex, outgoing, id).await;
+}
+
+pub async fn run_codex_tool_session_reply(
+    codex: Arc<Codex>,
+    outgoing: Arc<OutgoingMessageSender>,
+    request_id: RequestId,
+    prompt: String,
+) {
+    if let Err(e) = codex
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text { text: prompt }],
+        })
+        .await
+    {
+        tracing::error!("Failed to submit user input: {e}");
+    }
+
+    run_codex_tool_session_inner(codex, outgoing, request_id).await;
+}
+
+async fn run_codex_tool_session_inner(
+    codex: Arc<Codex>,
+    outgoing: Arc<OutgoingMessageSender>,
+    request_id: RequestId,
+) {
+    let sub_id = match &request_id {
+        RequestId::String(s) => s.clone(),
+        RequestId::Integer(n) => n.to_string(),
+    };
 
     // Stream events until the task needs to pause for user interaction or
     // completes.
@@ -128,7 +168,7 @@ pub async fn run_codex_tool_session(
 
                                 outgoing
                                     .send_error(
-                                        id.clone(),
+                                        request_id.clone(),
                                         JSONRPCErrorError {
                                             code: INVALID_PARAMS_ERROR_CODE,
                                             message,
@@ -168,7 +208,9 @@ pub async fn run_codex_tool_session(
                             is_error: None,
                             structured_content: None,
                         };
-                        outgoing.send_response(id.clone(), result.into()).await;
+                        outgoing
+                            .send_response(request_id.clone(), result.into())
+                            .await;
                         // Continue, don't break so the session continues.
                         continue;
                     }
@@ -186,7 +228,9 @@ pub async fn run_codex_tool_session(
                             is_error: None,
                             structured_content: None,
                         };
-                        outgoing.send_response(id.clone(), result.into()).await;
+                        outgoing
+                            .send_response(request_id.clone(), result.into())
+                            .await;
                         break;
                     }
                     EventMsg::SessionConfigured(_) => {
@@ -234,7 +278,9 @@ pub async fn run_codex_tool_session(
                     // structured way.
                     structured_content: None,
                 };
-                outgoing.send_response(id.clone(), result.into()).await;
+                outgoing
+                    .send_response(request_id.clone(), result.into())
+                    .await;
                 break;
             }
         }
