@@ -58,7 +58,7 @@ async fn shell_command_interruption() -> anyhow::Result<()> {
 
     // Send codex tool call that triggers "sleep 60"
     let codex_request_id = mcp_process
-        .send_codex_tool_call(None, "hi run `sleep 60`")
+        .send_codex_tool_call(None, "First Run: run `sleep 60`")
         .await?;
 
     let session_id = mcp_process
@@ -93,7 +93,7 @@ async fn shell_command_interruption() -> anyhow::Result<()> {
     );
 
     let codex_reply_request_id = mcp_process
-        .send_codex_reply_tool_call(&session_id, "run `sleep 60` please")
+        .send_codex_reply_tool_call(&session_id, "Second Run: run `sleep 60`")
         .await?;
 
     // Give the command a moment to start
