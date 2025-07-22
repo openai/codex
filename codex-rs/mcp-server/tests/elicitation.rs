@@ -189,7 +189,8 @@ async fn test_patch_approval_triggers_elicitation() {
 }
 
 async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
-    let test_file = NamedTempFile::new()?;
+    let cwd = TempDir::new()?;
+    let test_file = NamedTempFile::new_in(cwd.path())?;
     std::fs::write(&test_file, "original content\n")?;
 
     let patch_content = format!(
@@ -209,7 +210,10 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
 
     // Send a "codex" tool request that will trigger the apply_patch command
     let codex_request_id = mcp_process
-        .send_codex_tool_call(None, "please modify the test file")
+        .send_codex_tool_call(
+            Some(cwd.path().to_string_lossy().to_string()),
+            "please modify the test file",
+        )
         .await?;
     let elicitation_request = timeout(
         DEFAULT_READ_TIMEOUT,
