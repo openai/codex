@@ -39,6 +39,8 @@ pub fn create_shell_sse_response(
     Ok(sse)
 }
 
+// allow dead code
+#[allow(dead_code)]
 pub fn create_final_assistant_message_sse_response(message: &str) -> anyhow::Result<String> {
     let assistant_message = json!({
         "choices": [
