@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -16,6 +17,7 @@ use serde_json::json;
 use tracing::error;
 
 use crate::codex_tool_runner::INVALID_PARAMS_ERROR_CODE;
+use crate::outgoing_message::OutgoingMessageSender;
 
 #[derive(Debug, Serialize)]
 pub struct PatchApprovalElicitRequestParams {
@@ -29,7 +31,7 @@ pub struct PatchApprovalElicitRequestParams {
     pub codex_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub codex_grant_root: Option<PathBuf>,
-    pub codex_changes: std::collections::HashMap<PathBuf, FileChange>,
+    pub codex_changes: HashMap<PathBuf, FileChange>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -41,8 +43,8 @@ pub struct PatchApprovalResponse {
 pub(crate) async fn handle_patch_approval_request(
     reason: Option<String>,
     grant_root: Option<PathBuf>,
-    changes: std::collections::HashMap<PathBuf, FileChange>,
-    outgoing: Arc<crate::outgoing_message::OutgoingMessageSender>,
+    changes: HashMap<PathBuf, FileChange>,
+    outgoing: Arc<OutgoingMessageSender>,
     codex: Arc<Codex>,
     request_id: RequestId,
     tool_call_id: String,
@@ -113,6 +115,15 @@ pub(crate) async fn on_patch_approval_response(
         Ok(value) => value,
         Err(err) => {
             error!("request failed: {err:?}");
+            if let Err(submit_err) = codex
+                .submit(Op::PatchApproval {
+                    id: event_id.clone(),
+                    decision: ReviewDecision::Denied,
+                })
+                .await
+            {
+                error!("failed to submit denied PatchApproval after request failure: {submit_err}");
+            }
             return;
         }
     };

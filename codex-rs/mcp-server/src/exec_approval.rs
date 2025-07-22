@@ -17,7 +17,7 @@ use tracing::error;
 use crate::codex_tool_runner::INVALID_PARAMS_ERROR_CODE;
 
 /// Conforms to [`mcp_types::ElicitRequestParams`] so that it can be used as the
-/// `params` field of an [`mcp_types::ElicitRequest`].
+/// `params` field of an [`ElicitRequest`].
 #[derive(Debug, Serialize)]
 pub struct ExecApprovalElicitRequestParams {
     // These fields are required so that `params`
@@ -78,7 +78,7 @@ pub(crate) async fn handle_exec_approval_request(
         Ok(value) => value,
         Err(err) => {
             let message = format!("Failed to serialize ExecApprovalElicitRequestParams: {err}");
-            tracing::error!("{message}");
+            error!("{message}");
 
             outgoing
                 .send_error(
@@ -124,17 +124,14 @@ async fn on_exec_approval_response(
     };
 
     // Try to deserialize `value` and then make the appropriate call to `codex`.
-    let response = match serde_json::from_value::<ExecApprovalResponse>(value) {
-        Ok(response) => response,
-        Err(err) => {
-            error!("failed to deserialize ExecApprovalResponse: {err}");
-            // If we cannot deserialize the response, we deny the request to be
-            // conservative.
-            ExecApprovalResponse {
-                decision: ReviewDecision::Denied,
-            }
+    let response = serde_json::from_value::<ExecApprovalResponse>(value).unwrap_or_else(|err| {
+        error!("failed to deserialize ExecApprovalResponse: {err}");
+        // If we cannot deserialize the response, we deny the request to be
+        // conservative.
+        ExecApprovalResponse {
+            decision: ReviewDecision::Denied,
         }
-    };
+    });
 
     if let Err(err) = codex
         .submit(Op::ExecApproval {
