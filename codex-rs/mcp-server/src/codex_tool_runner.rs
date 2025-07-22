@@ -121,6 +121,7 @@ pub async fn run_codex_tool_session_reply(
         .await
     {
         tracing::error!("Failed to submit user input: {e}");
+        return;
     }
 
     run_codex_tool_session_inner(
