@@ -66,17 +66,6 @@ impl ModelClient {
         }
     }
 
-    pub(crate) fn experimental_instructions_override(&self) -> Option<String> {
-        let path = self.config.experimental_instructions_file.as_ref()?;
-        if !path.is_absolute() {
-            return None;
-        }
-        std::fs::read_to_string(path)
-            .ok()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-    }
-
     /// Dispatches to either the Responses or Chat implementation depending on
     /// the provider config.  Public callers always invoke `stream()` – the
     /// specialised helpers are private to avoid accidental misuse.

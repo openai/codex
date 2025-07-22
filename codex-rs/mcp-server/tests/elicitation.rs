@@ -4,6 +4,7 @@ use std::path::Path;
 
 use codex_core::exec::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_core::protocol::ReviewDecision;
+use codex_mcp_server::CodexToolCallParam;
 use codex_mcp_server::ExecApprovalElicitRequestParams;
 use codex_mcp_server::ExecApprovalResponse;
 use mcp_types::ElicitRequest;
@@ -74,7 +75,12 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
     // Send a "codex" tool request, which should hit the completions endpoint.
     // In turn, it should reply with a tool call, which the MCP should forward
     // as an elicitation.
-    let codex_request_id = mcp_process.send_codex_tool_call("run `git init`").await?;
+    let codex_request_id = mcp_process
+        .send_codex_tool_call(CodexToolCallParam {
+            prompt: "run `git init`".to_string(),
+            ..Default::default()
+        })
+        .await?;
     let elicitation_request = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp_process.read_stream_until_request_message(),
