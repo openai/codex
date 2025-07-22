@@ -21,6 +21,7 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::TempDir;
 use tokio::time::timeout;
+use wiremock::MockServer;
 
 use crate::common::McpProcess;
 use crate::common::create_apply_patch_sse_response;
@@ -54,12 +55,11 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
     let shell_command = vec!["git".to_string(), "init".to_string()];
     let workdir_for_shell_function_call = TempDir::new()?;
 
-    // Configure the mock server so it makes two responses:
-    // 1. The first response is a shell function call that will trigger an
-    //    elicitation request.
-    // 2. The second response is the final assistant message that should be
-    //    returned after the elicitation is approved and the command is run.
-    let server = create_mock_chat_completions_server(vec![
+    let McpHandle {
+        process: mut mcp_process,
+        _server,
+        _dir,
+    } = create_mcp_process(vec![
         create_shell_sse_response(
             shell_command.clone(),
             Some(workdir_for_shell_function_call.path()),
@@ -68,12 +68,7 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
         )?,
         create_final_assistant_message_sse_response("Enjoy your new git repo!")?,
     ])
-    .await;
-
-    let McpHandle {
-        process: mut mcp_process,
-        _dir,
-    } = create_mcp_process(server.uri()).await?;
+    .await?;
 
     // Send a "codex" tool request, which should hit the completions endpoint.
     // In turn, it should reply with a tool call, which the MCP should forward
@@ -200,18 +195,15 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
         test_file.to_string_lossy()
     );
 
-    // Configure the mock server for patch approval flow
-    // First response triggers the apply_patch command, second is the completion
-    let server = create_mock_chat_completions_server(vec![
+    let McpHandle {
+        process: mut mcp_process,
+        _server,
+        _dir,
+    } = create_mcp_process(vec![
         create_apply_patch_sse_response(&patch_content, "call1234")?,
         create_final_assistant_message_sse_response("Patch has been applied successfully!")?,
     ])
-    .await;
-
-    let McpHandle {
-        process: mut mcp_process,
-        _dir,
-    } = create_mcp_process(server.uri()).await?;
+    .await?;
 
     // Send a "codex" tool request that will trigger the apply_patch command
     let codex_request_id = mcp_process
@@ -322,16 +314,19 @@ fn create_expected_patch_approval_elicitation_request(
 
 pub struct McpHandle {
     pub process: McpProcess,
+    _server: MockServer,
     _dir: tempfile::TempDir,
 }
 
-async fn create_mcp_process(server_uri: impl AsRef<str>) -> anyhow::Result<McpHandle> {
+async fn create_mcp_process(responses: Vec<String>) -> anyhow::Result<McpHandle> {
+    let server = create_mock_chat_completions_server(responses).await;
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), server_uri.as_ref())?;
+    create_config_toml(codex_home.path(), &server.uri())?;
     let mut mcp_process = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp_process.initialize()).await??;
     Ok(McpHandle {
         process: mcp_process,
+        _server: server,
         _dir: codex_home,
     })
 }
