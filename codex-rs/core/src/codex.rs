@@ -1033,6 +1033,15 @@ async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
             }
         }
     }
+    // Flush rollout so that all recorded items for this task are durable before TaskComplete.
+    if let Some(rec) = {
+        let guard = sess.rollout.lock().unwrap();
+        guard.as_ref().cloned()
+    } {
+        if let Err(e) = rec.sync().await {
+            warn!("failed to flush rollout at task end: {e}");
+        }
+    }
     sess.remove_task(&sub_id);
     let event = Event {
         id: sub_id,
