@@ -44,6 +44,7 @@ pub struct ExecApprovalElicitRequestParams {
 pub struct ExecApprovalResponse {
     pub decision: ReviewDecision,
 }
+
 pub(crate) async fn handle_exec_approval_request(
     command: Vec<String>,
     cwd: PathBuf,
