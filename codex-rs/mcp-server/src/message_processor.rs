@@ -10,6 +10,7 @@ use crate::outgoing_message::OutgoingMessageSender;
 
 use codex_core::Codex;
 use codex_core::config::Config as CodexConfig;
+use codex_core::protocol::Submission;
 use mcp_types::CallToolRequestParams;
 use mcp_types::CallToolResult;
 use mcp_types::ClientRequest;
@@ -35,6 +36,7 @@ pub(crate) struct MessageProcessor {
     initialized: bool,
     codex_linux_sandbox_exe: Option<PathBuf>,
     session_map: Arc<Mutex<HashMap<Uuid, Arc<Codex>>>>,
+    running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, Uuid>>>,
 }
 
 impl MessageProcessor {
@@ -49,6 +51,7 @@ impl MessageProcessor {
             initialized: false,
             codex_linux_sandbox_exe,
             session_map: Arc::new(Mutex::new(HashMap::new())),
+            running_requests_id_to_codex_uuid: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -116,7 +119,7 @@ impl MessageProcessor {
     }
 
     /// Handle a fire-and-forget JSON-RPC notification.
-    pub(crate) fn process_notification(&mut self, notification: JSONRPCNotification) {
+    pub(crate) async fn process_notification(&mut self, notification: JSONRPCNotification) {
         let server_notification = match ServerNotification::try_from(notification) {
             Ok(n) => n,
             Err(e) => {
@@ -129,7 +132,7 @@ impl MessageProcessor {
         // handler so additional logic can be implemented incrementally.
         match server_notification {
             ServerNotification::CancelledNotification(params) => {
-                self.handle_cancelled_notification(params);
+                self.handle_cancelled_notification(params).await;
             }
             ServerNotification::ProgressNotification(params) => {
                 self.handle_progress_notification(params);
@@ -379,6 +382,7 @@ impl MessageProcessor {
         // Clone outgoing and session map to move into async task.
         let outgoing = self.outgoing.clone();
         let session_map = self.session_map.clone();
+        let running_requests_id_to_codex_uuid = self.running_requests_id_to_codex_uuid.clone();
 
         // Spawn an async task to handle the Codex session so that we do not
         // block the synchronous message-processing loop.
@@ -390,6 +394,7 @@ impl MessageProcessor {
                 config,
                 outgoing,
                 session_map,
+                running_requests_id_to_codex_uuid,
             )
             .await;
         });
@@ -464,13 +469,12 @@ impl MessageProcessor {
 
         // Clone outgoing and session map to move into async task.
         let outgoing = self.outgoing.clone();
+        let running_requests_id_to_codex_uuid = self.running_requests_id_to_codex_uuid.clone();
 
-        // Spawn an async task to handle the Codex session so that we do not
-        // block the synchronous message-processing loop.
-        task::spawn(async move {
+        let codex = {
             let session_map = session_map_mutex.lock().await;
-            let codex = match session_map.get(&session_id) {
-                Some(codex) => codex,
+            match session_map.get(&session_id).cloned() {
+                Some(c) => c,
                 None => {
                     tracing::warn!("Session not found for session_id: {session_id}");
                     let result = CallToolResult {
@@ -482,21 +486,32 @@ impl MessageProcessor {
                         is_error: Some(true),
                         structured_content: None,
                     };
-                    // unwrap_or_default is fine here because we know the result is valid JSON
                     outgoing
                         .send_response(request_id, serde_json::to_value(result).unwrap_or_default())
                         .await;
                     return;
                 }
-            };
+            }
+        };
 
-            crate::codex_tool_runner::run_codex_tool_session_reply(
-                codex.clone(),
-                outgoing,
-                request_id,
-                prompt.clone(),
-            )
-            .await;
+        // Spawn the long-running reply handler.
+        tokio::spawn({
+            let codex = codex.clone();
+            let outgoing = outgoing.clone();
+            let prompt = prompt.clone();
+            let running_requests_id_to_codex_uuid = running_requests_id_to_codex_uuid.clone();
+
+            async move {
+                crate::codex_tool_runner::run_codex_tool_session_reply(
+                    codex,
+                    outgoing,
+                    request_id,
+                    prompt,
+                    running_requests_id_to_codex_uuid,
+                    session_id,
+                )
+                .await;
+            }
         });
     }
 
@@ -518,11 +533,58 @@ impl MessageProcessor {
     // Notification handlers
     // ---------------------------------------------------------------------
 
-    fn handle_cancelled_notification(
+    async fn handle_cancelled_notification(
         &self,
         params: <mcp_types::CancelledNotification as mcp_types::ModelContextProtocolNotification>::Params,
     ) {
-        tracing::info!("notifications/cancelled -> params: {:?}", params);
+        let request_id = params.request_id;
+        // Create a stable string form early for logging and submission id.
+        let request_id_string = match &request_id {
+            RequestId::String(s) => s.clone(),
+            RequestId::Integer(i) => i.to_string(),
+        };
+
+        // Obtain the session_id while holding the first lock, then release.
+        let session_id = {
+            let map_guard = self.running_requests_id_to_codex_uuid.lock().await;
+            match map_guard.get(&request_id) {
+                Some(id) => *id, // Uuid is Copy
+                None => {
+                    tracing::warn!("Session not found for request_id: {}", request_id_string);
+                    return;
+                }
+            }
+        };
+        tracing::info!("session_id: {session_id}");
+
+        // Obtain the Codex Arc while holding the session_map lock, then release.
+        let codex_arc = {
+            let sessions_guard = self.session_map.lock().await;
+            match sessions_guard.get(&session_id) {
+                Some(codex) => Arc::clone(codex),
+                None => {
+                    tracing::warn!("Session not found for session_id: {session_id}");
+                    return;
+                }
+            }
+        };
+
+        // Submit interrupt to Codex.
+        let err = codex_arc
+            .submit_with_id(Submission {
+                id: request_id_string,
+                op: codex_core::protocol::Op::Interrupt,
+            })
+            .await;
+        if let Err(e) = err {
+            tracing::error!("Failed to submit interrupt to Codex: {e}");
+            return;
+        }
+        // unregister the id so we don't keep it in the map
+        self.running_requests_id_to_codex_uuid
+            .lock()
+            .await
+            .remove(&request_id);
     }
 
     fn handle_progress_notification(
