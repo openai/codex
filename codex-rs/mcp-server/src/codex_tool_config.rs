@@ -160,6 +160,47 @@ impl CodexToolCallParam {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CodexToolCallReplyParam {
+    /// The *session id* for this conversation.
+    pub session_id: String,
+
+    /// The *next user prompt* to continue the Codex conversation.
+    pub prompt: String,
+}
+
+/// Builds a `Tool` definition for the `codex-reply` tool-call.
+pub(crate) fn create_tool_for_codex_tool_call_reply_param() -> Tool {
+    let schema = SchemaSettings::draft2019_09()
+        .with(|s| {
+            s.inline_subschemas = true;
+            s.option_add_null_type = false;
+        })
+        .into_generator()
+        .into_root_schema_for::<CodexToolCallReplyParam>();
+
+    #[expect(clippy::expect_used)]
+    let schema_value =
+        serde_json::to_value(&schema).expect("Codex reply tool schema should serialise to JSON");
+
+    let tool_input_schema =
+        serde_json::from_value::<ToolInputSchema>(schema_value).unwrap_or_else(|e| {
+            panic!("failed to create Tool from schema: {e}");
+        });
+
+    Tool {
+        name: "codex-reply".to_string(),
+        title: Some("Codex Reply".to_string()),
+        input_schema: tool_input_schema,
+        output_schema: None,
+        description: Some(
+            "Continue a Codex session by providing the session id and prompt.".to_string(),
+        ),
+        annotations: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -232,6 +273,36 @@ mod tests {
               "prompt"
             ]
           }
+        });
+        assert_eq!(expected_tool_json, tool_json);
+    }
+
+    #[test]
+    fn verify_codex_tool_reply_json_schema() {
+        let tool = create_tool_for_codex_tool_call_reply_param();
+        #[expect(clippy::expect_used)]
+        let tool_json = serde_json::to_value(&tool).expect("tool serializes");
+        let expected_tool_json = serde_json::json!({
+          "description": "Continue a Codex session by providing the session id and prompt.",
+          "inputSchema": {
+            "properties": {
+              "prompt": {
+                "description": "The *next user prompt* to continue the Codex conversation.",
+                "type": "string"
+              },
+              "sessionId": {
+                "description": "The *session id* for this conversation.",
+                "type": "string"
+              },
+            },
+            "required": [
+              "prompt",
+              "sessionId",
+            ],
+            "type": "object",
+          },
+          "name": "codex-reply",
+          "title": "Codex Reply",
         });
         assert_eq!(expected_tool_json, tool_json);
     }

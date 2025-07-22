@@ -5,13 +5,16 @@ use codex_core::Codex;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
-use mcp_types::ElicitRequest;
+use mcp_types::{ElicitRequest, RequestId};
 use mcp_types::ElicitRequestParamsRequestedSchema;
+use mcp_types::JSONRPCErrorError;
 use mcp_types::ModelContextProtocolRequest;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::json;
 use tracing::error;
+
+use crate::codex_tool_runner::INVALID_PARAMS_ERROR_CODE;
 
 #[derive(Debug, Serialize)]
 pub struct PatchApprovalElicitRequestParams {
@@ -39,6 +42,7 @@ pub(crate) async fn handle_patch_approval_request(
     changes: std::collections::HashMap<PathBuf, FileChange>,
     outgoing: Arc<crate::outgoing_message::OutgoingMessageSender>,
     codex: Arc<Codex>,
+    request_id: RequestId,
     sub_id: String,
     event_id: String,
 ) {
@@ -67,6 +71,18 @@ pub(crate) async fn handle_patch_approval_request(
         Err(err) => {
             let message = format!("Failed to serialize PatchApprovalElicitRequestParams: {err}");
             tracing::error!("{message}");
+
+            outgoing
+                .send_error(
+                    request_id.clone(),
+                    JSONRPCErrorError {
+                        code: INVALID_PARAMS_ERROR_CODE,
+                        message,
+                        data: None,
+                    },
+                )
+                .await;
+
             return;
         }
     };
