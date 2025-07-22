@@ -18,7 +18,6 @@ use mcp_types::JSONRPCResponse;
 use mcp_types::ModelContextProtocolRequest;
 use mcp_types::RequestId;
 use pretty_assertions::assert_eq;
-use serde::Serialize;
 use serde_json::json;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -71,7 +70,10 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
     ])
     .await;
 
-    let mut mcp_process = create_mcp_process(server.uri()).await?;
+    let McpHandle {
+        process: mut mcp_process,
+        _dir,
+    } = create_mcp_process(server.uri()).await?;
 
     // Send a "codex" tool request, which should hit the completions endpoint.
     // In turn, it should reply with a tool call, which the MCP should forward
@@ -86,26 +88,14 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
     // This is the first request from the server, so the id should be 0 given
     // how things are currently implemented.
     let elicitation_request_id = RequestId::Integer(0);
-    let expected_message = format!(
-        "Allow Codex to run `{}` in `{}`?",
-        shlex::try_join(shell_command.iter().map(|s| s.as_ref()))?,
-        workdir_for_shell_function_call.path().to_string_lossy()
-    );
-    let expected_elicitation_request = create_elicitation_request(
+    let expected_elicitation_request = create_expected_elicitation_request(
         elicitation_request_id.clone(),
-        &ExecApprovalElicitRequestParams {
-            message: expected_message,
-            requested_schema: ElicitRequestParamsRequestedSchema {
-                r#type: "object".to_string(),
-                properties: json!({}),
-                required: None,
-            },
-            codex_elicitation: "exec-approval".to_string(),
-            codex_mcp_tool_call_id: codex_request_id.to_string(),
-            codex_event_id: "1".to_string(),
-            codex_command: shell_command.clone(),
-            codex_cwd: workdir_for_shell_function_call.path().to_path_buf(),
-        },
+        shell_command.clone(),
+        workdir_for_shell_function_call.path(),
+        codex_request_id.to_string(),
+        // Internal Codex id: empirically it is 1, but this is
+        // admittedly an internal detail that could change.
+        "1".to_string(),
     )?;
     assert_eq!(expected_elicitation_request, elicitation_request);
 
@@ -150,38 +140,36 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn create_mcp_process(server_uri: impl AsRef<str>) -> anyhow::Result<McpProcess> {
-    let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), server_uri.as_ref())?;
-    let mut mcp_process = McpProcess::new(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp_process.initialize()).await??;
-    Ok(mcp_process)
-}
-
-/// Create a Codex config that uses the mock server as the model provider.
-/// It also uses `approval_policy = "untrusted"` so that we exercise the
-/// elicitation code path for shell commands.
-fn create_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()> {
-    let config_toml = codex_home.join("config.toml");
-    std::fs::write(
-        config_toml,
-        format!(
-            r#"
-model = "mock-model"
-approval_policy = "untrusted"
-sandbox_policy = "read-only"
-
-model_provider = "mock_provider"
-
-[model_providers.mock_provider]
-name = "Mock provider for test"
-base_url = "{server_uri}/v1"
-wire_api = "chat"
-request_max_retries = 0
-stream_max_retries = 0
-"#
-        ),
-    )
+fn create_expected_elicitation_request(
+    elicitation_request_id: RequestId,
+    command: Vec<String>,
+    workdir: &Path,
+    codex_mcp_tool_call_id: String,
+    codex_event_id: String,
+) -> anyhow::Result<JSONRPCRequest> {
+    let expected_message = format!(
+        "Allow Codex to run `{}` in `{}`?",
+        shlex::try_join(command.iter().map(|s| s.as_ref()))?,
+        workdir.to_string_lossy()
+    );
+    Ok(JSONRPCRequest {
+        jsonrpc: JSONRPC_VERSION.into(),
+        id: elicitation_request_id,
+        method: ElicitRequest::METHOD.to_string(),
+        params: Some(serde_json::to_value(&ExecApprovalElicitRequestParams {
+            message: expected_message,
+            requested_schema: ElicitRequestParamsRequestedSchema {
+                r#type: "object".to_string(),
+                properties: json!({}),
+                required: None,
+            },
+            codex_elicitation: "exec-approval".to_string(),
+            codex_mcp_tool_call_id,
+            codex_event_id,
+            codex_command: command,
+            codex_cwd: workdir.to_path_buf(),
+        })?),
+    })
 }
 
 /// Test that patch approval triggers an elicitation request to the MCP and that
@@ -220,7 +208,10 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
     ])
     .await;
 
-    let mut mcp_process = create_mcp_process(server.uri()).await?;
+    let McpHandle {
+        process: mut mcp_process,
+        _dir: _,
+    } = create_mcp_process(server.uri()).await?;
 
     // Send a "codex" tool request that will trigger the apply_patch command
     let codex_request_id = mcp_process
@@ -308,9 +299,11 @@ fn create_expected_patch_approval_elicitation_request(
     }
     message_lines.push("Allow Codex to apply proposed code changes?".to_string());
 
-    create_elicitation_request(
-        elicitation_request_id,
-        &PatchApprovalElicitRequestParams {
+    Ok(JSONRPCRequest {
+        jsonrpc: JSONRPC_VERSION.into(),
+        id: elicitation_request_id,
+        method: ElicitRequest::METHOD.to_string(),
+        params: Some(serde_json::to_value(&PatchApprovalElicitRequestParams {
             message: message_lines.join("\n"),
             requested_schema: ElicitRequestParamsRequestedSchema {
                 r#type: "object".to_string(),
@@ -323,18 +316,48 @@ fn create_expected_patch_approval_elicitation_request(
             codex_reason: reason,
             codex_grant_root: grant_root,
             codex_changes: changes,
-        },
-    )
+        })?),
+    })
 }
 
-fn create_elicitation_request(
-    elicitation_request_id: RequestId,
-    params: impl Serialize,
-) -> anyhow::Result<JSONRPCRequest> {
-    Ok(JSONRPCRequest {
-        jsonrpc: JSONRPC_VERSION.into(),
-        id: elicitation_request_id,
-        method: ElicitRequest::METHOD.to_string(),
-        params: Some(serde_json::to_value(&params)?),
+pub struct McpHandle {
+    pub process: McpProcess,
+    _dir: tempfile::TempDir,
+}
+
+async fn create_mcp_process(server_uri: impl AsRef<str>) -> anyhow::Result<McpHandle> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), server_uri.as_ref())?;
+    let mut mcp_process = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp_process.initialize()).await??;
+    Ok(McpHandle {
+        process: mcp_process,
+        _dir: codex_home,
     })
+}
+
+/// Create a Codex config that uses the mock server as the model provider.
+/// It also uses `approval_policy = "untrusted"` so that we exercise the
+/// elicitation code path for shell commands.
+fn create_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()> {
+    let config_toml = codex_home.join("config.toml");
+    std::fs::write(
+        config_toml,
+        format!(
+            r#"
+model = "mock-model"
+approval_policy = "untrusted"
+sandbox_policy = "read-only"
+
+model_provider = "mock_provider"
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "{server_uri}/v1"
+wire_api = "chat"
+request_max_retries = 0
+stream_max_retries = 0
+"#
+        ),
+    )
 }
