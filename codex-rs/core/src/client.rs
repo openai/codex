@@ -151,6 +151,17 @@ impl ModelClient {
                 .json(&payload);
 
             let res = req_builder.send().await;
+            if let Ok(resp) = &res {
+                trace!(
+                    "Response status: {}, request-id: {}",
+                    resp.status(),
+                    resp.headers()
+                        .get("x-request-id")
+                        .map(|v| v.to_str().unwrap_or_default())
+                        .unwrap_or_default()
+                );
+            }
+
             match res {
                 Ok(resp) if resp.status().is_success() => {
                     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
@@ -372,6 +383,19 @@ async fn process_sse<S>(
             "response.created" => {
                 if event.response.is_some() {
                     let _ = tx_event.send(Ok(ResponseEvent::Created {})).await;
+                }
+            }
+            "response.failed" => {
+                if let Some(resp_val) = event.response {
+                    let error = resp_val
+                        .get("error")
+                        .and_then(|v| v.get("message"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("response.failed event received");
+
+                    let _ = tx_event
+                        .send(Err(CodexErr::Stream(error.to_string())))
+                        .await;
                 }
             }
             // Final response completed – includes array of output items & id

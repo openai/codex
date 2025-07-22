@@ -108,13 +108,15 @@ impl Codex {
         let (tx_sub, rx_sub) = async_channel::bounded(64);
         let (tx_event, rx_event) = async_channel::bounded(1600);
 
-        let instructions = get_user_instructions(&config).await;
+        let user_instructions = get_user_instructions(&config).await;
+
         let configure_session = Op::ConfigureSession {
             provider: config.model_provider.clone(),
             model: config.model.clone(),
             model_reasoning_effort: config.model_reasoning_effort,
             model_reasoning_summary: config.model_reasoning_summary,
-            instructions,
+            user_instructions,
+            base_instructions: config.base_instructions.clone(),
             approval_policy: config.approval_policy,
             sandbox_policy: config.sandbox_policy.clone(),
             disable_response_storage: config.disable_response_storage,
@@ -183,7 +185,8 @@ pub(crate) struct Session {
     /// the model as well as sandbox policies are resolved against this path
     /// instead of `std::env::current_dir()`.
     cwd: PathBuf,
-    instructions: Option<String>,
+    base_instructions: Option<String>,
+    user_instructions: Option<String>,
     approval_policy: AskForApproval,
     sandbox_policy: SandboxPolicy,
     shell_environment_policy: ShellEnvironmentPolicy,
@@ -577,7 +580,8 @@ async fn submission_loop(
                 model,
                 model_reasoning_effort,
                 model_reasoning_summary,
-                instructions,
+                user_instructions,
+                base_instructions,
                 approval_policy,
                 sandbox_policy,
                 disable_response_storage,
@@ -625,15 +629,17 @@ async fn submission_loop(
 
                 let rollout_recorder = match rollout_recorder {
                     Some(rec) => Some(rec),
-                    None => match RolloutRecorder::new(&config, session_id, instructions.clone())
-                        .await
-                    {
-                        Ok(r) => Some(r),
-                        Err(e) => {
-                            warn!("failed to initialise rollout recorder: {e}");
-                            None
+                    None => {
+                        match RolloutRecorder::new(&config, session_id, user_instructions.clone())
+                            .await
+                        {
+                            Ok(r) => Some(r),
+                            Err(e) => {
+                                warn!("failed to initialise rollout recorder: {e}");
+                                None
+                            }
                         }
-                    },
+                    }
                 };
 
                 let client = ModelClient::new(
@@ -699,7 +705,8 @@ async fn submission_loop(
                     client,
                     tx_event: tx_event.clone(),
                     ctrl_c: Arc::clone(&ctrl_c),
-                    instructions,
+                    user_instructions,
+                    base_instructions,
                     approval_policy,
                     sandbox_policy,
                     shell_environment_policy: config.shell_environment_policy.clone(),
@@ -1067,9 +1074,10 @@ async fn run_turn(
     let prompt = Prompt {
         input,
         prev_id,
-        user_instructions: sess.instructions.clone(),
+        user_instructions: sess.user_instructions.clone(),
         store,
         extra_tools,
+        base_instructions_override: sess.base_instructions.clone(),
     };
 
     let mut retries = 0;

@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use crate::json_to_toml::json_to_toml;
 
 /// Client-supplied configuration for a `codex` tool-call.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "kebab-case")]
 pub struct CodexToolCallParam {
     /// The *initial user prompt* to start the Codex conversation.
@@ -46,6 +46,10 @@ pub struct CodexToolCallParam {
     /// CODEX_HOME/config.toml.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<HashMap<String, serde_json::Value>>,
+
+    /// The set of instructions to use instead of the default ones.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_instructions: Option<String>,
 }
 
 /// Custom enum mirroring [`AskForApproval`], but has an extra dependency on
@@ -135,6 +139,7 @@ impl CodexToolCallParam {
             approval_policy,
             sandbox,
             config: cli_overrides,
+            base_instructions,
         } = self;
 
         // Build the `ConfigOverrides` recognised by codex-core.
@@ -146,6 +151,7 @@ impl CodexToolCallParam {
             sandbox_mode: sandbox.map(Into::into),
             model_provider: None,
             codex_linux_sandbox_exe,
+            base_instructions,
         };
 
         let cli_overrides = cli_overrides
@@ -266,6 +272,10 @@ mod tests {
               },
               "prompt": {
                 "description": "The *initial user prompt* to start the Codex conversation.",
+                "type": "string"
+              },
+              "base-instructions": {
+                "description": "The set of instructions to use instead of the default ones.",
                 "type": "string"
               },
             },
