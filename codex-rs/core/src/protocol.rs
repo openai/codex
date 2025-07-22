@@ -44,8 +44,12 @@ pub enum Op {
         model_reasoning_effort: ReasoningEffortConfig,
         model_reasoning_summary: ReasoningSummaryConfig,
 
-        /// Model instructions
-        instructions: Option<String>,
+        /// Model instructions that are appended to the base instructions.
+        user_instructions: Option<String>,
+
+        /// Base instructions override.
+        base_instructions: Option<String>,
+
         /// When to escalate for approval for execution
         approval_policy: AskForApproval,
         /// How to sandbox commands executed in the system

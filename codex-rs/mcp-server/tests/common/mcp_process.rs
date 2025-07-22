@@ -141,20 +141,11 @@ impl McpProcess {
     /// correlating notifications.
     pub async fn send_codex_tool_call(
         &mut self,
-        cwd: Option<String>,
-        prompt: &str,
+        params: CodexToolCallParam,
     ) -> anyhow::Result<i64> {
         let codex_tool_call_params = CallToolRequestParams {
             name: "codex".to_string(),
-            arguments: Some(serde_json::to_value(CodexToolCallParam {
-                cwd,
-                prompt: prompt.to_string(),
-                model: None,
-                profile: None,
-                approval_policy: None,
-                sandbox: None,
-                config: None,
-            })?),
+            arguments: Some(serde_json::to_value(params)?),
         };
         self.send_request(
             mcp_types::CallToolRequest::METHOD,

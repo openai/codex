@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use codex_core::exec::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::ReviewDecision;
+use codex_mcp_server::CodexToolCallParam;
 use codex_mcp_server::ExecApprovalElicitRequestParams;
 use codex_mcp_server::ExecApprovalResponse;
 use codex_mcp_server::PatchApprovalElicitRequestParams;
@@ -76,7 +77,10 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
     // In turn, it should reply with a tool call, which the MCP should forward
     // as an elicitation.
     let codex_request_id = mcp_process
-        .send_codex_tool_call(None, "run `git init`")
+        .send_codex_tool_call(CodexToolCallParam {
+            prompt: "run `git init`".to_string(),
+            ..Default::default()
+        })
         .await?;
     let elicitation_request = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -209,10 +213,11 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
 
     // Send a "codex" tool request that will trigger the apply_patch command
     let codex_request_id = mcp_process
-        .send_codex_tool_call(
-            Some(cwd.path().to_string_lossy().to_string()),
-            "please modify the test file",
-        )
+        .send_codex_tool_call(CodexToolCallParam {
+            cwd: Some(cwd.path().to_string_lossy().to_string()),
+            prompt: "please modify the test file".to_string(),
+            ..Default::default()
+        })
         .await?;
     let elicitation_request = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -275,6 +280,75 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
 
     let file_contents = std::fs::read_to_string(test_file.as_path())?;
     assert_eq!(file_contents, "modified content\n");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_codex_tool_passes_base_instructions() {
+    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+        println!(
+            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+        );
+        return;
+    }
+
+    // Apparently `#[tokio::test]` must return `()`, so we create a helper
+    // function that returns `Result` so we can use `?` in favor of `unwrap`.
+    if let Err(err) = codex_tool_passes_base_instructions().await {
+        panic!("failure: {err}");
+    }
+}
+
+async fn codex_tool_passes_base_instructions() -> anyhow::Result<()> {
+    #![allow(clippy::unwrap_used)]
+
+    let server =
+        create_mock_chat_completions_server(vec![create_final_assistant_message_sse_response(
+            "Enjoy!",
+        )?])
+        .await;
+
+    // Run `codex mcp` with a specific config.toml.
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    let mut mcp_process = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp_process.initialize()).await??;
+
+    // Send a "codex" tool request, which should hit the completions endpoint.
+    let codex_request_id = mcp_process
+        .send_codex_tool_call(CodexToolCallParam {
+            prompt: "How are you?".to_string(),
+            base_instructions: Some("You are a helpful assistant.".to_string()),
+            ..Default::default()
+        })
+        .await?;
+
+    let codex_response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp_process.read_stream_until_response_message(RequestId::Integer(codex_request_id)),
+    )
+    .await??;
+    assert_eq!(
+        JSONRPCResponse {
+            jsonrpc: JSONRPC_VERSION.into(),
+            id: RequestId::Integer(codex_request_id),
+            result: json!({
+                "content": [
+                    {
+                        "text": "Enjoy!",
+                        "type": "text"
+                    }
+                ]
+            }),
+        },
+        codex_response
+    );
+
+    let requests = server.received_requests().await.unwrap();
+    let request = requests[0].body_json::<serde_json::Value>().unwrap();
+    let instructions = request["messages"][0]["content"].as_str().unwrap();
+    assert!(instructions.starts_with("You are a helpful assistant."));
 
     Ok(())
 }
