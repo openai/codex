@@ -150,7 +150,7 @@ async fn includes_base_instructions_override_in_request() {
     config.model_provider = model_provider;
 
     let ctrl_c = std::sync::Arc::new(tokio::sync::Notify::new());
-    let (codex, _init_id) = Codex::spawn(config, ctrl_c.clone()).await.unwrap();
+    let (codex, ..) = Codex::spawn(config, ctrl_c.clone()).await.unwrap();
 
     codex
         .submit(Op::UserInput {

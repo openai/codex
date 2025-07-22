@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use codex_core::exec::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::ReviewDecision;
+use codex_mcp_server::CodexToolCallParam;
 use codex_mcp_server::ExecApprovalElicitRequestParams;
 use codex_mcp_server::ExecApprovalResponse;
 use codex_mcp_server::PatchApprovalElicitRequestParams;
@@ -76,7 +77,10 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
     // In turn, it should reply with a tool call, which the MCP should forward
     // as an elicitation.
     let codex_request_id = mcp_process
-        .send_codex_tool_call(None, "run `git init`")
+        .send_codex_tool_call(CodexToolCallParam {
+            prompt: "run `git init`".to_string(),
+            ..Default::default()
+        })
         .await?;
     let elicitation_request = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -209,10 +213,11 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
 
     // Send a "codex" tool request that will trigger the apply_patch command
     let codex_request_id = mcp_process
-        .send_codex_tool_call(
-            Some(cwd.path().to_string_lossy().to_string()),
-            "please modify the test file",
-        )
+        .send_codex_tool_call(CodexToolCallParam {
+            cwd: Some(cwd.path().to_string_lossy().to_string()),
+            prompt: "please modify the test file".to_string(),
+            ..Default::default()
+        })
         .await?;
     let elicitation_request = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -306,7 +311,7 @@ async fn codex_tool_passes_base_instructions() -> anyhow::Result<()> {
 
     // Run `codex mcp` with a specific config.toml.
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), server.uri())?;
+    create_config_toml(codex_home.path(), &server.uri())?;
     let mut mcp_process = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp_process.initialize()).await??;
 
@@ -347,7 +352,6 @@ async fn codex_tool_passes_base_instructions() -> anyhow::Result<()> {
 
     Ok(())
 }
-
 
 fn create_expected_patch_approval_elicitation_request(
     elicitation_request_id: RequestId,
