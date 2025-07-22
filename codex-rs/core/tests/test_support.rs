@@ -77,6 +77,7 @@ pub fn load_sse_fixture_with_id(path: impl AsRef<std::path::Path>, id: &str) -> 
         .collect()
 }
 
+#[allow(dead_code)]
 pub async fn wait_for_event<F>(
     codex: &codex_core::Codex,
     mut predicate: F,
