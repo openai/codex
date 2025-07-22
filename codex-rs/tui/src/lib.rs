@@ -65,7 +65,7 @@ pub fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> std::io::
         )
     };
 
-    let config = {
+    let mut config = {
         // Load configuration and support CLI overrides.
         let overrides = ConfigOverrides {
             model: cli.model.clone(),
@@ -96,6 +96,31 @@ pub fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> std::io::
             }
         }
     };
+
+    // Apply Flex flag from CLI.
+    config.flex_mode = cli.flex;
+
+    if config.flex_mode {
+        if config.model_provider_id != "openai" {
+            eprintln!(
+                "--flex is only supported with the built-in `openai` provider (got `{}`)",
+                config.model_provider_id
+            );
+            std::process::exit(1);
+        }
+
+        if !(config.model == "o3"
+            || config.model == "o4-mini"
+            || config.model.starts_with("o3-")
+            || config.model.starts_with("o4-mini-"))
+        {
+            eprintln!(
+                "--flex can only be used with `o3` or `o4-mini` models (got `{}`)",
+                config.model
+            );
+            std::process::exit(1);
+        }
+    }
 
     let log_dir = codex_core::config::log_dir(&config)?;
     std::fs::create_dir_all(&log_dir)?;

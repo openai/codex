@@ -53,4 +53,8 @@ pub struct Cli {
 
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
+
+    /// Enable Flex processing when using supported OpenAI models (o3 and o4-mini).
+    #[arg(long = "flex", default_value_t = false)]
+    pub flex: bool,
 }

@@ -44,6 +44,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         json: json_mode,
         sandbox_mode: sandbox_mode_cli_arg,
         prompt,
+        flex,
         config_overrides,
     } = cli;
 
@@ -121,7 +122,37 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         }
     };
 
-    let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides)?;
+    let mut config = Config::load_with_cli_overrides(cli_kv_overrides, overrides)?;
+
+    // Apply Flex flag from CLI after configuration loading as it is currently
+    // not propagated via `ConfigOverrides`.
+    config.flex_mode = flex;
+
+    // Validate Flex constraints early to fail fast instead of making an invalid
+    // API request.
+    if config.flex_mode {
+        // Ensure provider is OpenAI.
+        if config.model_provider_id != "openai" {
+            eprintln!(
+                "--flex is only supported with the built-in `openai` provider (got `{}`)",
+                config.model_provider_id
+            );
+            std::process::exit(1);
+        }
+
+        // Ensure model is o3 or o4-mini (allow snapshot suffixes).
+        if !(config.model == "o3"
+            || config.model == "o4-mini"
+            || config.model.starts_with("o3-")
+            || config.model.starts_with("o4-mini-"))
+        {
+            eprintln!(
+                "--flex can only be used with `o3` or `o4-mini` models (got `{}`)",
+                config.model
+            );
+            std::process::exit(1);
+        }
+    }
     let mut event_processor: Box<dyn EventProcessor> = if json_mode {
         Box::new(EventProcessorWithJsonOutput::new())
     } else {

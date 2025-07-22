@@ -138,6 +138,9 @@ pub(crate) struct ResponsesApiRequest<'a> {
     /// true when using the Responses API.
     pub(crate) store: bool,
     pub(crate) stream: bool,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) service_tier: Option<&'static str>,
 }
 
 use crate::config::Config;

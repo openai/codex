@@ -32,6 +32,7 @@ pub(crate) async fn stream_chat_completions(
     model: &str,
     client: &reqwest::Client,
     provider: &ModelProviderInfo,
+    flex_mode: bool,
 ) -> Result<ResponseStream> {
     // Build messages array
     let mut messages = Vec::<serde_json::Value>::new();
@@ -105,12 +106,17 @@ pub(crate) async fn stream_chat_completions(
     }
 
     let tools_json = create_tools_json_for_chat_completions_api(prompt, model)?;
-    let payload = json!({
+    let mut payload = json!({
         "model": model,
         "messages": messages,
         "stream": true,
         "tools": tools_json,
     });
+
+    if flex_mode {
+        // Inject service_tier parameter for Flex processing.
+        payload["service_tier"] = serde_json::Value::String("flex".to_string());
+    }
 
     debug!(
         "POST to {}: {}",

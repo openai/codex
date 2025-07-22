@@ -143,6 +143,9 @@ pub struct Config {
 
     /// Experimental rollout resume path (absolute path to .jsonl; undocumented).
     pub experimental_resume: Option<PathBuf>,
+
+    /// When `true`, requests to OpenAI will include `"service_tier": "flex"`.
+    pub flex_mode: bool,
 }
 
 impl Config {
@@ -333,6 +336,9 @@ pub struct ConfigToml {
 
     /// Experimental path to a file whose contents replace the built-in BASE_INSTRUCTIONS.
     pub experimental_instructions_file: Option<PathBuf>,
+
+    /// Opt-in flag for Flex processing (OpenAI service_tier="flex").
+    pub flex_mode: Option<bool>,
 }
 
 impl ConfigToml {
@@ -518,6 +524,8 @@ impl Config {
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
 
             experimental_resume,
+
+            flex_mode: cfg.flex_mode.unwrap_or(false),
         };
         Ok(config)
     }
@@ -841,6 +849,7 @@ disable_response_storage = true
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
                 experimental_resume: None,
                 base_instructions: None,
+                flex_mode: false,
             },
             o3_profile_config
         );
@@ -889,6 +898,7 @@ disable_response_storage = true
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             experimental_resume: None,
             base_instructions: None,
+                flex_mode: false,
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -952,6 +962,7 @@ disable_response_storage = true
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             experimental_resume: None,
             base_instructions: None,
+            flex_mode: false,
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);

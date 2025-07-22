@@ -59,6 +59,13 @@ pub struct Cli {
     #[arg(long = "output-last-message")]
     pub last_message_file: Option<PathBuf>,
 
+    /// Enable Flex processing when using supported OpenAI models (o3 and o4-mini).
+    /// This results in lower costs at the expense of higher latency and potential
+    /// unavailability. Only valid when the selected provider is `openai` and the
+    /// model is `o3` or `o4-mini`.
+    #[arg(long = "flex", default_value_t = false)]
+    pub flex: bool,
+
     /// Initial instructions for the agent. If not provided as an argument (or
     /// if `-` is used), instructions are read from stdin.
     #[arg(value_name = "PROMPT")]

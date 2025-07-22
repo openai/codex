@@ -79,6 +79,7 @@ impl ModelClient {
                     &self.config.model,
                     &self.client,
                     &self.provider,
+                    self.config.flex_mode,
                 )
                 .await?;
 
@@ -129,6 +130,11 @@ impl ModelClient {
             store: prompt.store,
             // TODO: make this configurable
             stream: true,
+            service_tier: if self.config.flex_mode {
+                Some("flex")
+            } else {
+                None
+            },
         };
 
         trace!(
