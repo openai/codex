@@ -9,7 +9,6 @@ mod test_support;
 use tempfile::TempDir;
 use test_support::load_default_config_for_test;
 use test_support::load_sse_fixture_with_id;
-
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
