@@ -1067,6 +1067,7 @@ async fn run_turn(
         user_instructions: sess.instructions.clone(),
         store,
         extra_tools,
+        base_instructions_override: sess.client.experimental_instructions_override(),
     };
 
     let mut retries = 0;

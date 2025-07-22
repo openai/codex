@@ -140,6 +140,10 @@ pub struct Config {
 
     /// Experimental rollout resume path (absolute path to .jsonl; undocumented).
     pub experimental_resume: Option<PathBuf>,
+
+    /// Experimental path to a file whose contents replace the built-in base instructions.
+    /// Absolute path; if missing or unreadable it is ignored.
+    pub experimental_instructions_file: Option<PathBuf>,
 }
 
 impl Config {
@@ -327,6 +331,9 @@ pub struct ConfigToml {
 
     /// Experimental rollout resume path (absolute path to .jsonl; undocumented).
     pub experimental_resume: Option<PathBuf>,
+
+    /// Experimental path to a file whose contents replace the built-in BASE_INSTRUCTIONS.
+    pub experimental_instructions_file: Option<PathBuf>,
 }
 
 impl ConfigToml {
@@ -456,6 +463,7 @@ impl Config {
         });
 
         let experimental_resume = cfg.experimental_resume;
+        let experimental_instructions_file = cfg.experimental_instructions_file;
 
         let config = Self {
             model,
@@ -505,6 +513,7 @@ impl Config {
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
 
             experimental_resume,
+            experimental_instructions_file,
         };
         Ok(config)
     }
@@ -818,6 +827,7 @@ disable_response_storage = true
                 model_supports_reasoning_summaries: false,
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
                 experimental_resume: None,
+                experimental_instructions_file: None,
             },
             o3_profile_config
         );
@@ -865,6 +875,7 @@ disable_response_storage = true
             model_supports_reasoning_summaries: false,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             experimental_resume: None,
+            experimental_instructions_file: None,
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -927,6 +938,7 @@ disable_response_storage = true
             model_supports_reasoning_summaries: false,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             experimental_resume: None,
+            experimental_instructions_file: None,
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);

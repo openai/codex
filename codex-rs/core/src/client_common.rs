@@ -34,11 +34,18 @@ pub struct Prompt {
     /// the "fully qualified" tool name (i.e., prefixed with the server name),
     /// which should be reported to the model in place of Tool::name.
     pub extra_tools: HashMap<String, mcp_types::Tool>,
+
+    /// Optional override for the built-in BASE_INSTRUCTIONS.
+    pub base_instructions_override: Option<String>,
 }
 
 impl Prompt {
     pub(crate) fn get_full_instructions(&self, model: &str) -> Cow<'_, str> {
-        let mut sections: Vec<&str> = vec![BASE_INSTRUCTIONS];
+        let base = self
+            .base_instructions_override
+            .as_deref()
+            .unwrap_or(BASE_INSTRUCTIONS);
+        let mut sections: Vec<&str> = vec![base];
         if let Some(ref user) = self.user_instructions {
             sections.push(user);
         }
