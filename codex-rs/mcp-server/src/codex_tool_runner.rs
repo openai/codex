@@ -113,7 +113,7 @@ async fn run_codex_tool_session_inner(
     outgoing: Arc<OutgoingMessageSender>,
     request_id: RequestId,
 ) {
-    let sub_id = match &request_id {
+    let request_id_str = match &request_id {
         RequestId::String(s) => s.clone(),
         RequestId::Integer(n) => n.to_string(),
     };
@@ -137,7 +137,7 @@ async fn run_codex_tool_session_inner(
                             outgoing.clone(),
                             codex.clone(),
                             request_id.clone(),
-                            sub_id.clone(),
+                            request_id_str.clone(),
                             event.id.clone(),
                         )
                         .await;
@@ -155,7 +155,7 @@ async fn run_codex_tool_session_inner(
                             outgoing.clone(),
                             codex.clone(),
                             request_id.clone(),
-                            sub_id.clone(),
+                            request_id_str.clone(),
                             event.id.clone(),
                         )
                         .await;

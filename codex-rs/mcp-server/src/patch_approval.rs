@@ -5,10 +5,10 @@ use codex_core::Codex;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
-use mcp_types::{ElicitRequest, RequestId};
 use mcp_types::ElicitRequestParamsRequestedSchema;
 use mcp_types::JSONRPCErrorError;
 use mcp_types::ModelContextProtocolRequest;
+use mcp_types::{ElicitRequest, RequestId};
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::json;
@@ -36,6 +36,7 @@ pub struct PatchApprovalResponse {
     pub decision: ReviewDecision,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_patch_approval_request(
     reason: Option<String>,
     grant_root: Option<PathBuf>,
@@ -43,7 +44,7 @@ pub(crate) async fn handle_patch_approval_request(
     outgoing: Arc<crate::outgoing_message::OutgoingMessageSender>,
     codex: Arc<Codex>,
     request_id: RequestId,
-    sub_id: String,
+    tool_call_id: String,
     event_id: String,
 ) {
     let mut message_lines = Vec::new();
@@ -60,7 +61,7 @@ pub(crate) async fn handle_patch_approval_request(
             required: None,
         },
         codex_elicitation: "patch-approval".to_string(),
-        codex_mcp_tool_call_id: sub_id.clone(),
+        codex_mcp_tool_call_id: tool_call_id.clone(),
         codex_event_id: event_id.clone(),
         codex_reason: reason,
         codex_grant_root: grant_root,
@@ -70,7 +71,7 @@ pub(crate) async fn handle_patch_approval_request(
         Ok(value) => value,
         Err(err) => {
             let message = format!("Failed to serialize PatchApprovalElicitRequestParams: {err}");
-            tracing::error!("{message}");
+            error!("{message}");
 
             outgoing
                 .send_error(
