@@ -329,9 +329,15 @@ fn create_expected_patch_approval_elicitation_request(
     })
 }
 
+/// This handle is used to ensure that the MockServer and TempDir are not dropped while
+/// the McpProcess is still running.
 pub struct McpHandle {
     pub process: McpProcess,
-    _server: MockServer,
+    /// Retain the server for the lifetime of the McpProcess.
+    #[allow(dead_code)]
+    server: MockServer,
+    /// Retain the temporary directory for the lifetime of the McpProcess.
+    #[allow(dead_code)]
     _dir: TempDir,
 }
 
