@@ -99,15 +99,12 @@ pub(crate) async fn on_patch_approval_response(
         }
     };
 
-    let response = match serde_json::from_value::<PatchApprovalResponse>(value) {
-        Ok(response) => response,
-        Err(err) => {
-            error!("failed to deserialize PatchApprovalResponse: {err}");
-            PatchApprovalResponse {
-                decision: ReviewDecision::Denied,
-            }
+    let response = serde_json::from_value::<PatchApprovalResponse>(value).unwrap_or_else(|err| {
+        error!("failed to deserialize PatchApprovalResponse: {err}");
+        PatchApprovalResponse {
+            decision: ReviewDecision::Denied,
         }
-    };
+    });
 
     if let Err(err) = codex
         .submit(Op::PatchApproval {

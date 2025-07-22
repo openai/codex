@@ -1,7 +1,9 @@
 mod common;
 
 use std::collections::HashMap;
+use std::env;
 use std::path::Path;
+use std::path::PathBuf;
 
 use codex_core::exec::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_core::protocol::FileChange;
@@ -36,7 +38,7 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 /// command, as expected.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_shell_command_approval_triggers_elicitation() {
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+    if env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!(
             "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
         );
@@ -171,7 +173,7 @@ fn create_expected_elicitation_request(
 /// sending the approval applies the patch, as expected.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_patch_approval_triggers_elicitation() {
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+    if env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!(
             "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
         );
@@ -183,16 +185,33 @@ async fn test_patch_approval_triggers_elicitation() {
     }
 }
 
-async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
-    // Use a hard-coded path that should be outside writable roots
-    let temp_dir = TempDir::new()?;
-    let test_file = temp_dir.path().join("test_patch_file.txt");
-    std::fs::write(&test_file, "original content")?;
+struct TempCwdFile {
+    path: PathBuf,
+}
 
-    // Create the patch content in the V4A format expected by apply_patch
+impl TempCwdFile {
+    fn new(file_name: &str, content: &str) -> anyhow::Result<Self> {
+        let home = env::var("HOME")?;
+        let dot_codex = PathBuf::from(home).join(".codex");
+        std::fs::create_dir_all(&dot_codex)?;
+        let path = dot_codex.join(file_name);
+        std::fs::write(&path, content)?;
+        Ok(Self { path })
+    }
+}
+
+impl Drop for TempCwdFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
+    let test_file = TempCwdFile::new("test_patch_file.txt", "original content")?;
+
     let patch_content = format!(
         "*** Begin Patch\n*** Update File: {}\n-original content\n+modified content\n*** End Patch",
-        test_file.to_string_lossy()
+        test_file.path.to_string_lossy()
     );
 
     let McpHandle {
@@ -215,13 +234,11 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
     )
     .await??;
 
-    // This is the first request from the server, so the id should be 0
     let elicitation_request_id = RequestId::Integer(0);
 
-    // Create the expected changes for the elicitation request
     let mut expected_changes = HashMap::new();
     expected_changes.insert(
-        test_file.clone(),
+        test_file.path.clone(),
         FileChange::Update {
             unified_diff:
                 "@@ -1 +1 @@\n-original content\n\\ No newline at end of file\n+modified content\n"
@@ -272,15 +289,16 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
         codex_response
     );
 
-    // Note: No file cleanup needed as we didn't create the file
+    let file_contents = std::fs::read_to_string(&test_file.path)?;
+    assert_eq!(file_contents, "modified content");
 
     Ok(())
 }
 
 fn create_expected_patch_approval_elicitation_request(
     elicitation_request_id: RequestId,
-    changes: HashMap<std::path::PathBuf, FileChange>,
-    grant_root: Option<std::path::PathBuf>,
+    changes: HashMap<PathBuf, FileChange>,
+    grant_root: Option<PathBuf>,
     reason: Option<String>,
     codex_mcp_tool_call_id: String,
     codex_event_id: String,
@@ -315,7 +333,7 @@ fn create_expected_patch_approval_elicitation_request(
 pub struct McpHandle {
     pub process: McpProcess,
     _server: MockServer,
-    _dir: tempfile::TempDir,
+    _dir: TempDir,
 }
 
 async fn create_mcp_process(responses: Vec<String>) -> anyhow::Result<McpHandle> {

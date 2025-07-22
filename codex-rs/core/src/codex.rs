@@ -1685,6 +1685,7 @@ async fn apply_patch(
     call_id: String,
     action: ApplyPatchAction,
 ) -> ResponseInputItem {
+    eprintln!("[GABE] codex#apply_patch {action:?}");
     let writable_roots_snapshot = {
         let guard = sess.writable_roots.lock().unwrap();
         guard.clone()
@@ -1727,8 +1728,10 @@ async fn apply_patch(
         }
     };
 
+
     // Verify write permissions before touching the filesystem.
     let writable_snapshot = { sess.writable_roots.lock().unwrap().clone() };
+    eprintln!("[GABE] codex#apply_patch auto_approved: {auto_approved} {writable_snapshot:?}");
 
     if let Some(offending) = first_offending_path(&action, &writable_snapshot, &sess.cwd) {
         let root = offending.parent().unwrap_or(&offending).to_path_buf();
@@ -1738,12 +1741,16 @@ async fn apply_patch(
             root.display()
         ));
 
+        eprintln!("[GABE] codex#apply_patch Calling request_patch_approval");
         let rx = sess
             .request_patch_approval(sub_id.clone(), &action, reason.clone(), Some(root.clone()))
             .await;
 
+        eprintln!("[GABE] codex#apply_patch Waiting for rx result");
+        let rx_result = rx.await.unwrap_or_default();
+        eprintln!("[GABE] codex#apply_patch rx_result: {rx_result:?}");
         if !matches!(
-            rx.await.unwrap_or_default(),
+            rx_result,
             ReviewDecision::Approved | ReviewDecision::ApprovedForSession
         ) {
             return ResponseInputItem::FunctionCallOutput {
@@ -1848,6 +1855,7 @@ async fn apply_patch(
 
     // Emit PatchApplyEnd event.
     let success_flag = result.is_ok();
+    eprintln!("[GABE] codex#apply_patch result: {result:?}");
     let _ = sess
         .tx_event
         .send(Event {
@@ -1915,9 +1923,13 @@ fn first_offending_path(
         }
 
         if !allowed {
+            eprintln!("[GABE] codex#first_offending_path: found offending path {abs:?}");
             return Some(candidate.clone());
+        } else {
+            eprintln!("[GABE] codex#first_offending_path: path {abs:?} is allowed");
         }
     }
+    eprintln!("[GABE] codex#first_offending_path: no offending paths found {writable_roots:?}");
     None
 }
 
@@ -1965,6 +1977,8 @@ fn apply_changes_from_apply_patch(action: &ApplyPatchAction) -> anyhow::Result<A
     let mut added: Vec<PathBuf> = Vec::new();
     let mut modified: Vec<PathBuf> = Vec::new();
     let mut deleted: Vec<PathBuf> = Vec::new();
+
+    eprintln!("[GABE] codex#apply_changes_from_apply_patch {action:?}");
 
     let changes = action.changes();
     for (path, change) in changes {
