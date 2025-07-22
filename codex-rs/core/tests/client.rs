@@ -100,7 +100,10 @@ async fn includes_session_id_and_model_headers_in_request() {
     let originator = request.headers.get("originator").unwrap();
 
     assert!(current_session_id.is_some());
-    assert_eq!(request_body.to_str().unwrap(), &current_session_id.unwrap());
+    assert_eq!(
+        request_body.to_str().unwrap(),
+        current_session_id.as_ref().unwrap()
+    );
     assert_eq!(originator.to_str().unwrap(), "codex_cli_rs");
 }
 
