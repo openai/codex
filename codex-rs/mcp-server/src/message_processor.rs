@@ -2,9 +2,12 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::codex_tool_config::CodexToolCallParam;
-use crate::codex_tool_config::CodexToolCallReplyParam;
-use crate::codex_tool_config::create_tool_for_codex_tool_call_param;
+use crate::codex_tool_config::{
+    CodexToolCallParam,
+    CodexToolCallReplyParam,
+    create_tool_for_codex_tool_call_param,
+    create_tool_for_codex_tool_call_reply_param,
+};
 use crate::outgoing_message::OutgoingMessageSender;
 
 use codex_core::Codex;
@@ -279,7 +282,10 @@ impl MessageProcessor {
     ) {
         tracing::trace!("tools/list -> {params:?}");
         let result = ListToolsResult {
-            tools: vec![create_tool_for_codex_tool_call_param()],
+            tools: vec![
+                create_tool_for_codex_tool_call_param(),
+                create_tool_for_codex_tool_call_reply_param(),
+            ],
             next_cursor: None,
         };
 
