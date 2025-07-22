@@ -3,6 +3,7 @@ mod common;
 use std::path::Path;
 
 use codex_core::exec::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use codex_mcp_server::CodexToolCallParam;
 use mcp_types::JSONRPCResponse;
 use mcp_types::RequestId;
 use serde_json::json;
@@ -58,7 +59,16 @@ async fn shell_command_interruption() -> anyhow::Result<()> {
 
     // Send codex tool call that triggers "sleep 60"
     let codex_request_id = mcp_process
-        .send_codex_tool_call(None, "First Run: run `sleep 60`")
+        .send_codex_tool_call(CodexToolCallParam {
+            cwd: None,
+            prompt: "First Run: run `sleep 60`".to_string(),
+            model: None,
+            profile: None,
+            approval_policy: None,
+            sandbox: None,
+            config: None,
+            base_instructions: None,
+        })
         .await?;
 
     let session_id = mcp_process
