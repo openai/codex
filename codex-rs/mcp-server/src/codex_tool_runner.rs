@@ -81,7 +81,10 @@ pub async fn run_codex_tool_session(
         RequestId::String(s) => s.clone(),
         RequestId::Integer(n) => n.to_string(),
     };
-
+    {
+        let mut running_requests_id_to_codex_uuid = running_requests_id_to_codex_uuid.lock().await;
+        running_requests_id_to_codex_uuid.insert(id.clone(), session_id);
+    }
     let submission = Submission {
         id: sub_id.clone(),
         op: Op::UserInput {
@@ -93,6 +96,12 @@ pub async fn run_codex_tool_session(
 
     if let Err(e) = codex.submit_with_id(submission).await {
         tracing::error!("Failed to submit initial prompt: {e}");
+        // unregister the id so we don't keep it in the map
+        {
+            let mut running_requests_id_to_codex_uuid =
+                running_requests_id_to_codex_uuid.lock().await;
+            running_requests_id_to_codex_uuid.remove(&id);
+        }
         return;
     }
 
@@ -114,6 +123,10 @@ pub async fn run_codex_tool_session_reply(
     running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, Uuid>>>,
     session_id: Uuid,
 ) {
+    {
+        let mut running_requests_id_to_codex_uuid = running_requests_id_to_codex_uuid.lock().await;
+        running_requests_id_to_codex_uuid.insert(request_id.clone(), session_id);
+    }
     if let Err(e) = codex
         .submit(Op::UserInput {
             items: vec![InputItem::Text { text: prompt }],
@@ -121,6 +134,12 @@ pub async fn run_codex_tool_session_reply(
         .await
     {
         tracing::error!("Failed to submit user input: {e}");
+        // unregister the id so we don't keep it in the map
+        {
+            let mut running_requests_id_to_codex_uuid =
+                running_requests_id_to_codex_uuid.lock().await;
+            running_requests_id_to_codex_uuid.remove(&request_id);
+        }
         return;
     }
 
@@ -145,10 +164,6 @@ async fn run_codex_tool_session_inner(
         RequestId::String(s) => s.clone(),
         RequestId::Integer(n) => n.to_string(),
     };
-    {
-        let mut running_requests_id_to_codex_uuid = running_requests_id_to_codex_uuid.lock().await;
-        running_requests_id_to_codex_uuid.insert(request_id.clone(), session_id);
-    }
 
     // Stream events until the task needs to pause for user interaction or
     // completes.
