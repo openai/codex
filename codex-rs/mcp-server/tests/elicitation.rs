@@ -210,7 +210,7 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
 
     let McpHandle {
         process: mut mcp_process,
-        _dir: _,
+        _dir,
     } = create_mcp_process(server.uri()).await?;
 
     // Send a "codex" tool request that will trigger the apply_patch command
