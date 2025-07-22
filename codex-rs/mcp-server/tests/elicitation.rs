@@ -21,6 +21,7 @@ use mcp_types::ModelContextProtocolRequest;
 use mcp_types::RequestId;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use tempfile::NamedTempFile;
 use tempfile::TempDir;
 use tokio::time::timeout;
 use wiremock::MockServer;
@@ -59,8 +60,8 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
 
     let McpHandle {
         process: mut mcp_process,
-        _server,
-        _dir,
+        server: _server,
+        dir: _dir,
     } = create_mcp_process(vec![
         create_shell_sse_response(
             shell_command.clone(),
@@ -75,7 +76,9 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
     // Send a "codex" tool request, which should hit the completions endpoint.
     // In turn, it should reply with a tool call, which the MCP should forward
     // as an elicitation.
-    let codex_request_id = mcp_process.send_codex_tool_call("run `git init`").await?;
+    let codex_request_id = mcp_process
+        .send_codex_tool_call(None, "run `git init`")
+        .await?;
     let elicitation_request = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp_process.read_stream_until_request_message(),
@@ -185,38 +188,19 @@ async fn test_patch_approval_triggers_elicitation() {
     }
 }
 
-struct TempCwdFile {
-    path: PathBuf,
-}
-
-impl TempCwdFile {
-    fn new(file_name: &str, content: &str) -> anyhow::Result<Self> {
-        // This file must be in a path that is a writable root on both macos and linux.
-        // TmpDir is writable by default on macos but not linux.
-        let path = env::current_dir()?.join(file_name);
-        std::fs::write(&path, content)?;
-        Ok(Self { path })
-    }
-}
-
-impl Drop for TempCwdFile {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
-    }
-}
-
 async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
-    let test_file = TempCwdFile::new("test_patch_file.txt", "original content")?;
+    let test_file = NamedTempFile::new()?;
+    std::fs::write(&test_file, "original content\n")?;
 
     let patch_content = format!(
         "*** Begin Patch\n*** Update File: {}\n-original content\n+modified content\n*** End Patch",
-        test_file.path.to_string_lossy()
+        test_file.path().to_string_lossy()
     );
 
     let McpHandle {
         process: mut mcp_process,
-        _server,
-        _dir,
+        server: _server,
+        dir: _dir,
     } = create_mcp_process(vec![
         create_apply_patch_sse_response(&patch_content, "call1234")?,
         create_final_assistant_message_sse_response("Patch has been applied successfully!")?,
@@ -225,7 +209,7 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
 
     // Send a "codex" tool request that will trigger the apply_patch command
     let codex_request_id = mcp_process
-        .send_codex_tool_call("please modify the test file")
+        .send_codex_tool_call(None, "please modify the test file")
         .await?;
     let elicitation_request = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -237,11 +221,9 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
 
     let mut expected_changes = HashMap::new();
     expected_changes.insert(
-        test_file.path.clone(),
+        test_file.path().to_path_buf(),
         FileChange::Update {
-            unified_diff:
-                "@@ -1 +1 @@\n-original content\n\\ No newline at end of file\n+modified content\n"
-                    .to_string(),
+            unified_diff: "@@ -1 +1 @@\n-original content\n+modified content\n".to_string(),
             move_path: None,
         },
     );
@@ -288,7 +270,7 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
         codex_response
     );
 
-    let file_contents = std::fs::read_to_string(&test_file.path)?;
+    let file_contents = std::fs::read_to_string(test_file.path())?;
     assert_eq!(file_contents, "modified content\n");
 
     Ok(())
@@ -338,7 +320,7 @@ pub struct McpHandle {
     server: MockServer,
     /// Retain the temporary directory for the lifetime of the McpProcess.
     #[allow(dead_code)]
-    _dir: TempDir,
+    dir: TempDir,
 }
 
 async fn create_mcp_process(responses: Vec<String>) -> anyhow::Result<McpHandle> {
@@ -349,8 +331,8 @@ async fn create_mcp_process(responses: Vec<String>) -> anyhow::Result<McpHandle>
     timeout(DEFAULT_READ_TIMEOUT, mcp_process.initialize()).await??;
     Ok(McpHandle {
         process: mcp_process,
-        _server: server,
-        _dir: codex_home,
+        server,
+        dir: codex_home,
     })
 }
 
