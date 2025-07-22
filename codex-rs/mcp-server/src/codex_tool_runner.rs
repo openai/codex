@@ -75,10 +75,10 @@ pub async fn run_codex_tool_session(
         RequestId::String(s) => s.clone(),
         RequestId::Integer(n) => n.to_string(),
     };
-    {
-        let mut running_requests_id_to_codex_uuid = running_requests_id_to_codex_uuid.lock().await;
-        running_requests_id_to_codex_uuid.insert(id.clone(), session_id);
-    }
+    running_requests_id_to_codex_uuid
+        .lock()
+        .await
+        .insert(id.clone(), session_id);
     let submission = Submission {
         id: sub_id.clone(),
         op: Op::UserInput {
