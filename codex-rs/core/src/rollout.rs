@@ -63,10 +63,7 @@ pub(crate) struct RolloutRecorder {
 enum RolloutCmd {
     AddItems(Vec<ResponseItem>),
     UpdateState(SessionStateSnapshot),
-    Sync {
-        exit: bool,
-        ack: oneshot::Sender<()>,
-    },
+    Sync { ack: oneshot::Sender<()> },
 }
 
 impl RolloutRecorder {
@@ -206,34 +203,9 @@ impl RolloutRecorder {
         Ok((Self { tx }, saved))
     }
 
-    pub async fn sync(&self) -> std::io::Result<()> {
-        let (tx_done, rx_done) = oneshot::channel();
-        if let Err(e) = self
-            .tx
-            .send(RolloutCmd::Sync {
-                exit: false,
-                ack: tx_done,
-            })
-            .await
-        {
-            warn!("failed to send rollout sync command: {e}");
-            return Ok(());
-        }
-        rx_done
-            .await
-            .map_err(|e| IoError::other(format!("failed waiting for rollout sync: {e}")))
-    }
-
     pub async fn shutdown(&self) -> std::io::Result<()> {
         let (tx_done, rx_done) = oneshot::channel();
-        if let Err(e) = self
-            .tx
-            .send(RolloutCmd::Sync {
-                exit: true,
-                ack: tx_done,
-            })
-            .await
-        {
+        if let Err(e) = self.tx.send(RolloutCmd::Sync { ack: tx_done }).await {
             warn!("failed to send rollout shutdown command: {e}");
             return Ok(());
         }
@@ -335,14 +307,11 @@ async fn rollout_writer(
                     let _ = file.flush().await;
                 }
             }
-            RolloutCmd::Sync { exit, ack } => {
+            RolloutCmd::Sync { ack } => {
                 if let Err(e) = file.flush().await {
                     warn!("Failed to flush on sync: {e}");
                 }
                 let _ = ack.send(());
-                if exit {
-                    break;
-                }
             }
         }
     }

@@ -469,6 +469,7 @@ impl ChatWidget<'_> {
             self.reasoning_buffer.clear();
             false
         } else if self.bottom_pane.ctrl_c_quit_hint_visible() {
+            self.submit_op(Op::Shutdown);
             true
         } else {
             self.bottom_pane.show_ctrl_c_quit_hint();

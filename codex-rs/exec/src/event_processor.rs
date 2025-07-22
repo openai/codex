@@ -1,15 +1,19 @@
+use std::path::Path;
+
 use codex_common::summarize_sandbox_policy;
 use codex_core::WireApi;
 use codex_core::config::Config;
 use codex_core::model_supports_reasoning_summaries;
 use codex_core::protocol::Event;
 
+use crate::event_processor_with_human_output::CodexStatus;
+
 pub(crate) trait EventProcessor {
     /// Print summary of effective configuration and user prompt.
     fn print_config_summary(&mut self, config: &Config, prompt: &str);
 
     /// Handle a single event emitted by the agent.
-    fn process_event(&mut self, event: Event);
+    fn process_event(&mut self, event: Event, last_message_file: Option<&Path>) -> CodexStatus;
 }
 
 pub(crate) fn create_config_summary_entries(config: &Config) -> Vec<(&'static str, String)> {
