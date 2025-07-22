@@ -21,7 +21,6 @@ use mcp_types::ModelContextProtocolRequest;
 use mcp_types::RequestId;
 use pretty_assertions::assert_eq;
 use serde_json::json;
-use tempfile::NamedTempFile;
 use tempfile::TempDir;
 use tokio::time::timeout;
 use wiremock::MockServer;
@@ -190,12 +189,12 @@ async fn test_patch_approval_triggers_elicitation() {
 
 async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
     let cwd = TempDir::new()?;
-    let test_file = NamedTempFile::new_in(cwd.path())?;
+    let test_file = cwd.path().join("destination_file.txt");
     std::fs::write(&test_file, "original content\n")?;
 
     let patch_content = format!(
         "*** Begin Patch\n*** Update File: {}\n-original content\n+modified content\n*** End Patch",
-        test_file.path().to_string_lossy()
+        test_file.as_path().to_string_lossy()
     );
 
     let McpHandle {
@@ -225,7 +224,7 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
 
     let mut expected_changes = HashMap::new();
     expected_changes.insert(
-        test_file.path().to_path_buf(),
+        test_file.as_path().to_path_buf(),
         FileChange::Update {
             unified_diff: "@@ -1 +1 @@\n-original content\n+modified content\n".to_string(),
             move_path: None,
@@ -274,7 +273,7 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
         codex_response
     );
 
-    let file_contents = std::fs::read_to_string(test_file.path())?;
+    let file_contents = std::fs::read_to_string(test_file.as_path())?;
     assert_eq!(file_contents, "modified content\n");
 
     Ok(())
