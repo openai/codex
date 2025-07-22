@@ -46,6 +46,7 @@ pub async fn run_codex_tool_session(
     config: CodexConfig,
     outgoing: Arc<OutgoingMessageSender>,
     session_map: Arc<Mutex<HashMap<Uuid, Arc<Codex>>>>,
+    running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, Uuid>>>,
 ) {
     let (codex, first_event, _ctrl_c, session_id) = match init_codex(config).await {
         Ok(res) => res,
@@ -92,9 +93,17 @@ pub async fn run_codex_tool_session(
 
     if let Err(e) = codex.submit_with_id(submission).await {
         tracing::error!("Failed to submit initial prompt: {e}");
+        return;
     }
 
-    run_codex_tool_session_inner(codex, outgoing, id).await;
+    run_codex_tool_session_inner(
+        codex,
+        outgoing,
+        id,
+        running_requests_id_to_codex_uuid,
+        session_id,
+    )
+    .await;
 }
 
 pub async fn run_codex_tool_session_reply(
@@ -102,6 +111,8 @@ pub async fn run_codex_tool_session_reply(
     outgoing: Arc<OutgoingMessageSender>,
     request_id: RequestId,
     prompt: String,
+    running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, Uuid>>>,
+    session_id: Uuid,
 ) {
     if let Err(e) = codex
         .submit(Op::UserInput {
@@ -112,18 +123,31 @@ pub async fn run_codex_tool_session_reply(
         tracing::error!("Failed to submit user input: {e}");
     }
 
-    run_codex_tool_session_inner(codex, outgoing, request_id).await;
+    run_codex_tool_session_inner(
+        codex,
+        outgoing,
+        request_id,
+        running_requests_id_to_codex_uuid,
+        session_id,
+    )
+    .await;
 }
 
 async fn run_codex_tool_session_inner(
     codex: Arc<Codex>,
     outgoing: Arc<OutgoingMessageSender>,
     request_id: RequestId,
+    running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, Uuid>>>,
+    session_id: Uuid,
 ) {
     let sub_id = match &request_id {
         RequestId::String(s) => s.clone(),
         RequestId::Integer(n) => n.to_string(),
     };
+    {
+        let mut running_requests_id_to_codex_uuid = running_requests_id_to_codex_uuid.lock().await;
+        running_requests_id_to_codex_uuid.insert(request_id.clone(), session_id);
+    }
 
     // Stream events until the task needs to pause for user interaction or
     // completes.
@@ -198,6 +222,22 @@ async fn run_codex_tool_session_inner(
                         // Continue, don't break so the session continues.
                         continue;
                     }
+                    EventMsg::Error(err_event) => {
+                        // Return a response to conclude the tool call when the Codex session reports an error (e.g., interruption).
+                        let result = json!({
+                            "error": err_event.message,
+                        });
+                        outgoing
+                            .send_response(request_id.clone(), result.into())
+                            .await;
+                        // unregister the id so we don't keep it in the map
+                        {
+                            let mut running_requests_id_to_codex_uuid =
+                                running_requests_id_to_codex_uuid.lock().await;
+                            running_requests_id_to_codex_uuid.remove(&request_id);
+                        }
+                        break;
+                    }
                     EventMsg::ApplyPatchApprovalRequest(_) => {
                         let result = CallToolResult {
                             content: vec![ContentBlock::TextContent(TextContent {
@@ -231,6 +271,12 @@ async fn run_codex_tool_session_inner(
                         outgoing
                             .send_response(request_id.clone(), result.into())
                             .await;
+                        // unregister the id so we don't keep it in the map
+                        {
+                            let mut running_requests_id_to_codex_uuid =
+                                running_requests_id_to_codex_uuid.lock().await;
+                            running_requests_id_to_codex_uuid.remove(&request_id);
+                        }
                         break;
                     }
                     EventMsg::SessionConfigured(_) => {
@@ -245,8 +291,7 @@ async fn run_codex_tool_session_inner(
                     EventMsg::AgentMessage(AgentMessageEvent { .. }) => {
                         // TODO: think how we want to support this in the MCP
                     }
-                    EventMsg::Error(_)
-                    | EventMsg::TaskStarted
+                    EventMsg::TaskStarted
                     | EventMsg::TokenCount(_)
                     | EventMsg::AgentReasoning(_)
                     | EventMsg::McpToolCallBegin(_)

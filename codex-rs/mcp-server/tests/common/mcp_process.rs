@@ -252,4 +252,17 @@ impl McpProcess {
             }
         }
     }
+
+    pub async fn send_notification(
+        &mut self,
+        method: &str,
+        params: Option<serde_json::Value>,
+    ) -> anyhow::Result<()> {
+        self.send_jsonrpc_message(JSONRPCMessage::Notification(JSONRPCNotification {
+            jsonrpc: JSONRPC_VERSION.into(),
+            method: method.to_string(),
+            params,
+        }))
+        .await
+    }
 }
