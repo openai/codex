@@ -227,9 +227,7 @@ async fn run_codex_tool_session_inner(
                         let result = json!({
                             "error": err_event.message,
                         });
-                        outgoing
-                            .send_response(request_id.clone(), result.into())
-                            .await;
+                        outgoing.send_response(request_id.clone(), result).await;
                         // unregister the id so we don't keep it in the map
                         {
                             let mut running_requests_id_to_codex_uuid =
