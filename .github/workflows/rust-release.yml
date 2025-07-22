@@ -93,7 +93,7 @@ jobs:
           sudo apt install -y musl-tools pkg-config
 
       - name: Cargo build
-        run: cargo build --target ${{ matrix.target }} --release --all-targets --all-features
+        run: cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-exec --bin codex-linux-sandbox
 
       - name: Stage artifacts
         shell: bash
