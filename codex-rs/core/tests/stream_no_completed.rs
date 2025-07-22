@@ -95,7 +95,7 @@ async fn retries_on_early_close() {
     let codex_home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider = model_provider;
-    let (codex, _init_id) = Codex::spawn(config, ctrl_c).await.unwrap();
+    let (codex, _init_id, _session_id) = Codex::spawn(config, ctrl_c).await.unwrap();
 
     codex
         .submit(Op::UserInput {

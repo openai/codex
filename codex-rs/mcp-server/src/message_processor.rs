@@ -1,10 +1,14 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::codex_tool_config::CodexToolCallParam;
+use crate::codex_tool_config::CodexToolCallReplyParam;
 use crate::codex_tool_config::create_tool_for_codex_tool_call_param;
+use crate::codex_tool_config::create_tool_for_codex_tool_call_reply_param;
 use crate::outgoing_message::OutgoingMessageSender;
 
+use codex_core::Codex;
 use codex_core::config::Config as CodexConfig;
 use mcp_types::CallToolRequestParams;
 use mcp_types::CallToolResult;
@@ -22,12 +26,15 @@ use mcp_types::ServerCapabilitiesTools;
 use mcp_types::ServerNotification;
 use mcp_types::TextContent;
 use serde_json::json;
+use tokio::sync::Mutex;
 use tokio::task;
+use uuid::Uuid;
 
 pub(crate) struct MessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,
     initialized: bool,
     codex_linux_sandbox_exe: Option<PathBuf>,
+    session_map: Arc<Mutex<HashMap<Uuid, Arc<Codex>>>>,
 }
 
 impl MessageProcessor {
@@ -41,6 +48,7 @@ impl MessageProcessor {
             outgoing: Arc::new(outgoing),
             initialized: false,
             codex_linux_sandbox_exe,
+            session_map: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -272,7 +280,10 @@ impl MessageProcessor {
     ) {
         tracing::trace!("tools/list -> {params:?}");
         let result = ListToolsResult {
-            tools: vec![create_tool_for_codex_tool_call_param()],
+            tools: vec![
+                create_tool_for_codex_tool_call_param(),
+                create_tool_for_codex_tool_call_reply_param(),
+            ],
             next_cursor: None,
         };
 
@@ -288,23 +299,29 @@ impl MessageProcessor {
         tracing::info!("tools/call -> params: {:?}", params);
         let CallToolRequestParams { name, arguments } = params;
 
-        // We only support the "codex" tool for now.
-        if name != "codex" {
-            // Tool not found – return error result so the LLM can react.
-            let result = CallToolResult {
-                content: vec![ContentBlock::TextContent(TextContent {
-                    r#type: "text".to_string(),
-                    text: format!("Unknown tool '{name}'"),
-                    annotations: None,
-                })],
-                is_error: Some(true),
-                structured_content: None,
-            };
-            self.send_response::<mcp_types::CallToolRequest>(id, result)
-                .await;
-            return;
+        match name.as_str() {
+            "codex" => self.handle_tool_call_codex(id, arguments).await,
+            "codex-reply" => {
+                self.handle_tool_call_codex_session_reply(id, arguments)
+                    .await
+            }
+            _ => {
+                let result = CallToolResult {
+                    content: vec![ContentBlock::TextContent(TextContent {
+                        r#type: "text".to_string(),
+                        text: format!("Unknown tool '{name}'"),
+                        annotations: None,
+                    })],
+                    is_error: Some(true),
+                    structured_content: None,
+                };
+                self.send_response::<mcp_types::CallToolRequest>(id, result)
+                    .await;
+            }
         }
+    }
 
+    async fn handle_tool_call_codex(&self, id: RequestId, arguments: Option<serde_json::Value>) {
         let (initial_prompt, config): (String, CodexConfig) = match arguments {
             Some(json_val) => match serde_json::from_value::<CodexToolCallParam>(json_val) {
                 Ok(tool_cfg) => match tool_cfg.into_config(self.codex_linux_sandbox_exe.clone()) {
@@ -359,15 +376,127 @@ impl MessageProcessor {
             }
         };
 
-        // Clone outgoing sender to move into async task.
+        // Clone outgoing and session map to move into async task.
         let outgoing = self.outgoing.clone();
+        let session_map = self.session_map.clone();
 
         // Spawn an async task to handle the Codex session so that we do not
         // block the synchronous message-processing loop.
         task::spawn(async move {
             // Run the Codex session and stream events back to the client.
-            crate::codex_tool_runner::run_codex_tool_session(id, initial_prompt, config, outgoing)
-                .await;
+            crate::codex_tool_runner::run_codex_tool_session(
+                id,
+                initial_prompt,
+                config,
+                outgoing,
+                session_map,
+            )
+            .await;
+        });
+    }
+
+    async fn handle_tool_call_codex_session_reply(
+        &self,
+        request_id: RequestId,
+        arguments: Option<serde_json::Value>,
+    ) {
+        tracing::info!("tools/call -> params: {:?}", arguments);
+
+        // parse arguments
+        let CodexToolCallReplyParam { session_id, prompt } = match arguments {
+            Some(json_val) => match serde_json::from_value::<CodexToolCallReplyParam>(json_val) {
+                Ok(params) => params,
+                Err(e) => {
+                    tracing::error!("Failed to parse Codex tool call reply parameters: {e}");
+                    let result = CallToolResult {
+                        content: vec![ContentBlock::TextContent(TextContent {
+                            r#type: "text".to_owned(),
+                            text: format!("Failed to parse configuration for Codex tool: {e}"),
+                            annotations: None,
+                        })],
+                        is_error: Some(true),
+                        structured_content: None,
+                    };
+                    self.send_response::<mcp_types::CallToolRequest>(request_id, result)
+                        .await;
+                    return;
+                }
+            },
+            None => {
+                tracing::error!(
+                    "Missing arguments for codex-reply tool-call; the `session_id` and `prompt` fields are required."
+                );
+                let result = CallToolResult {
+                    content: vec![ContentBlock::TextContent(TextContent {
+                        r#type: "text".to_owned(),
+                        text: "Missing arguments for codex-reply tool-call; the `session_id` and `prompt` fields are required.".to_owned(),
+                        annotations: None,
+                    })],
+                    is_error: Some(true),
+                    structured_content: None,
+                };
+                self.send_response::<mcp_types::CallToolRequest>(request_id, result)
+                    .await;
+                return;
+            }
+        };
+        let session_id = match Uuid::parse_str(&session_id) {
+            Ok(id) => id,
+            Err(e) => {
+                tracing::error!("Failed to parse session_id: {e}");
+                let result = CallToolResult {
+                    content: vec![ContentBlock::TextContent(TextContent {
+                        r#type: "text".to_owned(),
+                        text: format!("Failed to parse session_id: {e}"),
+                        annotations: None,
+                    })],
+                    is_error: Some(true),
+                    structured_content: None,
+                };
+                self.send_response::<mcp_types::CallToolRequest>(request_id, result)
+                    .await;
+                return;
+            }
+        };
+
+        // load codex from session map
+        let session_map_mutex = Arc::clone(&self.session_map);
+
+        // Clone outgoing and session map to move into async task.
+        let outgoing = self.outgoing.clone();
+
+        // Spawn an async task to handle the Codex session so that we do not
+        // block the synchronous message-processing loop.
+        task::spawn(async move {
+            let session_map = session_map_mutex.lock().await;
+            let codex = match session_map.get(&session_id) {
+                Some(codex) => codex,
+                None => {
+                    tracing::warn!("Session not found for session_id: {session_id}");
+                    let result = CallToolResult {
+                        content: vec![ContentBlock::TextContent(TextContent {
+                            r#type: "text".to_owned(),
+                            text: format!("Session not found for session_id: {session_id}"),
+                            annotations: None,
+                        })],
+                        is_error: Some(true),
+                        structured_content: None,
+                    };
+                    // unwrap_or_default is fine here because we know the result is valid JSON
+                    outgoing
+                        .send_response(request_id, serde_json::to_value(result).unwrap_or_default())
+                        .await;
+                    return;
+                }
+            };
+
+            crate::codex_tool_runner::run_codex_tool_session_reply(
+                codex.clone(),
+                outgoing,
+                request_id,
+                prompt.clone(),
+            )
+            .await;
         });
     }
 
