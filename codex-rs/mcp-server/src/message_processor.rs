@@ -571,7 +571,13 @@ impl MessageProcessor {
             .await;
         if let Err(e) = err {
             tracing::error!("Failed to submit interrupt to Codex: {e}");
+            return;
         }
+        // unregister the id so we don't keep it in the map
+        self.running_requests_id_to_codex_uuid
+            .lock()
+            .await
+            .remove(&request_id);
     }
 
     fn handle_progress_notification(

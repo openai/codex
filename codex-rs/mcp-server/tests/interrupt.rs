@@ -70,12 +70,11 @@ async fn shell_command_interruption() -> anyhow::Result<()> {
     .await??;
 
     assert!(
-        codex_response.result.is_null()
-            || codex_response
-                .result
-                .as_object()
-                .map(|o| o.contains_key("error"))
-                .unwrap_or(false),
+        codex_response
+            .result
+            .as_object()
+            .map(|o| o.contains_key("error"))
+            .unwrap_or(false),
         "Expected an interruption or error result, got: {codex_response:?}"
     );
 
