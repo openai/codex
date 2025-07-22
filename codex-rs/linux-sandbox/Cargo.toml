@@ -17,7 +17,9 @@ workspace = true
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
+codex-common = { path = "../common", features = ["cli"] }
 codex-core = { path = "../core" }
+dotenvy = "0.15.7"
 tokio = { version = "1", features = ["rt-multi-thread"] }
 
 [dev-dependencies]
