@@ -191,10 +191,9 @@ struct TempCwdFile {
 
 impl TempCwdFile {
     fn new(file_name: &str, content: &str) -> anyhow::Result<Self> {
-        let home = env::var("HOME")?;
-        let dot_codex = PathBuf::from(home).join(".codex");
-        std::fs::create_dir_all(&dot_codex)?;
-        let path = dot_codex.join(file_name);
+        // This file must be in a path that is a writable root on both macos and linux.
+        // TmpDir is writable by default on macos but not linux.
+        let path = env::current_dir()?.join(file_name);
         std::fs::write(&path, content)?;
         Ok(Self { path })
     }
@@ -290,7 +289,7 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
     );
 
     let file_contents = std::fs::read_to_string(&test_file.path)?;
-    assert_eq!(file_contents, "modified content");
+    assert_eq!(file_contents, "modified content\n");
 
     Ok(())
 }
