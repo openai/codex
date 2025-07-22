@@ -105,14 +105,7 @@ pub async fn run_codex_tool_session(
         return;
     }
 
-    run_codex_tool_session_inner(
-        codex,
-        outgoing,
-        id,
-        running_requests_id_to_codex_uuid,
-        session_id,
-    )
-    .await;
+    run_codex_tool_session_inner(codex, outgoing, id, running_requests_id_to_codex_uuid).await;
 }
 
 pub async fn run_codex_tool_session_reply(
@@ -148,7 +141,6 @@ pub async fn run_codex_tool_session_reply(
         outgoing,
         request_id,
         running_requests_id_to_codex_uuid,
-        session_id,
     )
     .await;
 }
@@ -158,7 +150,6 @@ async fn run_codex_tool_session_inner(
     outgoing: Arc<OutgoingMessageSender>,
     request_id: RequestId,
     running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, Uuid>>>,
-    session_id: Uuid,
 ) {
     let sub_id = match &request_id {
         RequestId::String(s) => s.clone(),
