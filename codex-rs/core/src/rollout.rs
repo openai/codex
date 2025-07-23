@@ -14,6 +14,7 @@ use time::macros::format_description;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::mpsc::{self};
+use tokio::sync::oneshot;
 use tracing::info;
 use tracing::warn;
 use uuid::Uuid;
@@ -57,10 +58,10 @@ pub(crate) struct RolloutRecorder {
     tx: Sender<RolloutCmd>,
 }
 
-#[derive(Clone)]
 enum RolloutCmd {
     AddItems(Vec<ResponseItem>),
     UpdateState(SessionStateSnapshot),
+    Shutdown { ack: oneshot::Sender<()> },
 }
 
 impl RolloutRecorder {
@@ -204,6 +205,21 @@ impl RolloutRecorder {
         info!("Resumed rollout successfully from {path:?}");
         Ok((Self { tx }, saved))
     }
+
+    pub async fn shutdown(&self) -> std::io::Result<()> {
+        let (tx_done, rx_done) = oneshot::channel();
+        match self.tx.send(RolloutCmd::Shutdown { ack: tx_done }).await {
+            Ok(_) => rx_done
+                .await
+                .map_err(|e| IoError::other(format!("failed waiting for rollout shutdown: {e}"))),
+            Err(e) => {
+                warn!("failed to send rollout shutdown command: {e}");
+                Err(IoError::other(format!(
+                    "failed to send rollout shutdown command: {e}"
+                )))
+            }
+        }
+    }
 }
 
 struct LogFileInfo {
@@ -298,6 +314,9 @@ async fn rollout_writer(
                     let _ = file.write_all(b"\n").await;
                     let _ = file.flush().await;
                 }
+            }
+            RolloutCmd::Shutdown { ack } => {
+                let _ = ack.send(());
             }
         }
     }

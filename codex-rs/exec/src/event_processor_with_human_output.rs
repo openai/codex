@@ -15,16 +15,20 @@ use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::SessionConfiguredEvent;
+use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TokenUsage;
 use owo_colors::OwoColorize;
 use owo_colors::Style;
 use shlex::try_join;
 use std::collections::HashMap;
 use std::io::Write;
+use std::path::PathBuf;
 use std::time::Instant;
 
+use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
 use crate::event_processor::create_config_summary_entries;
+use crate::event_processor::handle_last_message;
 
 /// This should be configurable. When used in CI, users may not want to impose
 /// a limit so they can see the full transcript.
@@ -54,10 +58,15 @@ pub(crate) struct EventProcessorWithHumanOutput {
     show_agent_reasoning: bool,
     answer_started: bool,
     reasoning_started: bool,
+    last_message_path: Option<PathBuf>,
 }
 
 impl EventProcessorWithHumanOutput {
-    pub(crate) fn create_with_ansi(with_ansi: bool, config: &Config) -> Self {
+    pub(crate) fn create_with_ansi(
+        with_ansi: bool,
+        config: &Config,
+        last_message_path: Option<PathBuf>,
+    ) -> Self {
         let call_id_to_command = HashMap::new();
         let call_id_to_patch = HashMap::new();
         let call_id_to_tool_call = HashMap::new();
@@ -77,6 +86,7 @@ impl EventProcessorWithHumanOutput {
                 show_agent_reasoning: !config.hide_agent_reasoning,
                 answer_started: false,
                 reasoning_started: false,
+                last_message_path,
             }
         } else {
             Self {
@@ -93,6 +103,7 @@ impl EventProcessorWithHumanOutput {
                 show_agent_reasoning: !config.hide_agent_reasoning,
                 answer_started: false,
                 reasoning_started: false,
+                last_message_path,
             }
         }
     }
@@ -158,7 +169,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
         );
     }
 
-    fn process_event(&mut self, event: Event) {
+    fn process_event(&mut self, event: Event) -> CodexStatus {
         let Event { id: _, msg } = event;
         match msg {
             EventMsg::Error(ErrorEvent { message }) => {
@@ -168,8 +179,15 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             EventMsg::BackgroundEvent(BackgroundEventEvent { message }) => {
                 ts_println!(self, "{}", message.style(self.dimmed));
             }
-            EventMsg::TaskStarted | EventMsg::TaskComplete(_) => {
+            EventMsg::TaskStarted => {
                 // Ignore.
+            }
+            EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) => {
+                handle_last_message(
+                    last_agent_message.as_deref(),
+                    self.last_message_path.as_deref(),
+                );
+                return CodexStatus::InitiateShutdown;
             }
             EventMsg::TokenCount(TokenUsage { total_tokens, .. }) => {
                 ts_println!(self, "tokens used: {total_tokens}");
@@ -185,7 +203,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             }
             EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta }) => {
                 if !self.show_agent_reasoning {
-                    return;
+                    return CodexStatus::Running;
                 }
                 if !self.reasoning_started {
                     ts_println!(
@@ -498,7 +516,9 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             EventMsg::GetHistoryEntryResponse(_) => {
                 // Currently ignored in exec output.
             }
+            EventMsg::ShutdownComplete => return CodexStatus::Shutdown,
         }
+        CodexStatus::Running
     }
 }
 
