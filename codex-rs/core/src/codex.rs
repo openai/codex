@@ -204,9 +204,6 @@ pub(crate) struct Session {
     rollout: Mutex<Option<RolloutRecorder>>,
     state: Mutex<State>,
     codex_linux_sandbox_exe: Option<PathBuf>,
-
-    /// When true, force sandboxed commands to simulate a sandbox denial so the fallback path is exercised.
-    always_fail_sandbox: bool,
 }
 
 impl Session {
@@ -722,7 +719,6 @@ async fn submission_loop(
                     state: Mutex::new(state),
                     rollout: Mutex::new(rollout_recorder),
                     codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
-                    always_fail_sandbox: config.always_fail_sandbox,
                 }));
 
                 // Patch restored state into the newly created session.
@@ -1519,24 +1515,14 @@ async fn handle_container_exec_with_params(
     sess.notify_exec_command_begin(&sub_id, &call_id, &params)
         .await;
 
-    let output_result = if sess.always_fail_sandbox && sandbox_type != SandboxType::None {
-        sess.notify_background_event(&sub_id, "forced failure (always_fail_sandbox)")
-            .await;
-        Err(CodexErr::Sandbox(SandboxErr::Denied(
-            -1,
-            "".to_string(),
-            "forced failure (always_fail_sandbox)".to_string(),
-        )))
-    } else {
-        process_exec_tool_call(
-            params.clone(),
-            sandbox_type,
-            sess.ctrl_c.clone(),
-            &sess.sandbox_policy,
-            &sess.codex_linux_sandbox_exe,
-        )
-        .await
-    };
+    let output_result = process_exec_tool_call(
+        params.clone(),
+        sandbox_type,
+        sess.ctrl_c.clone(),
+        &sess.sandbox_policy,
+        &sess.codex_linux_sandbox_exe,
+    )
+    .await;
 
     match output_result {
         Ok(output) => {
