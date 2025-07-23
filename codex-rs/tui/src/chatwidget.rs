@@ -328,6 +328,7 @@ impl ChatWidget<'_> {
                 self.bottom_pane.push_approval_request(request);
             }
             EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
+                call_id: _,
                 changes,
                 reason,
                 grant_root,
