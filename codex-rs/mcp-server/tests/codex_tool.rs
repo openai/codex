@@ -171,6 +171,7 @@ fn create_expected_elicitation_request(
             codex_event_id,
             codex_command: command,
             codex_cwd: workdir.to_path_buf(),
+            codex_call_id: "call1234".to_string(),
         })?),
     })
 }
@@ -384,6 +385,7 @@ fn create_expected_patch_approval_elicitation_request(
             codex_reason: reason,
             codex_grant_root: grant_root,
             codex_changes: changes,
+            codex_call_id: "call1234".to_string(),
         })?),
     })
 }
