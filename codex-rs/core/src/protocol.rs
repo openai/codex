@@ -116,6 +116,9 @@ pub enum Op {
 
     /// Request a single history entry identified by `log_id` + `offset`.
     GetHistoryEntryRequest { offset: usize, log_id: u64 },
+
+    /// Request to shut down codex instance.
+    Shutdown,
 }
 
 /// Determines the conditions under which the user is consulted to approve
@@ -326,6 +329,9 @@ pub enum EventMsg {
 
     /// Response to GetHistoryEntryRequest.
     GetHistoryEntryResponse(GetHistoryEntryResponseEvent),
+
+    /// Notification that the agent is shutting down.
+    ShutdownComplete,
 }
 
 // Individual event payload types matching each `EventMsg` variant.
