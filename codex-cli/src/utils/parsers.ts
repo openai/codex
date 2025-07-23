@@ -85,11 +85,17 @@ export function parseToolCallArguments(
   const { cmd, command } = json as Record<string, unknown>;
   // The OpenAI model sometimes produces a single string instead of an array.
   // Accept both shapes:
-  const commandArray =
-    toStringArray(cmd) ??
-    toStringArray(command) ??
-    (typeof cmd === "string" ? [cmd] : undefined) ??
-    (typeof command === "string" ? [command] : undefined);
+  let commandArray = toStringArray(cmd);
+  if (!commandArray) {
+    commandArray = toStringArray(command);
+    if (!commandArray) {
+      if (typeof cmd === "string") {
+        commandArray = [cmd];
+      } else if (typeof command === "string") {
+        commandArray = [command];
+      }
+    }
+  }
   if (commandArray == null) {
     return undefined;
   }
