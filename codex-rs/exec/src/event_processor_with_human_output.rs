@@ -28,6 +28,7 @@ use std::time::Instant;
 use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
 use crate::event_processor::create_config_summary_entries;
+use crate::event_processor::handle_last_message;
 
 /// This should be configurable. When used in CI, users may not want to impose
 /// a limit so they can see the full transcript.
@@ -182,21 +183,10 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 // Ignore.
             }
             EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) => {
-                match (
-                    self.last_message_path.clone(),
+                return handle_last_message(
                     last_agent_message.as_deref(),
-                ) {
-                    (Some(path), Some(msg)) => self.write_last_message_file(msg, Some(&path)),
-                    (Some(path), None) => {
-                        self.write_last_message_file("", Some(&path));
-                        eprintln!(
-                            "Warning: no last agent message; wrote empty content to {}",
-                            path.display()
-                        );
-                    }
-                    (None, _) => eprintln!("Warning: no file to write last message to."),
-                }
-                return CodexStatus::InitiateShutdown;
+                    self.last_message_path.as_deref(),
+                );
             }
             EventMsg::TokenCount(TokenUsage { total_tokens, .. }) => {
                 ts_println!(self, "tokens used: {total_tokens}");

@@ -18,15 +18,6 @@ pub(crate) trait EventProcessor {
 
     /// Handle a single event emitted by the agent.
     fn process_event(&mut self, event: Event) -> CodexStatus;
-
-    /// Write the last message to the last message file.
-    fn write_last_message_file(&self, contents: &str, last_message_path: Option<&Path>) {
-        if let Some(path) = last_message_path {
-            if let Err(e) = std::fs::write(path, contents) {
-                eprintln!("Failed to write last message file {path:?}: {e}");
-            }
-        }
-    }
 }
 
 pub(crate) fn create_config_summary_entries(config: &Config) -> Vec<(&'static str, String)> {
@@ -51,4 +42,30 @@ pub(crate) fn create_config_summary_entries(config: &Config) -> Vec<(&'static st
     }
 
     entries
+}
+
+pub(crate) fn handle_last_message(
+    last_agent_message: Option<&str>,
+    last_message_path: Option<&Path>,
+) -> CodexStatus {
+    match (last_message_path, last_agent_message) {
+        (Some(path), Some(msg)) => write_last_message_file(msg, Some(path)),
+        (Some(path), None) => {
+            write_last_message_file("", Some(path));
+            eprintln!(
+                "Warning: no last agent message; wrote empty content to {}",
+                path.display()
+            );
+        }
+        (None, _) => eprintln!("Warning: no file to write last message to."),
+    }
+    CodexStatus::InitiateShutdown
+}
+
+fn write_last_message_file(contents: &str, last_message_path: Option<&Path>) {
+    if let Some(path) = last_message_path {
+        if let Err(e) = std::fs::write(path, contents) {
+            eprintln!("Failed to write last message file {path:?}: {e}");
+        }
+    }
 }

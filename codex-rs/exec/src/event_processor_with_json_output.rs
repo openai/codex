@@ -10,6 +10,7 @@ use serde_json::json;
 use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
 use crate::event_processor::create_config_summary_entries;
+use crate::event_processor::handle_last_message;
 
 pub(crate) struct EventProcessorWithJsonOutput {
     last_message_path: Option<PathBuf>,
@@ -45,21 +46,10 @@ impl EventProcessor for EventProcessorWithJsonOutput {
                 CodexStatus::Running
             }
             EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) => {
-                match (
-                    self.last_message_path.clone(),
+                handle_last_message(
                     last_agent_message.as_deref(),
-                ) {
-                    (Some(path), Some(msg)) => self.write_last_message_file(msg, Some(&path)),
-                    (Some(path), None) => {
-                        self.write_last_message_file("", Some(&path));
-                        eprintln!(
-                            "Warning: no last agent message; wrote empty content to {}",
-                            path.display()
-                        );
-                    }
-                    (None, _) => eprintln!("Warning: no file to write last message to."),
-                }
-                CodexStatus::InitiateShutdown
+                    self.last_message_path.as_deref(),
+                )
             }
             EventMsg::ShutdownComplete => CodexStatus::Shutdown,
             _ => {
