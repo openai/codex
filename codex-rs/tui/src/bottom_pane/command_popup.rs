@@ -12,8 +12,32 @@ use ratatui::widgets::Table;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
 
+use crate::custom_slash_command::discover_custom_commands;
 use crate::slash_command::SlashCommand;
 use crate::slash_command::built_in_slash_commands;
+
+/// Entry representing either a built-in or a custom slash command.
+#[derive(Clone)]
+pub(super) enum CommandEntry {
+    BuiltIn(SlashCommand),
+    Custom { name: String },
+}
+
+impl CommandEntry {
+    pub(super) fn command(&self) -> &str {
+        match self {
+            CommandEntry::BuiltIn(cmd) => cmd.command(),
+            CommandEntry::Custom { name } => name.as_str(),
+        }
+    }
+
+    pub(super) fn description(&self) -> &str {
+        match self {
+            CommandEntry::BuiltIn(cmd) => cmd.description(),
+            CommandEntry::Custom { .. } => "Custom command",
+        }
+    }
+}
 
 const MAX_POPUP_ROWS: usize = 5;
 /// Ideally this is enough to show the longest command name.
@@ -23,15 +47,25 @@ use ratatui::style::Modifier;
 
 pub(crate) struct CommandPopup {
     command_filter: String,
-    all_commands: Vec<(&'static str, SlashCommand)>,
+    all_commands: Vec<CommandEntry>,
     selected_idx: Option<usize>,
 }
 
 impl CommandPopup {
     pub(crate) fn new() -> Self {
+        let mut all_commands: Vec<CommandEntry> = built_in_slash_commands()
+            .into_iter()
+            .map(|(_name, cmd)| CommandEntry::BuiltIn(cmd))
+            .collect();
+
+        // Discover custom commands on disk and append them to the list.
+        for name in discover_custom_commands() {
+            all_commands.push(CommandEntry::Custom { name });
+        }
+
         Self {
             command_filter: String::new(),
-            all_commands: built_in_slash_commands(),
+            all_commands,
             selected_idx: None,
         }
     }
@@ -81,21 +115,16 @@ impl CommandPopup {
 
     /// Return the list of commands that match the current filter. Matching is
     /// performed using a *prefix* comparison on the command name.
-    fn filtered_commands(&self) -> Vec<&SlashCommand> {
+    fn filtered_commands(&self) -> Vec<&CommandEntry> {
         self.all_commands
             .iter()
-            .filter_map(|(_name, cmd)| {
-                if self.command_filter.is_empty()
+            .filter(|cmd| {
+                self.command_filter.is_empty()
                     || cmd
                         .command()
                         .starts_with(&self.command_filter.to_ascii_lowercase())
-                {
-                    Some(cmd)
-                } else {
-                    None
-                }
             })
-            .collect::<Vec<&SlashCommand>>()
+            .collect()
     }
 
     /// Move the selection cursor one step up.
@@ -135,7 +164,7 @@ impl CommandPopup {
     }
 
     /// Return currently selected command, if any.
-    pub(crate) fn selected_command(&self) -> Option<&SlashCommand> {
+    pub(crate) fn selected_command(&self) -> Option<&CommandEntry> {
         let matches = self.filtered_commands();
         self.selected_idx.and_then(|idx| matches.get(idx).copied())
     }
@@ -146,7 +175,7 @@ impl WidgetRef for CommandPopup {
         let matches = self.filtered_commands();
 
         let mut rows: Vec<Row> = Vec::new();
-        let visible_matches: Vec<&SlashCommand> =
+        let visible_matches: Vec<&CommandEntry> =
             matches.into_iter().take(MAX_POPUP_ROWS).collect();
 
         if visible_matches.is_empty() {
