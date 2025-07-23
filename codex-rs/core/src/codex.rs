@@ -832,7 +832,7 @@ async fn submission_loop(
                 }
                 let event = Event {
                     id: sub.id.clone(),
-                    msg: EventMsg::Shutdown,
+                    msg: EventMsg::ShutdownComplete,
                 };
                 if let Err(e) = tx_event.send(event).await {
                     warn!("failed to send Shutdown event: {e}");

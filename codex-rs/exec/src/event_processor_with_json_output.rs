@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::path::Path;
 use std::path::PathBuf;
 
 use codex_core::config::Config;
@@ -23,10 +22,6 @@ impl EventProcessorWithJsonOutput {
 }
 
 impl EventProcessor for EventProcessorWithJsonOutput {
-    fn last_message_path(&self) -> Option<&Path> {
-        self.last_message_path.as_deref()
-    }
-
     fn print_config_summary(&mut self, config: &Config, prompt: &str) {
         let entries = create_config_summary_entries(config)
             .into_iter()
@@ -50,10 +45,13 @@ impl EventProcessor for EventProcessorWithJsonOutput {
                 CodexStatus::Running
             }
             EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) => {
-                self.write_last_message_file(last_agent_message.as_deref().unwrap_or(""));
+                self.write_last_message_file(
+                    last_agent_message.as_deref().unwrap_or(""),
+                    self.last_message_path.as_deref(),
+                );
                 CodexStatus::InitiateShutdown
             }
-            EventMsg::Shutdown => CodexStatus::Shutdown,
+            EventMsg::ShutdownComplete => CodexStatus::Shutdown,
             _ => {
                 if let Ok(line) = serde_json::to_string(&event) {
                     println!("{line}");

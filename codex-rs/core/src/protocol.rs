@@ -331,7 +331,7 @@ pub enum EventMsg {
     GetHistoryEntryResponse(GetHistoryEntryResponseEvent),
 
     /// Notification that the agent is shutting down.
-    Shutdown,
+    ShutdownComplete,
 }
 
 // Individual event payload types matching each `EventMsg` variant.

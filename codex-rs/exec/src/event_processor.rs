@@ -19,12 +19,9 @@ pub(crate) trait EventProcessor {
     /// Handle a single event emitted by the agent.
     fn process_event(&mut self, event: Event) -> CodexStatus;
 
-    /// Get the path to the last message file.
-    fn last_message_path(&self) -> Option<&Path>;
-
     /// Write the last message to the last message file.
-    fn write_last_message_file(&self, contents: &str) {
-        if let Some(path) = self.last_message_path() {
+    fn write_last_message_file(&self, contents: &str, last_message_path: Option<&Path>) {
+        if let Some(path) = last_message_path {
             if let Err(e) = std::fs::write(path, contents) {
                 eprintln!("Failed to write last message file {path:?}: {e}");
             }

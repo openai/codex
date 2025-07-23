@@ -226,7 +226,7 @@ impl App<'_> {
                                     widget.on_ctrl_c();
                                 }
                                 AppState::Login { .. } | AppState::GitWarning { .. } => {
-                                    // No-op. This is a no-op.
+                                    // No-op.
                                 }
                             }
                         }

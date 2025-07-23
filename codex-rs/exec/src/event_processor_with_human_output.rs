@@ -22,7 +22,6 @@ use owo_colors::Style;
 use shlex::try_join;
 use std::collections::HashMap;
 use std::io::Write;
-use std::path::Path;
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -139,10 +138,6 @@ macro_rules! ts_println {
 }
 
 impl EventProcessor for EventProcessorWithHumanOutput {
-    fn last_message_path(&self) -> Option<&Path> {
-        self.last_message_path.as_deref()
-    }
-
     /// Print a concise summary of the effective configuration that will be used
     /// for the session. This mirrors the information shown in the TUI welcome
     /// screen.
@@ -187,7 +182,20 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 // Ignore.
             }
             EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) => {
-                self.write_last_message_file(last_agent_message.as_deref().unwrap_or(""));
+                match (
+                    self.last_message_path.clone(),
+                    last_agent_message.as_deref(),
+                ) {
+                    (Some(path), Some(msg)) => self.write_last_message_file(msg, Some(&path)),
+                    (Some(path), None) => {
+                        self.write_last_message_file("", Some(&path));
+                        eprintln!(
+                            "Warning: no last agent message; wrote empty content to {}",
+                            path.display()
+                        );
+                    }
+                    (None, _) => eprintln!("Warning: no file to write last message to."),
+                }
                 return CodexStatus::InitiateShutdown;
             }
             EventMsg::TokenCount(TokenUsage { total_tokens, .. }) => {
@@ -517,7 +525,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             EventMsg::GetHistoryEntryResponse(_) => {
                 // Currently ignored in exec output.
             }
-            EventMsg::Shutdown => return CodexStatus::Shutdown,
+            EventMsg::ShutdownComplete => return CodexStatus::Shutdown,
         }
         CodexStatus::Running
     }

@@ -417,7 +417,7 @@ impl ChatWidget<'_> {
                 self.bottom_pane
                     .on_history_entry_response(log_id, offset, entry.map(|e| e.text));
             }
-            EventMsg::Shutdown => {
+            EventMsg::ShutdownComplete => {
                 self.app_event_tx.send(AppEvent::ExitRequest);
             }
             event => {
