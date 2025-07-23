@@ -117,6 +117,15 @@ impl ModelClient {
         let full_instructions = prompt.get_full_instructions(&self.config.model);
         let tools_json = create_tools_json_for_responses_api(prompt, &self.config.model)?;
         let reasoning = create_reasoning_param_for_request(&self.config, self.effort, self.summary);
+
+        // Request encrypted COT if we are not storing responses,
+        // otherwise reasoning items will be referenced by ID
+        let include = if !prompt.store && reasoning.is_some() {
+            vec!["reasoning.encrypted_content".to_string()]
+        } else {
+            vec![]
+        };
+
         let payload = ResponsesApiRequest {
             model: &self.config.model,
             instructions: &full_instructions,
@@ -125,10 +134,10 @@ impl ModelClient {
             tool_choice: "auto",
             parallel_tool_calls: false,
             reasoning,
-            previous_response_id: prompt.prev_id.clone(),
             store: prompt.store,
             // TODO: make this configurable
             stream: true,
+            include,
         };
 
         trace!(
