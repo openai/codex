@@ -45,11 +45,21 @@ impl EventProcessor for EventProcessorWithJsonOutput {
                 CodexStatus::Running
             }
             EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) => {
-                self.write_last_message_file(
-                    last_agent_message.as_deref().unwrap_or(""),
-                    self.last_message_path.as_deref(),
-                );
-                CodexStatus::InitiateShutdown
+                match (
+                    self.last_message_path.clone(),
+                    last_agent_message.as_deref(),
+                ) {
+                    (Some(path), Some(msg)) => self.write_last_message_file(msg, Some(&path)),
+                    (Some(path), None) => {
+                        self.write_last_message_file("", Some(&path));
+                        eprintln!(
+                            "Warning: no last agent message; wrote empty content to {}",
+                            path.display()
+                        );
+                    }
+                    (None, _) => eprintln!("Warning: no file to write last message to."),
+                }
+                return CodexStatus::InitiateShutdown;
             }
             EventMsg::ShutdownComplete => CodexStatus::Shutdown,
             _ => {
