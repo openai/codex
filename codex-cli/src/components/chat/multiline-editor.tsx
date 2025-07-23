@@ -211,52 +211,55 @@ const MultilineTextEditorInner = (
         console.log("[MultilineTextEditor] event", { input, key });
       }
 
-      // 1a) CSI-u / modifyOtherKeys *mode 2* (Ink strips initial ESC, so we
-      //     start with '[') – format: "[<code>;<modifiers>u".
-      if (input.startsWith("[") && input.endsWith("u")) {
-        const m = input.match(/^\[([0-9]+);([0-9]+)u$/);
-        if (m && m[1] === "13") {
-          const mod = Number(m[2]);
-          // In xterm's encoding: bit-1 (value 2) is Shift. Everything >1 that
-          // isn't exactly 1 means some modifier was held. We treat *shift or
-          // alt present* (2,3,4,6,8,9) as newline; Ctrl (bit-2 / value 4)
-          // triggers submit.  See xterm/DEC modifyOtherKeys docs.
+      // 1a) CSI-u / modifyOtherKeys *mode 2* – format: "[<code>;<modifiers>u".
+      // Ink strips the leading ESC, leaving us with the literal '['.  However
+      // depending on buffering we may receive preceding printable characters
+      // in the *same* chunk, so we search for the sequence at the *end* of the
+      // chunk rather than requiring `input.startsWith("[")`.
 
-          const hasCtrl = Math.floor(mod / 4) % 2 === 1;
-          if (hasCtrl) {
-            if (onSubmit) {
-              onSubmit(buffer.current.getText());
-            }
-          } else {
-            buffer.current.newline();
-          }
-          setVersion((v) => v + 1);
-          return;
+      // eslint-disable-next-line no-control-regex
+      let m = input.match(/^(.*)(?:\u001B)?\[([0-9]+);([0-9]+)u$/);
+      if (m && m[2] === "13") {
+        const prefix = m[1];
+        const mod = Number(m[3]);
+
+        if (prefix) {
+          buffer.current.insert(prefix);
         }
+
+        const hasCtrl = Math.floor(mod / 4) % 2 === 1;
+        if (hasCtrl) {
+          if (onSubmit) {
+            onSubmit(buffer.current.getText());
+          }
+        } else {
+          buffer.current.newline();
+        }
+        setVersion((v) => v + 1);
+        return;
       }
 
       // 1b) CSI-~ / modifyOtherKeys *mode 1* – format: "[27;<mod>;<code>~".
-      //     Terminals such as iTerm2 (default), older xterm versions, or when
-      //     modifyOtherKeys=1 is configured, emit this legacy sequence.  We
-      //     translate it to the same behaviour as the mode‑2 variant above so
-      //     that Shift+Enter (newline) / Ctrl+Enter (submit) work regardless
-      //     of the user’s terminal settings.
-      if (input.startsWith("[27;") && input.endsWith("~")) {
-        const m = input.match(/^\[27;([0-9]+);13~$/);
-        if (m) {
-          const mod = Number(m[1]);
-          const hasCtrl = Math.floor(mod / 4) % 2 === 1;
+      // eslint-disable-next-line no-control-regex
+      m = input.match(/^(.*)(?:\u001B)?\[27;([0-9]+);13~$/);
+      if (m) {
+        const prefix = m[1];
+        const mod = Number(m[2]);
 
-          if (hasCtrl) {
-            if (onSubmit) {
-              onSubmit(buffer.current.getText());
-            }
-          } else {
-            buffer.current.newline();
-          }
-          setVersion((v) => v + 1);
-          return;
+        if (prefix) {
+          buffer.current.insert(prefix);
         }
+
+        const hasCtrl = Math.floor(mod / 4) % 2 === 1;
+        if (hasCtrl) {
+          if (onSubmit) {
+            onSubmit(buffer.current.getText());
+          }
+        } else {
+          buffer.current.newline();
+        }
+        setVersion((v) => v + 1);
+        return;
       }
 
       // 2) Single‑byte control chars ------------------------------------------------
@@ -268,7 +271,11 @@ const MultilineTextEditorInner = (
       }
 
       if (input === "\r") {
-        // Plain Enter – submit (works on all basic terminals).
+        // Plain <Enter> — always triggers submission for compatibility with
+        // terminals that cannot distinguish Shift+Enter from a regular
+        // Enter keypress.  Environments capable of signalling the Shift
+        // modifier are already handled by the modifyOtherKeys paths above.
+
         if (onSubmit) {
           onSubmit(buffer.current.getText());
         }
