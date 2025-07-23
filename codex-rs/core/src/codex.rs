@@ -100,20 +100,22 @@ impl Codex {
     /// Spawn a new [`Codex`] and initialize the session. Returns the instance
     /// of `Codex` and the ID of the `SessionInitialized` event that was
     /// submitted to start the session.
-    pub async fn spawn(config: Config, ctrl_c: Arc<Notify>) -> CodexResult<(Codex, String)> {
+    pub async fn spawn(config: Config, ctrl_c: Arc<Notify>) -> CodexResult<(Codex, String, Uuid)> {
         // experimental resume path (undocumented)
         let resume_path = config.experimental_resume.clone();
         info!("resume_path: {resume_path:?}");
         let (tx_sub, rx_sub) = async_channel::bounded(64);
         let (tx_event, rx_event) = async_channel::bounded(1600);
 
-        let instructions = get_user_instructions(&config).await;
+        let user_instructions = get_user_instructions(&config).await;
+
         let configure_session = Op::ConfigureSession {
             provider: config.model_provider.clone(),
             model: config.model.clone(),
             model_reasoning_effort: config.model_reasoning_effort,
             model_reasoning_summary: config.model_reasoning_summary,
-            instructions,
+            user_instructions,
+            base_instructions: config.base_instructions.clone(),
             approval_policy: config.approval_policy,
             sandbox_policy: config.sandbox_policy.clone(),
             disable_response_storage: config.disable_response_storage,
@@ -123,7 +125,12 @@ impl Codex {
         };
 
         let config = Arc::new(config);
-        tokio::spawn(submission_loop(config, rx_sub, tx_event, ctrl_c));
+
+        // Generate a unique ID for the lifetime of this Codex session.
+        let session_id = Uuid::new_v4();
+        tokio::spawn(submission_loop(
+            session_id, config, rx_sub, tx_event, ctrl_c,
+        ));
         let codex = Codex {
             next_id: AtomicU64::new(0),
             tx_sub,
@@ -131,7 +138,7 @@ impl Codex {
         };
         let init_id = codex.submit(configure_session).await?;
 
-        Ok((codex, init_id))
+        Ok((codex, init_id, session_id))
     }
 
     /// Submit the `op` wrapped in a `Submission` with a unique ID.
@@ -177,7 +184,8 @@ pub(crate) struct Session {
     /// the model as well as sandbox policies are resolved against this path
     /// instead of `std::env::current_dir()`.
     cwd: PathBuf,
-    instructions: Option<String>,
+    base_instructions: Option<String>,
+    user_instructions: Option<String>,
     approval_policy: AskForApproval,
     sandbox_policy: SandboxPolicy,
     shell_environment_policy: ShellEnvironmentPolicy,
@@ -503,14 +511,12 @@ impl AgentTask {
 }
 
 async fn submission_loop(
+    mut session_id: Uuid,
     config: Arc<Config>,
     rx_sub: Receiver<Submission>,
     tx_event: Sender<Event>,
     ctrl_c: Arc<Notify>,
 ) {
-    // Generate a unique ID for the lifetime of this Codex session.
-    let mut session_id = Uuid::new_v4();
-
     let mut sess: Option<Arc<Session>> = None;
     // shorthand - send an event when there is no active session
     let send_no_session_event = |sub_id: String| async {
@@ -556,7 +562,8 @@ async fn submission_loop(
                 model,
                 model_reasoning_effort,
                 model_reasoning_summary,
-                instructions,
+                user_instructions,
+                base_instructions,
                 approval_policy,
                 sandbox_policy,
                 disable_response_storage,
@@ -602,15 +609,17 @@ async fn submission_loop(
 
                 let rollout_recorder = match rollout_recorder {
                     Some(rec) => Some(rec),
-                    None => match RolloutRecorder::new(&config, session_id, instructions.clone())
-                        .await
-                    {
-                        Ok(r) => Some(r),
-                        Err(e) => {
-                            warn!("failed to initialise rollout recorder: {e}");
-                            None
+                    None => {
+                        match RolloutRecorder::new(&config, session_id, user_instructions.clone())
+                            .await
+                        {
+                            Ok(r) => Some(r),
+                            Err(e) => {
+                                warn!("failed to initialise rollout recorder: {e}");
+                                None
+                            }
                         }
-                    },
+                    }
                 };
 
                 let client = ModelClient::new(
@@ -667,7 +676,8 @@ async fn submission_loop(
                     client,
                     tx_event: tx_event.clone(),
                     ctrl_c: Arc::clone(&ctrl_c),
-                    instructions,
+                    user_instructions,
+                    base_instructions,
                     approval_policy,
                     sandbox_policy,
                     shell_environment_policy: config.shell_environment_policy.clone(),
@@ -997,9 +1007,10 @@ async fn run_turn(
     let extra_tools = sess.mcp_connection_manager.list_all_tools();
     let prompt = Prompt {
         input,
-        user_instructions: sess.instructions.clone(),
+        user_instructions: sess.user_instructions.clone(),
         store: !sess.disable_response_storage,
         extra_tools,
+        base_instructions_override: sess.base_instructions.clone(),
     };
 
     let mut retries = 0;
