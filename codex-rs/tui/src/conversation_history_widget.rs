@@ -235,6 +235,30 @@ impl ConversationHistoryWidget {
         self.add_to_history(HistoryCell::new_active_exec_command(call_id, command));
     }
 
+    /// If an ActiveExecCommand with the same call_id already exists, replace
+    /// it with a fresh one (resetting start time and view). Otherwise, add a new entry.
+    pub fn reset_or_add_active_exec_command(&mut self, call_id: String, command: Vec<String>) {
+        // Find the most recent matching ActiveExecCommand.
+        let maybe_idx = self.entries.iter().rposition(|entry| {
+            if let HistoryCell::ActiveExecCommand { call_id: id, .. } = &entry.cell {
+                id == &call_id
+            } else {
+                false
+            }
+        });
+
+        if let Some(idx) = maybe_idx {
+            let width = self.cached_width.get();
+            self.entries[idx].cell = HistoryCell::new_active_exec_command(call_id.clone(), command);
+            if width > 0 {
+                let height = self.entries[idx].cell.height(width);
+                self.entries[idx].line_count.set(height);
+            }
+        } else {
+            self.add_active_exec_command(call_id, command);
+        }
+    }
+
     pub fn add_active_mcp_tool_call(
         &mut self,
         call_id: String,
