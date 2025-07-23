@@ -183,10 +183,11 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 // Ignore.
             }
             EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) => {
-                return handle_last_message(
+                handle_last_message(
                     last_agent_message.as_deref(),
                     self.last_message_path.as_deref(),
                 );
+                return CodexStatus::InitiateShutdown;
             }
             EventMsg::TokenCount(TokenUsage { total_tokens, .. }) => {
                 ts_println!(self, "tokens used: {total_tokens}");

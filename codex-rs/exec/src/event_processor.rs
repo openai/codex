@@ -47,7 +47,7 @@ pub(crate) fn create_config_summary_entries(config: &Config) -> Vec<(&'static st
 pub(crate) fn handle_last_message(
     last_agent_message: Option<&str>,
     last_message_path: Option<&Path>,
-) -> CodexStatus {
+) {
     match (last_message_path, last_agent_message) {
         (Some(path), Some(msg)) => write_last_message_file(msg, Some(path)),
         (Some(path), None) => {
@@ -59,7 +59,6 @@ pub(crate) fn handle_last_message(
         }
         (None, _) => eprintln!("Warning: no file to write last message to."),
     }
-    CodexStatus::InitiateShutdown
 }
 
 fn write_last_message_file(contents: &str, last_message_path: Option<&Path>) {
