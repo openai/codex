@@ -174,6 +174,9 @@ impl HistoryCell {
             for (key, value) in entries {
                 lines.push(Line::from(vec![format!("{key}: ").bold(), value.into()]));
             }
+            if config.always_fail_sandbox {
+                lines.push(Line::from("Always fail in sandbox is on".red().bold()));
+            }
             lines.push(Line::from(""));
             HistoryCell::WelcomeMessage {
                 view: TextBlock::new(lines),

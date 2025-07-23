@@ -204,6 +204,9 @@ pub(crate) struct Session {
     rollout: Mutex<Option<RolloutRecorder>>,
     state: Mutex<State>,
     codex_linux_sandbox_exe: Option<PathBuf>,
+
+    /// When true, force sandboxed commands to simulate a sandbox denial so the fallback path is exercised.
+    always_fail_sandbox: bool,
 }
 
 impl Session {
@@ -257,6 +260,7 @@ impl Session {
     pub async fn request_command_approval(
         &self,
         sub_id: String,
+        call_id: String,
         command: Vec<String>,
         cwd: PathBuf,
         reason: Option<String>,
@@ -265,6 +269,7 @@ impl Session {
         let event = Event {
             id: sub_id.clone(),
             msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
+                call_id,
                 command,
                 cwd,
                 reason,
@@ -717,6 +722,7 @@ async fn submission_loop(
                     state: Mutex::new(state),
                     rollout: Mutex::new(rollout_recorder),
                     codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
+                    always_fail_sandbox: config.always_fail_sandbox,
                 }));
 
                 // Patch restored state into the newly created session.
@@ -1472,6 +1478,7 @@ async fn handle_container_exec_with_params(
             let rx_approve = sess
                 .request_command_approval(
                     sub_id.clone(),
+                    call_id.clone(),
                     params.command.clone(),
                     params.cwd.clone(),
                     None,
@@ -1512,14 +1519,24 @@ async fn handle_container_exec_with_params(
     sess.notify_exec_command_begin(&sub_id, &call_id, &params)
         .await;
 
-    let output_result = process_exec_tool_call(
-        params.clone(),
-        sandbox_type,
-        sess.ctrl_c.clone(),
-        &sess.sandbox_policy,
-        &sess.codex_linux_sandbox_exe,
-    )
-    .await;
+    let output_result = if sess.always_fail_sandbox && sandbox_type != SandboxType::None {
+        sess.notify_background_event(&sub_id, "forced failure (always_fail_sandbox)")
+            .await;
+        Err(CodexErr::Sandbox(SandboxErr::Denied(
+            -1,
+            "".to_string(),
+            "forced failure (always_fail_sandbox)".to_string(),
+        )))
+    } else {
+        process_exec_tool_call(
+            params.clone(),
+            sandbox_type,
+            sess.ctrl_c.clone(),
+            &sess.sandbox_policy,
+            &sess.codex_linux_sandbox_exe,
+        )
+        .await
+    };
 
     match output_result {
         Ok(output) => {
@@ -1599,6 +1616,7 @@ async fn handle_sandbox_error(
     let rx_approve = sess
         .request_command_approval(
             sub_id.clone(),
+            call_id.clone(),
             params.command.clone(),
             params.cwd.clone(),
             Some("command failed; retry without sandbox?".to_string()),
@@ -1616,9 +1634,7 @@ async fn handle_sandbox_error(
             sess.notify_background_event(&sub_id, "retrying command without sandbox")
                 .await;
 
-            // Emit a fresh Begin event so progress bars reset.
-            let retry_call_id = format!("{call_id}-retry");
-            sess.notify_exec_command_begin(&sub_id, &retry_call_id, &params)
+            sess.notify_exec_command_begin(&sub_id, &call_id, &params)
                 .await;
 
             // This is an escalated retry; the policy will not be
@@ -1641,14 +1657,8 @@ async fn handle_sandbox_error(
                         duration,
                     } = retry_output;
 
-                    sess.notify_exec_command_end(
-                        &sub_id,
-                        &retry_call_id,
-                        &stdout,
-                        &stderr,
-                        exit_code,
-                    )
-                    .await;
+                    sess.notify_exec_command_end(&sub_id, &call_id, &stdout, &stderr, exit_code)
+                        .await;
 
                     let is_success = exit_code == 0;
                     let content = format_exec_output(

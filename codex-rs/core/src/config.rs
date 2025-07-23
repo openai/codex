@@ -143,6 +143,10 @@ pub struct Config {
 
     /// Experimental rollout resume path (absolute path to .jsonl; undocumented).
     pub experimental_resume: Option<PathBuf>,
+
+    /// When true, force any sandboxed command execution attempt to fail prior to execution.
+    /// This is useful for testing sandbox escalation and fallback handling paths.
+    pub always_fail_sandbox: bool,
 }
 
 impl Config {
@@ -333,6 +337,10 @@ pub struct ConfigToml {
 
     /// Experimental path to a file whose contents replace the built-in BASE_INSTRUCTIONS.
     pub experimental_instructions_file: Option<PathBuf>,
+
+    /// When true, force any sandboxed command execution attempt to fail prior to execution.
+    /// This is useful for testing sandbox escalation and fallback handling paths.
+    pub always_fail_sandbox: Option<bool>,
 }
 
 impl ConfigToml {
@@ -518,6 +526,7 @@ impl Config {
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
 
             experimental_resume,
+            always_fail_sandbox: cfg.always_fail_sandbox.unwrap_or(false),
         };
         Ok(config)
     }
@@ -841,6 +850,7 @@ disable_response_storage = true
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
                 experimental_resume: None,
                 base_instructions: None,
+                always_fail_sandbox: false,
             },
             o3_profile_config
         );
@@ -889,6 +899,7 @@ disable_response_storage = true
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             experimental_resume: None,
             base_instructions: None,
+            always_fail_sandbox: false,
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -952,6 +963,7 @@ disable_response_storage = true
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             experimental_resume: None,
             base_instructions: None,
+            always_fail_sandbox: false,
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);

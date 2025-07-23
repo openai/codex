@@ -314,6 +314,7 @@ impl ChatWidget<'_> {
                 self.bottom_pane.set_task_running(false);
             }
             EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
+                call_id: _,
                 command,
                 cwd,
                 reason,
@@ -362,7 +363,7 @@ impl ChatWidget<'_> {
                 cwd: _,
             }) => {
                 self.conversation_history
-                    .add_active_exec_command(call_id, command);
+                    .reset_or_add_active_exec_command(call_id, command);
                 self.request_redraw();
             }
             EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
