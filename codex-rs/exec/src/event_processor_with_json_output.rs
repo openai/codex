@@ -59,7 +59,7 @@ impl EventProcessor for EventProcessorWithJsonOutput {
                     }
                     (None, _) => eprintln!("Warning: no file to write last message to."),
                 }
-                return CodexStatus::InitiateShutdown;
+                CodexStatus::InitiateShutdown
             }
             EventMsg::ShutdownComplete => CodexStatus::Shutdown,
             _ => {
