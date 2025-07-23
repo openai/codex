@@ -6,14 +6,30 @@ use codex_core::config::Config;
 use codex_core::model_supports_reasoning_summaries;
 use codex_core::protocol::Event;
 
-use crate::event_processor_with_human_output::CodexStatus;
+pub(crate) enum CodexStatus {
+    Running,
+    InitiateShutdown,
+    Shutdown,
+}
 
 pub(crate) trait EventProcessor {
     /// Print summary of effective configuration and user prompt.
     fn print_config_summary(&mut self, config: &Config, prompt: &str);
 
     /// Handle a single event emitted by the agent.
-    fn process_event(&mut self, event: Event, last_message_file: Option<&Path>) -> CodexStatus;
+    fn process_event(&mut self, event: Event) -> CodexStatus;
+
+    /// Get the path to the last message file.
+    fn last_message_path(&self) -> Option<&Path>;
+
+    /// Write the last message to the last message file.
+    fn write_last_message_file(&self, contents: &str) {
+        if let Some(path) = self.last_message_path() {
+            if let Err(e) = std::fs::write(path, contents) {
+                eprintln!("Failed to write last message file {path:?}: {e}");
+            }
+        }
+    }
 }
 
 pub(crate) fn create_config_summary_entries(config: &Config) -> Vec<(&'static str, String)> {

@@ -23,8 +23,10 @@ use shlex::try_join;
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::Path;
+use std::path::PathBuf;
 use std::time::Instant;
 
+use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
 use crate::event_processor::create_config_summary_entries;
 
@@ -56,10 +58,15 @@ pub(crate) struct EventProcessorWithHumanOutput {
     show_agent_reasoning: bool,
     answer_started: bool,
     reasoning_started: bool,
+    last_message_path: Option<PathBuf>,
 }
 
 impl EventProcessorWithHumanOutput {
-    pub(crate) fn create_with_ansi(with_ansi: bool, config: &Config) -> Self {
+    pub(crate) fn create_with_ansi(
+        with_ansi: bool,
+        config: &Config,
+        last_message_path: Option<PathBuf>,
+    ) -> Self {
         let call_id_to_command = HashMap::new();
         let call_id_to_patch = HashMap::new();
         let call_id_to_tool_call = HashMap::new();
@@ -79,6 +86,7 @@ impl EventProcessorWithHumanOutput {
                 show_agent_reasoning: !config.hide_agent_reasoning,
                 answer_started: false,
                 reasoning_started: false,
+                last_message_path,
             }
         } else {
             Self {
@@ -95,6 +103,7 @@ impl EventProcessorWithHumanOutput {
                 show_agent_reasoning: !config.hide_agent_reasoning,
                 answer_started: false,
                 reasoning_started: false,
+                last_message_path,
             }
         }
     }
@@ -118,12 +127,6 @@ struct PatchApplyBegin {
     auto_approved: bool,
 }
 
-pub(crate) enum CodexStatus {
-    Running,
-    InitiateShutdown,
-    Shutdown,
-}
-
 // Timestamped println helper. The timestamp is styled with self.dimmed.
 #[macro_export]
 macro_rules! ts_println {
@@ -136,6 +139,10 @@ macro_rules! ts_println {
 }
 
 impl EventProcessor for EventProcessorWithHumanOutput {
+    fn last_message_path(&self) -> Option<&Path> {
+        self.last_message_path.as_deref()
+    }
+
     /// Print a concise summary of the effective configuration that will be used
     /// for the session. This mirrors the information shown in the TUI welcome
     /// screen.
@@ -166,45 +173,25 @@ impl EventProcessor for EventProcessorWithHumanOutput {
         );
     }
 
-    fn process_event(&mut self, event: Event, last_message_file: Option<&Path>) -> CodexStatus {
+    fn process_event(&mut self, event: Event) -> CodexStatus {
         let Event { id: _, msg } = event;
         match msg {
             EventMsg::Error(ErrorEvent { message }) => {
                 let prefix = "ERROR:".style(self.red);
                 ts_println!(self, "{prefix} {message}");
-                CodexStatus::Running
             }
             EventMsg::BackgroundEvent(BackgroundEventEvent { message }) => {
                 ts_println!(self, "{}", message.style(self.dimmed));
-                CodexStatus::Running
             }
             EventMsg::TaskStarted => {
                 // Ignore.
-                CodexStatus::Running
             }
             EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) => {
-                match (last_agent_message, last_message_file) {
-                    (Some(last_agent_message), Some(last_message_file)) => {
-                        // Last message and a file to write to.
-                        if let Err(e) = std::fs::write(last_message_file, last_agent_message) {
-                            eprintln!("Error writing last message to file: {e}");
-                        }
-                    }
-                    (None, Some(last_message_file)) => {
-                        eprintln!(
-                            "Warning: No last message to write to file: {}",
-                            last_message_file.to_string_lossy()
-                        );
-                    }
-                    (_, None) => {
-                        // No last message and no file to write to.
-                    }
-                }
-                CodexStatus::InitiateShutdown
+                self.write_last_message_file(last_agent_message.as_deref().unwrap_or(""));
+                return CodexStatus::InitiateShutdown;
             }
             EventMsg::TokenCount(TokenUsage { total_tokens, .. }) => {
                 ts_println!(self, "tokens used: {total_tokens}");
-                CodexStatus::Running
             }
             EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
                 if !self.answer_started {
@@ -214,7 +201,6 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 print!("{delta}");
                 #[allow(clippy::expect_used)]
                 std::io::stdout().flush().expect("could not flush stdout");
-                CodexStatus::Running
             }
             EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta }) => {
                 if !self.show_agent_reasoning {
@@ -231,7 +217,6 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 print!("{delta}");
                 #[allow(clippy::expect_used)]
                 std::io::stdout().flush().expect("could not flush stdout");
-                CodexStatus::Running
             }
             EventMsg::AgentMessage(AgentMessageEvent { message }) => {
                 // if answer_started is false, this means we haven't received any
@@ -247,7 +232,6 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     println!();
                     self.answer_started = false;
                 }
-                CodexStatus::Running
             }
             EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
                 call_id,
@@ -268,7 +252,6 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     escape_command(&command).style(self.bold),
                     cwd.to_string_lossy(),
                 );
-                CodexStatus::Running
             }
             EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                 call_id,
@@ -307,7 +290,6 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     }
                 }
                 println!("{}", truncated_output.style(self.dimmed));
-                CodexStatus::Running
             }
             EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
                 call_id,
@@ -346,7 +328,6 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     "tool".style(self.magenta),
                     invocation.style(self.bold),
                 );
-                CodexStatus::Running
             }
             EventMsg::McpToolCallEnd(tool_call_end_event) => {
                 let is_success = tool_call_end_event.is_success();
@@ -380,7 +361,6 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                         println!("{}", line.style(self.dimmed));
                     }
                 }
-                CodexStatus::Running
             }
             EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
                 call_id,
@@ -460,7 +440,6 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                         }
                     }
                 }
-                CodexStatus::Running
             }
             EventMsg::PatchApplyEnd(PatchApplyEndEvent {
                 call_id,
@@ -495,15 +474,12 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 for line in output.lines() {
                     println!("{}", line.style(self.dimmed));
                 }
-                CodexStatus::Running
             }
             EventMsg::ExecApprovalRequest(_) => {
                 // Should we exit?
-                CodexStatus::Running
             }
             EventMsg::ApplyPatchApprovalRequest(_) => {
                 // Should we exit?
-                CodexStatus::Running
             }
             EventMsg::AgentReasoning(agent_reasoning_event) => {
                 if self.show_agent_reasoning {
@@ -519,7 +495,6 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                         self.reasoning_started = false;
                     }
                 }
-                CodexStatus::Running
             }
             EventMsg::SessionConfigured(session_configured_event) => {
                 let SessionConfiguredEvent {
@@ -538,14 +513,13 @@ impl EventProcessor for EventProcessorWithHumanOutput {
 
                 ts_println!(self, "model: {}", model);
                 println!();
-                CodexStatus::Running
             }
             EventMsg::GetHistoryEntryResponse(_) => {
                 // Currently ignored in exec output.
-                CodexStatus::Running
             }
-            EventMsg::Shutdown => CodexStatus::Shutdown,
+            EventMsg::Shutdown => return CodexStatus::Shutdown,
         }
+        CodexStatus::Running
     }
 }
 

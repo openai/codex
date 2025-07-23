@@ -27,8 +27,8 @@ use tracing::error;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
+use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
-use crate::event_processor_with_human_output::CodexStatus;
 
 pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
     let Cli {
@@ -123,11 +123,12 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
     let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides)?;
     let mut event_processor: Box<dyn EventProcessor> = if json_mode {
-        Box::new(EventProcessorWithJsonOutput::new())
+        Box::new(EventProcessorWithJsonOutput::new(last_message_file.clone()))
     } else {
         Box::new(EventProcessorWithHumanOutput::create_with_ansi(
             stdout_with_ansi,
             &config,
+            last_message_file.clone(),
         ))
     };
 
@@ -224,8 +225,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
     // Run the loop until the task is complete.
     while let Some(event) = rx.recv().await {
-        let shutdown: CodexStatus =
-            event_processor.process_event(event, last_message_file.as_deref());
+        let shutdown: CodexStatus = event_processor.process_event(event);
         match shutdown {
             CodexStatus::Running => continue,
             CodexStatus::InitiateShutdown => {

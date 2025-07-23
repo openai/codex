@@ -205,13 +205,17 @@ impl RolloutRecorder {
 
     pub async fn shutdown(&self) -> std::io::Result<()> {
         let (tx_done, rx_done) = oneshot::channel();
-        if let Err(e) = self.tx.send(RolloutCmd::Shutdown { ack: tx_done }).await {
-            warn!("failed to send rollout shutdown command: {e}");
-            return Ok(());
+        match self.tx.send(RolloutCmd::Shutdown { ack: tx_done }).await {
+            Ok(_) => rx_done
+                .await
+                .map_err(|e| IoError::other(format!("failed waiting for rollout shutdown: {e}"))),
+            Err(e) => {
+                warn!("failed to send rollout shutdown command: {e}");
+                Err(IoError::other(format!(
+                    "failed to send rollout shutdown command: {e}"
+                )))
+            }
         }
-        rx_done
-            .await
-            .map_err(|e| IoError::other(format!("failed waiting for rollout shutdown: {e}")))
     }
 }
 
@@ -308,9 +312,6 @@ async fn rollout_writer(
                 }
             }
             RolloutCmd::Shutdown { ack } => {
-                if let Err(e) = file.flush().await {
-                    warn!("Failed to flush on sync: {e}");
-                }
                 let _ = ack.send(());
             }
         }
