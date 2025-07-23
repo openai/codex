@@ -682,7 +682,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha1",
- "strum_macros 0.27.1",
+ "strum_macros 0.27.2",
  "tempfile",
  "thiserror 2.0.12",
  "time",
@@ -841,7 +841,7 @@ dependencies = [
  "serde_json",
  "shlex",
  "strum 0.27.2",
- "strum_macros 0.27.1",
+ "strum_macros 0.27.2",
  "tokio",
  "tracing",
  "tracing-appender",
@@ -4282,14 +4282,13 @@ dependencies = [
 
 [[package]]
 name = "strum_macros"
-version = "0.27.1"
+version = "0.27.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c77a8c5abcaf0f9ce05d62342b7d298c346515365c36b673df4ebe3ced01fde8"
+checksum = "7695ce3845ea4b33927c055a39dc438a45b059f7c1b3d91d38d10355fb8cbca7"
 dependencies = [
  "heck",
  "proc-macro2",
  "quote",
- "rustversion",
  "syn 2.0.104",
 ]
 
