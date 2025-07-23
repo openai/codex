@@ -812,6 +812,37 @@ async fn submission_loop(
                     }
                 });
             }
+            Op::Shutdown => {
+                info!("Shutting down Codex instance");
+
+                // Gracefully flush and shutdown rollout recorder on session end so tests
+                // that inspect the rollout file do not race with the background writer.
+                if let Some(sess_arc) = sess {
+                    let recorder_opt = sess_arc.rollout.lock().unwrap().take();
+                    if let Some(rec) = recorder_opt {
+                        if let Err(e) = rec.shutdown().await {
+                            warn!("failed to shutdown rollout recorder: {e}");
+                            let event = Event {
+                                id: sub.id.clone(),
+                                msg: EventMsg::Error(ErrorEvent {
+                                    message: "Failed to shutdown rollout recorder".to_string(),
+                                }),
+                            };
+                            if let Err(e) = tx_event.send(event).await {
+                                warn!("failed to send error message: {e:?}");
+                            }
+                        }
+                    }
+                }
+                let event = Event {
+                    id: sub.id.clone(),
+                    msg: EventMsg::ShutdownComplete,
+                };
+                if let Err(e) = tx_event.send(event).await {
+                    warn!("failed to send Shutdown event: {e}");
+                }
+                break;
+            }
         }
     }
     debug!("Agent loop exited");

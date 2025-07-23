@@ -223,9 +223,7 @@ impl App<'_> {
                         } => {
                             match &mut self.app_state {
                                 AppState::Chat { widget } => {
-                                    if widget.on_ctrl_c() {
-                                        self.app_event_tx.send(AppEvent::ExitRequest);
-                                    }
+                                    widget.on_ctrl_c();
                                 }
                                 AppState::Login { .. } | AppState::GitWarning { .. } => {
                                     // No-op.

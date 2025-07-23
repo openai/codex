@@ -419,6 +419,9 @@ impl ChatWidget<'_> {
                 self.bottom_pane
                     .on_history_entry_response(log_id, offset, entry.map(|e| e.text));
             }
+            EventMsg::ShutdownComplete => {
+                self.app_event_tx.send(AppEvent::ExitRequest);
+            }
             event => {
                 self.conversation_history
                     .add_background_event(format!("{event:?}"));
@@ -471,6 +474,7 @@ impl ChatWidget<'_> {
             self.reasoning_buffer.clear();
             false
         } else if self.bottom_pane.ctrl_c_quit_hint_visible() {
+            self.submit_op(Op::Shutdown);
             true
         } else {
             self.bottom_pane.show_ctrl_c_quit_hint();
