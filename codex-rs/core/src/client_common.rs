@@ -22,8 +22,6 @@ const BASE_INSTRUCTIONS: &str = include_str!("../prompt.md");
 pub struct Prompt {
     /// Conversation context input items.
     pub input: Vec<ResponseItem>,
-    /// Optional previous response ID (when storage is enabled).
-    pub prev_id: Option<String>,
     /// Optional instructions from the user to amend to the built-in agent
     /// instructions.
     pub user_instructions: Option<String>,
@@ -133,11 +131,10 @@ pub(crate) struct ResponsesApiRequest<'a> {
     pub(crate) tool_choice: &'static str,
     pub(crate) parallel_tool_calls: bool,
     pub(crate) reasoning: Option<Reasoning>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) previous_response_id: Option<String>,
     /// true when using the Responses API.
     pub(crate) store: bool,
     pub(crate) stream: bool,
+    pub(crate) include: Vec<String>,
 }
 
 use crate::config::Config;
