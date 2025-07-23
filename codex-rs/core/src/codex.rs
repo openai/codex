@@ -279,6 +279,7 @@ impl Session {
     pub async fn request_patch_approval(
         &self,
         sub_id: String,
+        call_id: String,
         action: &ApplyPatchAction,
         reason: Option<String>,
         grant_root: Option<PathBuf>,
@@ -287,6 +288,7 @@ impl Session {
         let event = Event {
             id: sub_id.clone(),
             msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
+                call_id,
                 changes: convert_apply_patch_to_protocol(action),
                 reason,
                 grant_root,
@@ -1629,7 +1631,7 @@ async fn apply_patch(
             // Compute a readable summary of path changes to include in the
             // approval request so the user can make an informed decision.
             let rx_approve = sess
-                .request_patch_approval(sub_id.clone(), &action, None, None)
+                .request_patch_approval(sub_id.clone(), call_id.clone(), &action, None, None)
                 .await;
             match rx_approve.await.unwrap_or_default() {
                 ReviewDecision::Approved | ReviewDecision::ApprovedForSession => false,
@@ -1667,7 +1669,13 @@ async fn apply_patch(
         ));
 
         let rx = sess
-            .request_patch_approval(sub_id.clone(), &action, reason.clone(), Some(root.clone()))
+            .request_patch_approval(
+                sub_id.clone(),
+                call_id.clone(),
+                &action,
+                reason.clone(),
+                Some(root.clone()),
+            )
             .await;
 
         if !matches!(
@@ -1751,6 +1759,7 @@ async fn apply_patch(
                 let rx = sess
                     .request_patch_approval(
                         sub_id.clone(),
+                        call_id.clone(),
                         &action,
                         reason.clone(),
                         Some(root.clone()),

@@ -27,6 +27,7 @@ pub struct PatchApprovalElicitRequestParams {
     pub codex_elicitation: String,
     pub codex_mcp_tool_call_id: String,
     pub codex_event_id: String,
+    pub codex_call_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub codex_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -41,6 +42,7 @@ pub struct PatchApprovalResponse {
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_patch_approval_request(
+    call_id: String,
     reason: Option<String>,
     grant_root: Option<PathBuf>,
     changes: HashMap<PathBuf, FileChange>,
@@ -66,6 +68,7 @@ pub(crate) async fn handle_patch_approval_request(
         codex_elicitation: "patch-approval".to_string(),
         codex_mcp_tool_call_id: tool_call_id.clone(),
         codex_event_id: event_id.clone(),
+        codex_call_id: call_id,
         codex_reason: reason,
         codex_grant_root: grant_root,
         codex_changes: changes,
