@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use base64::Engine;
 use mcp_types::CallToolResult;
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
 use serde::ser::Serializer;
 
@@ -37,12 +38,14 @@ pub enum ContentItem {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseItem {
     Message {
+        id: Option<String>,
         role: String,
         content: Vec<ContentItem>,
     },
     Reasoning {
         id: String,
         summary: Vec<ReasoningItemReasoningSummary>,
+        encrypted_content: Option<String>,
     },
     LocalShellCall {
         /// Set when using the chat completions API.
@@ -53,6 +56,7 @@ pub enum ResponseItem {
         action: LocalShellAction,
     },
     FunctionCall {
+        id: Option<String>,
         name: String,
         // The Responses API returns the function call arguments as a *string* that contains
         // JSON, not as an already‑parsed object. We keep it as a raw string here and let
@@ -78,7 +82,11 @@ pub enum ResponseItem {
 impl From<ResponseInputItem> for ResponseItem {
     fn from(item: ResponseInputItem) -> Self {
         match item {
-            ResponseInputItem::Message { role, content } => Self::Message { role, content },
+            ResponseInputItem::Message { role, content } => Self::Message {
+                role,
+                content,
+                id: None,
+            },
             ResponseInputItem::FunctionCallOutput { call_id, output } => {
                 Self::FunctionCallOutput { call_id, output }
             }
@@ -177,7 +185,7 @@ pub struct ShellToolCallParams {
     pub timeout_ms: Option<u64>,
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct FunctionCallOutputPayload {
     pub content: String,
     #[expect(dead_code)]
@@ -202,6 +210,19 @@ impl Serialize for FunctionCallOutputPayload {
         // exactly: always emit a bare string.
 
         serializer.serialize_str(&self.content)
+    }
+}
+
+impl<'de> Deserialize<'de> for FunctionCallOutputPayload {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Ok(FunctionCallOutputPayload {
+            content: s,
+            success: None,
+        })
     }
 }
 
