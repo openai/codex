@@ -239,16 +239,13 @@ impl ConversationHistoryWidget {
     /// it with a fresh one (resetting start time and view). Otherwise, add a new entry.
     pub fn reset_or_add_active_exec_command(&mut self, call_id: String, command: Vec<String>) {
         // Find the most recent matching ActiveExecCommand.
-        let maybe_idx = self
-            .entries
-            .iter()
-            .rposition(|entry| {
-                if let HistoryCell::ActiveExecCommand { call_id: id, .. } = &entry.cell {
-                    id == &call_id
-                } else {
-                    false
-                }
-            });
+        let maybe_idx = self.entries.iter().rposition(|entry| {
+            if let HistoryCell::ActiveExecCommand { call_id: id, .. } = &entry.cell {
+                id == &call_id
+            } else {
+                false
+            }
+        });
 
         if let Some(idx) = maybe_idx {
             let width = self.cached_width.get();
