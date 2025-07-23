@@ -145,7 +145,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         },
         Some(Subcommand::Apply(mut apply_cli)) => {
             prepend_config_flags(&mut apply_cli.config_overrides, cli.config_overrides);
-            run_apply_command(apply_cli).await?;
+            run_apply_command(apply_cli, None).await?;
         }
     }
 

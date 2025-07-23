@@ -78,17 +78,7 @@ async fn test_apply_command_creates_fibonacci_file() {
         .await
         .expect("Failed to load fixture");
 
-    let original_dir = std::env::current_dir().expect("Failed to get current dir");
-    std::env::set_current_dir(repo_path).expect("Failed to change directory");
-    struct DirGuard(std::path::PathBuf);
-    impl Drop for DirGuard {
-        fn drop(&mut self) {
-            let _ = std::env::set_current_dir(&self.0);
-        }
-    }
-    let _guard = DirGuard(original_dir);
-
-    apply_diff_from_task(task_response)
+    apply_diff_from_task(task_response, Some(repo_path.to_path_buf()))
         .await
         .expect("Failed to apply diff from task");
 
@@ -173,7 +163,7 @@ console.log(fib(10));
         .await
         .expect("Failed to load fixture");
 
-    let apply_result = apply_diff_from_task(task_response).await;
+    let apply_result = apply_diff_from_task(task_response, Some(repo_path.to_path_buf())).await;
 
     assert!(
         apply_result.is_err(),
