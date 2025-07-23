@@ -253,6 +253,7 @@ impl Session {
     pub async fn request_command_approval(
         &self,
         sub_id: String,
+        call_id: String,
         command: Vec<String>,
         cwd: PathBuf,
         reason: Option<String>,
@@ -261,6 +262,7 @@ impl Session {
         let event = Event {
             id: sub_id.clone(),
             msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
+                call_id,
                 command,
                 cwd,
                 reason,
@@ -1393,6 +1395,7 @@ async fn handle_container_exec_with_params(
             let rx_approve = sess
                 .request_command_approval(
                     sub_id.clone(),
+                    call_id.clone(),
                     params.command.clone(),
                     params.cwd.clone(),
                     None,
@@ -1520,6 +1523,7 @@ async fn handle_sandbox_error(
     let rx_approve = sess
         .request_command_approval(
             sub_id.clone(),
+            call_id.clone(),
             params.command.clone(),
             params.cwd.clone(),
             Some("command failed; retry without sandbox?".to_string()),
@@ -1537,9 +1541,7 @@ async fn handle_sandbox_error(
             sess.notify_background_event(&sub_id, "retrying command without sandbox")
                 .await;
 
-            // Emit a fresh Begin event so progress bars reset.
-            let retry_call_id = format!("{call_id}-retry");
-            sess.notify_exec_command_begin(&sub_id, &retry_call_id, &params)
+            sess.notify_exec_command_begin(&sub_id, &call_id, &params)
                 .await;
 
             // This is an escalated retry; the policy will not be
@@ -1562,14 +1564,8 @@ async fn handle_sandbox_error(
                         duration,
                     } = retry_output;
 
-                    sess.notify_exec_command_end(
-                        &sub_id,
-                        &retry_call_id,
-                        &stdout,
-                        &stderr,
-                        exit_code,
-                    )
-                    .await;
+                    sess.notify_exec_command_end(&sub_id, &call_id, &stdout, &stderr, exit_code)
+                        .await;
 
                     let is_success = exit_code == 0;
                     let content = format_exec_output(

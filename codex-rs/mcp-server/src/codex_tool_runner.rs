@@ -156,6 +156,7 @@ async fn run_codex_tool_session_inner(
                     EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
                         command,
                         cwd,
+                        call_id: _,
                         reason: _,
                     }) => {
                         handle_exec_approval_request(
