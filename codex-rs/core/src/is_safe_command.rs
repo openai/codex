@@ -23,9 +23,9 @@ fn is_safe_to_call_with_exec(command: &[String]) -> bool {
     let cmd0 = command.first().map(String::as_str);
 
     match cmd0 {
-        Some(
-            "cat" | "cd" | "echo" | "grep" | "head" | "ls" | "pwd" | "rg" | "tail" | "wc" | "which",
-        ) => true,
+        Some("cat" | "cd" | "echo" | "grep" | "head" | "ls" | "pwd" | "tail" | "wc" | "which") => {
+            true
+        }
 
         Some("find") => {
             // Certain options to `find` can delete files, write to files, or
@@ -44,6 +44,29 @@ fn is_safe_to_call_with_exec(command: &[String]) -> bool {
             !command
                 .iter()
                 .any(|arg| UNSAFE_FIND_OPTIONS.contains(&arg.as_str()))
+        }
+
+        // Ripgrep
+        Some("rg") => {
+            const UNSAFE_RIPGREP_OPTIONS_WITH_ARGS: &[&str] = &[
+                // Takes an arbitrary command that is executed for each match.
+                "--pre",
+                // Takes a command that can be used to obtain the local hostname.
+                "--hostname-bin",
+            ];
+            const UNSAFE_RIPGREP_OPTIONS_WITHOUT_ARGS: &[&str] = &[
+                // Calls out to other decompression tools, so do not auto-approve
+                // out of an abundance of caution.
+                "--search-zip",
+                "-z",
+            ];
+
+            !command.iter().any(|arg| {
+                UNSAFE_RIPGREP_OPTIONS_WITHOUT_ARGS.contains(&arg.as_str())
+                    || UNSAFE_RIPGREP_OPTIONS_WITH_ARGS
+                        .iter()
+                        .any(|&opt| arg == opt || arg.starts_with(&format!("{opt}=")))
+            })
         }
 
         // Git
@@ -241,6 +264,40 @@ mod tests {
             assert!(
                 !is_safe_to_call_with_exec(&args),
                 "expected {args:?} to be unsafe"
+            );
+        }
+    }
+
+    #[test]
+    fn ripgrep_rules() {
+        // Safe ripgrep invocations – none of the unsafe flags are present.
+        assert!(is_safe_to_call_with_exec(&vec_str(&[
+            "rg",
+            "Cargo.toml",
+            "-n"
+        ])));
+
+        // Unsafe flags that do not take an argument (present verbatim).
+        for args in [
+            vec_str(&["rg", "--search-zip", "files"]),
+            vec_str(&["rg", "-z", "files"]),
+        ] {
+            assert!(
+                !is_safe_to_call_with_exec(&args),
+                "expected {args:?} to be considered unsafe due to zip-search flag",
+            );
+        }
+
+        // Unsafe flags that expect a value, provided in both split and = forms.
+        for args in [
+            vec_str(&["rg", "--pre", "pwned", "files"]),
+            vec_str(&["rg", "--pre=pwned", "files"]),
+            vec_str(&["rg", "--hostname-bin", "pwned", "files"]),
+            vec_str(&["rg", "--hostname-bin=pwned", "files"]),
+        ] {
+            assert!(
+                !is_safe_to_call_with_exec(&args),
+                "expected {args:?} to be considered unsafe due to external-command flag",
             );
         }
     }
