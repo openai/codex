@@ -20,6 +20,8 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::config::Config;
+use crate::git_info::GitInfo;
+use crate::git_info::collect_git_info;
 use crate::models::ResponseItem;
 
 const SESSIONS_SUBDIR: &str = "sessions";
@@ -29,6 +31,14 @@ pub struct SessionMeta {
     pub id: Uuid,
     pub timestamp: String,
     pub instructions: Option<String>,
+}
+
+#[derive(Serialize)]
+struct SessionMetaWithGit {
+    #[serde(flatten)]
+    meta: SessionMeta,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    git: Option<GitInfo>,
 }
 
 #[derive(Serialize, Deserialize, Default, Clone)]
@@ -86,15 +96,12 @@ impl RolloutRecorder {
             .format(timestamp_format)
             .map_err(|e| IoError::other(format!("failed to format timestamp: {e}")))?;
 
-        let meta = SessionMeta {
-            timestamp,
-            id: session_id,
-            instructions,
-        };
+        // Clone the cwd for the spawned task to collect git info asynchronously
+        let cwd = config.cwd.clone();
 
         // A reasonably-sized bounded channel. If the buffer fills up the send
         // future will yield, which is fine – we only need to ensure we do not
-        // perform *blocking* I/O on the caller’s thread.
+        // perform *blocking* I/O on the caller's thread.
         let (tx, rx) = mpsc::channel::<RolloutCmd>(256);
 
         // Spawn a Tokio task that owns the file handle and performs async
@@ -103,7 +110,12 @@ impl RolloutRecorder {
         tokio::task::spawn(rollout_writer(
             tokio::fs::File::from_std(file),
             rx,
-            Some(meta),
+            Some(SessionMeta {
+                timestamp,
+                id: session_id,
+                instructions,
+            }),
+            cwd,
         ));
 
         Ok(Self { tx })
@@ -143,7 +155,10 @@ impl RolloutRecorder {
             .map_err(|e| IoError::other(format!("failed to queue rollout state: {e}")))
     }
 
-    pub async fn resume(path: &Path) -> std::io::Result<(Self, SavedSession)> {
+    pub async fn resume(
+        path: &Path,
+        cwd: std::path::PathBuf,
+    ) -> std::io::Result<(Self, SavedSession)> {
         info!("Resuming rollout from {path:?}");
         let text = tokio::fs::read_to_string(path).await?;
         let mut lines = text.lines();
@@ -201,7 +216,12 @@ impl RolloutRecorder {
             .open(path)?;
 
         let (tx, rx) = mpsc::channel::<RolloutCmd>(256);
-        tokio::task::spawn(rollout_writer(tokio::fs::File::from_std(file), rx, None));
+        tokio::task::spawn(rollout_writer(
+            tokio::fs::File::from_std(file),
+            rx,
+            None,
+            cwd,
+        ));
         info!("Resumed rollout successfully from {path:?}");
         Ok((Self { tx }, saved))
     }
@@ -270,15 +290,26 @@ fn create_log_file(config: &Config, session_id: Uuid) -> std::io::Result<LogFile
 async fn rollout_writer(
     mut file: tokio::fs::File,
     mut rx: mpsc::Receiver<RolloutCmd>,
-    meta: Option<SessionMeta>,
+    mut meta: Option<SessionMeta>,
+    cwd: std::path::PathBuf,
 ) {
-    if let Some(meta) = meta {
-        if let Ok(json) = serde_json::to_string(&meta) {
+    // If we have a meta, collect git info asynchronously and write meta first
+    if let Some(session_meta) = meta.take() {
+        let git_info = collect_git_info(&cwd).await;
+        let session_meta_with_git = SessionMetaWithGit {
+            meta: session_meta,
+            git: git_info,
+        };
+
+        // Write the SessionMeta as the first item in the file
+        if let Ok(json) = serde_json::to_string(&session_meta_with_git) {
             let _ = file.write_all(json.as_bytes()).await;
             let _ = file.write_all(b"\n").await;
             let _ = file.flush().await;
         }
     }
+
+    // Process rollout commands
     while let Some(cmd) = rx.recv().await {
         match cmd {
             RolloutCmd::AddItems(items) => {
