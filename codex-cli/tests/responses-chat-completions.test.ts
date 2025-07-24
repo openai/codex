@@ -811,5 +811,64 @@ describe("responsesCreateViaChatCompletions", () => {
         }
       }
     });
+
+    it("should not throw when a chunk has no delta field", async () => {
+      // Streaming mock where one chunk omits the `delta` field entirely.
+      async function* fakeStreamNoDelta() {
+        yield {
+          id: "chatcmpl-111",
+          model: "o3",
+          choices: [
+            {
+              delta: { role: "assistant" },
+              finish_reason: null,
+              index: 0,
+            },
+          ],
+        };
+        // Chunk without a delta property
+        yield {
+          id: "chatcmpl-111",
+          model: "o3",
+          choices: [
+            {
+              /* no delta */
+              finish_reason: "stop",
+              index: 0,
+            },
+          ],
+        };
+      }
+
+      openAiState.createStreamSpy = vi.fn().mockReturnValue(fakeStreamNoDelta());
+
+      const openaiClient = new (await import("openai")).default({
+        apiKey: "test-key",
+      }) as unknown as OpenAI;
+
+      const inputMessage = createTestInput({
+        model: "o3",
+        userMessage: "Hello, world!",
+        stream: true,
+      });
+
+      const streamGenerator =
+        await responsesModule.responsesCreateViaChatCompletions(
+          openaiClient,
+          inputMessage as unknown as ResponseCreateParamsStreaming,
+        );
+
+      const events: Array<ResponseEvent> = [];
+      for await (const event of streamGenerator) {
+        events.push(event);
+      }
+
+      // We should reach a completed event without throwing.
+      const completionEvent = events.find(isResponseCompletedEvent);
+      expect(completionEvent).toBeDefined();
+      if (completionEvent) {
+        expect(completionEvent.response.status).toBe("completed");
+      }
+    });
   });
 });
