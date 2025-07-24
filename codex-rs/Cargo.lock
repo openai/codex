@@ -663,6 +663,7 @@ dependencies = [
  "bytes",
  "codex-apply-patch",
  "codex-mcp-client",
+ "core_test_support",
  "dirs",
  "env-flags",
  "eventsource-stream",
@@ -799,6 +800,7 @@ dependencies = [
  "codex-core",
  "codex-linux-sandbox",
  "mcp-types",
+ "mcp_test_support",
  "pretty_assertions",
  "schemars 0.8.22",
  "serde",
@@ -951,6 +953,16 @@ name = "core-foundation-sys"
 version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
+
+[[package]]
+name = "core_test_support"
+version = "0.0.0"
+dependencies = [
+ "codex-core",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
 
 [[package]]
 name = "cpufeatures"
@@ -2602,6 +2614,22 @@ version = "0.0.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "mcp_test_support"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "assert_cmd",
+ "codex-mcp-server",
+ "mcp-types",
+ "pretty_assertions",
+ "serde_json",
+ "shlex",
+ "tempfile",
+ "tokio",
+ "wiremock",
 ]
 
 [[package]]
