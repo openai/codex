@@ -594,7 +594,7 @@ async fn submission_loop(
                 let mut restored_items: Option<Vec<ResponseItem>> = None;
                 let rollout_recorder: Option<RolloutRecorder> =
                     if let Some(path) = resume_path.as_ref() {
-                        match RolloutRecorder::resume(path).await {
+                        match RolloutRecorder::resume(path, cwd.clone()).await {
                             Ok((rec, saved)) => {
                                 session_id = saved.session_id;
                                 if !saved.items.is_empty() {
