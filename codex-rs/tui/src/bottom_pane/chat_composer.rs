@@ -22,7 +22,6 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use codex_file_search::FileMatch;
 
-
 const BASE_PLACEHOLDER_TEXT: &str = "send a message";
 /// If the pasted content exceeds this number of characters, replace it with a
 /// placeholder in the UI.
