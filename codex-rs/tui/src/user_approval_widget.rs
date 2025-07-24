@@ -333,7 +333,32 @@ impl WidgetRef for &UserApprovalWidget<'_> {
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded);
         let inner = outer.inner(area);
-        let prompt_height = self.get_confirmation_prompt_height(inner.width);
+
+        // Determine how many rows we can allocate for the static confirmation
+        // prompt while *always* keeping enough space for the interactive
+        // response area (select list or input field). When the full prompt
+        // would exceed the available height we truncate it so the response
+        // options never get pushed out of view. This keeps the approval modal
+        // usable even when the overall bottom viewport is small.
+
+        // Full height of the prompt (may be larger than the available area).
+        let full_prompt_height = self.get_confirmation_prompt_height(inner.width);
+
+        // Minimum rows that must remain for the interactive section.
+        let min_response_rows = match self.mode {
+            Mode::Select => SELECT_OPTIONS.len() as u16,
+            // In input mode we need exactly two rows: one for the guidance
+            // prompt and one for the single-line input field.
+            Mode::Input => 2,
+        };
+
+        // Clamp prompt height so confirmation + response never exceed the
+        // available space. `saturating_sub` avoids underflow when the area is
+        // too small even for the minimal layout – in this unlikely case we
+        // fall back to zero-height prompt so at least the options are
+        // visible.
+        let prompt_height = full_prompt_height.min(inner.height.saturating_sub(min_response_rows));
+
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Length(prompt_height), Constraint::Min(0)])

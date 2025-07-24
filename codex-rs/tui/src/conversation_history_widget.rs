@@ -281,6 +281,12 @@ impl ConversationHistoryWidget {
         });
     }
 
+    /// Return the lines for the most recently appended entry (if any) so the
+    /// parent widget can surface them via the new scrollback insertion path.
+    pub(crate) fn last_entry_plain_lines(&self) -> Option<Vec<Line<'static>>> {
+        self.entries.last().map(|e| e.cell.plain_lines())
+    }
+
     pub fn replace_last_agent_reasoning(&mut self, config: &Config, text: String) {
         if let Some(idx) = self
             .entries
