@@ -11,5 +11,5 @@ pub fn ansi_escape<'a>(s: &'a str) -> Text<'a>
 Advantages:
 
 - `ansi_to_tui::IntoText` is not in scope for the entire TUI crate
-- we `panic!()` and log if `IntoText` returns an `Err` and log it so that
+- we `panic!()` and log if `IntoText` returns an `Err` so that
   the caller does not have to deal with it

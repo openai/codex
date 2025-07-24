@@ -153,7 +153,7 @@ model_provider = "ollama"
 model = "mistral"
 ```
 
-This way, you can specify one command-line argument (.e.g., `--profile o3`, `--profile mistral`) to override multiple settings together.
+This way, you can specify one command-line argument (e.g., `--profile o3`, `--profile mistral`) to override multiple settings together.
 
 </details>
 <br />
