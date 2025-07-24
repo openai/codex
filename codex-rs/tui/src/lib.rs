@@ -151,7 +151,7 @@ pub fn run_main(
     let show_git_warning = !cli.skip_git_repo_check && !is_inside_git_repo(&config);
 
     run_ratatui_app(cli, config, show_login_screen, show_git_warning, log_rx)
-        .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err.to_string()))
+        .map_err(|err| std::io::Error::other(err.to_string()))
 }
 
 fn run_ratatui_app(
