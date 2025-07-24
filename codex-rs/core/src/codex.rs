@@ -991,6 +991,13 @@ async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
                     }),
                 };
                 sess.tx_event.send(event).await.ok();
+                // Clean up the task before returning
+                sess.remove_task(&sub_id);
+                let complete_event = Event {
+                    id: sub_id,
+                    msg: EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message: None }),
+                };
+                sess.tx_event.send(complete_event).await.ok();
                 return;
             }
         }
