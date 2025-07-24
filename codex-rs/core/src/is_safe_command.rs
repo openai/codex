@@ -23,9 +23,23 @@ fn is_safe_to_call_with_exec(command: &[String]) -> bool {
     let cmd0 = command.first().map(String::as_str);
 
     match cmd0 {
-        Some("cat" | "cd" | "echo" | "grep" | "head" | "ls" | "pwd" | "tail" | "wc" | "which") => {
+        #[rustfmt::skip]
+        Some(
+            "cat" |
+            "cd" |
+            "echo" |
+            "false" |
+            "grep" |
+            "head" |
+            "ls" |
+            "nl" |
+            "pwd" |
+            "tail" |
+            "true" |
+            "wc" |
+            "which") => {
             true
-        }
+        },
 
         Some("find") => {
             // Certain options to `find` can delete files, write to files, or
@@ -231,6 +245,11 @@ mod tests {
         assert!(is_safe_to_call_with_exec(&vec_str(&["git", "status"])));
         assert!(is_safe_to_call_with_exec(&vec_str(&[
             "sed", "-n", "1,5p", "file.txt"
+        ])));
+        assert!(is_safe_to_call_with_exec(&vec_str(&[
+            "nl",
+            "-nrz",
+            "Cargo.toml"
         ])));
 
         // Safe `find` command (no unsafe options).
