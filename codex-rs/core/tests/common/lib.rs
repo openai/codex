@@ -1,9 +1,5 @@
 #![allow(clippy::expect_used)]
 
-// Helpers shared by the integration tests.  These are located inside the
-// `tests/` tree on purpose so they never become part of the public API surface
-// of the `codex-core` crate.
-
 use tempfile::TempDir;
 
 use codex_core::config::Config;
@@ -30,7 +26,6 @@ pub fn load_default_config_for_test(codex_home: &TempDir) -> Config {
 /// with only a `type` field results in an event with no `data:` section. This
 /// makes it trivial to extend the fixtures as OpenAI adds new event kinds or
 /// fields.
-#[allow(dead_code)]
 pub fn load_sse_fixture(path: impl AsRef<std::path::Path>) -> String {
     let events: Vec<serde_json::Value> =
         serde_json::from_reader(std::fs::File::open(path).expect("read fixture"))
@@ -55,7 +50,6 @@ pub fn load_sse_fixture(path: impl AsRef<std::path::Path>) -> String {
 /// fixture template with the supplied identifier before parsing. This lets a
 /// single JSON template be reused by multiple tests that each need a unique
 /// `response_id`.
-#[allow(dead_code)]
 pub fn load_sse_fixture_with_id(path: impl AsRef<std::path::Path>, id: &str) -> String {
     let raw = std::fs::read_to_string(path).expect("read fixture template");
     let replaced = raw.replace("__ID__", id);
@@ -77,7 +71,6 @@ pub fn load_sse_fixture_with_id(path: impl AsRef<std::path::Path>, id: &str) -> 
         .collect()
 }
 
-#[allow(dead_code)]
 pub async fn wait_for_event<F>(
     codex: &codex_core::Codex,
     mut predicate: F,

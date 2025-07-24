@@ -62,6 +62,7 @@ openssl-sys = { version = "*", features = ["vendored"] }
 
 [dev-dependencies]
 assert_cmd = "2"
+core_test_support = { path = "tests/common" }
 maplit = "1.0.2"
 predicates = "3"
 pretty_assertions = "1.4.1"

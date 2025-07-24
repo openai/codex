@@ -37,6 +37,7 @@ uuid = { version = "1", features = ["serde", "v4"] }
 
 [dev-dependencies]
 assert_cmd = "2"
+mcp_test_support = { path = "tests/common" }
 pretty_assertions = "1.4.1"
 tempfile = "3"
 tokio-test = "0.4"
