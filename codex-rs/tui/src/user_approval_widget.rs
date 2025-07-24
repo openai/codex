@@ -116,10 +116,6 @@ pub(crate) struct UserApprovalWidget<'a> {
     done: bool,
 }
 
-// Number of lines automatically added by ratatui’s [`Block`] when
-// borders are enabled (one at the top, one at the bottom).
-const BORDER_LINES: u16 = 2;
-
 impl UserApprovalWidget<'_> {
     pub(crate) fn new(approval_request: ApprovalRequest, app_event_tx: AppEventSender) -> Self {
         let input = Input::default();
@@ -187,28 +183,6 @@ impl UserApprovalWidget<'_> {
             input,
             mode: Mode::Select,
             done: false,
-        }
-    }
-
-    pub(crate) fn get_height(&self, area: &Rect) -> u16 {
-        let confirmation_prompt_height =
-            self.get_confirmation_prompt_height(area.width - BORDER_LINES);
-
-        match self.mode {
-            Mode::Select => {
-                let num_option_lines = SELECT_OPTIONS.len() as u16;
-                confirmation_prompt_height + num_option_lines + BORDER_LINES
-            }
-            Mode::Input => {
-                //   1. "Give the model feedback ..." prompt
-                //   2. A single‑line input field (we allocate exactly one row;
-                //      the `tui-input` widget will scroll horizontally if the
-                //      text exceeds the width).
-                const INPUT_PROMPT_LINES: u16 = 1;
-                const INPUT_FIELD_LINES: u16 = 1;
-
-                confirmation_prompt_height + INPUT_PROMPT_LINES + INPUT_FIELD_LINES + BORDER_LINES
-            }
         }
     }
 
@@ -367,8 +341,7 @@ impl WidgetRef for &UserApprovalWidget<'_> {
         let response_chunk = chunks[1];
 
         // Build the inner lines based on the mode. Collect them into a List of
-        // non-wrapping lines rather than a Paragraph because get_height(Rect)
-        // depends on this behavior for its calculation.
+        // non-wrapping lines rather than a Paragraph for predictable layout.
         let lines = match self.mode {
             Mode::Select => SELECT_OPTIONS
                 .iter()
