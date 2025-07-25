@@ -649,7 +649,7 @@ dependencies = [
  "clap",
  "codex-core",
  "serde",
- "toml 0.9.1",
+ "toml 0.9.2",
 ]
 
 [[package]]
@@ -663,6 +663,7 @@ dependencies = [
  "bytes",
  "codex-apply-patch",
  "codex-mcp-client",
+ "core_test_support",
  "dirs",
  "env-flags",
  "eventsource-stream",
@@ -676,20 +677,20 @@ dependencies = [
  "openssl-sys",
  "predicates",
  "pretty_assertions",
- "rand 0.9.1",
+ "rand 0.9.2",
  "reqwest",
  "seccompiler",
  "serde",
  "serde_json",
  "sha1",
- "strum_macros 0.27.1",
+ "strum_macros 0.27.2",
  "tempfile",
  "thiserror 2.0.12",
  "time",
  "tokio",
  "tokio-test",
  "tokio-util",
- "toml 0.9.1",
+ "toml 0.9.2",
  "tracing",
  "tree-sitter",
  "tree-sitter-bash",
@@ -799,6 +800,7 @@ dependencies = [
  "codex-core",
  "codex-linux-sandbox",
  "mcp-types",
+ "mcp_test_support",
  "pretty_assertions",
  "schemars 0.8.22",
  "serde",
@@ -807,7 +809,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-test",
- "toml 0.9.1",
+ "toml 0.9.2",
  "tracing",
  "tracing-subscriber",
  "uuid",
@@ -840,8 +842,8 @@ dependencies = [
  "regex-lite",
  "serde_json",
  "shlex",
- "strum 0.27.1",
- "strum_macros 0.27.1",
+ "strum 0.27.2",
+ "strum_macros 0.27.2",
  "tokio",
  "tracing",
  "tracing-appender",
@@ -951,6 +953,16 @@ name = "core-foundation-sys"
 version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
+
+[[package]]
+name = "core_test_support"
+version = "0.0.0"
+dependencies = [
+ "codex-core",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
 
 [[package]]
 name = "cpufeatures"
@@ -2605,6 +2617,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "mcp_test_support"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "assert_cmd",
+ "codex-mcp-server",
+ "mcp-types",
+ "pretty_assertions",
+ "serde_json",
+ "shlex",
+ "tempfile",
+ "tokio",
+ "wiremock",
+]
+
+[[package]]
 name = "memchr"
 version = "2.7.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3279,9 +3307,9 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.9.1"
+version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9fbfd9d094a40bf3ae768db9361049ace4c0e04a4fd6b359518bd7b73a73dd97"
+checksum = "6db2770f06117d490610c7488547d543617b21bfa07796d7a12f6f1bd53850d1"
 dependencies = [
  "rand_chacha 0.9.0",
  "rand_core 0.9.3",
@@ -4263,9 +4291,9 @@ dependencies = [
 
 [[package]]
 name = "strum"
-version = "0.27.1"
+version = "0.27.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f64def088c51c9510a8579e3c5d67c65349dcf755e5479ad3d010aa6454e2c32"
+checksum = "af23d6f6c1a224baef9d3f61e287d2761385a5b88fdab4eb4c6f11aeb54c4bcf"
 
 [[package]]
 name = "strum_macros"
@@ -4282,14 +4310,13 @@ dependencies = [
 
 [[package]]
 name = "strum_macros"
-version = "0.27.1"
+version = "0.27.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c77a8c5abcaf0f9ce05d62342b7d298c346515365c36b673df4ebe3ced01fde8"
+checksum = "7695ce3845ea4b33927c055a39dc438a45b059f7c1b3d91d38d10355fb8cbca7"
 dependencies = [
  "heck",
  "proc-macro2",
  "quote",
- "rustversion",
  "syn 2.0.104",
 ]
 
@@ -4666,9 +4693,9 @@ dependencies = [
 
 [[package]]
 name = "toml"
-version = "0.9.1"
+version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0207d6ed1852c2a124c1fbec61621acb8330d2bf969a5d0643131e9affd985a5"
+checksum = "ed0aee96c12fa71097902e0bb061a5e1ebd766a6636bb605ba401c45c1650eac"
 dependencies = [
  "indexmap 2.10.0",
  "serde",
@@ -4712,9 +4739,9 @@ dependencies = [
 
 [[package]]
 name = "toml_parser"
-version = "1.0.0"
+version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b5c1c469eda89749d2230d8156a5969a69ffe0d6d01200581cdc6110674d293e"
+checksum = "97200572db069e74c512a14117b296ba0a80a30123fbbb5aa1f4a348f639ca30"
 dependencies = [
  "winnow",
 ]
@@ -4856,9 +4883,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter"
-version = "0.25.6"
+version = "0.25.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7cf18d43cbf0bfca51f657132cc616a5097edc4424d538bae6fa60142eaf9f0"
+checksum = "6d7b8994f367f16e6fa14b5aebbcb350de5d7cbea82dc5b00ae997dd71680dd2"
 dependencies = [
  "cc",
  "regex",

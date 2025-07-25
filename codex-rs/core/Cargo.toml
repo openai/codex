@@ -30,7 +30,7 @@ reqwest = { version = "0.12", features = ["json", "stream"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha1 = "0.10.6"
-strum_macros = "0.27.1"
+strum_macros = "0.27.2"
 thiserror = "2.0.12"
 time = { version = "0.3", features = ["formatting", "local-offset", "macros"] }
 tokio = { version = "1", features = [
@@ -41,9 +41,9 @@ tokio = { version = "1", features = [
     "signal",
 ] }
 tokio-util = "0.7.14"
-toml = "0.9.1"
+toml = "0.9.2"
 tracing = { version = "0.1.41", features = ["log"] }
-tree-sitter = "0.25.3"
+tree-sitter = "0.25.8"
 tree-sitter-bash = "0.25.0"
 uuid = { version = "1", features = ["serde", "v4"] }
 wildmatch = "2.4.0"
@@ -62,6 +62,7 @@ openssl-sys = { version = "*", features = ["vendored"] }
 
 [dev-dependencies]
 assert_cmd = "2"
+core_test_support = { path = "tests/common" }
 maplit = "1.0.2"
 predicates = "3"
 pretty_assertions = "1.4.1"

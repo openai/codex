@@ -1,31 +1,57 @@
-use tree_sitter::Parser;
-use tree_sitter::Tree;
-use tree_sitter_bash::LANGUAGE as BASH;
+use crate::bash::try_parse_bash;
+use crate::bash::try_parse_word_only_commands_sequence;
 
 pub fn is_known_safe_command(command: &[String]) -> bool {
     if is_safe_to_call_with_exec(command) {
         return true;
     }
 
-    // TODO(mbolin): Also support safe commands that are piped together such
-    // as `cat foo | wc -l`.
-    matches!(
-        command,
-        [bash, flag, script]
-            if bash == "bash"
-            && flag == "-lc"
-            && try_parse_bash(script).and_then(|tree|
-                try_parse_single_word_only_command(&tree, script)).is_some_and(|parsed_bash_command| is_safe_to_call_with_exec(&parsed_bash_command))
-    )
+    // Support `bash -lc "..."` where the script consists solely of one or
+    // more "plain" commands (only bare words / quoted strings) combined with
+    // a conservative allow‑list of shell operators that themselves do not
+    // introduce side effects ( "&&", "||", ";", and "|" ). If every
+    // individual command in the script is itself a known‑safe command, then
+    // the composite expression is considered safe.
+    if let [bash, flag, script] = command {
+        if bash == "bash" && flag == "-lc" {
+            if let Some(tree) = try_parse_bash(script) {
+                if let Some(all_commands) = try_parse_word_only_commands_sequence(&tree, script) {
+                    if !all_commands.is_empty()
+                        && all_commands
+                            .iter()
+                            .all(|cmd| is_safe_to_call_with_exec(cmd))
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+
+    false
 }
 
 fn is_safe_to_call_with_exec(command: &[String]) -> bool {
     let cmd0 = command.first().map(String::as_str);
 
     match cmd0 {
-        Some("cat" | "cd" | "echo" | "grep" | "head" | "ls" | "pwd" | "tail" | "wc" | "which") => {
+        #[rustfmt::skip]
+        Some(
+            "cat" |
+            "cd" |
+            "echo" |
+            "false" |
+            "grep" |
+            "head" |
+            "ls" |
+            "nl" |
+            "pwd" |
+            "tail" |
+            "true" |
+            "wc" |
+            "which") => {
             true
-        }
+        },
 
         Some("find") => {
             // Certain options to `find` can delete files, write to files, or
@@ -95,90 +121,7 @@ fn is_safe_to_call_with_exec(command: &[String]) -> bool {
     }
 }
 
-fn try_parse_bash(bash_lc_arg: &str) -> Option<Tree> {
-    let lang = BASH.into();
-    let mut parser = Parser::new();
-    #[expect(clippy::expect_used)]
-    parser.set_language(&lang).expect("load bash grammar");
-
-    let old_tree: Option<&Tree> = None;
-    parser.parse(bash_lc_arg, old_tree)
-}
-
-/// If `tree` represents a single Bash command whose name and every argument is
-/// an ordinary `word`, return those words in order; otherwise, return `None`.
-///
-/// `src` must be the exact source string that was parsed into `tree`, so we can
-/// extract the text for every node.
-pub fn try_parse_single_word_only_command(tree: &Tree, src: &str) -> Option<Vec<String>> {
-    // Any parse error is an immediate rejection.
-    if tree.root_node().has_error() {
-        return None;
-    }
-
-    // (program …) with exactly one statement
-    let root = tree.root_node();
-    if root.kind() != "program" || root.named_child_count() != 1 {
-        return None;
-    }
-
-    let cmd = root.named_child(0)?; // (command …)
-    if cmd.kind() != "command" {
-        return None;
-    }
-
-    let mut words = Vec::new();
-    let mut cursor = cmd.walk();
-
-    for child in cmd.named_children(&mut cursor) {
-        match child.kind() {
-            // The command name node wraps one `word` child.
-            "command_name" => {
-                let word_node = child.named_child(0)?; // make sure it's only a word
-                if word_node.kind() != "word" {
-                    return None;
-                }
-                words.push(word_node.utf8_text(src.as_bytes()).ok()?.to_owned());
-            }
-            // Positional‑argument word (allowed).
-            "word" | "number" => {
-                words.push(child.utf8_text(src.as_bytes()).ok()?.to_owned());
-            }
-            "string" => {
-                if child.child_count() == 3
-                    && child.child(0)?.kind() == "\""
-                    && child.child(1)?.kind() == "string_content"
-                    && child.child(2)?.kind() == "\""
-                {
-                    words.push(child.child(1)?.utf8_text(src.as_bytes()).ok()?.to_owned());
-                } else {
-                    // Anything else means the command is *not* plain words.
-                    return None;
-                }
-            }
-            "concatenation" => {
-                // TODO: Consider things like `'ab\'a'`.
-                return None;
-            }
-            "raw_string" => {
-                // Raw string is a single word, but we need to strip the quotes.
-                let raw_string = child.utf8_text(src.as_bytes()).ok()?;
-                let stripped = raw_string
-                    .strip_prefix('\'')
-                    .and_then(|s| s.strip_suffix('\''));
-                if let Some(stripped) = stripped {
-                    words.push(stripped.to_owned());
-                } else {
-                    return None;
-                }
-            }
-            // Anything else means the command is *not* plain words.
-            _ => return None,
-        }
-    }
-
-    Some(words)
-}
+// (bash parsing helpers implemented in crate::bash)
 
 /* ----------------------------------------------------------
 Example
@@ -216,6 +159,7 @@ fn is_valid_sed_n_arg(arg: Option<&str>) -> bool {
         _ => false,
     }
 }
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
@@ -231,6 +175,11 @@ mod tests {
         assert!(is_safe_to_call_with_exec(&vec_str(&["git", "status"])));
         assert!(is_safe_to_call_with_exec(&vec_str(&[
             "sed", "-n", "1,5p", "file.txt"
+        ])));
+        assert!(is_safe_to_call_with_exec(&vec_str(&[
+            "nl",
+            "-nrz",
+            "Cargo.toml"
         ])));
 
         // Safe `find` command (no unsafe options).
@@ -335,6 +284,30 @@ mod tests {
     }
 
     #[test]
+    fn bash_lc_safe_examples_with_operators() {
+        assert!(is_known_safe_command(&vec_str(&[
+            "bash",
+            "-lc",
+            "grep -R \"Cargo.toml\" -n || true"
+        ])));
+        assert!(is_known_safe_command(&vec_str(&[
+            "bash",
+            "-lc",
+            "ls && pwd"
+        ])));
+        assert!(is_known_safe_command(&vec_str(&[
+            "bash",
+            "-lc",
+            "echo 'hi' ; ls"
+        ])));
+        assert!(is_known_safe_command(&vec_str(&[
+            "bash",
+            "-lc",
+            "ls | wc -l"
+        ])));
+    }
+
+    #[test]
     fn bash_lc_unsafe_examples() {
         assert!(
             !is_known_safe_command(&vec_str(&["bash", "-lc", "git", "status"])),
@@ -347,44 +320,29 @@ mod tests {
 
         assert!(
             !is_known_safe_command(&vec_str(&["bash", "-lc", "find . -name file.txt -delete"])),
-            "Unsafe find option should not be auto‑approved."
-        );
-    }
-
-    #[test]
-    fn test_try_parse_single_word_only_command() {
-        let script_with_single_quoted_string = "sed -n '1,5p' file.txt";
-        let parsed_words = try_parse_bash(script_with_single_quoted_string)
-            .and_then(|tree| {
-                try_parse_single_word_only_command(&tree, script_with_single_quoted_string)
-            })
-            .unwrap();
-        assert_eq!(
-            vec![
-                "sed".to_string(),
-                "-n".to_string(),
-                // Ensure the single quotes are properly removed.
-                "1,5p".to_string(),
-                "file.txt".to_string()
-            ],
-            parsed_words,
+            "Unsafe find option should not be auto-approved."
         );
 
-        let script_with_number_arg = "ls -1";
-        let parsed_words = try_parse_bash(script_with_number_arg)
-            .and_then(|tree| try_parse_single_word_only_command(&tree, script_with_number_arg))
-            .unwrap();
-        assert_eq!(vec!["ls", "-1"], parsed_words,);
+        // Disallowed because of unsafe command in sequence.
+        assert!(
+            !is_known_safe_command(&vec_str(&["bash", "-lc", "ls && rm -rf /"])),
+            "Sequence containing unsafe command must be rejected"
+        );
 
-        let script_with_double_quoted_string_with_no_funny_stuff_arg = "grep -R \"Cargo.toml\" -n";
-        let parsed_words = try_parse_bash(script_with_double_quoted_string_with_no_funny_stuff_arg)
-            .and_then(|tree| {
-                try_parse_single_word_only_command(
-                    &tree,
-                    script_with_double_quoted_string_with_no_funny_stuff_arg,
-                )
-            })
-            .unwrap();
-        assert_eq!(vec!["grep", "-R", "Cargo.toml", "-n"], parsed_words);
+        // Disallowed because of parentheses / subshell.
+        assert!(
+            !is_known_safe_command(&vec_str(&["bash", "-lc", "(ls)"])),
+            "Parentheses (subshell) are not provably safe with the current parser"
+        );
+        assert!(
+            !is_known_safe_command(&vec_str(&["bash", "-lc", "ls || (pwd && echo hi)"])),
+            "Nested parentheses are not provably safe with the current parser"
+        );
+
+        // Disallowed redirection.
+        assert!(
+            !is_known_safe_command(&vec_str(&["bash", "-lc", "ls > out.txt"])),
+            "> redirection should be rejected"
+        );
     }
 }

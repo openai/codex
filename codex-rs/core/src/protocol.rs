@@ -11,6 +11,7 @@ use std::str::FromStr;
 use mcp_types::CallToolResult;
 use serde::Deserialize;
 use serde::Serialize;
+use strum_macros::Display;
 use uuid::Uuid;
 
 use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
@@ -116,18 +117,23 @@ pub enum Op {
 
     /// Request a single history entry identified by `log_id` + `offset`.
     GetHistoryEntryRequest { offset: usize, log_id: u64 },
+
+    /// Request to shut down codex instance.
+    Shutdown,
 }
 
 /// Determines the conditions under which the user is consulted to approve
 /// running the command proposed by Codex.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, Display)]
 #[serde(rename_all = "kebab-case")]
+#[strum(serialize_all = "kebab-case")]
 pub enum AskForApproval {
     /// Under this policy, only "known safe" commands—as determined by
     /// `is_safe_command()`—that **only read files** are auto‑approved.
     /// Everything else will ask the user to approve.
     #[default]
     #[serde(rename = "untrusted")]
+    #[strum(serialize = "untrusted")]
     UnlessTrusted,
 
     /// *All* commands are auto‑approved, but they are expected to run inside a
@@ -326,6 +332,9 @@ pub enum EventMsg {
 
     /// Response to GetHistoryEntryRequest.
     GetHistoryEntryResponse(GetHistoryEntryResponseEvent),
+
+    /// Notification that the agent is shutting down.
+    ShutdownComplete,
 }
 
 // Individual event payload types matching each `EventMsg` variant.

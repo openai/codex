@@ -26,9 +26,8 @@ use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
-mod test_support;
+use core_test_support::load_default_config_for_test;
 use tempfile::TempDir;
-use test_support::load_default_config_for_test;
 use tokio::sync::Notify;
 use tokio::time::timeout;
 
