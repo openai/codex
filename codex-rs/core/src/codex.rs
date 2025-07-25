@@ -205,7 +205,7 @@ pub(crate) struct Session {
     rollout: Mutex<Option<RolloutRecorder>>,
     state: Mutex<State>,
     codex_linux_sandbox_exe: Option<PathBuf>,
-    user_shell: Option<shell::Shell>,
+    user_shell: shell::Shell,
 }
 
 impl Session {
@@ -695,7 +695,7 @@ async fn submission_loop(
                     rollout: Mutex::new(rollout_recorder),
                     codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
                     disable_response_storage,
-                    user_shell: shell::current_shell(),
+                    user_shell: shell::current_shell().await,
                 }));
 
                 // Patch restored state into the newly created session.
@@ -1387,9 +1387,8 @@ fn parse_container_exec_arguments(
 }
 
 fn maybe_run_with_shell(params: ExecParams, sess: &Session) -> ExecParams {
-    if sess.shell_environment_policy.use_profile && sess.user_shell.is_some() {
-        let shell = sess.user_shell.as_ref().unwrap();
-        let command = shell.run_with_profile(params.command.clone());
+    if sess.shell_environment_policy.use_profile {
+        let command = sess.user_shell.run_with_profile(params.command.clone());
         if let Some(command) = command {
             return ExecParams { command, ..params };
         }
