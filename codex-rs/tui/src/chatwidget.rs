@@ -23,9 +23,6 @@ use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TokenUsage;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
-use ratatui::layout::Constraint;
-use ratatui::layout::Direction;
-use ratatui::layout::Layout;
 use ratatui::layout::Rect;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
@@ -52,6 +49,9 @@ pub(crate) struct ChatWidget<'a> {
     initial_user_message: Option<UserMessage>,
     token_usage: TokenUsage,
     reasoning_buffer: String,
+    // Buffer for streaming assistant answer text; we do not surface partial
+    // We wait for the final AgentMessage event and then emit the full text
+    // at once into scrollback so the history contains a single message.
     answer_buffer: String,
 }
 
@@ -187,6 +187,13 @@ impl ChatWidget<'_> {
         }
     }
 
+    /// Emits the last entry's plain lines from conversation_history, if any.
+    fn emit_last_history_entry(&mut self) {
+        if let Some(lines) = self.conversation_history.last_entry_plain_lines() {
+            self.app_event_tx.send(AppEvent::InsertHistory(lines));
+        }
+    }
+
     fn submit_user_message(&mut self, user_message: UserMessage) {
         let UserMessage { text, image_paths } = user_message;
         let mut items: Vec<InputItem> = Vec::new();
@@ -220,7 +227,8 @@ impl ChatWidget<'_> {
 
         // Only show text portion in conversation history for now.
         if !text.is_empty() {
-            self.conversation_history.add_user_message(text);
+            self.conversation_history.add_user_message(text.clone());
+            self.emit_last_history_entry();
         }
         self.conversation_history.scroll_to_bottom();
     }
@@ -232,6 +240,10 @@ impl ChatWidget<'_> {
                 // Record session information at the top of the conversation.
                 self.conversation_history
                     .add_session_info(&self.config, event.clone());
+                // Immediately surface the session banner / settings summary in
+                // scrollback so the user can review configuration (model,
+                // sandbox, approvals, etc.) before interacting.
+                self.emit_last_history_entry();
 
                 // Forward history metadata to the bottom pane so the chat
                 // composer can navigate through past messages.
@@ -247,50 +259,50 @@ impl ChatWidget<'_> {
                 self.request_redraw();
             }
             EventMsg::AgentMessage(AgentMessageEvent { message }) => {
-                // if the answer buffer is empty, this means we haven't received any
-                // delta. Thus, we need to print the message as a new answer.
-                if self.answer_buffer.is_empty() {
-                    self.conversation_history
-                        .add_agent_message(&self.config, message);
+                // Final assistant answer. Prefer the fully provided message
+                // from the event; if it is empty fall back to any accumulated
+                // delta buffer (some providers may only stream deltas and send
+                // an empty final message).
+                let full = if message.is_empty() {
+                    std::mem::take(&mut self.answer_buffer)
                 } else {
+                    self.answer_buffer.clear();
+                    message
+                };
+                if !full.is_empty() {
                     self.conversation_history
-                        .replace_prev_agent_message(&self.config, message);
+                        .add_agent_message(&self.config, full);
+                    self.emit_last_history_entry();
                 }
-                self.answer_buffer.clear();
                 self.request_redraw();
             }
             EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
-                if self.answer_buffer.is_empty() {
-                    self.conversation_history
-                        .add_agent_message(&self.config, "".to_string());
-                }
-                self.answer_buffer.push_str(&delta.clone());
-                self.conversation_history
-                    .replace_prev_agent_message(&self.config, self.answer_buffer.clone());
-                self.request_redraw();
+                // Buffer only – do not emit partial lines. This avoids cases
+                // where long responses appear truncated if the terminal
+                // wrapped early. The full message is emitted on
+                // AgentMessage.
+                self.answer_buffer.push_str(&delta);
             }
             EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta }) => {
-                if self.reasoning_buffer.is_empty() {
-                    self.conversation_history
-                        .add_agent_reasoning(&self.config, "".to_string());
-                }
-                self.reasoning_buffer.push_str(&delta.clone());
-                self.conversation_history
-                    .replace_prev_agent_reasoning(&self.config, self.reasoning_buffer.clone());
-                self.request_redraw();
+                // Buffer only – disable incremental reasoning streaming so we
+                // avoid truncated intermediate lines. Full text emitted on
+                // AgentReasoning.
+                self.reasoning_buffer.push_str(&delta);
             }
             EventMsg::AgentReasoning(AgentReasoningEvent { text }) => {
-                // if the reasoning buffer is empty, this means we haven't received any
-                // delta. Thus, we need to print the message as a new reasoning.
-                if self.reasoning_buffer.is_empty() {
-                    self.conversation_history
-                        .add_agent_reasoning(&self.config, "".to_string());
+                // Emit full reasoning text once. Some providers might send
+                // final event with empty text if only deltas were used.
+                let full = if text.is_empty() {
+                    std::mem::take(&mut self.reasoning_buffer)
                 } else {
-                    // else, we rerender one last time.
+                    self.reasoning_buffer.clear();
+                    text
+                };
+                if !full.is_empty() {
                     self.conversation_history
-                        .replace_prev_agent_reasoning(&self.config, text);
+                        .add_agent_reasoning(&self.config, full);
+                    self.emit_last_history_entry();
                 }
-                self.reasoning_buffer.clear();
                 self.request_redraw();
             }
             EventMsg::TaskStarted => {
@@ -310,7 +322,8 @@ impl ChatWidget<'_> {
                     .set_token_usage(self.token_usage.clone(), self.config.model_context_window);
             }
             EventMsg::Error(ErrorEvent { message }) => {
-                self.conversation_history.add_error(message);
+                self.conversation_history.add_error(message.clone());
+                self.emit_last_history_entry();
                 self.bottom_pane.set_task_running(false);
             }
             EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
@@ -346,6 +359,7 @@ impl ChatWidget<'_> {
 
                 self.conversation_history
                     .add_patch_event(PatchEventType::ApprovalRequest, changes);
+                self.emit_last_history_entry();
 
                 self.conversation_history.scroll_to_bottom();
 
@@ -364,7 +378,8 @@ impl ChatWidget<'_> {
                 cwd: _,
             }) => {
                 self.conversation_history
-                    .reset_or_add_active_exec_command(call_id, command);
+                    .add_active_exec_command(call_id, command);
+                self.emit_last_history_entry();
                 self.request_redraw();
             }
             EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
@@ -376,6 +391,7 @@ impl ChatWidget<'_> {
                 // summary so the user can follow along.
                 self.conversation_history
                     .add_patch_event(PatchEventType::ApplyBegin { auto_approved }, changes);
+                self.emit_last_history_entry();
                 if !auto_approved {
                     self.conversation_history.scroll_to_bottom();
                 }
@@ -399,6 +415,7 @@ impl ChatWidget<'_> {
             }) => {
                 self.conversation_history
                     .add_active_mcp_tool_call(call_id, server, tool, arguments);
+                self.emit_last_history_entry();
                 self.request_redraw();
             }
             EventMsg::McpToolCallEnd(mcp_tool_call_end_event) => {
@@ -425,6 +442,7 @@ impl ChatWidget<'_> {
             event => {
                 self.conversation_history
                     .add_background_event(format!("{event:?}"));
+                self.emit_last_history_entry();
                 self.request_redraw();
             }
         }
@@ -441,7 +459,9 @@ impl ChatWidget<'_> {
     }
 
     pub(crate) fn add_diff_output(&mut self, diff_output: String) {
-        self.conversation_history.add_diff_output(diff_output);
+        self.conversation_history
+            .add_diff_output(diff_output.clone());
+        self.emit_last_history_entry();
         self.request_redraw();
     }
 
@@ -492,19 +512,18 @@ impl ChatWidget<'_> {
             tracing::error!("failed to submit op: {e}");
         }
     }
+
+    pub(crate) fn token_usage(&self) -> &TokenUsage {
+        &self.token_usage
+    }
 }
 
 impl WidgetRef for &ChatWidget<'_> {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        let bottom_height = self.bottom_pane.calculate_required_height(&area);
-
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(0), Constraint::Length(bottom_height)])
-            .split(area);
-
-        self.conversation_history.render(chunks[0], buf);
-        (&self.bottom_pane).render(chunks[1], buf);
+        // In the hybrid inline viewport mode we only draw the interactive
+        // bottom pane; history entries are injected directly into scrollback
+        // via `Terminal::insert_before`.
+        (&self.bottom_pane).render(area, buf);
     }
 }
 
