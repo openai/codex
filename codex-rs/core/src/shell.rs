@@ -1,6 +1,4 @@
 use shlex;
-use tokio::process::Command;
-use whoami;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct ZshShell {
@@ -37,6 +35,9 @@ impl Shell {
 
 #[cfg(target_os = "macos")]
 pub async fn default_user_shell() -> Shell {
+    use tokio::process::Command;
+    use whoami;
+
     let user = whoami::username();
     let home = format!("/Users/{user}");
     let output = Command::new("dscl")
@@ -65,6 +66,11 @@ pub async fn default_user_shell() -> Shell {
         }
         _ => Shell::Unknown,
     }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub async fn default_user_shell() -> Shell {
+    Shell::Unknown
 }
 
 #[cfg(test)]
@@ -110,14 +116,11 @@ mod tests {
     #[tokio::test]
     async fn test_run_with_profile_escaping_and_execution() {
         let shell_path = "/bin/zsh";
-        let shell = Shell::Zsh(ZshShell {
-            shell_path: shell_path.to_string(),
-            zshrc_path: "~/.zshrc".to_string(),
-        });
+
         let cases = vec![
             (
                 vec!["myecho"],
-                vec![shell_path, "-c", "source ~/.zshrc && (myecho)"],
+                vec![shell_path, "-c", "source ZSHRC_PATH && (myecho)"],
                 Some("It works!\n"),
             ),
             (
@@ -125,7 +128,7 @@ mod tests {
                 vec![
                     shell_path,
                     "-c",
-                    "source ~/.zshrc && (bash -lc \"echo 'single' \\\"double\\\"\")",
+                    "source ZSHRC_PATH && (bash -lc \"echo 'single' \\\"double\\\"\")",
                 ],
                 Some("single double\n"),
             ),
@@ -146,7 +149,7 @@ mod tests {
             let temp_home = tempfile::tempdir().unwrap();
             let zshrc_path = temp_home.path().join(".zshrc");
             std::fs::write(
-                zshrc_path,
+                &zshrc_path,
                 r#"
                     set -x
                     function myecho {
@@ -155,12 +158,21 @@ mod tests {
                     "#,
             )
             .unwrap();
+            let shell = Shell::Zsh(ZshShell {
+                shell_path: shell_path.to_string(),
+                zshrc_path: zshrc_path.to_str().unwrap().to_string(),
+            });
 
             let actual_cmd = shell.run_with_profile(input.iter().map(|s| s.to_string()).collect());
-            assert_eq!(
-                actual_cmd,
-                Some(expected_cmd.iter().map(|s| s.to_string()).collect())
-            );
+            let expected_cmd = expected_cmd
+                .iter()
+                .map(|s| {
+                    s.replace("ZSHRC_PATH", zshrc_path.to_str().unwrap())
+                        .to_string()
+                })
+                .collect();
+
+            assert_eq!(actual_cmd, Some(expected_cmd));
             // Actually run the command and check output/exit code
             let output = process_exec_tool_call(
                 ExecParams {
