@@ -10,7 +10,6 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use tracing::trace;
 
 use crate::json_to_toml::json_to_toml;
 
