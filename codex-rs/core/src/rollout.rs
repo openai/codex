@@ -288,11 +288,13 @@ fn create_log_file(config: &Config, session_id: Uuid) -> std::io::Result<LogFile
 }
 
 async fn rollout_writer(
-    mut file: tokio::fs::File,
+    file: tokio::fs::File,
     mut rx: mpsc::Receiver<RolloutCmd>,
     mut meta: Option<SessionMeta>,
     cwd: std::path::PathBuf,
-) {
+) -> std::io::Result<()> {
+    let mut writer = JsonlWriter { file };
+
     // If we have a meta, collect git info asynchronously and write meta first
     if let Some(session_meta) = meta.take() {
         let git_info = collect_git_info(&cwd).await;
@@ -302,11 +304,7 @@ async fn rollout_writer(
         };
 
         // Write the SessionMeta as the first item in the file
-        if let Ok(json) = serde_json::to_string(&session_meta_with_git) {
-            let _ = file.write_all(json.as_bytes()).await;
-            let _ = file.write_all(b"\n").await;
-            let _ = file.flush().await;
-        }
+        writer.write_line(&session_meta_with_git).await?;
     }
 
     // Process rollout commands
@@ -320,15 +318,11 @@ async fn rollout_writer(
                         | ResponseItem::FunctionCall { .. }
                         | ResponseItem::FunctionCallOutput { .. }
                         | ResponseItem::Reasoning { .. } => {
-                            if let Ok(json) = serde_json::to_string(&item) {
-                                let _ = file.write_all(json.as_bytes()).await;
-                                let _ = file.write_all(b"\n").await;
-                            }
+                            writer.write_line(&item).await?;
                         }
                         ResponseItem::Other => {}
                     }
                 }
-                let _ = file.flush().await;
             }
             RolloutCmd::UpdateState(state) => {
                 #[derive(Serialize)]
@@ -337,18 +331,32 @@ async fn rollout_writer(
                     #[serde(flatten)]
                     state: &'a SessionStateSnapshot,
                 }
-                if let Ok(json) = serde_json::to_string(&StateLine {
-                    record_type: "state",
-                    state: &state,
-                }) {
-                    let _ = file.write_all(json.as_bytes()).await;
-                    let _ = file.write_all(b"\n").await;
-                    let _ = file.flush().await;
-                }
+                writer
+                    .write_line(&StateLine {
+                        record_type: "state",
+                        state: &state,
+                    })
+                    .await?;
             }
             RolloutCmd::Shutdown { ack } => {
                 let _ = ack.send(());
             }
         }
+    }
+
+    Ok(())
+}
+
+struct JsonlWriter {
+    file: tokio::fs::File,
+}
+
+impl JsonlWriter {
+    async fn write_line(&mut self, item: &impl serde::Serialize) -> std::io::Result<()> {
+        let mut json = serde_json::to_string(item)?;
+        json.push('\n');
+        let _ = self.file.write_all(json.as_bytes()).await;
+        self.file.flush().await?;
+        Ok(())
     }
 }
