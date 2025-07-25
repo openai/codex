@@ -47,6 +47,8 @@ tree-sitter = "0.25.8"
 tree-sitter-bash = "0.25.0"
 uuid = { version = "1", features = ["serde", "v4"] }
 wildmatch = "2.4.0"
+whoami = "1.6.0"
+shlex = "1.3.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 landlock = "0.4.1"

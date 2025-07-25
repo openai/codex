@@ -85,6 +85,7 @@ use crate::rollout::RolloutRecorder;
 use crate::safety::SafetyCheck;
 use crate::safety::assess_command_safety;
 use crate::safety::assess_patch_safety;
+use crate::shell;
 use crate::user_notification::UserNotification;
 use crate::util::backoff;
 
@@ -204,6 +205,7 @@ pub(crate) struct Session {
     rollout: Mutex<Option<RolloutRecorder>>,
     state: Mutex<State>,
     codex_linux_sandbox_exe: Option<PathBuf>,
+    user_shell: Option<shell::Shell>,
 }
 
 impl Session {
@@ -693,6 +695,7 @@ async fn submission_loop(
                     rollout: Mutex::new(rollout_recorder),
                     codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
                     disable_response_storage,
+                    user_shell: shell::current_shell(),
                 }));
 
                 // Patch restored state into the newly created session.
@@ -1383,6 +1386,17 @@ fn parse_container_exec_arguments(
     }
 }
 
+fn maybe_run_with_shell(params: ExecParams, sess: &Session) -> ExecParams {
+    if sess.shell_environment_policy.use_profile && sess.user_shell.is_some() {
+        let shell = sess.user_shell.as_ref().unwrap();
+        let command = shell.run_with_profile(params.command.clone());
+        if let Some(command) = command {
+            return ExecParams { command, ..params };
+        }
+    }
+    params
+}
+
 async fn handle_container_exec_with_params(
     params: ExecParams,
     sess: &Session,
@@ -1469,8 +1483,9 @@ async fn handle_container_exec_with_params(
     sess.notify_exec_command_begin(&sub_id, &call_id, &params)
         .await;
 
+    let processed_params = maybe_run_with_shell(params.clone(), sess);
     let output_result = process_exec_tool_call(
-        params.clone(),
+        processed_params.clone(),
         sandbox_type,
         sess.ctrl_c.clone(),
         &sess.sandbox_policy,
@@ -1506,7 +1521,7 @@ async fn handle_container_exec_with_params(
             }
         }
         Err(CodexErr::Sandbox(error)) => {
-            handle_sandbox_error(error, sandbox_type, params, sess, sub_id, call_id).await
+            handle_sandbox_error(error, sandbox_type, processed_params, sess, sub_id, call_id).await
         }
         Err(e) => {
             // Handle non-sandbox errors

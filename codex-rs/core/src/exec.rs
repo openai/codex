@@ -82,7 +82,8 @@ pub async fn process_exec_tool_call(
 ) -> Result<ExecToolCallOutput> {
     let start = Instant::now();
 
-    let raw_output_result = match sandbox_type {
+    let raw_output_result: std::result::Result<RawExecToolCallOutput, CodexErr> = match sandbox_type
+    {
         SandboxType::None => exec(params, sandbox_policy, ctrl_c).await,
         SandboxType::MacosSeatbelt => {
             let ExecParams {

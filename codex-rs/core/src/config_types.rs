@@ -143,6 +143,8 @@ pub struct ShellEnvironmentPolicyToml {
 
     /// List of regular expressions.
     pub include_only: Option<Vec<String>>,
+
+    pub experimental_use_profile: Option<bool>,
 }
 
 pub type EnvironmentVariablePattern = WildMatchPattern<'*', '?'>;
@@ -171,6 +173,9 @@ pub struct ShellEnvironmentPolicy {
 
     /// Environment variable names to retain in the environment.
     pub include_only: Vec<EnvironmentVariablePattern>,
+
+    /// If true, the shell profile will be used to run the command.
+    pub use_profile: bool,
 }
 
 impl From<ShellEnvironmentPolicyToml> for ShellEnvironmentPolicy {
@@ -197,6 +202,7 @@ impl From<ShellEnvironmentPolicyToml> for ShellEnvironmentPolicy {
             exclude,
             r#set,
             include_only,
+            use_profile: toml.experimental_use_profile.unwrap_or(false),
         }
     }
 }
