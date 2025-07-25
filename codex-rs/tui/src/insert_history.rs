@@ -5,6 +5,7 @@ use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use unicode_width::UnicodeWidthChar;
+use ratatui::style::Style;
 
 /// Insert a batch of history lines into the terminal scrollback above the
 /// inline viewport.
@@ -35,6 +36,87 @@ use unicode_width::UnicodeWidthChar;
 /// scrollback region using [`Terminal::insert_before`]. Any backend error is
 /// ignored: failing to insert history is non‑fatal and a subsequent redraw
 /// will eventually repaint a consistent view.
+fn display_width(s: &str) -> usize {
+    s.chars().map(|c| UnicodeWidthChar::width(c).unwrap_or(0)).sum()
+}
+
+struct LineBuilder {
+    term_width: usize,
+    spans: Vec<Span<'static>>,
+    width: usize,
+}
+
+impl LineBuilder {
+    fn new(term_width: usize) -> Self {
+        Self {
+            term_width,
+            spans: Vec::new(),
+            width: 0,
+        }
+    }
+
+    fn flush_line(&mut self, out: &mut Vec<Line<'static>>) {
+        out.push(Line::from(std::mem::take(&mut self.spans)));
+        self.width = 0;
+    }
+
+    fn push_segment(&mut self, text: String, style: Style) {
+        self.width += display_width(&text);
+        self.spans.push(Span::styled(text, style));
+    }
+
+    fn push_word(&mut self, word: &mut String, style: Style, out: &mut Vec<Line<'static>>) {
+        if word.is_empty() {
+            return;
+        }
+        let w_len = display_width(word);
+        if self.width > 0 && self.width + w_len > self.term_width {
+            self.flush_line(out);
+        }
+        if w_len > self.term_width && self.width == 0 {
+            // Split an overlong word across multiple lines.
+            let mut cur = String::new();
+            let mut cur_w = 0;
+            for ch in word.chars() {
+                let ch_w = UnicodeWidthChar::width(ch).unwrap_or(0);
+                if cur_w + ch_w > self.term_width && cur_w > 0 {
+                    self.push_segment(cur.clone(), style);
+                    self.flush_line(out);
+                    cur.clear();
+                    cur_w = 0;
+                }
+                cur.push(ch);
+                cur_w += ch_w;
+            }
+            if !cur.is_empty() {
+                self.push_segment(cur, style);
+            }
+        } else {
+            self.push_segment(word.clone(), style);
+        }
+        word.clear();
+    }
+
+    fn consume_whitespace(
+        &mut self,
+        ws: &mut String,
+        style: Style,
+        out: &mut Vec<Line<'static>>,
+    ) {
+        if ws.is_empty() {
+            return;
+        }
+        let space_w = display_width(ws);
+        if self.width > 0 && self.width + space_w > self.term_width {
+            self.flush_line(out);
+        }
+        if self.width > 0 {
+            self.push_segment(" ".to_string(), style);
+        }
+        ws.clear();
+    }
+}
+
 pub(crate) fn insert_history_lines(terminal: &mut tui::Tui, lines: Vec<Line<'static>>) {
     let term_width = terminal.size().map(|a| a.width).unwrap_or(80) as usize;
     let mut physical: Vec<Line<'static>> = Vec::new();
@@ -45,120 +127,36 @@ pub(crate) fn insert_history_lines(terminal: &mut tui::Tui, lines: Vec<Line<'sta
             continue;
         }
 
-        let mut line_spans: Vec<Span<'static>> = Vec::new();
-        let mut line_width: usize = 0;
+        let mut builder = LineBuilder::new(term_width);
+        let mut buf_space = String::new();
 
-        // Helper that finalises the current in‑progress line.
-        let flush_line =
-            |store: &mut Vec<Line<'static>>, spans: &mut Vec<Span<'static>>, width: &mut usize| {
-                store.push(Line::from(spans.clone()));
-                spans.clear();
-                *width = 0;
-            };
-
-        // Iterate spans tokenising into words and whitespace so wrapping can
-        // happen at word boundaries.
         for span in logical.spans.into_iter() {
             let style = span.style;
             let mut buf_word = String::new();
-            let mut buf_space = String::new();
-            let flush_word = |word: &mut String,
-                              line_spans: &mut Vec<Span<'static>>,
-                              line_width: &mut usize,
-                              store: &mut Vec<Line<'static>>| {
-                if word.is_empty() {
-                    return;
-                }
-                let w_len: usize = word
-                    .chars()
-                    .map(|c| UnicodeWidthChar::width(c).unwrap_or(0))
-                    .sum();
-                if *line_width > 0 && *line_width + w_len > term_width {
-                    flush_line(store, line_spans, line_width);
-                }
-                if w_len > term_width && *line_width == 0 {
-                    // Break an overlong word across multiple physical lines.
-                    let mut cur = String::new();
-                    let mut cur_w = 0usize;
-                    for ch in word.chars() {
-                        let ch_w = UnicodeWidthChar::width(ch).unwrap_or(0);
-                        if cur_w + ch_w > term_width && cur_w > 0 {
-                            line_spans.push(Span::styled(cur.clone(), style));
-                            flush_line(store, line_spans, line_width);
-                            cur.clear();
-                            cur_w = 0;
-                        }
-                        cur.push(ch);
-                        cur_w += ch_w;
-                    }
-                    if !cur.is_empty() {
-                        line_spans.push(Span::styled(cur.clone(), style));
-                        *line_width += cur_w;
-                    }
-                } else {
-                    line_spans.push(Span::styled(word.clone(), style));
-                    *line_width += w_len;
-                }
-                word.clear();
-            };
 
             for ch in span.content.chars() {
                 if ch == '\n' {
-                    flush_word(
-                        &mut buf_word,
-                        &mut line_spans,
-                        &mut line_width,
-                        &mut physical,
-                    );
+                    builder.push_word(&mut buf_word, style, &mut physical);
                     buf_space.clear();
-                    flush_line(&mut physical, &mut line_spans, &mut line_width);
+                    builder.flush_line(&mut physical);
                     continue;
                 }
                 if ch.is_whitespace() {
-                    if !buf_word.is_empty() {
-                        flush_word(
-                            &mut buf_word,
-                            &mut line_spans,
-                            &mut line_width,
-                            &mut physical,
-                        );
-                    }
+                    builder.push_word(&mut buf_word, style, &mut physical);
                     buf_space.push(ch);
                 } else {
-                    if !buf_space.is_empty() {
-                        // Collapse a run of whitespace to a single space if it fits.
-                        let space_w: usize = buf_space
-                            .chars()
-                            .map(|c| UnicodeWidthChar::width(c).unwrap_or(0))
-                            .sum();
-                        if line_width > 0 && line_width + space_w > term_width {
-                            flush_line(&mut physical, &mut line_spans, &mut line_width);
-                        }
-                        if line_width > 0 {
-                            // avoid leading spaces
-                            line_spans.push(Span::styled(" ".to_string(), style));
-                            line_width += 1;
-                        }
-                        buf_space.clear();
-                    }
+                    builder.consume_whitespace(&mut buf_space, style, &mut physical);
                     buf_word.push(ch);
                 }
-                // Soft wrap when the line exactly fills the available width.
-                if line_width >= term_width {
-                    flush_line(&mut physical, &mut line_spans, &mut line_width);
+                if builder.width >= term_width {
+                    builder.flush_line(&mut physical);
                 }
             }
-            // Flush any dangling word at span end. Whitespace is intentionally
-            // deferred so runs can collapse across span boundaries.
-            flush_word(
-                &mut buf_word,
-                &mut line_spans,
-                &mut line_width,
-                &mut physical,
-            );
+            builder.push_word(&mut buf_word, style, &mut physical);
+            // whitespace intentionally left to allow collapsing across spans
         }
-        if !line_spans.is_empty() {
-            physical.push(Line::from(line_spans));
+        if !builder.spans.is_empty() {
+            physical.push(Line::from(std::mem::take(&mut builder.spans)));
         } else {
             // Preserve explicit blank line (e.g. due to a trailing newline).
             physical.push(Line::from(Vec::<Span<'static>>::new()));
