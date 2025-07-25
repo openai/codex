@@ -202,14 +202,6 @@ impl ConversationHistoryWidget {
         self.add_to_history(HistoryCell::new_agent_reasoning(config, text));
     }
 
-    pub fn replace_prev_agent_reasoning(&mut self, config: &Config, text: String) {
-        self.replace_last_agent_reasoning(config, text);
-    }
-
-    pub fn replace_prev_agent_message(&mut self, config: &Config, text: String) {
-        self.replace_last_agent_message(config, text);
-    }
-
     pub fn add_background_event(&mut self, message: String) {
         self.add_to_history(HistoryCell::new_background_event(message));
     }
@@ -235,30 +227,6 @@ impl ConversationHistoryWidget {
         self.add_to_history(HistoryCell::new_active_exec_command(call_id, command));
     }
 
-    /// If an ActiveExecCommand with the same call_id already exists, replace
-    /// it with a fresh one (resetting start time and view). Otherwise, add a new entry.
-    pub fn reset_or_add_active_exec_command(&mut self, call_id: String, command: Vec<String>) {
-        // Find the most recent matching ActiveExecCommand.
-        let maybe_idx = self.entries.iter().rposition(|entry| {
-            if let HistoryCell::ActiveExecCommand { call_id: id, .. } = &entry.cell {
-                id == &call_id
-            } else {
-                false
-            }
-        });
-
-        if let Some(idx) = maybe_idx {
-            let width = self.cached_width.get();
-            self.entries[idx].cell = HistoryCell::new_active_exec_command(call_id.clone(), command);
-            if width > 0 {
-                let height = self.entries[idx].cell.height(width);
-                self.entries[idx].line_count.set(height);
-            }
-        } else {
-            self.add_active_exec_command(call_id, command);
-        }
-    }
-
     pub fn add_active_mcp_tool_call(
         &mut self,
         call_id: String,
@@ -281,40 +249,10 @@ impl ConversationHistoryWidget {
         });
     }
 
-    pub fn replace_last_agent_reasoning(&mut self, config: &Config, text: String) {
-        if let Some(idx) = self
-            .entries
-            .iter()
-            .rposition(|entry| matches!(entry.cell, HistoryCell::AgentReasoning { .. }))
-        {
-            let width = self.cached_width.get();
-            let entry = &mut self.entries[idx];
-            entry.cell = HistoryCell::new_agent_reasoning(config, text);
-            let height = if width > 0 {
-                entry.cell.height(width)
-            } else {
-                0
-            };
-            entry.line_count.set(height);
-        }
-    }
-
-    pub fn replace_last_agent_message(&mut self, config: &Config, text: String) {
-        if let Some(idx) = self
-            .entries
-            .iter()
-            .rposition(|entry| matches!(entry.cell, HistoryCell::AgentMessage { .. }))
-        {
-            let width = self.cached_width.get();
-            let entry = &mut self.entries[idx];
-            entry.cell = HistoryCell::new_agent_message(config, text);
-            let height = if width > 0 {
-                entry.cell.height(width)
-            } else {
-                0
-            };
-            entry.line_count.set(height);
-        }
+    /// Return the lines for the most recently appended entry (if any) so the
+    /// parent widget can surface them via the new scrollback insertion path.
+    pub(crate) fn last_entry_plain_lines(&self) -> Option<Vec<Line<'static>>> {
+        self.entries.last().map(|e| e.cell.plain_lines())
     }
 
     pub fn record_completed_exec_command(

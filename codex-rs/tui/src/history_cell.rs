@@ -123,6 +123,30 @@ pub(crate) enum HistoryCell {
 const TOOL_CALL_MAX_LINES: usize = 5;
 
 impl HistoryCell {
+    /// Return a cloned, plain representation of the cell's lines suitable for
+    /// one‑shot insertion into the terminal scrollback. Image cells are
+    /// represented with a simple placeholder for now.
+    pub(crate) fn plain_lines(&self) -> Vec<Line<'static>> {
+        match self {
+            HistoryCell::WelcomeMessage { view }
+            | HistoryCell::UserPrompt { view }
+            | HistoryCell::AgentMessage { view }
+            | HistoryCell::AgentReasoning { view }
+            | HistoryCell::BackgroundEvent { view }
+            | HistoryCell::GitDiffOutput { view }
+            | HistoryCell::ErrorEvent { view }
+            | HistoryCell::SessionInfo { view }
+            | HistoryCell::CompletedExecCommand { view }
+            | HistoryCell::CompletedMcpToolCall { view }
+            | HistoryCell::PendingPatch { view }
+            | HistoryCell::ActiveExecCommand { view, .. }
+            | HistoryCell::ActiveMcpToolCall { view, .. } => view.lines.clone(),
+            HistoryCell::CompletedMcpToolCallWithImageOutput { .. } => vec![
+                Line::from("tool result (image output omitted)"),
+                Line::from(""),
+            ],
+        }
+    }
     pub(crate) fn new_session_info(
         config: &Config,
         event: SessionConfiguredEvent,

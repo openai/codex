@@ -50,10 +50,6 @@ impl<'a> BottomPaneView<'a> for ApprovalModalView<'a> {
         self.current.is_complete() && self.queue.is_empty()
     }
 
-    fn calculate_required_height(&self, area: &Rect) -> u16 {
-        self.current.get_height(area)
-    }
-
     fn render(&self, area: Rect, buf: &mut Buffer) {
         (&self.current).render_ref(area, buf);
     }

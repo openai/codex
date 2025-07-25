@@ -498,14 +498,5 @@ Options that are specific to the TUI.
 
 ```toml
 [tui]
-# This will make it so that Codex does not try to process mouse events, which
-# means your Terminal's native drag-to-text to text selection and copy/paste
-# should work. The tradeoff is that Codex will not receive any mouse events, so
-# it will not be possible to use the mouse to scroll conversation history.
-#
-# Note that most terminals support holding down a modifier key when using the
-# mouse to support text selection. For example, even if Codex mouse capture is
-# enabled (i.e., this is set to `false`), you can still hold down alt while
-# dragging the mouse to select text.
-disable_mouse_capture = true  # defaults to `false`
+# More to come here
 ```

@@ -76,20 +76,7 @@ pub enum HistoryPersistence {
 
 /// Collection of settings that are specific to the TUI.
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
-pub struct Tui {
-    /// By default, mouse capture is enabled in the TUI so that it is possible
-    /// to scroll the conversation history with a mouse. This comes at the cost
-    /// of not being able to use the mouse to select text in the TUI.
-    /// (Most terminals support a modifier key to allow this. For example,
-    /// text selection works in iTerm if you hold down the `Option` key while
-    /// clicking and dragging.)
-    ///
-    /// Setting this option to `true` disables mouse capture, so scrolling with
-    /// the mouse is not possible, though the keyboard shortcuts e.g. `b` and
-    /// `space` still work. This allows the user to select text in the TUI
-    /// using the mouse without needing to hold down a modifier key.
-    pub disable_mouse_capture: bool,
-}
+pub struct Tui {}
 
 #[derive(Deserialize, Debug, Clone, Copy, PartialEq, Default)]
 #[serde(rename_all = "kebab-case")]

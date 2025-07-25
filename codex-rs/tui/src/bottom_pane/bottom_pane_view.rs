@@ -22,9 +22,6 @@ pub(crate) trait BottomPaneView<'a> {
         false
     }
 
-    /// Height required to render the view.
-    fn calculate_required_height(&self, area: &Rect) -> u16;
-
     /// Render the view: this will be displayed in place of the composer.
     fn render(&self, area: Rect, buf: &mut Buffer);
 
