@@ -109,6 +109,13 @@ impl App<'_> {
                             scroll_event_helper.scroll_down();
                         }
                         crossterm::event::Event::Paste(pasted) => {
+                            // Many terminals convert newlines to \r when
+                            // pasting, e.g. [iTerm2][]. But [tui-textarea
+                            // expects \n][tui-textarea]. This seems like a bug
+                            // in tui-textarea IMO, but work around it for now.
+                            // [tui-textarea]: https://github.com/rhysd/tui-textarea/blob/4d18622eeac13b309e0ff6a55a46ac6706da68cf/src/textarea.rs#L782-L783
+                            // [iTerm2]: https://github.com/gnachman/iTerm2/blob/5d0c0d9f68523cbd0494dad5422998964a2ecd8d/sources/iTermPasteHelper.m#L206-L216
+                            let pasted = pasted.replace("\r", "\n");
                             app_event_tx.send(AppEvent::Paste(pasted));
                         }
                         _ => {
