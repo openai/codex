@@ -2,6 +2,7 @@ import type { AppRollout } from "../../app.js";
 import type { ApplyPatchCommand, ApprovalPolicy } from "../../approvals.js";
 import type { CommandConfirmation } from "../../utils/agent/agent-loop.js";
 import type { AppConfig } from "../../utils/config.js";
+import type { UsageData } from "../../utils/responses.js";
 import type { ColorName } from "chalk";
 import type { ResponseItem } from "openai/resources/responses/responses.mjs";
 
@@ -154,6 +155,9 @@ export default function TerminalChat({
     initialApprovalPolicy,
   );
   const [thinkingSeconds, setThinkingSeconds] = useState(0);
+  const [cumulativeInputTokens, setCumulativeInputTokens] = useState<number>(0);
+  const [cumulativeOutputTokens, setCumulativeOutputTokens] =
+    useState<number>(0);
 
   const handleCompact = async () => {
     setLoading(true);
@@ -252,6 +256,10 @@ export default function TerminalChat({
       disableResponseStorage: config.disableResponseStorage,
       additionalWritableRoots,
       onLastResponseId: setLastResponseId,
+      onTokenUsage: (usage: UsageData) => {
+        setCumulativeInputTokens((prev) => prev + (usage.input_tokens ?? 0));
+        setCumulativeOutputTokens((prev) => prev + (usage.output_tokens ?? 0));
+      },
       onItem: (item) => {
         log(`onItem: ${JSON.stringify(item)}`);
         setItems((prev) => {
@@ -503,6 +511,13 @@ export default function TerminalChat({
             <Text color="gray">Initializing agent…</Text>
           </Box>
         )}
+        {/* Token usage summary */}
+        <Box marginY={1}>
+          <Text color="gray">
+            Total Input Tokens: {cumulativeInputTokens} | Total Output Tokens:{" "}
+            {cumulativeOutputTokens}
+          </Text>
+        </Box>
         {overlayMode === "none" && agent && (
           <TerminalChatInput
             loading={loading}
