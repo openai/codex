@@ -74,12 +74,12 @@ pub async fn default_user_shell() -> Shell {
 }
 
 #[cfg(test)]
+#[cfg(target_os = "macos")]
 mod tests {
     use super::*;
     use std::process::Command;
 
     #[tokio::test]
-    #[cfg(target_os = "macos")]
     #[expect(clippy::unwrap_used)]
     async fn test_current_shell_detects_zsh() {
         let shell = Command::new("sh")
@@ -111,7 +111,6 @@ mod tests {
         assert_eq!(actual_cmd, None);
     }
 
-    #[cfg(target_os = "macos")]
     #[expect(clippy::unwrap_used)]
     #[tokio::test]
     async fn test_run_with_profile_escaping_and_execution() {
