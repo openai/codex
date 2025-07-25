@@ -361,3 +361,268 @@ test("loads and saves custom shell config", () => {
   expect(reloadedConfig.tools?.shell?.maxBytes).toBe(updatedMaxBytes);
   expect(reloadedConfig.tools?.shell?.maxLines).toBe(updatedMaxLines);
 });
+
+test("loads and saves provider default models correctly", () => {
+  // Setup config with provider default models
+  const providerDefaultModels = {
+    openai: "o4-mini",
+    ollama: "qwen2.5-coder:14b",
+    mistral: "mistral-large-latest",
+  };
+
+  memfs[testConfigPath] = JSON.stringify(
+    {
+      model: "mymodel",
+      providerDefaultModels,
+    },
+    null,
+    2,
+  );
+  memfs[testInstructionsPath] = "test instructions";
+
+  // Load config and verify provider default models
+  const loadedConfig = loadConfig(testConfigPath, testInstructionsPath, {
+    disableProjectDoc: true,
+  });
+
+  // Check provider default models were loaded correctly
+  expect(loadedConfig.providerDefaultModels).toEqual(providerDefaultModels);
+
+  // Modify provider default models and save
+  const updatedProviderDefaultModels = {
+    ...providerDefaultModels,
+    openai: "gpt-4.1",
+    groq: "llama3-70b",
+  };
+
+  const updatedConfig = {
+    ...loadedConfig,
+    providerDefaultModels: updatedProviderDefaultModels,
+  };
+
+  saveConfig(updatedConfig, testConfigPath, testInstructionsPath);
+
+  // Verify saved config contains updated provider default models
+  expect(memfs[testConfigPath]).toContain(`"providerDefaultModels"`);
+  expect(memfs[testConfigPath]).toContain(`"gpt-4.1"`);
+  expect(memfs[testConfigPath]).toContain(`"llama3-70b"`);
+
+  // Load again and verify updated values
+  const reloadedConfig = loadConfig(testConfigPath, testInstructionsPath, {
+    disableProjectDoc: true,
+  });
+
+  expect(reloadedConfig.providerDefaultModels).toEqual(
+    updatedProviderDefaultModels,
+  );
+});
+
+test("handles empty providerDefaultModels correctly", () => {
+  // Setup config with empty providerDefaultModels
+  memfs[testConfigPath] = JSON.stringify(
+    {
+      model: "mymodel",
+      providerDefaultModels: {},
+    },
+    null,
+    2,
+  );
+  memfs[testInstructionsPath] = "test instructions";
+
+  // Load config and verify empty providerDefaultModels
+  const loadedConfig = loadConfig(testConfigPath, testInstructionsPath, {
+    disableProjectDoc: true,
+  });
+
+  // Check providerDefaultModels is an empty object
+  expect(loadedConfig.providerDefaultModels).toEqual({});
+
+  // Add provider default models and save
+  const updatedConfig = {
+    ...loadedConfig,
+    providerDefaultModels: {
+      openai: "o4-mini",
+      ollama: "qwen2.5-coder:14b",
+    },
+  };
+
+  saveConfig(updatedConfig, testConfigPath, testInstructionsPath);
+
+  // Load again and verify updated values
+  const reloadedConfig = loadConfig(testConfigPath, testInstructionsPath, {
+    disableProjectDoc: true,
+  });
+
+  expect(reloadedConfig.providerDefaultModels).toEqual({
+    openai: "o4-mini",
+    ollama: "qwen2.5-coder:14b",
+  });
+});
+
+test("loads and saves provider with defaultModel property correctly", () => {
+  // Setup config with providers that have defaultModel property
+  const customProviders = {
+    openai: {
+      name: "OpenAI",
+      baseURL: "https://api.openai.com/v1",
+      envKey: "OPENAI_API_KEY",
+      defaultModel: "o4-mini",
+    },
+    ollama: {
+      name: "Ollama",
+      baseURL: "http://localhost:11434/v1",
+      envKey: "OLLAMA_API_KEY",
+      defaultModel: "qwen2.5-coder:14b",
+    },
+  };
+
+  memfs[testConfigPath] = JSON.stringify(
+    {
+      model: "mymodel",
+      providers: customProviders,
+    },
+    null,
+    2,
+  );
+  memfs[testInstructionsPath] = "test instructions";
+
+  // Load config and verify providers with defaultModel
+  const loadedConfig = loadConfig(testConfigPath, testInstructionsPath, {
+    disableProjectDoc: true,
+  });
+
+  // Check providers were loaded correctly with defaultModel
+  expect(loadedConfig.providers?.["openai"]?.defaultModel).toBe("o4-mini");
+  expect(loadedConfig.providers?.["ollama"]?.defaultModel).toBe(
+    "qwen2.5-coder:14b",
+  );
+
+  // Modify providers and save
+  const updatedProviders = {
+    ...loadedConfig.providers,
+    openai: {
+      name: "OpenAI",
+      baseURL: "https://api.openai.com/v1",
+      envKey: "OPENAI_API_KEY",
+      defaultModel: "gpt-4.1",
+    },
+    mistral: {
+      name: "Mistral",
+      baseURL: "https://api.mistral.ai/v1",
+      envKey: "MISTRAL_API_KEY",
+      defaultModel: "mistral-large-latest",
+    },
+  };
+
+  const updatedConfig = {
+    ...loadedConfig,
+    providers: updatedProviders,
+  };
+
+  saveConfig(updatedConfig, testConfigPath, testInstructionsPath);
+
+  // Verify saved config contains updated providers with defaultModel
+  expect(memfs[testConfigPath]).toContain(`"defaultModel": "gpt-4.1"`);
+  expect(memfs[testConfigPath]).toContain(
+    `"defaultModel": "mistral-large-latest"`,
+  );
+
+  // Load again and verify updated values
+  const reloadedConfig = loadConfig(testConfigPath, testInstructionsPath, {
+    disableProjectDoc: true,
+  });
+
+  expect(reloadedConfig.providers?.["openai"]?.defaultModel).toBe("gpt-4.1");
+  expect(reloadedConfig.providers?.["mistral"]?.defaultModel).toBe(
+    "mistral-large-latest",
+  );
+  expect(reloadedConfig.providers?.["ollama"]?.defaultModel).toBe(
+    "qwen2.5-coder:14b",
+  );
+});
+
+test("handles both providerDefaultModels and provider.defaultModel correctly", () => {
+  // Setup config with both providerDefaultModels and provider.defaultModel
+  const providerDefaultModels = {
+    openai: "o4-mini",
+    ollama: "qwen2.5-coder:14b",
+  };
+
+  const customProviders = {
+    openai: {
+      name: "OpenAI",
+      baseURL: "https://api.openai.com/v1",
+      envKey: "OPENAI_API_KEY",
+      defaultModel: "gpt-4.1", // This should take precedence in the provider object
+    },
+    mistral: {
+      name: "Mistral",
+      baseURL: "https://api.mistral.ai/v1",
+      envKey: "MISTRAL_API_KEY",
+      defaultModel: "mistral-large-latest",
+    },
+  };
+
+  memfs[testConfigPath] = JSON.stringify(
+    {
+      model: "mymodel",
+      providerDefaultModels,
+      providers: customProviders,
+    },
+    null,
+    2,
+  );
+  memfs[testInstructionsPath] = "test instructions";
+
+  // Load config and verify both types of default models
+  const loadedConfig = loadConfig(testConfigPath, testInstructionsPath, {
+    disableProjectDoc: true,
+  });
+
+  // Check both types of default models were loaded correctly
+  expect(loadedConfig.providerDefaultModels?.["openai"]).toBe("o4-mini");
+  expect(loadedConfig.providerDefaultModels?.["ollama"]).toBe(
+    "qwen2.5-coder:14b",
+  );
+  expect(loadedConfig.providers?.["openai"]?.defaultModel).toBe("gpt-4.1");
+  expect(loadedConfig.providers?.["mistral"]?.defaultModel).toBe(
+    "mistral-large-latest",
+  );
+});
+
+test("handles missing providerDefaultModels correctly", () => {
+  // Setup config without providerDefaultModels
+  memfs[testConfigPath] = JSON.stringify(
+    {
+      model: "mymodel",
+    },
+    null,
+    2,
+  );
+  memfs[testInstructionsPath] = "test instructions";
+
+  // Load config and verify providerDefaultModels is undefined
+  const loadedConfig = loadConfig(testConfigPath, testInstructionsPath, {
+    disableProjectDoc: true,
+  });
+
+  // Check providerDefaultModels is undefined
+  expect(loadedConfig.providerDefaultModels).toBeUndefined();
+
+  // Add provider default models and save
+  const updatedConfig = {
+    ...loadedConfig,
+    providerDefaultModels: {
+      openai: "o4-mini",
+    },
+  };
+
+  saveConfig(updatedConfig, testConfigPath, testInstructionsPath);
+
+  // Load again and verify updated values
+  const reloadedConfig = loadConfig(testConfigPath, testInstructionsPath, {
+    disableProjectDoc: true,
+  });
+
+  expect(reloadedConfig.providerDefaultModels?.["openai"]).toBe("o4-mini");
+});
