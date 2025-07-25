@@ -13,7 +13,7 @@ pub enum Shell {
 }
 
 impl Shell {
-    pub fn run_with_profile(&self, command: Vec<String>) -> Option<Vec<String>> {
+    pub fn format_default_shell_invocation(&self, command: Vec<String>) -> Option<Vec<String>> {
         match self {
             Shell::Zsh(zsh) => {
                 if !std::path::Path::new(&zsh.zshrc_path).exists() {
@@ -107,7 +107,7 @@ mod tests {
             shell_path: "/bin/zsh".to_string(),
             zshrc_path: "/does/not/exist/.zshrc".to_string(),
         });
-        let actual_cmd = shell.run_with_profile(vec!["myecho".to_string()]);
+        let actual_cmd = shell.format_default_shell_invocation(vec!["myecho".to_string()]);
         assert_eq!(actual_cmd, None);
     }
 
@@ -162,7 +162,8 @@ mod tests {
                 zshrc_path: zshrc_path.to_str().unwrap().to_string(),
             });
 
-            let actual_cmd = shell.run_with_profile(input.iter().map(|s| s.to_string()).collect());
+            let actual_cmd = shell
+                .format_default_shell_invocation(input.iter().map(|s| s.to_string()).collect());
             let expected_cmd = expected_cmd
                 .iter()
                 .map(|s| {
