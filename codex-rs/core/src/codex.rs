@@ -678,6 +678,7 @@ async fn submission_loop(
                         });
                     }
                 }
+                let default_shell = shell::default_user_shell().await;
                 sess = Some(Arc::new(Session {
                     client,
                     tx_event: tx_event.clone(),
@@ -695,7 +696,7 @@ async fn submission_loop(
                     rollout: Mutex::new(rollout_recorder),
                     codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
                     disable_response_storage,
-                    user_shell: shell::current_shell().await,
+                    user_shell: default_shell,
                 }));
 
                 // Patch restored state into the newly created session.
@@ -1386,7 +1387,7 @@ fn parse_container_exec_arguments(
     }
 }
 
-fn maybe_run_with_shell(params: ExecParams, sess: &Session) -> ExecParams {
+fn maybe_run_with_user_profile(params: ExecParams, sess: &Session) -> ExecParams {
     if sess.shell_environment_policy.use_profile {
         let command = sess.user_shell.run_with_profile(params.command.clone());
         if let Some(command) = command {
@@ -1482,9 +1483,9 @@ async fn handle_container_exec_with_params(
     sess.notify_exec_command_begin(&sub_id, &call_id, &params)
         .await;
 
-    let processed_params = maybe_run_with_shell(params.clone(), sess);
+    let params = maybe_run_with_user_profile(params, sess);
     let output_result = process_exec_tool_call(
-        processed_params.clone(),
+        params.clone(),
         sandbox_type,
         sess.ctrl_c.clone(),
         &sess.sandbox_policy,
@@ -1520,7 +1521,7 @@ async fn handle_container_exec_with_params(
             }
         }
         Err(CodexErr::Sandbox(error)) => {
-            handle_sandbox_error(error, sandbox_type, processed_params, sess, sub_id, call_id).await
+            handle_sandbox_error(error, sandbox_type, params, sess, sub_id, call_id).await
         }
         Err(e) => {
             // Handle non-sandbox errors

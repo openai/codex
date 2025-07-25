@@ -195,6 +195,7 @@ impl From<ShellEnvironmentPolicyToml> for ShellEnvironmentPolicy {
             .into_iter()
             .map(|s| EnvironmentVariablePattern::new_case_insensitive(&s))
             .collect();
+        let use_profile = toml.experimental_use_profile.unwrap_or(false);
 
         Self {
             inherit,
@@ -202,7 +203,7 @@ impl From<ShellEnvironmentPolicyToml> for ShellEnvironmentPolicy {
             exclude,
             r#set,
             include_only,
-            use_profile: toml.experimental_use_profile.unwrap_or(false),
+            use_profile,
         }
     }
 }

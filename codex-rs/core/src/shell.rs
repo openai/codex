@@ -36,7 +36,7 @@ impl Shell {
 }
 
 #[cfg(target_os = "macos")]
-pub async fn current_shell() -> Shell {
+pub async fn default_user_shell() -> Shell {
     let user = whoami::username();
     let home = format!("/Users/{user}");
     let output = Command::new("dscl")
@@ -86,7 +86,7 @@ mod tests {
         let shell_path = String::from_utf8_lossy(&shell.stdout).trim().to_string();
         if shell_path.ends_with("/zsh") {
             assert_eq!(
-                current_shell().await,
+                default_user_shell().await,
                 Shell::Zsh(ZshShell {
                     shell_path: shell_path.to_string(),
                     zshrc_path: format!("{home}/.zshrc",),
