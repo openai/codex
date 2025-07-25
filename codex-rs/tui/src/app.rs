@@ -127,7 +127,6 @@ impl App<'_> {
                                     app_event_tx.send(AppEvent::Paste(pasted));
                                 }
                                 _ => {
-                                    panic!("event: {:?}", event);
                                     // Ignore any other events.
                                 }
                             }
