@@ -375,7 +375,7 @@ async fn spawn_child_async(
     env: HashMap<String, String>,
 ) -> std::io::Result<Child> {
     trace!(
-        "process_exspawn_child_async: {program:?} {args:?} {arg0:?} {cwd:?} {sandbox_policy:?} {stdio_policy:?} {env:?}"
+        "spawn_child_async: {program:?} {args:?} {arg0:?} {cwd:?} {sandbox_policy:?} {stdio_policy:?} {env:?}"
     );
 
     let mut cmd = Command::new(&program);
