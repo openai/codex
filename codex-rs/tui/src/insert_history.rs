@@ -1,4 +1,4 @@
-use crate::tui; // for the Tui type alias
+use crate::tui;
 use ratatui::layout::Rect;
 use ratatui::text::Line;
 use ratatui::text::Span;

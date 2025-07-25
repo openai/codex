@@ -49,11 +49,10 @@ pub(crate) struct ChatWidget<'a> {
     initial_user_message: Option<UserMessage>,
     token_usage: TokenUsage,
     reasoning_buffer: String,
+    // Buffer for streaming assistant answer text; we do not surface partial 
+    // We wait for the final AgentMessage event and then emit the full text 
+    // at once into scrollback so the history contains a single message.
     answer_buffer: String,
-    // Buffer for streaming assistant answer text; we do not surface partial
-    // output line‑by‑line anymore (to avoid truncation issues). We wait for
-    // the final AgentMessage event and then emit the full text at once into
-    // scrollback so the history contains a single immutable message.
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -188,6 +187,13 @@ impl ChatWidget<'_> {
         }
     }
 
+    /// Emits the last entry's plain lines from conversation_history, if any.
+    fn emit_last_history_entry(&mut self) {
+        if let Some(lines) = self.conversation_history.last_entry_plain_lines() {
+            self.app_event_tx.send(AppEvent::InsertHistory(lines));
+        }
+    }
+
     fn submit_user_message(&mut self, user_message: UserMessage) {
         let UserMessage { text, image_paths } = user_message;
         let mut items: Vec<InputItem> = Vec::new();
@@ -222,9 +228,7 @@ impl ChatWidget<'_> {
         // Only show text portion in conversation history for now.
         if !text.is_empty() {
             self.conversation_history.add_user_message(text.clone());
-            if let Some(lines) = self.conversation_history.last_entry_plain_lines() {
-                self.app_event_tx.send(AppEvent::InsertHistory(lines));
-            }
+            self.emit_last_history_entry();
         }
         self.conversation_history.scroll_to_bottom();
     }
@@ -239,9 +243,7 @@ impl ChatWidget<'_> {
                 // Immediately surface the session banner / settings summary in
                 // scrollback so the user can review configuration (model,
                 // sandbox, approvals, etc.) before interacting.
-                if let Some(lines) = self.conversation_history.last_entry_plain_lines() {
-                    self.app_event_tx.send(AppEvent::InsertHistory(lines));
-                }
+                self.emit_last_history_entry();
 
                 // Forward history metadata to the bottom pane so the chat
                 // composer can navigate through past messages.
@@ -270,9 +272,7 @@ impl ChatWidget<'_> {
                 if !full.is_empty() {
                     self.conversation_history
                         .add_agent_message(&self.config, full);
-                    if let Some(lines) = self.conversation_history.last_entry_plain_lines() {
-                        self.app_event_tx.send(AppEvent::InsertHistory(lines));
-                    }
+                    self.emit_last_history_entry();
                 }
                 self.request_redraw();
             }
@@ -301,9 +301,7 @@ impl ChatWidget<'_> {
                 if !full.is_empty() {
                     self.conversation_history
                         .add_agent_reasoning(&self.config, full);
-                    if let Some(lines) = self.conversation_history.last_entry_plain_lines() {
-                        self.app_event_tx.send(AppEvent::InsertHistory(lines));
-                    }
+                    self.emit_last_history_entry();
                 }
                 self.request_redraw();
             }
@@ -325,9 +323,7 @@ impl ChatWidget<'_> {
             }
             EventMsg::Error(ErrorEvent { message }) => {
                 self.conversation_history.add_error(message.clone());
-                if let Some(lines) = self.conversation_history.last_entry_plain_lines() {
-                    self.app_event_tx.send(AppEvent::InsertHistory(lines));
-                }
+                self.emit_last_history_entry();
                 self.bottom_pane.set_task_running(false);
             }
             EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
@@ -363,9 +359,7 @@ impl ChatWidget<'_> {
 
                 self.conversation_history
                     .add_patch_event(PatchEventType::ApprovalRequest, changes);
-                if let Some(lines) = self.conversation_history.last_entry_plain_lines() {
-                    self.app_event_tx.send(AppEvent::InsertHistory(lines));
-                }
+                self.emit_last_history_entry();
 
                 self.conversation_history.scroll_to_bottom();
 
@@ -385,9 +379,7 @@ impl ChatWidget<'_> {
             }) => {
                 self.conversation_history
                     .add_active_exec_command(call_id, command);
-                if let Some(lines) = self.conversation_history.last_entry_plain_lines() {
-                    self.app_event_tx.send(AppEvent::InsertHistory(lines));
-                }
+                self.emit_last_history_entry();
                 self.request_redraw();
             }
             EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
@@ -399,9 +391,7 @@ impl ChatWidget<'_> {
                 // summary so the user can follow along.
                 self.conversation_history
                     .add_patch_event(PatchEventType::ApplyBegin { auto_approved }, changes);
-                if let Some(lines) = self.conversation_history.last_entry_plain_lines() {
-                    self.app_event_tx.send(AppEvent::InsertHistory(lines));
-                }
+                self.emit_last_history_entry();
                 if !auto_approved {
                     self.conversation_history.scroll_to_bottom();
                 }
@@ -425,9 +415,7 @@ impl ChatWidget<'_> {
             }) => {
                 self.conversation_history
                     .add_active_mcp_tool_call(call_id, server, tool, arguments);
-                if let Some(lines) = self.conversation_history.last_entry_plain_lines() {
-                    self.app_event_tx.send(AppEvent::InsertHistory(lines));
-                }
+                self.emit_last_history_entry();
                 self.request_redraw();
             }
             EventMsg::McpToolCallEnd(mcp_tool_call_end_event) => {
@@ -454,9 +442,7 @@ impl ChatWidget<'_> {
             event => {
                 self.conversation_history
                     .add_background_event(format!("{event:?}"));
-                if let Some(lines) = self.conversation_history.last_entry_plain_lines() {
-                    self.app_event_tx.send(AppEvent::InsertHistory(lines));
-                }
+                self.emit_last_history_entry();
                 self.request_redraw();
             }
         }
@@ -475,9 +461,7 @@ impl ChatWidget<'_> {
     pub(crate) fn add_diff_output(&mut self, diff_output: String) {
         self.conversation_history
             .add_diff_output(diff_output.clone());
-        if let Some(lines) = self.conversation_history.last_entry_plain_lines() {
-            self.app_event_tx.send(AppEvent::InsertHistory(lines));
-        }
+        self.emit_last_history_entry();
         self.request_redraw();
     }
 

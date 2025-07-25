@@ -51,8 +51,5 @@ pub(crate) enum AppEvent {
         matches: Vec<FileMatch>,
     },
 
-    /// Append immutable history lines above the inline viewport. Part of the
-    /// incremental migration to the hybrid scrollback model described in
-    /// `fix-history-plan.md`.
     InsertHistory(Vec<Line<'static>>),
 }
