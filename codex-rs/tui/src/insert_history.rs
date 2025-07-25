@@ -1,11 +1,11 @@
 use crate::tui;
 use ratatui::layout::Rect;
+use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use unicode_width::UnicodeWidthChar;
-use ratatui::style::Style;
 
 /// Insert a batch of history lines into the terminal scrollback above the
 /// inline viewport.
@@ -37,7 +37,9 @@ use ratatui::style::Style;
 /// ignored: failing to insert history is non‑fatal and a subsequent redraw
 /// will eventually repaint a consistent view.
 fn display_width(s: &str) -> usize {
-    s.chars().map(|c| UnicodeWidthChar::width(c).unwrap_or(0)).sum()
+    s.chars()
+        .map(|c| UnicodeWidthChar::width(c).unwrap_or(0))
+        .sum()
 }
 
 struct LineBuilder {
@@ -97,12 +99,7 @@ impl LineBuilder {
         word.clear();
     }
 
-    fn consume_whitespace(
-        &mut self,
-        ws: &mut String,
-        style: Style,
-        out: &mut Vec<Line<'static>>,
-    ) {
+    fn consume_whitespace(&mut self, ws: &mut String, style: Style, out: &mut Vec<Line<'static>>) {
         if ws.is_empty() {
             return;
         }

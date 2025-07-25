@@ -49,8 +49,8 @@ pub(crate) struct ChatWidget<'a> {
     initial_user_message: Option<UserMessage>,
     token_usage: TokenUsage,
     reasoning_buffer: String,
-    // Buffer for streaming assistant answer text; we do not surface partial 
-    // We wait for the final AgentMessage event and then emit the full text 
+    // Buffer for streaming assistant answer text; we do not surface partial
+    // We wait for the final AgentMessage event and then emit the full text
     // at once into scrollback so the history contains a single message.
     answer_buffer: String,
 }

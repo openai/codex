@@ -21,20 +21,7 @@ fn main() -> anyhow::Result<()> {
             .raw_overrides
             .splice(0..0, top_cli.config_overrides.raw_overrides);
         let usage = run_main(inner, codex_linux_sandbox_exe)?;
-        println!(
-            "Token usage: total={} input={}{} output={}{}",
-            usage.total_tokens,
-            usage.input_tokens,
-            usage
-                .cached_input_tokens
-                .map(|c| format!(" (cached {c})"))
-                .unwrap_or_default(),
-            usage.output_tokens,
-            usage
-                .reasoning_output_tokens
-                .map(|r| format!(" (reasoning {r})"))
-                .unwrap_or_default()
-        );
+        println!("{}", codex_core::protocol::FinalOutput::from(usage));
         Ok(())
     })
 }
