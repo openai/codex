@@ -18,8 +18,6 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tracing::warn;
 
-// removed helper; using EventMsg::method_name()
-
 pub(crate) struct OutgoingMessageSender {
     next_request_id: AtomicI64,
     sender: mpsc::Sender<OutgoingMessage>,
