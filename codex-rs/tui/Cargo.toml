@@ -37,6 +37,7 @@ path-clean = "1.0.1"
 ratatui = { version = "0.29.0", features = [
     "unstable-widget-ref",
     "unstable-rendered-line-info",
+    "scrolling-regions",
 ] }
 ratatui-image = "8.0.0"
 regex-lite = "0.1"
