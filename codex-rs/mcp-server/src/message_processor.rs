@@ -525,7 +525,7 @@ impl MessageProcessor {
     }
 
     /// Send a user message to a running Codex session.
-    /// Don't use this tool yet becuase we need a listen tool to be implemented first.
+    /// Don't use this tool yet because we need a listen tool to be implemented first.
     async fn handle_tool_call_send_user_message(
         &self,
         id: RequestId,

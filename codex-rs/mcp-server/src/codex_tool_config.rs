@@ -108,7 +108,7 @@ pub(crate) fn create_tool_for_codex_tool_call_param() -> Tool {
 
     #[expect(clippy::expect_used)]
     let schema_value =
-        serde_json::to_value(&schema).expect("Codex tool schema should serialise to JSON");
+        serde_json::to_value(&schema).expect("Codex tool schema should serialize to JSON");
 
     let tool_input_schema =
         serde_json::from_value::<ToolInputSchema>(schema_value).unwrap_or_else(|e| {
@@ -194,7 +194,7 @@ pub(crate) fn create_tool_for_codex_tool_call_reply_param() -> Tool {
 
     #[expect(clippy::expect_used)]
     let schema_value =
-        serde_json::to_value(&schema).expect("Codex reply tool schema should serialise to JSON");
+        serde_json::to_value(&schema).expect("Codex reply tool schema should serialize to JSON");
 
     let tool_input_schema =
         serde_json::from_value::<ToolInputSchema>(schema_value).unwrap_or_else(|e| {

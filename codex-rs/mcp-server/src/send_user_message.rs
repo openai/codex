@@ -24,7 +24,7 @@ pub(crate) fn create_tool_for_send_user_message_param() -> Tool {
         .into_root_schema_for::<SendUserMessageParam>();
 
     let schema_value = serde_json::to_value(&schema)
-        .unwrap_or_else(|e| panic!("send_user_message tool schema should serialise to JSON: {e}"));
+        .unwrap_or_else(|e| panic!("send_user_message tool schema should serialize to JSON: {e}"));
 
     let tool_input_schema = serde_json::from_value::<ToolInputSchema>(schema_value)
         .unwrap_or_else(|e| panic!("failed to create Tool from schema: {e}"));
