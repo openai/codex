@@ -1,0 +1,36 @@
+# Codex CLI — Test Architecture & Patterns
+
+The Codex CLI codebase is equipped with an extensive automated test suite under `codex-cli/tests/`. This suite covers agent workflows, UI, configuration, patching, approvals, and core utility logic — using Vitest for both logic and TUI/reactive interaction testing.
+
+---
+
+## Coverage Areas
+- Core agent/approval logic: shell command & patch safety, auto-approval, rejection, and "ask user" flows (e.g., `approvals.test.ts`)
+- Interactive UI: overlays, chat session restoration, prompt input, model switching, error boundaries
+- Utilities: patch parsing, command formatting, config/env management, file suggestions, diff computation
+- Agent loop & context: handling of various network, error, and edge cases for OpenAI and self-hosted providers
+- Full regression/roundtrip on CLI flows, model option validation, and snapshot-driven UI updates
+
+---
+
+## Example: Approval Policy Testing
+```typescript
+import { canAutoApprove } from '../src/approvals';
+expect(canAutoApprove(['ls'], undefined, 'suggest', [], process.env)).toEqual({
+  type: 'auto-approve', reason: 'List directory', group: 'Searching', runInSandbox: false
+});
+```
+
+## Running the Tests
+```bash
+pnpm test
+# or
+npm test
+```
+Tests are found in `tests/`, with fixtures and snapshots to cover complex behavior.
+
+---
+
+## Related Documentation
+- [CLI Core Modules](./cli_modules.mdx)
+- [Repository Overview](./overview.mdx)
