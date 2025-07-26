@@ -36,6 +36,7 @@ mod project_doc;
 pub mod protocol;
 mod rollout;
 mod safety;
+pub mod shell;
 mod user_notification;
 pub mod util;
 
