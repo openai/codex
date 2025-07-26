@@ -12,10 +12,34 @@ use std::pin::Pin;
 use std::task::Context;
 use std::task::Poll;
 use tokio::sync::mpsc;
+use once_cell::sync::Lazy;
+use std::process::Command;
+use std::process::Stdio;
 
 /// The `instructions` field in the payload sent to a model should always start
 /// with this content.
 const BASE_INSTRUCTIONS: &str = include_str!("../prompt.md");
+
+static RG_AVAILABLE: Lazy<bool> = Lazy::new(|| {
+    Command::new("rg")
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+});
+
+const RG_LINE: &str = "- Do not use `ls -R`, `find`, or `grep` - these are slow in large repos. Use `rg` and `rg --files`.";
+const RG_LINE_NO_RG: &str = "- Do not use `ls -R`, `find`, or `grep` - these are slow in large repos.";
+
+fn base_instructions() -> Cow<'static, str> {
+    if *RG_AVAILABLE {
+        Cow::Borrowed(BASE_INSTRUCTIONS)
+    } else {
+        Cow::Owned(BASE_INSTRUCTIONS.replace(RG_LINE, RG_LINE_NO_RG))
+    }
+}
 
 /// API request payload for a single model turn.
 #[derive(Default, Debug, Clone)]
@@ -42,8 +66,9 @@ impl Prompt {
         let base = self
             .base_instructions_override
             .as_deref()
-            .unwrap_or(BASE_INSTRUCTIONS);
-        let mut sections: Vec<&str> = vec![base];
+            .map(Cow::Borrowed)
+            .unwrap_or_else(|| base_instructions());
+        let mut sections: Vec<&str> = vec![base.as_ref()];
         if let Some(ref user) = self.user_instructions {
             sections.push(user);
         }
