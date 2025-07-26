@@ -64,7 +64,7 @@ Within a hunk each line starts with:
 
 Patch := Begin { FileOp } End
 Begin := "**_ Begin Patch" NEWLINE
-End := "_** End Patch" NEWLINE
+End := "*** End Patch" NEWLINE
 FileOp := AddFile | DeleteFile | UpdateFile
 AddFile := "**_ Add File: " path NEWLINE { "+" line NEWLINE }
 DeleteFile := "_** Delete File: " path NEWLINE

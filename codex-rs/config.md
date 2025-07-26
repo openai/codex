@@ -94,7 +94,7 @@ env_http_headers = { "X-Example-Features": "EXAMPLE_FEATURES" }
 
 ### Per-provider network tuning
 
-The following optional settings control retry behaviour and streaming idle timeouts **per model provider**. They must be specified inside the corresponding `[model_providers.<id>]` block in `config.toml`. (Older releases accepted top‑level keys; those are now ignored.)
+The following optional settings control retry behavior and streaming idle timeouts **per model provider**. They must be specified inside the corresponding `[model_providers.<id>]` block in `config.toml`. (Older releases accepted top‑level keys; those are now ignored.)
 
 Example:
 
@@ -244,7 +244,7 @@ model_supports_reasoning_summaries = true
 
 Codex executes model-generated shell commands inside an OS-level sandbox.
 
-In most cases you can pick the desired behaviour with a single option:
+In most cases you can pick the desired behavior with a single option:
 
 ```toml
 # same as `--sandbox read-only`
