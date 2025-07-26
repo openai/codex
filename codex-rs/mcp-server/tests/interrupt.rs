@@ -69,7 +69,6 @@ async fn shell_command_interruption() -> anyhow::Result<()> {
     create_config_toml(codex_home.path(), server.uri())?;
     let mut mcp_process = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp_process.initialize()).await??;
-    eprintln!("initialized");
 
     // Send codex tool call that triggers "sleep 60"
     let codex_request_id = mcp_process
@@ -84,12 +83,10 @@ async fn shell_command_interruption() -> anyhow::Result<()> {
             base_instructions: None,
         })
         .await?;
-    eprintln!("codex_request_id: {codex_request_id}");
 
     let session_id = mcp_process
         .read_stream_until_configured_response_message()
         .await?;
-    eprintln!("codex_request_id: {codex_request_id}");
     // Give the command a moment to start
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 

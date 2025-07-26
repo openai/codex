@@ -325,11 +325,6 @@ impl McpProcess {
                     anyhow::bail!("unexpected JSONRPCMessage::Response: {message:?}");
                 }
             }
-
-            // If we're running against a server that only emits one schema, return whichever we got.
-            if let Some(id) = sid_old.clone().or(sid_new.clone()) {
-                return Ok(id);
-            }
         }
     }
 
