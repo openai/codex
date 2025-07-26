@@ -87,6 +87,7 @@ async fn shell_command_interruption() -> anyhow::Result<()> {
     let session_id = mcp_process
         .read_stream_until_configured_response_message()
         .await?;
+
     // Give the command a moment to start
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
