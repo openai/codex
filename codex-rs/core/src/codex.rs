@@ -97,11 +97,22 @@ pub struct Codex {
     rx_event: Receiver<Event>,
 }
 
+/// Wrapper returned by [`Codex::spawn`] containing the spawned [`Codex`],
+/// the submission id for the initial `ConfigureSession` request and the
+/// unique session id.
+pub struct CodexConversation {
+    pub codex: Codex,
+    pub init_id: String,
+    pub session_id: Uuid,
+}
+
 impl Codex {
-    /// Spawn a new [`Codex`] and initialize the session. Returns the instance
-    /// of `Codex` and the ID of the `SessionInitialized` event that was
-    /// submitted to start the session.
-    pub async fn spawn(config: Config, ctrl_c: Arc<Notify>) -> CodexResult<(Codex, String, Uuid)> {
+    /// Spawn a new [`Codex`] and initialize the session.
+    ///
+    /// Returns a [`CodexConversation`] containing the [`Codex`] instance,
+    /// the submission id of the initial `ConfigureSession` request and the
+    /// unique session id.
+    pub async fn spawn(config: Config, ctrl_c: Arc<Notify>) -> CodexResult<CodexConversation> {
         // experimental resume path (undocumented)
         let resume_path = config.experimental_resume.clone();
         info!("resume_path: {resume_path:?}");
@@ -139,7 +150,11 @@ impl Codex {
         };
         let init_id = codex.submit(configure_session).await?;
 
-        Ok((codex, init_id, session_id))
+        Ok(CodexConversation {
+            codex,
+            init_id,
+            session_id,
+        })
     }
 
     /// Submit the `op` wrapped in a `Submission` with a unique ID.

@@ -11,6 +11,7 @@ mod client;
 mod client_common;
 pub mod codex;
 pub use codex::Codex;
+pub use codex::CodexConversation;
 pub mod codex_wrapper;
 pub mod config;
 pub mod config_profile;
