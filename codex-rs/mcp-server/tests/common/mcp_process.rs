@@ -270,20 +270,49 @@ impl McpProcess {
     pub async fn read_stream_until_configured_response_message(
         &mut self,
     ) -> anyhow::Result<String> {
+        let mut sid_old: Option<String> = None;
+        let mut sid_new: Option<String> = None;
         loop {
             let message = self.read_jsonrpc_message().await?;
             eprint!("message: {message:?}");
 
             match message {
                 JSONRPCMessage::Notification(notification) => {
-                    if notification.method == "SessionConfigured" {
-                        if let Some(params) = notification.params {
-                            if let Some(session_id) =
-                                params.get("session_id").and_then(|v| v.as_str())
-                            {
-                                return Ok(session_id.to_string());
+                    if let Some(params) = notification.params {
+                        // Back-compat schema: method == "codex/event" and msg.type == "session_configured"
+                        if notification.method == "codex/event" {
+                            if let Some(msg) = params.get("msg") {
+                                if msg.get("type").and_then(|v| v.as_str())
+                                    == Some("session_configured")
+                                {
+                                    if let Some(session_id) =
+                                        msg.get("session_id").and_then(|v| v.as_str())
+                                    {
+                                        sid_old = Some(session_id.to_string());
+                                    }
+                                }
                             }
                         }
+                        // New schema: method is the Display of EventMsg::SessionConfigured => "SessionConfigured"
+                        if notification.method == "SessionConfigured" {
+                            if let Some(msg) = params.get("msg") {
+                                if let Some(session_id) =
+                                    msg.get("session_id").and_then(|v| v.as_str())
+                                {
+                                    sid_new = Some(session_id.to_string());
+                                }
+                            }
+                        }
+                    }
+
+                    if sid_old.is_some() && sid_new.is_some() {
+                        // Both seen, they must match
+                        assert_eq!(
+                            sid_old.as_ref().unwrap(),
+                            sid_new.as_ref().unwrap(),
+                            "session_id mismatch between old and new schema"
+                        );
+                        return Ok(sid_old.unwrap());
                     }
                 }
                 JSONRPCMessage::Request(_) => {
@@ -295,6 +324,11 @@ impl McpProcess {
                 JSONRPCMessage::Response(_) => {
                     anyhow::bail!("unexpected JSONRPCMessage::Response: {message:?}");
                 }
+            }
+
+            // If we're running against a server that only emits one schema, return whichever we got.
+            if let Some(id) = sid_old.clone().or(sid_new.clone()) {
+                return Ok(id);
             }
         }
     }
