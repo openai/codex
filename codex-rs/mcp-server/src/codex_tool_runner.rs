@@ -156,6 +156,7 @@ async fn run_codex_tool_session_inner(
                     EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
                         command,
                         cwd,
+                        call_id,
                         reason: _,
                     }) => {
                         handle_exec_approval_request(
@@ -166,6 +167,7 @@ async fn run_codex_tool_session_inner(
                             request_id.clone(),
                             request_id_str.clone(),
                             event.id.clone(),
+                            call_id,
                         )
                         .await;
                         continue;
@@ -179,11 +181,13 @@ async fn run_codex_tool_session_inner(
                         break;
                     }
                     EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
+                        call_id,
                         reason,
                         grant_root,
                         changes,
                     }) => {
                         handle_patch_approval_request(
+                            call_id,
                             reason,
                             grant_root,
                             changes,
@@ -242,7 +246,8 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::BackgroundEvent(_)
                     | EventMsg::PatchApplyBegin(_)
                     | EventMsg::PatchApplyEnd(_)
-                    | EventMsg::GetHistoryEntryResponse(_) => {
+                    | EventMsg::GetHistoryEntryResponse(_)
+                    | EventMsg::ShutdownComplete => {
                         // For now, we do not do anything extra for these
                         // events. Note that
                         // send(codex_event_to_notification(&event)) above has

@@ -5,10 +5,10 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::SessionConfiguredEvent;
-mod test_support;
+use core_test_support::load_default_config_for_test;
+use core_test_support::load_sse_fixture_with_id;
+use core_test_support::wait_for_event;
 use tempfile::TempDir;
-use test_support::load_default_config_for_test;
-use test_support::load_sse_fixture_with_id;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
@@ -84,14 +84,13 @@ async fn includes_session_id_and_model_headers_in_request() {
         .unwrap();
 
     let EventMsg::SessionConfigured(SessionConfiguredEvent { session_id, .. }) =
-        test_support::wait_for_event(&codex, |ev| matches!(ev, EventMsg::SessionConfigured(_)))
-            .await
+        wait_for_event(&codex, |ev| matches!(ev, EventMsg::SessionConfigured(_))).await
     else {
         unreachable!()
     };
 
     let current_session_id = Some(session_id.to_string());
-    test_support::wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     // get request from the server
     let request = &server.received_requests().await.unwrap()[0];
@@ -160,7 +159,7 @@ async fn includes_base_instructions_override_in_request() {
         .await
         .unwrap();
 
-    test_support::wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     let request = &server.received_requests().await.unwrap()[0];
     let request_body = request.body_json::<serde_json::Value>().unwrap();

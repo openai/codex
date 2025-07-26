@@ -34,7 +34,6 @@ use tracing::trace;
 use tracing::warn;
 use uuid::Uuid;
 
-use crate::WireApi;
 use crate::client::ModelClient;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
@@ -87,6 +86,7 @@ use crate::rollout::RolloutRecorder;
 use crate::safety::SafetyCheck;
 use crate::safety::assess_command_safety;
 use crate::safety::assess_patch_safety;
+use crate::shell;
 use crate::user_notification::UserNotification;
 use crate::util::backoff;
 
@@ -192,6 +192,7 @@ pub(crate) struct Session {
     sandbox_policy: SandboxPolicy,
     shell_environment_policy: ShellEnvironmentPolicy,
     writable_roots: Mutex<Vec<PathBuf>>,
+    disable_response_storage: bool,
 
     /// Manager for external MCP servers/tools.
     mcp_connection_manager: McpConnectionManager,
@@ -205,6 +206,7 @@ pub(crate) struct Session {
     rollout: Mutex<Option<RolloutRecorder>>,
     state: Mutex<State>,
     codex_linux_sandbox_exe: Option<PathBuf>,
+    user_shell: shell::Shell,
 }
 
 impl Session {
@@ -220,13 +222,9 @@ impl Session {
 struct State {
     approved_commands: HashSet<Vec<String>>,
     current_task: Option<AgentTask>,
-    /// Call IDs that have been sent from the Responses API but have not been sent back yet.
-    /// You CANNOT send a Responses API follow-up message unless you have sent back the output for all pending calls or else it will 400.
-    pending_call_ids: HashSet<String>,
-    previous_response_id: Option<String>,
     pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
     pending_input: Vec<ResponseInputItem>,
-    zdr_transcript: Option<ConversationHistory>,
+    history: ConversationHistory,
 }
 
 impl Session {
@@ -258,6 +256,7 @@ impl Session {
     pub async fn request_command_approval(
         &self,
         sub_id: String,
+        call_id: String,
         command: Vec<String>,
         cwd: PathBuf,
         reason: Option<String>,
@@ -266,6 +265,7 @@ impl Session {
         let event = Event {
             id: sub_id.clone(),
             msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
+                call_id,
                 command,
                 cwd,
                 reason,
@@ -282,6 +282,7 @@ impl Session {
     pub async fn request_patch_approval(
         &self,
         sub_id: String,
+        call_id: String,
         action: &ApplyPatchAction,
         reason: Option<String>,
         grant_root: Option<PathBuf>,
@@ -290,6 +291,7 @@ impl Session {
         let event = Event {
             id: sub_id.clone(),
             msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
+                call_id,
                 changes: convert_apply_patch_to_protocol(action),
                 reason,
                 grant_root,
@@ -321,18 +323,11 @@ impl Session {
         debug!("Recording items for conversation: {items:?}");
         self.record_state_snapshot(items).await;
 
-        if let Some(transcript) = self.state.lock().unwrap().zdr_transcript.as_mut() {
-            transcript.record_items(items);
-        }
+        self.state.lock().unwrap().history.record_items(items);
     }
 
     async fn record_state_snapshot(&self, items: &[ResponseItem]) {
-        let snapshot = {
-            let state = self.state.lock().unwrap();
-            crate::rollout::SessionStateSnapshot {
-                previous_response_id: state.previous_response_id.clone(),
-            }
-        };
+        let snapshot = { crate::rollout::SessionStateSnapshot {} };
 
         let recorder = {
             let guard = self.rollout.lock().unwrap();
@@ -434,8 +429,6 @@ impl Session {
     pub fn abort(&self) {
         info!("Aborting existing session");
         let mut state = self.state.lock().unwrap();
-        // Don't clear pending_call_ids because we need to keep track of them to ensure we don't 400 on the next turn.
-        // We will generate a synthetic aborted response for each pending call id.
         state.pending_approvals.clear();
         state.pending_input.clear();
         if let Some(task) = state.current_task.take() {
@@ -480,15 +473,10 @@ impl Drop for Session {
 }
 
 impl State {
-    pub fn partial_clone(&self, retain_zdr_transcript: bool) -> Self {
+    pub fn partial_clone(&self) -> Self {
         Self {
             approved_commands: self.approved_commands.clone(),
-            previous_response_id: self.previous_response_id.clone(),
-            zdr_transcript: if retain_zdr_transcript {
-                self.zdr_transcript.clone()
-            } else {
-                None
-            },
+            history: self.history.clone(),
             ..Default::default()
         }
     }
@@ -607,13 +595,11 @@ async fn submission_loop(
                 }
                 // Optionally resume an existing rollout.
                 let mut restored_items: Option<Vec<ResponseItem>> = None;
-                let mut restored_prev_id: Option<String> = None;
                 let rollout_recorder: Option<RolloutRecorder> =
                     if let Some(path) = resume_path.as_ref() {
-                        match RolloutRecorder::resume(path).await {
+                        match RolloutRecorder::resume(path, cwd.clone()).await {
                             Ok((rec, saved)) => {
                                 session_id = saved.session_id;
-                                restored_prev_id = saved.state.previous_response_id;
                                 if !saved.items.is_empty() {
                                     restored_items = Some(saved.items);
                                 }
@@ -652,22 +638,13 @@ async fn submission_loop(
                 );
 
                 // abort any current running session and clone its state
-                let retain_zdr_transcript =
-                    record_conversation_history(disable_response_storage, provider.wire_api);
                 let state = match sess.take() {
                     Some(sess) => {
                         sess.abort();
-                        sess.state
-                            .lock()
-                            .unwrap()
-                            .partial_clone(retain_zdr_transcript)
+                        sess.state.lock().unwrap().partial_clone()
                     }
                     None => State {
-                        zdr_transcript: if retain_zdr_transcript {
-                            Some(ConversationHistory::new())
-                        } else {
-                            None
-                        },
+                        history: ConversationHistory::new(),
                         ..Default::default()
                     },
                 };
@@ -702,6 +679,7 @@ async fn submission_loop(
                         });
                     }
                 }
+                let default_shell = shell::default_user_shell().await;
                 sess = Some(Arc::new(Session {
                     client,
                     tx_event: tx_event.clone(),
@@ -718,18 +696,15 @@ async fn submission_loop(
                     state: Mutex::new(state),
                     rollout: Mutex::new(rollout_recorder),
                     codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
+                    disable_response_storage,
+                    user_shell: default_shell,
                 }));
 
                 // Patch restored state into the newly created session.
                 if let Some(sess_arc) = &sess {
-                    if restored_prev_id.is_some() || restored_items.is_some() {
+                    if restored_items.is_some() {
                         let mut st = sess_arc.state.lock().unwrap();
-                        st.previous_response_id = restored_prev_id;
-                        if let (Some(hist), Some(items)) =
-                            (st.zdr_transcript.as_mut(), restored_items.as_ref())
-                        {
-                            hist.record_items(items.iter());
-                        }
+                        st.history.record_items(restored_items.unwrap().iter());
                     }
                 }
 
@@ -842,6 +817,37 @@ async fn submission_loop(
                     }
                 });
             }
+            Op::Shutdown => {
+                info!("Shutting down Codex instance");
+
+                // Gracefully flush and shutdown rollout recorder on session end so tests
+                // that inspect the rollout file do not race with the background writer.
+                if let Some(sess_arc) = sess {
+                    let recorder_opt = sess_arc.rollout.lock().unwrap().take();
+                    if let Some(rec) = recorder_opt {
+                        if let Err(e) = rec.shutdown().await {
+                            warn!("failed to shutdown rollout recorder: {e}");
+                            let event = Event {
+                                id: sub.id.clone(),
+                                msg: EventMsg::Error(ErrorEvent {
+                                    message: "Failed to shutdown rollout recorder".to_string(),
+                                }),
+                            };
+                            if let Err(e) = tx_event.send(event).await {
+                                warn!("failed to send error message: {e:?}");
+                            }
+                        }
+                    }
+                }
+                let event = Event {
+                    id: sub.id.clone(),
+                    msg: EventMsg::ShutdownComplete,
+                };
+                if let Err(e) = tx_event.send(event).await {
+                    warn!("failed to send Shutdown event: {e}");
+                }
+                break;
+            }
         }
     }
     debug!("Agent loop exited");
@@ -876,14 +882,8 @@ async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
     sess.record_conversation_items(&[initial_input_for_turn.clone().into()])
         .await;
 
-    let mut input_for_next_turn: Vec<ResponseInputItem> = vec![initial_input_for_turn];
     let last_agent_message: Option<String>;
     loop {
-        let mut net_new_turn_input = input_for_next_turn
-            .drain(..)
-            .map(ResponseItem::from)
-            .collect::<Vec<_>>();
-
         // Note that pending_input would be something like a message the user
         // submitted through the UI while the model was running. Though the UI
         // may support this, the model might not.
@@ -900,29 +900,7 @@ async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
         // only record the new items that originated in this turn so that it
         // represents an append-only log without duplicates.
         let turn_input: Vec<ResponseItem> =
-            if let Some(transcript) = sess.state.lock().unwrap().zdr_transcript.as_mut() {
-                // If we are using Chat/ZDR, we need to send the transcript with
-                // every turn. By induction, `transcript` already contains:
-                // - The `input` that kicked off this task.
-                // - Each `ResponseItem` that was recorded in the previous turn.
-                // - Each response to a `ResponseItem` (in practice, the only
-                //   response type we seem to have is `FunctionCallOutput`).
-                //
-                // The only thing the `transcript` does not contain is the
-                // `pending_input` that was injected while the model was
-                // running. We need to add that to the conversation history
-                // so that the model can see it in the next turn.
-                [transcript.contents(), pending_input].concat()
-            } else {
-                // In practice, net_new_turn_input should contain only:
-                // - User messages
-                // - Outputs for function calls requested by the model
-                net_new_turn_input.extend(pending_input);
-
-                // Responses API path – we can just send the new items and
-                // record the same.
-                net_new_turn_input
-            };
+            [sess.state.lock().unwrap().history.contents(), pending_input].concat();
 
         let turn_input_messages: Vec<String> = turn_input
             .iter()
@@ -998,8 +976,19 @@ async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
                                 },
                             );
                         }
-                        (ResponseItem::Reasoning { .. }, None) => {
-                            // Omit from conversation history.
+                        (
+                            ResponseItem::Reasoning {
+                                id,
+                                summary,
+                                encrypted_content,
+                            },
+                            None,
+                        ) => {
+                            items_to_record_in_conversation_history.push(ResponseItem::Reasoning {
+                                id: id.clone(),
+                                summary: summary.clone(),
+                                encrypted_content: encrypted_content.clone(),
+                            });
                         }
                         _ => {
                             warn!("Unexpected response item: {item:?} with response: {response:?}");
@@ -1028,8 +1017,6 @@ async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
                     });
                     break;
                 }
-
-                input_for_next_turn = responses;
             }
             Err(e) => {
                 info!("Turn error: {e:#}");
@@ -1057,26 +1044,11 @@ async fn run_turn(
     sub_id: String,
     input: Vec<ResponseItem>,
 ) -> CodexResult<Vec<ProcessedResponseItem>> {
-    // Decide whether to use server-side storage (previous_response_id) or disable it
-    let (prev_id, store) = {
-        let state = sess.state.lock().unwrap();
-        let store = state.zdr_transcript.is_none();
-        let prev_id = if store {
-            state.previous_response_id.clone()
-        } else {
-            // When using ZDR, the Responses API may send previous_response_id
-            // back, but trying to use it results in a 400.
-            None
-        };
-        (prev_id, store)
-    };
-
     let extra_tools = sess.mcp_connection_manager.list_all_tools();
     let prompt = Prompt {
         input,
-        prev_id,
         user_instructions: sess.user_instructions.clone(),
-        store,
+        store: !sess.disable_response_storage,
         extra_tools,
         base_instructions_override: sess.base_instructions.clone(),
     };
@@ -1150,11 +1122,17 @@ async fn try_run_turn(
     // This usually happens because the user interrupted the model before we responded to one of its tool calls
     // and then the user sent a follow-up message.
     let missing_calls = {
-        sess.state
-            .lock()
-            .unwrap()
-            .pending_call_ids
+        prompt
+            .input
             .iter()
+            .filter_map(|ri| match ri {
+                ResponseItem::FunctionCall { call_id, .. } => Some(call_id),
+                ResponseItem::LocalShellCall {
+                    call_id: Some(call_id),
+                    ..
+                } => Some(call_id),
+                _ => None,
+            })
             .filter_map(|call_id| {
                 if completed_call_ids.contains(&call_id) {
                     None
@@ -1208,31 +1186,14 @@ async fn try_run_turn(
         };
 
         match event {
-            ResponseEvent::Created => {
-                let mut state = sess.state.lock().unwrap();
-                // We successfully created a new response and ensured that all pending calls were included so we can clear the pending call ids.
-                state.pending_call_ids.clear();
-            }
+            ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(item) => {
-                let call_id = match &item {
-                    ResponseItem::LocalShellCall {
-                        call_id: Some(call_id),
-                        ..
-                    } => Some(call_id),
-                    ResponseItem::FunctionCall { call_id, .. } => Some(call_id),
-                    _ => None,
-                };
-                if let Some(call_id) = call_id {
-                    // We just got a new call id so we need to make sure to respond to it in the next turn.
-                    let mut state = sess.state.lock().unwrap();
-                    state.pending_call_ids.insert(call_id.clone());
-                }
                 let response = handle_response_item(sess, sub_id, item.clone()).await?;
 
                 output.push(ProcessedResponseItem { item, response });
             }
             ResponseEvent::Completed {
-                response_id,
+                response_id: _,
                 token_usage,
                 timestamp,
             } => {
@@ -1253,8 +1214,6 @@ async fn try_run_turn(
                         .ok();
                 }
 
-                let mut state = sess.state.lock().unwrap();
-                state.previous_response_id = Some(response_id);
                 return Ok(output);
             }
             ResponseEvent::OutputTextDelta(delta) => {
@@ -1294,7 +1253,7 @@ async fn handle_response_item(
             }
             None
         }
-        ResponseItem::Reasoning { id: _, summary } => {
+        ResponseItem::Reasoning { summary, .. } => {
             for item in summary {
                 let text = match item {
                     ReasoningItemReasoningSummary::SummaryText { text } => text,
@@ -1311,6 +1270,7 @@ async fn handle_response_item(
             name,
             arguments,
             call_id,
+            ..
         } => {
             info!("FunctionCall: {arguments}");
             Some(handle_function_call(sess, sub_id.to_string(), name, arguments, call_id).await)
@@ -1436,6 +1396,18 @@ fn parse_container_exec_arguments(
     }
 }
 
+fn maybe_run_with_user_profile(params: ExecParams, sess: &Session) -> ExecParams {
+    if sess.shell_environment_policy.use_profile {
+        let command = sess
+            .user_shell
+            .format_default_shell_invocation(params.command.clone());
+        if let Some(command) = command {
+            return ExecParams { command, ..params };
+        }
+    }
+    params
+}
+
 async fn handle_container_exec_with_params(
     params: ExecParams,
     sess: &Session,
@@ -1481,6 +1453,7 @@ async fn handle_container_exec_with_params(
             let rx_approve = sess
                 .request_command_approval(
                     sub_id.clone(),
+                    call_id.clone(),
                     params.command.clone(),
                     params.cwd.clone(),
                     None,
@@ -1521,6 +1494,7 @@ async fn handle_container_exec_with_params(
     sess.notify_exec_command_begin(&sub_id, &call_id, &params)
         .await;
 
+    let params = maybe_run_with_user_profile(params, sess);
     let output_result = process_exec_tool_call(
         params.clone(),
         sandbox_type,
@@ -1608,6 +1582,7 @@ async fn handle_sandbox_error(
     let rx_approve = sess
         .request_command_approval(
             sub_id.clone(),
+            call_id.clone(),
             params.command.clone(),
             params.cwd.clone(),
             Some("command failed; retry without sandbox?".to_string()),
@@ -1625,9 +1600,7 @@ async fn handle_sandbox_error(
             sess.notify_background_event(&sub_id, "retrying command without sandbox")
                 .await;
 
-            // Emit a fresh Begin event so progress bars reset.
-            let retry_call_id = format!("{call_id}-retry");
-            sess.notify_exec_command_begin(&sub_id, &retry_call_id, &params)
+            sess.notify_exec_command_begin(&sub_id, &call_id, &params)
                 .await;
 
             // This is an escalated retry; the policy will not be
@@ -1650,14 +1623,8 @@ async fn handle_sandbox_error(
                         duration,
                     } = retry_output;
 
-                    sess.notify_exec_command_end(
-                        &sub_id,
-                        &retry_call_id,
-                        &stdout,
-                        &stderr,
-                        exit_code,
-                    )
-                    .await;
+                    sess.notify_exec_command_end(&sub_id, &call_id, &stdout, &stderr, exit_code)
+                        .await;
 
                     let is_success = exit_code == 0;
                     let content = format_exec_output(
@@ -1721,7 +1688,7 @@ async fn apply_patch(
             // Compute a readable summary of path changes to include in the
             // approval request so the user can make an informed decision.
             let rx_approve = sess
-                .request_patch_approval(sub_id.clone(), &action, None, None)
+                .request_patch_approval(sub_id.clone(), call_id.clone(), &action, None, None)
                 .await;
             match rx_approve.await.unwrap_or_default() {
                 ReviewDecision::Approved | ReviewDecision::ApprovedForSession => false,
@@ -1759,7 +1726,13 @@ async fn apply_patch(
         ));
 
         let rx = sess
-            .request_patch_approval(sub_id.clone(), &action, reason.clone(), Some(root.clone()))
+            .request_patch_approval(
+                sub_id.clone(),
+                call_id.clone(),
+                &action,
+                reason.clone(),
+                Some(root.clone()),
+            )
             .await;
 
         if !matches!(
@@ -1843,6 +1816,7 @@ async fn apply_patch(
                 let rx = sess
                     .request_patch_approval(
                         sub_id.clone(),
+                        call_id.clone(),
                         &action,
                         reason.clone(),
                         Some(root.clone()),
@@ -2118,7 +2092,6 @@ fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -> Option<St
         }
     })
 }
-
 fn attach_info_to_last_assistant_message(
     items: &mut [ProcessedResponseItem],
     usage: TokenUsage,
@@ -2138,17 +2111,5 @@ fn attach_info_to_last_assistant_message(
                 break;
             }
         }
-    }
-}
-
-/// See [`ConversationHistory`] for details.
-fn record_conversation_history(disable_response_storage: bool, wire_api: WireApi) -> bool {
-    if disable_response_storage {
-        return true;
-    }
-
-    match wire_api {
-        WireApi::Responses => false,
-        WireApi::Chat => true,
     }
 }

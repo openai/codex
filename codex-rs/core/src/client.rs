@@ -126,6 +126,7 @@ impl ModelClient {
             .iter()
             .map(|item| match item {
                 ResponseItem::Message { role, content, .. } => ResponseItem::Message {
+                    id: None,
                     role: role.clone(),
                     content: content.clone(),
                     token_usage: None,
@@ -135,6 +136,14 @@ impl ModelClient {
             })
             .collect();
 
+        // Request encrypted COT if we are not storing responses,
+        // otherwise reasoning items will be referenced by ID
+        let include = if !prompt.store && reasoning.is_some() {
+            vec!["reasoning.encrypted_content".to_string()]
+        } else {
+            vec![]
+        };
+
         let payload = ResponsesApiRequest {
             model: &self.config.model,
             instructions: &full_instructions,
@@ -143,10 +152,10 @@ impl ModelClient {
             tool_choice: "auto",
             parallel_tool_calls: false,
             reasoning,
-            previous_response_id: prompt.prev_id.clone(),
             store: prompt.store,
             // TODO: make this configurable
             stream: true,
+            include,
         };
 
         trace!(

@@ -58,6 +58,7 @@ pub(crate) async fn stream_chat_completions(
                 name,
                 arguments,
                 call_id,
+                ..
             } => {
                 messages.push(json!({
                     "role": "assistant",
@@ -261,6 +262,7 @@ async fn process_chat_sse<S>(
                     content: vec![ContentItem::OutputText {
                         text: content.to_string(),
                     }],
+                    id: None,
                     token_usage: None,
                     timestamp: None,
                 };
@@ -304,6 +306,7 @@ async fn process_chat_sse<S>(
                     "tool_calls" if fn_call_state.active => {
                         // Build the FunctionCall response item.
                         let item = ResponseItem::FunctionCall {
+                            id: None,
                             name: fn_call_state.name.clone().unwrap_or_else(|| "".to_string()),
                             arguments: fn_call_state.arguments.clone(),
                             call_id: fn_call_state.call_id.clone().unwrap_or_else(String::new),
@@ -408,6 +411,7 @@ where
                 }))) => {
                     if !this.cumulative.is_empty() {
                         let aggregated_item = crate::models::ResponseItem::Message {
+                            id: None,
                             role: "assistant".to_string(),
                             content: vec![crate::models::ContentItem::OutputText {
                                 text: std::mem::take(&mut this.cumulative),

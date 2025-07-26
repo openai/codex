@@ -1,5 +1,4 @@
 use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
 use ratatui::widgets::WidgetRef;
 
 use crate::app_event_sender::AppEventSender;
@@ -13,9 +12,9 @@ pub(crate) struct StatusIndicatorView {
 }
 
 impl StatusIndicatorView {
-    pub fn new(app_event_tx: AppEventSender, height: u16) -> Self {
+    pub fn new(app_event_tx: AppEventSender) -> Self {
         Self {
-            view: StatusIndicatorWidget::new(app_event_tx, height),
+            view: StatusIndicatorWidget::new(app_event_tx),
         }
     }
 
@@ -34,11 +33,7 @@ impl BottomPaneView<'_> for StatusIndicatorView {
         true
     }
 
-    fn calculate_required_height(&self, _area: &Rect) -> u16 {
-        self.view.get_height()
-    }
-
-    fn render(&self, area: Rect, buf: &mut Buffer) {
+    fn render(&self, area: ratatui::layout::Rect, buf: &mut Buffer) {
         self.view.render_ref(area, buf);
     }
 }

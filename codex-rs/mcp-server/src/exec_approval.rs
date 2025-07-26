@@ -32,6 +32,7 @@ pub struct ExecApprovalElicitRequestParams {
     pub codex_elicitation: String,
     pub codex_mcp_tool_call_id: String,
     pub codex_event_id: String,
+    pub codex_call_id: String,
     pub codex_command: Vec<String>,
     pub codex_cwd: PathBuf,
 }
@@ -45,6 +46,7 @@ pub struct ExecApprovalResponse {
     pub decision: ReviewDecision,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_exec_approval_request(
     command: Vec<String>,
     cwd: PathBuf,
@@ -53,6 +55,7 @@ pub(crate) async fn handle_exec_approval_request(
     request_id: RequestId,
     tool_call_id: String,
     event_id: String,
+    call_id: String,
 ) {
     let escaped_command =
         shlex::try_join(command.iter().map(|s| s.as_str())).unwrap_or_else(|_| command.join(" "));
@@ -71,6 +74,7 @@ pub(crate) async fn handle_exec_approval_request(
         codex_elicitation: "exec-approval".to_string(),
         codex_mcp_tool_call_id: tool_call_id.clone(),
         codex_event_id: event_id.clone(),
+        codex_call_id: call_id,
         codex_command: command,
         codex_cwd: cwd,
     };
