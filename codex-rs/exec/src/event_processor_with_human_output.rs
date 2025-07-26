@@ -3,10 +3,12 @@ use codex_core::config::Config;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
+use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::BackgroundEventEvent;
 use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
+use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::FileChange;
@@ -474,11 +476,45 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     println!("{}", line.style(self.dimmed));
                 }
             }
-            EventMsg::ExecApprovalRequest(_) => {
-                // Should we exit?
+            EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
+                command,
+                cwd,
+                reason,
+                ..
+            }) => {
+                ts_println!(
+                    self,
+                    "{} {} in {}",
+                    "approval required for".style(self.magenta),
+                    escape_command(&command).style(self.bold),
+                    cwd.to_string_lossy(),
+                );
+                if let Some(r) = reason {
+                    ts_println!(self, "{r}");
+                }
+                return CodexStatus::InitiateShutdown;
             }
-            EventMsg::ApplyPatchApprovalRequest(_) => {
-                // Should we exit?
+            EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
+                changes,
+                reason,
+                ..
+            }) => {
+                ts_println!(
+                    self,
+                    "{}:",
+                    "approval required for apply_patch".style(self.magenta),
+                );
+                for (path, change) in changes.iter() {
+                    println!(
+                        "  {} {}",
+                        format_file_change(change).style(self.cyan),
+                        path.to_string_lossy(),
+                    );
+                }
+                if let Some(r) = reason {
+                    ts_println!(self, "{r}");
+                }
+                return CodexStatus::InitiateShutdown;
             }
             EventMsg::AgentReasoning(agent_reasoning_event) => {
                 if self.show_agent_reasoning {
@@ -536,5 +572,44 @@ fn format_file_change(change: &FileChange) -> &'static str {
         FileChange::Update {
             move_path: None, ..
         } => "M",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_core::config::Config;
+    use codex_core::config::ConfigOverrides;
+    use codex_core::config::ConfigToml;
+    use codex_core::protocol::Event;
+    use codex_core::protocol::EventMsg;
+    use codex_core::protocol::ExecApprovalRequestEvent;
+
+    fn test_config() -> Config {
+        Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            std::env::temp_dir(),
+        )
+        .unwrap_or_else(|e| panic!("failed to load test configuration: {e}"))
+    }
+
+    #[test]
+    fn exec_approval_request_displays_command() {
+        let config = test_config();
+        let mut processor = EventProcessorWithHumanOutput::create_with_ansi(false, &config, None);
+
+        let event = Event {
+            id: "1".into(),
+            msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
+                call_id: "c1".into(),
+                command: vec!["rm".into(), "-rf".into(), "/".into()],
+                cwd: PathBuf::from("/tmp"),
+                reason: None,
+            }),
+        };
+
+        let status = processor.process_event(event);
+        assert!(matches!(status, CodexStatus::InitiateShutdown));
     }
 }

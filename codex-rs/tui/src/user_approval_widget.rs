@@ -368,3 +368,102 @@ impl WidgetRef for &UserApprovalWidget<'_> {
         Widget::render(List::new(lines), response_chunk, buf);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_event::AppEvent;
+    use crate::app_event_sender::AppEventSender;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+    use ratatui::widgets::WidgetRef;
+    use std::path::PathBuf;
+    use std::sync::mpsc::channel;
+
+    #[test]
+    fn exec_command_is_visible_in_small_viewport() {
+        let long_reason = "This is a very long explanatory reason that would normally occupy many lines in the confirmation prompt. \
+It should not cause the actual command or the response options to be scrolled out of the visible area.";
+
+        let (tx, _rx) = channel::<AppEvent>();
+        let app_tx = AppEventSender::new(tx);
+
+        let cwd = PathBuf::from("/home/alice/project");
+        let command = vec![
+            "bash".to_string(),
+            "-lc".to_string(),
+            "echo 123 && printf 'hello'".to_string(),
+        ];
+
+        let widget = UserApprovalWidget::new(
+            ApprovalRequest::Exec {
+                id: "test-id".to_string(),
+                command: command.clone(),
+                cwd: cwd.clone(),
+                reason: Some(long_reason.to_string()),
+            },
+            app_tx,
+        );
+
+        let area = Rect::new(0, 0, 50, 12);
+        let mut buf = Buffer::empty(area);
+        (&widget).render_ref(area, &mut buf);
+
+        let mut rendered = String::new();
+        for y in 0..area.height {
+            for x in 0..area.width {
+                let cell = &buf[(x, y)];
+                rendered.push(cell.symbol().chars().next().unwrap_or('\0'));
+            }
+            rendered.push('\n');
+        }
+
+        assert!(
+            rendered.contains("echo 123 && printf 'hello'"),
+            "rendered buffer did not contain the command.\n--- buffer ---\n{rendered}\n----------------"
+        );
+        assert!(rendered.contains("Yes (y)"));
+    }
+
+    #[test]
+    fn all_options_visible_in_reasonable_viewport() {
+        let (tx, _rx) = channel::<AppEvent>();
+        let app_tx = AppEventSender::new(tx);
+
+        let widget = UserApprovalWidget::new(
+            ApprovalRequest::Exec {
+                id: "test-id".to_string(),
+                command: vec![
+                    "bash".into(),
+                    "-lc".into(),
+                    "echo 123 && printf 'hello'".into(),
+                ],
+                cwd: PathBuf::from("/home/alice/project"),
+                reason: Some("short reason".into()),
+            },
+            app_tx,
+        );
+
+        // Use a generous area to avoid truncation of either the prompt or the options.
+        let area = Rect::new(0, 0, 100, 30);
+        let mut buf = Buffer::empty(area);
+        (&widget).render_ref(area, &mut buf);
+
+        let mut rendered = String::new();
+        for y in 0..area.height {
+            for x in 0..area.width {
+                let cell = &buf[(x, y)];
+                rendered.push(cell.symbol().chars().next().unwrap_or('\0'));
+            }
+            rendered.push('\n');
+        }
+
+        for opt in super::SELECT_OPTIONS {
+            assert!(
+                rendered.contains(opt.label),
+                "expected option label to be visible: {}\n--- buffer ---\n{rendered}\n----------------",
+                opt.label
+            );
+        }
+    }
+}
