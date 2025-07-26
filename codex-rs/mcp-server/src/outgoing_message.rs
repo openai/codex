@@ -86,8 +86,20 @@ impl OutgoingMessageSender {
             params,
         });
         let _ = self.sender.send(outgoing_message).await;
+
+        self.send_event_as_notification_new_schema(event).await;
     }
 
+    // this is the new schema for sending events as notifications.
+    // should be backwards compatible.
+    // it will replace send_event_as_notification eventually.
+    async fn send_event_as_notification_new_schema(&self, event: &Event) {
+        let outgoing_message = OutgoingMessage::Notification(OutgoingNotification {
+            method: event.msg.to_string(),
+            params: None,
+        });
+        let _ = self.sender.send(outgoing_message).await;
+    }
     pub(crate) async fn send_error(&self, id: RequestId, error: JSONRPCErrorError) {
         let outgoing_message = OutgoingMessage::Error(OutgoingError { id, error });
         let _ = self.sender.send(outgoing_message).await;

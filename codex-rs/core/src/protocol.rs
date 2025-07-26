@@ -338,10 +338,9 @@ pub enum EventMsg {
     ShutdownComplete,
 }
 
-impl EventMsg {
-    /// Returns a stable human-readable name for this variant, used as the JSON-RPC method.
-    pub fn method_name(&self) -> &'static str {
-        match self {
+impl fmt::Display for EventMsg {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
             EventMsg::Error(_) => "Error",
             EventMsg::TaskStarted => "TaskStarted",
             EventMsg::TaskComplete(_) => "TaskComplete",
@@ -362,7 +361,8 @@ impl EventMsg {
             EventMsg::PatchApplyEnd(_) => "PatchApplyEnd",
             EventMsg::GetHistoryEntryResponse(_) => "GetHistoryEntryResponse",
             EventMsg::ShutdownComplete => "ShutdownComplete",
-        }
+        };
+        f.write_str(s)
     }
 }
 
