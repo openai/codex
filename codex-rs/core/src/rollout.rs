@@ -31,6 +31,7 @@ pub struct SessionMeta {
     pub id: Uuid,
     pub timestamp: String,
     pub instructions: Option<String>,
+    pub model: String,
 }
 
 #[derive(Serialize)]
@@ -114,6 +115,7 @@ impl RolloutRecorder {
                 timestamp,
                 id: session_id,
                 instructions,
+                model: config.model.to_string(),
             }),
             cwd,
         ));
@@ -340,6 +342,7 @@ async fn rollout_writer(
             }
             RolloutCmd::Shutdown { ack } => {
                 let _ = ack.send(());
+                break;
             }
         }
     }

@@ -81,6 +81,7 @@ use crate::protocol::SandboxPolicy;
 use crate::protocol::SessionConfiguredEvent;
 use crate::protocol::Submission;
 use crate::protocol::TaskCompleteEvent;
+use crate::protocol::TokenUsage;
 use crate::rollout::RolloutRecorder;
 use crate::safety::SafetyCheck;
 use crate::safety::assess_command_safety;
@@ -1194,8 +1195,16 @@ async fn try_run_turn(
             ResponseEvent::Completed {
                 response_id: _,
                 token_usage,
+                timestamp,
             } => {
-                if let Some(token_usage) = token_usage {
+                if let (Some(token_usage), Some(timestamp)) = (token_usage, timestamp) {
+                    // Attach token usage to the last assistant message in this turn
+                    attach_info_to_last_assistant_message(
+                        &mut output,
+                        token_usage.clone(),
+                        timestamp.clone(),
+                    );
+
                     sess.tx_event
                         .send(Event {
                             id: sub_id.to_string(),
@@ -2082,4 +2091,25 @@ fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -> Option<St
             None
         }
     })
+}
+fn attach_info_to_last_assistant_message(
+    items: &mut [ProcessedResponseItem],
+    usage: TokenUsage,
+    timestamp: String,
+) {
+    for processed_item in items.iter_mut().rev() {
+        if let ResponseItem::Message {
+            role,
+            token_usage,
+            timestamp: message_timestamp,
+            ..
+        } = &mut processed_item.item
+        {
+            if role == "assistant" && token_usage.is_none() {
+                *token_usage = Some(usage);
+                *message_timestamp = Some(timestamp.clone());
+                break;
+            }
+        }
+    }
 }
