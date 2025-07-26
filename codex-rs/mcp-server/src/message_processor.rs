@@ -1,15 +1,20 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::SendUserMessageParam;
 use crate::codex_tool_config::CodexToolCallParam;
 use crate::codex_tool_config::CodexToolCallReplyParam;
 use crate::codex_tool_config::create_tool_for_codex_tool_call_param;
 use crate::codex_tool_config::create_tool_for_codex_tool_call_reply_param;
 use crate::outgoing_message::OutgoingMessageSender;
+use crate::send_user_message::create_tool_for_send_user_message_param;
 
 use codex_core::Codex;
 use codex_core::config::Config as CodexConfig;
+use codex_core::protocol::InputItem;
+use codex_core::protocol::Op;
 use codex_core::protocol::Submission;
 use mcp_types::CallToolRequestParams;
 use mcp_types::CallToolResult;
@@ -37,6 +42,7 @@ pub(crate) struct MessageProcessor {
     codex_linux_sandbox_exe: Option<PathBuf>,
     session_map: Arc<Mutex<HashMap<Uuid, Arc<Codex>>>>,
     running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, Uuid>>>,
+    running_session_id_set: Arc<Mutex<HashSet<Uuid>>>,
 }
 
 impl MessageProcessor {
@@ -52,6 +58,7 @@ impl MessageProcessor {
             codex_linux_sandbox_exe,
             session_map: Arc::new(Mutex::new(HashMap::new())),
             running_requests_id_to_codex_uuid: Arc::new(Mutex::new(HashMap::new())),
+            running_session_id_set: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -286,6 +293,7 @@ impl MessageProcessor {
             tools: vec![
                 create_tool_for_codex_tool_call_param(),
                 create_tool_for_codex_tool_call_reply_param(),
+                create_tool_for_send_user_message_param(),
             ],
             next_cursor: None,
         };
@@ -308,6 +316,7 @@ impl MessageProcessor {
                 self.handle_tool_call_codex_session_reply(id, arguments)
                     .await
             }
+            "send-user-message" => self.handle_tool_call_send_user_message(id, arguments).await,
             _ => {
                 let result = CallToolResult {
                     content: vec![ContentBlock::TextContent(TextContent {
@@ -515,6 +524,103 @@ impl MessageProcessor {
         });
     }
 
+    async fn handle_tool_call_send_user_message(
+        &self,
+        id: RequestId,
+        arguments: Option<serde_json::Value>,
+    ) {
+        let SendUserMessageParam {
+            message,
+            session_id,
+        } = match arguments {
+            Some(json_val) => match serde_json::from_value::<SendUserMessageParam>(json_val) {
+                Ok(params) => params,
+                Err(e) => {
+                    self.send_error_response(id, format!("Failed to parse arguments: {e}"), true)
+                        .await;
+                    return;
+                }
+            },
+            None => {
+                self.send_error_response(id, "Missing arguments for send_user_message tool-call; the `message` and `session_id` fields are required.".to_owned(), true).await;
+                return;
+            }
+        };
+
+        let session_id = match Uuid::parse_str(&session_id) {
+            Ok(id) => id,
+            Err(e) => {
+                self.send_error_response(id, format!("Failed to parse session_id: {e}"), true)
+                    .await;
+                return;
+            }
+        };
+        if self
+            .running_session_id_set
+            .lock()
+            .await
+            .contains(&session_id)
+        {
+            self.send_error_response(
+                id,
+                format!("Session already running for session_id: {session_id}"),
+                true,
+            )
+            .await;
+            return;
+        }
+        if !session_exists(session_id, self.session_map.clone()).await {
+            self.send_error_response(
+                id,
+                format!("Session not found for session_id: {session_id}"),
+                true,
+            )
+            .await;
+            return;
+        }
+        self.running_session_id_set.lock().await.insert(session_id);
+
+        let codex = {
+            let guard = self.session_map.lock().await;
+            guard.get(&session_id).cloned()
+        };
+
+        if codex.is_none() {
+            self.send_error_response(
+                id,
+                format!("Session not found for session_id: {session_id}"),
+                true,
+            )
+            .await;
+            return;
+        }
+
+        let request_id_string = match &id {
+            RequestId::String(s) => s.clone(),
+            RequestId::Integer(i) => i.to_string(),
+        };
+
+        if let Some(codex) = codex {
+            let submit_res = codex
+                .submit_with_id(Submission {
+                    id: request_id_string,
+                    op: Op::UserInput {
+                        items: vec![InputItem::Text { text: message }],
+                    },
+                })
+                .await;
+
+            if let Err(e) = submit_res {
+                self.send_error_response(id, format!("Failed to submit user input: {e}"), true)
+                    .await;
+                return;
+            }
+        }
+
+        self.send_error_response(id, "Success".to_owned(), false)
+            .await;
+    }
+
     fn handle_set_level(
         &self,
         params: <mcp_types::SetLevelRequest as mcp_types::ModelContextProtocolRequest>::Params,
@@ -631,4 +737,27 @@ impl MessageProcessor {
     ) {
         tracing::info!("notifications/message -> params: {:?}", params);
     }
+
+    async fn send_error_response(&self, id: RequestId, message: String, is_error: bool) {
+        let result = CallToolResult {
+            content: vec![ContentBlock::TextContent(TextContent {
+                r#type: "text".to_owned(),
+                text: message,
+                annotations: None,
+            })],
+            is_error: Some(is_error),
+            structured_content: None,
+        };
+        self.send_response::<mcp_types::CallToolRequest>(id, result)
+            .await;
+    }
+}
+
+async fn session_exists(
+    session_id: Uuid,
+    session_map: Arc<Mutex<HashMap<Uuid, Arc<Codex>>>>,
+) -> bool {
+    let session_map = session_map.lock().await;
+    session_map.contains_key(&session_id)
+    // TODO: check if session exists on disk as well
 }

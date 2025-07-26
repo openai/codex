@@ -13,6 +13,7 @@ use anyhow::Context;
 use assert_cmd::prelude::*;
 use codex_mcp_server::CodexToolCallParam;
 use codex_mcp_server::CodexToolCallReplyParam;
+use codex_mcp_server::SendUserMessageParam;
 use mcp_types::CallToolRequestParams;
 use mcp_types::ClientCapabilities;
 use mcp_types::Implementation;
@@ -170,6 +171,25 @@ impl McpProcess {
         self.send_request(
             mcp_types::CallToolRequest::METHOD,
             Some(serde_json::to_value(codex_tool_call_params)?),
+        )
+        .await
+    }
+
+    pub async fn send_send_user_message_tool_call(
+        &mut self,
+        message: &str,
+        session_id: &str,
+    ) -> anyhow::Result<i64> {
+        let params = CallToolRequestParams {
+            name: "send-user-message".to_string(),
+            arguments: Some(serde_json::to_value(SendUserMessageParam {
+                message: message.to_string(),
+                session_id: session_id.to_string(),
+            })?),
+        };
+        self.send_request(
+            mcp_types::CallToolRequest::METHOD,
+            Some(serde_json::to_value(params)?),
         )
         .await
     }
