@@ -126,13 +126,22 @@ where
 }
 
 pub(crate) fn insert_history_lines(terminal: &mut tui::Tui, lines: Vec<Line<'static>>) {
-    let screen_height = terminal.backend_mut().size().unwrap().height;
+    let screen_height = terminal
+        .backend_mut()
+        .size()
+        .map(|s| s.height)
+        .unwrap_or(0xffffu16);
     let mut area = terminal.get_frame().area();
     // We scroll up one line at a time because
     for line in lines.into_iter() {
         // 1. Scroll everything above the viewport up by one line
-        if area.bottom() < screen_height {
-            // Scroll down instead of up
+        if area.bottom() >= screen_height {
+            let top = area.top();
+            terminal.backend_mut().scroll_region_up(0..top, 1).ok();
+            // 2. Move the cursor to the blank line
+            terminal.set_cursor_position(Position::new(0, top - 1)).ok();
+        } else {
+            // If the viewport isn't at the bottom of the screen, scroll down instead
             terminal
                 .backend_mut()
                 .scroll_region_down(area.top()..area.bottom() + 1, 1)
@@ -141,11 +150,6 @@ pub(crate) fn insert_history_lines(terminal: &mut tui::Tui, lines: Vec<Line<'sta
                 .set_cursor_position(Position::new(0, area.top()))
                 .ok();
             area.y += 1;
-        } else {
-            let top = area.top();
-            terminal.backend_mut().scroll_region_up(0..top, 1).ok();
-            // 2. Move the cursor to the blank line
-            terminal.set_cursor_position(Position::new(0, top - 1)).ok();
         }
         // 3. Write the line
         write_spans(&mut std::io::stdout(), line.iter()).ok();
