@@ -15,7 +15,7 @@ use toml::Value;
 /// CLI option that captures arbitrary configuration overrides specified as
 /// `-c key=value`. It intentionally keeps both halves **unparsed** so that the
 /// calling code can decide how to interpret the right-hand side.
-#[derive(Parser, Debug, Default, Clone)]
+#[derive(Parser, Debug, Default, Clone, serde::Serialize)]
 pub struct CliConfigOverrides {
     /// Override a configuration value that would otherwise be loaded from
     /// `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override

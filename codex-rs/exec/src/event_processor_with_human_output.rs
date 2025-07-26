@@ -24,11 +24,27 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
 use std::time::Instant;
+use std::path::Path;
 
 use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
 use crate::event_processor::create_config_summary_entries;
 use crate::event_processor::handle_last_message;
+
+// Helper: determine base ~/.codex directory similar to concurrent module.
+fn codex_base_dir_for_logging() -> Option<std::path::PathBuf> {
+    if let Ok(val) = std::env::var("CODEX_HOME") { if !val.is_empty() { return std::fs::canonicalize(val).ok(); } }
+    let home = std::env::var_os("HOME")?;
+    let base = std::path::PathBuf::from(home).join(".codex");
+    let _ = std::fs::create_dir_all(&base);
+    Some(base)
+}
+
+fn append_json_line(path: &Path, value: &serde_json::Value) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+    writeln!(f, "{}", value.to_string())
+}
 
 /// This should be configurable. When used in CI, users may not want to impose
 /// a limit so they can see the full transcript.
@@ -59,6 +75,7 @@ pub(crate) struct EventProcessorWithHumanOutput {
     answer_started: bool,
     reasoning_started: bool,
     last_message_path: Option<PathBuf>,
+    last_token_usage: Option<TokenUsage>,
 }
 
 impl EventProcessorWithHumanOutput {
@@ -87,6 +104,7 @@ impl EventProcessorWithHumanOutput {
                 answer_started: false,
                 reasoning_started: false,
                 last_message_path,
+                last_token_usage: None,
             }
         } else {
             Self {
@@ -104,6 +122,7 @@ impl EventProcessorWithHumanOutput {
                 answer_started: false,
                 reasoning_started: false,
                 last_message_path,
+                last_token_usage: None,
             }
         }
     }
@@ -180,17 +199,74 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 ts_println!(self, "{}", message.style(self.dimmed));
             }
             EventMsg::TaskStarted => {
-                // Ignore.
+                if let Ok(task_id) = std::env::var("CODEX_TASK_ID") {
+                    if let Some(base) = codex_base_dir_for_logging() {
+                        let tasks_path = base.join("tasks.jsonl");
+                        let ts = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0);
+                        let obj = serde_json::json!({
+                            "task_id": task_id,
+                            "update_time": ts,
+                            "state": "started",
+                        });
+                        let _ = append_json_line(&tasks_path, &obj);
+                    }
+                }
             }
             EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) => {
+                
                 handle_last_message(
                     last_agent_message.as_deref(),
                     self.last_message_path.as_deref(),
                 );
+                // On completion, append a final state entry with last token count snapshot.
+                if let Ok(task_id) = std::env::var("CODEX_TASK_ID") {
+                    if let Some(base) = codex_base_dir_for_logging() {
+                        let tasks_path = base.join("tasks.jsonl");
+                        let ts = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0);
+                        let token_json = self.last_token_usage.as_ref().map(|u| serde_json::json!({
+                            "input_tokens": u.input_tokens,
+                            "cached_input_tokens": u.cached_input_tokens,
+                            "output_tokens": u.output_tokens,
+                            "reasoning_output_tokens": u.reasoning_output_tokens,
+                            "total_tokens": u.total_tokens,
+                        }));
+                        let mut obj = serde_json::json!({
+                            "task_id": task_id,
+                            "completion_time": ts,
+                            "end_time": ts,
+                            "state": "done",
+                        });
+                        if let Some(tj) = token_json { if let serde_json::Value::Object(ref mut map) = obj { map.insert("token_count".to_string(), tj); } }
+                        let _ = append_json_line(&tasks_path, &obj);
+                    }
+                }
                 return CodexStatus::InitiateShutdown;
             }
             EventMsg::TokenCount(TokenUsage { total_tokens, .. }) => {
                 ts_println!(self, "tokens used: {total_tokens}");
+                if let Ok(task_id) = std::env::var("CODEX_TASK_ID") {
+                    if let Some(base) = codex_base_dir_for_logging() {
+                        let tasks_path = base.join("tasks.jsonl");
+                        let ts = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0);
+                        let full = serde_json::json!({
+                            "task_id": task_id,
+                            "update_time": ts,
+                            "token_count": {
+                                "total_tokens": total_tokens,
+                            }
+                        });
+                        let _ = append_json_line(&tasks_path, &full);
+                    }
+                }
             }
             EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
                 if !self.answer_started {
@@ -475,10 +551,41 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 }
             }
             EventMsg::ExecApprovalRequest(_) => {
-                // Should we exit?
+                // When a background task requests execution approval, persist a state transition
+                // so `codex tasks ls` can reflect that it is waiting on user input.
+                if let Ok(task_id) = std::env::var("CODEX_TASK_ID") {
+                    if let Some(base) = codex_base_dir_for_logging() {
+                        let tasks_path = base.join("tasks.jsonl");
+                        let ts = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0);
+                        let obj = serde_json::json!({
+                            "task_id": task_id,
+                            "update_time": ts,
+                            "state": "waiting_exec_approval",
+                        });
+                        let _ = append_json_line(&tasks_path, &obj);
+                    }
+                }
             }
             EventMsg::ApplyPatchApprovalRequest(_) => {
-                // Should we exit?
+                // todo: test/verify and verify if useful to keep now
+                if let Ok(task_id) = std::env::var("CODEX_TASK_ID") {
+                    if let Some(base) = codex_base_dir_for_logging() {
+                        let tasks_path = base.join("tasks.jsonl");
+                        let ts = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0);
+                        let obj = serde_json::json!({
+                            "task_id": task_id,
+                            "update_time": ts,
+                            "state": "waiting_patch_approval",
+                        });
+                        let _ = append_json_line(&tasks_path, &obj);
+                    }
+                }
             }
             EventMsg::AgentReasoning(agent_reasoning_event) => {
                 if self.show_agent_reasoning {

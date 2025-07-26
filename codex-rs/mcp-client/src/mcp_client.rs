@@ -75,6 +75,9 @@ pub struct McpClient {
 
     /// Monotonically increasing counter used to generate request IDs.
     id_counter: AtomicI64,
+
+    /// Channel receiver for notifications (single consumer). Created per client.
+    notifications_rx: Mutex<Option<mpsc::Receiver<JSONRPCNotification>>>,
 }
 
 impl McpClient {
@@ -110,6 +113,7 @@ impl McpClient {
 
         let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<JSONRPCMessage>(CHANNEL_CAPACITY);
         let pending: Arc<Mutex<HashMap<i64, PendingSender>>> = Arc::new(Mutex::new(HashMap::new()));
+        let (notif_tx, notif_rx) = mpsc::channel::<JSONRPCNotification>(CHANNEL_CAPACITY);
 
         // Spawn writer task. It listens on the `outgoing_rx` channel and
         // writes messages to the child's STDIN.
@@ -156,8 +160,15 @@ impl McpClient {
                             Self::dispatch_error(err, &pending).await;
                         }
                         Ok(JSONRPCMessage::Notification(JSONRPCNotification { .. })) => {
-                            // For now we only log server-initiated notifications.
+                            // Log and also print notifications so callers (e.g., concurrent worker) can stream progress.
                             info!("<- notification: {}", line);
+                            // (Filtered printing handled by higher-level caller; suppress raw spam here.)
+                            // Attempt to forward the notification to channel subscribers.
+                            if let Ok(parsed) = serde_json::from_str::<JSONRPCMessage>(&line) {
+                                if let JSONRPCMessage::Notification(n) = parsed {
+                                    let _ = notif_tx.try_send(n);
+                                }
+                            }
                         }
                         Ok(other) => {
                             // Batch responses and requests are currently not
@@ -183,6 +194,7 @@ impl McpClient {
             outgoing_tx,
             pending,
             id_counter: AtomicI64::new(1),
+            notifications_rx: Mutex::new(Some(notif_rx)),
         })
     }
 
@@ -347,6 +359,11 @@ impl McpClient {
         let params = CallToolRequestParams { name, arguments };
         debug!("MCP tool call: {params:?}");
         self.send_request::<CallToolRequest>(params, timeout).await
+    }
+
+    /// Take the notifications receiver (only once). Returns None if already taken.
+    pub async fn take_notification_receiver(&self) -> Option<mpsc::Receiver<JSONRPCNotification>> {
+        self.notifications_rx.lock().await.take()
     }
 
     /// Internal helper: route a JSON-RPC *response* object to the pending map.

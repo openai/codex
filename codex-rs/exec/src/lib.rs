@@ -7,6 +7,7 @@ use std::io::IsTerminal;
 use std::io::Read;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::path::Path;
 
 pub use cli::Cli;
 use codex_core::codex_wrapper;
@@ -236,6 +237,120 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             }
         }
     }
+
+    // If running in concurrent auto-merge mode, attempt to commit and merge original branch.
+    if std::env::var("CODEX_CONCURRENT_AUTOMERGE").ok().as_deref() == Some("1") {
+        if let Err(e) = auto_commit_and_fast_forward_original_branch() {
+            eprintln!("[codex-concurrent] Auto-merge skipped: {e}");
+        }
+    }
+
+    Ok(())
+}
+
+fn handle_last_message(
+    last_agent_message: Option<String>,
+    last_message_file: Option<&Path>,
+) -> std::io::Result<()> {
+    match (last_agent_message, last_message_file) {
+        (Some(last_agent_message), Some(last_message_file)) => {
+            // Last message and a file to write to.
+            std::fs::write(last_message_file, last_agent_message)?;
+        }
+        (None, Some(last_message_file)) => {
+            eprintln!(
+                "Warning: No last message to write to file: {}",
+                last_message_file.to_string_lossy()
+            );
+        }
+        (_, None) => {
+            // No last message and no file to write to.
+        }
+    }
+    Ok(())
+}
+
+/// Auto-commit changes in the concurrent worktree branch and integrate them back into the original branch.
+/// Strategy:
+/// 1. Commit any pending changes on the concurrent branch.
+/// 2. Checkout the original branch in the original root and perform a --no-ff merge.
+/// Safety: Only performs merge operations if repository state allows; on conflicts it aborts and reports.
+fn auto_commit_and_fast_forward_original_branch() -> anyhow::Result<()> {
+    use std::process::Command;
+    let concurrent_branch = std::env::var("CODEX_CONCURRENT_BRANCH").ok().ok_or_else(|| anyhow::anyhow!("missing concurrent branch env"))?;
+    let original_branch = std::env::var("CODEX_ORIGINAL_BRANCH").ok().ok_or_else(|| anyhow::anyhow!("missing original branch env"))?;
+    let original_commit = std::env::var("CODEX_ORIGINAL_COMMIT").ok().ok_or_else(|| anyhow::anyhow!("missing original commit env"))?;
+    let worktree_dir_env = std::env::var("CODEX_CONCURRENT_WORKTREE").ok();
+    let original_root_env = std::env::var("CODEX_ORIGINAL_ROOT").ok();
+
+    // Determine directory to run git commit for concurrent branch (worktree if provided, else repo root from rev-parse).
+    let worktree_dir = if let Some(wt) = worktree_dir_env.clone() {
+        std::path::PathBuf::from(wt)
+    } else {
+        let repo_root = Command::new("git").args(["rev-parse", "--show-toplevel"]).output()?;
+        if !repo_root.status.success() { anyhow::bail!("not a git repo"); }
+        std::path::PathBuf::from(String::from_utf8_lossy(&repo_root.stdout).trim().to_string())
+    };
+
+    // Commit pending changes (git add ., git commit -m ...).
+    let status_out = Command::new("git")
+        .current_dir(&worktree_dir)
+        .args(["status", "--porcelain"]).output()?;
+    if !status_out.status.success() { anyhow::bail!("git status failed"); }
+    if !status_out.stdout.is_empty() {
+        let add_status = Command::new("git")
+            .current_dir(&worktree_dir)
+            .args(["add", "."]).status()?;
+        if !add_status.success() { anyhow::bail!("git add failed"); }
+        let commit_msg = format!("Codex concurrent run auto-commit on branch {concurrent_branch}");
+        let commit_status = Command::new("git")
+            .current_dir(&worktree_dir)
+            .args(["commit", "-m", &commit_msg]).status()?;
+        if !commit_status.success() { anyhow::bail!("git commit failed"); }
+        eprintln!("[codex-concurrent] Created commit in {concurrent_branch}.");
+    } else {
+        eprintln!("[codex-concurrent] No changes to commit in {concurrent_branch}.");
+    }
+
+    // Capture head of concurrent branch (for potential future use / diagnostics).
+    let concurrent_head_out = Command::new("git")
+        .current_dir(&worktree_dir)
+        .args(["rev-parse", &concurrent_branch]).output()?;
+    if !concurrent_head_out.status.success() { anyhow::bail!("failed to rev-parse concurrent branch"); }
+
+    // Determine where to integrate (original root if known, else worktree).
+    let integration_dir = if let Some(root) = original_root_env.clone() { std::path::PathBuf::from(root) } else { worktree_dir.clone() };
+
+    // Checkout original branch.
+    let co_status = Command::new("git")
+        .current_dir(&integration_dir)
+        .args(["checkout", &original_branch])
+        .status()?;
+    if !co_status.success() { anyhow::bail!("git checkout {original_branch} failed in original root"); }
+
+    // Check if concurrent branch already merged (ancestor test).
+    let ancestor_status = Command::new("git")
+        .current_dir(&integration_dir)
+        .args(["merge-base", "--is-ancestor", &concurrent_branch, &original_branch])
+        .status();
+    if let Ok(code) = ancestor_status {
+        if code.success() {
+            eprintln!("[codex-concurrent] {concurrent_branch} already merged into {original_branch}; skipping.");
+            return Ok(());
+        }
+    }
+
+    // Perform a --no-ff merge.
+    let merge_msg = format!("Merge concurrent Codex branch {concurrent_branch} (base {original_commit})");
+    let merge_status = Command::new("git")
+        .current_dir(&integration_dir)
+        .args(["merge", "--no-ff", &concurrent_branch, "-m", &merge_msg])
+        .status()?;
+    if !merge_status.success() {
+        let _ = Command::new("git").current_dir(&integration_dir).args(["merge", "--abort"]).status();
+        anyhow::bail!("git merge --no-ff failed (conflicts?)");
+    }
+    eprintln!("[codex-concurrent] Merged {concurrent_branch} into {original_branch} in original root: {}", integration_dir.display());
 
     Ok(())
 }

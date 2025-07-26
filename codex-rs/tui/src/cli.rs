@@ -3,7 +3,7 @@ use codex_common::ApprovalModeCliArg;
 use codex_common::CliConfigOverrides;
 use std::path::PathBuf;
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 #[command(version)]
 pub struct Cli {
     /// Optional user prompt to start the session.
