@@ -126,15 +126,13 @@ where
 }
 
 pub(crate) fn insert_history_lines(terminal: &mut tui::Tui, lines: Vec<Line<'static>>) {
-    let total = lines.len() as u16;
-    let top = terminal.get_frame().area().top();
-    terminal.backend_mut().scroll_region_up(0..top, total).ok();
-    terminal
-        .set_cursor_position(Position::new(0, top - total))
-        .ok();
-    std::io::stdout().write_all(b"\r").ok();
     for line in lines.into_iter() {
+        // 1. Scroll everything above the viewport up by one line
+        let top = terminal.get_frame().area().top();
+        terminal.backend_mut().scroll_region_up(0..top, 1).ok();
+        // 2. Move the cursor to the blank line
+        terminal.set_cursor_position(Position::new(0, top - 1)).ok();
+        // 3. Write the line
         write_spans(&mut std::io::stdout(), line.iter()).ok();
-        std::io::stdout().write_all(b"\r\n").ok();
     }
 }
