@@ -97,6 +97,9 @@ pub enum Op {
         id: String,
         /// The user's decision in response to the request.
         decision: ReviewDecision,
+        /// Optional feedback from the user explaining the decision.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        feedback: Option<String>,
     },
 
     /// Approve a code patch
@@ -105,6 +108,9 @@ pub enum Op {
         id: String,
         /// The user's decision in response to the request.
         decision: ReviewDecision,
+        /// Optional feedback from the user explaining the decision.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        feedback: Option<String>,
     },
 
     /// Append an entry to the persistent cross-session message history.
