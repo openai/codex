@@ -357,8 +357,11 @@ export const loadConfig = (
       } else {
         storedConfig = JSON.parse(raw);
       }
-    } catch {
+    } catch (error) {
       // If parsing fails, fall back to empty config to avoid crashing.
+
+      // eslint-disable-next-line no-console
+      console.warn(`codex: failed to parse config file: ${error}`);
       storedConfig = {};
     }
   }
