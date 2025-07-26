@@ -278,8 +278,9 @@ pub struct Event {
 }
 
 /// Response event from the agent
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Display)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[strum(serialize_all = "lowercase")]
 pub enum EventMsg {
     /// Error while executing a submission
     Error(ErrorEvent),
@@ -336,34 +337,6 @@ pub enum EventMsg {
 
     /// Notification that the agent is shutting down.
     ShutdownComplete,
-}
-
-impl fmt::Display for EventMsg {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let s = match self {
-            EventMsg::Error(_) => "Error",
-            EventMsg::TaskStarted => "TaskStarted",
-            EventMsg::TaskComplete(_) => "TaskComplete",
-            EventMsg::TokenCount(_) => "TokenCount",
-            EventMsg::AgentMessage(_) => "AgentMessage",
-            EventMsg::AgentMessageDelta(_) => "AgentMessageDelta",
-            EventMsg::AgentReasoning(_) => "AgentReasoning",
-            EventMsg::AgentReasoningDelta(_) => "AgentReasoningDelta",
-            EventMsg::SessionConfigured(_) => "SessionConfigured",
-            EventMsg::McpToolCallBegin(_) => "McpToolCallBegin",
-            EventMsg::McpToolCallEnd(_) => "McpToolCallEnd",
-            EventMsg::ExecCommandBegin(_) => "ExecCommandBegin",
-            EventMsg::ExecCommandEnd(_) => "ExecCommandEnd",
-            EventMsg::ExecApprovalRequest(_) => "ExecApprovalRequest",
-            EventMsg::ApplyPatchApprovalRequest(_) => "ApplyPatchApprovalRequest",
-            EventMsg::BackgroundEvent(_) => "BackgroundEvent",
-            EventMsg::PatchApplyBegin(_) => "PatchApplyBegin",
-            EventMsg::PatchApplyEnd(_) => "PatchApplyEnd",
-            EventMsg::GetHistoryEntryResponse(_) => "GetHistoryEntryResponse",
-            EventMsg::ShutdownComplete => "ShutdownComplete",
-        };
-        f.write_str(s)
-    }
 }
 
 // Individual event payload types matching each `EventMsg` variant.
