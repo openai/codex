@@ -276,17 +276,15 @@ impl McpProcess {
 
             match message {
                 JSONRPCMessage::Notification(notification) => {
-                    if notification.method == "codex/event" {
-                        if let Some(params) = notification.params {
-                            if let Some(msg) = params.get("msg") {
-                                if let Some(msg_type) = msg.get("type") {
-                                    if msg_type == "session_configured" {
-                                        if let Some(session_id) = msg.get("session_id") {
-                                            return Ok(session_id
-                                                .to_string()
-                                                .trim_matches('"')
-                                                .to_string());
-                                        }
+                    if let Some(params) = notification.params {
+                        if let Some(msg) = params.get("msg") {
+                            if let Some(msg_type) = msg.get("type") {
+                                if msg_type == "session_configured" {
+                                    if let Some(session_id) = msg.get("session_id") {
+                                        return Ok(session_id
+                                            .to_string()
+                                            .trim_matches('"')
+                                            .to_string());
                                     }
                                 }
                             }

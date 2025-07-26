@@ -79,16 +79,12 @@ impl OutgoingMessageSender {
     }
 
     pub(crate) async fn send_event_as_notification(&self, event: &Event) {
-        let params = match serde_json::to_value(event) {
-            Ok(v) => Some(v),
-            Err(err) => {
-                tracing::error!("failed to serialize event: {err}");
-                None
-            }
-        };
-        let method = event.msg.method_name().to_string();
-        let outgoing_message =
-            OutgoingMessage::Notification(OutgoingNotification { method, params });
+        #[expect(clippy::expect_used)]
+        let params = Some(serde_json::to_value(event).expect("Event must serialize"));
+        let outgoing_message = OutgoingMessage::Notification(OutgoingNotification {
+            method: "codex/event".to_string(),
+            params,
+        });
         let _ = self.sender.send(outgoing_message).await;
     }
 
