@@ -71,7 +71,7 @@ Note that Azure requires `api-version` to be passed as a query parameter, so be 
 [model_providers.azure]
 name = "Azure"
 # Make sure you set the appropriate subdomain for this URL.
-base_url = "https://YOUR_PROJECT_NAME.openai.azure.com/openai"
+base_url = "https://YOUR_PROJECT_NAME.openai.azure.com/openai" # If you are using `chat` as the `wire_api` (e.g., when using models like `gpt-4o` or `o3-mini`), the `base_url` should be like **https://YOUR_PROJECT_NAME.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT_NAME**. Please note that `codex-mini` has been onboarded into Azure AI Foundry, when using this model, set `wire_api` to `responses` and use a `base_url` like **https://YOUR_PROJECT_NAME.openai.azure.com/openai**. Be sure to copy the exact URL from Azure AI Foundry, as it may vary by region or deployment method.
 env_key = "AZURE_OPENAI_API_KEY"  # Or "OPENAI_API_KEY", whichever you use.
 query_params = { api-version = "2025-04-01-preview" }
 ```
