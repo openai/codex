@@ -1,6 +1,8 @@
 #![allow(clippy::expect_used)]
 
 use std::path::Path;
+use std::thread::sleep;
+use std::time::Duration;
 
 use codex_mcp_server::CodexToolCallParam;
 use mcp_test_support::McpProcess;
@@ -19,7 +21,9 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_send_user_message_success() {
     // Spin up a mock completions server that immediately ends the Codex turn.
+    // Two Codex turns hit the mock model (session start + send-user-message). Provide two SSE responses.
     let responses = vec![
+        create_final_assistant_message_sse_response("Done").expect("build mock assistant message"),
         create_final_assistant_message_sse_response("Done").expect("build mock assistant message"),
     ];
     let server = create_mock_chat_completions_server(responses).await;
@@ -91,6 +95,8 @@ async fn test_send_user_message_success() {
         },
         response
     );
+    // wait for the server to hear the user message
+    sleep(Duration::from_secs(1)).await;
 
     // Ensure the server and tempdir live until end of test
     drop(server);
