@@ -338,6 +338,34 @@ pub enum EventMsg {
     ShutdownComplete,
 }
 
+impl EventMsg {
+    /// Returns a stable human-readable name for this variant, used as the JSON-RPC method.
+    pub fn method_name(&self) -> &'static str {
+        match self {
+            EventMsg::Error(_) => "Error",
+            EventMsg::TaskStarted => "TaskStarted",
+            EventMsg::TaskComplete(_) => "TaskComplete",
+            EventMsg::TokenCount(_) => "TokenCount",
+            EventMsg::AgentMessage(_) => "AgentMessage",
+            EventMsg::AgentMessageDelta(_) => "AgentMessageDelta",
+            EventMsg::AgentReasoning(_) => "AgentReasoning",
+            EventMsg::AgentReasoningDelta(_) => "AgentReasoningDelta",
+            EventMsg::SessionConfigured(_) => "SessionConfigured",
+            EventMsg::McpToolCallBegin(_) => "McpToolCallBegin",
+            EventMsg::McpToolCallEnd(_) => "McpToolCallEnd",
+            EventMsg::ExecCommandBegin(_) => "ExecCommandBegin",
+            EventMsg::ExecCommandEnd(_) => "ExecCommandEnd",
+            EventMsg::ExecApprovalRequest(_) => "ExecApprovalRequest",
+            EventMsg::ApplyPatchApprovalRequest(_) => "ApplyPatchApprovalRequest",
+            EventMsg::BackgroundEvent(_) => "BackgroundEvent",
+            EventMsg::PatchApplyBegin(_) => "PatchApplyBegin",
+            EventMsg::PatchApplyEnd(_) => "PatchApplyEnd",
+            EventMsg::GetHistoryEntryResponse(_) => "GetHistoryEntryResponse",
+            EventMsg::ShutdownComplete => "ShutdownComplete",
+        }
+    }
+}
+
 // Individual event payload types matching each `EventMsg` variant.
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
