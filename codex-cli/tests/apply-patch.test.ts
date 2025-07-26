@@ -344,3 +344,21 @@ test("apply_commit correctly performs move / rename operations", () => {
   expect(writes).toEqual({ "new.txt": "new" });
   expect(removals).toEqual(["old.txt"]);
 });
+
+test("text_to_patch + patch_to_commit tolerant to missing edit space", () => {
+  const originalFiles = {
+    "a.txt": "section1\n[old code1]\nsection2\n[old code2]",
+  };
+
+  const patch = `*** Begin Patch\n*** Update File: a.txt\n@@section1\n-[old code1]\n+[new code1}\n@@section2\n-[old code2]\n+[new code2}\n*** End Patch`;
+
+  const [parsedPatch] = text_to_patch(patch, originalFiles);
+  const commit = patch_to_commit(parsedPatch, originalFiles).changes;
+
+  expect(commit["a.txt"]).toEqual({
+    type: ActionType.UPDATE,
+    move_path: undefined,
+    old_content: "section1\n[old code1]\nsection2\n[old code2]",
+    new_content: "section1\n[new code1}\nsection2\n[new code2}",
+  });
+});
