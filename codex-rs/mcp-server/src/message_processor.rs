@@ -524,6 +524,8 @@ impl MessageProcessor {
         });
     }
 
+    /// Send a user message to a running Codex session.
+    /// Don't use this tool yet becuase we need a listen tool to be implemented first.
     async fn handle_tool_call_send_user_message(
         &self,
         id: RequestId,
@@ -536,13 +538,17 @@ impl MessageProcessor {
             Some(json_val) => match serde_json::from_value::<SendUserMessageParam>(json_val) {
                 Ok(params) => params,
                 Err(e) => {
-                    self.send_error_response(id, format!("Failed to parse arguments: {e}"), true)
-                        .await;
+                    self.send_response_with_optional_error(
+                        id,
+                        format!("Failed to parse arguments: {e}"),
+                        true,
+                    )
+                    .await;
                     return;
                 }
             },
             None => {
-                self.send_error_response(id, "Missing arguments for send_user_message tool-call; the `message` and `session_id` fields are required.".to_owned(), true).await;
+                self.send_response_with_optional_error(id, "Missing arguments for send_user_message tool-call; the `message` and `session_id` fields are required.".to_owned(), true).await;
                 return;
             }
         };
@@ -550,8 +556,12 @@ impl MessageProcessor {
         let session_id = match Uuid::parse_str(&session_id) {
             Ok(id) => id,
             Err(e) => {
-                self.send_error_response(id, format!("Failed to parse session_id: {e}"), true)
-                    .await;
+                self.send_response_with_optional_error(
+                    id,
+                    format!("Failed to parse session_id: {e}"),
+                    true,
+                )
+                .await;
                 return;
             }
         };
@@ -561,7 +571,7 @@ impl MessageProcessor {
             .await
             .contains(&session_id)
         {
-            self.send_error_response(
+            self.send_response_with_optional_error(
                 id,
                 format!("Session already running for session_id: {session_id}"),
                 true,
@@ -570,7 +580,7 @@ impl MessageProcessor {
             return;
         }
         if !session_exists(session_id, self.session_map.clone()).await {
-            self.send_error_response(
+            self.send_response_with_optional_error(
                 id,
                 format!("Session not found for session_id: {session_id}"),
                 true,
@@ -586,7 +596,7 @@ impl MessageProcessor {
         };
 
         if codex.is_none() {
-            self.send_error_response(
+            self.send_response_with_optional_error(
                 id,
                 format!("Session not found for session_id: {session_id}"),
                 true,
@@ -611,13 +621,16 @@ impl MessageProcessor {
                 .await;
 
             if let Err(e) = submit_res {
-                self.send_error_response(id, format!("Failed to submit user input: {e}"), true)
-                    .await;
+                self.send_response_with_optional_error(
+                    id,
+                    format!("Failed to submit user input: {e}"),
+                    true,
+                )
+                .await;
                 return;
             }
         }
-
-        self.send_error_response(id, "Success".to_owned(), false)
+        self.send_response_with_optional_error(id, "Success".to_owned(), false)
             .await;
     }
 
@@ -738,7 +751,12 @@ impl MessageProcessor {
         tracing::info!("notifications/message -> params: {:?}", params);
     }
 
-    async fn send_error_response(&self, id: RequestId, message: String, is_error: bool) {
+    async fn send_response_with_optional_error(
+        &self,
+        id: RequestId,
+        message: String,
+        is_error: bool,
+    ) {
         let result = CallToolResult {
             content: vec![ContentBlock::TextContent(TextContent {
                 r#type: "text".to_owned(),
