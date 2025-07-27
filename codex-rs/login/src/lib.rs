@@ -59,6 +59,13 @@ pub async fn login_with_chatgpt(
 /// Attempt to read the `OPENAI_API_KEY` from the `auth.json` file in the given
 /// `CODEX_HOME` directory, refreshing it, if necessary.
 pub async fn try_read_openai_api_key(codex_home: &Path) -> std::io::Result<String> {
+    let auth_dot_json = try_read_auth_json(codex_home).await?;
+    Ok(auth_dot_json.openai_api_key)
+}
+
+/// Attempt to read and refresh the `auth.json` file in the given `CODEX_HOME` directory.
+/// Returns the full AuthDotJson structure after refreshing if necessary.
+pub async fn try_read_auth_json(codex_home: &Path) -> std::io::Result<AuthDotJson> {
     let auth_path = codex_home.join("auth.json");
     let mut file = std::fs::File::open(&auth_path)?;
     let mut contents = String::new();
@@ -88,9 +95,9 @@ pub async fn try_read_openai_api_key(codex_home: &Path) -> std::io::Result<Strin
             file.flush()?;
         }
 
-        Ok(auth_dot_json.openai_api_key)
+        Ok(auth_dot_json)
     } else {
-        Ok(auth_dot_json.openai_api_key)
+        Ok(auth_dot_json)
     }
 }
 
@@ -146,23 +153,24 @@ struct RefreshResponse {
 
 /// Expected structure for $CODEX_HOME/auth.json.
 #[derive(Deserialize, Serialize)]
-struct AuthDotJson {
+pub struct AuthDotJson {
     #[serde(rename = "OPENAI_API_KEY")]
-    openai_api_key: String,
+    pub openai_api_key: String,
 
-    tokens: TokenData,
+    pub tokens: TokenData,
 
-    last_refresh: DateTime<Utc>,
+    pub last_refresh: DateTime<Utc>,
 }
 
-#[derive(Deserialize, Serialize)]
-struct TokenData {
+#[derive(Deserialize, Serialize, Clone)]
+pub struct TokenData {
     /// This is a JWT.
-    id_token: String,
+    pub id_token: String,
 
     /// This is a JWT.
-    #[allow(dead_code)]
-    access_token: String,
+    pub access_token: String,
 
-    refresh_token: String,
+    pub refresh_token: String,
+
+    pub account_id: String,
 }

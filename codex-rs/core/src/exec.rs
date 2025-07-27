@@ -17,6 +17,7 @@ use tokio::io::BufReader;
 use tokio::process::Child;
 use tokio::process::Command;
 use tokio::sync::Notify;
+use tracing::trace;
 
 use crate::error::CodexErr;
 use crate::error::Result;
@@ -82,7 +83,8 @@ pub async fn process_exec_tool_call(
 ) -> Result<ExecToolCallOutput> {
     let start = Instant::now();
 
-    let raw_output_result = match sandbox_type {
+    let raw_output_result: std::result::Result<RawExecToolCallOutput, CodexErr> = match sandbox_type
+    {
         SandboxType::None => exec(params, sandbox_policy, ctrl_c).await,
         SandboxType::MacosSeatbelt => {
             let ExecParams {
@@ -225,41 +227,20 @@ fn create_linux_sandbox_command_args(
     sandbox_policy: &SandboxPolicy,
     cwd: &Path,
 ) -> Vec<String> {
-    let mut linux_cmd: Vec<String> = vec![];
+    #[expect(clippy::expect_used)]
+    let sandbox_policy_cwd = cwd.to_str().expect("cwd must be valid UTF-8").to_string();
 
-    // Translate individual permissions.
-    // Use high-level helper methods to infer flags when we cannot see the
-    // exact permission list.
-    if sandbox_policy.has_full_disk_read_access() {
-        linux_cmd.extend(["-s", "disk-full-read-access"].map(String::from));
-    }
+    #[expect(clippy::expect_used)]
+    let sandbox_policy_json =
+        serde_json::to_string(sandbox_policy).expect("Failed to serialize SandboxPolicy to JSON");
 
-    if sandbox_policy.has_full_disk_write_access() {
-        linux_cmd.extend(["-s", "disk-full-write-access"].map(String::from));
-    } else {
-        // Derive granular writable paths (includes cwd if `DiskWriteCwd` is
-        // present).
-        for root in sandbox_policy.get_writable_roots_with_cwd(cwd) {
-            // Check if this path corresponds exactly to cwd to map to
-            // `disk-write-cwd`, otherwise use the generic folder rule.
-            if root == cwd {
-                linux_cmd.extend(["-s", "disk-write-cwd"].map(String::from));
-            } else {
-                linux_cmd.extend([
-                    "-s".to_string(),
-                    format!("disk-write-folder={}", root.to_string_lossy()),
-                ]);
-            }
-        }
-    }
-
-    if sandbox_policy.has_full_network_access() {
-        linux_cmd.extend(["-s", "network-full-access"].map(String::from));
-    }
-
-    // Separator so that command arguments starting with `-` are not parsed as
-    // options of the helper itself.
-    linux_cmd.push("--".to_string());
+    let mut linux_cmd: Vec<String> = vec![
+        sandbox_policy_cwd,
+        sandbox_policy_json,
+        // Separator so that command arguments starting with `-` are not parsed as
+        // options of the helper itself.
+        "--".to_string(),
+    ];
 
     // Append the original tool command.
     linux_cmd.extend(command);
@@ -393,6 +374,10 @@ async fn spawn_child_async(
     stdio_policy: StdioPolicy,
     env: HashMap<String, String>,
 ) -> std::io::Result<Child> {
+    trace!(
+        "spawn_child_async: {program:?} {args:?} {arg0:?} {cwd:?} {sandbox_policy:?} {stdio_policy:?} {env:?}"
+    );
+
     let mut cmd = Command::new(&program);
     #[cfg(unix)]
     cmd.arg0(arg0.map_or_else(|| program.to_string_lossy().to_string(), String::from));
@@ -403,6 +388,31 @@ async fn spawn_child_async(
 
     if !sandbox_policy.has_full_network_access() {
         cmd.env(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR, "1");
+    }
+
+    // If this Codex process dies (including being killed via SIGKILL), we want
+    // any child processes that were spawned as part of a `"shell"` tool call
+    // to also be terminated.
+
+    // This relies on prctl(2), so it only works on Linux.
+    #[cfg(target_os = "linux")]
+    unsafe {
+        cmd.pre_exec(|| {
+            // This prctl call effectively requests, "deliver SIGTERM when my
+            // current parent dies."
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) == -1 {
+                return Err(io::Error::last_os_error());
+            }
+
+            // Though if there was a race condition and this pre_exec() block is
+            // run _after_ the parent (i.e., the Codex process) has already
+            // exited, then the parent is the _init_ process (which will never
+            // die), so we should just terminate the child process now.
+            if libc::getppid() == 1 {
+                libc::raise(libc::SIGTERM);
+            }
+            Ok(())
+        });
     }
 
     match stdio_policy {

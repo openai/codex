@@ -20,9 +20,9 @@ inputs:
     description: "Value to use as the CODEX_HOME environment variable when running Codex."
     required: false
   codex_release_tag:
-    description: "The release tag of the Codex model to run."
+    description: "The release tag of the Codex model to run, e.g., 'rust-v0.3.0'. Defaults to the latest release."
     required: false
-    default: "codex-rs-ca8e97fcbcb991e542b8689f2d4eab9d30c399d6-1-rust-v0.0.2505302325"
+    default: ""
 
 runs:
   using: "composite"
@@ -84,7 +84,10 @@ runs:
         # we will need to update this action.yml file to match.
         artifact="codex-exec-${triple}.tar.gz"
 
-        gh release download ${{ inputs.codex_release_tag }} --repo openai/codex \
+        TAG_ARG="${{ inputs.codex_release_tag }}"
+        # The usage is `gh release download [<tag>] [flags]`, so if TAG_ARG
+        # is empty, we do not pass it so we can default to the latest release.
+        gh release download ${TAG_ARG:+$TAG_ARG} --repo openai/codex \
           --pattern "$artifact" --output - \
         | tar xzO > /usr/local/bin/codex-exec
         chmod +x /usr/local/bin/codex-exec

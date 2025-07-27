@@ -12,11 +12,10 @@ workspace = true
 
 [dependencies]
 anyhow = "1"
-serde_json = "1.0.110"
 similar = "2.7.0"
 thiserror = "2.0.12"
-tree-sitter = "0.25.3"
-tree-sitter-bash = "0.23.3"
+tree-sitter = "0.25.8"
+tree-sitter-bash = "0.25.0"
 
 [dev-dependencies]
 pretty_assertions = "1.4.1"

@@ -1,9 +1,10 @@
 mod cli;
 mod event_processor;
+mod event_processor_with_human_output;
+mod event_processor_with_json_output;
 
 use std::io::IsTerminal;
 use std::io::Read;
-use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -11,19 +12,23 @@ pub use cli::Cli;
 use codex_core::codex_wrapper;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
+use codex_core::config_types::SandboxMode;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::util::is_inside_git_repo;
-use event_processor::EventProcessor;
+use event_processor_with_human_output::EventProcessorWithHumanOutput;
+use event_processor_with_json_output::EventProcessorWithJsonOutput;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
+
+use crate::event_processor::CodexStatus;
+use crate::event_processor::EventProcessor;
 
 pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
     let Cli {
@@ -31,11 +36,13 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         model,
         config_profile,
         full_auto,
-        sandbox,
+        dangerously_bypass_approvals_and_sandbox,
         cwd,
         skip_git_repo_check,
         color,
         last_message_file,
+        json: json_mode,
+        sandbox_mode: sandbox_mode_cli_arg,
         prompt,
         config_overrides,
     } = cli;
@@ -84,10 +91,12 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         ),
     };
 
-    let sandbox_policy = if full_auto {
-        Some(SandboxPolicy::new_full_auto_policy())
+    let sandbox_mode = if full_auto {
+        Some(SandboxMode::WorkspaceWrite)
+    } else if dangerously_bypass_approvals_and_sandbox {
+        Some(SandboxMode::DangerFullAccess)
     } else {
-        sandbox.permissions.clone().map(Into::into)
+        sandbox_mode_cli_arg.map(Into::<SandboxMode>::into)
     };
 
     // Load configuration and determine approval policy
@@ -97,10 +106,11 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         // This CLI is intended to be headless and has no affordances for asking
         // the user for approval.
         approval_policy: Some(AskForApproval::Never),
-        sandbox_policy,
+        sandbox_mode,
         cwd: cwd.map(|p| p.canonicalize().unwrap_or(p)),
         model_provider: None,
         codex_linux_sandbox_exe,
+        base_instructions: None,
     };
     // Parse `-c` overrides.
     let cli_kv_overrides = match config_overrides.parse_overrides() {
@@ -112,8 +122,16 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     };
 
     let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides)?;
-    let mut event_processor =
-        EventProcessor::create_with_ansi(stdout_with_ansi, !config.hide_agent_reasoning);
+    let mut event_processor: Box<dyn EventProcessor> = if json_mode {
+        Box::new(EventProcessorWithJsonOutput::new(last_message_file.clone()))
+    } else {
+        Box::new(EventProcessorWithHumanOutput::create_with_ansi(
+            stdout_with_ansi,
+            &config,
+            last_message_file.clone(),
+        ))
+    };
+
     // Print the effective configuration and prompt so users can see what Codex
     // is using.
     event_processor.print_config_summary(&config, &prompt);
@@ -137,7 +155,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         .with_writer(std::io::stderr)
         .try_init();
 
-    let (codex_wrapper, event, ctrl_c) = codex_wrapper::init_codex(config).await?;
+    let (codex_wrapper, event, ctrl_c, _session_id) = codex_wrapper::init_codex(config).await?;
     let codex = Arc::new(codex_wrapper);
     info!("Codex initialized with event: {event:?}");
 
@@ -207,40 +225,17 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
     // Run the loop until the task is complete.
     while let Some(event) = rx.recv().await {
-        let (is_last_event, last_assistant_message) = match &event.msg {
-            EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) => {
-                (true, last_agent_message.clone())
+        let shutdown: CodexStatus = event_processor.process_event(event);
+        match shutdown {
+            CodexStatus::Running => continue,
+            CodexStatus::InitiateShutdown => {
+                codex.submit(Op::Shutdown).await?;
             }
-            _ => (false, None),
-        };
-        event_processor.process_event(event);
-        if is_last_event {
-            handle_last_message(last_assistant_message, last_message_file.as_deref())?;
-            break;
+            CodexStatus::Shutdown => {
+                break;
+            }
         }
     }
 
-    Ok(())
-}
-
-fn handle_last_message(
-    last_agent_message: Option<String>,
-    last_message_file: Option<&Path>,
-) -> std::io::Result<()> {
-    match (last_agent_message, last_message_file) {
-        (Some(last_agent_message), Some(last_message_file)) => {
-            // Last message and a file to write to.
-            std::fs::write(last_message_file, last_agent_message)?;
-        }
-        (None, Some(last_message_file)) => {
-            eprintln!(
-                "Warning: No last message to write to file: {}",
-                last_message_file.to_string_lossy()
-            );
-        }
-        (_, None) => {
-            // No last message and no file to write to.
-        }
-    }
     Ok(())
 }

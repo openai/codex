@@ -206,6 +206,10 @@ impl ConversationHistoryWidget {
         self.add_to_history(HistoryCell::new_background_event(message));
     }
 
+    pub fn add_diff_output(&mut self, diff_output: String) {
+        self.add_to_history(HistoryCell::new_diff_output(diff_output));
+    }
+
     pub fn add_error(&mut self, message: String) {
         self.add_to_history(HistoryCell::new_error_event(message));
     }
@@ -243,6 +247,12 @@ impl ConversationHistoryWidget {
             cell,
             line_count: Cell::new(count),
         });
+    }
+
+    /// Return the lines for the most recently appended entry (if any) so the
+    /// parent widget can surface them via the new scrollback insertion path.
+    pub(crate) fn last_entry_plain_lines(&self) -> Option<Vec<Line<'static>>> {
+        self.entries.last().map(|e| e.cell.plain_lines())
     }
 
     pub fn record_completed_exec_command(
@@ -450,7 +460,7 @@ impl WidgetRef for ConversationHistoryWidget {
 
         {
             // Choose a thumb color that stands out only when this pane has focus so that the
-            // user’s attention is naturally drawn to the active viewport. When unfocused we show
+            // user's attention is naturally drawn to the active viewport. When unfocused we show
             // a low-contrast thumb so the scrollbar fades into the background without becoming
             // invisible.
             let thumb_style = if self.has_input_focus {

@@ -5,11 +5,11 @@
 use app::App;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
+use codex_core::config_types::SandboxMode;
 use codex_core::openai_api_key::OPENAI_API_KEY_ENV_VAR;
 use codex_core::openai_api_key::get_openai_api_key;
 use codex_core::openai_api_key::set_openai_api_key;
 use codex_core::protocol::AskForApproval;
-use codex_core::protocol::SandboxPolicy;
 use codex_core::util::is_inside_git_repo;
 use codex_login::try_read_openai_api_key;
 use log_layer::TuiLogLayer;
@@ -29,12 +29,14 @@ mod citation_regex;
 mod cli;
 mod conversation_history_widget;
 mod exec_command;
+mod file_search;
+mod get_git_diff;
 mod git_warning_screen;
 mod history_cell;
+mod insert_history;
 mod log_layer;
 mod login_screen;
 mod markdown;
-mod mouse_capture;
 mod scroll_event_helper;
 mod slash_command;
 mod status_indicator_widget;
@@ -45,15 +47,25 @@ mod user_approval_widget;
 
 pub use cli::Cli;
 
-pub fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> std::io::Result<()> {
-    let (sandbox_policy, approval_policy) = if cli.full_auto {
+pub fn run_main(
+    cli: Cli,
+    codex_linux_sandbox_exe: Option<PathBuf>,
+) -> std::io::Result<codex_core::protocol::TokenUsage> {
+    let (sandbox_mode, approval_policy) = if cli.full_auto {
         (
-            Some(SandboxPolicy::new_full_auto_policy()),
+            Some(SandboxMode::WorkspaceWrite),
             Some(AskForApproval::OnFailure),
         )
+    } else if cli.dangerously_bypass_approvals_and_sandbox {
+        (
+            Some(SandboxMode::DangerFullAccess),
+            Some(AskForApproval::Never),
+        )
     } else {
-        let sandbox_policy = cli.sandbox.permissions.clone().map(Into::into);
-        (sandbox_policy, cli.approval_policy.map(Into::into))
+        (
+            cli.sandbox_mode.map(Into::<SandboxMode>::into),
+            cli.approval_policy.map(Into::into),
+        )
     };
 
     let config = {
@@ -61,11 +73,12 @@ pub fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> std::io::
         let overrides = ConfigOverrides {
             model: cli.model.clone(),
             approval_policy,
-            sandbox_policy,
+            sandbox_mode,
             cwd: cli.cwd.clone().map(|p| p.canonicalize().unwrap_or(p)),
             model_provider: None,
             config_profile: cli.config_profile.clone(),
             codex_linux_sandbox_exe,
+            base_instructions: None,
         };
         // Parse `-c` overrides from the CLI.
         let cli_kv_overrides = match cli.config_overrides.parse_overrides() {
@@ -137,24 +150,8 @@ pub fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> std::io::
     // `--allow-no-git-exec` flag.
     let show_git_warning = !cli.skip_git_repo_check && !is_inside_git_repo(&config);
 
-    try_run_ratatui_app(cli, config, show_login_screen, show_git_warning, log_rx);
-    Ok(())
-}
-
-#[expect(
-    clippy::print_stderr,
-    reason = "Resort to stderr in exceptional situations."
-)]
-fn try_run_ratatui_app(
-    cli: Cli,
-    config: Config,
-    show_login_screen: bool,
-    show_git_warning: bool,
-    log_rx: tokio::sync::mpsc::UnboundedReceiver<String>,
-) {
-    if let Err(report) = run_ratatui_app(cli, config, show_login_screen, show_git_warning, log_rx) {
-        eprintln!("Error: {report:?}");
-    }
+    run_ratatui_app(cli, config, show_login_screen, show_git_warning, log_rx)
+        .map_err(|err| std::io::Error::other(err.to_string()))
 }
 
 fn run_ratatui_app(
@@ -163,16 +160,15 @@ fn run_ratatui_app(
     show_login_screen: bool,
     show_git_warning: bool,
     mut log_rx: tokio::sync::mpsc::UnboundedReceiver<String>,
-) -> color_eyre::Result<()> {
+) -> color_eyre::Result<codex_core::protocol::TokenUsage> {
     color_eyre::install()?;
 
-    // Forward panic reports through the tracing stack so that they appear in
-    // the status indicator instead of breaking the alternate screen – the
-    // normal colour‑eyre hook writes to stderr which would corrupt the UI.
+    // Forward panic reports through tracing so they appear in the UI status
+    // line instead of interleaving raw panic output with the interface.
     std::panic::set_hook(Box::new(|info| {
         tracing::error!("panic: {info}");
     }));
-    let (mut terminal, mut mouse_capture) = tui::init(&config)?;
+    let mut terminal = tui::init(&config)?;
     terminal.clear()?;
 
     let Cli { prompt, images, .. } = cli;
@@ -194,10 +190,12 @@ fn run_ratatui_app(
         });
     }
 
-    let app_result = app.run(&mut terminal, &mut mouse_capture);
+    let app_result = app.run(&mut terminal);
+    let usage = app.token_usage();
 
     restore();
-    app_result
+    // ignore error when collecting usage – report underlying error instead
+    app_result.map(|_| usage)
 }
 
 #[expect(
@@ -207,8 +205,7 @@ fn run_ratatui_app(
 fn restore() {
     if let Err(err) = tui::restore() {
         eprintln!(
-            "failed to restore terminal. Run `reset` or restart your terminal to recover: {}",
-            err
+            "failed to restore terminal. Run `reset` or restart your terminal to recover: {err}"
         );
     }
 }

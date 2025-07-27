@@ -15,9 +15,6 @@ concurrency:
   group: ${{ github.workflow }}
   cancel-in-progress: true
 
-env:
-  TAG_REGEX: '^rust-v[0-9]+\.[0-9]+\.[0-9]+$'
-
 jobs:
   tag-check:
     runs-on: ubuntu-latest
@@ -33,8 +30,8 @@ jobs:
           # 1. Must be a tag and match the regex
           [[ "${GITHUB_REF_TYPE}" == "tag" ]] \
             || { echo "❌  Not a tag push"; exit 1; }
-          [[ "${GITHUB_REF_NAME}" =~ ${TAG_REGEX} ]] \
-            || { echo "❌  Tag '${GITHUB_REF_NAME}' != ${TAG_REGEX}"; exit 1; }
+          [[ "${GITHUB_REF_NAME}" =~ ^rust-v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)(\.[0-9]+)?)?$ ]] \
+            || { echo "❌  Tag '${GITHUB_REF_NAME}' doesn't match expected format"; exit 1; }
 
           # 2. Extract versions
           tag_ver="${GITHUB_REF_NAME#rust-v}"
@@ -76,7 +73,7 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.87
+      - uses: dtolnay/rust-toolchain@1.88
         with:
           targets: ${{ matrix.target }}
 
@@ -96,7 +93,7 @@ jobs:
           sudo apt install -y musl-tools pkg-config
 
       - name: Cargo build
-        run: cargo build --target ${{ matrix.target }} --release --all-targets --all-features
+        run: cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-exec --bin codex-linux-sandbox
 
       - name: Stage artifacts
         shell: bash
@@ -160,9 +157,7 @@ jobs:
   release:
     needs: build
     name: release
-    runs-on: ubuntu-24.04
-    env:
-      RELEASE_TAG: codex-rs-${{ github.sha }}-${{ github.run_attempt }}-${{ github.ref_name }}
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/download-artifact@v4
@@ -172,9 +167,19 @@ jobs:
       - name: List
         run: ls -R dist/
 
-      - uses: softprops/action-gh-release@v2
+      - name: Define release name
+        id: release_name
+        run: |
+          # Extract the version from the tag name, which is in the format
+          # "rust-v0.1.0".
+          version="${GITHUB_REF_NAME#rust-v}"
+          echo "name=${version}" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ env.RELEASE_TAG }}
+          name: ${{ steps.release_name.outputs.name }}
+          tag_name: ${{ github.ref_name }}
           files: dist/**
           # For now, tag releases as "prerelease" because we are not claiming
           # the Rust CLI is stable yet.
@@ -184,5 +189,5 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag: ${{ env.RELEASE_TAG }}
+          tag: ${{ github.ref_name }}
           config: .github/dotslash-config.json

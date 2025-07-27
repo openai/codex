@@ -4,6 +4,7 @@
 // definitions that do not contain business logic.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use strum_macros::Display;
 use wildmatch::WildMatchPattern;
 
@@ -75,19 +76,28 @@ pub enum HistoryPersistence {
 
 /// Collection of settings that are specific to the TUI.
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
-pub struct Tui {
-    /// By default, mouse capture is enabled in the TUI so that it is possible
-    /// to scroll the conversation history with a mouse. This comes at the cost
-    /// of not being able to use the mouse to select text in the TUI.
-    /// (Most terminals support a modifier key to allow this. For example,
-    /// text selection works in iTerm if you hold down the `Option` key while
-    /// clicking and dragging.)
-    ///
-    /// Setting this option to `true` disables mouse capture, so scrolling with
-    /// the mouse is not possible, though the keyboard shortcuts e.g. `b` and
-    /// `space` still work. This allows the user to select text in the TUI
-    /// using the mouse without needing to hold down a modifier key.
-    pub disable_mouse_capture: bool,
+pub struct Tui {}
+
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum SandboxMode {
+    #[serde(rename = "read-only")]
+    #[default]
+    ReadOnly,
+
+    #[serde(rename = "workspace-write")]
+    WorkspaceWrite,
+
+    #[serde(rename = "danger-full-access")]
+    DangerFullAccess,
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct SandboxWorkplaceWrite {
+    #[serde(default)]
+    pub writable_roots: Vec<PathBuf>,
+    #[serde(default)]
+    pub network_access: bool,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
@@ -120,6 +130,8 @@ pub struct ShellEnvironmentPolicyToml {
 
     /// List of regular expressions.
     pub include_only: Option<Vec<String>>,
+
+    pub experimental_use_profile: Option<bool>,
 }
 
 pub type EnvironmentVariablePattern = WildMatchPattern<'*', '?'>;
@@ -148,6 +160,9 @@ pub struct ShellEnvironmentPolicy {
 
     /// Environment variable names to retain in the environment.
     pub include_only: Vec<EnvironmentVariablePattern>,
+
+    /// If true, the shell profile will be used to run the command.
+    pub use_profile: bool,
 }
 
 impl From<ShellEnvironmentPolicyToml> for ShellEnvironmentPolicy {
@@ -167,6 +182,7 @@ impl From<ShellEnvironmentPolicyToml> for ShellEnvironmentPolicy {
             .into_iter()
             .map(|s| EnvironmentVariablePattern::new_case_insensitive(&s))
             .collect();
+        let use_profile = toml.experimental_use_profile.unwrap_or(false);
 
         Self {
             inherit,
@@ -174,6 +190,7 @@ impl From<ShellEnvironmentPolicyToml> for ShellEnvironmentPolicy {
             exclude,
             r#set,
             include_only,
+            use_profile,
         }
     }
 }
