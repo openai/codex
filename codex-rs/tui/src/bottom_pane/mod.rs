@@ -248,12 +248,23 @@ impl BottomPane<'_> {
     }
 }
 
+impl WidgetRef for &BottomPane<'_> {
+    fn render_ref(&self, area: Rect, buf: &mut Buffer) {
+        // Show BottomPaneView if present.
+        if let Some(ov) = &self.active_view {
+            ov.render(area, buf);
+        } else {
+            (&self.composer).render_ref(area, buf);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::app_event::AppEvent;
-    use std::sync::mpsc::channel;
     use std::path::PathBuf;
+    use std::sync::mpsc::channel;
 
     fn make_sender() -> AppEventSender {
         let (tx, _rx) = channel::<AppEvent>();
@@ -272,25 +283,13 @@ mod tests {
     #[test]
     fn ctrl_c_on_modal_consumes_and_shows_quit_hint() {
         let tx = make_sender();
-        let mut pane = BottomPane::new(BottomPaneParams { app_event_tx: tx, has_input_focus: true });
-        // Push an approval request to create the modal
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            has_input_focus: true,
+        });
         pane.push_approval_request(exec_request());
-        // First Ctrl-C should be handled by the modal and return true
         assert!(pane.on_ctrl_c());
-        // The quit hint should be visible for the next Ctrl-C
         assert!(pane.ctrl_c_quit_hint_visible());
-        // With the modal closed, second Ctrl-C should not be consumed here
         assert!(!pane.on_ctrl_c());
-    }
-}
-
-impl WidgetRef for &BottomPane<'_> {
-    fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        // Show BottomPaneView if present.
-        if let Some(ov) = &self.active_view {
-            ov.render(area, buf);
-        } else {
-            (&self.composer).render_ref(area, buf);
-        }
     }
 }

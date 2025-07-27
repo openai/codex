@@ -17,50 +17,6 @@ pub(crate) struct ApprovalModalView<'a> {
     app_event_tx: AppEventSender,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::app_event::AppEvent;
-    use std::path::PathBuf;
-    use std::sync::mpsc::channel;
-
-    fn make_sender() -> AppEventSender {
-        let (tx, _rx) = channel::<AppEvent>();
-        AppEventSender::new(tx)
-    }
-
-    fn make_exec_request() -> ApprovalRequest {
-        ApprovalRequest::Exec {
-            id: "test".to_string(),
-            command: vec!["echo".to_string(), "hi".to_string()],
-            cwd: PathBuf::from("/tmp"),
-            reason: None,
-        }
-    }
-
-    #[test]
-    fn ctrl_c_aborts_and_clears_queue() {
-        let tx = make_sender();
-        let first = make_exec_request();
-        let mut view = ApprovalModalView::new(first, tx);
-        // enqueue a second request so we can verify it gets dropped
-        view.enqueue_request(make_exec_request());
-
-        // Simulate Ctrl-C
-        // We don't have a BottomPane in this unit test; pass a Null pointer through Option
-        view.on_ctrl_c(&mut BottomPane::new(super::super::BottomPaneParams {
-            app_event_tx: make_sender(),
-            has_input_focus: true,
-        }));
-
-        // Queue should be empty and the current request should be complete.
-        assert!(view.queue.is_empty());
-        assert!(view.current.is_complete());
-        // The modal reports completion as well
-        assert!(view.is_complete());
-    }
-}
-
 impl ApprovalModalView<'_> {
     pub fn new(request: ApprovalRequest, app_event_tx: AppEventSender) -> Self {
         Self {
@@ -109,5 +65,44 @@ impl<'a> BottomPaneView<'a> for ApprovalModalView<'a> {
     fn try_consume_approval_request(&mut self, req: ApprovalRequest) -> Option<ApprovalRequest> {
         self.enqueue_request(req);
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_event::AppEvent;
+    use std::path::PathBuf;
+    use std::sync::mpsc::channel;
+
+    fn make_sender() -> AppEventSender {
+        let (tx, _rx) = channel::<AppEvent>();
+        AppEventSender::new(tx)
+    }
+
+    fn make_exec_request() -> ApprovalRequest {
+        ApprovalRequest::Exec {
+            id: "test".to_string(),
+            command: vec!["echo".to_string(), "hi".to_string()],
+            cwd: PathBuf::from("/tmp"),
+            reason: None,
+        }
+    }
+
+    #[test]
+    fn ctrl_c_aborts_and_clears_queue() {
+        let tx = make_sender();
+        let first = make_exec_request();
+        let mut view = ApprovalModalView::new(first, tx);
+        view.enqueue_request(make_exec_request());
+
+        let mut pane = BottomPane::new(super::super::BottomPaneParams {
+            app_event_tx: make_sender(),
+            has_input_focus: true,
+        });
+        assert!(view.on_ctrl_c(&mut pane));
+        assert!(view.queue.is_empty());
+        assert!(view.current.is_complete());
+        assert!(view.is_complete());
     }
 }
