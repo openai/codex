@@ -35,7 +35,7 @@ pub async fn run_main(opts: ProtoCli) -> anyhow::Result<()> {
 
     let config = Config::load_with_cli_overrides(overrides_vec, ConfigOverrides::default())?;
     let ctrl_c = notify_on_sigint();
-    let (codex, _init_id) = Codex::spawn(config, ctrl_c.clone()).await?;
+    let (codex, _init_id, _session_id) = Codex::spawn(config, ctrl_c.clone()).await?;
     let codex = Arc::new(codex);
 
     // Task that reads JSON lines from stdin and forwards to Submission Queue

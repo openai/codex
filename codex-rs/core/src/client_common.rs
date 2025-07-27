@@ -22,8 +22,6 @@ const BASE_INSTRUCTIONS: &str = include_str!("../prompt.md");
 pub struct Prompt {
     /// Conversation context input items.
     pub input: Vec<ResponseItem>,
-    /// Optional previous response ID (when storage is enabled).
-    pub prev_id: Option<String>,
     /// Optional instructions from the user to amend to the built-in agent
     /// instructions.
     pub user_instructions: Option<String>,
@@ -34,11 +32,18 @@ pub struct Prompt {
     /// the "fully qualified" tool name (i.e., prefixed with the server name),
     /// which should be reported to the model in place of Tool::name.
     pub extra_tools: HashMap<String, mcp_types::Tool>,
+
+    /// Optional override for the built-in BASE_INSTRUCTIONS.
+    pub base_instructions_override: Option<String>,
 }
 
 impl Prompt {
     pub(crate) fn get_full_instructions(&self, model: &str) -> Cow<'_, str> {
-        let mut sections: Vec<&str> = vec![BASE_INSTRUCTIONS];
+        let base = self
+            .base_instructions_override
+            .as_deref()
+            .unwrap_or(BASE_INSTRUCTIONS);
+        let mut sections: Vec<&str> = vec![base];
         if let Some(ref user) = self.user_instructions {
             sections.push(user);
         }
@@ -126,11 +131,10 @@ pub(crate) struct ResponsesApiRequest<'a> {
     pub(crate) tool_choice: &'static str,
     pub(crate) parallel_tool_calls: bool,
     pub(crate) reasoning: Option<Reasoning>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) previous_response_id: Option<String>,
     /// true when using the Responses API.
     pub(crate) store: bool,
     pub(crate) stream: bool,
+    pub(crate) include: Vec<String>,
 }
 
 use crate::config::Config;

@@ -370,11 +370,26 @@ export function isSafeCommand(
         reason: "View file with line numbers",
         group: "Reading files",
       };
-    case "rg":
+    case "rg": {
+      // Certain ripgrep options execute external commands or invoke other
+      // processes, so we must reject them.
+      const isUnsafe = command.some(
+        (arg: string) =>
+          UNSAFE_OPTIONS_FOR_RIPGREP_WITHOUT_ARGS.has(arg) ||
+          [...UNSAFE_OPTIONS_FOR_RIPGREP_WITH_ARGS].some(
+            (opt) => arg === opt || arg.startsWith(`${opt}=`),
+          ),
+      );
+
+      if (isUnsafe) {
+        break;
+      }
+
       return {
         reason: "Ripgrep search",
         group: "Searching",
       };
+    }
     case "find": {
       // Certain options to `find` allow executing arbitrary processes, so we
       // cannot auto-approve them.
@@ -493,6 +508,22 @@ const UNSAFE_OPTIONS_FOR_FIND_COMMAND: ReadonlySet<string> = new Set([
   "-fprint",
   "-fprint0",
   "-fprintf",
+]);
+
+// Ripgrep options that are considered unsafe because they may execute
+// arbitrary commands or spawn auxiliary processes.
+const UNSAFE_OPTIONS_FOR_RIPGREP_WITH_ARGS: ReadonlySet<string> = new Set([
+  // Executes an arbitrary command for each matching file.
+  "--pre",
+  // Allows custom hostname command which could leak environment details.
+  "--hostname-bin",
+]);
+
+const UNSAFE_OPTIONS_FOR_RIPGREP_WITHOUT_ARGS: ReadonlySet<string> = new Set([
+  // Enables searching inside archives which triggers external decompression
+  // utilities – reject out of an abundance of caution.
+  "--search-zip",
+  "-z",
 ]);
 
 // ---------------- Helper utilities for complex shell expressions -----------------

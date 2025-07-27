@@ -329,6 +329,7 @@ async fn integration_creates_and_checks_session_file() {
         .env("OPENAI_API_KEY", "dummy")
         .env("CODEX_RS_SSE_FIXTURE", &fixture)
         .env("OPENAI_BASE_URL", "http://unused.local");
+
     let output2 = cmd2.output().unwrap();
     assert!(output2.status.success(), "resume codex-cli run failed");
 
@@ -358,4 +359,126 @@ async fn integration_creates_and_checks_session_file() {
         content2.contains(&marker2),
         "rollout missing resumed marker"
     );
+}
+
+/// Integration test to verify git info is collected and recorded in session files.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn integration_git_info_unit_test() {
+    // This test verifies git info collection works independently
+    // without depending on the full CLI integration
+
+    // 1. Create temp directory for git repo
+    let temp_dir = TempDir::new().unwrap();
+    let git_repo = temp_dir.path().to_path_buf();
+
+    // 2. Initialize a git repository with some content
+    let init_output = std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(&git_repo)
+        .output()
+        .unwrap();
+    assert!(init_output.status.success(), "git init failed");
+
+    // Configure git user (required for commits)
+    std::process::Command::new("git")
+        .args(["config", "user.name", "Integration Test"])
+        .current_dir(&git_repo)
+        .output()
+        .unwrap();
+
+    std::process::Command::new("git")
+        .args(["config", "user.email", "test@example.com"])
+        .current_dir(&git_repo)
+        .output()
+        .unwrap();
+
+    // Create a test file and commit it
+    let test_file = git_repo.join("test.txt");
+    std::fs::write(&test_file, "integration test content").unwrap();
+
+    std::process::Command::new("git")
+        .args(["add", "."])
+        .current_dir(&git_repo)
+        .output()
+        .unwrap();
+
+    let commit_output = std::process::Command::new("git")
+        .args(["commit", "-m", "Integration test commit"])
+        .current_dir(&git_repo)
+        .output()
+        .unwrap();
+    assert!(commit_output.status.success(), "git commit failed");
+
+    // Create a branch to test branch detection
+    std::process::Command::new("git")
+        .args(["checkout", "-b", "integration-test-branch"])
+        .current_dir(&git_repo)
+        .output()
+        .unwrap();
+
+    // Add a remote to test repository URL detection
+    std::process::Command::new("git")
+        .args([
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/example/integration-test.git",
+        ])
+        .current_dir(&git_repo)
+        .output()
+        .unwrap();
+
+    // 3. Test git info collection directly
+    let git_info = codex_core::git_info::collect_git_info(&git_repo).await;
+
+    // 4. Verify git info is present and contains expected data
+    assert!(git_info.is_some(), "Git info should be collected");
+
+    let git_info = git_info.unwrap();
+
+    // Check that we have a commit hash
+    assert!(
+        git_info.commit_hash.is_some(),
+        "Git info should contain commit_hash"
+    );
+    let commit_hash = git_info.commit_hash.as_ref().unwrap();
+    assert_eq!(commit_hash.len(), 40, "Commit hash should be 40 characters");
+    assert!(
+        commit_hash.chars().all(|c| c.is_ascii_hexdigit()),
+        "Commit hash should be hexadecimal"
+    );
+
+    // Check that we have the correct branch
+    assert!(git_info.branch.is_some(), "Git info should contain branch");
+    let branch = git_info.branch.as_ref().unwrap();
+    assert_eq!(
+        branch, "integration-test-branch",
+        "Branch should match what we created"
+    );
+
+    // Check that we have the repository URL
+    assert!(
+        git_info.repository_url.is_some(),
+        "Git info should contain repository_url"
+    );
+    let repo_url = git_info.repository_url.as_ref().unwrap();
+    assert_eq!(
+        repo_url, "https://github.com/example/integration-test.git",
+        "Repository URL should match what we configured"
+    );
+
+    println!("✅ Git info collection test passed!");
+    println!("   Commit: {commit_hash}");
+    println!("   Branch: {branch}");
+    println!("   Repo: {repo_url}");
+
+    // 5. Test serialization to ensure it works in SessionMeta
+    let serialized = serde_json::to_string(&git_info).unwrap();
+    let deserialized: codex_core::git_info::GitInfo = serde_json::from_str(&serialized).unwrap();
+
+    assert_eq!(git_info.commit_hash, deserialized.commit_hash);
+    assert_eq!(git_info.branch, deserialized.branch);
+    assert_eq!(git_info.repository_url, deserialized.repository_url);
+
+    println!("✅ Git info serialization test passed!");
 }

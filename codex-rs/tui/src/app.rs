@@ -6,7 +6,6 @@ use crate::get_git_diff::get_git_diff;
 use crate::git_warning_screen::GitWarningOutcome;
 use crate::git_warning_screen::GitWarningScreen;
 use crate::login_screen::LoginScreen;
-use crate::mouse_capture::MouseCapture;
 use crate::scroll_event_helper::ScrollEventHelper;
 use crate::slash_command::SlashCommand;
 use crate::tui;
@@ -89,32 +88,51 @@ impl App<'_> {
         {
             let app_event_tx = app_event_tx.clone();
             std::thread::spawn(move || {
-                while let Ok(event) = crossterm::event::read() {
-                    match event {
-                        crossterm::event::Event::Key(key_event) => {
-                            app_event_tx.send(AppEvent::KeyEvent(key_event));
+                loop {
+                    // This timeout is necessary to avoid holding the event lock
+                    // that crossterm::event::read() acquires. In particular,
+                    // reading the cursor position (crossterm::cursor::position())
+                    // needs to acquire the event lock, and so will fail if it
+                    // can't acquire it within 2 sec. Resizing the terminal
+                    // crashes the app if the cursor position can't be read.
+                    if let Ok(true) = crossterm::event::poll(Duration::from_millis(100)) {
+                        if let Ok(event) = crossterm::event::read() {
+                            match event {
+                                crossterm::event::Event::Key(key_event) => {
+                                    app_event_tx.send(AppEvent::KeyEvent(key_event));
+                                }
+                                crossterm::event::Event::Resize(_, _) => {
+                                    app_event_tx.send(AppEvent::RequestRedraw);
+                                }
+                                crossterm::event::Event::Mouse(MouseEvent {
+                                    kind: MouseEventKind::ScrollUp,
+                                    ..
+                                }) => {
+                                    scroll_event_helper.scroll_up();
+                                }
+                                crossterm::event::Event::Mouse(MouseEvent {
+                                    kind: MouseEventKind::ScrollDown,
+                                    ..
+                                }) => {
+                                    scroll_event_helper.scroll_down();
+                                }
+                                crossterm::event::Event::Paste(pasted) => {
+                                    // Many terminals convert newlines to \r when
+                                    // pasting, e.g. [iTerm2][]. But [tui-textarea
+                                    // expects \n][tui-textarea]. This seems like a bug
+                                    // in tui-textarea IMO, but work around it for now.
+                                    // [tui-textarea]: https://github.com/rhysd/tui-textarea/blob/4d18622eeac13b309e0ff6a55a46ac6706da68cf/src/textarea.rs#L782-L783
+                                    // [iTerm2]: https://github.com/gnachman/iTerm2/blob/5d0c0d9f68523cbd0494dad5422998964a2ecd8d/sources/iTermPasteHelper.m#L206-L216
+                                    let pasted = pasted.replace("\r", "\n");
+                                    app_event_tx.send(AppEvent::Paste(pasted));
+                                }
+                                _ => {
+                                    // Ignore any other events.
+                                }
+                            }
                         }
-                        crossterm::event::Event::Resize(_, _) => {
-                            app_event_tx.send(AppEvent::RequestRedraw);
-                        }
-                        crossterm::event::Event::Mouse(MouseEvent {
-                            kind: MouseEventKind::ScrollUp,
-                            ..
-                        }) => {
-                            scroll_event_helper.scroll_up();
-                        }
-                        crossterm::event::Event::Mouse(MouseEvent {
-                            kind: MouseEventKind::ScrollDown,
-                            ..
-                        }) => {
-                            scroll_event_helper.scroll_down();
-                        }
-                        crossterm::event::Event::Paste(pasted) => {
-                            app_event_tx.send(AppEvent::Paste(pasted));
-                        }
-                        _ => {
-                            // Ignore any other events.
-                        }
+                    } else {
+                        // Timeout expired, no `Event` is available
                     }
                 }
             });
@@ -197,17 +215,17 @@ impl App<'_> {
         });
     }
 
-    pub(crate) fn run(
-        &mut self,
-        terminal: &mut tui::Tui,
-        mouse_capture: &mut MouseCapture,
-    ) -> Result<()> {
+    pub(crate) fn run(&mut self, terminal: &mut tui::Tui) -> Result<()> {
         // Insert an event to trigger the first render.
         let app_event_tx = self.app_event_tx.clone();
         app_event_tx.send(AppEvent::RequestRedraw);
 
         while let Ok(event) = self.app_event_rx.recv() {
             match event {
+                AppEvent::InsertHistory(lines) => {
+                    crate::insert_history::insert_history_lines(terminal, lines);
+                    self.app_event_tx.send(AppEvent::RequestRedraw);
+                }
                 AppEvent::RequestRedraw => {
                     self.schedule_redraw();
                 }
@@ -223,9 +241,7 @@ impl App<'_> {
                         } => {
                             match &mut self.app_state {
                                 AppState::Chat { widget } => {
-                                    if widget.on_ctrl_c() {
-                                        self.app_event_tx.send(AppEvent::ExitRequest);
-                                    }
+                                    widget.on_ctrl_c();
                                 }
                                 AppState::Login { .. } | AppState::GitWarning { .. } => {
                                     // No-op.
@@ -289,11 +305,6 @@ impl App<'_> {
                         self.app_state = AppState::Chat { widget: new_widget };
                         self.app_event_tx.send(AppEvent::RequestRedraw);
                     }
-                    SlashCommand::ToggleMouseMode => {
-                        if let Err(e) = mouse_capture.toggle() {
-                            tracing::error!("Failed to toggle mouse mode: {e}");
-                        }
-                    }
                     SlashCommand::Quit => {
                         break;
                     }
@@ -332,6 +343,15 @@ impl App<'_> {
         terminal.clear()?;
 
         Ok(())
+    }
+
+    pub(crate) fn token_usage(&self) -> codex_core::protocol::TokenUsage {
+        match &self.app_state {
+            AppState::Chat { widget } => widget.token_usage().clone(),
+            AppState::Login { .. } | AppState::GitWarning { .. } => {
+                codex_core::protocol::TokenUsage::default()
+            }
+        }
     }
 
     fn draw_next_frame(&mut self, terminal: &mut tui::Tui) -> Result<()> {

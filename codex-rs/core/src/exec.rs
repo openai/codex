@@ -17,6 +17,7 @@ use tokio::io::BufReader;
 use tokio::process::Child;
 use tokio::process::Command;
 use tokio::sync::Notify;
+use tracing::trace;
 
 use crate::error::CodexErr;
 use crate::error::Result;
@@ -82,7 +83,8 @@ pub async fn process_exec_tool_call(
 ) -> Result<ExecToolCallOutput> {
     let start = Instant::now();
 
-    let raw_output_result = match sandbox_type {
+    let raw_output_result: std::result::Result<RawExecToolCallOutput, CodexErr> = match sandbox_type
+    {
         SandboxType::None => exec(params, sandbox_policy, ctrl_c).await,
         SandboxType::MacosSeatbelt => {
             let ExecParams {
@@ -372,6 +374,10 @@ async fn spawn_child_async(
     stdio_policy: StdioPolicy,
     env: HashMap<String, String>,
 ) -> std::io::Result<Child> {
+    trace!(
+        "spawn_child_async: {program:?} {args:?} {arg0:?} {cwd:?} {sandbox_policy:?} {stdio_policy:?} {env:?}"
+    );
+
     let mut cmd = Command::new(&program);
     #[cfg(unix)]
     cmd.arg0(arg0.map_or_else(|| program.to_string_lossy().to_string(), String::from));
@@ -382,6 +388,31 @@ async fn spawn_child_async(
 
     if !sandbox_policy.has_full_network_access() {
         cmd.env(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR, "1");
+    }
+
+    // If this Codex process dies (including being killed via SIGKILL), we want
+    // any child processes that were spawned as part of a `"shell"` tool call
+    // to also be terminated.
+
+    // This relies on prctl(2), so it only works on Linux.
+    #[cfg(target_os = "linux")]
+    unsafe {
+        cmd.pre_exec(|| {
+            // This prctl call effectively requests, "deliver SIGTERM when my
+            // current parent dies."
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) == -1 {
+                return Err(io::Error::last_os_error());
+            }
+
+            // Though if there was a race condition and this pre_exec() block is
+            // run _after_ the parent (i.e., the Codex process) has already
+            // exited, then the parent is the _init_ process (which will never
+            // die), so we should just terminate the child process now.
+            if libc::getppid() == 1 {
+                libc::raise(libc::SIGTERM);
+            }
+            Ok(())
+        });
     }
 
     match stdio_policy {

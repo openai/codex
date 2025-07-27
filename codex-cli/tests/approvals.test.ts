@@ -44,6 +44,14 @@ describe("canAutoApprove()", () => {
       group: "Navigating",
       runInSandbox: false,
     });
+
+    // Ripgrep safe invocation.
+    expect(check(["rg", "TODO"])).toEqual({
+      type: "auto-approve",
+      reason: "Ripgrep search",
+      group: "Searching",
+      runInSandbox: false,
+    });
   });
 
   test("simple safe commands within a `bash -lc` call", () => {
@@ -64,6 +72,24 @@ describe("canAutoApprove()", () => {
       reason: "Git show",
       group: "Using git",
       runInSandbox: false,
+    });
+  });
+
+  test("ripgrep unsafe flags", () => {
+    // Flags that do not take arguments
+    expect(check(["rg", "--search-zip", "TODO"])).toEqual({ type: "ask-user" });
+    expect(check(["rg", "-z", "TODO"])).toEqual({ type: "ask-user" });
+
+    // Flags that take arguments (provided separately)
+    expect(check(["rg", "--pre", "cat", "TODO"])).toEqual({ type: "ask-user" });
+    expect(check(["rg", "--hostname-bin", "hostname", "TODO"])).toEqual({
+      type: "ask-user",
+    });
+
+    // Flags that take arguments in = form
+    expect(check(["rg", "--pre=cat", "TODO"])).toEqual({ type: "ask-user" });
+    expect(check(["rg", "--hostname-bin=hostname", "TODO"])).toEqual({
+      type: "ask-user",
     });
   });
 

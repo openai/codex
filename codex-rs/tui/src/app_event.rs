@@ -1,6 +1,7 @@
 use codex_core::protocol::Event;
 use codex_file_search::FileMatch;
 use crossterm::event::KeyEvent;
+use ratatui::text::Line;
 
 use crate::slash_command::SlashCommand;
 
@@ -49,4 +50,6 @@ pub(crate) enum AppEvent {
         query: String,
         matches: Vec<FileMatch>,
     },
+
+    InsertHistory(Vec<Line<'static>>),
 }

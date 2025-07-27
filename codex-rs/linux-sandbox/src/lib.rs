@@ -43,6 +43,10 @@ where
         crate::run_main();
     }
 
+    // This modifies the environment, which is not thread-safe, so do this
+    // before creating any threads/the Tokio runtime.
+    load_dotenv();
+
     // Regular invocation – create a Tokio runtime and execute the provided
     // async entry-point.
     let runtime = tokio::runtime::Runtime::new()?;
@@ -60,4 +64,12 @@ where
 #[cfg(not(target_os = "linux"))]
 pub fn run_main() -> ! {
     panic!("codex-linux-sandbox is only supported on Linux");
+}
+
+/// Load env vars from ~/.codex/.env and `$(pwd)/.env`.
+fn load_dotenv() {
+    if let Ok(codex_home) = codex_core::config::find_codex_home() {
+        dotenvy::from_path(codex_home.join(".env")).ok();
+    }
+    dotenvy::dotenv().ok();
 }

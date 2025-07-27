@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use crate::json_to_toml::json_to_toml;
 
 /// Client-supplied configuration for a `codex` tool-call.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "kebab-case")]
 pub struct CodexToolCallParam {
     /// The *initial user prompt* to start the Codex conversation.
@@ -46,6 +46,10 @@ pub struct CodexToolCallParam {
     /// CODEX_HOME/config.toml.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<HashMap<String, serde_json::Value>>,
+
+    /// The set of instructions to use instead of the default ones.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_instructions: Option<String>,
 }
 
 /// Custom enum mirroring [`AskForApproval`], but has an extra dependency on
@@ -135,6 +139,7 @@ impl CodexToolCallParam {
             approval_policy,
             sandbox,
             config: cli_overrides,
+            base_instructions,
         } = self;
 
         // Build the `ConfigOverrides` recognised by codex-core.
@@ -146,6 +151,7 @@ impl CodexToolCallParam {
             sandbox_mode: sandbox.map(Into::into),
             model_provider: None,
             codex_linux_sandbox_exe,
+            base_instructions,
         };
 
         let cli_overrides = cli_overrides
@@ -157,6 +163,47 @@ impl CodexToolCallParam {
         let cfg = codex_core::config::Config::load_with_cli_overrides(cli_overrides, overrides)?;
 
         Ok((prompt, cfg))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexToolCallReplyParam {
+    /// The *session id* for this conversation.
+    pub session_id: String,
+
+    /// The *next user prompt* to continue the Codex conversation.
+    pub prompt: String,
+}
+
+/// Builds a `Tool` definition for the `codex-reply` tool-call.
+pub(crate) fn create_tool_for_codex_tool_call_reply_param() -> Tool {
+    let schema = SchemaSettings::draft2019_09()
+        .with(|s| {
+            s.inline_subschemas = true;
+            s.option_add_null_type = false;
+        })
+        .into_generator()
+        .into_root_schema_for::<CodexToolCallReplyParam>();
+
+    #[expect(clippy::expect_used)]
+    let schema_value =
+        serde_json::to_value(&schema).expect("Codex reply tool schema should serialise to JSON");
+
+    let tool_input_schema =
+        serde_json::from_value::<ToolInputSchema>(schema_value).unwrap_or_else(|e| {
+            panic!("failed to create Tool from schema: {e}");
+        });
+
+    Tool {
+        name: "codex-reply".to_string(),
+        title: Some("Codex Reply".to_string()),
+        input_schema: tool_input_schema,
+        output_schema: None,
+        description: Some(
+            "Continue a Codex session by providing the session id and prompt.".to_string(),
+        ),
+        annotations: None,
     }
 }
 
@@ -227,11 +274,45 @@ mod tests {
                 "description": "The *initial user prompt* to start the Codex conversation.",
                 "type": "string"
               },
+              "base-instructions": {
+                "description": "The set of instructions to use instead of the default ones.",
+                "type": "string"
+              },
             },
             "required": [
               "prompt"
             ]
           }
+        });
+        assert_eq!(expected_tool_json, tool_json);
+    }
+
+    #[test]
+    fn verify_codex_tool_reply_json_schema() {
+        let tool = create_tool_for_codex_tool_call_reply_param();
+        #[expect(clippy::expect_used)]
+        let tool_json = serde_json::to_value(&tool).expect("tool serializes");
+        let expected_tool_json = serde_json::json!({
+          "description": "Continue a Codex session by providing the session id and prompt.",
+          "inputSchema": {
+            "properties": {
+              "prompt": {
+                "description": "The *next user prompt* to continue the Codex conversation.",
+                "type": "string"
+              },
+              "sessionId": {
+                "description": "The *session id* for this conversation.",
+                "type": "string"
+              },
+            },
+            "required": [
+              "prompt",
+              "sessionId",
+            ],
+            "type": "object",
+          },
+          "name": "codex-reply",
+          "title": "Codex Reply",
         });
         assert_eq!(expected_tool_json, tool_json);
     }
