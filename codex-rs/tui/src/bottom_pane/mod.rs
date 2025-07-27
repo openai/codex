@@ -104,12 +104,6 @@ impl BottomPane<'_> {
         }
     }
 
-    /// Update the UI to reflect whether this `BottomPane` has input focus.
-    pub(crate) fn set_input_focus(&mut self, has_focus: bool) {
-        self.has_input_focus = has_focus;
-        self.composer.set_input_focus(has_focus);
-    }
-
     pub(crate) fn show_ctrl_c_quit_hint(&mut self) {
         self.ctrl_c_quit_hint = true;
         self.composer
@@ -201,11 +195,6 @@ impl BottomPane<'_> {
     /// Height (terminal rows) required by the current bottom pane.
     pub(crate) fn request_redraw(&self) {
         self.app_event_tx.send(AppEvent::RequestRedraw)
-    }
-
-    /// Returns true when a popup inside the composer is visible.
-    pub(crate) fn is_popup_visible(&self) -> bool {
-        self.active_view.is_none() && self.composer.is_popup_visible()
     }
 
     // --- History helpers ---
