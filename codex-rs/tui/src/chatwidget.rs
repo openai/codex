@@ -1,10 +1,16 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::app_event::AppEvent;
+use crate::app_event_sender::AppEventSender;
+use crate::bottom_pane::BottomPane;
+use crate::bottom_pane::BottomPaneParams;
+use crate::bottom_pane::InputResult;
+use crate::conversation_history_widget::ConversationHistoryWidget;
+use crate::history_cell::PatchEventType;
+use crate::user_approval_widget::ApprovalRequest;
 use codex_core::codex_wrapper::init_codex;
 use codex_core::config::Config;
-use codex_core::protocol::AgentMessageDeltaEvent;
-use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
 use codex_core::protocol::AgentReasoningEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
@@ -21,6 +27,9 @@ use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TokenUsage;
+use codex_core::protocol::{AgentMessageDeltaEvent, PatchSessionConfigType};
+use codex_core::protocol::{AgentMessageEvent, AskForApproval};
+use codex_file_search::FileMatch;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -29,15 +38,9 @@ use ratatui::widgets::WidgetRef;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::mpsc::unbounded_channel;
 
-use crate::app_event::AppEvent;
-use crate::app_event_sender::AppEventSender;
-use crate::bottom_pane::BottomPane;
-use crate::bottom_pane::BottomPaneParams;
-use crate::bottom_pane::InputResult;
-use crate::conversation_history_widget::ConversationHistoryWidget;
-use crate::history_cell::PatchEventType;
-use crate::user_approval_widget::ApprovalRequest;
-use codex_file_search::FileMatch;
+struct SessionConfiguration {
+    approval_policy: AskForApproval,
+}
 
 pub(crate) struct ChatWidget<'a> {
     app_event_tx: AppEventSender,
@@ -53,6 +56,9 @@ pub(crate) struct ChatWidget<'a> {
     // We wait for the final AgentMessage event and then emit the full text
     // at once into scrollback so the history contains a single message.
     answer_buffer: String,
+    /// store configuration for the current session
+    /// this is used to display the session information in the conversation history
+    session_config: SessionConfiguration,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -124,7 +130,9 @@ impl ChatWidget<'_> {
                 app_event_tx_clone.send(AppEvent::CodexEvent(event));
             }
         });
-
+        let session_config = SessionConfiguration {
+            approval_policy: config.approval_policy,
+        };
         Self {
             app_event_tx: app_event_tx.clone(),
             codex_op_tx,
@@ -142,6 +150,7 @@ impl ChatWidget<'_> {
             token_usage: TokenUsage::default(),
             reasoning_buffer: String::new(),
             answer_buffer: String::new(),
+            session_config,
         }
     }
 
@@ -439,6 +448,17 @@ impl ChatWidget<'_> {
             EventMsg::ShutdownComplete => {
                 self.app_event_tx.send(AppEvent::ExitRequest);
             }
+            EventMsg::SessionConfigPatchedEvent(config_patch) => {
+                match config_patch.patch_config_event_type {
+                    PatchSessionConfigType::AskForApprovalPatch {
+                        new_approval_policy,
+                    } => {
+                        self.session_config.approval_policy = new_approval_policy;
+                        
+                    },
+                }
+                self.conversation_history.record_patch_event(config_patch.patch_config_event_type);
+            }
             event => {
                 self.conversation_history
                     .add_background_event(format!("{event:?}"));
@@ -465,8 +485,9 @@ impl ChatWidget<'_> {
         self.request_redraw();
     }
 
-    pub(crate) fn toggle_approval_mode(&mut self) {
-        // self.bottom_pane.toggle_approval_mode();
+    pub(crate) fn show_approval_mode_selection(&mut self) {
+        self.bottom_pane
+            .open_change_approval_policy_modal(self.session_config.approval_policy);
         self.request_redraw();
     }
 
