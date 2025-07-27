@@ -127,10 +127,6 @@ impl ChatComposer<'_> {
             .on_entry_response(log_id, offset, entry, &mut self.textarea)
     }
 
-    pub fn set_input_focus(&mut self, has_focus: bool) {
-        self.update_border(has_focus);
-    }
-
     pub fn handle_paste(&mut self, pasted: String) -> bool {
         let char_count = pasted.chars().count();
         if char_count > LARGE_PASTE_CHAR_THRESHOLD {
@@ -637,13 +633,6 @@ impl ChatComposer<'_> {
                 .border_type(BorderType::Rounded)
                 .border_style(bs.border_style),
         );
-    }
-
-    pub(crate) fn is_popup_visible(&self) -> bool {
-        match self.active_popup {
-            ActivePopup::Command(_) | ActivePopup::File(_) => true,
-            ActivePopup::None => false,
-        }
     }
 }
 
