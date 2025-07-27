@@ -5,7 +5,7 @@ use crate::app_event_sender::AppEventSender;
 use crate::user_approval_widget::ApprovalRequest;
 use bottom_pane_view::BottomPaneView;
 use bottom_pane_view::ConditionalUpdate;
-use codex_core::protocol::TokenUsage;
+use codex_core::protocol::{AskForApproval, TokenUsage};
 use codex_file_search::FileMatch;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
@@ -14,12 +14,12 @@ use ratatui::widgets::WidgetRef;
 
 mod approval_modal_view;
 mod bottom_pane_view;
+mod change_approval_policy_modal_view;
 mod chat_composer;
 mod chat_composer_history;
 mod command_popup;
 mod file_search_popup;
 mod status_indicator_view;
-mod change_approval_policy_modal_view;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CancellationEvent {
@@ -30,6 +30,7 @@ pub(crate) enum CancellationEvent {
 pub(crate) use chat_composer::ChatComposer;
 pub(crate) use chat_composer::InputResult;
 
+use crate::bottom_pane::change_approval_policy_modal_view::ChangeApprovalPolicyModelView;
 use approval_modal_view::ApprovalModalView;
 use status_indicator_view::StatusIndicatorView;
 
@@ -224,6 +225,16 @@ impl BottomPane<'_> {
         let modal = ApprovalModalView::new(request, self.app_event_tx.clone());
         self.active_view = Some(Box::new(modal));
         self.request_redraw()
+    }
+
+    pub(crate) fn open_change_approval_policy_modal(
+        &mut self,
+        current_approval_policy: AskForApproval,
+    ) {
+        let modal =
+            ChangeApprovalPolicyModelView::new(self.app_event_tx.clone(), current_approval_policy);
+        self.active_view = Some(Box::new(modal));
+        self.request_redraw();
     }
 
     /// Height (terminal rows) required by the current bottom pane.

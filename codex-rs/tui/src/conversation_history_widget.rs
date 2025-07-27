@@ -3,8 +3,10 @@ use crate::history_cell::CommandOutput;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::PatchEventType;
 use codex_core::config::Config;
-use codex_core::protocol::FileChange;
 use codex_core::protocol::SessionConfiguredEvent;
+use codex_core::protocol::{FileChange, PatchSessionConfigType};
+use crossterm::event::KeyCode;
+use crossterm::event::KeyEvent;
 use ratatui::prelude::*;
 use ratatui::style::Style;
 use ratatui::widgets::*;
@@ -250,6 +252,10 @@ impl ConversationHistoryWidget {
                 }
             }
         }
+    }
+
+    pub(crate) fn record_patch_event(&mut self, patch_event: PatchSessionConfigType) {
+        self.add_to_history(HistoryCell::new_session_config_patched(patch_event))
     }
 }
 
