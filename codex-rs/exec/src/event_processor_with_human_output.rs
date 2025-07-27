@@ -1,6 +1,5 @@
 use codex_common::elapsed::format_elapsed;
 use codex_core::config::Config;
-use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
 use codex_core::protocol::BackgroundEventEvent;
@@ -17,6 +16,7 @@ use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TokenUsage;
+use codex_core::protocol::{AgentMessageDeltaEvent, PatchSessionConfigType};
 use owo_colors::OwoColorize;
 use owo_colors::Style;
 use shlex::try_join;
@@ -517,6 +517,23 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 // Currently ignored in exec output.
             }
             EventMsg::ShutdownComplete => return CodexStatus::Shutdown,
+            EventMsg::SessionConfigPatchedEvent(session_config_patch_event) => {
+                match session_config_patch_event.patch_config_event_type {
+                    PatchSessionConfigType::AskForApprovalPatch {
+                        new_approval_policy,
+                    } => {
+                        ts_println!(
+                            self,
+                            "{}: {}",
+                            "session approval policy changed",
+                            new_approval_policy
+                                .to_string()
+                                .style(self.bold)
+                                .style(self.green),
+                        );
+                    }
+                }
+            }
         }
         CodexStatus::Running
     }

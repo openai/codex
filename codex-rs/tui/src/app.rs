@@ -331,7 +331,7 @@ impl App<'_> {
                     }
                     SlashCommand::Approval => {
                         if let AppState::Chat { widget } = &mut self.app_state {
-                            // widget.toggle_approval_mode();
+                            widget.show_approval_mode_selection();
                         }
                     }
                 },

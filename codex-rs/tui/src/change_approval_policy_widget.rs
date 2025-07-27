@@ -1,32 +1,138 @@
+use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
-use codex_core::protocol::AskForApproval;
-use ratatui::layout::Rect;
+use crate::bottom_pane::BottomPane;
+use codex_core::protocol::{AskForApproval, Op};
+use crossterm::event::{KeyCode, KeyEvent};
+use ratatui::buffer::Buffer;
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::prelude::{Color, Widget};
+use ratatui::widgets::{Block, BorderType, Borders, List, WidgetRef};
+use ratatui::{
+    style::Style,
+    text::{Line, Span},
+    widgets::Paragraph,
+};
 
 struct ApprovalPolicySelectOption {
     label: AskForApproval,
-    description: &'static str,
 }
+
+const HEADER_TEXT: &str = "Switch approval mode";
+
+const PLAIN: Style = Style::new();
+const GREEN_STYLE: Style = Style::new().fg(Color::Green);
+const BLUE_STYLE: Style = Style::new().fg(Color::Blue);
 
 const APPROVAL_POLICY_OPTIONS: &[ApprovalPolicySelectOption] = &[
     ApprovalPolicySelectOption {
         label: AskForApproval::UnlessTrusted,
-        description: "No approval required for messages.",
     },
     ApprovalPolicySelectOption {
         label: AskForApproval::OnFailure,
-        description: "All messages require approval before sending.",
     },
     ApprovalPolicySelectOption {
         label: AskForApproval::Never,
-        description: "Messages can be sent without approval, but approval is encouraged.",
     },
 ];
 
-pub(crate) struct ChangeApprovalPolicyWidget {
+pub(crate) struct ChangeApprovalPolicyWidget<'a> {
     app_event_tx: AppEventSender,
+    change_prompt: Paragraph<'a>,
+    selected_option: usize,
+    compleat: bool,
 }
-impl ChangeApprovalPolicyWidget {
-    pub(crate) fn get_height(&self, area: &Rect) -> u16 {
-        todo!()
+impl<'a> ChangeApprovalPolicyWidget<'a> {
+    pub(crate) fn new(
+        app_event_tx: AppEventSender,
+        current_approval_policy: AskForApproval,
+    ) -> Self {
+        let lines = vec![
+            Line::from(vec![
+                Span::from("Current mode: "),
+                Span::from(current_approval_policy.to_string()).style(GREEN_STYLE),
+            ]),
+            Line::from(""),
+        ];
+        let header = Paragraph::new(lines);
+
+        Self {
+            app_event_tx,
+            change_prompt: header,
+            selected_option: 0,
+            compleat: false,
+        }
+    }
+
+    fn send_decision(&mut self) {
+        self.app_event_tx
+            .send(AppEvent::CodexOp(Op::ChangeApprovalPolicy {
+                approval_policy: APPROVAL_POLICY_OPTIONS[self.selected_option].label,
+            }));
+    }
+
+    pub(crate) fn handle_key_event(&mut self, _pane: &mut BottomPane<'_>, key_event: KeyEvent) {
+        match key_event.code {
+            KeyCode::Up => {
+                if self.selected_option == 0 {
+                    self.selected_option = APPROVAL_POLICY_OPTIONS.len() - 1;
+                } else {
+                    self.selected_option -= 1;
+                }
+            }
+            KeyCode::Down => {
+                self.selected_option = (self.selected_option + 1) % APPROVAL_POLICY_OPTIONS.len();
+            }
+            KeyCode::Esc => {
+                self.compleat = true;
+            }
+            KeyCode::Enter => {
+                self.send_decision();
+                self.compleat = true;
+            }
+            _ => {}
+        };
+    }
+
+    pub(crate) fn is_complete(&self) -> bool {
+        self.compleat
+    }
+}
+
+impl WidgetRef for ChangeApprovalPolicyWidget<'_> {
+    fn render_ref(&self, area: Rect, buf: &mut Buffer) {
+        let outer = Block::default()
+            .title(HEADER_TEXT)
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded);
+        let inner = outer.inner(area);
+
+        let full_prompt_height = self.change_prompt.line_count(inner.width) as u16;
+        let min_response_rows = APPROVAL_POLICY_OPTIONS.len() as u16;
+
+        let prompt_height = full_prompt_height.min(inner.height.saturating_sub(min_response_rows));
+
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(prompt_height), Constraint::Min(0)])
+            .split(inner);
+        let prompt_chunk = chunks[0];
+        let response_chunk = chunks[1];
+
+        let lines: Vec<Line> = APPROVAL_POLICY_OPTIONS
+            .iter()
+            .enumerate()
+            .map(|(idx, opt)| {
+                let (prefix, style) = if idx == self.selected_option {
+                    ("▶", BLUE_STYLE)
+                } else {
+                    (" ", PLAIN)
+                };
+                Line::styled(format!("  {prefix} {}", opt.label), style)
+            })
+            .collect();
+
+        outer.render(area, buf);
+        self.change_prompt.clone().render(prompt_chunk, buf);
+        Widget::render(List::new(lines), response_chunk, buf);
     }
 }

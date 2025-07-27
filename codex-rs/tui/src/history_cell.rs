@@ -10,7 +10,7 @@ use codex_common::summarize_sandbox_policy;
 use codex_core::WireApi;
 use codex_core::config::Config;
 use codex_core::model_supports_reasoning_summaries;
-use codex_core::protocol::FileChange;
+use codex_core::protocol::{FileChange, PatchSessionConfigType};
 use codex_core::protocol::SessionConfiguredEvent;
 use image::DynamicImage;
 use image::GenericImageView;
@@ -118,6 +118,9 @@ pub(crate) enum HistoryCell {
     /// behaviour of `ActiveExecCommand` so the user sees *what* patch the
     /// model wants to apply before being prompted to approve or deny it.
     PendingPatch { view: TextBlock },
+
+    /// Current session's configuration was patched.
+    SessionConfigPatched { view: TextBlock },
 }
 
 const TOOL_CALL_MAX_LINES: usize = 5;
@@ -140,7 +143,8 @@ impl HistoryCell {
             | HistoryCell::CompletedMcpToolCall { view }
             | HistoryCell::PendingPatch { view }
             | HistoryCell::ActiveExecCommand { view, .. }
-            | HistoryCell::ActiveMcpToolCall { view, .. } => view.lines.clone(),
+            | HistoryCell::ActiveMcpToolCall { view, .. }
+            | HistoryCell::SessionConfigPatched { view } => view.lines.clone(),
             HistoryCell::CompletedMcpToolCallWithImageOutput { .. } => vec![
                 Line::from("tool result (image output omitted)"),
                 Line::from(""),
@@ -579,6 +583,22 @@ impl HistoryCell {
             view: TextBlock::new(lines),
         }
     }
+
+    pub(crate) fn new_session_config_patched(patch_event: PatchSessionConfigType) -> Self {
+        let line = match patch_event {
+            PatchSessionConfigType::AskForApprovalPatch {
+                new_approval_policy,
+            } => Line::from(vec![
+                RtSpan::raw("Approval policy changed: "),
+                RtSpan::raw(new_approval_policy.to_string()).style(Color::Green),
+            ]),
+        };
+        let mut lines = vec![line];
+        lines.push(Line::from(""));
+        HistoryCell::SessionConfigPatched {
+            view: TextBlock::new(lines),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -602,7 +622,8 @@ impl CellWidget for HistoryCell {
             | HistoryCell::CompletedMcpToolCall { view }
             | HistoryCell::PendingPatch { view }
             | HistoryCell::ActiveExecCommand { view, .. }
-            | HistoryCell::ActiveMcpToolCall { view, .. } => view.height(width),
+            | HistoryCell::ActiveMcpToolCall { view, .. }
+            | HistoryCell::SessionConfigPatched { view } => view.height(width),
             HistoryCell::CompletedMcpToolCallWithImageOutput {
                 image,
                 render_cache,
@@ -624,7 +645,8 @@ impl CellWidget for HistoryCell {
             | HistoryCell::CompletedMcpToolCall { view }
             | HistoryCell::PendingPatch { view }
             | HistoryCell::ActiveExecCommand { view, .. }
-            | HistoryCell::ActiveMcpToolCall { view, .. } => {
+            | HistoryCell::ActiveMcpToolCall { view, .. }
+            | HistoryCell::SessionConfigPatched { view } => {
                 view.render_window(first_visible_line, area, buf)
             }
             HistoryCell::CompletedMcpToolCallWithImageOutput {
