@@ -20,7 +20,6 @@ mod chat_composer_history;
 mod command_popup;
 mod file_search_popup;
 mod status_indicator_view;
-mod change_approval_policy_modal_view;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CancellationEvent {
