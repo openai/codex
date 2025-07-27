@@ -78,18 +78,38 @@ impl OutgoingMessageSender {
         let _ = self.sender.send(outgoing_message).await;
     }
 
-    pub(crate) async fn send_event_as_notification(&self, event: &Event) {
-        #[expect(clippy::expect_used)]
-        let params = Some(serde_json::to_value(event).expect("Event must serialize"));
+    pub(crate) async fn send_event_as_notification(
+        &self,
+        event: &Event,
+        event_context: Option<OutgoingEventContext>,
+    ) {
+        #[allow(clippy::expect_used)]
+        let mut params = serde_json::to_value(event).expect("Event must serialize");
+
+        if let Some(event_context) = event_context {
+            #[allow(clippy::expect_used)]
+            let event_context_obj = serde_json::to_value(event_context)
+                .expect("EventContext must serialize")
+                .as_object()
+                .cloned();
+
+            if let (Some(params_obj), Some(event_context_obj)) =
+                (params.as_object_mut(), event_context_obj)
+            {
+                params_obj.extend(event_context_obj.into_iter());
+            }
+        }
+
         let outgoing_message = OutgoingMessage::Notification(OutgoingNotification {
             method: "codex/event".to_string(),
-            params: params.clone(),
+            params: Some(params.clone()),
         });
         let _ = self.sender.send(outgoing_message).await;
 
-        self.send_event_as_notification_new_schema(event, params)
+        self.send_event_as_notification_new_schema(event, Some(params.clone()))
             .await;
     }
+
     // should be backwards compatible.
     // it will replace send_event_as_notification eventually.
     async fn send_event_as_notification_new_schema(
@@ -167,6 +187,12 @@ pub(crate) struct OutgoingNotification {
     pub params: Option<serde_json::Value>,
 }
 
+// Additional mcp-specific data to be added to a [`codex_core::protocol::Event`] in notification.params
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub(crate) struct OutgoingEventContext {
+    pub request_id: RequestId,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub(crate) struct OutgoingResponse {
     pub id: RequestId,
@@ -177,4 +203,107 @@ pub(crate) struct OutgoingResponse {
 pub(crate) struct OutgoingError {
     pub error: JSONRPCErrorError,
     pub id: RequestId,
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use codex_core::protocol::EventMsg;
+    use codex_core::protocol::SessionConfiguredEvent;
+    use serde_json::json;
+    use uuid::Uuid;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_send_event_as_notification() {
+        let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingMessage>(2);
+        let outgoing_message_sender = OutgoingMessageSender::new(outgoing_tx);
+
+        let event = Event {
+            id: "1".to_string(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: Uuid::new_v4(),
+                model: "gpt-4o".to_string(),
+                history_log_id: 1,
+                history_entry_count: 1000,
+            }),
+        };
+
+        outgoing_message_sender
+            .send_event_as_notification(&event, None)
+            .await;
+
+        let result = outgoing_rx.recv().await.unwrap();
+        let OutgoingMessage::Notification(OutgoingNotification { method, params }) = result else {
+            panic!("expected Notification for first message");
+        };
+        assert_eq!(method, "codex/event");
+
+        let Ok(expected_params) = serde_json::to_value(&event) else {
+            panic!("Event must serialize");
+        };
+        assert_eq!(params, Some(expected_params.clone()));
+
+        let result2 = outgoing_rx.recv().await.unwrap();
+        let OutgoingMessage::Notification(OutgoingNotification {
+            method: method2,
+            params: params2,
+        }) = result2
+        else {
+            panic!("expected Notification for second message");
+        };
+        assert_eq!(method2, event.msg.to_string());
+        assert_eq!(params2, Some(expected_params));
+    }
+
+    #[tokio::test]
+    async fn test_send_event_as_notification_with_context() {
+        let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingMessage>(2);
+        let outgoing_message_sender = OutgoingMessageSender::new(outgoing_tx);
+
+        let session_configured_event = SessionConfiguredEvent {
+            session_id: Uuid::new_v4(),
+            model: "gpt-4o".to_string(),
+            history_log_id: 1,
+            history_entry_count: 1000,
+        };
+        let event = Event {
+            id: "1".to_string(),
+            msg: EventMsg::SessionConfigured(session_configured_event.clone()),
+        };
+        let context = OutgoingEventContext {
+            request_id: RequestId::String("123".to_string()),
+        };
+
+        outgoing_message_sender
+            .send_event_as_notification(&event, Some(context))
+            .await;
+
+        let result = outgoing_rx.recv().await.unwrap();
+        let OutgoingMessage::Notification(OutgoingNotification { method, params }) = result else {
+            panic!("expected Notification for first message");
+        };
+        assert_eq!(method, "codex/event");
+        let expected_params = json!({
+            "request_id": "123",
+            "session_id": session_configured_event.session_id,
+            "model": session_configured_event.model,
+            "history_log_id": session_configured_event.history_log_id.to_string(),
+            "history_entry_count": session_configured_event.history_entry_count,
+        });
+        assert_eq!(params.unwrap(), expected_params);
+
+        let result2 = outgoing_rx.recv().await.unwrap();
+        let OutgoingMessage::Notification(OutgoingNotification {
+            method: method2,
+            params: params2,
+        }) = result2
+        else {
+            panic!("expected Notification for second message");
+        };
+        assert_eq!(method2, event.msg.to_string());
+        assert_eq!(params2.unwrap(), expected_params);
+    }
 }
