@@ -80,6 +80,30 @@ impl BottomPane<'_> {
         }
     }
 
+    /// Handle Ctrl-C in the bottom pane. If a modal view is active it gets a
+    /// chance to consume the event (e.g. to dismiss itself). Returns true when
+    /// handled.
+    pub(crate) fn on_ctrl_c(&mut self) -> bool {
+        if let Some(mut view) = self.active_view.take() {
+            if view.on_ctrl_c(self) {
+                if !view.is_complete() {
+                    self.active_view = Some(view);
+                } else if self.is_task_running {
+                    self.active_view = Some(Box::new(StatusIndicatorView::new(
+                        self.app_event_tx.clone(),
+                    )));
+                }
+                // Show the standard Ctrl-C quit hint so a subsequent Ctrl-C will exit.
+                self.show_ctrl_c_quit_hint();
+                return true;
+            } else {
+                // Put the view back unchanged
+                self.active_view = Some(view);
+            }
+        }
+        false
+    }
+
     pub fn handle_paste(&mut self, pasted: String) {
         if self.active_view.is_none() {
             let needs_redraw = self.composer.handle_paste(pasted);
@@ -221,6 +245,42 @@ impl BottomPane<'_> {
     pub(crate) fn on_file_search_result(&mut self, query: String, matches: Vec<FileMatch>) {
         self.composer.on_file_search_result(query, matches);
         self.request_redraw();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_event::AppEvent;
+    use std::sync::mpsc::channel;
+    use std::path::PathBuf;
+
+    fn make_sender() -> AppEventSender {
+        let (tx, _rx) = channel::<AppEvent>();
+        AppEventSender::new(tx)
+    }
+
+    fn exec_request() -> ApprovalRequest {
+        ApprovalRequest::Exec {
+            id: "1".to_string(),
+            command: vec!["echo".into(), "ok".into()],
+            cwd: PathBuf::from("."),
+            reason: None,
+        }
+    }
+
+    #[test]
+    fn ctrl_c_on_modal_consumes_and_shows_quit_hint() {
+        let tx = make_sender();
+        let mut pane = BottomPane::new(BottomPaneParams { app_event_tx: tx, has_input_focus: true });
+        // Push an approval request to create the modal
+        pane.push_approval_request(exec_request());
+        // First Ctrl-C should be handled by the modal and return true
+        assert!(pane.on_ctrl_c());
+        // The quit hint should be visible for the next Ctrl-C
+        assert!(pane.ctrl_c_quit_hint_visible());
+        // With the modal closed, second Ctrl-C should not be consumed here
+        assert!(!pane.on_ctrl_c());
     }
 }
 

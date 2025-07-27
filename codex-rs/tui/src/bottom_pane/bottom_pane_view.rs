@@ -22,6 +22,13 @@ pub(crate) trait BottomPaneView<'a> {
         false
     }
 
+    /// Handle Ctrl-C while this view is active. Return true if the view
+    /// consumed the event (e.g. to cancel itself), false to let the caller
+    /// handle it.
+    fn on_ctrl_c(&mut self, _pane: &mut BottomPane<'a>) -> bool {
+        false
+    }
+
     /// Render the view: this will be displayed in place of the composer.
     fn render(&self, area: Rect, buf: &mut Buffer);
 

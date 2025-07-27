@@ -203,6 +203,12 @@ impl UserApprovalWidget<'_> {
         }
     }
 
+    /// Handle Ctrl-C pressed by the user while the modal is visible.
+    /// Behaves like pressing Escape: abort the request and close the modal.
+    pub(crate) fn on_ctrl_c(&mut self) {
+        self.send_decision(ReviewDecision::Abort);
+    }
+
     fn handle_select_key(&mut self, key_event: KeyEvent) {
         match key_event.code {
             KeyCode::Up => {

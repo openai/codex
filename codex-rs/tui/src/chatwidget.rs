@@ -469,6 +469,10 @@ impl ChatWidget<'_> {
     /// Returns true if the key press was handled, false if it was not.
     /// If the key press was not handled, the caller should handle it (likely by exiting the process).
     pub(crate) fn on_ctrl_c(&mut self) -> bool {
+        // Give active modal views (e.g. approval modal) a chance to consume Ctrl-C.
+        if self.bottom_pane.on_ctrl_c() {
+            return true;
+        }
         if self.bottom_pane.is_task_running() {
             self.bottom_pane.clear_ctrl_c_quit_hint();
             self.submit_op(Op::Interrupt);
