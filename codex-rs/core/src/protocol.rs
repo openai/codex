@@ -121,6 +121,12 @@ pub enum Op {
 
     /// Request to shut down codex instance.
     Shutdown,
+
+    /// Request to change the approval policy for the current session.
+    ChangeApprovalPolicy {
+        /// The new approval policy to use.
+        approval_policy: AskForApproval,
+    },
 }
 
 /// Determines the conditions under which the user is consulted to approve

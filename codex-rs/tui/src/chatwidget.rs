@@ -465,6 +465,11 @@ impl ChatWidget<'_> {
         self.request_redraw();
     }
 
+    pub(crate) fn toggle_approval_mode(&mut self) {
+        // self.bottom_pane.toggle_approval_mode();
+        self.request_redraw();
+    }
+
     pub(crate) fn handle_scroll_delta(&mut self, scroll_delta: i32) {
         // If the user is trying to scroll exactly one line, we let them, but
         // otherwise we assume they are trying to scroll in larger increments.

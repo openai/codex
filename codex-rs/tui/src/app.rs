@@ -329,6 +329,11 @@ impl App<'_> {
                             widget.add_diff_output(text);
                         }
                     }
+                    SlashCommand::Approval => {
+                        if let AppState::Chat { widget } = &mut self.app_state {
+                            // widget.toggle_approval_mode();
+                        }
+                    }
                 },
                 AppEvent::StartFileSearch(query) => {
                     self.file_search.on_user_query(query);
