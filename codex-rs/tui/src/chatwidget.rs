@@ -44,7 +44,6 @@ pub(crate) struct ChatWidget<'a> {
     codex_op_tx: UnboundedSender<Op>,
     conversation_history: ConversationHistoryWidget,
     bottom_pane: BottomPane<'a>,
-    input_focus: InputFocus,
     config: Config,
     initial_user_message: Option<UserMessage>,
     token_usage: TokenUsage,
@@ -53,12 +52,6 @@ pub(crate) struct ChatWidget<'a> {
     // We wait for the final AgentMessage event and then emit the full text
     // at once into scrollback so the history contains a single message.
     answer_buffer: String,
-}
-
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum InputFocus {
-    HistoryPane,
-    BottomPane,
 }
 
 struct UserMessage {
@@ -133,7 +126,6 @@ impl ChatWidget<'_> {
                 app_event_tx,
                 has_input_focus: true,
             }),
-            input_focus: InputFocus::BottomPane,
             config,
             initial_user_message: create_initial_user_message(
                 initial_prompt.unwrap_or_default(),
@@ -147,44 +139,17 @@ impl ChatWidget<'_> {
 
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
         self.bottom_pane.clear_ctrl_c_quit_hint();
-        // Special-case <Tab>: normally toggles focus between history and bottom panes.
-        // However, when the slash-command popup is visible we forward the key
-        // to the bottom pane so it can handle auto-completion.
-        if matches!(key_event.code, crossterm::event::KeyCode::Tab)
-            && !self.bottom_pane.is_popup_visible()
-        {
-            self.input_focus = match self.input_focus {
-                InputFocus::HistoryPane => InputFocus::BottomPane,
-                InputFocus::BottomPane => InputFocus::HistoryPane,
-            };
-            self.conversation_history
-                .set_input_focus(self.input_focus == InputFocus::HistoryPane);
-            self.bottom_pane
-                .set_input_focus(self.input_focus == InputFocus::BottomPane);
-            self.request_redraw();
-            return;
-        }
 
-        match self.input_focus {
-            InputFocus::HistoryPane => {
-                let needs_redraw = self.conversation_history.handle_key_event(key_event);
-                if needs_redraw {
-                    self.request_redraw();
-                }
+        match self.bottom_pane.handle_key_event(key_event) {
+            InputResult::Submitted(text) => {
+                self.submit_user_message(text.into());
             }
-            InputFocus::BottomPane => match self.bottom_pane.handle_key_event(key_event) {
-                InputResult::Submitted(text) => {
-                    self.submit_user_message(text.into());
-                }
-                InputResult::None => {}
-            },
+            InputResult::None => {}
         }
     }
 
     pub(crate) fn handle_paste(&mut self, text: String) {
-        if matches!(self.input_focus, InputFocus::BottomPane) {
-            self.bottom_pane.handle_paste(text);
-        }
+        self.bottom_pane.handle_paste(text);
     }
 
     /// Emits the last entry's plain lines from conversation_history, if any.

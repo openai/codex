@@ -5,8 +5,6 @@ use crate::history_cell::PatchEventType;
 use codex_core::config::Config;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::SessionConfiguredEvent;
-use crossterm::event::KeyCode;
-use crossterm::event::KeyEvent;
 use ratatui::prelude::*;
 use ratatui::style::Style;
 use ratatui::widgets::*;
@@ -44,33 +42,6 @@ impl ConversationHistoryWidget {
             num_rendered_lines: StdCell::new(0),
             last_viewport_height: StdCell::new(0),
             has_input_focus: false,
-        }
-    }
-
-    pub(crate) fn set_input_focus(&mut self, has_input_focus: bool) {
-        self.has_input_focus = has_input_focus;
-    }
-
-    /// Returns true if it needs a redraw.
-    pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) -> bool {
-        match key_event.code {
-            KeyCode::Up | KeyCode::Char('k') => {
-                self.scroll_up(1);
-                true
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                self.scroll_down(1);
-                true
-            }
-            KeyCode::PageUp | KeyCode::Char('b') => {
-                self.scroll_page_up();
-                true
-            }
-            KeyCode::PageDown | KeyCode::Char(' ') => {
-                self.scroll_page_down();
-                true
-            }
-            _ => false,
         }
     }
 
@@ -116,53 +87,6 @@ impl ConversationHistoryWidget {
         if new_pos >= max_scroll {
             // Reached (or passed) the bottom – switch to stick‑to‑bottom mode
             // so that additional output keeps the view pinned automatically.
-            self.scroll_position = usize::MAX;
-        } else {
-            self.scroll_position = new_pos;
-        }
-    }
-
-    /// Scroll up by one full viewport height (Page Up).
-    fn scroll_page_up(&mut self) {
-        let viewport_height = self.last_viewport_height.get().max(1);
-
-        // If we are currently in the "stick to bottom" mode, first convert the
-        // implicit scroll position (`usize::MAX`) into an explicit offset that
-        // represents the very bottom of the scroll region.  This mirrors the
-        // logic from `scroll_up()`.
-        if self.scroll_position == usize::MAX {
-            self.scroll_position = self
-                .num_rendered_lines
-                .get()
-                .saturating_sub(viewport_height);
-        }
-
-        // Move up by a full page.
-        self.scroll_position = self.scroll_position.saturating_sub(viewport_height);
-    }
-
-    /// Scroll down by one full viewport height (Page Down).
-    fn scroll_page_down(&mut self) {
-        // Nothing to do if we're already stuck to the bottom.
-        if self.scroll_position == usize::MAX {
-            return;
-        }
-
-        let viewport_height = self.last_viewport_height.get().max(1);
-        let num_lines = self.num_rendered_lines.get();
-
-        // Calculate the maximum explicit scroll offset that is still within
-        // range. This matches the logic in `scroll_down()` and the render
-        // method.
-        let max_scroll = num_lines.saturating_sub(viewport_height);
-
-        // Attempt to move down by a full page.
-        let new_pos = self.scroll_position.saturating_add(viewport_height);
-
-        if new_pos >= max_scroll {
-            // We have reached (or passed) the bottom – switch back to
-            // automatic stick‑to‑bottom mode so that subsequent output keeps
-            // the viewport pinned.
             self.scroll_position = usize::MAX;
         } else {
             self.scroll_position = new_pos;
