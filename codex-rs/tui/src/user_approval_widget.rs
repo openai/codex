@@ -265,7 +265,36 @@ impl UserApprovalWidget<'_> {
         self.send_decision_with_feedback(decision, String::new())
     }
 
-    fn send_decision_with_feedback(&mut self, decision: ReviewDecision, _feedback: String) {
+    fn send_decision_with_feedback(&mut self, decision: ReviewDecision, feedback: String) {
+        // Emit a short summary into the history so the transcript captures the user's decision.
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        match &self.approval_request {
+            ApprovalRequest::Exec { command, .. } => {
+                let cmd = strip_bash_lc_and_escape(command);
+                lines.push(Line::from("approval decision"));
+                lines.push(Line::from(format!("$ {cmd}")));
+                lines.push(Line::from(format!("decision: {decision:?}")));
+                if !feedback.trim().is_empty() {
+                    lines.push(Line::from("feedback:"));
+                    for l in feedback.lines() {
+                        lines.push(Line::from(l.to_string()));
+                    }
+                }
+                lines.push(Line::from(""));
+            }
+            ApprovalRequest::ApplyPatch { .. } => {
+                lines.push(Line::from(format!("patch approval decision: {decision:?}")));
+                if !feedback.trim().is_empty() {
+                    lines.push(Line::from("feedback:"));
+                    for l in feedback.lines() {
+                        lines.push(Line::from(l.to_string()));
+                    }
+                }
+                lines.push(Line::from(""));
+            }
+        }
+        self.app_event_tx.send(AppEvent::InsertHistory(lines));
+
         let op = match &self.approval_request {
             ApprovalRequest::Exec { id, .. } => Op::ExecApproval {
                 id: id.clone(),
@@ -277,12 +306,6 @@ impl UserApprovalWidget<'_> {
             },
         };
 
-        // Ignore feedback for now – the current `Op` variants do not carry it.
-
-        // Forward the Op to the agent. The caller (ChatWidget) will trigger a
-        // redraw after it processes the resulting state change, so we avoid
-        // issuing an extra Redraw here to prevent a transient frame where the
-        // modal is still visible.
         self.app_event_tx.send(AppEvent::CodexOp(op));
         self.done = true;
     }

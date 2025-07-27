@@ -35,6 +35,7 @@ use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
 use crate::bottom_pane::InputResult;
 use crate::conversation_history_widget::ConversationHistoryWidget;
+use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell::PatchEventType;
 use crate::user_approval_widget::ApprovalRequest;
 use codex_file_search::FileMatch;
@@ -297,6 +298,21 @@ impl ChatWidget<'_> {
                 cwd,
                 reason,
             }) => {
+                // Print the command to the history so it is visible in the
+                // transcript *before* the modal asks for approval.
+                let cmdline = strip_bash_lc_and_escape(&command);
+                let mut text = String::new();
+                text.push_str("command requires approval:\n");
+                text.push_str("$ ");
+                text.push_str(&cmdline);
+                if let Some(r) = &reason {
+                    text.push('\n');
+                    text.push_str(r);
+                }
+                self.conversation_history.add_background_event(text);
+                self.emit_last_history_entry();
+                self.conversation_history.scroll_to_bottom();
+
                 let request = ApprovalRequest::Exec {
                     id,
                     command,
@@ -304,6 +320,7 @@ impl ChatWidget<'_> {
                     reason,
                 };
                 self.bottom_pane.push_approval_request(request);
+                self.request_redraw();
             }
             EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
                 call_id: _,
