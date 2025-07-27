@@ -65,16 +65,33 @@ base_url = "https://api.mistral.ai/v1"
 env_key = "MISTRAL_API_KEY"
 ```
 
-Note that Azure requires `api-version` to be passed as a query parameter, so be sure to specify it as part of `query_params` when defining the Azure provider:
+
+Note that Azure requires `api-version` to be passed as a query parameter, so be sure to specify it as part of `query_params` when defining the Azure provider, please copy the endpoint from Azure AI Foundry and then extract the `base_url` and `api_version` from the endpoint carefully.
+
+If you want to use `codex-mini` or other newer models that support the `responses` API, use the following configuration:
 
 ```toml
 [model_providers.azure]
 name = "Azure"
 # Make sure you set the appropriate subdomain for this URL.
-base_url = "https://YOUR_PROJECT_NAME.openai.azure.com/openai" # If you are using `chat` as the `wire_api` (e.g., when using models like `gpt-4o` or `o3-mini`), the `base_url` should be like **https://YOUR_PROJECT_NAME.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT_NAME**. Please note that `codex-mini` has been onboarded into Azure AI Foundry, when using this model, set `wire_api` to `responses` and use a `base_url` like **https://YOUR_PROJECT_NAME.openai.azure.com/openai**. Be sure to copy the exact URL from Azure AI Foundry, as it may vary by region or deployment method.
-env_key = "AZURE_OPENAI_API_KEY"  # Or "OPENAI_API_KEY", whichever you use.
+base_url = "https://YOUR_PROJECT_NAME.openai.azure.com/openai" 
+env_key = "AZURE_OPENAI_API_KEY"  
 query_params = { api-version = "2025-04-01-preview" }
+wire_api: "responses"
 ```
+
+If you want to use gpt-4.1 or o4-mini, which only support the chat API, use the following configuration:
+
+```toml
+[model_providers.azure]
+name = "Azure"
+# Make sure you set the appropriate subdomain for this URL.
+base_url = "https://YOUR_PROJECT_NAME.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT_NAME" 
+env_key = "AZURE_OPENAI_API_KEY" 
+query_params = { api-version = "2025-04-01-preview" }
+wire_api: "chat"
+```
+
 
 It is also possible to configure a provider to include extra HTTP headers with a request. These can be hardcoded values (`http_headers`) or values read from environment variables (`env_http_headers`):
 
