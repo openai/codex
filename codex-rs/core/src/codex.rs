@@ -192,7 +192,7 @@ pub(crate) struct Session {
     pub(crate) cwd: PathBuf,
     base_instructions: Option<String>,
     user_instructions: Option<String>,
-    pub(crate) approval_policy: AskForApproval,
+    approval_policy: Mutex<AskForApproval>,
     sandbox_policy: SandboxPolicy,
     shell_environment_policy: ShellEnvironmentPolicy,
     pub(crate) writable_roots: Mutex<Vec<PathBuf>>,
@@ -690,7 +690,7 @@ async fn submission_loop(
                     ctrl_c: Arc::clone(&ctrl_c),
                     user_instructions,
                     base_instructions,
-                    approval_policy,
+                    approval_policy: Mutex::new(approval_policy),
                     sandbox_policy,
                     shell_environment_policy: config.shell_environment_policy.clone(),
                     cwd,
@@ -851,6 +851,18 @@ async fn submission_loop(
                     warn!("failed to send Shutdown event: {e}");
                 }
                 break;
+            }
+
+            Op::ChangeApprovalPolicy { approval_policy } => {
+                if let Some(sess) = &sess {
+                    let mut policy = sess.approval_policy.lock().unwrap();
+                    if *policy != approval_policy {
+                        info!("Changing approval policy to: {approval_policy:?}");
+                        *policy = approval_policy;
+                    } else {
+                        debug!("Approval policy unchanged: {approval_policy:?}");
+                    }
+                }
             }
         }
     }
@@ -1436,9 +1448,10 @@ async fn handle_container_exec_with_params(
     // safety checks
     let safety = {
         let state = sess.state.lock().unwrap();
+        let approval_policy = *sess.approval_policy.lock().unwrap();
         assess_command_safety(
             &params.command,
-            sess.approval_policy,
+            approval_policy,
             &sess.sandbox_policy,
             &state.approved_commands,
         )
@@ -1552,7 +1565,8 @@ async fn handle_sandbox_error(
     call_id: String,
 ) -> ResponseInputItem {
     // Early out if the user never wants to be asked for approval; just return to the model immediately
-    if sess.approval_policy == AskForApproval::Never {
+    let current_approval_policy = *sess.approval_policy.lock().unwrap();
+    if current_approval_policy == AskForApproval::Never {
         return ResponseInputItem::FunctionCallOutput {
             call_id,
             output: FunctionCallOutputPayload {
