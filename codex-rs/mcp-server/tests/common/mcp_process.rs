@@ -294,7 +294,7 @@ impl McpProcess {
                             }
                         }
                         // New schema: method is the Display of EventMsg::SessionConfigured => "SessionConfigured"
-                        if notification.method == "sessionconfigured" {
+                        if notification.method == "session_configured" {
                             if let Some(msg) = params.get("msg") {
                                 if let Some(session_id) =
                                     msg.get("session_id").and_then(|v| v.as_str())
