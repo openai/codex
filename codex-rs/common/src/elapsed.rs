@@ -22,7 +22,8 @@ fn format_elapsed_millis(millis: i64) -> String {
     if millis < 1000 {
         format!("{millis}ms")
     } else if millis < 60_000 {
-        format!("{:.2}s", millis as f64 / 1000.0)
+        let secs = millis / 1000;
+        format!("{secs}s")
     } else {
         let minutes = millis / 60_000;
         let seconds = (millis % 60_000) / 1000;
@@ -48,13 +49,12 @@ mod tests {
     #[test]
     fn test_format_duration_seconds() {
         // Durations between 1s (inclusive) and 60s (exclusive) should be
-        // printed with 2-decimal-place seconds.
+        // printed as whole seconds.
         let dur = Duration::from_millis(1_500); // 1.5s
-        assert_eq!(format_duration(dur), "1.50s");
+        assert_eq!(format_duration(dur), "1s");
 
-        // 59.999s rounds to 60.00s
         let dur2 = Duration::from_millis(59_999);
-        assert_eq!(format_duration(dur2), "60.00s");
+        assert_eq!(format_duration(dur2), "59s");
     }
 
     #[test]
