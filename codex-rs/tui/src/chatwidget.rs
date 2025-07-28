@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use codex_core::codex_wrapper::CodexConversation;
 use codex_core::codex_wrapper::init_codex;
 use codex_core::config::Config;
 use codex_core::protocol::AgentMessageDeltaEvent;
@@ -33,8 +34,10 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
+use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::InputResult;
 use crate::conversation_history_widget::ConversationHistoryWidget;
+use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell::PatchEventType;
 use crate::user_approval_widget::ApprovalRequest;
 use codex_file_search::FileMatch;
@@ -44,7 +47,6 @@ pub(crate) struct ChatWidget<'a> {
     codex_op_tx: UnboundedSender<Op>,
     conversation_history: ConversationHistoryWidget,
     bottom_pane: BottomPane<'a>,
-    input_focus: InputFocus,
     config: Config,
     initial_user_message: Option<UserMessage>,
     token_usage: TokenUsage,
@@ -53,12 +55,6 @@ pub(crate) struct ChatWidget<'a> {
     // We wait for the final AgentMessage event and then emit the full text
     // at once into scrollback so the history contains a single message.
     answer_buffer: String,
-}
-
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum InputFocus {
-    HistoryPane,
-    BottomPane,
 }
 
 struct UserMessage {
@@ -96,19 +92,22 @@ impl ChatWidget<'_> {
         // Create the Codex asynchronously so the UI loads as quickly as possible.
         let config_for_agent_loop = config.clone();
         tokio::spawn(async move {
-            let (codex, session_event, _ctrl_c, _session_id) =
-                match init_codex(config_for_agent_loop).await {
-                    Ok(vals) => vals,
-                    Err(e) => {
-                        // TODO: surface this error to the user.
-                        tracing::error!("failed to initialize codex: {e}");
-                        return;
-                    }
-                };
+            let CodexConversation {
+                codex,
+                session_configured,
+                ..
+            } = match init_codex(config_for_agent_loop).await {
+                Ok(vals) => vals,
+                Err(e) => {
+                    // TODO: surface this error to the user.
+                    tracing::error!("failed to initialize codex: {e}");
+                    return;
+                }
+            };
 
             // Forward the captured `SessionInitialized` event that was consumed
             // inside `init_codex()` so it can be rendered in the UI.
-            app_event_tx_clone.send(AppEvent::CodexEvent(session_event.clone()));
+            app_event_tx_clone.send(AppEvent::CodexEvent(session_configured.clone()));
             let codex = Arc::new(codex);
             let codex_clone = codex.clone();
             tokio::spawn(async move {
@@ -133,7 +132,6 @@ impl ChatWidget<'_> {
                 app_event_tx,
                 has_input_focus: true,
             }),
-            input_focus: InputFocus::BottomPane,
             config,
             initial_user_message: create_initial_user_message(
                 initial_prompt.unwrap_or_default(),
@@ -147,44 +145,17 @@ impl ChatWidget<'_> {
 
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
         self.bottom_pane.clear_ctrl_c_quit_hint();
-        // Special-case <Tab>: normally toggles focus between history and bottom panes.
-        // However, when the slash-command popup is visible we forward the key
-        // to the bottom pane so it can handle auto-completion.
-        if matches!(key_event.code, crossterm::event::KeyCode::Tab)
-            && !self.bottom_pane.is_popup_visible()
-        {
-            self.input_focus = match self.input_focus {
-                InputFocus::HistoryPane => InputFocus::BottomPane,
-                InputFocus::BottomPane => InputFocus::HistoryPane,
-            };
-            self.conversation_history
-                .set_input_focus(self.input_focus == InputFocus::HistoryPane);
-            self.bottom_pane
-                .set_input_focus(self.input_focus == InputFocus::BottomPane);
-            self.request_redraw();
-            return;
-        }
 
-        match self.input_focus {
-            InputFocus::HistoryPane => {
-                let needs_redraw = self.conversation_history.handle_key_event(key_event);
-                if needs_redraw {
-                    self.request_redraw();
-                }
+        match self.bottom_pane.handle_key_event(key_event) {
+            InputResult::Submitted(text) => {
+                self.submit_user_message(text.into());
             }
-            InputFocus::BottomPane => match self.bottom_pane.handle_key_event(key_event) {
-                InputResult::Submitted(text) => {
-                    self.submit_user_message(text.into());
-                }
-                InputResult::None => {}
-            },
+            InputResult::None => {}
         }
     }
 
     pub(crate) fn handle_paste(&mut self, text: String) {
-        if matches!(self.input_focus, InputFocus::BottomPane) {
-            self.bottom_pane.handle_paste(text);
-        }
+        self.bottom_pane.handle_paste(text);
     }
 
     /// Emits the last entry's plain lines from conversation_history, if any.
@@ -332,6 +303,20 @@ impl ChatWidget<'_> {
                 cwd,
                 reason,
             }) => {
+                // Print the command to the history so it is visible in the
+                // transcript *before* the modal asks for approval.
+                let cmdline = strip_bash_lc_and_escape(&command);
+                let text = format!(
+                    "command requires approval:\n$ {cmdline}{reason}",
+                    reason = reason
+                        .as_ref()
+                        .map(|r| format!("\n{r}"))
+                        .unwrap_or_default()
+                );
+                self.conversation_history.add_background_event(text);
+                self.emit_last_history_entry();
+                self.conversation_history.scroll_to_bottom();
+
                 let request = ApprovalRequest::Exec {
                     id,
                     command,
@@ -339,6 +324,7 @@ impl ChatWidget<'_> {
                     reason,
                 };
                 self.bottom_pane.push_approval_request(request);
+                self.request_redraw();
             }
             EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
                 call_id: _,
@@ -484,21 +470,25 @@ impl ChatWidget<'_> {
     }
 
     /// Handle Ctrl-C key press.
-    /// Returns true if the key press was handled, false if it was not.
-    /// If the key press was not handled, the caller should handle it (likely by exiting the process).
-    pub(crate) fn on_ctrl_c(&mut self) -> bool {
+    /// Returns CancellationEvent::Handled if the event was consumed by the UI, or
+    /// CancellationEvent::Ignored if the caller should handle it (e.g. exit).
+    pub(crate) fn on_ctrl_c(&mut self) -> CancellationEvent {
+        match self.bottom_pane.on_ctrl_c() {
+            CancellationEvent::Handled => return CancellationEvent::Handled,
+            CancellationEvent::Ignored => {}
+        }
         if self.bottom_pane.is_task_running() {
             self.bottom_pane.clear_ctrl_c_quit_hint();
             self.submit_op(Op::Interrupt);
             self.answer_buffer.clear();
             self.reasoning_buffer.clear();
-            false
+            CancellationEvent::Ignored
         } else if self.bottom_pane.ctrl_c_quit_hint_visible() {
             self.submit_op(Op::Shutdown);
-            true
+            CancellationEvent::Handled
         } else {
             self.bottom_pane.show_ctrl_c_quit_hint();
-            false
+            CancellationEvent::Ignored
         }
     }
 

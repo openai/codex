@@ -5,12 +5,14 @@
 // the TUI or the tracing stack).
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
+mod apply_patch;
 mod bash;
 mod chat_completions;
 mod client;
 mod client_common;
 pub mod codex;
 pub use codex::Codex;
+pub use codex::CodexSpawnOk;
 pub mod codex_wrapper;
 pub mod config;
 pub mod config_profile;

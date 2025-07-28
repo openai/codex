@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::ffi::OsString;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -127,7 +128,12 @@ impl McpConnectionManager {
 
             join_set.spawn(async move {
                 let McpServerConfig { command, args, env } = cfg;
-                let client_res = McpClient::new_stdio_client(command, args, env).await;
+                let client_res = McpClient::new_stdio_client(
+                    command.into(),
+                    args.into_iter().map(OsString::from).collect(),
+                    env,
+                )
+                .await;
                 match client_res {
                     Ok(client) => {
                         // Initialize the client.

@@ -9,7 +9,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 pub use cli::Cli;
-use codex_core::codex_wrapper;
+use codex_core::codex_wrapper::CodexConversation;
+use codex_core::codex_wrapper::{self};
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config_types::SandboxMode;
@@ -155,9 +156,14 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         .with_writer(std::io::stderr)
         .try_init();
 
-    let (codex_wrapper, event, ctrl_c, _session_id) = codex_wrapper::init_codex(config).await?;
+    let CodexConversation {
+        codex: codex_wrapper,
+        session_configured,
+        ctrl_c,
+        ..
+    } = codex_wrapper::init_codex(config).await?;
     let codex = Arc::new(codex_wrapper);
-    info!("Codex initialized with event: {event:?}");
+    info!("Codex initialized with event: {session_configured:?}");
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
     {

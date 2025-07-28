@@ -20,6 +20,12 @@ mod command_popup;
 mod file_search_popup;
 mod status_indicator_view;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CancellationEvent {
+    Ignored,
+    Handled,
+}
+
 pub(crate) use chat_composer::ChatComposer;
 pub(crate) use chat_composer::InputResult;
 
@@ -80,6 +86,33 @@ impl BottomPane<'_> {
         }
     }
 
+    /// Handle Ctrl-C in the bottom pane. If a modal view is active it gets a
+    /// chance to consume the event (e.g. to dismiss itself).
+    pub(crate) fn on_ctrl_c(&mut self) -> CancellationEvent {
+        let mut view = match self.active_view.take() {
+            Some(view) => view,
+            None => return CancellationEvent::Ignored,
+        };
+
+        let event = view.on_ctrl_c(self);
+        match event {
+            CancellationEvent::Handled => {
+                if !view.is_complete() {
+                    self.active_view = Some(view);
+                } else if self.is_task_running {
+                    self.active_view = Some(Box::new(StatusIndicatorView::new(
+                        self.app_event_tx.clone(),
+                    )));
+                }
+                self.show_ctrl_c_quit_hint();
+            }
+            CancellationEvent::Ignored => {
+                self.active_view = Some(view);
+            }
+        }
+        event
+    }
+
     pub fn handle_paste(&mut self, pasted: String) {
         if self.active_view.is_none() {
             let needs_redraw = self.composer.handle_paste(pasted);
@@ -102,12 +135,6 @@ impl BottomPane<'_> {
                 }
             }
         }
-    }
-
-    /// Update the UI to reflect whether this `BottomPane` has input focus.
-    pub(crate) fn set_input_focus(&mut self, has_focus: bool) {
-        self.has_input_focus = has_focus;
-        self.composer.set_input_focus(has_focus);
     }
 
     pub(crate) fn show_ctrl_c_quit_hint(&mut self) {
@@ -203,11 +230,6 @@ impl BottomPane<'_> {
         self.app_event_tx.send(AppEvent::RequestRedraw)
     }
 
-    /// Returns true when a popup inside the composer is visible.
-    pub(crate) fn is_popup_visible(&self) -> bool {
-        self.active_view.is_none() && self.composer.is_popup_visible()
-    }
-
     // --- History helpers ---
 
     pub(crate) fn set_history_metadata(&mut self, log_id: u64, entry_count: usize) {
@@ -243,5 +265,36 @@ impl WidgetRef for &BottomPane<'_> {
         } else {
             (&self.composer).render_ref(area, buf);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_event::AppEvent;
+    use std::path::PathBuf;
+    use std::sync::mpsc::channel;
+
+    fn exec_request() -> ApprovalRequest {
+        ApprovalRequest::Exec {
+            id: "1".to_string(),
+            command: vec!["echo".into(), "ok".into()],
+            cwd: PathBuf::from("."),
+            reason: None,
+        }
+    }
+
+    #[test]
+    fn ctrl_c_on_modal_consumes_and_shows_quit_hint() {
+        let (tx_raw, _rx) = channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            has_input_focus: true,
+        });
+        pane.push_approval_request(exec_request());
+        assert_eq!(CancellationEvent::Handled, pane.on_ctrl_c());
+        assert!(pane.ctrl_c_quit_hint_visible());
+        assert_eq!(CancellationEvent::Ignored, pane.on_ctrl_c());
     }
 }
