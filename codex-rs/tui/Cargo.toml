@@ -35,8 +35,9 @@ lazy_static = "1"
 mcp-types = { path = "../mcp-types" }
 path-clean = "1.0.1"
 ratatui = { version = "0.29.0", features = [
-    "unstable-widget-ref",
+    "scrolling-regions",
     "unstable-rendered-line-info",
+    "unstable-widget-ref",
 ] }
 ratatui-image = "8.0.0"
 regex-lite = "0.1"
