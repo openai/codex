@@ -19,6 +19,7 @@ use codex_core::protocol::Submission;
 use codex_core::protocol::TaskCompleteEvent;
 use mcp_types::CallToolResult;
 use mcp_types::ContentBlock;
+use mcp_types::ProgressToken;
 use mcp_types::RequestId;
 use mcp_types::TextContent;
 use serde_json::json;
@@ -26,8 +27,8 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::exec_approval::handle_exec_approval_request;
-use crate::outgoing_message::OutgoingEventContext;
 use crate::outgoing_message::OutgoingMessageSender;
+use crate::outgoing_message::OutgoingNotificationMeta;
 use crate::patch_approval::handle_patch_approval_request;
 
 pub(crate) const INVALID_PARAMS_ERROR_CODE: i64 = -32602;
@@ -73,11 +74,15 @@ pub async fn run_codex_tool_session(
     drop(session_map);
 
     // Send initial SessionConfigured event, and include the request id
+    let request_id_str = match &id {
+        RequestId::String(s) => s.clone(),
+        RequestId::Integer(n) => n.to_string(),
+    };
     outgoing
         .send_event_as_notification(
             &session_configured,
-            Some(OutgoingEventContext {
-                request_id: id.clone(),
+            Some(OutgoingNotificationMeta {
+                progress_token: Some(ProgressToken::String(request_id_str)),
             }),
         )
         .await;
@@ -167,8 +172,9 @@ async fn run_codex_tool_session_inner(
                 outgoing
                     .send_event_as_notification(
                         &event,
-                        Some(OutgoingEventContext {
-                            request_id: request_id.clone(),
+                        Some(OutgoingNotificationMeta {
+                            // TODO: use request.params.progressToken
+                            progress_token: Some(ProgressToken::String(request_id_str.clone())),
                         }),
                     )
                     .await;

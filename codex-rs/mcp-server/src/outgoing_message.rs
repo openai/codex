@@ -10,6 +10,7 @@ use mcp_types::JSONRPCMessage;
 use mcp_types::JSONRPCNotification;
 use mcp_types::JSONRPCRequest;
 use mcp_types::JSONRPCResponse;
+use mcp_types::ProgressToken;
 use mcp_types::RequestId;
 use mcp_types::Result;
 use serde::Serialize;
@@ -81,24 +82,20 @@ impl OutgoingMessageSender {
     pub(crate) async fn send_event_as_notification(
         &self,
         event: &Event,
-        event_context: Option<OutgoingEventContext>,
+        meta: Option<OutgoingNotificationMeta>,
     ) {
         #[allow(clippy::expect_used)]
-        let mut params = serde_json::to_value(event).expect("Event must serialize");
+        let event_json = serde_json::to_value(event).expect("Event must serialize");
 
-        if let Some(event_context) = event_context {
-            #[allow(clippy::expect_used)]
-            let event_context_obj = serde_json::to_value(event_context)
-                .expect("EventContext must serialize")
-                .as_object()
-                .cloned();
-
-            if let (Some(params_obj), Some(event_context_obj)) =
-                (params.as_object_mut(), event_context_obj)
-            {
-                params_obj.extend(event_context_obj.into_iter());
-            }
-        }
+        let params = if let Ok(params) = serde_json::to_value(OutgoingNotificationParams {
+            meta,
+            event: event_json.clone(),
+        }) {
+            params
+        } else {
+            warn!("Failed to serialize event as OutgoingNotificationParams");
+            event_json
+        };
 
         let outgoing_message = OutgoingMessage::Notification(OutgoingNotification {
             method: "codex/event".to_string(),
@@ -187,10 +184,22 @@ pub(crate) struct OutgoingNotification {
     pub params: Option<serde_json::Value>,
 }
 
-// Additional mcp-specific data to be added to a [`codex_core::protocol::Event`] in notification.params
 #[derive(Debug, Clone, PartialEq, Serialize)]
-pub(crate) struct OutgoingEventContext {
-    pub request_id: RequestId,
+pub(crate) struct OutgoingNotificationParams {
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<OutgoingNotificationMeta>,
+
+    #[serde(flatten)]
+    pub event: serde_json::Value,
+}
+
+// Additional mcp-specific data to be added to a [`codex_core::protocol::Event`] in notification.params._meta
+// MCP Spec: https://modelcontextprotocol.io/specification/2025-06-18/basic#meta
+// Typescript Schema: https://github.com/modelcontextprotocol/modelcontextprotocol/blob/0695a497eb50a804fc0e88c18a93a21a675d6b3e/schema/2025-06-18/schema.ts
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct OutgoingNotificationMeta {
+    pub progress_token: Option<ProgressToken>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -211,6 +220,7 @@ mod tests {
 
     use codex_core::protocol::EventMsg;
     use codex_core::protocol::SessionConfiguredEvent;
+    use pretty_assertions::assert_eq;
     use serde_json::json;
     use uuid::Uuid;
 
@@ -259,7 +269,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_send_event_as_notification_with_context() {
+    async fn test_send_event_as_notification_with_meta() {
         let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingMessage>(2);
         let outgoing_message_sender = OutgoingMessageSender::new(outgoing_tx);
 
@@ -273,12 +283,12 @@ mod tests {
             id: "1".to_string(),
             msg: EventMsg::SessionConfigured(session_configured_event.clone()),
         };
-        let context = OutgoingEventContext {
-            request_id: RequestId::String("123".to_string()),
+        let meta = OutgoingNotificationMeta {
+            progress_token: Some(ProgressToken::String("123".to_string())),
         };
 
         outgoing_message_sender
-            .send_event_as_notification(&event, Some(context))
+            .send_event_as_notification(&event, Some(meta))
             .await;
 
         let result = outgoing_rx.recv().await.unwrap();
@@ -287,11 +297,17 @@ mod tests {
         };
         assert_eq!(method, "codex/event");
         let expected_params = json!({
-            "request_id": "123",
-            "session_id": session_configured_event.session_id,
-            "model": session_configured_event.model,
-            "history_log_id": session_configured_event.history_log_id.to_string(),
-            "history_entry_count": session_configured_event.history_entry_count,
+            "_meta": {
+                "progressToken": "123",
+            },
+            "id": "1",
+            "msg": {
+                "session_id": session_configured_event.session_id,
+                "model": session_configured_event.model,
+                "history_log_id": session_configured_event.history_log_id,
+                "history_entry_count": session_configured_event.history_entry_count,
+                "type": "session_configured",
+            }
         });
         assert_eq!(params.unwrap(), expected_params);
 
