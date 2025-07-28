@@ -466,9 +466,11 @@ impl ChatWidget<'_> {
     }
 
     /// Handle Ctrl-C key press.
-    pub(crate) fn on_ctrl_c(&mut self) -> bool {
+    /// Returns CancellationEvent::Handled if the event was consumed by the UI, or
+    /// CancellationEvent::Ignored if the caller should handle it (e.g. exit).
+    pub(crate) fn on_ctrl_c(&mut self) -> CancellationEvent {
         match self.bottom_pane.on_ctrl_c() {
-            CancellationEvent::Handled => return true,
+            CancellationEvent::Handled => return CancellationEvent::Handled,
             CancellationEvent::Ignored => {}
         }
         if self.bottom_pane.is_task_running() {
@@ -476,13 +478,13 @@ impl ChatWidget<'_> {
             self.submit_op(Op::Interrupt);
             self.answer_buffer.clear();
             self.reasoning_buffer.clear();
-            false
+            CancellationEvent::Ignored
         } else if self.bottom_pane.ctrl_c_quit_hint_visible() {
             self.submit_op(Op::Shutdown);
-            true
+            CancellationEvent::Handled
         } else {
             self.bottom_pane.show_ctrl_c_quit_hint();
-            false
+            CancellationEvent::Ignored
         }
     }
 
