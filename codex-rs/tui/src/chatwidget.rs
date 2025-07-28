@@ -43,6 +43,7 @@ use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell::PatchEventType;
 use crate::user_approval_widget::ApprovalRequest;
 use codex_file_search::FileMatch;
+
 struct SessionConfiguration {
     approval_policy: AskForApproval,
 }
