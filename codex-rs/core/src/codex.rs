@@ -227,12 +227,18 @@ impl Session {
     }
 }
 
+#[derive(Default)]
+pub struct Approval {
+    pub decision: ReviewDecision,
+    pub feedback: Option<String>,
+}
+
 /// Mutable state of the agent
 #[derive(Default)]
 struct State {
     approved_commands: HashSet<Vec<String>>,
     current_task: Option<AgentTask>,
-    pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
+    pending_approvals: HashMap<String, oneshot::Sender<Approval>>,
     pending_input: Vec<ResponseInputItem>,
     history: ConversationHistory,
 }
@@ -270,7 +276,7 @@ impl Session {
         command: Vec<String>,
         cwd: PathBuf,
         reason: Option<String>,
-    ) -> oneshot::Receiver<ReviewDecision> {
+    ) -> oneshot::Receiver<Approval> {
         let (tx_approve, rx_approve) = oneshot::channel();
         let event = Event {
             id: sub_id.clone(),
@@ -296,7 +302,7 @@ impl Session {
         action: &ApplyPatchAction,
         reason: Option<String>,
         grant_root: Option<PathBuf>,
-    ) -> oneshot::Receiver<ReviewDecision> {
+    ) -> oneshot::Receiver<Approval> {
         let (tx_approve, rx_approve) = oneshot::channel();
         let event = Event {
             id: sub_id.clone(),
@@ -315,10 +321,15 @@ impl Session {
         rx_approve
     }
 
-    pub fn notify_approval(&self, sub_id: &str, decision: ReviewDecision) {
+    pub fn notify_approval(
+        &self,
+        sub_id: &str,
+        decision: ReviewDecision,
+        feedback: Option<String>,
+    ) {
         let mut state = self.state.lock().unwrap();
         if let Some(tx_approve) = state.pending_approvals.remove(sub_id) {
-            tx_approve.send(decision).ok();
+            tx_approve.send(Approval { decision, feedback }).ok();
         }
     }
 
@@ -755,7 +766,11 @@ async fn submission_loop(
                     sess.set_task(task);
                 }
             }
-            Op::ExecApproval { id, decision } => {
+            Op::ExecApproval {
+                id,
+                decision,
+                feedback,
+            } => {
                 let sess = match sess.as_ref() {
                     Some(sess) => sess,
                     None => {
@@ -767,10 +782,14 @@ async fn submission_loop(
                     ReviewDecision::Abort => {
                         sess.abort();
                     }
-                    other => sess.notify_approval(&id, other),
+                    other => sess.notify_approval(&id, other, feedback.clone()),
                 }
             }
-            Op::PatchApproval { id, decision } => {
+            Op::PatchApproval {
+                id,
+                decision,
+                feedback,
+            } => {
                 let sess = match sess.as_ref() {
                     Some(sess) => sess,
                     None => {
@@ -782,7 +801,7 @@ async fn submission_loop(
                     ReviewDecision::Abort => {
                         sess.abort();
                     }
-                    other => sess.notify_approval(&id, other),
+                    other => sess.notify_approval(&id, other, feedback.clone()),
                 }
             }
             Op::AddToHistory { text } => {
@@ -982,7 +1001,11 @@ async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
                             items_to_record_in_conversation_history.push(
                                 ResponseItem::FunctionCallOutput {
                                     call_id: call_id.clone(),
-                                    output: FunctionCallOutputPayload { content, success },
+                                    output: FunctionCallOutputPayload {
+                                        content,
+                                        success,
+                                        is_user_feedback: false,
+                                    },
                                 },
                             );
                         }
@@ -999,6 +1022,14 @@ async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
                                 summary: summary.clone(),
                                 encrypted_content: encrypted_content.clone(),
                             });
+                        }
+                        (_, Some(ResponseInputItem::FunctionCallOutput { call_id, output })) => {
+                            items_to_record_in_conversation_history.push(
+                                ResponseItem::FunctionCallOutput {
+                                    call_id: call_id.clone(),
+                                    output: output.clone(),
+                                },
+                            );
                         }
                         _ => {
                             warn!("Unexpected response item: {item:?} with response: {response:?}");
@@ -1155,6 +1186,7 @@ async fn try_run_turn(
                 output: FunctionCallOutputPayload {
                     content: "aborted".to_string(),
                     success: Some(false),
+                    is_user_feedback: false,
                 },
             })
             .collect::<Vec<_>>()
@@ -1300,6 +1332,7 @@ async fn handle_response_item(
                         output: FunctionCallOutputPayload {
                             content: "LocalShellCall without call_id or id".to_string(),
                             success: None,
+                            is_user_feedback: false,
                         },
                     }));
                 }
@@ -1359,6 +1392,7 @@ async fn handle_function_call(
                         output: FunctionCallOutputPayload {
                             content: format!("unsupported call: {name}"),
                             success: None,
+                            is_user_feedback: false,
                         },
                     }
                 }
@@ -1391,6 +1425,7 @@ fn parse_container_exec_arguments(
                 output: FunctionCallOutputPayload {
                     content: format!("failed to parse function arguments: {e}"),
                     success: None,
+                    is_user_feedback: false,
                 },
             };
             Err(Box::new(output))
@@ -1430,6 +1465,7 @@ async fn handle_container_exec_with_params(
                 output: FunctionCallOutputPayload {
                     content: format!("error: {parse_error:#}"),
                     success: None,
+                    is_user_feedback: false,
                 },
             };
         }
@@ -1461,17 +1497,23 @@ async fn handle_container_exec_with_params(
                     None,
                 )
                 .await;
-            match rx_approve.await.unwrap_or_default() {
+            let Approval { decision, feedback } = rx_approve.await.unwrap_or_default();
+            match decision {
                 ReviewDecision::Approved => (),
                 ReviewDecision::ApprovedForSession => {
                     sess.add_approved_command(params.command.clone());
                 }
                 ReviewDecision::Denied | ReviewDecision::Abort => {
                     return ResponseInputItem::FunctionCallOutput {
-                        call_id,
+                        call_id: call_id.clone(),
                         output: FunctionCallOutputPayload {
-                            content: "exec command rejected by user".to_string(),
+                            content: feedback
+                                .map(|f| {
+                                    format!("exec command rejected by user with feedback: `{f}`")
+                                })
+                                .unwrap_or_else(|| "exec command rejected by user".to_string()),
                             success: None,
+                            is_user_feedback: true,
                         },
                     };
                 }
@@ -1484,10 +1526,11 @@ async fn handle_container_exec_with_params(
         }
         SafetyCheck::Reject { reason } => {
             return ResponseInputItem::FunctionCallOutput {
-                call_id,
+                call_id: call_id.clone(),
                 output: FunctionCallOutputPayload {
                     content: format!("exec command rejected: {reason}"),
                     success: None,
+                    is_user_feedback: false,
                 },
             };
         }
@@ -1530,6 +1573,7 @@ async fn handle_container_exec_with_params(
                 output: FunctionCallOutputPayload {
                     content,
                     success: Some(is_success),
+                    is_user_feedback: false,
                 },
             }
         }
@@ -1543,6 +1587,7 @@ async fn handle_container_exec_with_params(
                 output: FunctionCallOutputPayload {
                     content: format!("execution error: {e}"),
                     success: None,
+                    is_user_feedback: false,
                 },
             }
         }
@@ -1566,6 +1611,7 @@ async fn handle_sandbox_error(
                     "failed in sandbox {sandbox_type:?} with execution error: {error}"
                 ),
                 success: Some(false),
+                is_user_feedback: false,
             },
         };
     }
@@ -1591,7 +1637,8 @@ async fn handle_sandbox_error(
         )
         .await;
 
-    match rx_approve.await.unwrap_or_default() {
+    let Approval { decision, feedback } = rx_approve.await.unwrap_or_default();
+    match decision {
         ReviewDecision::Approved | ReviewDecision::ApprovedForSession => {
             // Persist this command as pre‑approved for the
             // remainder of the session so future
@@ -1640,6 +1687,7 @@ async fn handle_sandbox_error(
                         output: FunctionCallOutputPayload {
                             content,
                             success: Some(is_success),
+                            is_user_feedback: false,
                         },
                     }
                 }
@@ -1650,6 +1698,7 @@ async fn handle_sandbox_error(
                         output: FunctionCallOutputPayload {
                             content: format!("retry failed: {e}"),
                             success: None,
+                            is_user_feedback: false,
                         },
                     }
                 }
@@ -1658,10 +1707,13 @@ async fn handle_sandbox_error(
         ReviewDecision::Denied | ReviewDecision::Abort => {
             // Fall through to original failure handling.
             ResponseInputItem::FunctionCallOutput {
-                call_id,
+                call_id: call_id.clone(),
                 output: FunctionCallOutputPayload {
-                    content: "exec command rejected by user".to_string(),
+                    content: feedback
+                        .map(|f| format!("exec command rejected by user with feedback: `{f}`"))
+                        .unwrap_or_else(|| "exec command rejected by user".to_string()),
                     success: None,
+                    is_user_feedback: true,
                 },
             }
         }
@@ -1692,14 +1744,18 @@ async fn apply_patch(
             let rx_approve = sess
                 .request_patch_approval(sub_id.clone(), call_id.clone(), &action, None, None)
                 .await;
-            match rx_approve.await.unwrap_or_default() {
+            let Approval { decision, feedback } = rx_approve.await.unwrap_or_default();
+            match decision {
                 ReviewDecision::Approved | ReviewDecision::ApprovedForSession => false,
                 ReviewDecision::Denied | ReviewDecision::Abort => {
                     return ResponseInputItem::FunctionCallOutput {
                         call_id,
                         output: FunctionCallOutputPayload {
-                            content: "patch rejected by user".to_string(),
-                            success: Some(false),
+                            content: feedback
+                                .map(|f| format!("patch rejected by user with feedback: `{f}`"))
+                                .unwrap_or_else(|| "patch rejected by user".to_string()),
+                            success: None,
+                            is_user_feedback: true,
                         },
                     };
                 }
@@ -1711,6 +1767,7 @@ async fn apply_patch(
                 output: FunctionCallOutputPayload {
                     content: format!("patch rejected: {reason}"),
                     success: Some(false),
+                    is_user_feedback: false,
                 },
             };
         }
@@ -1736,16 +1793,19 @@ async fn apply_patch(
                 Some(root.clone()),
             )
             .await;
-
+        let Approval { decision, feedback } = rx.await.unwrap_or_default();
         if !matches!(
-            rx.await.unwrap_or_default(),
+            decision,
             ReviewDecision::Approved | ReviewDecision::ApprovedForSession
         ) {
             return ResponseInputItem::FunctionCallOutput {
                 call_id,
                 output: FunctionCallOutputPayload {
-                    content: "patch rejected by user".to_string(),
-                    success: Some(false),
+                    content: feedback
+                        .map(|f| format!("patch rejected by user with feedback: `{f}`"))
+                        .unwrap_or_else(|| "patch rejected by user".to_string()),
+                    success: None,
+                    is_user_feedback: true,
                 },
             };
         }
@@ -1824,8 +1884,12 @@ async fn apply_patch(
                         Some(root.clone()),
                     )
                     .await;
+                let Approval {
+                    decision,
+                    feedback: _,
+                } = rx.await.unwrap_or_default();
                 if matches!(
-                    rx.await.unwrap_or_default(),
+                    decision,
                     ReviewDecision::Approved | ReviewDecision::ApprovedForSession
                 ) {
                     // Extend writable roots.
@@ -1863,6 +1927,7 @@ async fn apply_patch(
             output: FunctionCallOutputPayload {
                 content: String::from_utf8_lossy(&stdout).to_string(),
                 success: None,
+                is_user_feedback: false,
             },
         },
         Err(e) => ResponseInputItem::FunctionCallOutput {
@@ -1870,6 +1935,7 @@ async fn apply_patch(
             output: FunctionCallOutputPayload {
                 content: format!("error: {e:#}, stderr: {}", String::from_utf8_lossy(&stderr)),
                 success: Some(false),
+                is_user_feedback: false,
             },
         },
     }

@@ -1,3 +1,4 @@
+use crate::config::Config;
 use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::error::Result;
@@ -6,6 +7,7 @@ use crate::protocol::TokenUsage;
 use codex_apply_patch::APPLY_PATCH_TOOL_INSTRUCTIONS;
 use futures::Stream;
 use serde::Serialize;
+use serde_json::Value;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -126,7 +128,8 @@ pub(crate) struct ResponsesApiRequest<'a> {
     // TODO(mbolin): ResponseItem::Other should not be serialized. Currently,
     // we code defensively to avoid this case, but perhaps we should use a
     // separate enum for serialization.
-    pub(crate) input: &'a Vec<ResponseItem>,
+    #[serde(serialize_with = "serialize_sanitized_input")]
+    pub(crate) input: &'a Vec<crate::models::ResponseItem>,
     pub(crate) tools: &'a [serde_json::Value],
     pub(crate) tool_choice: &'static str,
     pub(crate) parallel_tool_calls: bool,
@@ -137,7 +140,42 @@ pub(crate) struct ResponsesApiRequest<'a> {
     pub(crate) include: Vec<String>,
 }
 
-use crate::config::Config;
+// Custom serializer that strips internal-only fields before sending to the LLM.
+#[allow(clippy::ptr_arg)]
+fn serialize_sanitized_input<S>(
+    input: &Vec<crate::models::ResponseItem>,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error>
+where
+    S: serde::ser::Serializer,
+{
+    let sanitized: Vec<Value> = input.iter().map(sanitize_response_item).collect();
+
+    serde::Serialize::serialize(&sanitized, serializer)
+}
+
+// Top-level dispatcher to apply a sanitizer per ResponseItem variant.
+fn sanitize_response_item(item: &crate::models::ResponseItem) -> Value {
+    use crate::models::ResponseItem as RI;
+    match item {
+        RI::FunctionCallOutput { .. } => sanitize_function_call_output(item),
+        // For other variants, no special handling for now.
+        _ => serde_json::to_value(item).unwrap_or(Value::Null),
+    }
+}
+
+// Special-case sanitizer for FunctionCallOutput: replace the `output` object with its `content` string.
+fn sanitize_function_call_output(item: &crate::models::ResponseItem) -> Value {
+    let mut v = serde_json::to_value(item).unwrap_or(Value::Null);
+    if let Some(obj) = v.as_object_mut() {
+        if let Some(output) = obj.get_mut("output") {
+            if let Some(content) = output.get("content") {
+                *output = content.clone();
+            }
+        }
+    }
+    v
+}
 
 pub(crate) fn create_reasoning_param_for_request(
     config: &Config,
@@ -186,5 +224,65 @@ impl Stream for ResponseStream {
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.rx_event.poll_recv(cx)
+    }
+}
+
+#[cfg(test)]
+mod sanitize_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::*;
+    use crate::models::ContentItem;
+    use crate::models::FunctionCallOutputPayload;
+    use crate::models::ResponseItem;
+
+    fn make_req(input: &Vec<ResponseItem>) -> serde_json::Value {
+        let req = ResponsesApiRequest {
+            model: "test-model",
+            instructions: "instr",
+            input,
+            tools: &[],
+            tool_choice: "auto",
+            parallel_tool_calls: false,
+            reasoning: None,
+            store: false,
+            stream: false,
+            include: vec![],
+        };
+        serde_json::to_value(&req).unwrap()
+    }
+
+    #[test]
+    fn function_call_output_output_is_replaced_by_content() {
+        let items = vec![ResponseItem::FunctionCallOutput {
+            call_id: "c1".into(),
+            output: FunctionCallOutputPayload {
+                content: "hello".into(),
+                success: Some(true),
+                is_user_feedback: true,
+            },
+        }];
+
+        let v = make_req(&items);
+        let input0 = &v["input"][0];
+        assert_eq!(input0["type"].as_str().unwrap(), "function_call_output");
+        assert!(input0["output"].is_string());
+        assert_eq!(input0["output"].as_str().unwrap(), "hello");
+        // The object fields like is_user_feedback should be stripped at this stage
+        // (because output is now just a string).
+    }
+
+    #[test]
+    fn non_function_call_items_are_unchanged() {
+        let items = vec![ResponseItem::Message {
+            id: None,
+            role: "user".into(),
+            content: vec![ContentItem::InputText { text: "Hi".into() }],
+        }];
+
+        let v = make_req(&items);
+        let input0 = &v["input"][0];
+        assert_eq!(input0["type"].as_str().unwrap(), "message");
+        assert_eq!(input0["role"].as_str().unwrap(), "user");
+        assert_eq!(input0["content"][0]["text"].as_str().unwrap(), "Hi");
     }
 }

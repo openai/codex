@@ -101,8 +101,20 @@ impl From<ResponseInputItem> for ResponseItem {
                                 .unwrap_or_else(|e| format!("JSON serialization error: {e}"))
                         },
                     ),
+                    is_user_feedback: false,
                 },
             },
+        }
+    }
+}
+
+impl ResponseItem {
+    /// Returns true if this item represents user feedback
+    #[allow(dead_code)]
+    pub(crate) fn is_user_feedback(&self) -> bool {
+        match self {
+            Self::FunctionCallOutput { output, .. } => output.is_user_feedback,
+            _ => false,
         }
     }
 }
@@ -188,8 +200,9 @@ pub struct ShellToolCallParams {
 #[derive(Debug, Clone)]
 pub struct FunctionCallOutputPayload {
     pub content: String,
-    #[expect(dead_code)]
+    #[allow(dead_code)]
     pub success: Option<bool>,
+    pub is_user_feedback: bool,
 }
 
 // The Responses API expects two *different* shapes depending on success vs failure:
@@ -203,13 +216,13 @@ impl Serialize for FunctionCallOutputPayload {
     where
         S: Serializer,
     {
-        // The upstream TypeScript CLI always serializes `output` as a *plain string* regardless
-        // of whether the function call succeeded or failed. The boolean is purely informational
-        // for local bookkeeping and is NOT sent to the OpenAI endpoint. Sending the nested object
-        // form `{ content, success:false }` triggers the 400 we are still seeing. Mirror the JS CLI
-        // exactly: always emit a bare string.
-
-        serializer.serialize_str(&self.content)
+        use serde::ser::SerializeStruct;
+        // Always emit an object with all three fields
+        let mut state = serializer.serialize_struct("FunctionCallOutputPayload", 3)?;
+        state.serialize_field("content", &self.content)?;
+        state.serialize_field("success", &self.success)?;
+        state.serialize_field("is_user_feedback", &self.is_user_feedback)?;
+        state.end()
     }
 }
 
@@ -218,10 +231,15 @@ impl<'de> Deserialize<'de> for FunctionCallOutputPayload {
     where
         D: Deserializer<'de>,
     {
+        // The Responses API (and our sanitize step) send this payload as a bare string.
+        // That form carries no `success` or `is_user_feedback` flags, so we must supply
+        // defaults here. We pick `None` for success and `false` for is_user_feedback as
+        // conservative fallbacks; the full object form is preserved in rollout JSONL.
         let s = String::deserialize(deserializer)?;
         Ok(FunctionCallOutputPayload {
             content: s,
             success: None,
+            is_user_feedback: false,
         })
     }
 }
@@ -249,36 +267,48 @@ mod tests {
     use super::*;
 
     #[test]
-    fn serializes_success_as_plain_string() {
+    fn serializes_success_as_object_with_flag() {
         let item = ResponseInputItem::FunctionCallOutput {
             call_id: "call1".into(),
             output: FunctionCallOutputPayload {
                 content: "ok".into(),
                 success: None,
+                is_user_feedback: false,
             },
         };
 
         let json = serde_json::to_string(&item).unwrap();
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
 
-        // Success case -> output should be a plain string
-        assert_eq!(v.get("output").unwrap().as_str().unwrap(), "ok");
+        // Output should be an object with content and is_user_feedback
+        assert_eq!(v.get("output").unwrap()["content"].as_str().unwrap(), "ok");
+        assert!(
+            !v.get("output").unwrap()["is_user_feedback"]
+                .as_bool()
+                .unwrap()
+        );
     }
 
     #[test]
-    fn serializes_failure_as_string() {
+    fn serializes_failure_with_flag() {
         let item = ResponseInputItem::FunctionCallOutput {
             call_id: "call1".into(),
             output: FunctionCallOutputPayload {
                 content: "bad".into(),
                 success: Some(false),
+                is_user_feedback: true,
             },
         };
 
         let json = serde_json::to_string(&item).unwrap();
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
 
-        assert_eq!(v.get("output").unwrap().as_str().unwrap(), "bad");
+        assert_eq!(v.get("output").unwrap()["content"].as_str().unwrap(), "bad");
+        assert!(
+            v.get("output").unwrap()["is_user_feedback"]
+                .as_bool()
+                .unwrap()
+        );
     }
 
     #[test]
@@ -298,5 +328,84 @@ mod tests {
             },
             params
         );
+    }
+
+    #[test]
+    fn deserialize_user_feedback() {
+        // The wire format we deserialize from the LLM side is a bare string for `output`.
+        let json = r#"{"type":"function_call_output","call_id":"call_123","output":"This is a test feedback"}"#;
+        let feedback: ResponseItem = serde_json::from_str(json).unwrap();
+        if let ResponseItem::FunctionCallOutput { call_id, output } = feedback {
+            assert_eq!(call_id, "call_123");
+            assert_eq!(output.content, "This is a test feedback");
+            assert_eq!(output.success, None);
+            assert!(!output.is_user_feedback);
+        } else {
+            panic!("Expected FunctionCallOutput variant");
+        }
+    }
+
+    #[test]
+    fn serialize_deserialize_response_input_user_feedback() {
+        let user_feedback = ResponseInputItem::FunctionCallOutput {
+            call_id: "call_456".to_string(),
+            output: FunctionCallOutputPayload {
+                content: "Test user feedback".to_string(),
+                success: None,
+                is_user_feedback: true,
+            },
+        };
+
+        let json = serde_json::to_string(&user_feedback).unwrap();
+
+        // Now the output is an object with the flag
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["output"]["content"], "Test user feedback");
+        assert_eq!(v["output"]["is_user_feedback"], true);
+    }
+
+    #[test]
+    fn user_feedback_to_llm_compatible_conversion() {
+        let user_feedback = ResponseItem::FunctionCallOutput {
+            call_id: "call_6789".to_string(),
+            output: FunctionCallOutputPayload {
+                content: "This is user feedback".to_string(),
+                success: None,
+                is_user_feedback: true,
+            },
+        };
+
+        // Test that we can identify user feedback
+        assert!(user_feedback.is_user_feedback());
+
+        if let ResponseItem::FunctionCallOutput { call_id, output } = user_feedback {
+            assert_eq!(call_id, "call_6789");
+            assert_eq!(output.content, "This is user feedback");
+            assert_eq!(output.success, None);
+            assert!(output.is_user_feedback);
+        } else {
+            panic!("Expected FunctionCallOutput variant");
+        }
+    }
+
+    #[test]
+    fn non_user_feedback_to_llm_compatible_unchanged() {
+        let message = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "Hello".to_string(),
+            }],
+        };
+
+        // Test that regular messages are not identified as user feedback
+        assert!(!message.is_user_feedback());
+
+        if let ResponseItem::Message { role, content, .. } = message {
+            assert_eq!(role, "user");
+            assert_eq!(content.len(), 1);
+        } else {
+            panic!("Expected Message variant to remain unchanged");
+        }
     }
 }
