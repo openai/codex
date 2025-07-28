@@ -127,12 +127,16 @@ where
 
 pub(crate) fn insert_history_lines(terminal: &mut tui::Tui, lines: Vec<Line<'static>>) {
     let screen_height = terminal
-        .backend_mut()
+        .backend()
         .size()
         .map(|s| s.height)
         .unwrap_or(0xffffu16);
     let mut area = terminal.get_frame().area();
-    // We scroll up one line at a time because
+    // We scroll up one line at a time because we can't position the cursor
+    // above the top of the screen. i.e. if
+    //   lines.len() > screen_height - area.top()
+    // we would need to print the first line above the top of the screen, which
+    // can't be done.
     for line in lines.into_iter() {
         // 1. Scroll everything above the viewport up by one line
         if area.bottom() >= screen_height {
