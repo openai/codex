@@ -257,7 +257,7 @@ impl ConversationHistoryWidget {
         &mut self,
         patch_event: PatchSessionConfigType,
     ) {
-        self.add_to_history(HistoryCell::new_session_config_patched(patch_event))
+        self.add_to_history(HistoryCell::session_config_patched(patch_event))
     }
 }
 

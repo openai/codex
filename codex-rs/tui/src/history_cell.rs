@@ -585,7 +585,7 @@ impl HistoryCell {
         }
     }
 
-    pub(crate) fn new_session_config_patched(patch_event: PatchSessionConfigType) -> Self {
+    pub(crate) fn session_config_patched(patch_event: PatchSessionConfigType) -> Self {
         let line = match patch_event {
             PatchSessionConfigType::AskForApprovalPatch {
                 new_approval_policy,
