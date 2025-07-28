@@ -20,6 +20,7 @@ use ratatui::style::Modifier;
 use ratatui::text::Line;
 use ratatui::text::Span;
 
+/// Insert `lines` above the viewport.
 pub(crate) fn insert_history_lines(terminal: &mut tui::Tui, lines: Vec<Line<'static>>) {
     let screen_size = terminal.backend().size().unwrap_or(Size::new(0, 0));
 
@@ -27,6 +28,8 @@ pub(crate) fn insert_history_lines(terminal: &mut tui::Tui, lines: Vec<Line<'sta
 
     let wrapped_lines = wrapped_line_count(&lines, area.width);
     let cursor_top = if area.bottom() < screen_size.height {
+        // If the viewport is not at the bottom of the screen, scroll it down to make room.
+        // Don't scroll it past the bottom of the screen.
         let scroll_amount = wrapped_lines.min(screen_size.height - area.bottom());
         terminal
             .backend_mut()
@@ -39,6 +42,22 @@ pub(crate) fn insert_history_lines(terminal: &mut tui::Tui, lines: Vec<Line<'sta
     } else {
         area.top() - 1
     };
+
+    // Limit the scroll region to the lines from the top of the screen to the
+    // top of the viewport. With this in place, when we add lines inside this
+    // area, only the lines in this area will be scrolled. We place the cursor
+    // at the end of the scroll region, and add lines starting there.
+    //
+    // ┌─Screen───────────────────────┐
+    // │┌╌Scroll region╌╌╌╌╌╌╌╌╌╌╌╌╌╌┐│
+    // │┆                            ┆│
+    // │┆                            ┆│
+    // │┆                            ┆│
+    // │█╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┘│
+    // │╭─Viewport───────────────────╮│
+    // ││                            ││
+    // │╰────────────────────────────╯│
+    // └──────────────────────────────┘
     queue!(std::io::stdout(), SetScrollRegion(1..area.top())).ok();
 
     terminal
