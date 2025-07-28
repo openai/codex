@@ -1,7 +1,9 @@
+use std::fmt;
 use std::io;
 use std::io::Write;
 
 use crate::tui;
+use crossterm::Command;
 use crossterm::queue;
 use crossterm::style::Color as CColor;
 use crossterm::style::Colors;
@@ -11,46 +13,127 @@ use crossterm::style::SetBackgroundColor;
 use crossterm::style::SetColors;
 use crossterm::style::SetForegroundColor;
 use ratatui::layout::Position;
+use ratatui::layout::Size;
 use ratatui::prelude::Backend;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::text::Line;
 use ratatui::text::Span;
 
+/// Insert `lines` above the viewport.
 pub(crate) fn insert_history_lines(terminal: &mut tui::Tui, lines: Vec<Line<'static>>) {
-    let screen_height = terminal
-        .backend()
-        .size()
-        .map(|s| s.height)
-        .unwrap_or(0xffffu16);
+    let screen_size = terminal.backend().size().unwrap_or(Size::new(0, 0));
+
     let mut area = terminal.get_frame().area();
-    // We scroll up one line at a time because we can't position the cursor
-    // above the top of the screen. i.e. if
-    //   lines.len() > screen_height - area.top()
-    // we would need to print the first line above the top of the screen, which
-    // can't be done.
-    for line in lines.into_iter() {
-        // 1. Scroll everything above the viewport up by one line
-        if area.bottom() >= screen_height {
-            let top = area.top();
-            terminal.backend_mut().scroll_region_up(0..top, 1).ok();
-            // 2. Move the cursor to the blank line
-            terminal.set_cursor_position(Position::new(0, top - 1)).ok();
-        } else {
-            // If the viewport isn't at the bottom of the screen, scroll down instead
-            terminal
-                .backend_mut()
-                .scroll_region_down(area.top()..area.bottom() + 1, 1)
-                .ok();
-            terminal
-                .set_cursor_position(Position::new(0, area.top()))
-                .ok();
-            area.y += 1;
-        }
-        // 3. Write the line
+
+    let wrapped_lines = wrapped_line_count(&lines, area.width);
+    let cursor_top = if area.bottom() < screen_size.height {
+        // If the viewport is not at the bottom of the screen, scroll it down to make room.
+        // Don't scroll it past the bottom of the screen.
+        let scroll_amount = wrapped_lines.min(screen_size.height - area.bottom());
+        terminal
+            .backend_mut()
+            .scroll_region_down(area.top()..screen_size.height, scroll_amount)
+            .ok();
+        let cursor_top = area.top() - 1;
+        area.y += scroll_amount;
+        terminal.set_viewport_area(area);
+        cursor_top
+    } else {
+        area.top() - 1
+    };
+
+    // Limit the scroll region to the lines from the top of the screen to the
+    // top of the viewport. With this in place, when we add lines inside this
+    // area, only the lines in this area will be scrolled. We place the cursor
+    // at the end of the scroll region, and add lines starting there.
+    //
+    // ┌─Screen───────────────────────┐
+    // │┌╌Scroll region╌╌╌╌╌╌╌╌╌╌╌╌╌╌┐│
+    // │┆                            ┆│
+    // │┆                            ┆│
+    // │┆                            ┆│
+    // │█╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┘│
+    // │╭─Viewport───────────────────╮│
+    // ││                            ││
+    // │╰────────────────────────────╯│
+    // └──────────────────────────────┘
+    queue!(std::io::stdout(), SetScrollRegion(1..area.top())).ok();
+
+    terminal
+        .set_cursor_position(Position::new(0, cursor_top))
+        .ok();
+
+    for line in lines {
+        queue!(std::io::stdout(), Print("\r\n")).ok();
         write_spans(&mut std::io::stdout(), line.iter()).ok();
     }
-    terminal.set_viewport_area(area);
+
+    queue!(std::io::stdout(), ResetScrollRegion).ok();
+}
+
+fn wrapped_line_count(lines: &[Line], width: u16) -> u16 {
+    let mut count = 0;
+    for line in lines {
+        count += line_height(line, width);
+    }
+    count
+}
+
+fn line_height(line: &Line, width: u16) -> u16 {
+    use unicode_width::UnicodeWidthStr;
+    // get the total display width of the line, accounting for double-width chars
+    let total_width = line
+        .spans
+        .iter()
+        .map(|span| span.content.width())
+        .sum::<usize>();
+    // divide by width to get the number of lines, rounding up
+    if width == 0 {
+        1
+    } else {
+        (total_width as u16).div_ceil(width).max(1)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetScrollRegion(pub std::ops::Range<u16>);
+
+impl Command for SetScrollRegion {
+    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
+        write!(f, "\x1b[{};{}r", self.0.start, self.0.end)
+    }
+
+    #[cfg(windows)]
+    fn execute_winapi(&self) -> std::io::Result<()> {
+        panic!("tried to execute SetScrollRegion command using WinAPI, use ANSI instead");
+    }
+
+    #[cfg(windows)]
+    fn is_ansi_code_supported(&self) -> bool {
+        // TODO(nornagon): is this supported on Windows?
+        true
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResetScrollRegion;
+
+impl Command for ResetScrollRegion {
+    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
+        write!(f, "\x1b[r")
+    }
+
+    #[cfg(windows)]
+    fn execute_winapi(&self) -> std::io::Result<()> {
+        panic!("tried to execute ResetScrollRegion command using WinAPI, use ANSI instead");
+    }
+
+    #[cfg(windows)]
+    fn is_ansi_code_supported(&self) -> bool {
+        // TODO(nornagon): is this supported on Windows?
+        true
+    }
 }
 
 struct ModifierDiff {
