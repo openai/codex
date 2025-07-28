@@ -27,7 +27,7 @@ pub(crate) fn insert_history_lines(terminal: &mut tui::Tui, lines: Vec<Line<'sta
 
     let wrapped_lines = wrapped_line_count(&lines, area.width);
     let cursor_top = if area.bottom() < screen_size.height {
-        let scroll_amount = wrapped_lines.min(screen_size.height - area.top());
+        let scroll_amount = wrapped_lines.min(screen_size.height - area.bottom());
         terminal
             .backend_mut()
             .scroll_region_down(area.top()..screen_size.height, scroll_amount)
