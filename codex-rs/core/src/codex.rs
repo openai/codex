@@ -864,7 +864,10 @@ async fn submission_loop(
                         }
                     }
                     if changed {
-                        info!("Changing approval policy to: {approval_policy:?}");
+                        info!(
+                            "Changing approval policy to: {}",
+                            approval_policy.to_string()
+                        );
                         let event = Event {
                             id: sub.id.clone(),
                             msg: EventMsg::SessionConfigPatchedEvent(SessionConfigPatchedEvent {

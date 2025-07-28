@@ -473,7 +473,7 @@ impl ChatWidget<'_> {
         self.request_redraw();
     }
 
-    pub(crate) fn show_approval_mode_selection(&mut self) {
+    pub(crate) fn show_approval_policy_selection(&mut self) {
         self.bottom_pane
             .open_change_approval_policy_modal(self.session_config.approval_policy);
         self.request_redraw();
