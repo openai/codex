@@ -16,6 +16,7 @@ use log_layer::TuiLogLayer;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
+use std::time::Duration;
 use tracing_appender::non_blocking;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
@@ -221,24 +222,25 @@ fn restore() {
     }
 }
 
-#[allow(clippy::unwrap_used)]
+#[allow(clippy::expect_used)]
+#[allow(clippy::print_stderr)]
 async fn should_show_login_screen(config: &Config) -> bool {
     if is_in_need_of_openai_api_key(config) {
         // Reading the OpenAI API key is an async operation because it may need
         // to refresh the token. Block on it.
         let codex_home = config.codex_home.clone();
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        match try_read_openai_api_key(&codex_home).await {
-            Ok(openai_api_key) => {
-                set_openai_api_key(openai_api_key);
-                tx.send(false).unwrap();
-            }
-            Err(_) => {
-                tx.send(true).unwrap();
-            }
+        if let Ok(openai_api_key) = tokio::time::timeout(
+            Duration::from_secs(60),
+            try_read_openai_api_key(&codex_home),
+        )
+        .await
+        .expect("timed out while refreshing OpenAI API key")
+        {
+            set_openai_api_key(openai_api_key);
+            false
+        } else {
+            true
         }
-        // TODO(mbolin): Impose some sort of timeout.
-        rx.await.unwrap()
     } else {
         false
     }
