@@ -14,8 +14,8 @@ pub enum SlashCommand {
     // more frequently used commands should be listed first.
     New,
     Diff,
-    Quit,
     Approval,
+    Quit,
 }
 
 impl SlashCommand {
