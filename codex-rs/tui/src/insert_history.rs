@@ -25,14 +25,15 @@ pub(crate) fn insert_history_lines(terminal: &mut tui::Tui, lines: Vec<Line<'sta
 
     let mut area = terminal.get_frame().area();
 
+    let wrapped_lines = wrapped_line_count(&lines, area.width);
     let cursor_top = if area.bottom() < screen_size.height {
-        let wrapped_lines = wrapped_line_count(&lines, area.width);
+        let scroll_amount = wrapped_lines.min(screen_size.height - area.top());
         terminal
             .backend_mut()
-            .scroll_region_down(area.top()..screen_size.height, wrapped_lines)
+            .scroll_region_down(area.top()..screen_size.height, scroll_amount)
             .ok();
         let cursor_top = area.top() - 1;
-        area.y += wrapped_lines;
+        area.y += scroll_amount;
         terminal.set_viewport_area(area);
         cursor_top
     } else {
