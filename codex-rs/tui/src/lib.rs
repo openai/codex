@@ -47,7 +47,7 @@ mod user_approval_widget;
 
 pub use cli::Cli;
 
-pub fn run_main(
+pub async fn run_main(
     cli: Cli,
     codex_linux_sandbox_exe: Option<PathBuf>,
 ) -> std::io::Result<codex_core::protocol::TokenUsage> {
@@ -142,11 +142,23 @@ pub fn run_main(
         .with(tui_layer)
         .try_init();
 
-    let show_login_screen = true; //should_show_login_screen(&config);
+    let show_login_screen = should_show_login_screen(&config).await;
     if show_login_screen {
-        std::io::stdout()
-            .write_all(b"Oh dear, we don't seem to have an API key. Would you mind running `codex login` and then trying this command again?\n")?;
-        std::process::exit(1);
+        std::io::stdout().write_all(
+            b"Oh dear, we don't seem to have an API key.\nTerribly sorry, but may I open a browser window for you to log in? [Yn] ",
+        )?;
+        std::io::stdout().flush()?;
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        let trimmed = input.trim();
+        if !(trimmed.is_empty() || trimmed.eq_ignore_ascii_case("y")) {
+            std::io::stdout().write_all(b"Right-o, fair enough. See you next time!\n")?;
+            std::process::exit(1);
+        }
+        // Spawn a task to run the login command.
+        // Block until the login command is finished.
+        let new_key = codex_login::login_with_chatgpt(&config.codex_home, false).await?;
+        set_openai_api_key(new_key);
     }
 
     // Determine whether we need to display the "not a git repo" warning
@@ -209,25 +221,23 @@ fn restore() {
 }
 
 #[allow(clippy::unwrap_used)]
-fn should_show_login_screen(config: &Config) -> bool {
+async fn should_show_login_screen(config: &Config) -> bool {
     if is_in_need_of_openai_api_key(config) {
         // Reading the OpenAI API key is an async operation because it may need
         // to refresh the token. Block on it.
         let codex_home = config.codex_home.clone();
         let (tx, rx) = tokio::sync::oneshot::channel();
-        tokio::spawn(async move {
-            match try_read_openai_api_key(&codex_home).await {
-                Ok(openai_api_key) => {
-                    set_openai_api_key(openai_api_key);
-                    tx.send(false).unwrap();
-                }
-                Err(_) => {
-                    tx.send(true).unwrap();
-                }
+        match try_read_openai_api_key(&codex_home).await {
+            Ok(openai_api_key) => {
+                set_openai_api_key(openai_api_key);
+                tx.send(false).unwrap();
             }
-        });
+            Err(_) => {
+                tx.send(true).unwrap();
+            }
+        }
         // TODO(mbolin): Impose some sort of timeout.
-        tokio::task::block_in_place(|| rx.blocking_recv()).unwrap()
+        rx.await.unwrap()
     } else {
         false
     }
