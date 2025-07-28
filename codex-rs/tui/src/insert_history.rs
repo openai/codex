@@ -1,7 +1,9 @@
+use std::fmt;
 use std::io;
 use std::io::Write;
 
 use crate::tui;
+use crossterm::Command;
 use crossterm::queue;
 use crossterm::style::Color as CColor;
 use crossterm::style::Colors;
@@ -11,18 +13,35 @@ use crossterm::style::SetBackgroundColor;
 use crossterm::style::SetColors;
 use crossterm::style::SetForegroundColor;
 use ratatui::layout::Position;
+use ratatui::layout::Size;
+use ratatui::prelude::Backend;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::text::Line;
 use ratatui::text::Span;
 
 pub(crate) fn insert_history_lines(terminal: &mut tui::Tui, lines: Vec<Line<'static>>) {
-    let area = terminal.get_frame().area();
+    let screen_size = terminal.backend().size().unwrap_or(Size::new(0, 0));
 
-    queue!(std::io::stdout(), Print(format!("\x1b[1;{}r", area.top()))).ok();
+    let mut area = terminal.get_frame().area();
+
+    let cursor_top = if area.bottom() < screen_size.height {
+        let wrapped_lines = wrapped_line_count(&lines, area.width);
+        terminal
+            .backend_mut()
+            .scroll_region_down(area.top()..screen_size.height, wrapped_lines)
+            .ok();
+        let cursor_top = area.top() - 1;
+        area.y += wrapped_lines;
+        terminal.set_viewport_area(area);
+        cursor_top
+    } else {
+        area.top() - 1
+    };
+    queue!(std::io::stdout(), SetScrollRegion(1..area.top())).ok();
 
     terminal
-        .set_cursor_position(Position::new(0, area.top() - 1))
+        .set_cursor_position(Position::new(0, cursor_top))
         .ok();
 
     for line in lines {
@@ -30,7 +49,71 @@ pub(crate) fn insert_history_lines(terminal: &mut tui::Tui, lines: Vec<Line<'sta
         write_spans(&mut std::io::stdout(), line.iter()).ok();
     }
 
-    queue!(std::io::stdout(), Print("\x1b[r")).ok();
+    queue!(std::io::stdout(), ResetScrollRegion).ok();
+}
+
+fn wrapped_line_count(lines: &[Line], width: u16) -> u16 {
+    let mut count = 0;
+    for line in lines {
+        count += line_height(line, width);
+    }
+    count
+}
+
+fn line_height(line: &Line, width: u16) -> u16 {
+    use unicode_width::UnicodeWidthStr;
+    // get the total display width of the line, accounting for double-width chars
+    let total_width = line
+        .spans
+        .iter()
+        .map(|span| span.content.width())
+        .sum::<usize>();
+    // divide by width to get the number of lines, rounding up
+    if width == 0 {
+        1
+    } else {
+        (total_width as u16).div_ceil(width).max(1)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetScrollRegion(pub std::ops::Range<u16>);
+
+impl Command for SetScrollRegion {
+    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
+        write!(f, "\x1b[{};{}r", self.0.start, self.0.end)
+    }
+
+    #[cfg(windows)]
+    fn execute_winapi(&self) -> std::io::Result<()> {
+        panic!("tried to execute SetScrollRegion command using WinAPI, use ANSI instead");
+    }
+
+    #[cfg(windows)]
+    fn is_ansi_code_supported(&self) -> bool {
+        // TODO(nornagon): is this supported on Windows?
+        true
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResetScrollRegion;
+
+impl Command for ResetScrollRegion {
+    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
+        write!(f, "\x1b[r")
+    }
+
+    #[cfg(windows)]
+    fn execute_winapi(&self) -> std::io::Result<()> {
+        panic!("tried to execute ResetScrollRegion command using WinAPI, use ANSI instead");
+    }
+
+    #[cfg(windows)]
+    fn is_ansi_code_supported(&self) -> bool {
+        // TODO(nornagon): is this supported on Windows?
+        true
+    }
 }
 
 struct ModifierDiff {
