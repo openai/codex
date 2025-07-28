@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "ansi-escape",
     "apply-patch",
+    "arg0",
     "cli",
     "common",
     "core",

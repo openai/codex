@@ -2,6 +2,7 @@ use clap::CommandFactory;
 use clap::Parser;
 use clap_complete::Shell;
 use clap_complete::generate;
+use codex_arg0::arg0_dispatch_or_else;
 use codex_chatgpt::apply_command::ApplyCommand;
 use codex_chatgpt::apply_command::run_apply_command;
 use codex_cli::LandlockCommand;
@@ -92,7 +93,7 @@ struct LoginCommand {
 }
 
 fn main() -> anyhow::Result<()> {
-    codex_linux_sandbox::run_with_sandbox(|codex_linux_sandbox_exe| async move {
+    arg0_dispatch_or_else(|codex_linux_sandbox_exe| async move {
         cli_main(codex_linux_sandbox_exe).await?;
         Ok(())
     })

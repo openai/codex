@@ -606,6 +606,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-arg0"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "codex-core",
+ "codex-linux-sandbox",
+ "dotenvy",
+ "tokio",
+]
+
+[[package]]
 name = "codex-chatgpt"
 version = "0.0.0"
 dependencies = [
@@ -628,11 +639,11 @@ dependencies = [
  "anyhow",
  "clap",
  "clap_complete",
+ "codex-arg0",
  "codex-chatgpt",
  "codex-common",
  "codex-core",
  "codex-exec",
- "codex-linux-sandbox",
  "codex-login",
  "codex-mcp-server",
  "codex-tui",
@@ -709,9 +720,9 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
+ "codex-arg0",
  "codex-common",
  "codex-core",
- "codex-linux-sandbox",
  "owo-colors",
  "serde_json",
  "shlex",
@@ -761,7 +772,6 @@ dependencies = [
  "clap",
  "codex-common",
  "codex-core",
- "dotenvy",
  "landlock",
  "libc",
  "seccompiler",
@@ -799,8 +809,8 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
+ "codex-arg0",
  "codex-core",
- "codex-linux-sandbox",
  "mcp-types",
  "mcp_test_support",
  "pretty_assertions",
@@ -826,10 +836,10 @@ dependencies = [
  "base64 0.22.1",
  "clap",
  "codex-ansi-escape",
+ "codex-arg0",
  "codex-common",
  "codex-core",
  "codex-file-search",
- "codex-linux-sandbox",
  "codex-login",
  "color-eyre",
  "crossterm",
