@@ -159,6 +159,7 @@ pub async fn run_main(
         // Block until the login command is finished.
         let new_key = codex_login::login_with_chatgpt(&config.codex_home, false).await?;
         set_openai_api_key(new_key);
+        std::io::stdout().write_all(b"Excellent, looks like that worked. Let's get started!\n")?;
     }
 
     // Determine whether we need to display the "not a git repo" warning
