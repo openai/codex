@@ -280,7 +280,7 @@ pub struct Event {
 /// Response event from the agent
 #[derive(Debug, Clone, Deserialize, Serialize, Display)]
 #[serde(tag = "type", rename_all = "snake_case")]
-#[strum(serialize_all = "lowercase")]
+#[strum(serialize_all = "snake_case")]
 pub enum EventMsg {
     /// Error while executing a submission
     Error(ErrorEvent),
