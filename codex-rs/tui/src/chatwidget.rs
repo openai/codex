@@ -1,14 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::app_event::AppEvent;
-use crate::app_event_sender::AppEventSender;
-use crate::bottom_pane::BottomPane;
-use crate::bottom_pane::BottomPaneParams;
-use crate::bottom_pane::InputResult;
-use crate::conversation_history_widget::ConversationHistoryWidget;
-use crate::history_cell::PatchEventType;
-use crate::user_approval_widget::ApprovalRequest;
 use codex_core::codex_wrapper::CodexConversation;
 use codex_core::codex_wrapper::init_codex;
 use codex_core::config::Config;
@@ -40,6 +32,15 @@ use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::mpsc::unbounded_channel;
+
+use crate::app_event::AppEvent;
+use crate::app_event_sender::AppEventSender;
+use crate::bottom_pane::BottomPane;
+use crate::bottom_pane::BottomPaneParams;
+use crate::bottom_pane::InputResult;
+use crate::conversation_history_widget::ConversationHistoryWidget;
+use crate::history_cell::PatchEventType;
+use crate::user_approval_widget::ApprovalRequest;
 
 struct SessionConfiguration {
     approval_policy: AskForApproval,
