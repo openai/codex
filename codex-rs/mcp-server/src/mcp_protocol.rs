@@ -22,9 +22,9 @@ pub struct NewConversationArgs {
     pub model: String,
     pub cwd: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub approval_policy: Option<String>,
+    pub approval_policy: Option<codex_core::protocol::AskForApproval>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sandbox: Option<String>,
+    pub sandbox: Option<codex_core::config_types::SandboxMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -248,10 +248,8 @@ mod tests {
             },
         };
 
-        let got = match serde_json::to_value(&params) {
-            Ok(v) => v,
-            Err(e) => panic!("failed to serialize InitialStateNotificationParams: {e}"),
-        };
+        let observed = serde_json::to_value(&params)
+            .expect("failed to serialize InitialStateNotificationParams");
         let expected = json!({
             "_meta": {
                 "conversationId": "67e55044-10b1-426f-9247-bb680e5fe0c8",
@@ -264,7 +262,7 @@ mod tests {
                 ]
             }
         });
-        assert_eq!(got, expected);
+        assert_eq!(observed, expected);
     }
 
     #[test]
@@ -276,15 +274,13 @@ mod tests {
             }),
             reason: "New connect() took over".into(),
         };
-        let got = match serde_json::to_value(&params) {
-            Ok(v) => v,
-            Err(e) => panic!("failed to serialize ConnectionRevokedNotificationParams: {e}"),
-        };
+        let observed = serde_json::to_value(&params)
+            .expect("failed to serialize ConnectionRevokedNotificationParams");
         let expected = json!({
             "_meta": { "conversationId": "67e55044-10b1-426f-9247-bb680e5fe0c8" },
             "reason": "New connect() took over"
         });
-        assert_eq!(got, expected);
+        assert_eq!(observed, expected);
     }
 
     #[test]
@@ -295,17 +291,15 @@ mod tests {
             history_log_id: 3874612938,
             history_entry_count: 0,
         };
-        let got = match serde_json::to_value(&result) {
-            Ok(v) => v,
-            Err(e) => panic!("failed to serialize NewConversationResult: {e}"),
-        };
+        let observed =
+            serde_json::to_value(&result).expect("failed to serialize NewConversationResult");
         let expected = json!({
             "conversation_id": "d0f6ecbe-84a2-41c1-b23d-b20473b25eab",
             "model": "o3",
             "history_log_id": 3874612938u64,
             "history_entry_count": 0
         });
-        assert_eq!(got, expected);
+        assert_eq!(observed, expected);
     }
 
     #[test]
@@ -317,17 +311,15 @@ mod tests {
             }],
             next_cursor: Some("eyJsb2dpZF9vZmZzZXQiOjIwfQ==".into()),
         };
-        let got = match serde_json::to_value(&result) {
-            Ok(v) => v,
-            Err(e) => panic!("failed to serialize GetConversationsResult: {e}"),
-        };
+        let observed =
+            serde_json::to_value(&result).expect("failed to serialize GetConversationsResult");
         let expected = json!({
             "conversations": [
                 {"conversation_id": "67e55044-10b1-426f-9247-bb680e5fe0c8", "title": "Refactor config loader"}
             ],
             "next_cursor": "eyJsb2dpZF9vZmZzZXQiOjIwfQ=="
         });
-        assert_eq!(got, expected);
+        assert_eq!(observed, expected);
     }
 
     #[test]
@@ -339,10 +331,8 @@ mod tests {
             }],
             message_id: Some("client-uuid-123".into()),
         });
-        let got = match serde_json::to_value(&req) {
-            Ok(v) => v,
-            Err(e) => panic!("failed to serialize ToolCallRequestParams::SendUserMessage: {e}"),
-        };
+        let observed = serde_json::to_value(&req)
+            .expect("failed to serialize ToolCallRequestParams::SendUserMessage");
         let expected = json!({
             "name": "send_user_message",
             "arguments": {
@@ -351,7 +341,7 @@ mod tests {
                 "message_id": "client-uuid-123"
             }
         });
-        assert_eq!(got, expected);
+        assert_eq!(observed, expected);
     }
 
     #[test]
@@ -362,10 +352,8 @@ mod tests {
             history_log_id: 1,
             history_entry_count: 0,
         });
-        let got = match serde_json::to_value(&resp) {
-            Ok(v) => v,
-            Err(e) => panic!("failed to serialize ToolCallResponseData::NewConversation: {e}"),
-        };
+        let observed = serde_json::to_value(&resp)
+            .expect("failed to serialize ToolCallResponseData::NewConversation");
         let expected = json!({
             "type": "new_conversation",
             "data": {
@@ -375,7 +363,7 @@ mod tests {
                 "history_entry_count": 0
             }
         });
-        assert_eq!(got, expected);
+        assert_eq!(observed, expected);
     }
 
     #[test]
@@ -389,10 +377,8 @@ mod tests {
                 message: "hi".into(),
             }),
         });
-        let got = match serde_json::to_value(&params) {
-            Ok(v) => v,
-            Err(e) => panic!("failed to serialize ConversationNotificationParams::CodexEvent: {e}"),
-        };
+        let observed = serde_json::to_value(&params)
+            .expect("failed to serialize ConversationNotificationParams::CodexEvent");
         let expected = json!({
             "type": "codex_event",
             "data": {
@@ -403,6 +389,6 @@ mod tests {
                 "msg": { "type": "agent_message", "message": "hi" }
             }
         });
-        assert_eq!(got, expected);
+        assert_eq!(observed, expected);
     }
 }
