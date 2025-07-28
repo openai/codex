@@ -5,8 +5,6 @@ use crate::history_cell::PatchEventType;
 use codex_core::config::Config;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::{FileChange, PatchSessionConfigType};
-use crossterm::event::KeyCode;
-use crossterm::event::KeyEvent;
 use ratatui::prelude::*;
 use ratatui::style::Style;
 use ratatui::widgets::*;
