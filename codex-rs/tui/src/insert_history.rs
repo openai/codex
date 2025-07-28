@@ -19,27 +19,18 @@ use ratatui::text::Span;
 pub(crate) fn insert_history_lines(terminal: &mut tui::Tui, lines: Vec<Line<'static>>) {
     let area = terminal.get_frame().area();
 
-    // 1. Move the cursor to the top-left of the viewport.
+    queue!(std::io::stdout(), Print(format!("\x1b[1;{}r", area.top()))).ok();
+
     terminal
-        .set_cursor_position(Position::new(0, area.top()))
+        .set_cursor_position(Position::new(0, area.top() - 1))
         .ok();
 
-    // 2. Clear the screen below the cursor.
-    // This causes ratatui to redraw the prompt area after we write the lines.
-    terminal.clear().ok();
-
-    // 3. Write the lines.
     for line in lines {
-        write_spans(&mut std::io::stdout(), line.iter()).ok();
         queue!(std::io::stdout(), Print("\r\n")).ok();
+        write_spans(&mut std::io::stdout(), line.iter()).ok();
     }
 
-    // 4. Scroll the screen up by the size of the viewport.
-    queue!(
-        std::io::stdout(),
-        Print("\n".repeat(area.height as usize - 1))
-    )
-    .ok();
+    queue!(std::io::stdout(), Print("\x1b[r")).ok();
 }
 
 struct ModifierDiff {
