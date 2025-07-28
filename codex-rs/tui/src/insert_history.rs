@@ -11,46 +11,35 @@ use crossterm::style::SetBackgroundColor;
 use crossterm::style::SetColors;
 use crossterm::style::SetForegroundColor;
 use ratatui::layout::Position;
-use ratatui::prelude::Backend;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::text::Line;
 use ratatui::text::Span;
 
 pub(crate) fn insert_history_lines(terminal: &mut tui::Tui, lines: Vec<Line<'static>>) {
-    let screen_height = terminal
-        .backend()
-        .size()
-        .map(|s| s.height)
-        .unwrap_or(0xffffu16);
-    let mut area = terminal.get_frame().area();
-    // We scroll up one line at a time because we can't position the cursor
-    // above the top of the screen. i.e. if
-    //   lines.len() > screen_height - area.top()
-    // we would need to print the first line above the top of the screen, which
-    // can't be done.
-    for line in lines.into_iter() {
-        // 1. Scroll everything above the viewport up by one line
-        if area.bottom() >= screen_height {
-            let top = area.top();
-            terminal.backend_mut().scroll_region_up(0..top, 1).ok();
-            // 2. Move the cursor to the blank line
-            terminal.set_cursor_position(Position::new(0, top - 1)).ok();
-        } else {
-            // If the viewport isn't at the bottom of the screen, scroll down instead
-            terminal
-                .backend_mut()
-                .scroll_region_down(area.top()..area.bottom() + 1, 1)
-                .ok();
-            terminal
-                .set_cursor_position(Position::new(0, area.top()))
-                .ok();
-            area.y += 1;
-        }
-        // 3. Write the line
+    let area = terminal.get_frame().area();
+
+    // 1. Move the cursor to the top-left of the viewport.
+    terminal
+        .set_cursor_position(Position::new(0, area.top()))
+        .ok();
+
+    // 2. Clear the screen below the cursor.
+    // This causes ratatui to redraw the prompt area after we write the lines.
+    terminal.clear().ok();
+
+    // 3. Write the lines.
+    for line in lines {
         write_spans(&mut std::io::stdout(), line.iter()).ok();
+        queue!(std::io::stdout(), Print("\r\n")).ok();
     }
-    terminal.set_viewport_area(area);
+
+    // 4. Scroll the screen up by the size of the viewport.
+    queue!(
+        std::io::stdout(),
+        Print("\n".repeat(area.height as usize - 1))
+    )
+    .ok();
 }
 
 struct ModifierDiff {
