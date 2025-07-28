@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 anyhow = "1"
+codex-apply-patch = { path = "../apply-patch" }
 codex-core = { path = "../core" }
 codex-linux-sandbox = { path = "../linux-sandbox" }
 dotenvy = "0.15.7"

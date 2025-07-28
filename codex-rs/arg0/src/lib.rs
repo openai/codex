@@ -30,7 +30,8 @@ where
     Fut: Future<Output = anyhow::Result<()>>,
 {
     // Determine if we were invoked via the special alias.
-    let argv0 = std::env::args_os().next().unwrap_or_default();
+    let mut args = std::env::args_os();
+    let argv0 = args.next().unwrap_or_default();
     let exe_name = Path::new(&argv0)
         .file_name()
         .and_then(|s| s.to_str())
@@ -39,6 +40,26 @@ where
     if exe_name == "codex-linux-sandbox" {
         // Safety: [`run_main`] never returns.
         codex_linux_sandbox::run_main();
+    }
+
+    let argv1 = args.next().unwrap_or_default();
+    if argv1 == "--codex-run-as-apply-patch" {
+        let patch_arg = args.next().and_then(|s| s.to_str().map(|s| s.to_owned()));
+        let exit_code = match patch_arg {
+            Some(patch_arg) => {
+                let mut stdout = std::io::stdout();
+                let mut stderr = std::io::stderr();
+                match codex_apply_patch::apply_patch(&patch_arg, &mut stdout, &mut stderr) {
+                    Ok(()) => 0,
+                    Err(_) => 1,
+                }
+            }
+            None => {
+                eprintln!("Error: --codex-run-as-apply-patch requires a UTF-8 PATCH argument.");
+                1
+            }
+        };
+        std::process::exit(exit_code);
     }
 
     // This modifies the environment, which is not thread-safe, so do this
