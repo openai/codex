@@ -272,7 +272,6 @@ impl UserApprovalWidget<'_> {
     }
 
     fn send_decision_with_feedback(&mut self, decision: ReviewDecision, feedback: String) {
-        // Emit a short summary into the history so the transcript captures the user's decision.
         let mut lines: Vec<Line<'static>> = Vec::new();
         match &self.approval_request {
             ApprovalRequest::Exec { command, .. } => {
@@ -280,25 +279,18 @@ impl UserApprovalWidget<'_> {
                 lines.push(Line::from("approval decision"));
                 lines.push(Line::from(format!("$ {cmd}")));
                 lines.push(Line::from(format!("decision: {decision:?}")));
-                if !feedback.trim().is_empty() {
-                    lines.push(Line::from("feedback:"));
-                    for l in feedback.lines() {
-                        lines.push(Line::from(l.to_string()));
-                    }
-                }
-                lines.push(Line::from(""));
             }
             ApprovalRequest::ApplyPatch { .. } => {
                 lines.push(Line::from(format!("patch approval decision: {decision:?}")));
-                if !feedback.trim().is_empty() {
-                    lines.push(Line::from("feedback:"));
-                    for l in feedback.lines() {
-                        lines.push(Line::from(l.to_string()));
-                    }
-                }
-                lines.push(Line::from(""));
             }
         }
+        if !feedback.trim().is_empty() {
+            lines.push(Line::from("feedback:"));
+            for l in feedback.lines() {
+                lines.push(Line::from(l.to_string()));
+            }
+        }
+        lines.push(Line::from(""));
         self.app_event_tx.send(AppEvent::InsertHistory(lines));
 
         let op = match &self.approval_request {

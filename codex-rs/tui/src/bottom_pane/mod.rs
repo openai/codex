@@ -20,6 +20,12 @@ mod command_popup;
 mod file_search_popup;
 mod status_indicator_view;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CancellationEvent {
+    Ignored,
+    Handled,
+}
+
 pub(crate) use chat_composer::ChatComposer;
 pub(crate) use chat_composer::InputResult;
 
@@ -81,11 +87,16 @@ impl BottomPane<'_> {
     }
 
     /// Handle Ctrl-C in the bottom pane. If a modal view is active it gets a
-    /// chance to consume the event (e.g. to dismiss itself). Returns true when
-    /// handled.
-    pub(crate) fn on_ctrl_c(&mut self) -> bool {
-        if let Some(mut view) = self.active_view.take() {
-            if view.on_ctrl_c(self) {
+    /// chance to consume the event (e.g. to dismiss itself).
+    pub(crate) fn on_ctrl_c(&mut self) -> CancellationEvent {
+        let mut view = match self.active_view.take() {
+            Some(view) => view,
+            None => return CancellationEvent::Ignored,
+        };
+
+        let event = view.on_ctrl_c(self);
+        match event {
+            CancellationEvent::Handled => {
                 if !view.is_complete() {
                     self.active_view = Some(view);
                 } else if self.is_task_running {
@@ -93,15 +104,13 @@ impl BottomPane<'_> {
                         self.app_event_tx.clone(),
                     )));
                 }
-                // Show the standard Ctrl-C quit hint so a subsequent Ctrl-C will exit.
                 self.show_ctrl_c_quit_hint();
-                return true;
-            } else {
-                // Put the view back unchanged
+            }
+            CancellationEvent::Ignored => {
                 self.active_view = Some(view);
             }
         }
-        false
+        event
     }
 
     pub fn handle_paste(&mut self, pasted: String) {
@@ -266,11 +275,6 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::mpsc::channel;
 
-    fn make_sender() -> AppEventSender {
-        let (tx, _rx) = channel::<AppEvent>();
-        AppEventSender::new(tx)
-    }
-
     fn exec_request() -> ApprovalRequest {
         ApprovalRequest::Exec {
             id: "1".to_string(),
@@ -282,14 +286,15 @@ mod tests {
 
     #[test]
     fn ctrl_c_on_modal_consumes_and_shows_quit_hint() {
-        let tx = make_sender();
+        let (tx_raw, _rx) = channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
         let mut pane = BottomPane::new(BottomPaneParams {
             app_event_tx: tx,
             has_input_focus: true,
         });
         pane.push_approval_request(exec_request());
-        assert!(pane.on_ctrl_c());
+        assert_eq!(CancellationEvent::Handled, pane.on_ctrl_c());
         assert!(pane.ctrl_c_quit_hint_visible());
-        assert!(!pane.on_ctrl_c());
+        assert_eq!(CancellationEvent::Ignored, pane.on_ctrl_c());
     }
 }

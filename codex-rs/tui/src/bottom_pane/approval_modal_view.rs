@@ -9,6 +9,7 @@ use crate::user_approval_widget::UserApprovalWidget;
 
 use super::BottomPane;
 use super::BottomPaneView;
+use super::CancellationEvent;
 
 /// Modal overlay asking the user to approve/deny a sequence of requests.
 pub(crate) struct ApprovalModalView<'a> {
@@ -46,12 +47,10 @@ impl<'a> BottomPaneView<'a> for ApprovalModalView<'a> {
         self.maybe_advance();
     }
 
-    fn on_ctrl_c(&mut self, _pane: &mut BottomPane<'a>) -> bool {
-        // Abort the current request and drop any queued approvals.
+    fn on_ctrl_c(&mut self, _pane: &mut BottomPane<'a>) -> CancellationEvent {
         self.current.on_ctrl_c();
         self.queue.clear();
-        // Do not advance to next request; the modal should be closed.
-        true
+        CancellationEvent::Handled
     }
 
     fn is_complete(&self) -> bool {
@@ -75,11 +74,6 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::mpsc::channel;
 
-    fn make_sender() -> AppEventSender {
-        let (tx, _rx) = channel::<AppEvent>();
-        AppEventSender::new(tx)
-    }
-
     fn make_exec_request() -> ApprovalRequest {
         ApprovalRequest::Exec {
             id: "test".to_string(),
@@ -91,16 +85,18 @@ mod tests {
 
     #[test]
     fn ctrl_c_aborts_and_clears_queue() {
-        let tx = make_sender();
+        let (tx_raw, _rx) = channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
         let first = make_exec_request();
         let mut view = ApprovalModalView::new(first, tx);
         view.enqueue_request(make_exec_request());
 
+        let (tx_raw2, _rx2) = channel::<AppEvent>();
         let mut pane = BottomPane::new(super::super::BottomPaneParams {
-            app_event_tx: make_sender(),
+            app_event_tx: AppEventSender::new(tx_raw2),
             has_input_focus: true,
         });
-        assert!(view.on_ctrl_c(&mut pane));
+        assert_eq!(CancellationEvent::Handled, view.on_ctrl_c(&mut pane));
         assert!(view.queue.is_empty());
         assert!(view.current.is_complete());
         assert!(view.is_complete());
