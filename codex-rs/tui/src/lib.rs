@@ -229,13 +229,7 @@ async fn should_show_login_screen(config: &Config) -> bool {
         // Reading the OpenAI API key is an async operation because it may need
         // to refresh the token. Block on it.
         let codex_home = config.codex_home.clone();
-        if let Ok(openai_api_key) = tokio::time::timeout(
-            Duration::from_secs(60),
-            try_read_openai_api_key(&codex_home),
-        )
-        .await
-        .expect("timed out while refreshing OpenAI API key")
-        {
+        if let Ok(openai_api_key) = try_read_openai_api_key(&codex_home).await {
             set_openai_api_key(openai_api_key);
             false
         } else {
