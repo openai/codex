@@ -610,6 +610,7 @@ name = "codex-arg0"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "codex-apply-patch",
  "codex-core",
  "codex-linux-sandbox",
  "dotenvy",
@@ -718,14 +719,17 @@ name = "codex-exec"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "assert_cmd",
  "chrono",
  "clap",
  "codex-arg0",
  "codex-common",
  "codex-core",
  "owo-colors",
+ "predicates",
  "serde_json",
  "shlex",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
