@@ -30,7 +30,7 @@ where
     Fut: Future<Output = anyhow::Result<()>>,
 {
     // Determine if we were invoked via the special alias.
-    let argv0 = std::env::args().next().unwrap_or_default();
+    let argv0 = std::env::args_os().next().unwrap_or_default();
     let exe_name = Path::new(&argv0)
         .file_name()
         .and_then(|s| s.to_str())

@@ -12,6 +12,7 @@
 //! issue requests and receive strongly-typed results.
 
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
@@ -82,8 +83,8 @@ impl McpClient {
     /// Caller is responsible for sending the `initialize` request. See
     /// [`initialize`](Self::initialize) for details.
     pub async fn new_stdio_client(
-        program: String,
-        args: Vec<String>,
+        program: OsString,
+        args: Vec<OsString>,
         env: Option<HashMap<String, String>>,
     ) -> std::io::Result<Self> {
         let mut child = Command::new(program)
