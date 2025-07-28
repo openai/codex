@@ -5,6 +5,7 @@ use uuid::Uuid;
 
 use mcp_types::RequestId;
 
+// Requests
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "name", content = "arguments", rename_all = "snake_case")]
 pub enum ToolCallRequestParams {
@@ -52,22 +53,37 @@ pub enum InputMessageContentPart {
         text: String,
     },
     Image {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        image_url: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        file_id: Option<String>,
+        #[serde(flatten)]
+        source: ImageSource,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         detail: Option<ImageDetail>,
     },
     File {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        file_url: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        file_id: Option<String>,
+        #[serde(flatten)]
+        source: FileSource,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ImageSource {
+    ImageUrl { image_url: String },
+    FileId { file_id: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum FileSource {
+    Url {
+        file_url: String,
+    },
+    Id {
+        file_id: String,
+    },
+    Data {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         filename: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        file_data: Option<String>,
+        file_data: String,
     },
 }
 
@@ -85,6 +101,22 @@ pub struct GetConversationsArgs {
     pub limit: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
+}
+
+// Responses
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolCallResponseEnvelope {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub content: Vec<ToolCallResponseContent>,
+    #[serde(rename = "isError", default, skip_serializing_if = "Option::is_none")]
+    pub is_error: Option<bool>,
+    #[serde(
+        rename = "structuredContent",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub structured_content: Option<ToolCallResponseData>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -125,12 +157,20 @@ pub struct ConversationSummary {
     pub title: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ToolCallResponseContent {
+    Text { text: String },
+}
+
+// Notifications
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 pub enum ConversationNotificationParams {
     InitialState(InitialStateNotificationParams),
     ConnectionRevoked(ConnectionRevokedNotificationParams),
     CodexEvent(CodexEventNotificationParams),
+    Cancelled(CancelledNotificationParams),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -167,6 +207,13 @@ pub struct CodexEventNotificationParams {
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<NotificationMeta>,
     pub msg: EventMsg,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CancelledNotificationParams {
+    pub id: RequestId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 #[cfg(test)]
