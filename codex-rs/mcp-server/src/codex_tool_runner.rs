@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use codex_core::Codex;
+use codex_core::codex_wrapper::CodexConversation;
 use codex_core::codex_wrapper::init_codex;
 use codex_core::config::Config as CodexConfig;
 use codex_core::protocol::AgentMessageEvent;
@@ -42,7 +43,12 @@ pub async fn run_codex_tool_session(
     session_map: Arc<Mutex<HashMap<Uuid, Arc<Codex>>>>,
     running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, Uuid>>>,
 ) {
-    let (codex, first_event, _ctrl_c, session_id) = match init_codex(config).await {
+    let CodexConversation {
+        codex,
+        session_configured,
+        session_id,
+        ..
+    } = match init_codex(config).await {
         Ok(res) => res,
         Err(e) => {
             let result = CallToolResult {
@@ -66,7 +72,9 @@ pub async fn run_codex_tool_session(
     drop(session_map);
 
     // Send initial SessionConfigured event.
-    outgoing.send_event_as_notification(&first_event).await;
+    outgoing
+        .send_event_as_notification(&session_configured)
+        .await;
 
     // Use the original MCP request ID as the `sub_id` for the Codex submission so that
     // any events emitted for this tool-call can be correlated with the
