@@ -14,6 +14,7 @@ use codex_core::util::is_inside_git_repo;
 use codex_login::try_read_openai_api_key;
 use log_layer::TuiLogLayer;
 use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::PathBuf;
 use tracing_appender::non_blocking;
 use tracing_subscriber::EnvFilter;
@@ -35,7 +36,6 @@ mod git_warning_screen;
 mod history_cell;
 mod insert_history;
 mod log_layer;
-mod login_screen;
 mod markdown;
 mod scroll_event_helper;
 mod slash_command;
@@ -142,7 +142,12 @@ pub fn run_main(
         .with(tui_layer)
         .try_init();
 
-    let show_login_screen = should_show_login_screen(&config);
+    let show_login_screen = true; //should_show_login_screen(&config);
+    if show_login_screen {
+        std::io::stdout()
+            .write_all(b"Oh dear, we don't seem to have an API key. Would you mind running `codex login` and then trying this command again?\n")?;
+        std::process::exit(1);
+    }
 
     // Determine whether we need to display the "not a git repo" warning
     // modal. The flag is shown when the current working directory is *not*
@@ -150,14 +155,13 @@ pub fn run_main(
     // `--allow-no-git-exec` flag.
     let show_git_warning = !cli.skip_git_repo_check && !is_inside_git_repo(&config);
 
-    run_ratatui_app(cli, config, show_login_screen, show_git_warning, log_rx)
+    run_ratatui_app(cli, config, show_git_warning, log_rx)
         .map_err(|err| std::io::Error::other(err.to_string()))
 }
 
 fn run_ratatui_app(
     cli: Cli,
     config: Config,
-    show_login_screen: bool,
     show_git_warning: bool,
     mut log_rx: tokio::sync::mpsc::UnboundedReceiver<String>,
 ) -> color_eyre::Result<codex_core::protocol::TokenUsage> {
@@ -172,13 +176,7 @@ fn run_ratatui_app(
     terminal.clear()?;
 
     let Cli { prompt, images, .. } = cli;
-    let mut app = App::new(
-        config.clone(),
-        prompt,
-        show_login_screen,
-        show_git_warning,
-        images,
-    );
+    let mut app = App::new(config.clone(), prompt, show_git_warning, images);
 
     // Bridge log receiver into the AppEvent channel so latest log lines update the UI.
     {
