@@ -9,6 +9,7 @@ use ratatui::layout::Rect;
 use ratatui::widgets::WidgetRef;
 
 /// Modal view for choosing an approval policy.
+/// The view will propagate logic to the `ChangeApprovalPolicyWidget`
 pub(crate) struct ChangeApprovalPolicyModelView<'a> {
     change_approval_policy_widget: ChangeApprovalPolicyWidget<'a>,
 }

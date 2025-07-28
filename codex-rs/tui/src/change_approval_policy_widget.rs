@@ -13,28 +13,23 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-struct ApprovalPolicySelectOption {
-    label: AskForApproval,
-}
-
 const HEADER_TEXT: &str = "Switch approval mode";
 
 const PLAIN: Style = Style::new();
 const GREEN_STYLE: Style = Style::new().fg(Color::Green);
 const BLUE_STYLE: Style = Style::new().fg(Color::Blue);
 
-const APPROVAL_POLICY_OPTIONS: &[ApprovalPolicySelectOption] = &[
-    ApprovalPolicySelectOption {
-        label: AskForApproval::UnlessTrusted,
-    },
-    ApprovalPolicySelectOption {
-        label: AskForApproval::OnFailure,
-    },
-    ApprovalPolicySelectOption {
-        label: AskForApproval::Never,
-    },
+const APPROVAL_POLICY_OPTIONS: &[AskForApproval] = &[
+    AskForApproval::UnlessTrusted,
+    AskForApproval::OnFailure,
+    AskForApproval::Never,
 ];
 
+/// Widget for changing the approval policy in the bottom pane.
+/// This widget allows the user to select a new approval policy from a list of options.
+/// The user can navigate the options using the up/down arrow keys, and select an option
+/// by pressing Enter. The selected option is sent as an event to the application.
+/// The widget can be closed by pressing Esc.
 pub(crate) struct ChangeApprovalPolicyWidget<'a> {
     app_event_tx: AppEventSender,
     change_prompt: Paragraph<'a>,
@@ -66,7 +61,7 @@ impl<'a> ChangeApprovalPolicyWidget<'a> {
     fn send_decision(&mut self) {
         self.app_event_tx
             .send(AppEvent::CodexOp(Op::ChangeApprovalPolicy {
-                approval_policy: APPROVAL_POLICY_OPTIONS[self.selected_option].label,
+                approval_policy: APPROVAL_POLICY_OPTIONS[self.selected_option],
             }));
     }
 
@@ -99,6 +94,9 @@ impl<'a> ChangeApprovalPolicyWidget<'a> {
 }
 
 impl WidgetRef for ChangeApprovalPolicyWidget<'_> {
+
+    /// Render the widget to the given area and buffer.
+    /// Implementation similar to the `UserApprovalWidget`
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let outer = Block::default()
             .title(HEADER_TEXT)
@@ -127,7 +125,7 @@ impl WidgetRef for ChangeApprovalPolicyWidget<'_> {
                 } else {
                     (" ", PLAIN)
                 };
-                Line::styled(format!("  {prefix} {}", opt.label), style)
+                Line::styled(format!("  {prefix} {opt}"), style)
             })
             .collect();
 
