@@ -24,6 +24,7 @@ mod app_event;
 mod app_event_sender;
 mod bottom_pane;
 mod cell_widget;
+mod change_approval_policy_widget;
 mod chatwidget;
 mod citation_regex;
 mod cli;
@@ -44,7 +45,6 @@ mod text_block;
 mod text_formatting;
 mod tui;
 mod user_approval_widget;
-mod change_approval_policy_widget;
 
 pub use cli::Cli;
 

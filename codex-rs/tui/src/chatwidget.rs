@@ -454,10 +454,12 @@ impl ChatWidget<'_> {
                         new_approval_policy,
                     } => {
                         self.session_config.approval_policy = new_approval_policy;
-                        
-                    },
+                    }
                 }
-                self.conversation_history.record_patch_event(config_patch.patch_config_event_type);
+                self.conversation_history
+                    .record_session_config_patch_event(config_patch.patch_config_event_type);
+                self.emit_last_history_entry();
+                self.request_redraw()
             }
             event => {
                 self.conversation_history
