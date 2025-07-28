@@ -24,6 +24,7 @@ use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchSessionConfigType;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TokenUsage;
+use codex_file_search::FileMatch;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -42,7 +43,10 @@ use crate::conversation_history_widget::ConversationHistoryWidget;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell::PatchEventType;
 use crate::user_approval_widget::ApprovalRequest;
-use codex_file_search::FileMatch;
+
+struct SessionConfiguration {
+    approval_policy: AskForApproval,
+}
 
 struct SessionConfiguration {
     approval_policy: AskForApproval,
