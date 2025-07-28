@@ -19,7 +19,6 @@ use codex_core::protocol::Submission;
 use codex_core::protocol::TaskCompleteEvent;
 use mcp_types::CallToolResult;
 use mcp_types::ContentBlock;
-use mcp_types::ProgressToken;
 use mcp_types::RequestId;
 use mcp_types::TextContent;
 use serde_json::json;
@@ -82,7 +81,7 @@ pub async fn run_codex_tool_session(
         .send_event_as_notification(
             &session_configured,
             Some(OutgoingNotificationMeta {
-                progress_token: Some(ProgressToken::String(request_id_str)),
+                request_id: Some(RequestId::String(request_id_str)),
             }),
         )
         .await;
@@ -173,8 +172,7 @@ async fn run_codex_tool_session_inner(
                     .send_event_as_notification(
                         &event,
                         Some(OutgoingNotificationMeta {
-                            // TODO: use request.params.progressToken
-                            progress_token: Some(ProgressToken::String(request_id_str.clone())),
+                            request_id: Some(RequestId::String(request_id_str.clone())),
                         }),
                     )
                     .await;

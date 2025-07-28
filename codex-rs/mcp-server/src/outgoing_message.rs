@@ -10,7 +10,6 @@ use mcp_types::JSONRPCMessage;
 use mcp_types::JSONRPCNotification;
 use mcp_types::JSONRPCRequest;
 use mcp_types::JSONRPCResponse;
-use mcp_types::ProgressToken;
 use mcp_types::RequestId;
 use mcp_types::Result;
 use serde::Serialize;
@@ -19,6 +18,7 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tracing::warn;
 
+/// Sends messages to the client and manages request callbacks.
 pub(crate) struct OutgoingMessageSender {
     next_request_id: AtomicI64,
     sender: mpsc::Sender<OutgoingMessage>,
@@ -193,13 +193,13 @@ pub(crate) struct OutgoingNotificationParams {
     pub event: serde_json::Value,
 }
 
-// Additional mcp-specific data to be added to a [`codex_core::protocol::Event`] in notification.params._meta
+// Additional mcp-specific data to be added to a [`codex_core::protocol::Event`] as notification.params._meta
 // MCP Spec: https://modelcontextprotocol.io/specification/2025-06-18/basic#meta
 // Typescript Schema: https://github.com/modelcontextprotocol/modelcontextprotocol/blob/0695a497eb50a804fc0e88c18a93a21a675d6b3e/schema/2025-06-18/schema.ts
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct OutgoingNotificationMeta {
-    pub progress_token: Option<ProgressToken>,
+    pub request_id: Option<RequestId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -284,7 +284,7 @@ mod tests {
             msg: EventMsg::SessionConfigured(session_configured_event.clone()),
         };
         let meta = OutgoingNotificationMeta {
-            progress_token: Some(ProgressToken::String("123".to_string())),
+            request_id: Some(RequestId::String("123".to_string())),
         };
 
         outgoing_message_sender
@@ -298,7 +298,7 @@ mod tests {
         assert_eq!(method, "codex/event");
         let expected_params = json!({
             "_meta": {
-                "progressToken": "123",
+                "requestId": "123",
             },
             "id": "1",
             "msg": {
