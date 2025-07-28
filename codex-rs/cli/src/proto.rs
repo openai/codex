@@ -4,6 +4,7 @@ use std::sync::Arc;
 use clap::Parser;
 use codex_common::CliConfigOverrides;
 use codex_core::Codex;
+use codex_core::CodexSpawnOk;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::protocol::Submission;
@@ -35,7 +36,7 @@ pub async fn run_main(opts: ProtoCli) -> anyhow::Result<()> {
 
     let config = Config::load_with_cli_overrides(overrides_vec, ConfigOverrides::default())?;
     let ctrl_c = notify_on_sigint();
-    let (codex, _init_id, _session_id) = Codex::spawn(config, ctrl_c.clone()).await?;
+    let CodexSpawnOk { codex, .. } = Codex::spawn(config, ctrl_c.clone()).await?;
     let codex = Arc::new(codex);
 
     // Task that reads JSON lines from stdin and forwards to Submission Queue

@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use codex_core::codex_wrapper::CodexConversation;
 use codex_core::codex_wrapper::init_codex;
 use codex_core::config::Config;
 use codex_core::protocol::AgentMessageDeltaEvent;
@@ -89,19 +90,22 @@ impl ChatWidget<'_> {
         // Create the Codex asynchronously so the UI loads as quickly as possible.
         let config_for_agent_loop = config.clone();
         tokio::spawn(async move {
-            let (codex, session_event, _ctrl_c, _session_id) =
-                match init_codex(config_for_agent_loop).await {
-                    Ok(vals) => vals,
-                    Err(e) => {
-                        // TODO: surface this error to the user.
-                        tracing::error!("failed to initialize codex: {e}");
-                        return;
-                    }
-                };
+            let CodexConversation {
+                codex,
+                session_configured,
+                ..
+            } = match init_codex(config_for_agent_loop).await {
+                Ok(vals) => vals,
+                Err(e) => {
+                    // TODO: surface this error to the user.
+                    tracing::error!("failed to initialize codex: {e}");
+                    return;
+                }
+            };
 
             // Forward the captured `SessionInitialized` event that was consumed
             // inside `init_codex()` so it can be rendered in the UI.
-            app_event_tx_clone.send(AppEvent::CodexEvent(session_event.clone()));
+            app_event_tx_clone.send(AppEvent::CodexEvent(session_configured.clone()));
             let codex = Arc::new(codex);
             let codex_clone = codex.clone();
             tokio::spawn(async move {
