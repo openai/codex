@@ -30,9 +30,11 @@ pub(crate) async fn apply_patch(
         guard.clone()
     };
 
+    #[allow(clippy::unwrap_used)]
+    let approval_policy = *sess.approval_policy.lock().unwrap();
     let auto_approved = match assess_patch_safety(
         &action,
-        sess.approval_policy,
+        approval_policy,
         &writable_roots_snapshot,
         &sess.cwd,
     ) {

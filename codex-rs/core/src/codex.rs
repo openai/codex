@@ -71,8 +71,6 @@ use crate::protocol::ExecCommandBeginEvent;
 use crate::protocol::ExecCommandEndEvent;
 use crate::protocol::InputItem;
 use crate::protocol::Op;
-use crate::protocol::PatchApplyBeginEvent;
-use crate::protocol::PatchApplyEndEvent;
 use crate::protocol::PatchSessionConfigType;
 use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
@@ -196,7 +194,7 @@ pub(crate) struct Session {
     pub(crate) cwd: PathBuf,
     base_instructions: Option<String>,
     user_instructions: Option<String>,
-    approval_policy: Mutex<AskForApproval>,
+    pub(crate)approval_policy: Mutex<AskForApproval>,
     sandbox_policy: SandboxPolicy,
     shell_environment_policy: ShellEnvironmentPolicy,
     pub(crate) writable_roots: Mutex<Vec<PathBuf>>,
