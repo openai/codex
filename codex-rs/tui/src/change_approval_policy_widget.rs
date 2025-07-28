@@ -1,17 +1,26 @@
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::BottomPane;
-use codex_core::protocol::{AskForApproval, Op};
-use crossterm::event::{KeyCode, KeyEvent};
+use codex_core::protocol::AskForApproval;
+use codex_core::protocol::Op;
+use crossterm::event::KeyCode;
+use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::prelude::{Color, Widget};
-use ratatui::widgets::{Block, BorderType, Borders, List, WidgetRef};
-use ratatui::{
-    style::Style,
-    text::{Line, Span},
-    widgets::Paragraph,
-};
+use ratatui::layout::Constraint;
+use ratatui::layout::Direction;
+use ratatui::layout::Layout;
+use ratatui::layout::Rect;
+use ratatui::prelude::Color;
+use ratatui::prelude::Widget;
+use ratatui::style::Style;
+use ratatui::text::Line;
+use ratatui::text::Span;
+use ratatui::widgets::Block;
+use ratatui::widgets::BorderType;
+use ratatui::widgets::Borders;
+use ratatui::widgets::List;
+use ratatui::widgets::Paragraph;
+use ratatui::widgets::WidgetRef;
 
 const HEADER_TEXT: &str = "Switch approval mode";
 
@@ -94,7 +103,6 @@ impl<'a> ChangeApprovalPolicyWidget<'a> {
 }
 
 impl WidgetRef for ChangeApprovalPolicyWidget<'_> {
-
     /// Render the widget to the given area and buffer.
     /// Implementation similar to the `UserApprovalWidget`
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {

@@ -1,5 +1,6 @@
 use codex_common::elapsed::format_elapsed;
 use codex_core::config::Config;
+use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
 use codex_core::protocol::BackgroundEventEvent;
@@ -13,10 +14,10 @@ use codex_core::protocol::McpToolCallBeginEvent;
 use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
+use codex_core::protocol::PatchSessionConfigType;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TokenUsage;
-use codex_core::protocol::{AgentMessageDeltaEvent, PatchSessionConfigType};
 use owo_colors::OwoColorize;
 use owo_colors::Style;
 use shlex::try_join;
