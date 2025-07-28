@@ -58,7 +58,6 @@ use crate::models::ResponseInputItem;
 use crate::models::ResponseItem;
 use crate::models::ShellToolCallParams;
 use crate::project_doc::get_user_instructions;
-use crate::protocol::AgentMessageDeltaEvent;
 use crate::protocol::AgentMessageEvent;
 use crate::protocol::AgentReasoningDeltaEvent;
 use crate::protocol::AgentReasoningEvent;
@@ -81,6 +80,7 @@ use crate::protocol::SandboxPolicy;
 use crate::protocol::SessionConfiguredEvent;
 use crate::protocol::Submission;
 use crate::protocol::TaskCompleteEvent;
+use crate::protocol::{AgentMessageDeltaEvent, PatchSessionConfigType, SessionConfigPatchedEvent};
 use crate::rollout::RolloutRecorder;
 use crate::safety::SafetyCheck;
 use crate::safety::assess_command_safety;
@@ -861,10 +861,29 @@ async fn submission_loop(
 
             Op::ChangeApprovalPolicy { approval_policy } => {
                 if let Some(sess) = &sess {
-                    let mut policy = sess.approval_policy.lock().unwrap();
-                    if *policy != approval_policy {
+                    let changed;
+                    {
+                        let mut policy = sess.approval_policy.lock().unwrap();
+                        changed = *policy != approval_policy;
+                        if changed {
+                            *policy = approval_policy;
+                        }
+                    }
+                    if changed {
                         info!("Changing approval policy to: {approval_policy:?}");
-                        *policy = approval_policy;
+                        let event = Event {
+                            id: sub.id.clone(),
+                            msg: EventMsg::SessionConfigPatchedEvent(SessionConfigPatchedEvent {
+                                session_id,
+                                patch_config_event_type:
+                                    PatchSessionConfigType::AskForApprovalPatch {
+                                        new_approval_policy: approval_policy,
+                                    },
+                            }),
+                        };
+                        if let Err(e) = tx_event.send(event).await {
+                            warn!("failed to send SessionConfigPatchedEvent event: {e}");
+                        }
                     } else {
                         debug!("Approval policy unchanged: {approval_policy:?}");
                     }
