@@ -43,7 +43,7 @@ pub(crate) struct ChangeApprovalPolicyWidget<'a> {
     app_event_tx: AppEventSender,
     change_prompt: Paragraph<'a>,
     selected_option: usize,
-    compleat: bool,
+    complete: bool,
 }
 impl<'a> ChangeApprovalPolicyWidget<'a> {
     pub(crate) fn new(
@@ -63,7 +63,7 @@ impl<'a> ChangeApprovalPolicyWidget<'a> {
             app_event_tx,
             change_prompt: header,
             selected_option: 0,
-            compleat: false,
+            complete: false,
         }
     }
 
@@ -87,18 +87,18 @@ impl<'a> ChangeApprovalPolicyWidget<'a> {
                 self.selected_option = (self.selected_option + 1) % APPROVAL_POLICY_OPTIONS.len();
             }
             KeyCode::Esc => {
-                self.compleat = true;
+                self.complete = true;
             }
             KeyCode::Enter => {
                 self.send_decision();
-                self.compleat = true;
+                self.complete = true;
             }
             _ => {}
         };
     }
 
     pub(crate) fn is_complete(&self) -> bool {
-        self.compleat
+        self.complete
     }
 }
 
