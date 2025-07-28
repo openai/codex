@@ -22,7 +22,7 @@ use ratatui::widgets::List;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 
-const HEADER_TEXT: &str = "Switch approval mode";
+const HEADER_TEXT: &str = "Switch approval policy";
 
 const PLAIN: Style = Style::new();
 const GREEN_STYLE: Style = Style::new().fg(Color::Green);
@@ -52,7 +52,7 @@ impl<'a> ChangeApprovalPolicyWidget<'a> {
     ) -> Self {
         let lines = vec![
             Line::from(vec![
-                Span::from("Current mode: "),
+                Span::from("Current policy: "),
                 Span::from(current_approval_policy.to_string()).style(GREEN_STYLE),
             ]),
             Line::from(""),
