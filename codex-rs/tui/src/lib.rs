@@ -45,7 +45,6 @@ mod text_block;
 mod text_formatting;
 mod tui;
 mod user_approval_widget;
-mod change_approval_policy_widget;
 
 pub use cli::Cli;
 
