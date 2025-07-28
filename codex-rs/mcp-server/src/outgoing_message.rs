@@ -202,6 +202,12 @@ pub(crate) struct OutgoingNotificationMeta {
     pub request_id: Option<RequestId>,
 }
 
+impl OutgoingNotificationMeta {
+    pub(crate) fn new(request_id: Option<RequestId>) -> Self {
+        Self { request_id }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub(crate) struct OutgoingResponse {
     pub id: RequestId,

@@ -72,17 +72,10 @@ pub async fn run_codex_tool_session(
     session_map.lock().await.insert(session_id, codex.clone());
     drop(session_map);
 
-    // Send initial SessionConfigured event, and include the request id
-    let request_id_str = match &id {
-        RequestId::String(s) => s.clone(),
-        RequestId::Integer(n) => n.to_string(),
-    };
     outgoing
         .send_event_as_notification(
             &session_configured,
-            Some(OutgoingNotificationMeta {
-                request_id: Some(RequestId::String(request_id_str)),
-            }),
+            Some(OutgoingNotificationMeta::new(Some(id.clone()))),
         )
         .await;
 
@@ -171,9 +164,7 @@ async fn run_codex_tool_session_inner(
                 outgoing
                     .send_event_as_notification(
                         &event,
-                        Some(OutgoingNotificationMeta {
-                            request_id: Some(RequestId::String(request_id_str.clone())),
-                        }),
+                        Some(OutgoingNotificationMeta::new(Some(request_id.clone()))),
                     )
                     .await;
 
