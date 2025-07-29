@@ -1,3 +1,5 @@
+use codex_core::config_types::SandboxMode;
+use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use serde::Deserialize;
 use serde::Serialize;
@@ -26,9 +28,9 @@ pub struct ConversationCreateArgs {
     pub model: String,
     pub cwd: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub approval_policy: Option<codex_core::protocol::AskForApproval>,
+    pub approval_policy: Option<AskForApproval>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sandbox: Option<codex_core::config_types::SandboxMode>,
+    pub sandbox: Option<SandboxMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -46,9 +48,9 @@ pub struct ConversationOverrides {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub approval_policy: Option<codex_core::protocol::AskForApproval>,
+    pub approval_policy: Option<AskForApproval>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sandbox: Option<codex_core::config_types::SandboxMode>,
+    pub sandbox: Option<SandboxMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -65,20 +67,19 @@ pub struct ConversationConnectArgs {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConversationSendMessageArgs {
     pub conversation_id: ConversationId,
-    pub content: Vec<InputMessageContentPart>,
+    pub content: Vec<MessageInputItem>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(flatten)]
     pub conversation_overrides: Option<ConversationOverrides>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum InputMessageContentPart {
-    // following OpenAI's Responses API: https://platform.openai.com/docs/api-reference/responses
-    Text {
-        text: String,
-    },
+pub enum MessageInputItem {
+    /// Following OpenAI's Responses API: https://platform.openai.com/docs/api-reference/responses
+    Text { text: String },
     Image {
         #[serde(flatten)]
         source: ImageSource,
@@ -94,21 +95,26 @@ pub enum InputMessageContentPart {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ImageSource {
-    ImageUrl { image_url: String },
-    FileId { file_id: String },
+    /// Following OpenAI's API: https://platform.openai.com/docs/guides/images-vision#giving-a-model-images-as-input
+    ImageUrl {
+        image_url: String,
+    },
+    FileId {
+        file_id: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum FileSource {
-    // following OpenAI's Responses API: https://platform.openai.com/docs/guides/pdf-files?api-mode=responses#uploading-files
+    /// Following OpenAI's Responses API: https://platform.openai.com/docs/guides/pdf-files?api-mode=responses#uploading-files
     Url {
         file_url: String,
     },
     Id {
         file_id: String,
     },
-    Data {
+    Base64 {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         filename: Option<String>,
         /// Base64-encoded file contents.
@@ -135,16 +141,13 @@ pub struct ConversationsListArgs {
 // Responses
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ToolCallResponseEnvelope {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub content: Vec<ToolCallResponseContent>,
-    #[serde(rename = "isError", default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_error: Option<bool>,
-    #[serde(
-        rename = "structuredContent",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub structured_content: Option<ToolCallResponseData>,
 }
 
@@ -192,13 +195,13 @@ pub enum ToolCallResponseContent {
 
 // Notifications
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", content = "data", rename_all = "snake_case")]
+#[serde(tag = "method", content = "params", rename_all = "snake_case")]
 pub enum ConversationNotificationParams {
     InitialState(InitialStateNotificationParams),
     // sent when a second client connects to the same conversation
     ConnectionRevoked(ConnectionRevokedNotificationParams),
     CodexEvent(CodexEventNotificationParams),
-    Cancelled(CancelledNotificationParams),
+    Cancelled(CancellNotificationParams),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -238,7 +241,7 @@ pub struct CodexEventNotificationParams {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct CancelledNotificationParams {
+pub struct CancellNotificationParams {
     pub request_id: RequestId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
@@ -351,7 +354,7 @@ mod tests {
     fn serialize_tool_call_request_params_send_user_message() {
         let req = ToolCallRequestParams::ConversationSendMessage(ConversationSendMessageArgs {
             conversation_id: uuid!("d0f6ecbe-84a2-41c1-b23d-b20473b25eab"),
-            content: vec![InputMessageContentPart::Text {
+            content: vec![MessageInputItem::Text {
                 text: "Hello".into(),
             }],
             message_id: Some("client-uuid-123".into()),
