@@ -161,8 +161,6 @@ pub enum ToolCallResponseData {
 pub struct ConversationCreateResult {
     pub conversation_id: ConversationId,
     pub model: String,
-    pub history_log_id: u64,
-    pub history_entry_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
