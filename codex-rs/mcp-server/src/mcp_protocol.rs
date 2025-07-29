@@ -3,9 +3,6 @@ use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use serde::Deserialize;
 use serde::Serialize;
-use serde::ser::SerializeMap;
-use serde::ser::Serializer;
-use serde_json::Value;
 use uuid::Uuid;
 
 use mcp_types::RequestId;
@@ -22,13 +19,26 @@ pub struct ToolCallRequestEnvelope {
     pub params: ToolCallRequestParams,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "name", content = "arguments", rename_all = "snake_case")]
 pub enum ToolCallRequestParams {
     ConversationCreate(ConversationCreateArgs),
     ConversationConnect(ConversationConnectArgs),
     ConversationSendMessage(ConversationSendMessageArgs),
     ConversationsList(ConversationsListArgs),
+}
+
+impl ToolCallRequestParams {
+    /// Wrap this request in a JSON-RPC envelope.
+    #[allow(dead_code)]
+    pub fn into_envelope(self, id: u64) -> ToolCallRequestEnvelope {
+        ToolCallRequestEnvelope {
+            jsonrpc: "2.0",
+            id,
+            method: "tools/call",
+            params: self,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -202,6 +212,7 @@ pub enum ToolCallResponseContent {
 }
 
 // Notifications
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "method", content = "params", rename_all = "snake_case")]
 pub enum ConversationNotificationParams {
@@ -250,69 +261,404 @@ pub struct CodexEventNotificationParams {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CancellNotificationParams {
+    #[serde(rename = "requestId")]
     pub request_id: RequestId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }
 
-impl Serialize for ToolCallRequestParams {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let inner = serde_json::to_value(self).map_err(serde::ser::Error::custom)?;
+/// Strongly-typed notification envelope (no unwraps/expect, no serde_json::Value payloads).
+#[derive(Debug, Clone)]
+pub enum NotificationEnvelope {
+    InitialState(InitialStateNotificationParams),
+    ConnectionRevoked(ConnectionRevokedNotificationParams),
+    Cancelled(CancellNotificationParams),
+    CodexEvent(CodexEventNotificationParams),
+}
 
-        let mut state = serializer.serialize_map(Some(3))?;
-        state.serialize_entry("jsonrpc", "2.0")?;
-        state.serialize_entry("id", &2u64)?;
-        state.serialize_entry("method", "tools/call")?;
-        state.serialize_entry("params", &inner)?;
-        state.end()
+impl From<ConversationNotificationParams> for NotificationEnvelope {
+    fn from(n: ConversationNotificationParams) -> Self {
+        match n {
+            ConversationNotificationParams::InitialState(p) => {
+                NotificationEnvelope::InitialState(p)
+            }
+            ConversationNotificationParams::ConnectionRevoked(p) => {
+                NotificationEnvelope::ConnectionRevoked(p)
+            }
+            ConversationNotificationParams::Cancelled(p) => NotificationEnvelope::Cancelled(p),
+            ConversationNotificationParams::CodexEvent(p) => NotificationEnvelope::CodexEvent(p),
+        }
     }
 }
 
-impl Serialize for ConversationNotificationParams {
+impl Serialize for NotificationEnvelope {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
-        S: Serializer,
+        S: serde::Serializer,
     {
-        let mut state = serializer.serialize_map(Some(2))?;
+        use serde::ser::SerializeMap;
 
-        let method = match self {
-            ConversationNotificationParams::CodexEvent(p) => {
-                let msg_val = serde_json::to_value(&p.msg).map_err(serde::ser::Error::custom)?;
-                let event_type = msg_val
-                    .get("type")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown");
-                format!("notifications/{event_type}")
+        fn event_type(msg: &EventMsg) -> &'static str {
+            // Keep in sync with EventMsg variants/serde renames used by codex_core.
+            match msg {
+                EventMsg::TaskStarted => "task_started",
+                EventMsg::AgentMessageDelta(_) => "agent_message_delta",
+                EventMsg::AgentMessage(_) => "agent_message",
+                _ => "unknown",
             }
-            _ => {
-                let raw = serde_json::to_value(&self).map_err(serde::ser::Error::custom)?;
-                let type_name = raw.get("type").and_then(Value::as_str).unwrap_or("unknown");
-                format!("notifications/{type_name}")
+        }
+
+        let mut map = serializer.serialize_map(Some(2))?;
+        match self {
+            NotificationEnvelope::InitialState(p) => {
+                map.serialize_entry("method", "notifications/initial_state")?;
+                map.serialize_entry("params", p)?;
             }
-        };
-
-        let raw = serde_json::to_value(&self).map_err(serde::ser::Error::custom)?;
-        let params = raw.get("data").unwrap_or(&raw);
-
-        state.serialize_entry("method", &method)?;
-        state.serialize_entry("params", params)?;
-        state.end()
+            NotificationEnvelope::ConnectionRevoked(p) => {
+                map.serialize_entry("method", "notifications/connection_revoked")?;
+                map.serialize_entry("params", p)?;
+            }
+            NotificationEnvelope::Cancelled(p) => {
+                map.serialize_entry("method", "notifications/cancelled")?;
+                map.serialize_entry("params", p)?;
+            }
+            NotificationEnvelope::CodexEvent(p) => {
+                let t = event_type(&p.msg);
+                map.serialize_entry("method", &format!("notifications/{t}"))?;
+                map.serialize_entry("params", p)?;
+            }
+        }
+        map.end()
     }
 }
 
 #[cfg(test)]
 #[allow(clippy::expect_used)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use serde::Serialize;
+    use serde_json::Value;
     use serde_json::json;
     use uuid::uuid;
 
+    fn to_val<T: Serialize>(v: &T) -> Value {
+        serde_json::to_value(v).expect("serialize to Value")
+    }
+
+    // ----- Requests -----
+
     #[test]
-    fn serialize_initial_state_params_minimal() {
+    fn serialize_tool_call_request_params_conversation_create_minimal() {
+        let req = ToolCallRequestParams::ConversationCreate(ConversationCreateArgs {
+            prompt: None,
+            model: "o3".into(),
+            cwd: "/repo".into(),
+            approval_policy: None,
+            sandbox: None,
+            config: None,
+            profile: None,
+            base_instructions: None,
+        });
+
+        let observed = to_val(&req.into_envelope(2));
+        let expected = json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "conversation_create",
+                "arguments": {
+                    "model": "o3",
+                    "cwd": "/repo"
+                }
+            }
+        });
+        assert_eq!(observed, expected);
+    }
+
+    #[test]
+    fn serialize_tool_call_request_params_conversation_send_message_with_overrides_and_message_id()
+    {
+        let req = ToolCallRequestParams::ConversationSendMessage(ConversationSendMessageArgs {
+            conversation_id: uuid!("d0f6ecbe-84a2-41c1-b23d-b20473b25eab"),
+            content: vec![
+                MessageInputItem::Text { text: "Hi".into() },
+                MessageInputItem::Image {
+                    source: ImageSource::ImageUrl {
+                        image_url: "https://example.com/cat.jpg".into(),
+                    },
+                    detail: Some(ImageDetail::High),
+                },
+                MessageInputItem::File {
+                    source: FileSource::Base64 {
+                        filename: Some("notes.txt".into()),
+                        file_data: "Zm9vYmFy".into(),
+                    },
+                },
+            ],
+            message_id: Some("client-uuid-123".into()),
+            conversation_overrides: Some(ConversationOverrides {
+                model: Some("o4-mini".into()),
+                cwd: Some("/workdir".into()),
+                approval_policy: None,
+                sandbox: Some(SandboxMode::DangerFullAccess),
+                config: Some(json!({"temp": 0.2})),
+                profile: Some("eng".into()),
+                base_instructions: Some("Be terse".into()),
+            }),
+        });
+
+        let observed = to_val(&req.into_envelope(2));
+        let expected = json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "conversation_send_message",
+                "arguments": {
+                    "conversation_id": "d0f6ecbe-84a2-41c1-b23d-b20473b25eab",
+                    "content": [
+                        { "type": "text", "text": "Hi" },
+                        { "type": "image", "image_url": "https://example.com/cat.jpg", "detail": "high" },
+                        { "type": "file", "filename": "notes.txt", "file_data": "Zm9vYmFy" }
+                    ],
+                    "message_id": "client-uuid-123",
+                    "model": "o4-mini",
+                    "cwd": "/workdir",
+                    "sandbox": "danger-full-access",
+                    "config": { "temp": 0.2 },
+                    "profile": "eng",
+                    "base_instructions": "Be terse"
+                }
+            }
+        });
+        assert_eq!(observed, expected);
+    }
+
+    #[test]
+    fn serialize_tool_call_request_params_conversations_list_with_opts() {
+        let req = ToolCallRequestParams::ConversationsList(ConversationsListArgs {
+            limit: Some(50),
+            cursor: Some("abc".into()),
+        });
+
+        let observed = to_val(&req.into_envelope(2));
+        let expected = json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "conversations_list",
+                "arguments": {
+                    "limit": 50,
+                    "cursor": "abc"
+                }
+            }
+        });
+        assert_eq!(observed, expected);
+    }
+
+    #[test]
+    fn serialize_tool_call_request_params_conversation_connect() {
+        let req = ToolCallRequestParams::ConversationConnect(ConversationConnectArgs {
+            conversation_id: uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8"),
+        });
+
+        let observed = to_val(&req.into_envelope(2));
+        let expected = json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "conversation_connect",
+                "arguments": {
+                    "conversation_id": "67e55044-10b1-426f-9247-bb680e5fe0c8"
+                }
+            }
+        });
+        assert_eq!(observed, expected);
+    }
+
+    // ----- Message inputs / sources -----
+
+    #[test]
+    fn serialize_message_input_image_file_id_auto_detail() {
+        let item = MessageInputItem::Image {
+            source: ImageSource::FileId {
+                file_id: "file_123".into(),
+            },
+            detail: Some(ImageDetail::Auto),
+        };
+        let observed = to_val(&item);
+        let expected = json!({
+            "type": "image",
+            "file_id": "file_123",
+            "detail": "auto"
+        });
+        assert_eq!(observed, expected);
+    }
+
+    #[test]
+    fn serialize_message_input_file_url_and_id_variants() {
+        let url = MessageInputItem::File {
+            source: FileSource::Url {
+                file_url: "https://example.com/a.pdf".into(),
+            },
+        };
+        let id = MessageInputItem::File {
+            source: FileSource::Id {
+                file_id: "file_456".into(),
+            },
+        };
+        assert_eq!(
+            to_val(&url),
+            json!({"type":"file","file_url":"https://example.com/a.pdf"})
+        );
+        assert_eq!(to_val(&id), json!({"type":"file","file_id":"file_456"}));
+    }
+
+    #[test]
+    fn serialize_message_input_image_url_without_detail() {
+        let item = MessageInputItem::Image {
+            source: ImageSource::ImageUrl {
+                image_url: "https://example.com/x.png".into(),
+            },
+            detail: None,
+        };
+        let observed = to_val(&item);
+        let expected = json!({
+            "type": "image",
+            "image_url": "https://example.com/x.png"
+        });
+        assert_eq!(observed, expected);
+    }
+
+    // ----- Responses (full envelope) -----
+
+    #[test]
+    fn envelope_success_conversation_create_full_schema() {
+        let env = ToolCallResponseEnvelope {
+            request_id: RequestId::Integer(1),
+            is_error: None,
+            result: Some(ToolCallResponseData::ConversationCreate(
+                ConversationCreateResult {
+                    conversation_id: uuid!("d0f6ecbe-84a2-41c1-b23d-b20473b25eab"),
+                    model: "o3".into(),
+                },
+            )),
+        };
+        let observed = to_val(&env);
+        let expected = json!({
+            "requestId": 1,
+            "result": {
+                "conversation_id": "d0f6ecbe-84a2-41c1-b23d-b20473b25eab",
+                "model": "o3"
+            }
+        });
+        assert_eq!(
+            observed, expected,
+            "full envelope (ConversationCreate) must match"
+        );
+    }
+
+    #[test]
+    fn envelope_success_conversation_connect_empty_result_object() {
+        let env = ToolCallResponseEnvelope {
+            request_id: RequestId::Integer(2),
+            is_error: None,
+            result: Some(ToolCallResponseData::ConversationConnect(
+                ConversationConnectResult {},
+            )),
+        };
+        let observed = to_val(&env);
+        let expected = json!({
+            "requestId": 2,
+            "result": {}
+        });
+        assert_eq!(
+            observed, expected,
+            "full envelope (ConversationConnect) must have empty object result"
+        );
+    }
+
+    #[test]
+    fn envelope_success_send_message_accepted_full_schema() {
+        let env = ToolCallResponseEnvelope {
+            request_id: RequestId::Integer(3),
+            is_error: None,
+            result: Some(ToolCallResponseData::ConversationSendMessage(
+                ConversationSendMessageAccepted { accepted: true },
+            )),
+        };
+        let observed = to_val(&env);
+        let expected = json!({
+            "requestId": 3,
+            "result": { "accepted": true }
+        });
+        assert_eq!(
+            observed, expected,
+            "full envelope (ConversationSendMessageAccepted) must match"
+        );
+    }
+
+    #[test]
+    fn envelope_success_conversations_list_with_next_cursor_full_schema() {
+        let env = ToolCallResponseEnvelope {
+            request_id: RequestId::Integer(4),
+            is_error: None,
+            result: Some(ToolCallResponseData::ConversationsList(
+                ConversationsListResult {
+                    conversations: vec![ConversationSummary {
+                        conversation_id: uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8"),
+                        title: "Refactor config loader".into(),
+                    }],
+                    next_cursor: Some("next123".into()),
+                },
+            )),
+        };
+        let observed = to_val(&env);
+        let expected = json!({
+            "requestId": 4,
+            "result": {
+                "conversations": [
+                    {
+                        "conversation_id": "67e55044-10b1-426f-9247-bb680e5fe0c8",
+                        "title": "Refactor config loader"
+                    }
+                ],
+                "next_cursor": "next123"
+            }
+        });
+        assert_eq!(
+            observed, expected,
+            "full envelope (ConversationsList with cursor) must match"
+        );
+    }
+
+    #[test]
+    fn envelope_error_only_is_error_and_request_id_string() {
+        let env = ToolCallResponseEnvelope {
+            request_id: RequestId::Integer(4),
+            is_error: Some(true),
+            result: None,
+        };
+        let observed = to_val(&env);
+        let expected = json!({
+            "requestId": 4,
+            "isError": true
+        });
+        assert_eq!(
+            observed, expected,
+            "error envelope must omit `result` and include `isError`"
+        );
+    }
+
+    // ----- Notifications -----
+
+    #[test]
+    fn serialize_notification_initial_state_minimal() {
         let params = InitialStateNotificationParams {
             meta: Some(NotificationMeta {
                 conversation_id: Some(uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8")),
@@ -336,25 +682,48 @@ mod tests {
             },
         };
 
-        let observed = serde_json::to_value(&params)
-            .expect("failed to serialize InitialStateNotificationParams");
+        let observed = to_val(&NotificationEnvelope::from(
+            ConversationNotificationParams::InitialState(params.clone()),
+        ));
         let expected = json!({
-            "_meta": {
-                "conversationId": "67e55044-10b1-426f-9247-bb680e5fe0c8",
-                "requestId": 44
-            },
-            "initial_state": {
-                "events": [
-                    { "msg": { "type": "task_started" } },
-                    { "msg": { "type": "agent_message_delta", "delta": "Loading..." } }
-                ]
+            "method": "notifications/initial_state",
+            "params": {
+                "_meta": {
+                    "conversationId": "67e55044-10b1-426f-9247-bb680e5fe0c8",
+                    "requestId": 44
+                },
+                "initial_state": {
+                    "events": [
+                        { "msg": { "type": "task_started" } },
+                        { "msg": { "type": "agent_message_delta", "delta": "Loading..." } }
+                    ]
+                }
             }
         });
         assert_eq!(observed, expected);
     }
 
     #[test]
-    fn serialize_connection_revoked_params() {
+    fn serialize_notification_initial_state_omits_empty_events_full_json() {
+        let params = InitialStateNotificationParams {
+            meta: None,
+            initial_state: InitialStatePayload { events: vec![] },
+        };
+
+        let observed = to_val(&NotificationEnvelope::from(
+            ConversationNotificationParams::InitialState(params),
+        ));
+        let expected = json!({
+            "method": "notifications/initial_state",
+            "params": {
+                "initial_state": {}
+            }
+        });
+        assert_eq!(observed, expected);
+    }
+
+    #[test]
+    fn serialize_notification_connection_revoked() {
         let params = ConnectionRevokedNotificationParams {
             meta: Some(NotificationMeta {
                 conversation_id: Some(uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8")),
@@ -362,94 +731,23 @@ mod tests {
             }),
             reason: "New connect() took over".into(),
         };
-        let observed = serde_json::to_value(&params)
-            .expect("failed to serialize ConnectionRevokedNotificationParams");
-        let expected = json!({
-            "_meta": { "conversationId": "67e55044-10b1-426f-9247-bb680e5fe0c8" },
-            "reason": "New connect() took over"
-        });
-        assert_eq!(observed, expected);
-    }
 
-    #[test]
-    fn serialize_new_conversation_result() {
-        let result = ConversationCreateResult {
-            conversation_id: uuid!("d0f6ecbe-84a2-41c1-b23d-b20473b25eab"),
-            model: "o3".into(),
-        };
-        let observed =
-            serde_json::to_value(&result).expect("failed to serialize ConversationCreateResult");
+        let observed = to_val(&NotificationEnvelope::from(
+            ConversationNotificationParams::ConnectionRevoked(params),
+        ));
         let expected = json!({
-            "conversation_id": "d0f6ecbe-84a2-41c1-b23d-b20473b25eab",
-            "model": "o3",
-        });
-        assert_eq!(observed, expected);
-    }
-
-    #[test]
-    fn serialize_get_conversations_result() {
-        let result = ConversationsListResult {
-            conversations: vec![ConversationSummary {
-                conversation_id: uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8"),
-                title: "Refactor config loader".into(),
-            }],
-            next_cursor: Some("eyJsb2dpZF9vZmZzZXQiOjIwfQ==".into()),
-        };
-        let observed =
-            serde_json::to_value(&result).expect("failed to serialize ConversationsListResult");
-        let expected = json!({
-            "conversations": [
-                {"conversation_id": "67e55044-10b1-426f-9247-bb680e5fe0c8", "title": "Refactor config loader"}
-            ],
-            "next_cursor": "eyJsb2dpZF9vZmZzZXQiOjIwfQ=="
-        });
-        assert_eq!(observed, expected);
-    }
-
-    #[test]
-    fn serialize_tool_call_request_params_send_user_message() {
-        let req = ToolCallRequestParams::ConversationSendMessage(ConversationSendMessageArgs {
-            conversation_id: uuid!("d0f6ecbe-84a2-41c1-b23d-b20473b25eab"),
-            content: vec![MessageInputItem::Text {
-                text: "Hello".into(),
-            }],
-            message_id: Some("client-uuid-123".into()),
-            conversation_overrides: None,
-        });
-        let observed = serde_json::to_value(&req)
-            .expect("failed to serialize ToolCallRequestParams::SendUserMessage");
-        let expected = json!({
-            "name": "conversation_send_message",
-            "arguments": {
-                "conversation_id": "d0f6ecbe-84a2-41c1-b23d-b20473b25eab",
-                "content": [ { "type": "text", "text": "Hello" } ],
-                "message_id": "client-uuid-123"
+            "method": "notifications/connection_revoked",
+            "params": {
+                "_meta": { "conversationId": "67e55044-10b1-426f-9247-bb680e5fe0c8" },
+                "reason": "New connect() took over"
             }
         });
         assert_eq!(observed, expected);
     }
 
     #[test]
-    fn serialize_tool_call_response_data_new_conversation() {
-        let resp = ToolCallResponseData::ConversationCreate(ConversationCreateResult {
-            conversation_id: uuid!("d0f6ecbe-84a2-41c1-b23d-b20473b25eab"),
-            model: "o3".into(),
-        });
-        let observed = serde_json::to_value(&resp)
-            .expect("failed to serialize ToolCallResponseData::ConversationCreate");
-        let expected = json!({
-            "type": "conversation_create",
-            "data": {
-                "conversation_id": "d0f6ecbe-84a2-41c1-b23d-b20473b25eab",
-                "model": "o3",
-            }
-        });
-        assert_eq!(observed, expected);
-    }
-
-    #[test]
-    fn serialize_conversation_notification_params_codex_event() {
-        let params = ConversationNotificationParams::CodexEvent(CodexEventNotificationParams {
+    fn serialize_notification_codex_event_uses_eventmsg_type_in_method() {
+        let params = CodexEventNotificationParams {
             meta: Some(NotificationMeta {
                 conversation_id: Some(uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8")),
                 request_id: Some(RequestId::Integer(44)),
@@ -457,12 +755,14 @@ mod tests {
             msg: EventMsg::AgentMessage(codex_core::protocol::AgentMessageEvent {
                 message: "hi".into(),
             }),
-        });
-        let observed = serde_json::to_value(&params)
-            .expect("failed to serialize ConversationNotificationParams::CodexEvent");
+        };
+
+        let observed = to_val(&NotificationEnvelope::from(
+            ConversationNotificationParams::CodexEvent(params),
+        ));
         let expected = json!({
-            "type": "codex_event",
-            "data": {
+            "method": "notifications/agent_message",
+            "params": {
                 "_meta": {
                     "conversationId": "67e55044-10b1-426f-9247-bb680e5fe0c8",
                     "requestId": 44
@@ -471,5 +771,299 @@ mod tests {
             }
         });
         assert_eq!(observed, expected);
+    }
+
+    #[test]
+    fn serialize_notification_codex_event_task_started_full_json() {
+        let params = CodexEventNotificationParams {
+            meta: Some(NotificationMeta {
+                conversation_id: Some(uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8")),
+                request_id: Some(RequestId::Integer(7)),
+            }),
+            msg: EventMsg::TaskStarted,
+        };
+
+        let observed = to_val(&NotificationEnvelope::from(
+            ConversationNotificationParams::CodexEvent(params),
+        ));
+        let expected = json!({
+            "method": "notifications/task_started",
+            "params": {
+                "_meta": {
+                    "conversationId": "67e55044-10b1-426f-9247-bb680e5fe0c8",
+                    "requestId": 7
+                },
+                "msg": { "type": "task_started" }
+            }
+        });
+        assert_eq!(observed, expected);
+    }
+
+    #[test]
+    fn serialize_notification_codex_event_agent_message_delta_full_json() {
+        let params = CodexEventNotificationParams {
+            meta: None,
+            msg: EventMsg::AgentMessageDelta(codex_core::protocol::AgentMessageDeltaEvent {
+                delta: "stream...".into(),
+            }),
+        };
+
+        let observed = to_val(&NotificationEnvelope::from(
+            ConversationNotificationParams::CodexEvent(params),
+        ));
+        let expected = json!({
+            "method": "notifications/agent_message_delta",
+            "params": {
+                "msg": { "type": "agent_message_delta", "delta": "stream..." }
+            }
+        });
+        assert_eq!(observed, expected);
+    }
+
+    #[test]
+    fn serialize_notification_codex_event_agent_message_full_json() {
+        let params = CodexEventNotificationParams {
+            meta: Some(NotificationMeta {
+                conversation_id: Some(uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8")),
+                request_id: Some(RequestId::Integer(44)),
+            }),
+            msg: EventMsg::AgentMessage(codex_core::protocol::AgentMessageEvent {
+                message: "hi".into(),
+            }),
+        };
+
+        let observed = to_val(&NotificationEnvelope::from(
+            ConversationNotificationParams::CodexEvent(params),
+        ));
+        let expected = json!({
+            "method": "notifications/agent_message",
+            "params": {
+                "_meta": {
+                    "conversationId": "67e55044-10b1-426f-9247-bb680e5fe0c8",
+                    "requestId": 44
+                },
+                "msg": { "type": "agent_message", "message": "hi" }
+            }
+        });
+        assert_eq!(observed, expected);
+    }
+
+    // Fallback cases where method should be "notifications/unknown"
+    #[test]
+    fn serialize_notification_codex_event_agent_reasoning_full_json_unknown() {
+        let params = CodexEventNotificationParams {
+            meta: None,
+            msg: EventMsg::AgentReasoning(codex_core::protocol::AgentReasoningEvent {
+                text: "thinking…".into(),
+            }),
+        };
+
+        let observed = to_val(&NotificationEnvelope::from(
+            ConversationNotificationParams::CodexEvent(params),
+        ));
+        let expected = json!({
+            "method": "notifications/unknown",
+            "params": {
+                "msg": { "type": "agent_reasoning", "text": "thinking…" }
+            }
+        });
+        assert_eq!(observed, expected);
+    }
+
+    #[test]
+    fn serialize_notification_codex_event_token_count_full_json_unknown() {
+        let usage = codex_core::protocol::TokenUsage {
+            input_tokens: 10,
+            cached_input_tokens: Some(2),
+            output_tokens: 5,
+            reasoning_output_tokens: Some(1),
+            total_tokens: 16,
+        };
+        let params = CodexEventNotificationParams {
+            meta: None,
+            msg: EventMsg::TokenCount(usage),
+        };
+
+        let observed = to_val(&NotificationEnvelope::from(
+            ConversationNotificationParams::CodexEvent(params),
+        ));
+        let expected = json!({
+            "method": "notifications/unknown",
+            "params": {
+                "msg": {
+                    "type": "token_count",
+                    "input_tokens": 10,
+                    "cached_input_tokens": 2,
+                    "output_tokens": 5,
+                    "reasoning_output_tokens": 1,
+                    "total_tokens": 16
+                }
+            }
+        });
+        assert_eq!(observed, expected);
+    }
+
+    #[test]
+    fn serialize_notification_codex_event_session_configured_full_json_unknown() {
+        let params = CodexEventNotificationParams {
+            meta: Some(NotificationMeta {
+                conversation_id: Some(uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8")),
+                request_id: None,
+            }),
+            msg: EventMsg::SessionConfigured(codex_core::protocol::SessionConfiguredEvent {
+                session_id: uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8"),
+                model: "codex-mini-latest".into(),
+                history_log_id: 42,
+                history_entry_count: 3,
+            }),
+        };
+
+        let observed = to_val(&NotificationEnvelope::from(
+            ConversationNotificationParams::CodexEvent(params),
+        ));
+        let expected = json!({
+            "method": "notifications/unknown",
+            "params": {
+                "_meta": { "conversationId": "67e55044-10b1-426f-9247-bb680e5fe0c8" },
+                "msg": {
+                    "type": "session_configured",
+                    "session_id": "67e55044-10b1-426f-9247-bb680e5fe0c8",
+                    "model": "codex-mini-latest",
+                    "history_log_id": 42,
+                    "history_entry_count": 3
+                }
+            }
+        });
+        assert_eq!(observed, expected);
+    }
+
+    #[test]
+    fn serialize_notification_codex_event_exec_command_begin_full_json_unknown() {
+        let params = CodexEventNotificationParams {
+            meta: None,
+            msg: EventMsg::ExecCommandBegin(codex_core::protocol::ExecCommandBeginEvent {
+                call_id: "c1".into(),
+                command: vec!["bash".into(), "-lc".into(), "echo hi".into()],
+                cwd: std::path::PathBuf::from("/work"),
+            }),
+        };
+
+        let observed = to_val(&NotificationEnvelope::from(
+            ConversationNotificationParams::CodexEvent(params),
+        ));
+        let expected = json!({
+            "method": "notifications/unknown",
+            "params": {
+                "msg": {
+                    "type": "exec_command_begin",
+                    "call_id": "c1",
+                    "command": ["bash", "-lc", "echo hi"],
+                    "cwd": "/work"
+                }
+            }
+        });
+        assert_eq!(observed, expected);
+    }
+
+    #[test]
+    fn serialize_notification_codex_event_mcp_tool_call_begin_full_json_unknown() {
+        let params = CodexEventNotificationParams {
+            meta: None,
+            msg: EventMsg::McpToolCallBegin(codex_core::protocol::McpToolCallBeginEvent {
+                call_id: "m1".into(),
+                server: "calc".into(),
+                tool: "add".into(),
+                arguments: Some(json!({"a":1,"b":2})),
+            }),
+        };
+
+        let observed = to_val(&NotificationEnvelope::from(
+            ConversationNotificationParams::CodexEvent(params),
+        ));
+        let expected = json!({
+            "method": "notifications/unknown",
+            "params": {
+                "msg": {
+                    "type": "mcp_tool_call_begin",
+                    "call_id": "m1",
+                    "server": "calc",
+                    "tool": "add",
+                    "arguments": { "a": 1, "b": 2 }
+                }
+            }
+        });
+        assert_eq!(observed, expected);
+    }
+
+    #[test]
+    fn serialize_notification_codex_event_patch_apply_end_full_json_unknown() {
+        let params = CodexEventNotificationParams {
+            meta: None,
+            msg: EventMsg::PatchApplyEnd(codex_core::protocol::PatchApplyEndEvent {
+                call_id: "p1".into(),
+                stdout: "ok".into(),
+                stderr: "".into(),
+                success: true,
+            }),
+        };
+
+        let observed = to_val(&NotificationEnvelope::from(
+            ConversationNotificationParams::CodexEvent(params),
+        ));
+        let expected = json!({
+            "method": "notifications/unknown",
+            "params": {
+                "msg": {
+                    "type": "patch_apply_end",
+                    "call_id": "p1",
+                    "stdout": "ok",
+                    "stderr": "",
+                    "success": true
+                }
+            }
+        });
+        assert_eq!(observed, expected);
+    }
+
+    // ----- Cancelled notifications -----
+
+    #[test]
+    fn serialize_notification_cancelled_with_reason_full_json() {
+        let params = CancellNotificationParams {
+            request_id: RequestId::String("r-123".into()),
+            reason: Some("user_cancelled".into()),
+        };
+
+        let observed = to_val(&NotificationEnvelope::from(
+            ConversationNotificationParams::Cancelled(params),
+        ));
+        let expected = json!({
+            "method": "notifications/cancelled",
+            "params": {
+                "requestId": "r-123",
+                "reason": "user_cancelled"
+            }
+        });
+        assert_eq!(observed, expected);
+    }
+
+    #[test]
+    fn serialize_notification_cancelled_without_reason_full_json() {
+        let params = CancellNotificationParams {
+            request_id: RequestId::Integer(77),
+            reason: None,
+        };
+
+        let observed = to_val(&NotificationEnvelope::from(
+            ConversationNotificationParams::Cancelled(params),
+        ));
+
+        // Check exact structure: reason must be omitted.
+        assert_eq!(observed["method"], "notifications/cancelled");
+        assert_eq!(observed["params"]["requestId"], 77);
+        assert!(
+            observed["params"].get("reason").is_none(),
+            "reason must be omitted when None"
+        );
     }
 }
