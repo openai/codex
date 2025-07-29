@@ -3,11 +3,15 @@ use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use serde::Deserialize;
 use serde::Serialize;
+use strum_macros::Display;
 use uuid::Uuid;
 
 use mcp_types::RequestId;
 
-pub type ConversationId = Uuid;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ConversationId(pub Uuid);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct MessageId(pub Uuid);
@@ -26,13 +30,13 @@ pub struct ToolCallRequest {
 #[serde(tag = "name", content = "arguments", rename_all = "camelCase")]
 pub enum ToolCallRequestParams {
     ConversationCreate(ConversationCreateArgs),
-    ConversationConnect(ConversationConnectArgs),
+    ConversationStream(ConversationStreamArgs),
     ConversationSendMessage(ConversationSendMessageArgs),
     ConversationsList(ConversationsListArgs),
 }
 
-/// Wrap this request in a JSON-RPC request.
 impl ToolCallRequestParams {
+    /// Wrap this request in a JSON-RPC request.
     #[allow(dead_code)]
     pub fn into_request(self, id: u64) -> ToolCallRequest {
         ToolCallRequest {
@@ -83,7 +87,7 @@ pub struct ConversationOverrides {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ConversationConnectArgs {
+pub struct ConversationStreamArgs {
     pub conversation_id: ConversationId,
 }
 
@@ -179,7 +183,7 @@ pub struct ToolCallResponse {
 #[serde(untagged)]
 pub enum ToolCallResponseData {
     ConversationCreate(ConversationCreateResult),
-    ConversationConnect(ConversationConnectResult),
+    ConversationStream(ConversationStreamResult),
     ConversationSendMessage(ConversationSendMessageResult),
     ConversationsList(ConversationsListResult),
 }
@@ -191,7 +195,7 @@ pub struct ConversationCreateResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ConversationConnectResult {}
+pub struct ConversationStreamResult {}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConversationSendMessageResult {
@@ -212,15 +216,11 @@ pub struct ConversationSummary {
 }
 
 // Notifications
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "method", content = "params", rename_all = "camelCase")]
-pub enum ConversationNotificationParams {
+#[derive(Debug, Clone, Deserialize, Display)]
+pub enum ServerNotification {
     InitialState(InitialStateNotificationParams),
-    // Sent when a second client connects to the same conversation.
-    ConnectionRevoked(ConnectionRevokedNotificationParams),
+    StreamDisconnected(StreamDisconnectedNotificationParams),
     CodexEvent(CodexEventNotificationParams),
-    Cancelled(CancelNotificationParams),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -241,12 +241,12 @@ pub struct InitialStateNotificationParams {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InitialStatePayload {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub events: Vec<CodexEventNotificationParams>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ConnectionRevokedNotificationParams {
+pub struct StreamDisconnectedNotificationParams {
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<NotificationMeta>,
     pub reason: String,
@@ -267,65 +267,33 @@ pub struct CancelNotificationParams {
     pub reason: Option<String>,
 }
 
-#[derive(Debug, Clone)]
-pub enum ConversationNotification {
-    InitialState(InitialStateNotificationParams),
-    ConnectionRevoked(ConnectionRevokedNotificationParams),
-    Cancelled(CancelNotificationParams),
-    CodexEvent(CodexEventNotificationParams),
-}
-
-impl From<ConversationNotificationParams> for ConversationNotification {
-    fn from(n: ConversationNotificationParams) -> Self {
-        match n {
-            ConversationNotificationParams::InitialState(p) => {
-                ConversationNotification::InitialState(p)
-            }
-            ConversationNotificationParams::ConnectionRevoked(p) => {
-                ConversationNotification::ConnectionRevoked(p)
-            }
-            ConversationNotificationParams::Cancelled(p) => ConversationNotification::Cancelled(p),
-            ConversationNotificationParams::CodexEvent(p) => {
-                ConversationNotification::CodexEvent(p)
-            }
-        }
-    }
-}
-
-impl Serialize for ConversationNotification {
+impl Serialize for ServerNotification {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
         use serde::ser::SerializeMap;
 
-        fn event_type(msg: &EventMsg) -> String {
-            // Keep in sync with EventMsg variants/serde renames used by codex_core.
-            msg.to_string()
-        }
-
         let mut map = serializer.serialize_map(Some(2))?;
         match self {
-            ConversationNotification::InitialState(p) => {
-                map.serialize_entry("method", "notifications/initial_state")?;
+            ServerNotification::CodexEvent(p) => {
+                map.serialize_entry("method", &format!("notifications/{:?}", p.msg))?;
                 map.serialize_entry("params", p)?;
             }
-            ConversationNotification::ConnectionRevoked(p) => {
-                map.serialize_entry("method", "notifications/connection_revoked")?;
-                map.serialize_entry("params", p)?;
-            }
-            ConversationNotification::Cancelled(p) => {
-                map.serialize_entry("method", "notifications/cancelled")?;
-                map.serialize_entry("params", p)?;
-            }
-            ConversationNotification::CodexEvent(p) => {
-                let t = event_type(&p.msg);
-                map.serialize_entry("method", &format!("notifications/{t}"))?;
-                map.serialize_entry("params", p)?;
+            _ => {
+                map.serialize_entry("method", &format!("notifications/{self:?}"))?;
+                map.serialize_entry("params", self)?;
             }
         }
         map.end()
     }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(tag = "method", content = "params", rename_all = "camelCase")]
+pub enum ClientNotification {
+    #[serde(rename = "notifications/cancelled")]
+    Cancelled(CancelNotificationParams),
 }
 
 #[cfg(test)]
@@ -378,7 +346,7 @@ mod tests {
     fn serialize_tool_call_request_params_conversation_send_message_with_overrides_and_parent_message_id()
      {
         let req = ToolCallRequestParams::ConversationSendMessage(ConversationSendMessageArgs {
-            conversation_id: uuid!("d0f6ecbe-84a2-41c1-b23d-b20473b25eab"),
+            conversation_id: ConversationId(uuid!("d0f6ecbe-84a2-41c1-b23d-b20473b25eab")),
             content: vec![
                 MessageInputItem::Text { text: "Hi".into() },
                 MessageInputItem::Image {
@@ -457,9 +425,9 @@ mod tests {
     }
 
     #[test]
-    fn serialize_tool_call_request_params_conversation_connect() {
-        let req = ToolCallRequestParams::ConversationConnect(ConversationConnectArgs {
-            conversation_id: uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8"),
+    fn serialize_tool_call_request_params_conversation_stream() {
+        let req = ToolCallRequestParams::ConversationStream(ConversationStreamArgs {
+            conversation_id: ConversationId(uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8")),
         });
 
         let observed = to_val(&req.into_request(2));
@@ -468,7 +436,7 @@ mod tests {
             "id": 2,
             "method": "tools/call",
             "params": {
-                "name": "conversationConnect",
+                "name": "conversationStream",
                 "arguments": {
                     "conversation_id": "67e55044-10b1-426f-9247-bb680e5fe0c8"
                 }
@@ -540,7 +508,7 @@ mod tests {
             is_error: None,
             result: Some(ToolCallResponseData::ConversationCreate(
                 ConversationCreateResult {
-                    conversation_id: uuid!("d0f6ecbe-84a2-41c1-b23d-b20473b25eab"),
+                    conversation_id: ConversationId(uuid!("d0f6ecbe-84a2-41c1-b23d-b20473b25eab")),
                     model: "o3".into(),
                 },
             )),
@@ -560,12 +528,12 @@ mod tests {
     }
 
     #[test]
-    fn response_success_conversation_connect_empty_result_object() {
+    fn response_success_conversation_stream_empty_result_object() {
         let env = ToolCallResponse {
             request_id: RequestId::Integer(2),
             is_error: None,
-            result: Some(ToolCallResponseData::ConversationConnect(
-                ConversationConnectResult {},
+            result: Some(ToolCallResponseData::ConversationStream(
+                ConversationStreamResult {},
             )),
         };
         let observed = to_val(&env);
@@ -575,7 +543,7 @@ mod tests {
         });
         assert_eq!(
             observed, expected,
-            "response (ConversationConnect) must have empty object result"
+            "response (ConversationStream) must have empty object result"
         );
     }
 
@@ -607,7 +575,9 @@ mod tests {
             result: Some(ToolCallResponseData::ConversationsList(
                 ConversationsListResult {
                     conversations: vec![ConversationSummary {
-                        conversation_id: uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8"),
+                        conversation_id: ConversationId(uuid!(
+                            "67e55044-10b1-426f-9247-bb680e5fe0c8"
+                        )),
                         title: "Refactor config loader".into(),
                     }],
                     next_cursor: Some("next123".into()),
@@ -657,7 +627,9 @@ mod tests {
     fn serialize_notification_initial_state_minimal() {
         let params = InitialStateNotificationParams {
             meta: Some(NotificationMeta {
-                conversation_id: Some(uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8")),
+                conversation_id: Some(ConversationId(uuid!(
+                    "67e55044-10b1-426f-9247-bb680e5fe0c8"
+                ))),
                 request_id: Some(RequestId::Integer(44)),
             }),
             initial_state: InitialStatePayload {
@@ -678,9 +650,7 @@ mod tests {
             },
         };
 
-        let observed = to_val(&ConversationNotification::from(
-            ConversationNotificationParams::InitialState(params.clone()),
-        ));
+        let observed = to_val(&ServerNotification::InitialState(params.clone()));
         let expected = json!({
             "method": "notifications/initial_state",
             "params": {
@@ -706,36 +676,34 @@ mod tests {
             initial_state: InitialStatePayload { events: vec![] },
         };
 
-        let observed = to_val(&ConversationNotification::from(
-            ConversationNotificationParams::InitialState(params),
-        ));
+        let observed = to_val(&ServerNotification::InitialState(params));
         let expected = json!({
             "method": "notifications/initial_state",
             "params": {
-                "initial_state": {}
+                "initial_state": { "events": [] }
             }
         });
         assert_eq!(observed, expected);
     }
 
     #[test]
-    fn serialize_notification_connection_revoked() {
-        let params = ConnectionRevokedNotificationParams {
+    fn serialize_notification_stream_disconnected() {
+        let params = StreamDisconnectedNotificationParams {
             meta: Some(NotificationMeta {
-                conversation_id: Some(uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8")),
+                conversation_id: Some(ConversationId(uuid!(
+                    "67e55044-10b1-426f-9247-bb680e5fe0c8"
+                ))),
                 request_id: None,
             }),
-            reason: "New connect() took over".into(),
+            reason: "New stream() took over".into(),
         };
 
-        let observed = to_val(&ConversationNotification::from(
-            ConversationNotificationParams::ConnectionRevoked(params),
-        ));
+        let observed = to_val(&ServerNotification::StreamDisconnected(params));
         let expected = json!({
-            "method": "notifications/connection_revoked",
+            "method": "notifications/stream_disconnected",
             "params": {
                 "_meta": { "conversationId": "67e55044-10b1-426f-9247-bb680e5fe0c8" },
-                "reason": "New connect() took over"
+                "reason": "New stream() took over"
             }
         });
         assert_eq!(observed, expected);
@@ -745,7 +713,9 @@ mod tests {
     fn serialize_notification_codex_event_uses_eventmsg_type_in_method() {
         let params = CodexEventNotificationParams {
             meta: Some(NotificationMeta {
-                conversation_id: Some(uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8")),
+                conversation_id: Some(ConversationId(uuid!(
+                    "67e55044-10b1-426f-9247-bb680e5fe0c8"
+                ))),
                 request_id: Some(RequestId::Integer(44)),
             }),
             msg: EventMsg::AgentMessage(codex_core::protocol::AgentMessageEvent {
@@ -753,9 +723,7 @@ mod tests {
             }),
         };
 
-        let observed = to_val(&ConversationNotification::from(
-            ConversationNotificationParams::CodexEvent(params),
-        ));
+        let observed = to_val(&ServerNotification::CodexEvent(params));
         let expected = json!({
             "method": "notifications/agent_message",
             "params": {
@@ -773,15 +741,15 @@ mod tests {
     fn serialize_notification_codex_event_task_started_full_json() {
         let params = CodexEventNotificationParams {
             meta: Some(NotificationMeta {
-                conversation_id: Some(uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8")),
+                conversation_id: Some(ConversationId(uuid!(
+                    "67e55044-10b1-426f-9247-bb680e5fe0c8"
+                ))),
                 request_id: Some(RequestId::Integer(7)),
             }),
             msg: EventMsg::TaskStarted,
         };
 
-        let observed = to_val(&ConversationNotification::from(
-            ConversationNotificationParams::CodexEvent(params),
-        ));
+        let observed = to_val(&ServerNotification::CodexEvent(params));
         let expected = json!({
             "method": "notifications/task_started",
             "params": {
@@ -804,9 +772,7 @@ mod tests {
             }),
         };
 
-        let observed = to_val(&ConversationNotification::from(
-            ConversationNotificationParams::CodexEvent(params),
-        ));
+        let observed = to_val(&ServerNotification::CodexEvent(params));
         let expected = json!({
             "method": "notifications/agent_message_delta",
             "params": {
@@ -820,7 +786,9 @@ mod tests {
     fn serialize_notification_codex_event_agent_message_full_json() {
         let params = CodexEventNotificationParams {
             meta: Some(NotificationMeta {
-                conversation_id: Some(uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8")),
+                conversation_id: Some(ConversationId(uuid!(
+                    "67e55044-10b1-426f-9247-bb680e5fe0c8"
+                ))),
                 request_id: Some(RequestId::Integer(44)),
             }),
             msg: EventMsg::AgentMessage(codex_core::protocol::AgentMessageEvent {
@@ -828,9 +796,7 @@ mod tests {
             }),
         };
 
-        let observed = to_val(&ConversationNotification::from(
-            ConversationNotificationParams::CodexEvent(params),
-        ));
+        let observed = to_val(&ServerNotification::CodexEvent(params));
         let expected = json!({
             "method": "notifications/agent_message",
             "params": {
@@ -853,9 +819,7 @@ mod tests {
             }),
         };
 
-        let observed = to_val(&ConversationNotification::from(
-            ConversationNotificationParams::CodexEvent(params),
-        ));
+        let observed = to_val(&ServerNotification::CodexEvent(params));
         let expected = json!({
             "method": "notifications/agent_reasoning",
             "params": {
@@ -879,9 +843,7 @@ mod tests {
             msg: EventMsg::TokenCount(usage),
         };
 
-        let observed = to_val(&ConversationNotification::from(
-            ConversationNotificationParams::CodexEvent(params),
-        ));
+        let observed = to_val(&ServerNotification::CodexEvent(params));
         let expected = json!({
             "method": "notifications/token_count",
             "params": {
@@ -902,7 +864,9 @@ mod tests {
     fn serialize_notification_codex_event_session_configured_full_json() {
         let params = CodexEventNotificationParams {
             meta: Some(NotificationMeta {
-                conversation_id: Some(uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8")),
+                conversation_id: Some(ConversationId(uuid!(
+                    "67e55044-10b1-426f-9247-bb680e5fe0c8"
+                ))),
                 request_id: None,
             }),
             msg: EventMsg::SessionConfigured(codex_core::protocol::SessionConfiguredEvent {
@@ -913,9 +877,7 @@ mod tests {
             }),
         };
 
-        let observed = to_val(&ConversationNotification::from(
-            ConversationNotificationParams::CodexEvent(params),
-        ));
+        let observed = to_val(&ServerNotification::CodexEvent(params));
         let expected = json!({
             "method": "notifications/session_configured",
             "params": {
@@ -943,9 +905,7 @@ mod tests {
             }),
         };
 
-        let observed = to_val(&ConversationNotification::from(
-            ConversationNotificationParams::CodexEvent(params),
-        ));
+        let observed = to_val(&ServerNotification::CodexEvent(params));
         let expected = json!({
             "method": "notifications/exec_command_begin",
             "params": {
@@ -972,9 +932,7 @@ mod tests {
             }),
         };
 
-        let observed = to_val(&ConversationNotification::from(
-            ConversationNotificationParams::CodexEvent(params),
-        ));
+        let observed = to_val(&ServerNotification::CodexEvent(params));
         let expected = json!({
             "method": "notifications/mcp_tool_call_begin",
             "params": {
@@ -1002,9 +960,7 @@ mod tests {
             }),
         };
 
-        let observed = to_val(&ConversationNotification::from(
-            ConversationNotificationParams::CodexEvent(params),
-        ));
+        let observed = to_val(&ServerNotification::CodexEvent(params));
         let expected = json!({
             "method": "notifications/patch_apply_end",
             "params": {
@@ -1029,9 +985,7 @@ mod tests {
             reason: Some("user_cancelled".into()),
         };
 
-        let observed = to_val(&ConversationNotification::from(
-            ConversationNotificationParams::Cancelled(params),
-        ));
+        let observed = to_val(&ClientNotification::Cancelled(params));
         let expected = json!({
             "method": "notifications/cancelled",
             "params": {
@@ -1049,9 +1003,7 @@ mod tests {
             reason: None,
         };
 
-        let observed = to_val(&ConversationNotification::from(
-            ConversationNotificationParams::Cancelled(params),
-        ));
+        let observed = to_val(&ClientNotification::Cancelled(params));
 
         // Check exact structure: reason must be omitted.
         assert_eq!(observed["method"], "notifications/cancelled");
