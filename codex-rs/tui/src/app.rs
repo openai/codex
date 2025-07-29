@@ -97,8 +97,8 @@ impl App<'_> {
                     // crashes the app if the cursor position can't be read.
                     // For Termux compatibility, we use a longer timeout (500ms)
                     // to accommodate slower ANSI escape sequence processing.
-                    let is_termux = std::env::var("TERMUX_VERSION").is_ok() || 
-                                   std::env::var("PREFIX").map_or(false, |p| p.contains("com.termux"));
+                    let is_termux = std::env::var("TERMUX_VERSION").is_ok()
+                        || std::env::var("PREFIX").map_or(false, |p| p.contains("com.termux"));
                     let poll_timeout = if is_termux {
                         Duration::from_millis(500)
                     } else {
@@ -107,7 +107,7 @@ impl App<'_> {
                     match crossterm::event::poll(poll_timeout) {
                         Ok(true) => {
                             if let Ok(event) = crossterm::event::read() {
-                            match event {
+                                match event {
                                 crossterm::event::Event::Key(key_event) => {
                                     app_event_tx.send(AppEvent::KeyEvent(key_event));
                                 }
@@ -144,7 +144,7 @@ impl App<'_> {
                                 _ => {
                                     // Ignore any other events.
                                 }
-                            }
+                                }
                             }
                         }
                         Ok(false) => {

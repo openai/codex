@@ -19,8 +19,8 @@ pub type Tui = Terminal<CrosstermBackend<Stdout>>;
 /// Initialize the terminal (inline viewport; history stays in normal scrollback)
 pub fn init(_config: &Config) -> Result<Tui> {
     // For Termux compatibility, handle bracketed paste mode more gracefully
-    let is_termux = std::env::var("TERMUX_VERSION").is_ok() || 
-                   std::env::var("PREFIX").map_or(false, |p| p.contains("com.termux"));
+    let is_termux = std::env::var("TERMUX_VERSION").is_ok()
+        || std::env::var("PREFIX").map_or(false, |p| p.contains("com.termux"));
     
     if !is_termux {
         // Some terminals may not support bracketed paste, so don't fail on error
@@ -57,8 +57,8 @@ fn set_panic_hook() {
 /// Restore the terminal to its original state
 pub fn restore() -> Result<()> {
     // For Termux compatibility, handle bracketed paste mode gracefully
-    let is_termux = std::env::var("TERMUX_VERSION").is_ok() || 
-                   std::env::var("PREFIX").map_or(false, |p| p.contains("com.termux"));
+    let is_termux = std::env::var("TERMUX_VERSION").is_ok()
+        || std::env::var("PREFIX").map_or(false, |p| p.contains("com.termux"));
     
     if !is_termux {
         let _ = execute!(stdout(), DisableBracketedPaste);
