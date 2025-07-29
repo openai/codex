@@ -477,6 +477,17 @@ impl ChatComposer<'_> {
             }
         }
 
+        if let Input {
+            key: Key::Char('u'),
+            ctrl: true,
+            alt: false,
+            ..
+        } = input
+        {
+            self.textarea.delete_line_by_head();
+            return (InputResult::None, true);
+        }
+
         // Normal input handling
         self.textarea.input(input);
         let text_after = self.textarea.lines().join("\n");
