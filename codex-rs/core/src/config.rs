@@ -468,25 +468,11 @@ impl Config {
         // Load base instructions override from a file if specified. If the
         // path is relative, resolve it against the effective cwd so the
         // behaviour matches other path-like config values.
-        let base_instructions = match base_instructions {
-            Some(s) => Some(s),
-            None => {
-                match Self::get_base_instructions(
-                    cfg.experimental_instructions_file.as_ref(),
-                    Some(&resolved_cwd),
-                ) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        // Surface a hard failure when an explicit path was provided but could not be
-                        // read or was invalid.
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::InvalidInput,
-                            format!("Failed to load experimental_instructions_file: {e}"),
-                        ));
-                    }
-                }
-            }
-        };
+        let file_base_instructions = Self::get_base_instructions(
+            cfg.experimental_instructions_file.as_ref(),
+            &resolved_cwd,
+        )?;
+        let base_instructions = base_instructions.or(file_base_instructions);
 
         let config = Self {
             model,
@@ -560,48 +546,43 @@ impl Config {
 
     fn get_base_instructions(
         path: Option<&PathBuf>,
-        cwd: Option<&Path>,
+        cwd: &Path,
     ) -> std::io::Result<Option<String>> {
         let p = match path.as_ref() {
             None => return Ok(None),
             Some(p) => p,
         };
 
-        // Resolve relative paths against the provided cwd (if any) to make
-        // CLI overrides consistent regardless of where the process was
-        // launched from.
+        // Resolve relative paths against the provided cwd to make CLI
+        // overrides consistent regardless of where the process was launched
+        // from.
         let full_path = if p.is_relative() {
-            match cwd {
-                Some(root) => root.join(p),
-                None => p.to_path_buf(),
-            }
+            cwd.join(p)
         } else {
             p.to_path_buf()
         };
 
-        match std::fs::read_to_string(&full_path) {
-            Ok(contents) => {
-                let s = contents.trim().to_string();
-                if s.is_empty() {
-                    let e = std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        format!(
-                            "experimental instructions file is empty: {}",
-                            full_path.display()
-                        ),
-                    );
-                    Err(e)
-                } else {
-                    Ok(Some(s))
-                }
-            }
-            Err(e) => Err(std::io::Error::new(
+        let contents = std::fs::read_to_string(&full_path).map_err(|e| {
+            std::io::Error::new(
                 e.kind(),
                 format!(
                     "failed to read experimental instructions file {}: {e}",
                     full_path.display()
                 ),
-            )),
+            )
+        })?;
+
+        let s = contents.trim().to_string();
+        if s.is_empty() {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "experimental instructions file is empty: {}",
+                    full_path.display()
+                ),
+            ))
+        } else {
+            Ok(Some(s))
         }
     }
 }
