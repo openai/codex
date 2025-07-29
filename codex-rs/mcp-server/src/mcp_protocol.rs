@@ -5,18 +5,22 @@ use uuid::Uuid;
 
 use mcp_types::RequestId;
 
+// Introduce a dedicated ConversationId type to allow future flexibility
+// on the underlying representation (e.g. switching from UUID to u32).
+pub type ConversationId = Uuid;
+
 // Requests
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "name", content = "arguments", rename_all = "snake_case")]
 pub enum ToolCallRequestParams {
-    NewConversation(NewConversationArgs),
-    Connect(ConnectArgs),
-    SendUserMessage(SendUserMessageArgs),
-    GetConversations(GetConversationsArgs),
+    ConversationCreate(ConversationCreateArgs),
+    ConversationConnect(ConversationConnectArgs),
+    ConversationSendMessage(ConversationSendMessageArgs),
+    ConversationsList(ConversationsListArgs),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct NewConversationArgs {
+pub struct ConversationCreateArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
     pub model: String,
@@ -33,22 +37,45 @@ pub struct NewConversationArgs {
     pub base_instructions: Option<String>,
 }
 
+/// Optional overrides for an existing conversation's execution context when sending a message.
+/// Fields left as `None` inherit the current conversation/session settings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ConnectArgs {
-    pub conversation_id: Uuid,
+pub struct ConversationOverrides {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_policy: Option<codex_core::protocol::AskForApproval>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox: Option<codex_core::config_types::SandboxMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_instructions: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SendUserMessageArgs {
-    pub conversation_id: Uuid,
+pub struct ConversationConnectArgs {
+    pub conversation_id: ConversationId,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConversationSendMessageArgs {
+    pub conversation_id: ConversationId,
     pub content: Vec<InputMessageContentPart>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_overrides: Option<ConversationOverrides>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum InputMessageContentPart {
+    // following OpenAI's Responses API: https://platform.openai.com/docs/api-reference/responses
     Text {
         text: String,
     },
@@ -74,6 +101,7 @@ pub enum ImageSource {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum FileSource {
+    // following OpenAI's Responses API: https://platform.openai.com/docs/guides/pdf-files?api-mode=responses#uploading-files
     Url {
         file_url: String,
     },
@@ -83,6 +111,7 @@ pub enum FileSource {
     Data {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         filename: Option<String>,
+        /// Base64-encoded file contents.
         file_data: String,
     },
 }
@@ -96,7 +125,7 @@ pub enum ImageDetail {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct GetConversationsArgs {
+pub struct ConversationsListArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -122,30 +151,30 @@ pub struct ToolCallResponseEnvelope {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 pub enum ToolCallResponseData {
-    NewConversation(NewConversationResult),
-    Connect(ConnectResult),
-    SendUserMessage(SendUserMessageAccepted),
-    GetConversations(GetConversationsResult),
+    ConversationCreate(ConversationCreateResult),
+    ConversationConnect(ConversationConnectResult),
+    ConversationSendMessage(ConversationSendMessageAccepted),
+    ConversationsList(ConversationsListResult),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct NewConversationResult {
-    pub conversation_id: Uuid,
+pub struct ConversationCreateResult {
+    pub conversation_id: ConversationId,
     pub model: String,
     pub history_log_id: u64,
     pub history_entry_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ConnectResult {}
+pub struct ConversationConnectResult {}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SendUserMessageAccepted {
+pub struct ConversationSendMessageAccepted {
     pub accepted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct GetConversationsResult {
+pub struct ConversationsListResult {
     pub conversations: Vec<ConversationSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
@@ -153,7 +182,7 @@ pub struct GetConversationsResult {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConversationSummary {
-    pub conversation_id: Uuid,
+    pub conversation_id: ConversationId,
     pub title: String,
 }
 
@@ -168,6 +197,7 @@ pub enum ToolCallResponseContent {
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 pub enum ConversationNotificationParams {
     InitialState(InitialStateNotificationParams),
+    // sent when a second client connects to the same conversation
     ConnectionRevoked(ConnectionRevokedNotificationParams),
     CodexEvent(CodexEventNotificationParams),
     Cancelled(CancelledNotificationParams),
@@ -177,7 +207,7 @@ pub enum ConversationNotificationParams {
 #[serde(rename_all = "camelCase")]
 pub struct NotificationMeta {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub conversation_id: Option<Uuid>,
+    pub conversation_id: Option<ConversationId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_id: Option<RequestId>,
 }
@@ -217,6 +247,7 @@ pub struct CancelledNotificationParams {
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
@@ -285,14 +316,14 @@ mod tests {
 
     #[test]
     fn serialize_new_conversation_result() {
-        let result = NewConversationResult {
+        let result = ConversationCreateResult {
             conversation_id: uuid!("d0f6ecbe-84a2-41c1-b23d-b20473b25eab"),
             model: "o3".into(),
             history_log_id: 3874612938,
             history_entry_count: 0,
         };
         let observed =
-            serde_json::to_value(&result).expect("failed to serialize NewConversationResult");
+            serde_json::to_value(&result).expect("failed to serialize ConversationCreateResult");
         let expected = json!({
             "conversation_id": "d0f6ecbe-84a2-41c1-b23d-b20473b25eab",
             "model": "o3",
@@ -304,7 +335,7 @@ mod tests {
 
     #[test]
     fn serialize_get_conversations_result() {
-        let result = GetConversationsResult {
+        let result = ConversationsListResult {
             conversations: vec![ConversationSummary {
                 conversation_id: uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8"),
                 title: "Refactor config loader".into(),
@@ -312,7 +343,7 @@ mod tests {
             next_cursor: Some("eyJsb2dpZF9vZmZzZXQiOjIwfQ==".into()),
         };
         let observed =
-            serde_json::to_value(&result).expect("failed to serialize GetConversationsResult");
+            serde_json::to_value(&result).expect("failed to serialize ConversationsListResult");
         let expected = json!({
             "conversations": [
                 {"conversation_id": "67e55044-10b1-426f-9247-bb680e5fe0c8", "title": "Refactor config loader"}
@@ -324,17 +355,18 @@ mod tests {
 
     #[test]
     fn serialize_tool_call_request_params_send_user_message() {
-        let req = ToolCallRequestParams::SendUserMessage(SendUserMessageArgs {
+        let req = ToolCallRequestParams::ConversationSendMessage(ConversationSendMessageArgs {
             conversation_id: uuid!("d0f6ecbe-84a2-41c1-b23d-b20473b25eab"),
             content: vec![InputMessageContentPart::Text {
                 text: "Hello".into(),
             }],
             message_id: Some("client-uuid-123".into()),
+            conversation_overrides: None,
         });
         let observed = serde_json::to_value(&req)
             .expect("failed to serialize ToolCallRequestParams::SendUserMessage");
         let expected = json!({
-            "name": "send_user_message",
+            "name": "conversation_send_message",
             "arguments": {
                 "conversation_id": "d0f6ecbe-84a2-41c1-b23d-b20473b25eab",
                 "content": [ { "type": "text", "text": "Hello" } ],
@@ -346,16 +378,16 @@ mod tests {
 
     #[test]
     fn serialize_tool_call_response_data_new_conversation() {
-        let resp = ToolCallResponseData::NewConversation(NewConversationResult {
+        let resp = ToolCallResponseData::ConversationCreate(ConversationCreateResult {
             conversation_id: uuid!("d0f6ecbe-84a2-41c1-b23d-b20473b25eab"),
             model: "o3".into(),
             history_log_id: 1,
             history_entry_count: 0,
         });
         let observed = serde_json::to_value(&resp)
-            .expect("failed to serialize ToolCallResponseData::NewConversation");
+            .expect("failed to serialize ToolCallResponseData::ConversationCreate");
         let expected = json!({
-            "type": "new_conversation",
+            "type": "conversation_create",
             "data": {
                 "conversation_id": "d0f6ecbe-84a2-41c1-b23d-b20473b25eab",
                 "model": "o3",
