@@ -9,6 +9,7 @@ use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::process::Stdio;
+use std::time::Duration;
 use tokio::process::Command;
 
 const SOURCE_FOR_PYTHON_SERVER: &str = include_str!("./login_with_chatgpt.py");
@@ -73,7 +74,11 @@ pub async fn try_read_auth_json(codex_home: &Path) -> std::io::Result<AuthDotJso
     let auth_dot_json: AuthDotJson = serde_json::from_str(&contents)?;
 
     if is_expired(&auth_dot_json) {
-        let refresh_response = try_refresh_token(&auth_dot_json).await?;
+        let refresh_response =
+            tokio::time::timeout(Duration::from_secs(60), try_refresh_token(&auth_dot_json))
+                .await
+                .map_err(|_| std::io::Error::other("timed out while refreshing OpenAI API key"))?
+                .map_err(std::io::Error::other)?;
         let mut auth_dot_json = auth_dot_json;
         auth_dot_json.tokens.id_token = refresh_response.id_token;
         if let Some(refresh_token) = refresh_response.refresh_token {

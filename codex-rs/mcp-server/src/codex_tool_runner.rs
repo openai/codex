@@ -27,6 +27,7 @@ use uuid::Uuid;
 
 use crate::exec_approval::handle_exec_approval_request;
 use crate::outgoing_message::OutgoingMessageSender;
+use crate::outgoing_message::OutgoingNotificationMeta;
 use crate::patch_approval::handle_patch_approval_request;
 
 pub(crate) const INVALID_PARAMS_ERROR_CODE: i64 = -32602;
@@ -71,9 +72,11 @@ pub async fn run_codex_tool_session(
     session_map.lock().await.insert(session_id, codex.clone());
     drop(session_map);
 
-    // Send initial SessionConfigured event.
     outgoing
-        .send_event_as_notification(&session_configured)
+        .send_event_as_notification(
+            &session_configured,
+            Some(OutgoingNotificationMeta::new(Some(id.clone()))),
+        )
         .await;
 
     // Use the original MCP request ID as the `sub_id` for the Codex submission so that
@@ -158,7 +161,12 @@ async fn run_codex_tool_session_inner(
     loop {
         match codex.next_event().await {
             Ok(event) => {
-                outgoing.send_event_as_notification(&event).await;
+                outgoing
+                    .send_event_as_notification(
+                        &event,
+                        Some(OutgoingNotificationMeta::new(Some(request_id.clone()))),
+                    )
+                    .await;
 
                 match event.msg {
                     EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
