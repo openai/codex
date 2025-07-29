@@ -481,9 +481,7 @@ impl Config {
                         // read or was invalid.
                         return Err(std::io::Error::new(
                             std::io::ErrorKind::InvalidInput,
-                            format!(
-                                "Failed to load experimental_instructions_file: {e}"
-                            ),
+                            format!("Failed to load experimental_instructions_file: {e}"),
                         ));
                     }
                 }
