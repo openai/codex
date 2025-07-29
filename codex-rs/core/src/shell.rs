@@ -20,8 +20,13 @@ impl Shell {
                     return None;
                 }
 
-                let mut result = vec![zsh.shell_path.clone(), "-c".to_string()];
-                if let Ok(joined) = shlex::try_join(command.iter().map(|s| s.as_str())) {
+                let mut result = vec![zsh.shell_path.clone()];
+                result.push("-lc".to_string());
+
+                let joined = strip_bash_lc(&command)
+                    .or_else(|| shlex::try_join(command.iter().map(|s| s.as_str())).ok());
+
+                if let Some(joined) = joined {
                     result.push(format!("source {} && ({joined})", zsh.zshrc_path));
                 } else {
                     return None;
@@ -30,6 +35,19 @@ impl Shell {
             }
             Shell::Unknown => None,
         }
+    }
+}
+
+fn strip_bash_lc(command: &Vec<String>) -> Option<String> {
+    match command.as_slice() {
+        // exactly three items
+        [first, second, third]
+            // first two must be "bash", "-lc"
+            if first == "bash" && second == "-lc" =>
+        {
+            Some(third.clone())
+        }
+        _ => None,
     }
 }
 
@@ -119,15 +137,29 @@ mod tests {
         let cases = vec![
             (
                 vec!["myecho"],
-                vec![shell_path, "-c", "source ZSHRC_PATH && (myecho)"],
+                vec![shell_path, "-lc", "source ZSHRC_PATH && (myecho)"],
                 Some("It works!\n"),
+            ),
+            (
+                vec!["myecho"],
+                vec![shell_path, "-lc", "source ZSHRC_PATH && (myecho)"],
+                Some("It works!\n"),
+            ),
+            (
+                vec!["bash", "-c", "echo 'single' \"double\""],
+                vec![
+                    shell_path,
+                    "-lc",
+                    "source ZSHRC_PATH && (bash -c \"echo 'single' \\\"double\\\"\")",
+                ],
+                Some("single double\n"),
             ),
             (
                 vec!["bash", "-lc", "echo 'single' \"double\""],
                 vec![
                     shell_path,
-                    "-c",
-                    "source ZSHRC_PATH && (bash -lc \"echo 'single' \\\"double\\\"\")",
+                    "-lc",
+                    "source ZSHRC_PATH && (echo 'single' \"double\")",
                 ],
                 Some("single double\n"),
             ),
