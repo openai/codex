@@ -19,7 +19,7 @@ pub type Tui = Terminal<CrosstermBackend<Stdout>>;
 /// Initialize the terminal (inline viewport; history stays in normal scrollback)
 pub fn init(_config: &Config) -> Result<Tui> {
     use crate::termux_compat::TermuxCompat;
-    
+
     // For Termux compatibility, handle bracketed paste mode more gracefully
     if TermuxCompat::should_enable_bracketed_paste() {
         // Some terminals may not support bracketed paste, so don't fail on error
@@ -56,7 +56,7 @@ fn set_panic_hook() {
 /// Restore the terminal to its original state
 pub fn restore() -> Result<()> {
     use crate::termux_compat::TermuxCompat;
-    
+
     // For Termux compatibility, handle bracketed paste mode gracefully
     if TermuxCompat::should_enable_bracketed_paste() {
         let _ = execute!(stdout(), DisableBracketedPaste);
