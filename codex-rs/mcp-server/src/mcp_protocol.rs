@@ -317,16 +317,12 @@ mod tests {
         let result = ConversationCreateResult {
             conversation_id: uuid!("d0f6ecbe-84a2-41c1-b23d-b20473b25eab"),
             model: "o3".into(),
-            history_log_id: 3874612938,
-            history_entry_count: 0,
         };
         let observed =
             serde_json::to_value(&result).expect("failed to serialize ConversationCreateResult");
         let expected = json!({
             "conversation_id": "d0f6ecbe-84a2-41c1-b23d-b20473b25eab",
             "model": "o3",
-            "history_log_id": 3874612938u64,
-            "history_entry_count": 0
         });
         assert_eq!(observed, expected);
     }
@@ -379,8 +375,6 @@ mod tests {
         let resp = ToolCallResponseData::ConversationCreate(ConversationCreateResult {
             conversation_id: uuid!("d0f6ecbe-84a2-41c1-b23d-b20473b25eab"),
             model: "o3".into(),
-            history_log_id: 1,
-            history_entry_count: 0,
         });
         let observed = serde_json::to_value(&resp)
             .expect("failed to serialize ToolCallResponseData::ConversationCreate");
@@ -389,8 +383,6 @@ mod tests {
             "data": {
                 "conversation_id": "d0f6ecbe-84a2-41c1-b23d-b20473b25eab",
                 "model": "o3",
-                "history_log_id": 1,
-                "history_entry_count": 0
             }
         });
         assert_eq!(observed, expected);
