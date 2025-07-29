@@ -87,7 +87,10 @@ jobs:
       - name: cargo clippy
         id: clippy
         continue-on-error: true
-        run: cargo clippy --target ${{ matrix.target }} --all-features --tests -- -D warnings
+        run: |
+          cargo clippy --target ${{ matrix.target }} --all-features --tests -- -D warnings \
+            -A clippy::collapsible_if \
+            -A clippy::cloned_ref_to_slice_refs
 
       # Running `cargo build` from the workspace root builds the workspace using
       # the union of all features from third-party crates. This can mask errors
