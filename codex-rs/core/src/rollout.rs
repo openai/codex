@@ -257,8 +257,7 @@ struct LogFileInfo {
 
 fn create_log_file(config: &Config, session_id: Uuid) -> std::io::Result<LogFileInfo> {
     // Resolve ~/.codex/sessions/YYYY/MM/DD and create it if missing.
-    let timestamp = OffsetDateTime::now_local()
-        .map_err(|e| IoError::other(format!("failed to get local time: {e}")))?;
+    let timestamp = OffsetDateTime::now_utc();
     let mut dir = config.codex_home.clone();
     dir.push(SESSIONS_SUBDIR);
     dir.push(timestamp.year().to_string());
