@@ -465,8 +465,12 @@ impl Config {
 
         let experimental_resume = cfg.experimental_resume;
 
+        // Load base instructions override from a file if specified. If the
+        // path is relative, resolve it against the effective cwd so the
+        // behaviour matches other path-like config values.
         let base_instructions = base_instructions.or(Self::get_base_instructions(
             cfg.experimental_instructions_file.as_ref(),
+            Some(&resolved_cwd),
         ));
 
         let config = Self {
@@ -539,8 +543,20 @@ impl Config {
         })
     }
 
-    fn get_base_instructions(path: Option<&PathBuf>) -> Option<String> {
+    fn get_base_instructions(path: Option<&PathBuf>, cwd: Option<&Path>) -> Option<String> {
         let path = path.as_ref()?;
+
+        // Resolve relative paths against the provided cwd (if any) to make
+        // CLI overrides consistent regardless of where the process was
+        // launched from.
+        let path = if path.is_relative() {
+            match cwd {
+                Some(root) => root.join(path),
+                None => path.to_path_buf(),
+            }
+        } else {
+            path.to_path_buf()
+        };
 
         std::fs::read_to_string(path)
             .ok()
