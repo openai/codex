@@ -243,10 +243,10 @@ impl Session {
 
     pub fn remove_task(&self, sub_id: &str) {
         let mut state = self.state.lock().unwrap();
-        if let Some(task) = &state.current_task {
-            if task.sub_id == sub_id {
-                state.current_task.take();
-            }
+        if let Some(task) = &state.current_task
+            && task.sub_id == sub_id
+        {
+            state.current_task.take();
         }
     }
 
@@ -706,11 +706,11 @@ async fn submission_loop(
                 }));
 
                 // Patch restored state into the newly created session.
-                if let Some(sess_arc) = &sess {
-                    if restored_items.is_some() {
-                        let mut st = sess_arc.state.lock().unwrap();
-                        st.history.record_items(restored_items.unwrap().iter());
-                    }
+                if let Some(sess_arc) = &sess
+                    && restored_items.is_some()
+                {
+                    let mut st = sess_arc.state.lock().unwrap();
+                    st.history.record_items(restored_items.unwrap().iter());
                 }
 
                 // Gather history metadata for SessionConfiguredEvent.
@@ -829,18 +829,18 @@ async fn submission_loop(
                 // that inspect the rollout file do not race with the background writer.
                 if let Some(sess_arc) = sess {
                     let recorder_opt = sess_arc.rollout.lock().unwrap().take();
-                    if let Some(rec) = recorder_opt {
-                        if let Err(e) = rec.shutdown().await {
-                            warn!("failed to shutdown rollout recorder: {e}");
-                            let event = Event {
-                                id: sub.id.clone(),
-                                msg: EventMsg::Error(ErrorEvent {
-                                    message: "Failed to shutdown rollout recorder".to_string(),
-                                }),
-                            };
-                            if let Err(e) = tx_event.send(event).await {
-                                warn!("failed to send error message: {e:?}");
-                            }
+                    if let Some(rec) = recorder_opt
+                        && let Err(e) = rec.shutdown().await
+                    {
+                        warn!("failed to shutdown rollout recorder: {e}");
+                        let event = Event {
+                            id: sub.id.clone(),
+                            msg: EventMsg::Error(ErrorEvent {
+                                message: "Failed to shutdown rollout recorder".to_string(),
+                            }),
+                        };
+                        if let Err(e) = tx_event.send(event).await {
+                            warn!("failed to send error message: {e:?}");
                         }
                     }
                 }

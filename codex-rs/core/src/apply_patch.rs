@@ -127,74 +127,71 @@ pub(crate) async fn apply_patch(
     // and prompt the user to extend permissions.
     let mut result = apply_changes_from_apply_patch_and_report(&action, &mut stdout, &mut stderr);
 
-    if let Err(err) = &result {
-        if err.kind() == std::io::ErrorKind::PermissionDenied {
-            // Determine first offending path.
-            let offending_opt = action
-                .changes()
-                .iter()
-                .flat_map(|(path, change)| match change {
-                    ApplyPatchFileChange::Add { .. } => vec![path.as_ref()],
-                    ApplyPatchFileChange::Delete => vec![path.as_ref()],
-                    ApplyPatchFileChange::Update {
-                        move_path: Some(move_path),
-                        ..
-                    } => {
-                        vec![path.as_ref(), move_path.as_ref()]
-                    }
-                    ApplyPatchFileChange::Update {
-                        move_path: None, ..
-                    } => vec![path.as_ref()],
-                })
-                .find_map(|path: &Path| {
-                    // ApplyPatchAction promises to guarantee absolute paths.
-                    if !path.is_absolute() {
-                        panic!("apply_patch invariant failed: path is not absolute: {path:?}");
-                    }
-
-                    let writable = {
-                        #[allow(clippy::unwrap_used)]
-                        let roots = sess.writable_roots.lock().unwrap();
-                        roots.iter().any(|root| path.starts_with(root))
-                    };
-                    if writable {
-                        None
-                    } else {
-                        Some(path.to_path_buf())
-                    }
-                });
-
-            if let Some(offending) = offending_opt {
-                let root = offending.parent().unwrap_or(&offending).to_path_buf();
-
-                let reason = Some(format!(
-                    "grant write access to {} for this session",
-                    root.display()
-                ));
-                let rx = sess
-                    .request_patch_approval(
-                        sub_id.clone(),
-                        call_id.clone(),
-                        &action,
-                        reason.clone(),
-                        Some(root.clone()),
-                    )
-                    .await;
-                if matches!(
-                    rx.await.unwrap_or_default(),
-                    ReviewDecision::Approved | ReviewDecision::ApprovedForSession
-                ) {
-                    // Extend writable roots.
-                    #[allow(clippy::unwrap_used)]
-                    sess.writable_roots.lock().unwrap().push(root);
-                    stdout.clear();
-                    stderr.clear();
-                    result = apply_changes_from_apply_patch_and_report(
-                        &action,
-                        &mut stdout,
-                        &mut stderr,
-                    );
+    if let Err(err) = &result
+        && err.kind() == std::io::ErrorKind::PermissionDenied
+    {
+        // Determine first offending path.
+        let offending_opt = action
+            .changes()
+            .iter()
+            .flat_map(|(path, change)| match change {
+                ApplyPatchFileChange::Add { .. } => vec![path.as_ref()],
+                ApplyPatchFileChange::Delete => vec![path.as_ref()],
+                ApplyPatchFileChange::Update {
+                    move_path: Some(move_path),
+                    ..
+                } => {
+                    vec![path.as_ref(), move_path.as_ref()]
                 }
+                ApplyPatchFileChange::Update {
+                    move_path: None, ..
+                } => vec![path.as_ref()],
+            })
+            .find_map(|path: &Path| {
+                // ApplyPatchAction promises to guarantee absolute paths.
+                if !path.is_absolute() {
+                    panic!("apply_patch invariant failed: path is not absolute: {path:?}");
+                }
+
+                let writable = {
+                    #[allow(clippy::unwrap_used)]
+                    let roots = sess.writable_roots.lock().unwrap();
+                    roots.iter().any(|root| path.starts_with(root))
+                };
+                if writable {
+                    None
+                } else {
+                    Some(path.to_path_buf())
+                }
+            });
+
+        if let Some(offending) = offending_opt {
+            let root = offending.parent().unwrap_or(&offending).to_path_buf();
+
+            let reason = Some(format!(
+                "grant write access to {} for this session",
+                root.display()
+            ));
+            let rx = sess
+                .request_patch_approval(
+                    sub_id.clone(),
+                    call_id.clone(),
+                    &action,
+                    reason.clone(),
+                    Some(root.clone()),
+                )
+                .await;
+            if matches!(
+                rx.await.unwrap_or_default(),
+                ReviewDecision::Approved | ReviewDecision::ApprovedForSession
+            ) {
+                // Extend writable roots.
+                #[allow(clippy::unwrap_used)]
+                sess.writable_roots.lock().unwrap().push(root);
+                stdout.clear();
+                stderr.clear();
+                result =
+                    apply_changes_from_apply_patch_and_report(&action, &mut stdout, &mut stderr);
             }
         }
     }
@@ -325,12 +322,12 @@ fn apply_changes_from_apply_patch(action: &ApplyPatchAction) -> anyhow::Result<A
     for (path, change) in changes {
         match change {
             ApplyPatchFileChange::Add { content } => {
-                if let Some(parent) = path.parent() {
-                    if !parent.as_os_str().is_empty() {
-                        std::fs::create_dir_all(parent).with_context(|| {
-                            format!("Failed to create parent directories for {}", path.display())
-                        })?;
-                    }
+                if let Some(parent) = path.parent()
+                    && !parent.as_os_str().is_empty()
+                {
+                    std::fs::create_dir_all(parent).with_context(|| {
+                        format!("Failed to create parent directories for {}", path.display())
+                    })?;
                 }
                 std::fs::write(path, content)
                     .with_context(|| format!("Failed to write file {}", path.display()))?;
@@ -347,15 +344,15 @@ fn apply_changes_from_apply_patch(action: &ApplyPatchAction) -> anyhow::Result<A
                 new_content,
             } => {
                 if let Some(move_path) = move_path {
-                    if let Some(parent) = move_path.parent() {
-                        if !parent.as_os_str().is_empty() {
-                            std::fs::create_dir_all(parent).with_context(|| {
-                                format!(
-                                    "Failed to create parent directories for {}",
-                                    move_path.display()
-                                )
-                            })?;
-                        }
+                    if let Some(parent) = move_path.parent()
+                        && !parent.as_os_str().is_empty()
+                    {
+                        std::fs::create_dir_all(parent).with_context(|| {
+                            format!(
+                                "Failed to create parent directories for {}",
+                                move_path.display()
+                            )
+                        })?;
                     }
 
                     std::fs::rename(path, move_path)

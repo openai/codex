@@ -195,24 +195,23 @@ impl ConversationHistoryWidget {
                 start,
                 ..
             } = cell
+                && &call_id == history_id
             {
-                if &call_id == history_id {
-                    *cell = HistoryCell::new_completed_exec_command(
-                        command.clone(),
-                        CommandOutput {
-                            exit_code,
-                            stdout,
-                            stderr,
-                            duration: start.elapsed(),
-                        },
-                    );
+                *cell = HistoryCell::new_completed_exec_command(
+                    command.clone(),
+                    CommandOutput {
+                        exit_code,
+                        stdout,
+                        stderr,
+                        duration: start.elapsed(),
+                    },
+                );
 
-                    // Update cached line count.
-                    if width > 0 {
-                        entry.line_count.set(cell.height(width));
-                    }
-                    break;
+                // Update cached line count.
+                if width > 0 {
+                    entry.line_count.set(cell.height(width));
                 }
+                break;
             }
         }
     }
@@ -231,23 +230,22 @@ impl ConversationHistoryWidget {
                 start,
                 ..
             } = &entry.cell
+                && &call_id == history_id
             {
-                if &call_id == history_id {
-                    let completed = HistoryCell::new_completed_mcp_tool_call(
-                        width,
-                        invocation.clone(),
-                        *start,
-                        success,
-                        result,
-                    );
-                    entry.cell = completed;
+                let completed = HistoryCell::new_completed_mcp_tool_call(
+                    width,
+                    invocation.clone(),
+                    *start,
+                    success,
+                    result,
+                );
+                entry.cell = completed;
 
-                    if width > 0 {
-                        entry.line_count.set(entry.cell.height(width));
-                    }
-
-                    break;
+                if width > 0 {
+                    entry.line_count.set(entry.cell.height(width));
                 }
+
+                break;
             }
         }
     }

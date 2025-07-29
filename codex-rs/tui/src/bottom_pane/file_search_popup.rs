@@ -84,10 +84,10 @@ impl FileSearchPopup {
 
     /// Move selection cursor up.
     pub(crate) fn move_up(&mut self) {
-        if let Some(idx) = self.selected_idx {
-            if idx > 0 {
-                self.selected_idx = Some(idx - 1);
-            }
+        if let Some(idx) = self.selected_idx
+            && idx > 0
+        {
+            self.selected_idx = Some(idx - 1);
         }
     }
 

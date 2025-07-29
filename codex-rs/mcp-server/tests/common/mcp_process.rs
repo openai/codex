@@ -280,28 +280,20 @@ impl McpProcess {
                 JSONRPCMessage::Notification(notification) => {
                     if let Some(params) = notification.params {
                         // Back-compat schema: method == "codex/event" and msg.type == "session_configured"
-                        if notification.method == "codex/event" {
-                            if let Some(msg) = params.get("msg") {
-                                if msg.get("type").and_then(|v| v.as_str())
-                                    == Some("session_configured")
-                                {
-                                    if let Some(session_id) =
-                                        msg.get("session_id").and_then(|v| v.as_str())
-                                    {
-                                        sid_old = Some(session_id.to_string());
-                                    }
-                                }
-                            }
+                        if notification.method == "codex/event"
+                            && let Some(msg) = params.get("msg")
+                            && msg.get("type").and_then(|v| v.as_str())
+                                == Some("session_configured")
+                            && let Some(session_id) = msg.get("session_id").and_then(|v| v.as_str())
+                        {
+                            sid_old = Some(session_id.to_string());
                         }
                         // New schema: method is the Display of EventMsg::SessionConfigured => "SessionConfigured"
-                        if notification.method == "session_configured" {
-                            if let Some(msg) = params.get("msg") {
-                                if let Some(session_id) =
-                                    msg.get("session_id").and_then(|v| v.as_str())
-                                {
-                                    sid_new = Some(session_id.to_string());
-                                }
-                            }
+                        if notification.method == "session_configured"
+                            && let Some(msg) = params.get("msg")
+                            && let Some(session_id) = msg.get("session_id").and_then(|v| v.as_str())
+                        {
+                            sid_new = Some(session_id.to_string());
                         }
                     }
 

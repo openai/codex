@@ -744,10 +744,10 @@ fn ensure_image_cache(
     width_cells: u16,
     render_cache: &std::cell::RefCell<Option<ImageRenderCache>>,
 ) -> usize {
-    if let Some(cache) = render_cache.borrow().as_ref() {
-        if cache.width_cells == width_cells {
-            return cache.height_rows;
-        }
+    if let Some(cache) = render_cache.borrow().as_ref()
+        && cache.width_cells == width_cells
+    {
+        return cache.height_rows;
     }
 
     let picker = &*TERMINAL_PICKER;

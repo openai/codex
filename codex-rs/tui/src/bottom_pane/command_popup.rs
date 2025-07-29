@@ -100,10 +100,10 @@ impl CommandPopup {
 
     /// Move the selection cursor one step up.
     pub(crate) fn move_up(&mut self) {
-        if let Some(len) = self.filtered_commands().len().checked_sub(1) {
-            if len == usize::MAX {
-                return;
-            }
+        if let Some(len) = self.filtered_commands().len().checked_sub(1)
+            && len == usize::MAX
+        {
+            return;
         }
 
         if let Some(idx) = self.selected_idx {

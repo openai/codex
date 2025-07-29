@@ -471,10 +471,9 @@ impl ChatComposer<'_> {
             key: Key::Backspace,
             ..
         } = input
+            && self.try_remove_placeholder_at_cursor()
         {
-            if self.try_remove_placeholder_at_cursor() {
-                return (InputResult::None, true);
-            }
+            return (InputResult::None, true);
         }
 
         if let Input {

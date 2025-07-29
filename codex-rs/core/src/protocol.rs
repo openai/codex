@@ -237,10 +237,10 @@ impl SandboxPolicy {
                 // Note this is added dynamically rather than storing it in
                 // writable_roots because writable_roots contains only static
                 // values deserialized from the config file.
-                if cfg!(target_os = "macos") {
-                    if let Some(tmpdir) = std::env::var_os("TMPDIR") {
-                        roots.push(PathBuf::from(tmpdir));
-                    }
+                if cfg!(target_os = "macos")
+                    && let Some(tmpdir) = std::env::var_os("TMPDIR")
+                {
+                    roots.push(PathBuf::from(tmpdir));
                 }
 
                 roots
