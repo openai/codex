@@ -3,16 +3,26 @@ use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use serde::Deserialize;
 use serde::Serialize;
+use serde::ser::SerializeMap;
+use serde::ser::Serializer;
+use serde_json::Value;
 use uuid::Uuid;
 
 use mcp_types::RequestId;
 
-// Introduce a dedicated ConversationId type to allow future flexibility
-// on the underlying representation (e.g. switching from UUID to u32).
 pub type ConversationId = Uuid;
 
 // Requests
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCallRequestEnvelope {
+    #[serde(rename = "jsonrpc")]
+    pub jsonrpc: &'static str,
+    pub id: u64,
+    pub method: &'static str,
+    pub params: ToolCallRequestParams,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(tag = "name", content = "arguments", rename_all = "snake_case")]
 pub enum ToolCallRequestParams {
     ConversationCreate(ConversationCreateArgs),
@@ -139,20 +149,18 @@ pub struct ConversationsListArgs {
 }
 
 // Responses
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolCallResponseEnvelope {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub content: Vec<ToolCallResponseContent>,
+    pub request_id: RequestId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_error: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub structured_content: Option<ToolCallResponseData>,
+    pub result: Option<ToolCallResponseData>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", content = "data", rename_all = "snake_case")]
+#[serde(untagged)]
 pub enum ToolCallResponseData {
     ConversationCreate(ConversationCreateResult),
     ConversationConnect(ConversationConnectResult),
@@ -194,7 +202,7 @@ pub enum ToolCallResponseContent {
 }
 
 // Notifications
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "method", content = "params", rename_all = "snake_case")]
 pub enum ConversationNotificationParams {
     InitialState(InitialStateNotificationParams),
@@ -245,6 +253,54 @@ pub struct CancellNotificationParams {
     pub request_id: RequestId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+}
+
+impl Serialize for ToolCallRequestParams {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let inner = serde_json::to_value(self).map_err(serde::ser::Error::custom)?;
+
+        let mut state = serializer.serialize_map(Some(3))?;
+        state.serialize_entry("jsonrpc", "2.0")?;
+        state.serialize_entry("id", &2u64)?;
+        state.serialize_entry("method", "tools/call")?;
+        state.serialize_entry("params", &inner)?;
+        state.end()
+    }
+}
+
+impl Serialize for ConversationNotificationParams {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut state = serializer.serialize_map(Some(2))?;
+
+        let method = match self {
+            ConversationNotificationParams::CodexEvent(p) => {
+                let msg_val = serde_json::to_value(&p.msg).map_err(serde::ser::Error::custom)?;
+                let event_type = msg_val
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown");
+                format!("notifications/{event_type}")
+            }
+            _ => {
+                let raw = serde_json::to_value(&self).map_err(serde::ser::Error::custom)?;
+                let type_name = raw.get("type").and_then(Value::as_str).unwrap_or("unknown");
+                format!("notifications/{type_name}")
+            }
+        };
+
+        let raw = serde_json::to_value(&self).map_err(serde::ser::Error::custom)?;
+        let params = raw.get("data").unwrap_or(&raw);
+
+        state.serialize_entry("method", &method)?;
+        state.serialize_entry("params", params)?;
+        state.end()
+    }
 }
 
 #[cfg(test)]
