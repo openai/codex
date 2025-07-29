@@ -144,9 +144,8 @@ pub async fn run_main(
 
     let show_login_screen = should_show_login_screen(&config).await;
     if show_login_screen {
-        std::io::stdout().write_all(
-            b"No API key detected!\nLogin with your ChatGPT account? [Yn] ",
-        )?;
+        std::io::stdout()
+            .write_all(b"No API key detected!\nLogin with your ChatGPT account? [Yn] ")?;
         std::io::stdout().flush()?;
         let mut input = String::new();
         std::io::stdin().read_line(&mut input)?;
