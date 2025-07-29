@@ -20,7 +20,7 @@ pub struct ToolCallRequestEnvelope {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "name", content = "arguments", rename_all = "snake_case")]
+#[serde(tag = "name", content = "arguments", rename_all = "camelCase")]
 pub enum ToolCallRequestParams {
     ConversationCreate(ConversationCreateArgs),
     ConversationConnect(ConversationConnectArgs),
@@ -96,7 +96,7 @@ pub struct ConversationSendMessageArgs {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "camelCase")]
 pub enum MessageInputItem {
     /// Following OpenAI's Responses API: https://platform.openai.com/docs/api-reference/responses
     Text { text: String },
@@ -143,7 +143,7 @@ pub enum FileSource {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub enum ImageDetail {
     Low,
     High,
@@ -206,7 +206,7 @@ pub struct ConversationSummary {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "camelCase")]
 pub enum ToolCallResponseContent {
     Text { text: String },
 }
@@ -214,13 +214,13 @@ pub enum ToolCallResponseContent {
 // Notifications
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "method", content = "params", rename_all = "snake_case")]
+#[serde(tag = "method", content = "params", rename_all = "camelCase")]
 pub enum ConversationNotificationParams {
     InitialState(InitialStateNotificationParams),
     // sent when a second client connects to the same conversation
     ConnectionRevoked(ConnectionRevokedNotificationParams),
     CodexEvent(CodexEventNotificationParams),
-    Cancelled(CancellNotificationParams),
+    Cancelled(CancelNotificationParams),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -260,19 +260,18 @@ pub struct CodexEventNotificationParams {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct CancellNotificationParams {
-    #[serde(rename = "requestId")]
+#[serde(rename_all = "camelCase")]
+pub struct CancelNotificationParams {
     pub request_id: RequestId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }
 
-/// Strongly-typed notification envelope (no unwraps/expect, no serde_json::Value payloads).
 #[derive(Debug, Clone)]
 pub enum NotificationEnvelope {
     InitialState(InitialStateNotificationParams),
     ConnectionRevoked(ConnectionRevokedNotificationParams),
-    Cancelled(CancellNotificationParams),
+    Cancelled(CancelNotificationParams),
     CodexEvent(CodexEventNotificationParams),
 }
 
@@ -298,14 +297,9 @@ impl Serialize for NotificationEnvelope {
     {
         use serde::ser::SerializeMap;
 
-        fn event_type(msg: &EventMsg) -> &'static str {
+        fn event_type(msg: &EventMsg) -> String {
             // Keep in sync with EventMsg variants/serde renames used by codex_core.
-            match msg {
-                EventMsg::TaskStarted => "task_started",
-                EventMsg::AgentMessageDelta(_) => "agent_message_delta",
-                EventMsg::AgentMessage(_) => "agent_message",
-                _ => "unknown",
-            }
+            msg.to_string()
         }
 
         let mut map = serializer.serialize_map(Some(2))?;
@@ -368,7 +362,7 @@ mod tests {
             "id": 2,
             "method": "tools/call",
             "params": {
-                "name": "conversation_create",
+                "name": "conversationCreate",
                 "arguments": {
                     "model": "o3",
                     "cwd": "/repo"
@@ -416,7 +410,7 @@ mod tests {
             "id": 2,
             "method": "tools/call",
             "params": {
-                "name": "conversation_send_message",
+                "name": "conversationSendMessage",
                 "arguments": {
                     "conversation_id": "d0f6ecbe-84a2-41c1-b23d-b20473b25eab",
                     "content": [
@@ -450,7 +444,7 @@ mod tests {
             "id": 2,
             "method": "tools/call",
             "params": {
-                "name": "conversations_list",
+                "name": "conversationsList",
                 "arguments": {
                     "limit": 50,
                     "cursor": "abc"
@@ -472,7 +466,7 @@ mod tests {
             "id": 2,
             "method": "tools/call",
             "params": {
-                "name": "conversation_connect",
+                "name": "conversationConnect",
                 "arguments": {
                     "conversation_id": "67e55044-10b1-426f-9247-bb680e5fe0c8"
                 }
@@ -848,9 +842,8 @@ mod tests {
         assert_eq!(observed, expected);
     }
 
-    // Fallback cases where method should be "notifications/unknown"
     #[test]
-    fn serialize_notification_codex_event_agent_reasoning_full_json_unknown() {
+    fn serialize_notification_codex_event_agent_reasoning_full_json() {
         let params = CodexEventNotificationParams {
             meta: None,
             msg: EventMsg::AgentReasoning(codex_core::protocol::AgentReasoningEvent {
@@ -862,7 +855,7 @@ mod tests {
             ConversationNotificationParams::CodexEvent(params),
         ));
         let expected = json!({
-            "method": "notifications/unknown",
+            "method": "notifications/agent_reasoning",
             "params": {
                 "msg": { "type": "agent_reasoning", "text": "thinking…" }
             }
@@ -871,7 +864,7 @@ mod tests {
     }
 
     #[test]
-    fn serialize_notification_codex_event_token_count_full_json_unknown() {
+    fn serialize_notification_codex_event_token_count_full_json() {
         let usage = codex_core::protocol::TokenUsage {
             input_tokens: 10,
             cached_input_tokens: Some(2),
@@ -888,7 +881,7 @@ mod tests {
             ConversationNotificationParams::CodexEvent(params),
         ));
         let expected = json!({
-            "method": "notifications/unknown",
+            "method": "notifications/token_count",
             "params": {
                 "msg": {
                     "type": "token_count",
@@ -904,7 +897,7 @@ mod tests {
     }
 
     #[test]
-    fn serialize_notification_codex_event_session_configured_full_json_unknown() {
+    fn serialize_notification_codex_event_session_configured_full_json() {
         let params = CodexEventNotificationParams {
             meta: Some(NotificationMeta {
                 conversation_id: Some(uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8")),
@@ -922,7 +915,7 @@ mod tests {
             ConversationNotificationParams::CodexEvent(params),
         ));
         let expected = json!({
-            "method": "notifications/unknown",
+            "method": "notifications/session_configured",
             "params": {
                 "_meta": { "conversationId": "67e55044-10b1-426f-9247-bb680e5fe0c8" },
                 "msg": {
@@ -938,7 +931,7 @@ mod tests {
     }
 
     #[test]
-    fn serialize_notification_codex_event_exec_command_begin_full_json_unknown() {
+    fn serialize_notification_codex_event_exec_command_begin_full_json() {
         let params = CodexEventNotificationParams {
             meta: None,
             msg: EventMsg::ExecCommandBegin(codex_core::protocol::ExecCommandBeginEvent {
@@ -952,7 +945,7 @@ mod tests {
             ConversationNotificationParams::CodexEvent(params),
         ));
         let expected = json!({
-            "method": "notifications/unknown",
+            "method": "notifications/exec_command_begin",
             "params": {
                 "msg": {
                     "type": "exec_command_begin",
@@ -966,7 +959,7 @@ mod tests {
     }
 
     #[test]
-    fn serialize_notification_codex_event_mcp_tool_call_begin_full_json_unknown() {
+    fn serialize_notification_codex_event_mcp_tool_call_begin_full_json() {
         let params = CodexEventNotificationParams {
             meta: None,
             msg: EventMsg::McpToolCallBegin(codex_core::protocol::McpToolCallBeginEvent {
@@ -981,7 +974,7 @@ mod tests {
             ConversationNotificationParams::CodexEvent(params),
         ));
         let expected = json!({
-            "method": "notifications/unknown",
+            "method": "notifications/mcp_tool_call_begin",
             "params": {
                 "msg": {
                     "type": "mcp_tool_call_begin",
@@ -996,7 +989,7 @@ mod tests {
     }
 
     #[test]
-    fn serialize_notification_codex_event_patch_apply_end_full_json_unknown() {
+    fn serialize_notification_codex_event_patch_apply_end_full_json() {
         let params = CodexEventNotificationParams {
             meta: None,
             msg: EventMsg::PatchApplyEnd(codex_core::protocol::PatchApplyEndEvent {
@@ -1011,7 +1004,7 @@ mod tests {
             ConversationNotificationParams::CodexEvent(params),
         ));
         let expected = json!({
-            "method": "notifications/unknown",
+            "method": "notifications/patch_apply_end",
             "params": {
                 "msg": {
                     "type": "patch_apply_end",
@@ -1029,7 +1022,7 @@ mod tests {
 
     #[test]
     fn serialize_notification_cancelled_with_reason_full_json() {
-        let params = CancellNotificationParams {
+        let params = CancelNotificationParams {
             request_id: RequestId::String("r-123".into()),
             reason: Some("user_cancelled".into()),
         };
@@ -1049,7 +1042,7 @@ mod tests {
 
     #[test]
     fn serialize_notification_cancelled_without_reason_full_json() {
-        let params = CancellNotificationParams {
+        let params = CancelNotificationParams {
             request_id: RequestId::Integer(77),
             reason: None,
         };
