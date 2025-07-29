@@ -263,6 +263,7 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::PatchApplyBegin(_)
                     | EventMsg::PatchApplyEnd(_)
                     | EventMsg::GetHistoryEntryResponse(_)
+                    | EventMsg::PlanUpdate(_)
                     | EventMsg::ShutdownComplete => {
                         // For now, we do not do anything extra for these
                         // events. Note that

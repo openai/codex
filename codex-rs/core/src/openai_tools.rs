@@ -65,6 +65,45 @@ static DEFAULT_TOOLS: LazyLock<Vec<OpenAiTool>> = LazyLock::new(|| {
     })]
 });
 
+static PLAN_TOOL: LazyLock<OpenAiTool> = LazyLock::new(|| {
+    let mut plan_item_props = BTreeMap::new();
+    plan_item_props.insert("step".to_string(), JsonSchema::String);
+    plan_item_props.insert("status".to_string(), JsonSchema::String);
+
+    let plan_items_schema = JsonSchema::Array {
+        items: Box::new(JsonSchema::Object {
+            properties: plan_item_props,
+            required: &["step", "status"],
+            additional_properties: false,
+        }),
+    };
+
+    let mut properties = BTreeMap::new();
+    properties.insert("explanation".to_string(), JsonSchema::String);
+    properties.insert("plan".to_string(), plan_items_schema);
+
+    OpenAiTool::Function(ResponsesApiTool {
+        name: "update_plan",
+        description: r#"Use the update_plan tool to keep the user updated on the current plan for the task.
+After understanding the user's task, call the update_plan tool with an initial plan. An example of a plan:
+1. Explore the codebase to find relevant files (status: in_progress)
+2. Implement the feature in the XYZ component (status: pending)
+3. Commit changes and make a pull request (status: pending)
+Each step should be a short, 1-sentence description.
+Until all the steps are finished, there should always be exactly one in_progress step in the plan.
+Call the update_plan tool whenever you finish a step, marking the completed step as `completed` and marking the next step as `in_progress`.
+Before running a command, consider whether or not you have completed the previous step, and make sure to mark it as completed before moving on to the next step.
+Sometimes, you may need to change plans in the middle of a task: call `update_plan` with the updated plan and make sure to provide an `explanation` of the rationale when doing so.
+When all steps are completed, call update_plan one last time with all steps marked as `completed`."#,
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: &["plan"],
+            additional_properties: false,
+        },
+    })
+});
+
 static DEFAULT_CODEX_MODEL_TOOLS: LazyLock<Vec<OpenAiTool>> =
     LazyLock::new(|| vec![OpenAiTool::LocalShell {}]);
 
@@ -74,6 +113,7 @@ static DEFAULT_CODEX_MODEL_TOOLS: LazyLock<Vec<OpenAiTool>> =
 pub(crate) fn create_tools_json_for_responses_api(
     prompt: &Prompt,
     model: &str,
+    include_plan_tool: bool,
 ) -> crate::error::Result<Vec<serde_json::Value>> {
     // Assemble tool list: built-in tools + any extra tools from the prompt.
     let default_tools = if model.starts_with("codex") {
@@ -93,6 +133,10 @@ pub(crate) fn create_tools_json_for_responses_api(
             .map(|(name, tool)| mcp_tool_to_openai_tool(name, tool)),
     );
 
+    if include_plan_tool {
+        tools_json.push(serde_json::to_value(PLAN_TOOL.clone())?);
+    }
+
     Ok(tools_json)
 }
 
@@ -102,10 +146,12 @@ pub(crate) fn create_tools_json_for_responses_api(
 pub(crate) fn create_tools_json_for_chat_completions_api(
     prompt: &Prompt,
     model: &str,
+    include_plan_tool: bool,
 ) -> crate::error::Result<Vec<serde_json::Value>> {
     // We start with the JSON for the Responses API and than rewrite it to match
     // the chat completions tool call format.
-    let responses_api_tools_json = create_tools_json_for_responses_api(prompt, model)?;
+    let responses_api_tools_json =
+        create_tools_json_for_responses_api(prompt, model, include_plan_tool)?;
     let tools_json = responses_api_tools_json
         .into_iter()
         .filter_map(|mut tool| {

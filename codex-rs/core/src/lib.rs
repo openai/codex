@@ -30,6 +30,7 @@ mod message_history;
 mod model_provider_info;
 pub use model_provider_info::ModelProviderInfo;
 pub use model_provider_info::WireApi;
+pub mod handle_update_plan;
 mod models;
 pub mod openai_api_key;
 mod openai_model_info;
