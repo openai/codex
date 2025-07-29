@@ -95,13 +95,28 @@ impl App<'_> {
                     // needs to acquire the event lock, and so will fail if it
                     // can't acquire it within 2 sec. Resizing the terminal
                     // crashes the app if the cursor position can't be read.
-                    if let Ok(true) = crossterm::event::poll(Duration::from_millis(100)) {
-                        if let Ok(event) = crossterm::event::read() {
+                    // For Termux compatibility, we use a longer timeout (500ms)
+                    // to accommodate slower ANSI escape sequence processing.
+                    let is_termux = std::env::var("TERMUX_VERSION").is_ok() || 
+                                   std::env::var("PREFIX").map_or(false, |p| p.contains("com.termux"));
+                    let poll_timeout = if is_termux {
+                        Duration::from_millis(500)
+                    } else {
+                        Duration::from_millis(100)
+                    };
+                    match crossterm::event::poll(poll_timeout) {
+                        Ok(true) => {
+                            if let Ok(event) = crossterm::event::read() {
                             match event {
                                 crossterm::event::Event::Key(key_event) => {
                                     app_event_tx.send(AppEvent::KeyEvent(key_event));
                                 }
                                 crossterm::event::Event::Resize(_, _) => {
+                                    // For Termux compatibility, add a small delay before redraw
+                                    // to allow terminal to stabilize after resize
+                                    if is_termux {
+                                        std::thread::sleep(Duration::from_millis(50));
+                                    }
                                     app_event_tx.send(AppEvent::RequestRedraw);
                                 }
                                 crossterm::event::Event::Mouse(MouseEvent {
@@ -130,9 +145,16 @@ impl App<'_> {
                                     // Ignore any other events.
                                 }
                             }
+                            }
                         }
-                    } else {
-                        // Timeout expired, no `Event` is available
+                        Ok(false) => {
+                            // Timeout expired, no `Event` is available
+                        }
+                        Err(_) => {
+                            // Error in polling - for Termux compatibility, just continue
+                            // instead of crashing the event loop
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
                     }
                 }
             });
