@@ -7,7 +7,9 @@ impl TermuxCompat {
     /// Detect if running in Termux environment
     pub fn is_termux() -> bool {
         std::env::var("TERMUX_VERSION").is_ok()
-            || std::env::var("PREFIX").map_or(false, |p| p.contains("com.termux"))
+            || std::env::var("PREFIX")
+                .unwrap_or_default()
+                .contains("com.termux")
     }
 
     /// Get appropriate polling timeout for the current environment
