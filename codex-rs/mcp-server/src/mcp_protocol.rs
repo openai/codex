@@ -8,10 +8,13 @@ use uuid::Uuid;
 use mcp_types::RequestId;
 
 pub type ConversationId = Uuid;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct MessageId(pub Uuid);
 
 // Requests
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolCallRequestEnvelope {
+pub struct ToolCallRequest {
     #[serde(rename = "jsonrpc")]
     pub jsonrpc: &'static str,
     pub id: u64,
@@ -28,11 +31,11 @@ pub enum ToolCallRequestParams {
     ConversationsList(ConversationsListArgs),
 }
 
+/// Wrap this request in a JSON-RPC request.
 impl ToolCallRequestParams {
-    /// Wrap this request in a JSON-RPC envelope.
     #[allow(dead_code)]
-    pub fn into_envelope(self, id: u64) -> ToolCallRequestEnvelope {
-        ToolCallRequestEnvelope {
+    pub fn into_request(self, id: u64) -> ToolCallRequest {
+        ToolCallRequest {
             jsonrpc: "2.0",
             id,
             method: "tools/call",
@@ -84,22 +87,27 @@ pub struct ConversationConnectArgs {
     pub conversation_id: ConversationId,
 }
 
+/// If omitted, the message continues from the latest turn.
+/// Set to resume/edit from an earlier parent message in the thread.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConversationSendMessageArgs {
     pub conversation_id: ConversationId,
     pub content: Vec<MessageInputItem>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub message_id: Option<String>,
+    pub parent_message_id: Option<MessageId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[serde(flatten)]
     pub conversation_overrides: Option<ConversationOverrides>,
 }
 
+/// Input items for a message.
+/// Following OpenAI's Responses API: https://platform.openai.com/docs/api-reference/responses
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum MessageInputItem {
-    /// Following OpenAI's Responses API: https://platform.openai.com/docs/api-reference/responses
-    Text { text: String },
+    Text {
+        text: String,
+    },
     Image {
         #[serde(flatten)]
         source: ImageSource,
@@ -112,22 +120,20 @@ pub enum MessageInputItem {
     },
 }
 
+/// Source of an image.
+/// Following OpenAI's API: https://platform.openai.com/docs/guides/images-vision#giving-a-model-images-as-input
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ImageSource {
-    /// Following OpenAI's API: https://platform.openai.com/docs/guides/images-vision#giving-a-model-images-as-input
-    ImageUrl {
-        image_url: String,
-    },
-    FileId {
-        file_id: String,
-    },
+    ImageUrl { image_url: String },
+    FileId { file_id: String },
 }
 
+/// Source of a file.
+/// Following OpenAI's Responses API: https://platform.openai.com/docs/guides/pdf-files?api-mode=responses#uploading-files
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum FileSource {
-    /// Following OpenAI's Responses API: https://platform.openai.com/docs/guides/pdf-files?api-mode=responses#uploading-files
     Url {
         file_url: String,
     },
@@ -137,7 +143,7 @@ pub enum FileSource {
     Base64 {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         filename: Option<String>,
-        /// Base64-encoded file contents.
+        // Base64-encoded file contents.
         file_data: String,
     },
 }
@@ -161,7 +167,7 @@ pub struct ConversationsListArgs {
 // Responses
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ToolCallResponseEnvelope {
+pub struct ToolCallResponse {
     pub request_id: RequestId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_error: Option<bool>,
@@ -174,7 +180,7 @@ pub struct ToolCallResponseEnvelope {
 pub enum ToolCallResponseData {
     ConversationCreate(ConversationCreateResult),
     ConversationConnect(ConversationConnectResult),
-    ConversationSendMessage(ConversationSendMessageAccepted),
+    ConversationSendMessage(ConversationSendMessageResult),
     ConversationsList(ConversationsListResult),
 }
 
@@ -188,8 +194,8 @@ pub struct ConversationCreateResult {
 pub struct ConversationConnectResult {}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ConversationSendMessageAccepted {
-    pub accepted: bool,
+pub struct ConversationSendMessageResult {
+    pub success: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -205,19 +211,13 @@ pub struct ConversationSummary {
     pub title: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
-pub enum ToolCallResponseContent {
-    Text { text: String },
-}
-
 // Notifications
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "method", content = "params", rename_all = "camelCase")]
 pub enum ConversationNotificationParams {
     InitialState(InitialStateNotificationParams),
-    // sent when a second client connects to the same conversation
+    // Sent when a second client connects to the same conversation.
     ConnectionRevoked(ConnectionRevokedNotificationParams),
     CodexEvent(CodexEventNotificationParams),
     Cancelled(CancelNotificationParams),
@@ -268,29 +268,31 @@ pub struct CancelNotificationParams {
 }
 
 #[derive(Debug, Clone)]
-pub enum NotificationEnvelope {
+pub enum ConversationNotification {
     InitialState(InitialStateNotificationParams),
     ConnectionRevoked(ConnectionRevokedNotificationParams),
     Cancelled(CancelNotificationParams),
     CodexEvent(CodexEventNotificationParams),
 }
 
-impl From<ConversationNotificationParams> for NotificationEnvelope {
+impl From<ConversationNotificationParams> for ConversationNotification {
     fn from(n: ConversationNotificationParams) -> Self {
         match n {
             ConversationNotificationParams::InitialState(p) => {
-                NotificationEnvelope::InitialState(p)
+                ConversationNotification::InitialState(p)
             }
             ConversationNotificationParams::ConnectionRevoked(p) => {
-                NotificationEnvelope::ConnectionRevoked(p)
+                ConversationNotification::ConnectionRevoked(p)
             }
-            ConversationNotificationParams::Cancelled(p) => NotificationEnvelope::Cancelled(p),
-            ConversationNotificationParams::CodexEvent(p) => NotificationEnvelope::CodexEvent(p),
+            ConversationNotificationParams::Cancelled(p) => ConversationNotification::Cancelled(p),
+            ConversationNotificationParams::CodexEvent(p) => {
+                ConversationNotification::CodexEvent(p)
+            }
         }
     }
 }
 
-impl Serialize for NotificationEnvelope {
+impl Serialize for ConversationNotification {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -304,19 +306,19 @@ impl Serialize for NotificationEnvelope {
 
         let mut map = serializer.serialize_map(Some(2))?;
         match self {
-            NotificationEnvelope::InitialState(p) => {
+            ConversationNotification::InitialState(p) => {
                 map.serialize_entry("method", "notifications/initial_state")?;
                 map.serialize_entry("params", p)?;
             }
-            NotificationEnvelope::ConnectionRevoked(p) => {
+            ConversationNotification::ConnectionRevoked(p) => {
                 map.serialize_entry("method", "notifications/connection_revoked")?;
                 map.serialize_entry("params", p)?;
             }
-            NotificationEnvelope::Cancelled(p) => {
+            ConversationNotification::Cancelled(p) => {
                 map.serialize_entry("method", "notifications/cancelled")?;
                 map.serialize_entry("params", p)?;
             }
-            NotificationEnvelope::CodexEvent(p) => {
+            ConversationNotification::CodexEvent(p) => {
                 let t = event_type(&p.msg);
                 map.serialize_entry("method", &format!("notifications/{t}"))?;
                 map.serialize_entry("params", p)?;
@@ -356,7 +358,7 @@ mod tests {
             base_instructions: None,
         });
 
-        let observed = to_val(&req.into_envelope(2));
+        let observed = to_val(&req.into_request(2));
         let expected = json!({
             "jsonrpc": "2.0",
             "id": 2,
@@ -373,8 +375,8 @@ mod tests {
     }
 
     #[test]
-    fn serialize_tool_call_request_params_conversation_send_message_with_overrides_and_message_id()
-    {
+    fn serialize_tool_call_request_params_conversation_send_message_with_overrides_and_parent_message_id()
+     {
         let req = ToolCallRequestParams::ConversationSendMessage(ConversationSendMessageArgs {
             conversation_id: uuid!("d0f6ecbe-84a2-41c1-b23d-b20473b25eab"),
             content: vec![
@@ -392,7 +394,7 @@ mod tests {
                     },
                 },
             ],
-            message_id: Some("client-uuid-123".into()),
+            parent_message_id: Some(MessageId(uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8"))),
             conversation_overrides: Some(ConversationOverrides {
                 model: Some("o4-mini".into()),
                 cwd: Some("/workdir".into()),
@@ -404,7 +406,7 @@ mod tests {
             }),
         });
 
-        let observed = to_val(&req.into_envelope(2));
+        let observed = to_val(&req.into_request(2));
         let expected = json!({
             "jsonrpc": "2.0",
             "id": 2,
@@ -418,7 +420,7 @@ mod tests {
                         { "type": "image", "image_url": "https://example.com/cat.jpg", "detail": "high" },
                         { "type": "file", "filename": "notes.txt", "file_data": "Zm9vYmFy" }
                     ],
-                    "message_id": "client-uuid-123",
+                    "parent_message_id": "67e55044-10b1-426f-9247-bb680e5fe0c8",
                     "model": "o4-mini",
                     "cwd": "/workdir",
                     "sandbox": "danger-full-access",
@@ -438,7 +440,7 @@ mod tests {
             cursor: Some("abc".into()),
         });
 
-        let observed = to_val(&req.into_envelope(2));
+        let observed = to_val(&req.into_request(2));
         let expected = json!({
             "jsonrpc": "2.0",
             "id": 2,
@@ -460,7 +462,7 @@ mod tests {
             conversation_id: uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8"),
         });
 
-        let observed = to_val(&req.into_envelope(2));
+        let observed = to_val(&req.into_request(2));
         let expected = json!({
             "jsonrpc": "2.0",
             "id": 2,
@@ -529,11 +531,11 @@ mod tests {
         assert_eq!(observed, expected);
     }
 
-    // ----- Responses (full envelope) -----
+    // ----- Responses -----
 
     #[test]
-    fn envelope_success_conversation_create_full_schema() {
-        let env = ToolCallResponseEnvelope {
+    fn response_success_conversation_create_full_schema() {
+        let env = ToolCallResponse {
             request_id: RequestId::Integer(1),
             is_error: None,
             result: Some(ToolCallResponseData::ConversationCreate(
@@ -553,13 +555,13 @@ mod tests {
         });
         assert_eq!(
             observed, expected,
-            "full envelope (ConversationCreate) must match"
+            "response (ConversationCreate) must match"
         );
     }
 
     #[test]
-    fn envelope_success_conversation_connect_empty_result_object() {
-        let env = ToolCallResponseEnvelope {
+    fn response_success_conversation_connect_empty_result_object() {
+        let env = ToolCallResponse {
             request_id: RequestId::Integer(2),
             is_error: None,
             result: Some(ToolCallResponseData::ConversationConnect(
@@ -573,33 +575,33 @@ mod tests {
         });
         assert_eq!(
             observed, expected,
-            "full envelope (ConversationConnect) must have empty object result"
+            "response (ConversationConnect) must have empty object result"
         );
     }
 
     #[test]
-    fn envelope_success_send_message_accepted_full_schema() {
-        let env = ToolCallResponseEnvelope {
+    fn response_success_send_message_accepted_full_schema() {
+        let env = ToolCallResponse {
             request_id: RequestId::Integer(3),
             is_error: None,
             result: Some(ToolCallResponseData::ConversationSendMessage(
-                ConversationSendMessageAccepted { accepted: true },
+                ConversationSendMessageResult { success: true },
             )),
         };
         let observed = to_val(&env);
         let expected = json!({
             "requestId": 3,
-            "result": { "accepted": true }
+            "result": { "success": true }
         });
         assert_eq!(
             observed, expected,
-            "full envelope (ConversationSendMessageAccepted) must match"
+            "response (ConversationSendMessageAccepted) must match"
         );
     }
 
     #[test]
-    fn envelope_success_conversations_list_with_next_cursor_full_schema() {
-        let env = ToolCallResponseEnvelope {
+    fn response_success_conversations_list_with_next_cursor_full_schema() {
+        let env = ToolCallResponse {
             request_id: RequestId::Integer(4),
             is_error: None,
             result: Some(ToolCallResponseData::ConversationsList(
@@ -627,13 +629,13 @@ mod tests {
         });
         assert_eq!(
             observed, expected,
-            "full envelope (ConversationsList with cursor) must match"
+            "response (ConversationsList with cursor) must match"
         );
     }
 
     #[test]
-    fn envelope_error_only_is_error_and_request_id_string() {
-        let env = ToolCallResponseEnvelope {
+    fn response_error_only_is_error_and_request_id_string() {
+        let env = ToolCallResponse {
             request_id: RequestId::Integer(4),
             is_error: Some(true),
             result: None,
@@ -645,7 +647,7 @@ mod tests {
         });
         assert_eq!(
             observed, expected,
-            "error envelope must omit `result` and include `isError`"
+            "error response must omit `result` and include `isError`"
         );
     }
 
@@ -676,7 +678,7 @@ mod tests {
             },
         };
 
-        let observed = to_val(&NotificationEnvelope::from(
+        let observed = to_val(&ConversationNotification::from(
             ConversationNotificationParams::InitialState(params.clone()),
         ));
         let expected = json!({
@@ -704,7 +706,7 @@ mod tests {
             initial_state: InitialStatePayload { events: vec![] },
         };
 
-        let observed = to_val(&NotificationEnvelope::from(
+        let observed = to_val(&ConversationNotification::from(
             ConversationNotificationParams::InitialState(params),
         ));
         let expected = json!({
@@ -726,7 +728,7 @@ mod tests {
             reason: "New connect() took over".into(),
         };
 
-        let observed = to_val(&NotificationEnvelope::from(
+        let observed = to_val(&ConversationNotification::from(
             ConversationNotificationParams::ConnectionRevoked(params),
         ));
         let expected = json!({
@@ -751,7 +753,7 @@ mod tests {
             }),
         };
 
-        let observed = to_val(&NotificationEnvelope::from(
+        let observed = to_val(&ConversationNotification::from(
             ConversationNotificationParams::CodexEvent(params),
         ));
         let expected = json!({
@@ -777,7 +779,7 @@ mod tests {
             msg: EventMsg::TaskStarted,
         };
 
-        let observed = to_val(&NotificationEnvelope::from(
+        let observed = to_val(&ConversationNotification::from(
             ConversationNotificationParams::CodexEvent(params),
         ));
         let expected = json!({
@@ -802,7 +804,7 @@ mod tests {
             }),
         };
 
-        let observed = to_val(&NotificationEnvelope::from(
+        let observed = to_val(&ConversationNotification::from(
             ConversationNotificationParams::CodexEvent(params),
         ));
         let expected = json!({
@@ -826,7 +828,7 @@ mod tests {
             }),
         };
 
-        let observed = to_val(&NotificationEnvelope::from(
+        let observed = to_val(&ConversationNotification::from(
             ConversationNotificationParams::CodexEvent(params),
         ));
         let expected = json!({
@@ -851,7 +853,7 @@ mod tests {
             }),
         };
 
-        let observed = to_val(&NotificationEnvelope::from(
+        let observed = to_val(&ConversationNotification::from(
             ConversationNotificationParams::CodexEvent(params),
         ));
         let expected = json!({
@@ -877,7 +879,7 @@ mod tests {
             msg: EventMsg::TokenCount(usage),
         };
 
-        let observed = to_val(&NotificationEnvelope::from(
+        let observed = to_val(&ConversationNotification::from(
             ConversationNotificationParams::CodexEvent(params),
         ));
         let expected = json!({
@@ -911,7 +913,7 @@ mod tests {
             }),
         };
 
-        let observed = to_val(&NotificationEnvelope::from(
+        let observed = to_val(&ConversationNotification::from(
             ConversationNotificationParams::CodexEvent(params),
         ));
         let expected = json!({
@@ -941,7 +943,7 @@ mod tests {
             }),
         };
 
-        let observed = to_val(&NotificationEnvelope::from(
+        let observed = to_val(&ConversationNotification::from(
             ConversationNotificationParams::CodexEvent(params),
         ));
         let expected = json!({
@@ -970,7 +972,7 @@ mod tests {
             }),
         };
 
-        let observed = to_val(&NotificationEnvelope::from(
+        let observed = to_val(&ConversationNotification::from(
             ConversationNotificationParams::CodexEvent(params),
         ));
         let expected = json!({
@@ -1000,7 +1002,7 @@ mod tests {
             }),
         };
 
-        let observed = to_val(&NotificationEnvelope::from(
+        let observed = to_val(&ConversationNotification::from(
             ConversationNotificationParams::CodexEvent(params),
         ));
         let expected = json!({
@@ -1027,7 +1029,7 @@ mod tests {
             reason: Some("user_cancelled".into()),
         };
 
-        let observed = to_val(&NotificationEnvelope::from(
+        let observed = to_val(&ConversationNotification::from(
             ConversationNotificationParams::Cancelled(params),
         ));
         let expected = json!({
@@ -1047,7 +1049,7 @@ mod tests {
             reason: None,
         };
 
-        let observed = to_val(&NotificationEnvelope::from(
+        let observed = to_val(&ConversationNotification::from(
             ConversationNotificationParams::Cancelled(params),
         ));
 
