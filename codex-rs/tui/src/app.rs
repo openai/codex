@@ -88,6 +88,8 @@ impl App<'_> {
         {
             let app_event_tx = app_event_tx.clone();
             std::thread::spawn(move || {
+                use crate::termux_compat::TermuxCompat;
+                
                 loop {
                     // This timeout is necessary to avoid holding the event lock
                     // that crossterm::event::read() acquires. In particular,
@@ -95,15 +97,7 @@ impl App<'_> {
                     // needs to acquire the event lock, and so will fail if it
                     // can't acquire it within 2 sec. Resizing the terminal
                     // crashes the app if the cursor position can't be read.
-                    // For Termux compatibility, we use a longer timeout (500ms)
-                    // to accommodate slower ANSI escape sequence processing.
-                    let is_termux = std::env::var("TERMUX_VERSION").is_ok()
-                        || std::env::var("PREFIX").map_or(false, |p| p.contains("com.termux"));
-                    let poll_timeout = if is_termux {
-                        Duration::from_millis(500)
-                    } else {
-                        Duration::from_millis(100)
-                    };
+                    let poll_timeout = TermuxCompat::get_poll_timeout();
                     match crossterm::event::poll(poll_timeout) {
                         Ok(true) => {
                             if let Ok(event) = crossterm::event::read() {
@@ -114,8 +108,8 @@ impl App<'_> {
                                 crossterm::event::Event::Resize(_, _) => {
                                     // For Termux compatibility, add a small delay before redraw
                                     // to allow terminal to stabilize after resize
-                                    if is_termux {
-                                        std::thread::sleep(Duration::from_millis(50));
+                                    if let Some(delay) = TermuxCompat::get_resize_delay() {
+                                        std::thread::sleep(delay);
                                     }
                                     app_event_tx.send(AppEvent::RequestRedraw);
                                 }
@@ -153,7 +147,7 @@ impl App<'_> {
                         Err(_) => {
                             // Error in polling - for Termux compatibility, just continue
                             // instead of crashing the event loop
-                            std::thread::sleep(Duration::from_millis(10));
+                            TermuxCompat::handle_poll_error();
                         }
                     }
                 }
