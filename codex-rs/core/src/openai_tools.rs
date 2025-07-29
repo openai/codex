@@ -4,13 +4,14 @@ use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
 use crate::client_common::Prompt;
+use crate::plan_tool::PLAN_TOOL;
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct ResponsesApiTool {
-    name: &'static str,
-    description: &'static str,
-    strict: bool,
-    parameters: JsonSchema,
+    pub(crate) name: &'static str,
+    pub(crate) description: &'static str,
+    pub(crate) strict: bool,
+    pub(crate) parameters: JsonSchema,
 }
 
 /// When serialized as JSON, this produces a valid "Tool" in the OpenAI
@@ -63,45 +64,6 @@ static DEFAULT_TOOLS: LazyLock<Vec<OpenAiTool>> = LazyLock::new(|| {
             additional_properties: false,
         },
     })]
-});
-
-static PLAN_TOOL: LazyLock<OpenAiTool> = LazyLock::new(|| {
-    let mut plan_item_props = BTreeMap::new();
-    plan_item_props.insert("step".to_string(), JsonSchema::String);
-    plan_item_props.insert("status".to_string(), JsonSchema::String);
-
-    let plan_items_schema = JsonSchema::Array {
-        items: Box::new(JsonSchema::Object {
-            properties: plan_item_props,
-            required: &["step", "status"],
-            additional_properties: false,
-        }),
-    };
-
-    let mut properties = BTreeMap::new();
-    properties.insert("explanation".to_string(), JsonSchema::String);
-    properties.insert("plan".to_string(), plan_items_schema);
-
-    OpenAiTool::Function(ResponsesApiTool {
-        name: "update_plan",
-        description: r#"Use the update_plan tool to keep the user updated on the current plan for the task.
-After understanding the user's task, call the update_plan tool with an initial plan. An example of a plan:
-1. Explore the codebase to find relevant files (status: in_progress)
-2. Implement the feature in the XYZ component (status: pending)
-3. Commit changes and make a pull request (status: pending)
-Each step should be a short, 1-sentence description.
-Until all the steps are finished, there should always be exactly one in_progress step in the plan.
-Call the update_plan tool whenever you finish a step, marking the completed step as `completed` and marking the next step as `in_progress`.
-Before running a command, consider whether or not you have completed the previous step, and make sure to mark it as completed before moving on to the next step.
-Sometimes, you may need to change plans in the middle of a task: call `update_plan` with the updated plan and make sure to provide an `explanation` of the rationale when doing so.
-When all steps are completed, call update_plan one last time with all steps marked as `completed`."#,
-        strict: false,
-        parameters: JsonSchema::Object {
-            properties,
-            required: &["plan"],
-            additional_properties: false,
-        },
-    })
 });
 
 static DEFAULT_CODEX_MODEL_TOOLS: LazyLock<Vec<OpenAiTool>> =

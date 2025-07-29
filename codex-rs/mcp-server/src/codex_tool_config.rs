@@ -268,6 +268,10 @@ mod tests {
                 "description": "Working directory for the session. If relative, it is resolved against the server process's current working directory.",
                 "type": "string"
               },
+              "include-plan-tool": {
+                "description": "Whether to include the plan tool in the conversation.",
+                "type": "boolean"
+              },
               "model": {
                 "description": "Optional override for the model name (e.g. \"o3\", \"o4-mini\").",
                 "type": "string"
