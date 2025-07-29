@@ -9,8 +9,8 @@ use std::path::Path;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
-use codex_core::session_manager::SessionsMode;
-use codex_core::session_manager::get_sessions;
+use codex_core::get_conversation;
+use codex_core::get_conversations;
 use tempfile::TempDir;
 use time::OffsetDateTime;
 use time::PrimitiveDateTime;
@@ -75,119 +75,99 @@ fn make_config(codex_home: &Path) -> Config {
 }
 
 #[tokio::test]
-async fn test_basic_retrieval_full_mode() {
+async fn test_list_conversations_latest_first() {
     let temp = TempDir::new().unwrap();
     let home = temp.path();
 
-    // Create three sessions.
+    // Create three sessions: 01, 02, 03
     for day in 1..=3 {
         let ts = format!("2025-01-{day:02}T12-00-00");
         write_session_file(home, &ts, Uuid::new_v4(), 3).unwrap();
     }
 
     let cfg = make_config(home);
-    let page = get_sessions(&cfg, SessionsMode::Full, 10, None, None, None, None)
-        .await
-        .unwrap();
+    let page = get_conversations(&cfg, 10, None).await.unwrap();
 
-    assert_eq!(page.sessions.len(), 3);
+    assert_eq!(page.paths.len(), 3);
     assert!(!page.reached_scan_cap);
     assert_eq!(page.scanned_files, 3);
+
+    // Verify newest first: 03, 02, 01
+    let names: Vec<String> = page
+        .paths
+        .iter()
+        .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+        .collect();
+    assert!(names[0].contains("2025-01-03T12-00-00"));
+    assert!(names[1].contains("2025-01-02T12-00-00"));
+    assert!(names[2].contains("2025-01-01T12-00-00"));
 }
 
 #[tokio::test]
-async fn test_date_range_filter() {
-    let temp = TempDir::new().unwrap();
-    let home = temp.path();
-
-    // Sessions on Jan 1..3.
-    let mut dts = Vec::new();
-    for day in 1..=3 {
-        let ts = format!("2025-01-{day:02}T08-00-00");
-        let (dt, uuid) = write_session_file(home, &ts, Uuid::new_v4(), 1).unwrap();
-        dts.push((dt, uuid));
-    }
-
-    let cfg = make_config(home);
-
-    // Filter for only Jan-02.
-    let start = Some(dts[1].0);
-    let end = Some(dts[1].0);
-    let page = get_sessions(&cfg, SessionsMode::Lite, 10, None, start, end, None)
-        .await
-        .unwrap();
-
-    assert_eq!(page.sessions.len(), 1);
-    let session_meta = &page.sessions[0];
-    // Expect timestamp match (meta[0] is timestamp string)
-    assert_eq!(session_meta[0].as_str().unwrap(), "2025-01-02T08-00-00");
-}
-
-#[tokio::test]
-async fn test_filter_by_ids() {
-    let temp = TempDir::new().unwrap();
-    let home = temp.path();
-
-    let ts1 = "2025-02-01T10-00-00";
-    let (_dt1, uuid1) = write_session_file(home, ts1, Uuid::new_v4(), 2).unwrap();
-    let ts2 = "2025-02-01T10-05-00";
-    write_session_file(home, ts2, Uuid::new_v4(), 2).unwrap();
-
-    let cfg = make_config(home);
-
-    let page = get_sessions(
-        &cfg,
-        SessionsMode::Lite,
-        10,
-        None,
-        None,
-        None,
-        Some(&[uuid1]),
-    )
-    .await
-    .unwrap();
-
-    assert_eq!(page.sessions.len(), 1);
-    let meta = &page.sessions[0];
-    assert_eq!(meta[1].as_str().unwrap(), uuid1.to_string());
-    // Also ensure scanned_files counts both.
-    assert_eq!(page.scanned_files, 2);
-}
-
-#[tokio::test]
-async fn test_anchor_pagination() {
+async fn test_pagination_cursor() {
     let temp = TempDir::new().unwrap();
     let home = temp.path();
 
     // Five sequential sessions.
-    let mut anchors = Vec::new();
     for i in 0..5 {
         let ts = format!("2025-03-{:02}T09-00-00", i + 1); // 2025-03-01 .. 05
-        let (dt, uuid) = write_session_file(home, &ts, Uuid::new_v4(), 1).unwrap();
-        anchors.push((dt, uuid));
+        write_session_file(home, &ts, Uuid::new_v4(), 1).unwrap();
     }
 
     let cfg = make_config(home);
 
-    // Newest-first ordering: anchor represents the last item of a previous page.
-    // Use the 4th (2025-03-04) session as anchor; expect to receive strictly older sessions.
-    let (anchor_dt, anchor_id) = anchors[3];
-    let token = format!(
-        "{}|{}",
-        anchor_dt
-            .format(&format_description!(
-                "[year]-[month]-[day]T[hour]-[minute]-[second]"
-            ))
-            .unwrap(),
-        anchor_id
-    );
+    // First page of 2: expect 05, 04
+    let page1 = get_conversations(&cfg, 2, None).await.unwrap();
+    assert_eq!(page1.paths.len(), 2);
+    let n1: Vec<_> = page1
+        .paths
+        .iter()
+        .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+        .collect();
+    assert!(n1[0].contains("2025-03-05T09-00-00"));
+    assert!(n1[1].contains("2025-03-04T09-00-00"));
 
-    let page = get_sessions(&cfg, SessionsMode::Lite, 10, Some(&token), None, None, None)
+    // Second page of 2: pass cursor
+    let page2 = get_conversations(&cfg, 2, page1.next_cursor.as_deref())
         .await
         .unwrap();
+    assert_eq!(page2.paths.len(), 2);
+    let n2: Vec<_> = page2
+        .paths
+        .iter()
+        .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+        .collect();
+    assert!(n2[0].contains("2025-03-03T09-00-00"));
+    assert!(n2[1].contains("2025-03-02T09-00-00"));
 
-    // Should return sessions strictly older than the anchor => 3 remaining (03, 02, 01).
-    assert_eq!(page.sessions.len(), 3);
-    // Verify the first returned session is 2025-03-03 (the next older).
-    assert_eq!(page.sessions[0][0].as_str().unwrap(), "2025-03-03T09-00-00");
+    // Third page of 1: expect 01
+    let page3 = get_conversations(&cfg, 2, page2.next_cursor.as_deref())
+        .await
+        .unwrap();
+    assert_eq!(page3.paths.len(), 1);
+    let n3: Vec<_> = page3
+        .paths
+        .iter()
+        .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+        .collect();
+    assert!(n3[0].contains("2025-03-01T09-00-00"));
+}
+
+#[tokio::test]
+async fn test_get_conversation_contents() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+
+    let uuid = Uuid::new_v4();
+    let ts = "2025-04-01T10-30-00";
+    write_session_file(home, ts, uuid, 2).unwrap();
+
+    let cfg = make_config(home);
+    let page = get_conversations(&cfg, 1, None).await.unwrap();
+    let path = &page.paths[0];
+
+    let content = get_conversation(path).await.unwrap();
+
+    assert!(content.contains("2025-04-01T10-30-00"));
+    assert!(content.contains(&uuid.to_string()));
 }
