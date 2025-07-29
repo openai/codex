@@ -186,7 +186,6 @@ mod tests {
                     function myecho {
                         echo 'It works!'
                     }
-                    PATH="empty"
                     "#,
             )
             .unwrap();
