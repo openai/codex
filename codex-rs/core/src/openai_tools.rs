@@ -4,13 +4,14 @@ use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
 use crate::client_common::Prompt;
+use crate::plan_tool::PLAN_TOOL;
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct ResponsesApiTool {
-    name: &'static str,
-    description: &'static str,
-    strict: bool,
-    parameters: JsonSchema,
+    pub(crate) name: &'static str,
+    pub(crate) description: &'static str,
+    pub(crate) strict: bool,
+    pub(crate) parameters: JsonSchema,
 }
 
 /// When serialized as JSON, this produces a valid "Tool" in the OpenAI
@@ -74,6 +75,7 @@ static DEFAULT_CODEX_MODEL_TOOLS: LazyLock<Vec<OpenAiTool>> =
 pub(crate) fn create_tools_json_for_responses_api(
     prompt: &Prompt,
     model: &str,
+    include_plan_tool: bool,
 ) -> crate::error::Result<Vec<serde_json::Value>> {
     // Assemble tool list: built-in tools + any extra tools from the prompt.
     let default_tools = if model.starts_with("codex") {
@@ -93,6 +95,10 @@ pub(crate) fn create_tools_json_for_responses_api(
             .map(|(name, tool)| mcp_tool_to_openai_tool(name, tool)),
     );
 
+    if include_plan_tool {
+        tools_json.push(serde_json::to_value(PLAN_TOOL.clone())?);
+    }
+
     Ok(tools_json)
 }
 
@@ -102,10 +108,12 @@ pub(crate) fn create_tools_json_for_responses_api(
 pub(crate) fn create_tools_json_for_chat_completions_api(
     prompt: &Prompt,
     model: &str,
+    include_plan_tool: bool,
 ) -> crate::error::Result<Vec<serde_json::Value>> {
     // We start with the JSON for the Responses API and than rewrite it to match
     // the chat completions tool call format.
-    let responses_api_tools_json = create_tools_json_for_responses_api(prompt, model)?;
+    let responses_api_tools_json =
+        create_tools_json_for_responses_api(prompt, model, include_plan_tool)?;
     let tools_json = responses_api_tools_json
         .into_iter()
         .filter_map(|mut tool| {

@@ -143,6 +143,9 @@ pub struct Config {
 
     /// Experimental rollout resume path (absolute path to .jsonl; undocumented).
     pub experimental_resume: Option<PathBuf>,
+
+    /// Include an experimental plan tool that the model can use to update its current plan and status of each step.
+    pub include_plan_tool: bool,
 }
 
 impl Config {
@@ -366,6 +369,7 @@ pub struct ConfigOverrides {
     pub config_profile: Option<String>,
     pub codex_linux_sandbox_exe: Option<PathBuf>,
     pub base_instructions: Option<String>,
+    pub include_plan_tool: Option<bool>,
 }
 
 impl Config {
@@ -388,6 +392,7 @@ impl Config {
             config_profile: config_profile_key,
             codex_linux_sandbox_exe,
             base_instructions,
+            include_plan_tool,
         } = overrides;
 
         let config_profile = match config_profile_key.as_ref().or(cfg.profile.as_ref()) {
@@ -521,8 +526,8 @@ impl Config {
                 .chatgpt_base_url
                 .or(cfg.chatgpt_base_url)
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
-
             experimental_resume,
+            include_plan_tool: include_plan_tool.unwrap_or(false),
         };
         Ok(config)
     }
@@ -829,7 +834,7 @@ disable_response_storage = true
     ///
     /// 1. custom command-line argument, e.g. `--model o3`
     /// 2. as part of a profile, where the `--profile` is specified via a CLI
-    ///    (or in the config file itelf)
+    ///    (or in the config file itself)
     /// 3. as an entry in `config.toml`, e.g. `model = "o3"`
     /// 4. the default value for a required field defined in code, e.g.,
     ///    `crate::flags::OPENAI_DEFAULT_MODEL`
@@ -879,6 +884,7 @@ disable_response_storage = true
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
                 experimental_resume: None,
                 base_instructions: None,
+                include_plan_tool: false,
             },
             o3_profile_config
         );
@@ -927,6 +933,7 @@ disable_response_storage = true
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             experimental_resume: None,
             base_instructions: None,
+            include_plan_tool: false,
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -990,6 +997,7 @@ disable_response_storage = true
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             experimental_resume: None,
             base_instructions: None,
+            include_plan_tool: false,
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);
