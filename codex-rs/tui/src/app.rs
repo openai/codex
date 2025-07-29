@@ -5,7 +5,6 @@ use crate::file_search::FileSearchManager;
 use crate::get_git_diff::get_git_diff;
 use crate::git_warning_screen::GitWarningOutcome;
 use crate::git_warning_screen::GitWarningScreen;
-use crate::login_screen::LoginScreen;
 use crate::scroll_event_helper::ScrollEventHelper;
 use crate::slash_command::SlashCommand;
 use crate::tui;
@@ -37,8 +36,6 @@ enum AppState<'a> {
         /// `AppState`.
         widget: Box<ChatWidget<'a>>,
     },
-    /// The login screen for the OpenAI provider.
-    Login { screen: LoginScreen },
     /// The start-up warning that recommends running codex inside a Git repo.
     GitWarning { screen: GitWarningScreen },
 }
@@ -74,7 +71,6 @@ impl App<'_> {
     pub(crate) fn new(
         config: Config,
         initial_prompt: Option<String>,
-        show_login_screen: bool,
         show_git_warning: bool,
         initial_images: Vec<std::path::PathBuf>,
     ) -> Self {
@@ -138,18 +134,7 @@ impl App<'_> {
             });
         }
 
-        let (app_state, chat_args) = if show_login_screen {
-            (
-                AppState::Login {
-                    screen: LoginScreen::new(app_event_tx.clone(), config.codex_home.clone()),
-                },
-                Some(ChatWidgetArgs {
-                    config: config.clone(),
-                    initial_prompt,
-                    initial_images,
-                }),
-            )
-        } else if show_git_warning {
+        let (app_state, chat_args) = if show_git_warning {
             (
                 AppState::GitWarning {
                     screen: GitWarningScreen::new(),
@@ -243,7 +228,7 @@ impl App<'_> {
                                 AppState::Chat { widget } => {
                                     widget.on_ctrl_c();
                                 }
-                                AppState::Login { .. } | AppState::GitWarning { .. } => {
+                                AppState::GitWarning { .. } => {
                                     // No-op.
                                 }
                             }
@@ -264,7 +249,7 @@ impl App<'_> {
                                         self.dispatch_key_event(key_event);
                                     }
                                 }
-                                AppState::Login { .. } | AppState::GitWarning { .. } => {
+                                AppState::GitWarning { .. } => {
                                     self.app_event_tx.send(AppEvent::ExitRequest);
                                 }
                             }
@@ -288,11 +273,11 @@ impl App<'_> {
                 }
                 AppEvent::CodexOp(op) => match &mut self.app_state {
                     AppState::Chat { widget } => widget.submit_op(op),
-                    AppState::Login { .. } | AppState::GitWarning { .. } => {}
+                    AppState::GitWarning { .. } => {}
                 },
                 AppEvent::LatestLog(line) => match &mut self.app_state {
                     AppState::Chat { widget } => widget.update_latest_log(line),
-                    AppState::Login { .. } | AppState::GitWarning { .. } => {}
+                    AppState::GitWarning { .. } => {}
                 },
                 AppEvent::DispatchCommand(command) => match command {
                     SlashCommand::New => {
@@ -348,9 +333,7 @@ impl App<'_> {
     pub(crate) fn token_usage(&self) -> codex_core::protocol::TokenUsage {
         match &self.app_state {
             AppState::Chat { widget } => widget.token_usage().clone(),
-            AppState::Login { .. } | AppState::GitWarning { .. } => {
-                codex_core::protocol::TokenUsage::default()
-            }
+            AppState::GitWarning { .. } => codex_core::protocol::TokenUsage::default(),
         }
     }
 
@@ -360,9 +343,6 @@ impl App<'_> {
         match &mut self.app_state {
             AppState::Chat { widget } => {
                 terminal.draw(|frame| frame.render_widget_ref(&**widget, frame.area()))?;
-            }
-            AppState::Login { screen } => {
-                terminal.draw(|frame| frame.render_widget_ref(&*screen, frame.area()))?;
             }
             AppState::GitWarning { screen } => {
                 terminal.draw(|frame| frame.render_widget_ref(&*screen, frame.area()))?;
@@ -378,7 +358,6 @@ impl App<'_> {
             AppState::Chat { widget } => {
                 widget.handle_key_event(key_event);
             }
-            AppState::Login { screen } => screen.handle_key_event(key_event),
             AppState::GitWarning { screen } => match screen.handle_key_event(key_event) {
                 GitWarningOutcome::Continue => {
                     // User accepted – switch to chat view.
@@ -409,21 +388,21 @@ impl App<'_> {
     fn dispatch_paste_event(&mut self, pasted: String) {
         match &mut self.app_state {
             AppState::Chat { widget } => widget.handle_paste(pasted),
-            AppState::Login { .. } | AppState::GitWarning { .. } => {}
+            AppState::GitWarning { .. } => {}
         }
     }
 
     fn dispatch_scroll_event(&mut self, scroll_delta: i32) {
         match &mut self.app_state {
             AppState::Chat { widget } => widget.handle_scroll_delta(scroll_delta),
-            AppState::Login { .. } | AppState::GitWarning { .. } => {}
+            AppState::GitWarning { .. } => {}
         }
     }
 
     fn dispatch_codex_event(&mut self, event: Event) {
         match &mut self.app_state {
             AppState::Chat { widget } => widget.handle_codex_event(event),
-            AppState::Login { .. } | AppState::GitWarning { .. } => {}
+            AppState::GitWarning { .. } => {}
         }
     }
 }
