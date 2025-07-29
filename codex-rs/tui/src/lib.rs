@@ -221,8 +221,6 @@ fn restore() {
     }
 }
 
-#[allow(clippy::expect_used)]
-#[allow(clippy::print_stderr)]
 async fn should_show_login_screen(config: &Config) -> bool {
     if is_in_need_of_openai_api_key(config) {
         // Reading the OpenAI API key is an async operation because it may need
