@@ -145,7 +145,7 @@ pub async fn run_main(
     let show_login_screen = should_show_login_screen(&config).await;
     if show_login_screen {
         std::io::stdout()
-            .write_all(b"No API key detected!\nLogin with your ChatGPT account? [Yn] ")?;
+            .write_all(b"No API key detected.\nLogin with your ChatGPT account? [Yn] ")?;
         std::io::stdout().flush()?;
         let mut input = String::new();
         std::io::stdin().read_line(&mut input)?;
@@ -157,7 +157,7 @@ pub async fn run_main(
         // Block until the login command is finished.
         let new_key = codex_login::login_with_chatgpt(&config.codex_home, false).await?;
         set_openai_api_key(new_key);
-        std::io::stdout().write_all(b"Login successful!\n")?;
+        std::io::stdout().write_all(b"Login successful.\n")?;
     }
 
     // Determine whether we need to display the "not a git repo" warning
