@@ -1,8 +1,3 @@
-//! Simple session listing and loading over on-disk rollout JSONL session files.
-//! Public entry points:
-//! - `get_conversations` returning newest-first session file paths with pagination via opaque cursor tokens.
-//! - `get_conversation` returning the full file contents of a specific session.
-
 use std::cmp::Reverse;
 use std::fs;
 use std::io::{self};
@@ -22,9 +17,13 @@ pub(crate) const SESSIONS_SUBDIR: &str = "sessions";
 /// Returned page of conversation file paths.
 #[derive(Debug)]
 pub struct ConversationsPage {
+    /// Absolute paths to rollout files, ordered newest first.
     pub paths: Vec<PathBuf>,
+    /// Opaque pagination token to resume after the last item, or `None` if end.
     pub next_cursor: Option<String>,
+    /// Total number of files touched while scanning this request.
     pub scanned_files: usize,
+    /// True if a hard scan cap was hit; consider resuming with `next_cursor`.
     pub reached_scan_cap: bool,
 }
 
@@ -32,7 +31,7 @@ const MAX_SCAN_FILES: usize = 50_000; // Hard cap to bound worst‑case work per
 
 /// Retrieve recorded conversation file paths with token pagination. The returned `next_cursor`
 /// can be supplied on the next call to resume after the last returned item, resilient to
-/// concurrent new sessions being appended.
+/// concurrent new sessions being appended. Ordering is stable by timestamp desc, then UUID desc.
 pub async fn get_conversations(
     config: &Config,
     page_size: usize,
@@ -72,23 +71,7 @@ pub async fn get_conversations(
 /// Load the full contents of a single conversation session file at `path`.
 /// Returns the entire file contents as a String.
 pub async fn get_conversation(path: &Path) -> io::Result<String> {
-    let path = path.to_path_buf();
-    tokio::task::spawn_blocking(move || fs::read_to_string(path))
-        .await
-        .map_err(|e| io::Error::other(format!("join error: {e}")))?
-}
-
-/// Pagination cursor token format: "<file_ts>|<uuid>" where `file_ts` matches the
-/// filename timestamp portion (YYYY-MM-DDThh-mm-ss) used in rollout filenames.
-fn parse_cursor_token(token: &str) -> Option<(OffsetDateTime, Uuid)> {
-    let (file_ts, uuid_str) = token.split_once('|')?;
-    let Ok(uuid) = Uuid::parse_str(uuid_str) else {
-        return None;
-    };
-    let format: &[FormatItem] =
-        format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
-    let ts = PrimitiveDateTime::parse(file_ts, format).ok()?.assume_utc();
-    Some((ts, uuid))
+    tokio::fs::read_to_string(path).await
 }
 
 /// Load conversation file paths from disk using directory traversal.
@@ -129,7 +112,8 @@ fn traverse_directories_for_paths(
                     parse_timestamp_uuid_from_filename(name_str)
                         .map(|(ts, id)| (ts, id, name_str.to_string(), path.to_path_buf()))
                 })?;
-                day_files.sort_by_key(|(ts, _sid, _name_str, _path)| Reverse(*ts));
+                // Stable ordering within the same second: (timestamp desc, uuid desc)
+                day_files.sort_by_key(|(ts, sid, _name_str, _path)| (Reverse(*ts), Reverse(*sid)));
                 for (ts, sid, _name_str, path) in day_files.into_iter() {
                     scanned_files += 1;
                     if scanned_files >= MAX_SCAN_FILES && paths.len() >= page_size {
@@ -158,6 +142,20 @@ fn traverse_directories_for_paths(
         scanned_files,
         reached_scan_cap: scanned_files >= MAX_SCAN_FILES,
     })
+}
+
+/// Pagination cursor token format: "<file_ts>|<uuid>" where `file_ts` matches the
+/// filename timestamp portion (YYYY-MM-DDThh-mm-ss) used in rollout filenames.
+/// The cursor orders files by timestamp desc, then UUID desc.
+fn parse_cursor_token(token: &str) -> Option<(OffsetDateTime, Uuid)> {
+    let (file_ts, uuid_str) = token.split_once('|')?;
+    let Ok(uuid) = Uuid::parse_str(uuid_str) else {
+        return None;
+    };
+    let format: &[FormatItem] =
+        format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
+    let ts = PrimitiveDateTime::parse(file_ts, format).ok()?.assume_utc();
+    Some((ts, uuid))
 }
 
 fn build_next_cursor(paths: &[PathBuf]) -> Option<String> {

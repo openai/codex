@@ -171,3 +171,43 @@ async fn test_get_conversation_contents() {
     assert!(content.contains("2025-04-01T10-30-00"));
     assert!(content.contains(&uuid.to_string()));
 }
+
+#[tokio::test]
+async fn test_stable_ordering_same_second_pagination() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+
+    let ts = "2025-07-01T00-00-00";
+    // Deterministic UUIDs; ordering should be by UUID desc: 3, 2, 1
+    let u1 = Uuid::from_u128(1);
+    let u2 = Uuid::from_u128(2);
+    let u3 = Uuid::from_u128(3);
+
+    write_session_file(home, ts, u1, 0).unwrap();
+    write_session_file(home, ts, u2, 0).unwrap();
+    write_session_file(home, ts, u3, 0).unwrap();
+
+    let cfg = make_config(home);
+
+    let page1 = get_conversations(&cfg, 2, None).await.unwrap();
+    let names1: Vec<_> = page1
+        .paths
+        .iter()
+        .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+        .collect();
+    // Expect u3 then u2 on the first page
+    assert!(names1[0].contains(&u3.to_string()));
+    assert!(names1[1].contains(&u2.to_string()));
+
+    let page2 = get_conversations(&cfg, 2, page1.next_cursor.as_deref())
+        .await
+        .unwrap();
+    assert_eq!(page2.paths.len(), 1);
+    let name2 = page2.paths[0]
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+    // Remaining should be u1
+    assert!(name2.contains(&u1.to_string()));
+}
