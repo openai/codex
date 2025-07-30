@@ -1,6 +1,7 @@
 use codex_core::config_types::SandboxMode;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
+use codex_core::protocol::InputItem;
 use serde::Deserialize;
 use serde::Serialize;
 use strum_macros::Display;
@@ -95,32 +96,12 @@ pub struct ConversationStreamArgs {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConversationSendMessageArgs {
     pub conversation_id: ConversationId,
-    pub content: Vec<MessageInputItem>,
+    pub content: Vec<InputItem>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_message_id: Option<MessageId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[serde(flatten)]
     pub conversation_overrides: Option<ConversationOverrides>,
-}
-
-/// Input items for a message.
-/// Following OpenAI's Responses API: https://platform.openai.com/docs/api-reference/responses
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
-pub enum MessageInputItem {
-    Text {
-        text: String,
-    },
-    Image {
-        #[serde(flatten)]
-        source: ImageSource,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        detail: Option<ImageDetail>,
-    },
-    File {
-        #[serde(flatten)]
-        source: FileSource,
-    },
 }
 
 /// Source of an image.
