@@ -12,7 +12,7 @@ use codex_core::protocol::Event;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
-use ratatui::layout::Rect;
+use ratatui::layout::Offset;
 use ratatui::prelude::Backend;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -322,6 +322,24 @@ impl App<'_> {
 
     fn draw_next_frame(&mut self, terminal: &mut tui::Tui) -> Result<()> {
         // TODO: add a throttle to avoid redrawing too often
+
+        let cursor_pos = terminal.get_cursor_position()?;
+        let last_known_cursor_pos = terminal.last_known_cursor_pos;
+        let screen_size = terminal.size()?;
+        let last_known_screen_size = terminal.last_known_screen_size;
+        if cursor_pos.y != last_known_cursor_pos.y && screen_size != last_known_screen_size {
+            // The terminal was resized. The only point of reference we have for where our viewport
+            // was moved is the cursor position.
+            // NB this assumes that the cursor was not wrapped as part of the resize.
+            let cursor_delta = cursor_pos.y as i32 - last_known_cursor_pos.y as i32;
+
+            let new_viewport_area = terminal.viewport_area.offset(Offset {
+                x: 0,
+                y: cursor_delta,
+            });
+            terminal.set_viewport_area(new_viewport_area);
+            terminal.clear()?;
+        }
 
         let size = terminal.size()?;
         let desired_height = match &self.app_state {

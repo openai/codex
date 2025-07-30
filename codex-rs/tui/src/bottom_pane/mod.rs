@@ -10,7 +10,6 @@ use codex_file_search::FileMatch;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::layout::Size;
 use ratatui::widgets::WidgetRef;
 
 mod approval_modal_view;

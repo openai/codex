@@ -4,6 +4,7 @@ use std::io::Write;
 
 use crate::tui;
 use crossterm::Command;
+use crossterm::cursor::MoveTo;
 use crossterm::queue;
 use crossterm::style::Color as CColor;
 use crossterm::style::Colors;
@@ -23,6 +24,7 @@ use ratatui::text::Span;
 /// Insert `lines` above the viewport.
 pub(crate) fn insert_history_lines(terminal: &mut tui::Tui, lines: Vec<Line>) {
     let screen_size = terminal.backend().size().unwrap_or(Size::new(0, 0));
+    let cursor_pos = terminal.get_cursor_position().ok();
 
     let mut area = terminal.get_frame().area();
 
@@ -60,9 +62,7 @@ pub(crate) fn insert_history_lines(terminal: &mut tui::Tui, lines: Vec<Line>) {
     // └──────────────────────────────┘
     queue!(std::io::stdout(), SetScrollRegion(1..area.top())).ok();
 
-    terminal
-        .set_cursor_position(Position::new(0, cursor_top))
-        .ok();
+    queue!(std::io::stdout(), MoveTo(0, cursor_top)).ok();
 
     for line in lines {
         queue!(std::io::stdout(), Print("\r\n")).ok();
@@ -70,6 +70,9 @@ pub(crate) fn insert_history_lines(terminal: &mut tui::Tui, lines: Vec<Line>) {
     }
 
     queue!(std::io::stdout(), ResetScrollRegion).ok();
+    if let Some(cursor_pos) = cursor_pos {
+        queue!(std::io::stdout(), MoveTo(cursor_pos.x, cursor_pos.y)).ok();
+    }
 }
 
 fn wrapped_line_count(lines: &[Line], width: u16) -> u16 {

@@ -3,7 +3,6 @@ use std::io;
 use ratatui::backend::Backend;
 use ratatui::backend::ClearType;
 use ratatui::buffer::Buffer;
-use ratatui::buffer::Cell;
 use ratatui::layout::Position;
 use ratatui::layout::Rect;
 use ratatui::layout::Size;
@@ -30,6 +29,7 @@ pub struct Frame<'a> {
     pub(crate) count: usize,
 }
 
+#[allow(dead_code)]
 impl Frame<'_> {
     /// The area of the current frame
     ///
@@ -39,18 +39,6 @@ impl Frame<'_> {
     /// the event for any calculations that are used to render the current frame and use this value
     /// instead as this is the area of the buffer that is used to render the current frame.
     pub const fn area(&self) -> Rect {
-        self.viewport_area
-    }
-
-    /// The area of the current frame
-    ///
-    /// This is guaranteed not to change during rendering, so may be called multiple times.
-    ///
-    /// If your app listens for a resize event from the backend, it should ignore the values from
-    /// the event for any calculations that are used to render the current frame and use this value
-    /// instead as this is the area of the buffer that is used to render the current frame.
-    #[deprecated = "use .area() as it's the more correct name"]
-    pub const fn size(&self) -> Rect {
         self.viewport_area
     }
 
@@ -187,21 +175,6 @@ impl Frame<'_> {
         self.cursor_position = Some(position.into());
     }
 
-    /// After drawing this frame, make the cursor visible and put it at the specified (x, y)
-    /// coordinates. If this method is not called, the cursor will be hidden.
-    ///
-    /// Note that this will interfere with calls to [`Terminal::hide_cursor`],
-    /// [`Terminal::show_cursor`], and [`Terminal::set_cursor_position`]. Pick one of the APIs and
-    /// stick with it.
-    ///
-    /// [`Terminal::hide_cursor`]: crate::Terminal::hide_cursor
-    /// [`Terminal::show_cursor`]: crate::Terminal::show_cursor
-    /// [`Terminal::set_cursor_position`]: crate::Terminal::set_cursor_position
-    #[deprecated = "the method set_cursor_position indicates more clearly what about the cursor to set"]
-    pub fn set_cursor(&mut self, x: u16, y: u16) {
-        self.set_cursor_position(Position { x, y });
-    }
-
     /// Gets the buffer that this `Frame` draws into as a mutable reference.
     pub fn buffer_mut(&mut self) -> &mut Buffer {
         self.buffer
@@ -236,21 +209,6 @@ impl Frame<'_> {
     }
 }
 
-/// `CompletedFrame` represents the state of the terminal after all changes performed in the last
-/// [`Terminal::draw`] call have been applied. Therefore, it is only valid until the next call to
-/// [`Terminal::draw`].
-///
-/// [`Terminal::draw`]: crate::Terminal::draw
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
-pub struct CompletedFrame<'a> {
-    /// The buffer that was used to draw the last frame.
-    pub buffer: &'a Buffer,
-    /// The size of the last frame.
-    pub area: Rect,
-    /// The frame count indicating the sequence number of this frame.
-    pub count: usize,
-}
-
 #[derive(Debug, Default, Clone, Eq, PartialEq, Hash)]
 pub struct Terminal<B>
 where
@@ -267,8 +225,8 @@ where
     hidden_cursor: bool,
     /// Area of the viewport
     pub viewport_area: Rect,
-    /// Last known area of the terminal. Used to detect if the internal buffers have to be resized.
-    pub last_known_area: Rect,
+    /// Last known size of the terminal. Used to detect if the internal buffers have to be resized.
+    pub last_known_screen_size: Size,
     /// Last known position of the cursor. Used to find the new area when the viewport is inlined
     /// and the terminal resized.
     pub last_known_cursor_pos: Position,
@@ -310,7 +268,7 @@ where
     /// # std::io::Result::Ok(())
     /// ```
     pub fn with_options(mut backend: B) -> io::Result<Self> {
-        let area = Rect::from((Position::ORIGIN, backend.size()?));
+        let screen_size = backend.size()?;
         let cursor_pos = backend.get_cursor_position()?;
         Ok(Self {
             backend,
@@ -321,7 +279,7 @@ where
             current: 0,
             hidden_cursor: false,
             viewport_area: Rect::new(0, cursor_pos.y, 0, 0),
-            last_known_area: area,
+            last_known_screen_size: screen_size,
             last_known_cursor_pos: cursor_pos,
             frame_count: 0,
         })
@@ -369,26 +327,8 @@ where
     ///
     /// Requested area will be saved to remain consistent when rendering. This leads to a full clear
     /// of the screen.
-    pub fn resize(&mut self, area: Rect) -> io::Result<()> {
-        /*
-        let next_area = {
-            let offset_in_previous_viewport = self
-                .last_known_cursor_pos
-                .y
-                .saturating_sub(self.viewport_area.top());
-            compute_inline_size(
-                &mut self.backend,
-                self.viewport_area.height,
-                area.as_size(),
-                offset_in_previous_viewport,
-            )?
-            .0
-        };
-        self.set_viewport_area(next_area);
-        self.clear()?;
-            */
-
-        self.last_known_area = area;
+    pub fn resize(&mut self, screen_size: Size) -> io::Result<()> {
+        self.last_known_screen_size = screen_size;
         Ok(())
     }
 
@@ -401,9 +341,9 @@ where
 
     /// Queries the backend for size and resizes if it doesn't match the previous size.
     pub fn autoresize(&mut self) -> io::Result<()> {
-        let area = Rect::from((Position::ORIGIN, self.size()?));
-        if area != self.last_known_area {
-            self.resize(area)?;
+        let screen_size = self.size()?;
+        if screen_size != self.last_known_screen_size {
+            self.resize(screen_size)?;
         }
         Ok(())
     }
@@ -425,10 +365,6 @@ where
     /// - call the render callback, passing it a [`Frame`] reference to render to
     /// - flush the current internal state by copying the current buffer to the backend
     /// - move the cursor to the last known position if it was set during the rendering closure
-    /// - return a [`CompletedFrame`] with the current buffer and the area of the terminal
-    ///
-    /// The [`CompletedFrame`] returned by this method can be useful for debugging or testing
-    /// purposes, but it is often not used in regular applicationss.
     ///
     /// The render callback should fully render the entire frame when called, including areas that
     /// are unchanged from the previous frame. This is because each frame is compared to the
@@ -458,7 +394,7 @@ where
     /// }
     /// # std::io::Result::Ok(())
     /// ```
-    pub fn draw<F>(&mut self, render_callback: F) -> io::Result<CompletedFrame>
+    pub fn draw<F>(&mut self, render_callback: F) -> io::Result<()>
     where
         F: FnOnce(&mut Frame),
     {
@@ -533,7 +469,7 @@ where
     /// }
     /// # io::Result::Ok(())
     /// ```
-    pub fn try_draw<F, E>(&mut self, render_callback: F) -> io::Result<CompletedFrame>
+    pub fn try_draw<F, E>(&mut self, render_callback: F) -> io::Result<()>
     where
         F: FnOnce(&mut Frame) -> Result<(), E>,
         E: Into<io::Error>,
@@ -567,16 +503,10 @@ where
         // Flush
         self.backend.flush()?;
 
-        let completed_frame = CompletedFrame {
-            buffer: &self.buffers[1 - self.current],
-            area: self.last_known_area,
-            count: self.frame_count,
-        };
-
         // increment frame count before returning from draw
         self.frame_count = self.frame_count.wrapping_add(1);
 
-        Ok(completed_frame)
+        Ok(())
     }
 
     /// Hides the cursor.
@@ -596,6 +526,7 @@ where
     /// Gets the current cursor position.
     ///
     /// This is the position of the cursor after the last draw call.
+    #[allow(dead_code)]
     pub fn get_cursor_position(&mut self) -> io::Result<Position> {
         self.backend.get_cursor_position()
     }
@@ -632,39 +563,3 @@ where
         self.backend.size()
     }
 }
-
-/*
-fn compute_inline_size<B: Backend>(
-    backend: &mut B,
-    height: u16,
-    size: Size,
-    offset_in_previous_viewport: u16,
-) -> io::Result<(Rect, Position)> {
-    let pos = backend.get_cursor_position()?;
-    let mut row = pos.y;
-
-    let max_height = size.height.min(height);
-
-    let lines_after_cursor = height
-        .saturating_sub(offset_in_previous_viewport)
-        .saturating_sub(1);
-
-    backend.append_lines(lines_after_cursor)?;
-
-    let available_lines = size.height.saturating_sub(row).saturating_sub(1);
-    let missing_lines = lines_after_cursor.saturating_sub(available_lines);
-    row = row
-        .saturating_sub(missing_lines)
-        .saturating_sub(offset_in_previous_viewport);
-
-    Ok((
-        Rect {
-            x: 0,
-            y: row,
-            width: size.width,
-            height: max_height,
-        },
-        pos,
-    ))
-}
-*/
