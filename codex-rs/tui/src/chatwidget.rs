@@ -477,6 +477,10 @@ impl ChatWidget<'_> {
     pub(crate) fn token_usage(&self) -> &TokenUsage {
         &self.token_usage
     }
+
+    pub(crate) fn clear_token_usage(&mut self) {
+        self.token_usage = TokenUsage::default();
+    }
 }
 
 impl WidgetRef for &ChatWidget<'_> {

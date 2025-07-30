@@ -273,8 +273,8 @@ impl App<'_> {
                         self.app_event_tx.send(AppEvent::RequestRedraw);
                     }
                     SlashCommand::Compact => {
-                        self.token_usage = TokenUsage::default();
                         if let AppState::Chat { widget } = &mut self.app_state {
+                            widget.clear_token_usage();
                             widget.submit_op(Op::SummarizeContext);
                         }
                     }
