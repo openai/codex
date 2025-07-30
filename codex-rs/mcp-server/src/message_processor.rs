@@ -572,7 +572,9 @@ impl MessageProcessor {
             self.send_response_with_optional_error(
                 id,
                 Some(ToolCallResponseResult::ConversationSendMessage(
-                    ConversationSendMessageResult {},
+                    ConversationSendMessageResult::Error {
+                        message: "No content items provided".to_string(),
+                    },
                 )),
                 Some(true),
             )
@@ -590,7 +592,9 @@ impl MessageProcessor {
             self.send_response_with_optional_error(
                 id,
                 Some(ToolCallResponseResult::ConversationSendMessage(
-                    ConversationSendMessageResult {},
+                    ConversationSendMessageResult::Error {
+                        message: "Session is already running".to_string(),
+                    },
                 )),
                 Some(true),
             )
@@ -601,7 +605,9 @@ impl MessageProcessor {
             self.send_response_with_optional_error(
                 id,
                 Some(ToolCallResponseResult::ConversationSendMessage(
-                    ConversationSendMessageResult {},
+                    ConversationSendMessageResult::Error {
+                        message: "Session does not exist".to_string(),
+                    },
                 )),
                 Some(true),
             )
@@ -619,7 +625,9 @@ impl MessageProcessor {
             self.send_response_with_optional_error(
                 id,
                 Some(ToolCallResponseResult::ConversationSendMessage(
-                    ConversationSendMessageResult {},
+                    ConversationSendMessageResult::Error {
+                        message: "Session not found in session map".to_string(),
+                    },
                 )),
                 Some(true),
             )
@@ -640,11 +648,13 @@ impl MessageProcessor {
                 })
                 .await;
 
-            if let Err(_e) = submit_res {
+            if let Err(e) = submit_res {
                 self.send_response_with_optional_error(
                     id,
                     Some(ToolCallResponseResult::ConversationSendMessage(
-                        ConversationSendMessageResult {},
+                        ConversationSendMessageResult::Error {
+                            message: format!("Failed to submit user input: {e}"),
+                        },
                     )),
                     Some(true),
                 )
@@ -652,8 +662,14 @@ impl MessageProcessor {
                 return;
             }
         }
-        self.send_response_with_optional_error(id, None, Some(false))
-            .await;
+        self.send_response_with_optional_error(
+            id,
+            Some(ToolCallResponseResult::ConversationSendMessage(
+                ConversationSendMessageResult::Ok,
+            )),
+            Some(false),
+        )
+        .await;
     }
 
     fn handle_set_level(

@@ -115,7 +115,7 @@ pub struct ConversationsListArgs {
 }
 
 // Responses
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolCallResponse {
     pub request_id: RequestId,
@@ -123,6 +123,16 @@ pub struct ToolCallResponse {
     pub is_error: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<ToolCallResponseResult>,
+}
+
+impl Serialize for ToolCallResponse {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let call_tool_result = self.clone().into_result();
+        call_tool_result.serialize(serializer)
+    }
 }
 
 impl ToolCallResponse {
@@ -169,7 +179,11 @@ pub struct ConversationCreateResult {
 pub struct ConversationStreamResult {}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ConversationSendMessageResult {}
+#[serde(tag = "status", rename_all = "camelCase")]
+pub enum ConversationSendMessageResult {
+    Ok,
+    Error { message: String },
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConversationsListResult {
@@ -521,13 +535,15 @@ mod tests {
             request_id: RequestId::Integer(3),
             is_error: None,
             result: Some(ToolCallResponseResult::ConversationSendMessage(
-                ConversationSendMessageResult {},
+                ConversationSendMessageResult::Ok,
             )),
         };
         let observed = to_val(&env);
         let expected = json!({
             "requestId": 3,
-            "result": {}
+            "result": {
+                "status": "ok"
+            }
         });
         assert_eq!(
             observed, expected,

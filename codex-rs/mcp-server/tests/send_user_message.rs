@@ -85,8 +85,15 @@ async fn test_send_user_message_success() {
             id: RequestId::Integer(send_msg_request_id),
             result: json!({
                 "content": [
+                    {
+                        "text": "{\"status\":\"ok\"}",
+                        "type": "text",
+                    }
                 ],
                 "isError": false,
+                "structuredContent": {
+                    "status": "ok"
+                }
             }),
         },
         response
@@ -122,7 +129,10 @@ async fn test_send_user_message_session_not_found() {
     .expect("timeout")
     .expect("resp");
 
-    assert_eq!(resp.result["isError"], json!(true));
+    let result = resp.result.clone();
+    let content = result["content"][0]["text"].as_str().unwrap_or("");
+    assert!(content.contains("Session does not exist"));
+    assert_eq!(result["isError"], json!(true));
 }
 
 // ---------------------------------------------------------------------------
