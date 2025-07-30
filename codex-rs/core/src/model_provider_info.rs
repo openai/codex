@@ -12,7 +12,6 @@ use std::env::VarError;
 use std::time::Duration;
 
 use crate::error::EnvVarError;
-use crate::openai_api_key::get_openai_api_key;
 
 /// Value for the `OpenAI-Originator` header that is sent with requests to
 /// OpenAI.
@@ -30,7 +29,7 @@ const DEFAULT_REQUEST_MAX_RETRIES: u64 = 4;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum WireApi {
-    /// The experimental "Responses" API exposed by OpenAI at `/v1/responses`.
+    /// The Responses API exposed by OpenAI at `/v1/responses`.
     Responses,
 
     /// Regular Chat Completions compatible with `/v1/chat/completions`.
@@ -44,7 +43,7 @@ pub struct ModelProviderInfo {
     /// Friendly display name.
     pub name: String,
     /// Base URL for the provider's OpenAI-compatible API.
-    pub base_url: String,
+    pub base_url: Option<String>,
     /// Environment variable that stores the user's API key for this provider.
     pub env_key: Option<String>,
 
@@ -78,6 +77,10 @@ pub struct ModelProviderInfo {
     /// Idle timeout (in milliseconds) to wait for activity on a streaming response before treating
     /// the connection as lost.
     pub stream_idle_timeout_ms: Option<u64>,
+
+    /// Whether this provider requires some form of standard authentication (API key, ChatGPT token).
+    #[serde(default)]
+    pub requires_auth: bool,
 }
 
 impl ModelProviderInfo {
@@ -93,11 +96,11 @@ impl ModelProviderInfo {
         &'a self,
         client: &'a reqwest::Client,
     ) -> crate::error::Result<reqwest::RequestBuilder> {
-        let api_key = self.api_key()?;
-
         let url = self.get_full_url();
 
         let mut builder = client.post(url);
+
+        let api_key = self.api_key()?;
         if let Some(key) = api_key {
             builder = builder.bearer_auth(key);
         }
@@ -117,9 +120,15 @@ impl ModelProviderInfo {
                     .join("&");
                 format!("?{full_params}")
             });
-        let base_url = &self.base_url;
+        let base_url = self
+            .base_url
+            .clone()
+            .unwrap_or("https://api.openai.com/v1".to_string());
+
         match self.wire_api {
-            WireApi::Responses => format!("{base_url}/responses{query_string}"),
+            WireApi::Responses => {
+                format!("{base_url}/responses{query_string}")
+            }
             WireApi::Chat => format!("{base_url}/chat/completions{query_string}"),
         }
     }
@@ -127,7 +136,10 @@ impl ModelProviderInfo {
     /// Apply provider-specific HTTP headers (both static and environment-based)
     /// onto an existing `reqwest::RequestBuilder` and return the updated
     /// builder.
-    fn apply_http_headers(&self, mut builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    pub fn apply_http_headers(
+        &self,
+        mut builder: reqwest::RequestBuilder,
+    ) -> reqwest::RequestBuilder {
         if let Some(extra) = &self.http_headers {
             for (k, v) in extra {
                 builder = builder.header(k, v);
@@ -152,11 +164,7 @@ impl ModelProviderInfo {
     fn api_key(&self) -> crate::error::Result<Option<String>> {
         match &self.env_key {
             Some(env_key) => {
-                let env_value = if env_key == crate::openai_api_key::OPENAI_API_KEY_ENV_VAR {
-                    get_openai_api_key().map_or_else(|| Err(VarError::NotPresent), Ok)
-                } else {
-                    std::env::var(env_key)
-                };
+                let env_value = std::env::var(env_key);
                 env_value
                     .and_then(|v| {
                         if v.trim().is_empty() {
@@ -204,47 +212,51 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
     // providers are bundled with Codex CLI, so we only include the OpenAI
     // provider by default. Users are encouraged to add to `model_providers`
     // in config.toml to add their own providers.
-    [
-        (
-            "openai",
-            P {
-                name: "OpenAI".into(),
-                // Allow users to override the default OpenAI endpoint by
-                // exporting `OPENAI_BASE_URL`. This is useful when pointing
-                // Codex at a proxy, mock server, or Azure-style deployment
-                // without requiring a full TOML override for the built-in
-                // OpenAI provider.
-                base_url: std::env::var("OPENAI_BASE_URL")
-                    .ok()
-                    .filter(|v| !v.trim().is_empty())
-                    .unwrap_or_else(|| "https://api.openai.com/v1".to_string()),
-                env_key: Some("OPENAI_API_KEY".into()),
-                env_key_instructions: Some("Create an API key (https://platform.openai.com) and export it as an environment variable.".into()),
-                wire_api: WireApi::Responses,
-                query_params: None,
-                http_headers: Some(
-                    [
-                        ("originator".to_string(), OPENAI_ORIGINATOR_HEADER.to_string()),
-                        ("version".to_string(), env!("CARGO_PKG_VERSION").to_string()),
-                    ]
-                        .into_iter()
-                        .collect(),
-                ),
-                env_http_headers: Some(
-                    [
-                        ("OpenAI-Organization".to_string(), "OPENAI_ORGANIZATION".to_string()),
-                        ("OpenAI-Project".to_string(), "OPENAI_PROJECT".to_string()),
-                    ]
-                        .into_iter()
-                        .collect(),
-                ),
-                // Use global defaults for retry/timeout unless overridden in config.toml.
-                request_max_retries: None,
-                stream_max_retries: None,
-                stream_idle_timeout_ms: None,
-            },
-        ),
-    ]
+    [(
+        "openai",
+        P {
+            name: "OpenAI".into(),
+            // Allow users to override the default OpenAI endpoint by
+            // exporting `OPENAI_BASE_URL`. This is useful when pointing
+            // Codex at a proxy, mock server, or Azure-style deployment
+            // without requiring a full TOML override for the built-in
+            // OpenAI provider.
+            base_url: std::env::var("OPENAI_BASE_URL")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
+            env_key: None,
+            env_key_instructions: None,
+            wire_api: WireApi::Responses,
+            query_params: None,
+            http_headers: Some(
+                [
+                    (
+                        "originator".to_string(),
+                        OPENAI_ORIGINATOR_HEADER.to_string(),
+                    ),
+                    ("version".to_string(), env!("CARGO_PKG_VERSION").to_string()),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+            env_http_headers: Some(
+                [
+                    (
+                        "OpenAI-Organization".to_string(),
+                        "OPENAI_ORGANIZATION".to_string(),
+                    ),
+                    ("OpenAI-Project".to_string(), "OPENAI_PROJECT".to_string()),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+            // Use global defaults for retry/timeout unless overridden in config.toml.
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            requires_auth: true,
+        },
+    )]
     .into_iter()
     .map(|(k, v)| (k.to_string(), v))
     .collect()
@@ -264,7 +276,7 @@ base_url = "http://localhost:11434/v1"
         "#;
         let expected_provider = ModelProviderInfo {
             name: "Ollama".into(),
-            base_url: "http://localhost:11434/v1".into(),
+            base_url: Some("http://localhost:11434/v1".into()),
             env_key: None,
             env_key_instructions: None,
             wire_api: WireApi::Chat,
@@ -274,6 +286,7 @@ base_url = "http://localhost:11434/v1"
             request_max_retries: None,
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
+            requires_auth: false,
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -290,7 +303,7 @@ query_params = { api-version = "2025-04-01-preview" }
         "#;
         let expected_provider = ModelProviderInfo {
             name: "Azure".into(),
-            base_url: "https://xxxxx.openai.azure.com/openai".into(),
+            base_url: Some("https://xxxxx.openai.azure.com/openai".into()),
             env_key: Some("AZURE_OPENAI_API_KEY".into()),
             env_key_instructions: None,
             wire_api: WireApi::Chat,
@@ -302,6 +315,7 @@ query_params = { api-version = "2025-04-01-preview" }
             request_max_retries: None,
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
+            requires_auth: false,
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -319,7 +333,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
         "#;
         let expected_provider = ModelProviderInfo {
             name: "Example".into(),
-            base_url: "https://example.com".into(),
+            base_url: Some("https://example.com".into()),
             env_key: Some("API_KEY".into()),
             env_key_instructions: None,
             wire_api: WireApi::Chat,
@@ -333,6 +347,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
             request_max_retries: None,
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
+            requires_auth: false,
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();

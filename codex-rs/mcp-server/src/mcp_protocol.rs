@@ -103,43 +103,6 @@ pub struct ConversationSendMessageArgs {
     #[serde(flatten)]
     pub conversation_overrides: Option<ConversationOverrides>,
 }
-
-/// Source of an image.
-/// Following OpenAI's API: https://platform.openai.com/docs/guides/images-vision#giving-a-model-images-as-input
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum ImageSource {
-    ImageUrl { image_url: String },
-    FileId { file_id: String },
-}
-
-/// Source of a file.
-/// Following OpenAI's Responses API: https://platform.openai.com/docs/guides/pdf-files?api-mode=responses#uploading-files
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum FileSource {
-    Url {
-        file_url: String,
-    },
-    Id {
-        file_id: String,
-    },
-    Base64 {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        filename: Option<String>,
-        // Base64-encoded file contents.
-        file_data: String,
-    },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum ImageDetail {
-    Low,
-    High,
-    Auto,
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConversationsListArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -368,8 +331,8 @@ mod tests {
                     "conversation_id": "d0f6ecbe-84a2-41c1-b23d-b20473b25eab",
                     "content": [
                         { "type": "text", "text": "Hi" },
-                        { "type": "image", "image_url": "https://example.com/cat.jpg", "detail": "high" },
-                        { "type": "file", "filename": "notes.txt", "file_data": "Zm9vYmFy" }
+                        { "type": "image", "image_url": "https://example.com/cat.jpg" },
+                        { "type": "local_image", "path": "notes.txt" }
                     ],
                     "parent_message_id": "67e55044-10b1-426f-9247-bb680e5fe0c8",
                     "model": "o4-mini",
@@ -431,32 +394,38 @@ mod tests {
     // ----- Message inputs / sources -----
 
     #[test]
-    fn serialize_message_input_image_file_id_auto_detail() {
+    fn serialize_message_input_image_url() {
         let item = InputItem::Image {
             image_url: "https://example.com/x.png".into(),
         };
         let observed = to_val(&item);
         let expected = json!({
             "type": "image",
-            "file_id": "file_123",
-            "detail": "auto"
+            "image_url": "https://example.com/x.png"
         });
         assert_eq!(observed, expected);
     }
 
     #[test]
-    fn serialize_message_input_file_url_and_id_variants() {
+    fn serialize_message_input_local_image_path() {
         let url = InputItem::LocalImage {
             path: PathBuf::from("https://example.com/a.pdf"),
         };
         let id = InputItem::LocalImage {
             path: PathBuf::from("file_456"),
         };
+        let observed_url = to_val(&url);
+        let expected_url = json!({"type":"local_image","path":"https://example.com/a.pdf"});
         assert_eq!(
-            to_val(&url),
-            json!({"type":"file","file_url":"https://example.com/a.pdf"})
+            observed_url, expected_url,
+            "LocalImage with URL path should serialize as image_url"
         );
-        assert_eq!(to_val(&id), json!({"type":"file","file_id":"file_456"}));
+        let observed_id = to_val(&id);
+        let expected_id = json!({"type":"local_image","path":"file_456"});
+        assert_eq!(
+            observed_id, expected_id,
+            "LocalImage with file id should serialize as image_url"
+        );
     }
 
     #[test]
