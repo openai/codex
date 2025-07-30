@@ -31,8 +31,8 @@ impl ConversationHistory {
         }
     }
 
-    pub(crate) fn truncate(&mut self, n: usize) {
-        self.items.truncate(n);
+    pub(crate) fn keep_last(&mut self, n: usize) {
+        self.items.drain(..self.items.len().saturating_sub(n));
     }
 }
 

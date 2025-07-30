@@ -898,7 +898,7 @@ async fn submission_loop(
                     run_task(sess.clone(), sub.id, items).await;
                     // only keep the last input item and clear the rest
                     let mut history = sess.state.lock().unwrap().history.clone();
-                    history.truncate(1);
+                    history.keep_last(1);
                     sess.state.lock().unwrap().history = history;
                 }
             }
