@@ -50,7 +50,6 @@ impl ToolCallRequestParams {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConversationCreateArgs {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: String,
     pub model: String,
     pub cwd: String,
@@ -320,7 +319,7 @@ mod tests {
     #[test]
     fn serialize_tool_call_request_params_conversation_create_minimal() {
         let req = ToolCallRequestParams::ConversationCreate(ConversationCreateArgs {
-            prompt: None,
+            prompt: "".into(),
             model: "o3".into(),
             cwd: "/repo".into(),
             approval_policy: None,
@@ -338,6 +337,7 @@ mod tests {
             "params": {
                 "name": "conversationCreate",
                 "arguments": {
+                    "prompt": "",
                     "model": "o3",
                     "cwd": "/repo"
                 }
