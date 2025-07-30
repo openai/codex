@@ -277,12 +277,16 @@ impl Serialize for ServerNotification {
         let mut map = serializer.serialize_map(Some(2))?;
         match self {
             ServerNotification::CodexEvent(p) => {
-                map.serialize_entry("method", &format!("notifications/{:?}", p.msg))?;
+                map.serialize_entry("method", &format!("notifications/{}", p.msg))?;
                 map.serialize_entry("params", p)?;
             }
-            _ => {
-                map.serialize_entry("method", &format!("notifications/{self:?}"))?;
-                map.serialize_entry("params", self)?;
+            ServerNotification::InitialState(p) => {
+                map.serialize_entry("method", "notifications/initial_state")?;
+                map.serialize_entry("params", p)?;
+            }
+            ServerNotification::StreamDisconnected(p) => {
+                map.serialize_entry("method", "notifications/stream_disconnected")?;
+                map.serialize_entry("params", p)?;
             }
         }
         map.end()
