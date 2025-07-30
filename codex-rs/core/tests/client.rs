@@ -275,17 +275,8 @@ async fn includes_user_instructions_message_in_request() {
         .await;
 
     let model_provider = ModelProviderInfo {
-        name: "openai".into(),
-        base_url: format!("{}/v1", server.uri()),
-        env_key: Some("PATH".into()),
-        env_key_instructions: None,
-        wire_api: codex_core::WireApi::Responses,
-        query_params: None,
-        http_headers: None,
-        env_http_headers: None,
-        request_max_retries: Some(0),
-        stream_max_retries: Some(0),
-        stream_idle_timeout_ms: None,
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
     };
 
     let codex_home = TempDir::new().unwrap();
@@ -294,7 +285,13 @@ async fn includes_user_instructions_message_in_request() {
     config.user_instructions = Some("be nice".to_string());
 
     let ctrl_c = std::sync::Arc::new(tokio::sync::Notify::new());
-    let CodexSpawnOk { codex, .. } = Codex::spawn(config, ctrl_c.clone()).await.unwrap();
+    let CodexSpawnOk { codex, .. } = Codex::spawn(
+        config,
+        Some(CodexAuth::from_api_key("Test API Key".to_string())),
+        ctrl_c.clone(),
+    )
+    .await
+    .unwrap();
 
     codex
         .submit(Op::UserInput {
