@@ -31,15 +31,15 @@ const PROJECT_DOC_SEPARATOR: &str = "\n\n--- project-doc ---\n\n";
 /// Returns `Ok(None)` when no suitable file is found or
 /// `project_doc_max_bytes == 0`.
 pub fn discover_project_doc_path(config: &Config) -> std::io::Result<Option<std::path::PathBuf>> {
-    if config.project_doc_max_bytes == 0 {
-        return Ok(None);
+    if config.project_doc_max_bytes > 0 {
+        discover_project_doc_path_from_dir(
+            &config.cwd,
+            CANDIDATE_FILENAMES,
+            config.project_doc_max_bytes,
+        )
+    } else {
+        Ok(None)
     }
-
-    discover_project_doc_path_from_dir(
-        &config.cwd,
-        CANDIDATE_FILENAMES,
-        config.project_doc_max_bytes,
-    )
 }
 
 fn discover_project_doc_path_from_dir(
