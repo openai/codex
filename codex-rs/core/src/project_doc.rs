@@ -13,7 +13,6 @@
 
 use crate::config::Config;
 use std::fs;
-use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 use tokio::io::AsyncReadExt;
@@ -88,7 +87,7 @@ fn find_non_empty_candidate(
 ) -> std::io::Result<Option<std::path::PathBuf>> {
     for name in names {
         let candidate = dir.join(name);
-        let file = match File::open(&candidate) {
+        let file = match fs::File::open(&candidate) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
             Err(e) => return Err(e),
             Ok(f) => f,
