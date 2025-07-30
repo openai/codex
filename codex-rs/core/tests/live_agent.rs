@@ -50,7 +50,7 @@ async fn spawn_codex() -> Result<Codex, CodexErr> {
     config.model_provider.request_max_retries = Some(2);
     config.model_provider.stream_max_retries = Some(2);
     let CodexSpawnOk { codex: agent, .. } =
-        Codex::spawn(config, std::sync::Arc::new(Notify::new())).await?;
+        Codex::spawn(config, None, std::sync::Arc::new(Notify::new())).await?;
 
     Ok(agent)
 }
