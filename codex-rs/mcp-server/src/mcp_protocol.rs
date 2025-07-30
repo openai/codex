@@ -219,7 +219,7 @@ pub struct ConversationSummary {
 pub enum ServerNotification {
     InitialState(InitialStateNotificationParams),
     StreamDisconnected(StreamDisconnectedNotificationParams),
-    CodexEvent(CodexEventNotificationParams),
+    CodexEvent(Box<CodexEventNotificationParams>),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -304,6 +304,8 @@ pub enum ClientNotification {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use codex_core::protocol::McpInvocation;
+    use codex_core::protocol::McpToolCallBeginEvent;
     use pretty_assertions::assert_eq;
     use serde::Serialize;
     use serde_json::Value;
@@ -727,7 +729,7 @@ mod tests {
             }),
         };
 
-        let observed = to_val(&ServerNotification::CodexEvent(params));
+        let observed = to_val(&ServerNotification::CodexEvent(Box::new(params)));
         let expected = json!({
             "method": "notifications/agent_message",
             "params": {
@@ -753,7 +755,7 @@ mod tests {
             msg: EventMsg::TaskStarted,
         };
 
-        let observed = to_val(&ServerNotification::CodexEvent(params));
+        let observed = to_val(&ServerNotification::CodexEvent(Box::new(params)));
         let expected = json!({
             "method": "notifications/task_started",
             "params": {
@@ -776,7 +778,7 @@ mod tests {
             }),
         };
 
-        let observed = to_val(&ServerNotification::CodexEvent(params));
+        let observed = to_val(&ServerNotification::CodexEvent(Box::new(params)));
         let expected = json!({
             "method": "notifications/agent_message_delta",
             "params": {
@@ -800,7 +802,7 @@ mod tests {
             }),
         };
 
-        let observed = to_val(&ServerNotification::CodexEvent(params));
+        let observed = to_val(&ServerNotification::CodexEvent(Box::new(params)));
         let expected = json!({
             "method": "notifications/agent_message",
             "params": {
@@ -823,7 +825,7 @@ mod tests {
             }),
         };
 
-        let observed = to_val(&ServerNotification::CodexEvent(params));
+        let observed = to_val(&ServerNotification::CodexEvent(Box::new(params)));
         let expected = json!({
             "method": "notifications/agent_reasoning",
             "params": {
@@ -847,7 +849,7 @@ mod tests {
             msg: EventMsg::TokenCount(usage),
         };
 
-        let observed = to_val(&ServerNotification::CodexEvent(params));
+        let observed = to_val(&ServerNotification::CodexEvent(Box::new(params)));
         let expected = json!({
             "method": "notifications/token_count",
             "params": {
@@ -881,7 +883,7 @@ mod tests {
             }),
         };
 
-        let observed = to_val(&ServerNotification::CodexEvent(params));
+        let observed = to_val(&ServerNotification::CodexEvent(Box::new(params)));
         let expected = json!({
             "method": "notifications/session_configured",
             "params": {
@@ -909,7 +911,7 @@ mod tests {
             }),
         };
 
-        let observed = to_val(&ServerNotification::CodexEvent(params));
+        let observed = to_val(&ServerNotification::CodexEvent(Box::new(params)));
         let expected = json!({
             "method": "notifications/exec_command_begin",
             "params": {
@@ -928,24 +930,28 @@ mod tests {
     fn serialize_notification_codex_event_mcp_tool_call_begin_full_json() {
         let params = CodexEventNotificationParams {
             meta: None,
-            msg: EventMsg::McpToolCallBegin(codex_core::protocol::McpToolCallBeginEvent {
+            msg: EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
                 call_id: "m1".into(),
-                server: "calc".into(),
-                tool: "add".into(),
-                arguments: Some(json!({"a":1,"b":2})),
+                invocation: McpInvocation {
+                    server: "calc".into(),
+                    tool: "add".into(),
+                    arguments: Some(json!({"a":1,"b":2})),
+                },
             }),
         };
 
-        let observed = to_val(&ServerNotification::CodexEvent(params));
+        let observed = to_val(&ServerNotification::CodexEvent(Box::new(params)));
         let expected = json!({
             "method": "notifications/mcp_tool_call_begin",
             "params": {
                 "msg": {
                     "type": "mcp_tool_call_begin",
                     "call_id": "m1",
-                    "server": "calc",
-                    "tool": "add",
-                    "arguments": { "a": 1, "b": 2 }
+                    "invocation": {
+                        "server": "calc",
+                        "tool": "add",
+                        "arguments": { "a": 1, "b": 2 }
+                    }
                 }
             }
         });
@@ -964,7 +970,7 @@ mod tests {
             }),
         };
 
-        let observed = to_val(&ServerNotification::CodexEvent(params));
+        let observed = to_val(&ServerNotification::CodexEvent(Box::new(params)));
         let expected = json!({
             "method": "notifications/patch_apply_end",
             "params": {

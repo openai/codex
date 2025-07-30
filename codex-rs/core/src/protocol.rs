@@ -7,7 +7,8 @@ use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
 use std::path::PathBuf;
-use std::str::FromStr; // Added for FinalOutput Display implementation
+use std::str::FromStr;
+use std::time::Duration;
 
 use mcp_types::CallToolResult;
 use serde::Deserialize;
@@ -414,9 +415,7 @@ pub struct AgentReasoningDeltaEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct McpToolCallBeginEvent {
-    /// Identifier so this can be paired with the McpToolCallEnd event.
-    pub call_id: String,
+pub struct McpInvocation {
     /// Name of the MCP server as defined in the config.
     pub server: String,
     /// Name of the tool as given by the MCP server.
@@ -426,9 +425,18 @@ pub struct McpToolCallBeginEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct McpToolCallBeginEvent {
+    /// Identifier so this can be paired with the McpToolCallEnd event.
+    pub call_id: String,
+    pub invocation: McpInvocation,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct McpToolCallEndEvent {
     /// Identifier for the corresponding McpToolCallBegin that finished.
     pub call_id: String,
+    pub invocation: McpInvocation,
+    pub duration: Duration,
     /// Result of the tool call. Note this could be an error.
     pub result: Result<CallToolResult, String>,
 }

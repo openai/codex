@@ -21,7 +21,7 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 
 /// Insert `lines` above the viewport.
-pub(crate) fn insert_history_lines(terminal: &mut tui::Tui, lines: Vec<Line<'static>>) {
+pub(crate) fn insert_history_lines(terminal: &mut tui::Tui, lines: Vec<Line>) {
     let screen_size = terminal.backend().size().unwrap_or(Size::new(0, 0));
 
     let mut area = terminal.get_frame().area();
