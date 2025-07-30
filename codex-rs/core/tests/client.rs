@@ -257,6 +257,70 @@ async fn chatgpt_auth_sends_correct_request() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn includes_user_instructions_message_in_request() {
+    #![allow(clippy::unwrap_used)]
+
+    let server = MockServer::start().await;
+
+    let first = ResponseTemplate::new(200)
+        .insert_header("content-type", "text/event-stream")
+        .set_body_raw(sse_completed("resp1"), "text/event-stream");
+
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(first)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let model_provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+
+    let codex_home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&codex_home);
+    config.model_provider = model_provider;
+    config.user_instructions = Some("be nice".to_string());
+
+    let ctrl_c = std::sync::Arc::new(tokio::sync::Notify::new());
+    let CodexSpawnOk { codex, .. } = Codex::spawn(
+        config,
+        Some(CodexAuth::from_api_key("Test API Key".to_string())),
+        ctrl_c.clone(),
+    )
+    .await
+    .unwrap();
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: "hello".into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let request = &server.received_requests().await.unwrap()[0];
+    let request_body = request.body_json::<serde_json::Value>().unwrap();
+
+    assert!(
+        !request_body["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("be nice")
+    );
+    assert_eq!(request_body["input"][0]["role"], "user");
+    assert!(
+        request_body["input"][0]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("be nice")
+    );
+}
 fn auth_from_token(id_token: String) -> CodexAuth {
     CodexAuth::new(
         None,

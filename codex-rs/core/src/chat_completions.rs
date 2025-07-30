@@ -40,6 +40,10 @@ pub(crate) async fn stream_chat_completions(
     let full_instructions = prompt.get_full_instructions(model);
     messages.push(json!({"role": "system", "content": full_instructions}));
 
+    if let Some(instr) = &prompt.user_instructions {
+        messages.push(json!({"role": "user", "content": instr}));
+    }
+
     for item in &prompt.input {
         match item {
             ResponseItem::Message { role, content, .. } => {
