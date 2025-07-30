@@ -9,6 +9,7 @@ use crate::slash_command::SlashCommand;
 use crate::tui;
 use codex_core::config::Config;
 use codex_core::protocol::Event;
+use codex_core::protocol::Op;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -270,6 +271,12 @@ impl App<'_> {
                         ));
                         self.app_state = AppState::Chat { widget: new_widget };
                         self.app_event_tx.send(AppEvent::RequestRedraw);
+                    }
+                    SlashCommand::Compact => {
+                        self.token_usage = TokenUsage::default();
+                        if let AppState::Chat { widget } = &mut self.app_state {
+                            widget.submit_op(Op::SummarizeContext);
+                        }
                     }
                     SlashCommand::Quit => {
                         break;
