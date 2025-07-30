@@ -707,7 +707,7 @@ impl WidgetRef for &ChatComposer<'_> {
                 };
                 Line::from(hint)
                     .style(Style::default().dim())
-                    .render(bottom_line_rect, buf);
+                    .render_ref(bottom_line_rect, buf);
             }
         }
     }

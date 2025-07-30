@@ -7,12 +7,12 @@ use crate::git_warning_screen::GitWarningOutcome;
 use crate::git_warning_screen::GitWarningScreen;
 use crate::slash_command::SlashCommand;
 use crate::tui;
-use crate::user_approval_widget::ApprovalRequest;
 use codex_core::config::Config;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
 use color_eyre::eyre::Result;
+use crossterm::SynchronizedUpdate;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use ratatui::layout::Offset;
@@ -204,7 +204,7 @@ impl App<'_> {
                     self.schedule_redraw();
                 }
                 AppEvent::Redraw => {
-                    self.draw_next_frame(terminal)?;
+                    std::io::stdout().sync_update(|_| self.draw_next_frame(terminal))??;
                 }
                 AppEvent::KeyEvent(key_event) => {
                     match key_event {
@@ -335,8 +335,6 @@ impl App<'_> {
     }
 
     fn draw_next_frame(&mut self, terminal: &mut tui::Tui) -> Result<()> {
-        // TODO: add a throttle to avoid redrawing too often
-
         let screen_size = terminal.size()?;
         let last_known_screen_size = terminal.last_known_screen_size;
         if screen_size != last_known_screen_size {
