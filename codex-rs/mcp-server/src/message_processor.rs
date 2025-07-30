@@ -3,20 +3,17 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::SendUserMessageParam;
 use crate::codex_tool_config::CodexToolCallParam;
 use crate::codex_tool_config::CodexToolCallReplyParam;
 use crate::codex_tool_config::create_tool_for_codex_tool_call_param;
 use crate::codex_tool_config::create_tool_for_codex_tool_call_reply_param;
 use crate::mcp_protocol::ConversationSendMessageArgs;
-use crate::mcp_protocol::ToolCallRequest;
 use crate::mcp_protocol::ToolCallRequestParams;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::send_user_message::create_tool_for_send_user_message_param;
 
 use codex_core::Codex;
 use codex_core::config::Config as CodexConfig;
-use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::Submission;
 use mcp_types::CallToolRequestParams;
@@ -327,7 +324,6 @@ impl MessageProcessor {
                 self.handle_tool_call_codex_session_reply(id, arguments)
                     .await
             }
-            "send-user-message" => self.handle_tool_call_send_user_message(id, arguments).await,
             _ => {
                 let result = CallToolResult {
                     content: vec![ContentBlock::TextContent(TextContent {
