@@ -12,10 +12,10 @@
 //!     exists, the search stops – we do **not** walk past the Git root.
 
 use crate::config::Config;
-use std::path::Path;
 use std::fs;
 use std::fs::File;
 use std::io::Read;
+use std::path::Path;
 use tokio::io::AsyncReadExt;
 use tokio::io::BufReader;
 use tracing::error;
@@ -47,7 +47,6 @@ fn discover_project_doc_path_from_dir(
     names: &[&str],
     max_bytes: usize,
 ) -> std::io::Result<Option<std::path::PathBuf>> {
-
     // Canonicalize the path so that we do not end up in an infinite loop when
     // `cwd` contains `..` components.
     let mut dir = start_dir.to_path_buf();
@@ -87,7 +86,6 @@ fn find_non_empty_candidate(
     names: &[&str],
     max_bytes: usize,
 ) -> std::io::Result<Option<std::path::PathBuf>> {
-
     for name in names {
         let candidate = dir.join(name);
         let file = match File::open(&candidate) {
@@ -138,7 +136,6 @@ pub(crate) async fn get_user_instructions(config: &Config) -> Option<String> {
 /// the function returns `Ok(None)`. Unexpected I/O failures bubble up as
 /// `Err` so callers can decide how to handle them.
 async fn find_project_doc(config: &Config) -> std::io::Result<Option<String>> {
-
     let Some(path) = discover_project_doc_path(config)? else {
         return Ok(None);
     };
