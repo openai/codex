@@ -8,6 +8,9 @@ use crate::codex_tool_config::CodexToolCallParam;
 use crate::codex_tool_config::CodexToolCallReplyParam;
 use crate::codex_tool_config::create_tool_for_codex_tool_call_param;
 use crate::codex_tool_config::create_tool_for_codex_tool_call_reply_param;
+use crate::mcp_protocol::ConversationSendMessageArgs;
+use crate::mcp_protocol::ToolCallRequest;
+use crate::mcp_protocol::ToolCallRequestParams;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::send_user_message::create_tool_for_send_user_message_param;
 
@@ -316,7 +319,11 @@ impl MessageProcessor {
                 self.handle_tool_call_codex_session_reply(id, arguments)
                     .await
             }
-            "send-user-message" => self.handle_tool_call_send_user_message(id, arguments).await,
+            // Legacy entry-point: parse legacy JSON and forward to typed handler.
+            "send-user-message" => {
+                self.handle_tool_call_send_user_message_legacy(id, arguments)
+                    .await
+            }
             _ => {
                 let result = CallToolResult {
                     content: vec![ContentBlock::TextContent(TextContent {
@@ -329,6 +336,40 @@ impl MessageProcessor {
                 };
                 self.send_response::<mcp_types::CallToolRequest>(id, result)
                     .await;
+            }
+        }
+    }
+
+    async fn handle_new_tool_calls(&self, request: ToolCallRequest) {
+        match request.params {
+            ToolCallRequestParams::ConversationSendMessage(args) => {
+                // call your handler with what it actually needs (adjust signature as needed)
+                self.handle_tool_call_send_user_message(
+                    mcp_types::RequestId::Integer(request.id as i64),
+                    args,
+                )
+                .await;
+            }
+            // Add other tools here:
+            ToolCallRequestParams::ConversationCreate(_)
+            | ToolCallRequestParams::ConversationStream(_)
+            | ToolCallRequestParams::ConversationsList(_) => {
+                // If you truly want "Unknown tool", you can map variants to names:
+                let result = CallToolResult {
+                    content: vec![ContentBlock::TextContent(TextContent {
+                        r#type: "text".to_string(),
+                        text: "Unknown tool".to_string(),
+                        annotations: None,
+                    })],
+                    is_error: Some(true),
+                    structured_content: None,
+                };
+                // Use request.id, not an undefined `id`
+                self.send_response::<mcp_types::CallToolRequest>(
+                    mcp_types::RequestId::Integer(request.id as i64),
+                    result,
+                )
+                .await;
             }
         }
     }
@@ -524,47 +565,76 @@ impl MessageProcessor {
         });
     }
 
-    /// Send a user message to a running Codex session.
-    /// Don't use this tool yet because we need a listen tool to be implemented first.
+    // Map a text message item into a Codex InputItem.
+    fn handle_text_message_item(&self, text: String) -> InputItem {
+        InputItem::Text { text }
+    }
+
+    // Placeholder for future support: images are not supported yet.
+    fn handle_image_message_item_error(&self) -> String {
+        "Image content is not supported yet".to_owned()
+    }
+
+    // Placeholder for future support: files are not supported yet.
+    fn handle_file_message_item_error(&self) -> String {
+        "File content is not supported yet".to_owned()
+    }
+
+    /// Send a user message to a running Codex session using typed ConversationSendMessageArgs.
     async fn handle_tool_call_send_user_message(
         &self,
         id: RequestId,
-        arguments: Option<serde_json::Value>,
+        arguments: ConversationSendMessageArgs,
     ) {
-        let SendUserMessageParam {
-            message,
-            session_id,
-        } = match arguments {
-            Some(json_val) => match serde_json::from_value::<SendUserMessageParam>(json_val) {
-                Ok(params) => params,
-                Err(e) => {
+        let ConversationSendMessageArgs {
+            conversation_id,
+            content,
+            parent_message_id: _,
+            conversation_overrides: _,
+        } = arguments;
+
+        // Map message content into Codex input items, supporting only text for now.
+        let mut items: Vec<InputItem> = Vec::new();
+        for item in content.into_iter() {
+            match item {
+                crate::mcp_protocol::MessageInputItem::Text { text } => {
+                    items.push(self.handle_text_message_item(text));
+                }
+                crate::mcp_protocol::MessageInputItem::Image {
+                    source: _,
+                    detail: _,
+                } => {
                     self.send_response_with_optional_error(
                         id,
-                        format!("Failed to parse arguments: {e}"),
+                        self.handle_image_message_item_error(),
                         true,
                     )
                     .await;
                     return;
                 }
-            },
-            None => {
-                self.send_response_with_optional_error(id, "Missing arguments for send_user_message tool-call; the `message` and `session_id` fields are required.".to_owned(), true).await;
-                return;
+                crate::mcp_protocol::MessageInputItem::File { source: _ } => {
+                    self.send_response_with_optional_error(
+                        id,
+                        self.handle_file_message_item_error(),
+                        true,
+                    )
+                    .await;
+                    return;
+                }
             }
-        };
+        }
 
-        let session_id = match Uuid::parse_str(&session_id) {
-            Ok(id) => id,
-            Err(e) => {
-                self.send_response_with_optional_error(
-                    id,
-                    format!("Failed to parse session_id: {e}"),
-                    true,
-                )
-                .await;
-                return;
-            }
-        };
+        if items.is_empty() {
+            self.send_response_with_optional_error(
+                id,
+                "Message content must include at least one text item".to_owned(),
+                true,
+            )
+            .await;
+            return;
+        }
+
+        let session_id = conversation_id.0;
         if self
             .running_session_id_set
             .lock()
@@ -614,9 +684,7 @@ impl MessageProcessor {
             let submit_res = codex
                 .submit_with_id(Submission {
                     id: request_id_string,
-                    op: Op::UserInput {
-                        items: vec![InputItem::Text { text: message }],
-                    },
+                    op: Op::UserInput { items },
                 })
                 .await;
 
@@ -632,6 +700,63 @@ impl MessageProcessor {
         }
         self.send_response_with_optional_error(id, "Success".to_owned(), false)
             .await;
+    }
+
+    /// Legacy entry-point: parse SendUserMessageParam and forward to the typed handler.
+    async fn handle_tool_call_send_user_message_legacy(
+        &self,
+        id: RequestId,
+        arguments: Option<serde_json::Value>,
+    ) {
+        let SendUserMessageParam {
+            message,
+            session_id,
+        } = match arguments {
+            Some(json_val) => match serde_json::from_value::<SendUserMessageParam>(json_val) {
+                Ok(params) => params,
+                Err(e) => {
+                    self.send_response_with_optional_error(
+                        id,
+                        format!("Failed to parse arguments: {e}"),
+                        true,
+                    )
+                    .await;
+                    return;
+                }
+            },
+            None => {
+                self
+                    .send_response_with_optional_error(
+                        id,
+                        "Missing arguments for send_user_message tool-call; the `message` and `session_id` fields are required.".to_owned(),
+                        true,
+                    )
+                    .await;
+                return;
+            }
+        };
+
+        let session_id = match Uuid::parse_str(&session_id) {
+            Ok(id) => id,
+            Err(e) => {
+                self.send_response_with_optional_error(
+                    id,
+                    format!("Failed to parse session_id: {e}"),
+                    true,
+                )
+                .await;
+                return;
+            }
+        };
+
+        // Forward to the typed handler with text-only content.
+        let args = ConversationSendMessageArgs {
+            conversation_id: crate::mcp_protocol::ConversationId(session_id),
+            content: vec![crate::mcp_protocol::MessageInputItem::Text { text: message }],
+            parent_message_id: None,
+            conversation_overrides: None,
+        };
+        self.handle_tool_call_send_user_message(id, args).await;
     }
 
     fn handle_set_level(
