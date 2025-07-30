@@ -75,7 +75,7 @@ fn safe_format_key(key: &str) -> String {
     }
     let prefix = &key[..8];
     let suffix = &key[key.len() - 5..];
-    format!("{}***{}", prefix, suffix)
+    format!("{prefix}***{suffix}")
 }
 
 #[cfg(test)]
