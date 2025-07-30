@@ -305,6 +305,7 @@ pub enum ClientNotification {
 mod tests {
     use super::*;
     use codex_core::protocol::McpInvocation;
+    use codex_core::protocol::McpToolCallBeginEvent;
     use pretty_assertions::assert_eq;
     use serde::Serialize;
     use serde_json::Value;
@@ -929,7 +930,7 @@ mod tests {
     fn serialize_notification_codex_event_mcp_tool_call_begin_full_json() {
         let params = CodexEventNotificationParams {
             meta: None,
-            msg: EventMsg::McpToolCallBegin(codex_core::protocol::McpToolCallBeginEvent {
+            msg: EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
                 call_id: "m1".into(),
                 invocation: McpInvocation {
                     server: "calc".into(),
