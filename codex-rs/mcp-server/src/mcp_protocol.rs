@@ -51,7 +51,7 @@ impl ToolCallRequestParams {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConversationCreateArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prompt: Option<String>,
+    pub prompt: String,
     pub model: String,
     pub cwd: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
