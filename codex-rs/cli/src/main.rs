@@ -7,6 +7,7 @@ use codex_chatgpt::apply_command::ApplyCommand;
 use codex_chatgpt::apply_command::run_apply_command;
 use codex_cli::LandlockCommand;
 use codex_cli::SeatbeltCommand;
+use codex_cli::login::run_login_status;
 use codex_cli::login::run_login_with_chatgpt;
 use codex_cli::proto;
 use codex_common::CliConfigOverrides;
@@ -43,7 +44,7 @@ enum Subcommand {
     #[clap(visible_alias = "e")]
     Exec(ExecCli),
 
-    /// Login with ChatGPT.
+    /// Manage login.
     Login(LoginCommand),
 
     /// Experimental: run Codex as an MCP server.
@@ -90,6 +91,15 @@ enum DebugCommand {
 struct LoginCommand {
     #[clap(skip)]
     config_overrides: CliConfigOverrides,
+
+    #[command(subcommand)]
+    action: Option<LoginSubcommand>,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum LoginSubcommand {
+    /// Show login status.
+    Status,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -118,7 +128,14 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         }
         Some(Subcommand::Login(mut login_cli)) => {
             prepend_config_flags(&mut login_cli.config_overrides, cli.config_overrides);
-            run_login_with_chatgpt(login_cli.config_overrides).await;
+            match login_cli.action {
+                Some(LoginSubcommand::Status) => {
+                    run_login_status(login_cli.config_overrides).await;
+                }
+                None => {
+                    run_login_with_chatgpt(login_cli.config_overrides).await;
+                }
+            }
         }
         Some(Subcommand::Proto(mut proto_cli)) => {
             prepend_config_flags(&mut proto_cli.config_overrides, cli.config_overrides);
