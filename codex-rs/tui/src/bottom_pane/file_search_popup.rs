@@ -1,5 +1,4 @@
 use codex_file_search::FileMatch;
-use color_eyre::owo_colors::OwoColorize;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::prelude::Constraint;
