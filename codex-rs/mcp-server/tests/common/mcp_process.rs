@@ -11,9 +11,13 @@ use tokio::process::ChildStdout;
 
 use anyhow::Context;
 use assert_cmd::prelude::*;
+use codex_core::protocol::InputItem;
 use codex_mcp_server::CodexToolCallParam;
 use codex_mcp_server::CodexToolCallReplyParam;
-use codex_mcp_server::SendUserMessageParam;
+use codex_mcp_server::mcp_protocol::ConversationId;
+use codex_mcp_server::mcp_protocol::ConversationSendMessageArgs;
+use codex_mcp_server::mcp_protocol::ToolCallRequestParams;
+
 use mcp_types::CallToolRequestParams;
 use mcp_types::ClientCapabilities;
 use mcp_types::Implementation;
@@ -30,6 +34,7 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::process::Command as StdCommand;
 use tokio::process::Command;
+use uuid::Uuid;
 
 pub struct McpProcess {
     next_request_id: AtomicI64,
@@ -180,13 +185,14 @@ impl McpProcess {
         message: &str,
         session_id: &str,
     ) -> anyhow::Result<i64> {
-        let params = CallToolRequestParams {
-            name: "send-user-message".to_string(),
-            arguments: Some(serde_json::to_value(SendUserMessageParam {
-                message: message.to_string(),
-                session_id: session_id.to_string(),
-            })?),
-        };
+        let params = ToolCallRequestParams::ConversationSendMessage(ConversationSendMessageArgs {
+            conversation_id: ConversationId(Uuid::parse_str(session_id)?),
+            content: vec![InputItem::Text {
+                text: message.to_string(),
+            }],
+            parent_message_id: None,
+            conversation_overrides: None,
+        });
         self.send_request(
             mcp_types::CallToolRequest::METHOD,
             Some(serde_json::to_value(params)?),
@@ -208,6 +214,7 @@ impl McpProcess {
             params,
         });
         self.send_jsonrpc_message(message).await?;
+        eprintln!("send_request: Done");
         Ok(request_id)
     }
 

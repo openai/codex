@@ -103,36 +103,6 @@ async fn test_send_user_message_success() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_send_user_message_invalid_session_id_format() {
-    // No Codex session needed; this path fails before touching Codex
-    let codex_home = TempDir::new().expect("tempdir");
-    let mut mcp = McpProcess::new(codex_home.path()).await.expect("spawn");
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize())
-        .await
-        .expect("timeout")
-        .expect("init");
-
-    let bad_id = "not-a-uuid";
-    let req_id = mcp
-        .send_send_user_message_tool_call("hi", bad_id)
-        .await
-        .expect("send tool");
-
-    let resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
-    )
-    .await
-    .expect("timeout")
-    .expect("resp");
-
-    let result = resp.result.clone();
-    let content = result["content"][0]["text"].as_str().unwrap_or("");
-    assert!(content.contains("Failed to parse session_id"));
-    assert_eq!(result["isError"], json!(true));
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_send_user_message_session_not_found() {
     // Start MCP without creating a Codex session
     let codex_home = TempDir::new().expect("tempdir");
