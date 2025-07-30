@@ -22,7 +22,7 @@ pub struct MessageId(pub Uuid);
 pub struct ToolCallRequest {
     #[serde(rename = "jsonrpc")]
     pub jsonrpc: &'static str,
-    pub id: u64,
+    pub id: RequestId,
     pub method: &'static str,
     pub params: ToolCallRequestParams,
 }
@@ -39,7 +39,7 @@ pub enum ToolCallRequestParams {
 impl ToolCallRequestParams {
     /// Wrap this request in a JSON-RPC request.
     #[allow(dead_code)]
-    pub fn into_request(self, id: u64) -> ToolCallRequest {
+    pub fn into_request(self, id: RequestId) -> ToolCallRequest {
         ToolCallRequest {
             jsonrpc: "2.0",
             id,
