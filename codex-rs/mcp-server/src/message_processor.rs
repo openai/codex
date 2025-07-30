@@ -8,7 +8,10 @@ use crate::codex_tool_config::CodexToolCallReplyParam;
 use crate::codex_tool_config::create_tool_for_codex_tool_call_param;
 use crate::codex_tool_config::create_tool_for_codex_tool_call_reply_param;
 use crate::mcp_protocol::ConversationSendMessageArgs;
+use crate::mcp_protocol::ConversationSendMessageResult;
 use crate::mcp_protocol::ToolCallRequestParams;
+use crate::mcp_protocol::ToolCallResponse;
+use crate::mcp_protocol::ToolCallResponseResult;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::send_user_message::create_tool_for_send_user_message_param;
 
@@ -568,8 +571,10 @@ impl MessageProcessor {
         if items.is_empty() {
             self.send_response_with_optional_error(
                 id,
-                "Message content must include at least one text item".to_owned(),
-                true,
+                Some(ToolCallResponseResult::ConversationSendMessage(
+                    ConversationSendMessageResult {},
+                )),
+                Some(true),
             )
             .await;
             return;
@@ -584,8 +589,10 @@ impl MessageProcessor {
         {
             self.send_response_with_optional_error(
                 id,
-                format!("Session already running for session_id: {session_id}"),
-                true,
+                Some(ToolCallResponseResult::ConversationSendMessage(
+                    ConversationSendMessageResult {},
+                )),
+                Some(true),
             )
             .await;
             return;
@@ -593,8 +600,10 @@ impl MessageProcessor {
         if !session_exists(session_id, self.session_map.clone()).await {
             self.send_response_with_optional_error(
                 id,
-                format!("Session not found for session_id: {session_id}"),
-                true,
+                Some(ToolCallResponseResult::ConversationSendMessage(
+                    ConversationSendMessageResult {},
+                )),
+                Some(true),
             )
             .await;
             return;
@@ -609,8 +618,10 @@ impl MessageProcessor {
         if codex.is_none() {
             self.send_response_with_optional_error(
                 id,
-                format!("Session not found for session_id: {session_id}"),
-                true,
+                Some(ToolCallResponseResult::ConversationSendMessage(
+                    ConversationSendMessageResult {},
+                )),
+                Some(true),
             )
             .await;
             return;
@@ -629,17 +640,19 @@ impl MessageProcessor {
                 })
                 .await;
 
-            if let Err(e) = submit_res {
+            if let Err(_e) = submit_res {
                 self.send_response_with_optional_error(
                     id,
-                    format!("Failed to submit user input: {e}"),
-                    true,
+                    Some(ToolCallResponseResult::ConversationSendMessage(
+                        ConversationSendMessageResult {},
+                    )),
+                    Some(true),
                 )
                 .await;
                 return;
             }
         }
-        self.send_response_with_optional_error(id, "Success".to_owned(), false)
+        self.send_response_with_optional_error(id, None, Some(false))
             .await;
     }
 
@@ -763,19 +776,16 @@ impl MessageProcessor {
     async fn send_response_with_optional_error(
         &self,
         id: RequestId,
-        message: String,
-        is_error: bool,
+        message: Option<ToolCallResponseResult>,
+        error: Option<bool>,
     ) {
-        let result = CallToolResult {
-            content: vec![ContentBlock::TextContent(TextContent {
-                r#type: "text".to_owned(),
-                text: message,
-                annotations: None,
-            })],
-            is_error: Some(is_error),
-            structured_content: None,
+        let response = ToolCallResponse {
+            request_id: id.clone(),
+            is_error: error,
+            result: message,
         };
-        self.send_response::<mcp_types::CallToolRequest>(id, result)
+        let (result, id) = response.into_result();
+        self.send_response::<mcp_types::CallToolRequest>(id.clone(), result)
             .await;
     }
 }

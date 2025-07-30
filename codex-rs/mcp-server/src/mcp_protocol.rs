@@ -7,7 +7,10 @@ use serde::Serialize;
 use strum_macros::Display;
 use uuid::Uuid;
 
+use mcp_types::CallToolResult;
+use mcp_types::ContentBlock;
 use mcp_types::RequestId;
+use mcp_types::TextContent;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -122,6 +125,31 @@ pub struct ToolCallResponse {
     pub result: Option<ToolCallResponseResult>,
 }
 
+impl ToolCallResponse {
+    pub fn into_result(self) -> (CallToolResult, RequestId) {
+        let ToolCallResponse {
+            request_id,
+            is_error,
+            result,
+        } = self;
+        (
+            CallToolResult {
+                content: match &result {
+                    Some(res) => vec![ContentBlock::TextContent(TextContent {
+                        annotations: None,
+                        text: serde_json::to_string(res).unwrap_or_default(),
+                        r#type: "text".to_string(),
+                    })],
+                    None => vec![],
+                },
+                is_error,
+                structured_content: result.and_then(|r| serde_json::to_value(r).ok()),
+            },
+            request_id,
+        )
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ToolCallResponseResult {
@@ -141,9 +169,7 @@ pub struct ConversationCreateResult {
 pub struct ConversationStreamResult {}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ConversationSendMessageResult {
-    pub success: bool,
-}
+pub struct ConversationSendMessageResult {}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConversationsListResult {
@@ -495,13 +521,13 @@ mod tests {
             request_id: RequestId::Integer(3),
             is_error: None,
             result: Some(ToolCallResponseResult::ConversationSendMessage(
-                ConversationSendMessageResult { success: true },
+                ConversationSendMessageResult {},
             )),
         };
         let observed = to_val(&env);
         let expected = json!({
             "requestId": 3,
-            "result": { "success": true }
+            "result": {}
         });
         assert_eq!(
             observed, expected,
