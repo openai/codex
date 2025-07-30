@@ -175,12 +175,12 @@ pub struct ToolCallResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_error: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub result: Option<ToolCallResponseData>,
+    pub result: Option<ToolCallResponseResult>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
-pub enum ToolCallResponseData {
+pub enum ToolCallResponseResult {
     ConversationCreate(ConversationCreateResult),
     ConversationStream(ConversationStreamResult),
     ConversationSendMessage(ConversationSendMessageResult),
@@ -510,7 +510,7 @@ mod tests {
         let env = ToolCallResponse {
             request_id: RequestId::Integer(1),
             is_error: None,
-            result: Some(ToolCallResponseData::ConversationCreate(
+            result: Some(ToolCallResponseResult::ConversationCreate(
                 ConversationCreateResult {
                     conversation_id: ConversationId(uuid!("d0f6ecbe-84a2-41c1-b23d-b20473b25eab")),
                     model: "o3".into(),
@@ -536,7 +536,7 @@ mod tests {
         let env = ToolCallResponse {
             request_id: RequestId::Integer(2),
             is_error: None,
-            result: Some(ToolCallResponseData::ConversationStream(
+            result: Some(ToolCallResponseResult::ConversationStream(
                 ConversationStreamResult {},
             )),
         };
@@ -556,7 +556,7 @@ mod tests {
         let env = ToolCallResponse {
             request_id: RequestId::Integer(3),
             is_error: None,
-            result: Some(ToolCallResponseData::ConversationSendMessage(
+            result: Some(ToolCallResponseResult::ConversationSendMessage(
                 ConversationSendMessageResult { success: true },
             )),
         };
@@ -576,7 +576,7 @@ mod tests {
         let env = ToolCallResponse {
             request_id: RequestId::Integer(4),
             is_error: None,
-            result: Some(ToolCallResponseData::ConversationsList(
+            result: Some(ToolCallResponseResult::ConversationsList(
                 ConversationsListResult {
                     conversations: vec![ConversationSummary {
                         conversation_id: ConversationId(uuid!(
