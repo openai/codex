@@ -257,7 +257,6 @@ async fn chatgpt_auth_sends_correct_request() {
     );
 }
 
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn includes_user_instructions_message_in_request() {
     #![allow(clippy::unwrap_used)]
