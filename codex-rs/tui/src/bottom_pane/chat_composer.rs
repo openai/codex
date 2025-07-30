@@ -3,7 +3,6 @@ use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Alignment;
 use ratatui::layout::Rect;
-use ratatui::layout::Size;
 use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
