@@ -313,10 +313,14 @@ impl UserApprovalWidget<'_> {
     pub(crate) fn is_complete(&self) -> bool {
         self.done
     }
+
+    pub(crate) fn desired_height(&self, width: u16) -> u16 {
+        self.get_confirmation_prompt_height(width - 2) + SELECT_OPTIONS.len() as u16 + 2
+    }
 }
 
 const PLAIN: Style = Style::new();
-const BLUE_FG: Style = Style::new().fg(Color::Blue);
+const BLUE_FG: Style = Style::new().fg(Color::LightCyan);
 
 impl WidgetRef for &UserApprovalWidget<'_> {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {

@@ -15,6 +15,7 @@ pub enum SlashCommand {
     New,
     Diff,
     Quit,
+    TestApproval,
 }
 
 impl SlashCommand {
@@ -26,6 +27,7 @@ impl SlashCommand {
             SlashCommand::Diff => {
                 "Show git diff of the working directory (including untracked files)"
             }
+            SlashCommand::TestApproval => "Test approval request",
         }
     }
 

@@ -33,6 +33,10 @@ impl BottomPaneView<'_> for StatusIndicatorView {
         true
     }
 
+    fn desired_height(&self, width: u16) -> u16 {
+        self.view.desired_height(width)
+    }
+
     fn render(&self, area: ratatui::layout::Rect, buf: &mut Buffer) {
         self.view.render_ref(area, buf);
     }
