@@ -219,7 +219,7 @@ pub struct ConversationSummary {
 pub enum ServerNotification {
     InitialState(InitialStateNotificationParams),
     StreamDisconnected(StreamDisconnectedNotificationParams),
-    CodexEvent(CodexEventNotificationParams),
+    CodexEvent(Box<CodexEventNotificationParams>),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
