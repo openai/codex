@@ -92,6 +92,20 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         ),
     };
 
+    // TODO(mbolin): Take a more thoughtful approach to logging.
+    let default_level = "error";
+    let _ = tracing_subscriber::fmt()
+        // Fallback to the `default_level` log filter if the environment
+        // variable is not set _or_ contains an invalid value
+        .with_env_filter(
+            EnvFilter::try_from_default_env()
+                .or_else(|_| EnvFilter::try_new(default_level))
+                .unwrap_or_else(|_| EnvFilter::new(default_level)),
+        )
+        .with_ansi(stderr_with_ansi)
+        .with_writer(std::io::stderr)
+        .try_init();
+
     let sandbox_mode = if full_auto {
         Some(SandboxMode::WorkspaceWrite)
     } else if dangerously_bypass_approvals_and_sandbox {
@@ -112,6 +126,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         model_provider: None,
         codex_linux_sandbox_exe,
         base_instructions: None,
+        include_plan_tool: None,
     };
     // Parse `-c` overrides.
     let cli_kv_overrides = match config_overrides.parse_overrides() {
@@ -141,20 +156,6 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         eprintln!("Not inside a Git repo and --skip-git-repo-check was not specified.");
         std::process::exit(1);
     }
-
-    // TODO(mbolin): Take a more thoughtful approach to logging.
-    let default_level = "error";
-    let _ = tracing_subscriber::fmt()
-        // Fallback to the `default_level` log filter if the environment
-        // variable is not set _or_ contains an invalid value
-        .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .or_else(|_| EnvFilter::try_new(default_level))
-                .unwrap_or_else(|_| EnvFilter::new(default_level)),
-        )
-        .with_ansi(stderr_with_ansi)
-        .with_writer(std::io::stderr)
-        .try_init();
 
     let CodexConversation {
         codex: codex_wrapper,

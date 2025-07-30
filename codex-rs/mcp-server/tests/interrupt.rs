@@ -81,6 +81,7 @@ async fn shell_command_interruption() -> anyhow::Result<()> {
             sandbox: None,
             config: None,
             base_instructions: None,
+            include_plan_tool: None,
         })
         .await?;
 

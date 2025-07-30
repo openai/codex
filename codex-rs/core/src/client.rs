@@ -83,6 +83,7 @@ impl ModelClient {
                 let response_stream = stream_chat_completions(
                     prompt,
                     &self.config.model,
+                    self.config.include_plan_tool,
                     &self.client,
                     &self.provider,
                 )
@@ -140,7 +141,11 @@ impl ModelClient {
         let token = auth.get_token().await?;
 
         let full_instructions = prompt.get_full_instructions(&self.config.model);
-        let tools_json = create_tools_json_for_responses_api(prompt, &self.config.model)?;
+        let tools_json = create_tools_json_for_responses_api(
+            prompt,
+            &self.config.model,
+            self.config.include_plan_tool,
+        )?;
         let reasoning = create_reasoning_param_for_request(&self.config, self.effort, self.summary);
 
         // Request encrypted COT if we are not storing responses,

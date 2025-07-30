@@ -1,4 +1,5 @@
 use chrono::DateTime;
+
 use chrono::Utc;
 use serde::Deserialize;
 use serde::Serialize;
@@ -13,6 +14,7 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::Duration;
 use tokio::process::Command;
 
 const SOURCE_FOR_PYTHON_SERVER: &str = include_str!("./login_with_chatgpt.py");
@@ -72,8 +74,16 @@ impl CodexAuth {
         match auth_dot_json {
             Some(auth_dot_json) => {
                 if auth_dot_json.last_refresh < Utc::now() - chrono::Duration::days(28) {
-                    let refresh_response: RefreshResponse =
-                        try_refresh_token(auth_dot_json.tokens.refresh_token.clone()).await?;
+                    let refresh_response = tokio::time::timeout(
+                        Duration::from_secs(60),
+                        try_refresh_token(auth_dot_json.tokens.refresh_token.clone()),
+                    )
+                    .await
+                    .map_err(|_| {
+                        std::io::Error::other("timed out while refreshing OpenAI API key")
+                    })?
+                    .map_err(std::io::Error::other)?;
+
                     let updated_auth_dot_json = update_tokens(
                         &self.auth_file,
                         refresh_response.id_token,
@@ -147,19 +157,12 @@ pub fn load_auth(codex_home: &Path) -> std::io::Result<Option<CodexAuth>> {
 /// If `capture_output` is true, the subprocess's output will be captured and
 /// recorded in memory. Otherwise, the subprocess's output will be sent to the
 /// current process's stdout/stderr.
-pub async fn login_with_chatgpt(
-    codex_home: &Path,
-    capture_output: bool,
-    client_id: Option<String>,
-) -> std::io::Result<()> {
+pub async fn login_with_chatgpt(codex_home: &Path, capture_output: bool) -> std::io::Result<()> {
     let child = Command::new("python3")
         .arg("-c")
         .arg(SOURCE_FOR_PYTHON_SERVER)
         .env("CODEX_HOME", codex_home)
-        .env(
-            "CODEX_CLIENT_ID",
-            client_id.unwrap_or(CLIENT_ID.to_string()),
-        )
+        .env("CODEX_CLIENT_ID", CLIENT_ID)
         .stdin(Stdio::null())
         .stdout(if capture_output {
             Stdio::piped()

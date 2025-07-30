@@ -9,13 +9,7 @@ pub async fn run_login_with_chatgpt(cli_config_overrides: CliConfigOverrides) ->
     let config = load_config_or_exit(cli_config_overrides);
 
     let capture_output = false;
-    match login_with_chatgpt(
-        &config.codex_home,
-        capture_output,
-        config.experimental_client_id,
-    )
-    .await
-    {
+    match login_with_chatgpt(&config.codex_home, capture_output).await {
         Ok(_) => {
             eprintln!("Successfully logged in");
             std::process::exit(0);
