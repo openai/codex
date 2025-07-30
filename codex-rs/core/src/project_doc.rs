@@ -13,7 +13,11 @@
 
 use crate::config::Config;
 use std::path::Path;
+use std::fs;
+use std::fs::File;
+use std::io::Read;
 use tokio::io::AsyncReadExt;
+use tokio::io::BufReader;
 use tracing::error;
 
 /// Currently, we only match the filename `AGENTS.md` exactly.
@@ -43,7 +47,6 @@ fn discover_project_doc_path_from_dir(
     names: &[&str],
     max_bytes: usize,
 ) -> std::io::Result<Option<std::path::PathBuf>> {
-    use std::fs;
 
     // Canonicalize the path so that we do not end up in an infinite loop when
     // `cwd` contains `..` components.
@@ -84,8 +87,6 @@ fn find_non_empty_candidate(
     names: &[&str],
     max_bytes: usize,
 ) -> std::io::Result<Option<std::path::PathBuf>> {
-    use std::fs::File;
-    use std::io::Read;
 
     for name in names {
         let candidate = dir.join(name);
@@ -136,7 +137,6 @@ pub(crate) async fn get_user_instructions(config: &Config) -> Option<String> {
 /// the function returns `Ok(None)`. Unexpected I/O failures bubble up as
 /// `Err` so callers can decide how to handle them.
 async fn find_project_doc(config: &Config) -> std::io::Result<Option<String>> {
-    use tokio::io::BufReader;
 
     let Some(path) = discover_project_doc_path(config)? else {
         return Ok(None);
