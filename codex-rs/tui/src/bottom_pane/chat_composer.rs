@@ -6,6 +6,7 @@ use ratatui::style::Color;
 use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
+use ratatui::text::Span;
 use ratatui::widgets::BorderType;
 use ratatui::widgets::Borders;
 use ratatui::widgets::Widget;
@@ -688,12 +689,23 @@ impl WidgetRef for &ChatComposer<'_> {
                 let mut bottom_line_rect = area;
                 bottom_line_rect.y += textarea_rect.height;
                 bottom_line_rect.height = 1;
+                fn key_hint(key: &str) -> Span {
+                    Span::styled(key, Style::default().fg(Color::Cyan))
+                }
                 let hint = if self.ctrl_c_quit_hint {
-                    "[Ctrl+C] to quit"
+                    vec![Span::from(" "), key_hint("Ctrl+C"), Span::from(" to quit")]
                 } else {
-                    "[Enter] to send | [Ctrl+D] to quit | [Shift+Enter] for newline"
+                    vec![
+                        Span::from(" "),
+                        key_hint("Enter"),
+                        Span::from(" to send | "),
+                        key_hint("Ctrl+D"),
+                        Span::from(" to quit | "),
+                        key_hint("Shift+Enter"),
+                        Span::from(" for newline"),
+                    ]
                 };
-                Line::from(format!(" {hint}"))
+                Line::from(hint)
                     .style(Style::default().dim())
                     .render(bottom_line_rect, buf);
             }
