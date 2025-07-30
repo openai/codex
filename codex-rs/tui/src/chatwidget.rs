@@ -158,7 +158,7 @@ impl ChatWidget<'_> {
         self.bottom_pane.handle_paste(text);
     }
 
-    pub(crate) fn add_to_history(&mut self, cell: HistoryCell) {
+    fn add_to_history(&mut self, cell: HistoryCell) {
         self.app_event_tx
             .send(AppEvent::InsertHistory(cell.plain_lines()));
     }
