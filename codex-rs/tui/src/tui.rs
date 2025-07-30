@@ -25,6 +25,8 @@ pub fn init(_config: &Config) -> Result<Tui> {
 
     enable_raw_mode()?;
     // Enable keyboard enhancement flags so modifiers for keys like Enter are disambiguated.
+    // chat_composer.rs is using a keyboard event listener to enter for any modified keys
+    // to create a new line that require this.
     execute!(
         stdout(),
         PushKeyboardEnhancementFlags(
