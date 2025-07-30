@@ -221,7 +221,9 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
             // Codex at a proxy, mock server, or Azure-style deployment
             // without requiring a full TOML override for the built-in
             // OpenAI provider.
-            base_url: std::env::var("OPENAI_BASE_URL").ok(),
+            base_url: std::env::var("OPENAI_BASE_URL")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
             env_key: None,
             env_key_instructions: None,
             wire_api: WireApi::Responses,
