@@ -1,6 +1,7 @@
 use codex_common::elapsed::format_duration;
 use codex_common::elapsed::format_elapsed;
 use codex_core::config::Config;
+use codex_core::plan_tool::UpdatePlanArgs;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
@@ -468,6 +469,11 @@ impl EventProcessor for EventProcessorWithHumanOutput {
 
                 ts_println!(self, "model: {}", model);
                 println!();
+            }
+            EventMsg::PlanUpdate(plan_update_event) => {
+                let UpdatePlanArgs { explanation, plan } = plan_update_event;
+                ts_println!(self, "explanation: {explanation:?}");
+                ts_println!(self, "plan: {plan:?}");
             }
             EventMsg::GetHistoryEntryResponse(_) => {
                 // Currently ignored in exec output.

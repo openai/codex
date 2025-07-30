@@ -12,6 +12,8 @@ use codex_core::protocol::Event;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
+use crossterm::event::MouseEvent;
+use crossterm::event::MouseEventKind;
 use ratatui::layout::Offset;
 use ratatui::prelude::Backend;
 use std::path::PathBuf;

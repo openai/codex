@@ -17,6 +17,8 @@ base64 = "0.22"
 bytes = "1.10.1"
 codex-apply-patch = { path = "../apply-patch" }
 codex-mcp-client = { path = "../mcp-client" }
+chrono = { version = "0.4", features = ["serde"] }
+codex-login = { path = "../login" }
 dirs = "6"
 env-flags = "0.1.1"
 eventsource-stream = "0.2.3"
