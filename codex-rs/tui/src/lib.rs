@@ -6,16 +6,14 @@ use app::App;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config_types::SandboxMode;
-use codex_core::openai_api_key::OPENAI_API_KEY_ENV_VAR;
-use codex_core::openai_api_key::get_openai_api_key;
-use codex_core::openai_api_key::set_openai_api_key;
 use codex_core::protocol::AskForApproval;
 use codex_core::util::is_inside_git_repo;
-use codex_login::try_read_openai_api_key;
+use codex_login::load_auth;
 use log_layer::TuiLogLayer;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
+use tracing::error;
 use tracing_appender::non_blocking;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
@@ -140,7 +138,7 @@ pub async fn run_main(
         .with(tui_layer)
         .try_init();
 
-    let show_login_screen = should_show_login_screen(&config).await;
+    let show_login_screen = should_show_login_screen(&config);
     if show_login_screen {
         std::io::stdout()
             .write_all(b"No API key detected.\nLogin with your ChatGPT account? [Yn] ")?;
@@ -153,8 +151,8 @@ pub async fn run_main(
         }
         // Spawn a task to run the login command.
         // Block until the login command is finished.
-        let new_key = codex_login::login_with_chatgpt(&config.codex_home, false).await?;
-        set_openai_api_key(new_key);
+        codex_login::login_with_chatgpt(&config.codex_home, false).await?;
+
         std::io::stdout().write_all(b"Login successful.\n")?;
     }
 
@@ -217,28 +215,21 @@ fn restore() {
     }
 }
 
-async fn should_show_login_screen(config: &Config) -> bool {
-    if is_in_need_of_openai_api_key(config) {
+#[allow(clippy::unwrap_used)]
+fn should_show_login_screen(config: &Config) -> bool {
+    if config.model_provider.requires_auth {
         // Reading the OpenAI API key is an async operation because it may need
         // to refresh the token. Block on it.
         let codex_home = config.codex_home.clone();
-        if let Ok(openai_api_key) = try_read_openai_api_key(&codex_home).await {
-            set_openai_api_key(openai_api_key);
-            false
-        } else {
-            true
+        match load_auth(&codex_home) {
+            Ok(Some(_)) => false,
+            Ok(None) => true,
+            Err(err) => {
+                error!("Failed to read auth.json: {err}");
+                true
+            }
         }
     } else {
         false
     }
-}
-
-fn is_in_need_of_openai_api_key(config: &Config) -> bool {
-    let is_using_openai_key = config
-        .model_provider
-        .env_key
-        .as_ref()
-        .map(|s| s == OPENAI_API_KEY_ENV_VAR)
-        .unwrap_or(false);
-    is_using_openai_key && get_openai_api_key().is_none()
 }
