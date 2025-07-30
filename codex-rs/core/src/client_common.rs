@@ -44,9 +44,6 @@ impl Prompt {
             .as_deref()
             .unwrap_or(BASE_INSTRUCTIONS);
         let mut sections: Vec<&str> = vec![base];
-        if let Some(ref user) = self.user_instructions {
-            sections.push(user);
-        }
         if model.starts_with("gpt-4.1") {
             sections.push(APPLY_PATCH_TOOL_INSTRUCTIONS);
         }
@@ -186,5 +183,21 @@ impl Stream for ResponseStream {
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.rx_event.poll_recv(cx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn get_full_instructions_no_user_content() {
+        let prompt = Prompt {
+            user_instructions: Some("custom instruction".to_string()),
+            ..Default::default()
+        };
+        let expected = format!("{BASE_INSTRUCTIONS}\n{APPLY_PATCH_TOOL_INSTRUCTIONS}");
+        let full = prompt.get_full_instructions("gpt-4.1");
+        assert_eq!(full, expected);
     }
 }
