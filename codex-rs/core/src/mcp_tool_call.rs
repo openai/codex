@@ -1,4 +1,5 @@
 use std::time::Duration;
+use std::time::Instant;
 
 use tracing::error;
 
@@ -7,6 +8,7 @@ use crate::models::FunctionCallOutputPayload;
 use crate::models::ResponseInputItem;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
+use crate::protocol::McpInvocation;
 use crate::protocol::McpToolCallBeginEvent;
 use crate::protocol::McpToolCallEndEvent;
 
@@ -41,21 +43,28 @@ pub(crate) async fn handle_mcp_tool_call(
         }
     };
 
-    let tool_call_begin_event = EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
-        call_id: call_id.clone(),
+    let invocation = McpInvocation {
         server: server.clone(),
         tool: tool_name.clone(),
         arguments: arguments_value.clone(),
+    };
+
+    let tool_call_begin_event = EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
+        call_id: call_id.clone(),
+        invocation: invocation.clone(),
     });
     notify_mcp_tool_call_event(sess, sub_id, tool_call_begin_event).await;
 
+    let start = Instant::now();
     // Perform the tool call.
     let result = sess
-        .call_tool(&server, &tool_name, arguments_value, timeout)
+        .call_tool(&server, &tool_name, arguments_value.clone(), timeout)
         .await
         .map_err(|e| format!("tool call error: {e}"));
     let tool_call_end_event = EventMsg::McpToolCallEnd(McpToolCallEndEvent {
         call_id: call_id.clone(),
+        invocation,
+        duration: start.elapsed(),
         result: result.clone(),
     });
 
