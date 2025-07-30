@@ -8,53 +8,19 @@ use std::io::Write;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
-use std::process::Stdio;
 use std::time::Duration;
-use tokio::process::Command;
 
-const SOURCE_FOR_PYTHON_SERVER: &str = include_str!("./login_with_chatgpt.py");
+mod server;
 
 const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 
-/// Run `python3 -c {{SOURCE_FOR_PYTHON_SERVER}}` with the CODEX_HOME
-/// environment variable set to the provided `codex_home` path. If the
-/// subprocess exits 0, read the OPENAI_API_KEY property out of
-/// CODEX_HOME/auth.json and return Ok(OPENAI_API_KEY). Otherwise, return Err
-/// with any information from the subprocess.
-///
-/// If `capture_output` is true, the subprocess's output will be captured and
-/// recorded in memory. Otherwise, the subprocess's output will be sent to the
-/// current process's stdout/stderr.
-pub async fn login_with_chatgpt(
-    codex_home: &Path,
-    capture_output: bool,
-) -> std::io::Result<String> {
-    let child = Command::new("python3")
-        .arg("-c")
-        .arg(SOURCE_FOR_PYTHON_SERVER)
-        .env("CODEX_HOME", codex_home)
-        .stdin(Stdio::null())
-        .stdout(if capture_output {
-            Stdio::piped()
-        } else {
-            Stdio::inherit()
-        })
-        .stderr(if capture_output {
-            Stdio::piped()
-        } else {
-            Stdio::inherit()
-        })
-        .spawn()?;
-
-    let output = child.wait_with_output().await?;
-    if output.status.success() {
-        try_read_openai_api_key(codex_home).await
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(std::io::Error::other(format!(
-            "login_with_chatgpt subprocess failed: {stderr}"
-        )))
-    }
+/// Spawn a local OAuth callback server and run the ChatGPT login flow.
+/// On success, reads the OPENAI_API_KEY from CODEX_HOME/auth.json and returns it.
+pub async fn login_with_chatgpt(codex_home: &Path) -> std::io::Result<String> {
+    // Run the Rust implementation of the login server (raw hyper).
+    // This replicates the behavior of login_with_chatgpt.py.
+    server::run_login_server(codex_home).await?;
+    try_read_openai_api_key(codex_home).await
 }
 
 /// Attempt to read the `OPENAI_API_KEY` from the `auth.json` file in the given

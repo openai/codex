@@ -18,3 +18,11 @@ tokio = { version = "1", features = [
     "rt-multi-thread",
     "signal",
 ] }
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+open = "5"
+url = "2"
+base64 = "0.22"
+sha2 = "0.10"
+rand = "0.8"
+http-body-util = "0.1"
