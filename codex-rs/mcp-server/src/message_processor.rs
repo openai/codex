@@ -312,8 +312,8 @@ impl MessageProcessor {
     ) {
         tracing::info!("tools/call -> params: {:?}", params);
         // Serialize params into JSON and try to parse as new type
-        if let Ok(new_params) = serde_json::to_value(&params)
-            .and_then(|v| serde_json::from_value::<ToolCallRequestParams>(v))
+        if let Ok(new_params) =
+            serde_json::to_value(&params).and_then(serde_json::from_value::<ToolCallRequestParams>)
         {
             // New tool call matched → forward
             self.handle_new_tool_calls(id, new_params).await;
@@ -553,21 +553,6 @@ impl MessageProcessor {
                 .await;
             }
         });
-    }
-
-    // Map a text message item into a Codex InputItem.
-    fn handle_text_message_item(&self, text: String) -> InputItem {
-        InputItem::Text { text }
-    }
-
-    // Placeholder for future support: images are not supported yet.
-    fn handle_image_message_item_error(&self) -> String {
-        "Image content is not supported yet".to_owned()
-    }
-
-    // Placeholder for future support: files are not supported yet.
-    fn handle_file_message_item_error(&self) -> String {
-        "File content is not supported yet".to_owned()
     }
 
     /// Send a user message to a running Codex session using typed ConversationSendMessageArgs.

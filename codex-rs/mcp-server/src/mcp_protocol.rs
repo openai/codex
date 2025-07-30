@@ -284,6 +284,8 @@ pub enum ClientNotification {
 #[allow(clippy::expect_used)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
     use codex_core::protocol::McpInvocation;
     use codex_core::protocol::McpToolCallBeginEvent;
@@ -312,7 +314,7 @@ mod tests {
             base_instructions: None,
         });
 
-        let observed = to_val(&req.into_request(2));
+        let observed = to_val(&req.into_request(mcp_types::RequestId::Integer(2)));
         let expected = json!({
             "jsonrpc": "2.0",
             "id": 2,
@@ -335,18 +337,12 @@ mod tests {
         let req = ToolCallRequestParams::ConversationSendMessage(ConversationSendMessageArgs {
             conversation_id: ConversationId(uuid!("d0f6ecbe-84a2-41c1-b23d-b20473b25eab")),
             content: vec![
-                MessageInputItem::Text { text: "Hi".into() },
-                MessageInputItem::Image {
-                    source: ImageSource::ImageUrl {
-                        image_url: "https://example.com/cat.jpg".into(),
-                    },
-                    detail: Some(ImageDetail::High),
+                InputItem::Text { text: "Hi".into() },
+                InputItem::Image {
+                    image_url: "https://example.com/cat.jpg".into(),
                 },
-                MessageInputItem::File {
-                    source: FileSource::Base64 {
-                        filename: Some("notes.txt".into()),
-                        file_data: "Zm9vYmFy".into(),
-                    },
+                InputItem::LocalImage {
+                    path: "notes.txt".into(),
                 },
             ],
             parent_message_id: Some(MessageId(uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8"))),
@@ -361,7 +357,7 @@ mod tests {
             }),
         });
 
-        let observed = to_val(&req.into_request(2));
+        let observed = to_val(&req.into_request(mcp_types::RequestId::Integer(2)));
         let expected = json!({
             "jsonrpc": "2.0",
             "id": 2,
@@ -395,7 +391,7 @@ mod tests {
             cursor: Some("abc".into()),
         });
 
-        let observed = to_val(&req.into_request(2));
+        let observed = to_val(&req.into_request(RequestId::Integer(2)));
         let expected = json!({
             "jsonrpc": "2.0",
             "id": 2,
@@ -417,7 +413,7 @@ mod tests {
             conversation_id: ConversationId(uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8")),
         });
 
-        let observed = to_val(&req.into_request(2));
+        let observed = to_val(&req.into_request(mcp_types::RequestId::Integer(2)));
         let expected = json!({
             "jsonrpc": "2.0",
             "id": 2,
@@ -436,11 +432,8 @@ mod tests {
 
     #[test]
     fn serialize_message_input_image_file_id_auto_detail() {
-        let item = MessageInputItem::Image {
-            source: ImageSource::FileId {
-                file_id: "file_123".into(),
-            },
-            detail: Some(ImageDetail::Auto),
+        let item = InputItem::Image {
+            image_url: "https://example.com/x.png".into(),
         };
         let observed = to_val(&item);
         let expected = json!({
@@ -453,15 +446,11 @@ mod tests {
 
     #[test]
     fn serialize_message_input_file_url_and_id_variants() {
-        let url = MessageInputItem::File {
-            source: FileSource::Url {
-                file_url: "https://example.com/a.pdf".into(),
-            },
+        let url = InputItem::LocalImage {
+            path: PathBuf::from("https://example.com/a.pdf"),
         };
-        let id = MessageInputItem::File {
-            source: FileSource::Id {
-                file_id: "file_456".into(),
-            },
+        let id = InputItem::LocalImage {
+            path: PathBuf::from("file_456"),
         };
         assert_eq!(
             to_val(&url),
@@ -472,11 +461,8 @@ mod tests {
 
     #[test]
     fn serialize_message_input_image_url_without_detail() {
-        let item = MessageInputItem::Image {
-            source: ImageSource::ImageUrl {
-                image_url: "https://example.com/x.png".into(),
-            },
-            detail: None,
+        let item = InputItem::Image {
+            image_url: "https://example.com/x.png".into(),
         };
         let observed = to_val(&item);
         let expected = json!({
