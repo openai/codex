@@ -75,9 +75,6 @@ pub fn assess_command_safety(
     sandbox_policy: &SandboxPolicy,
     approved: &HashSet<Vec<String>>,
 ) -> SafetyCheck {
-    use AskForApproval::*;
-    use SandboxPolicy::*;
-
     // A command is "trusted" because either:
     // - it belongs to a set of commands we consider "safe" by default, or
     // - the user has explicitly approved the command for this session
@@ -96,6 +93,16 @@ pub fn assess_command_safety(
             sandbox_type: SandboxType::None,
         };
     }
+
+    assess_safety_for_untrusted_command(approval_policy, sandbox_policy)
+}
+
+pub(crate) fn assess_safety_for_untrusted_command(
+    approval_policy: AskForApproval,
+    sandbox_policy: &SandboxPolicy,
+) -> SafetyCheck {
+    use AskForApproval::*;
+    use SandboxPolicy::*;
 
     match (approval_policy, sandbox_policy) {
         (UnlessTrusted, _) => {

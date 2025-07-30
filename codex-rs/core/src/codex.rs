@@ -4,6 +4,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -30,6 +31,8 @@ use tracing::trace;
 use tracing::warn;
 use uuid::Uuid;
 
+use crate::apply_patch::CODEX_APPLY_PATCH_ARG1;
+use crate::apply_patch::InternalApplyPatchInvocation;
 use crate::apply_patch::convert_apply_patch_to_protocol;
 use crate::apply_patch::get_writable_roots;
 use crate::apply_patch::{self};
@@ -81,6 +84,7 @@ use crate::protocol::TaskCompleteEvent;
 use crate::rollout::RolloutRecorder;
 use crate::safety::SafetyCheck;
 use crate::safety::assess_command_safety;
+use crate::safety::assess_safety_for_untrusted_command;
 use crate::shell;
 use crate::user_notification::UserNotification;
 use crate::util::backoff;
@@ -354,13 +358,19 @@ impl Session {
         }
     }
 
-    async fn notify_exec_command_begin(&self, sub_id: &str, call_id: &str, params: &ExecParams) {
+    async fn notify_exec_command_begin(
+        &self,
+        sub_id: &str,
+        call_id: &str,
+        command_for_display: Vec<String>,
+        command_cwd: &Path,
+    ) {
         let event = Event {
             id: sub_id.to_string(),
             msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
                 call_id: call_id.to_string(),
-                command: params.command.clone(),
-                cwd: params.cwd.clone(),
+                command: command_for_display,
+                cwd: command_cwd.to_path_buf(),
             }),
         };
         let _ = self.tx_event.send(event).await;
@@ -1420,38 +1430,77 @@ async fn handle_container_exec_with_params(
     call_id: String,
 ) -> ResponseInputItem {
     // check if this was a patch, and apply it if so
-    match maybe_parse_apply_patch_verified(&params.command, &params.cwd) {
-        MaybeApplyPatchVerified::Body(changes) => {
-            return apply_patch::apply_patch(sess, sub_id, call_id, changes).await;
-        }
-        MaybeApplyPatchVerified::CorrectnessError(parse_error) => {
-            // It looks like an invocation of `apply_patch`, but we
-            // could not resolve it into a patch that would apply
-            // cleanly. Return to model for resample.
-            return ResponseInputItem::FunctionCallOutput {
-                call_id,
-                output: FunctionCallOutputPayload {
-                    content: format!("error: {parse_error:#}"),
-                    success: None,
-                },
-            };
-        }
-        MaybeApplyPatchVerified::ShellParseError(error) => {
-            trace!("Failed to parse shell command, {error:?}");
-        }
-        MaybeApplyPatchVerified::NotApplyPatch => (),
-    }
+    let apply_patch_action_for_exec =
+        match maybe_parse_apply_patch_verified(&params.command, &params.cwd) {
+            MaybeApplyPatchVerified::Body(changes) => {
+                match apply_patch::apply_patch(sess, &sub_id, &call_id, changes).await {
+                    InternalApplyPatchInvocation::Output(item) => return item,
+                    InternalApplyPatchInvocation::DelegateToExec(action) => Some(action),
+                }
+            }
+            MaybeApplyPatchVerified::CorrectnessError(parse_error) => {
+                // It looks like an invocation of `apply_patch`, but we
+                // could not resolve it into a patch that would apply
+                // cleanly. Return to model for resample.
+                return ResponseInputItem::FunctionCallOutput {
+                    call_id,
+                    output: FunctionCallOutputPayload {
+                        content: format!("error: {parse_error:#}"),
+                        success: None,
+                    },
+                };
+            }
+            MaybeApplyPatchVerified::ShellParseError(error) => {
+                trace!("Failed to parse shell command, {error:?}");
+                None
+            }
+            MaybeApplyPatchVerified::NotApplyPatch => None,
+        };
 
-    // safety checks
-    let safety = {
-        let state = sess.state.lock().unwrap();
-        assess_command_safety(
-            &params.command,
-            sess.approval_policy,
-            &sess.sandbox_policy,
-            &state.approved_commands,
-        )
+    let (params, safety, command_for_display) = match apply_patch_action_for_exec {
+        Some(ApplyPatchAction { patch, cwd, .. }) => {
+            let path_to_codex = std::env::current_exe()
+                .ok()
+                .map(|p| p.to_string_lossy().to_string());
+            let Some(path_to_codex) = path_to_codex else {
+                return ResponseInputItem::FunctionCallOutput {
+                    call_id,
+                    output: FunctionCallOutputPayload {
+                        content: "failed to determine path to codex executable".to_string(),
+                        success: None,
+                    },
+                };
+            };
+
+            let params = ExecParams {
+                command: vec![
+                    path_to_codex,
+                    CODEX_APPLY_PATCH_ARG1.to_string(),
+                    patch.clone(),
+                ],
+                cwd,
+                timeout_ms: params.timeout_ms,
+                env: HashMap::new(),
+            };
+            let safety =
+                assess_safety_for_untrusted_command(sess.approval_policy, &sess.sandbox_policy);
+            (params, safety, vec!["apply_patch".to_string(), patch])
+        }
+        None => {
+            let safety = {
+                let state = sess.state.lock().unwrap();
+                assess_command_safety(
+                    &params.command,
+                    sess.approval_policy,
+                    &sess.sandbox_policy,
+                    &state.approved_commands,
+                )
+            };
+            let command_for_display = params.command.clone();
+            (params, safety, command_for_display)
+        }
     };
+
     let sandbox_type = match safety {
         SafetyCheck::AutoApprove { sandbox_type } => sandbox_type,
         SafetyCheck::AskUser => {
@@ -1496,7 +1545,7 @@ async fn handle_container_exec_with_params(
         }
     };
 
-    sess.notify_exec_command_begin(&sub_id, &call_id, &params)
+    sess.notify_exec_command_begin(&sub_id, &call_id, command_for_display.clone(), &params.cwd)
         .await;
 
     let params = maybe_run_with_user_profile(params, sess);
@@ -1537,7 +1586,16 @@ async fn handle_container_exec_with_params(
             }
         }
         Err(CodexErr::Sandbox(error)) => {
-            handle_sandbox_error(error, sandbox_type, params, sess, sub_id, call_id).await
+            handle_sandbox_error(
+                error,
+                sandbox_type,
+                params,
+                command_for_display,
+                sess,
+                sub_id,
+                call_id,
+            )
+            .await
         }
         Err(e) => {
             // Handle non-sandbox errors
@@ -1556,6 +1614,7 @@ async fn handle_sandbox_error(
     error: SandboxErr,
     sandbox_type: SandboxType,
     params: ExecParams,
+    command_for_display: Vec<String>,
     sess: &Session,
     sub_id: String,
     call_id: String,
@@ -1605,7 +1664,7 @@ async fn handle_sandbox_error(
             sess.notify_background_event(&sub_id, "retrying command without sandbox")
                 .await;
 
-            sess.notify_exec_command_begin(&sub_id, &call_id, &params)
+            sess.notify_exec_command_begin(&sub_id, &call_id, command_for_display, &params.cwd)
                 .await;
 
             // This is an escalated retry; the policy will not be

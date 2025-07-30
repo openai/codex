@@ -18,12 +18,34 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 
+pub const CODEX_APPLY_PATCH_ARG1: &str = "--codex-run-as-apply-patch";
+
+pub(crate) enum InternalApplyPatchInvocation {
+    /// The `apply_patch` call was handled programmatically, without any sort
+    /// of sandbox, because the user explicitly approved it. This is the
+    /// result to use with the `shell` function call that contained `apply_patch`.
+    Output(ResponseInputItem),
+
+    /// The `apply_patch` call was auto-approved, which means that, on the
+    /// surface, it appears to be safe, but it should be run in a sandbox if the
+    /// user has configured one because a path being written could be a hard
+    /// link to a file outside the writable folders, so only the sandbox can
+    /// faithfully prevent the write in that case.
+    DelegateToExec(ApplyPatchAction),
+}
+
+impl From<ResponseInputItem> for InternalApplyPatchInvocation {
+    fn from(item: ResponseInputItem) -> Self {
+        InternalApplyPatchInvocation::Output(item)
+    }
+}
+
 pub(crate) async fn apply_patch(
     sess: &Session,
-    sub_id: String,
-    call_id: String,
+    sub_id: &str,
+    call_id: &str,
     action: ApplyPatchAction,
-) -> ResponseInputItem {
+) -> InternalApplyPatchInvocation {
     let writable_roots_snapshot = {
         #[allow(clippy::unwrap_used)]
         let guard = sess.writable_roots.lock().unwrap();
@@ -36,34 +58,38 @@ pub(crate) async fn apply_patch(
         &writable_roots_snapshot,
         &sess.cwd,
     ) {
-        SafetyCheck::AutoApprove { .. } => true,
+        SafetyCheck::AutoApprove { .. } => {
+            return InternalApplyPatchInvocation::DelegateToExec(action);
+        }
         SafetyCheck::AskUser => {
             // Compute a readable summary of path changes to include in the
             // approval request so the user can make an informed decision.
             let rx_approve = sess
-                .request_patch_approval(sub_id.clone(), call_id.clone(), &action, None, None)
+                .request_patch_approval(sub_id.to_owned(), call_id.to_owned(), &action, None, None)
                 .await;
             match rx_approve.await.unwrap_or_default() {
                 ReviewDecision::Approved | ReviewDecision::ApprovedForSession => false,
                 ReviewDecision::Denied | ReviewDecision::Abort => {
                     return ResponseInputItem::FunctionCallOutput {
-                        call_id,
+                        call_id: call_id.to_owned(),
                         output: FunctionCallOutputPayload {
                             content: "patch rejected by user".to_string(),
                             success: Some(false),
                         },
-                    };
+                    }
+                    .into();
                 }
             }
         }
         SafetyCheck::Reject { reason } => {
             return ResponseInputItem::FunctionCallOutput {
-                call_id,
+                call_id: call_id.to_owned(),
                 output: FunctionCallOutputPayload {
                     content: format!("patch rejected: {reason}"),
                     success: Some(false),
                 },
-            };
+            }
+            .into();
         }
     };
 
@@ -83,8 +109,8 @@ pub(crate) async fn apply_patch(
 
         let rx = sess
             .request_patch_approval(
-                sub_id.clone(),
-                call_id.clone(),
+                sub_id.to_owned(),
+                call_id.to_owned(),
                 &action,
                 reason.clone(),
                 Some(root.clone()),
@@ -96,12 +122,13 @@ pub(crate) async fn apply_patch(
             ReviewDecision::Approved | ReviewDecision::ApprovedForSession
         ) {
             return ResponseInputItem::FunctionCallOutput {
-                call_id,
+                call_id: call_id.to_owned(),
                 output: FunctionCallOutputPayload {
                     content: "patch rejected by user".to_string(),
                     success: Some(false),
                 },
-            };
+            }
+            .into();
         }
 
         // user approved, extend writable roots for this session
@@ -112,9 +139,9 @@ pub(crate) async fn apply_patch(
     let _ = sess
         .tx_event
         .send(Event {
-            id: sub_id.clone(),
+            id: sub_id.to_owned(),
             msg: EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
-                call_id: call_id.clone(),
+                call_id: call_id.to_owned(),
                 auto_approved,
                 changes: convert_apply_patch_to_protocol(&action),
             }),
@@ -173,8 +200,8 @@ pub(crate) async fn apply_patch(
                 ));
                 let rx = sess
                     .request_patch_approval(
-                        sub_id.clone(),
-                        call_id.clone(),
+                        sub_id.to_owned(),
+                        call_id.to_owned(),
                         &action,
                         reason.clone(),
                         Some(root.clone()),
@@ -204,9 +231,9 @@ pub(crate) async fn apply_patch(
     let _ = sess
         .tx_event
         .send(Event {
-            id: sub_id.clone(),
+            id: sub_id.to_owned(),
             msg: EventMsg::PatchApplyEnd(PatchApplyEndEvent {
-                call_id: call_id.clone(),
+                call_id: call_id.to_owned(),
                 stdout: String::from_utf8_lossy(&stdout).to_string(),
                 stderr: String::from_utf8_lossy(&stderr).to_string(),
                 success: success_flag,
@@ -214,22 +241,23 @@ pub(crate) async fn apply_patch(
         })
         .await;
 
-    match result {
+    let item = match result {
         Ok(_) => ResponseInputItem::FunctionCallOutput {
-            call_id,
+            call_id: call_id.to_owned(),
             output: FunctionCallOutputPayload {
                 content: String::from_utf8_lossy(&stdout).to_string(),
                 success: None,
             },
         },
         Err(e) => ResponseInputItem::FunctionCallOutput {
-            call_id,
+            call_id: call_id.to_owned(),
             output: FunctionCallOutputPayload {
                 content: format!("error: {e:#}, stderr: {}", String::from_utf8_lossy(&stderr)),
                 success: Some(false),
             },
         },
-    }
+    };
+    InternalApplyPatchInvocation::Output(item)
 }
 
 /// Return the first path in `hunks` that is NOT under any of the
