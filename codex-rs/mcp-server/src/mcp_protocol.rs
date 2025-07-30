@@ -729,7 +729,7 @@ mod tests {
             }),
         };
 
-        let observed = to_val(&ServerNotification::CodexEvent(params));
+        let observed = to_val(&ServerNotification::CodexEvent(Box::new(params)));
         let expected = json!({
             "method": "notifications/agent_message",
             "params": {
@@ -755,7 +755,7 @@ mod tests {
             msg: EventMsg::TaskStarted,
         };
 
-        let observed = to_val(&ServerNotification::CodexEvent(params));
+        let observed = to_val(&ServerNotification::CodexEvent(Box::new(params)));
         let expected = json!({
             "method": "notifications/task_started",
             "params": {
@@ -778,7 +778,7 @@ mod tests {
             }),
         };
 
-        let observed = to_val(&ServerNotification::CodexEvent(params));
+        let observed = to_val(&ServerNotification::CodexEvent(Box::new(params)));
         let expected = json!({
             "method": "notifications/agent_message_delta",
             "params": {
@@ -802,7 +802,7 @@ mod tests {
             }),
         };
 
-        let observed = to_val(&ServerNotification::CodexEvent(params));
+        let observed = to_val(&ServerNotification::CodexEvent(Box::new(params)));
         let expected = json!({
             "method": "notifications/agent_message",
             "params": {
@@ -825,7 +825,7 @@ mod tests {
             }),
         };
 
-        let observed = to_val(&ServerNotification::CodexEvent(params));
+        let observed = to_val(&ServerNotification::CodexEvent(Box::new(params)));
         let expected = json!({
             "method": "notifications/agent_reasoning",
             "params": {
@@ -849,7 +849,7 @@ mod tests {
             msg: EventMsg::TokenCount(usage),
         };
 
-        let observed = to_val(&ServerNotification::CodexEvent(params));
+        let observed = to_val(&ServerNotification::CodexEvent(Box::new(params)));
         let expected = json!({
             "method": "notifications/token_count",
             "params": {
@@ -883,7 +883,7 @@ mod tests {
             }),
         };
 
-        let observed = to_val(&ServerNotification::CodexEvent(params));
+        let observed = to_val(&ServerNotification::CodexEvent(Box::new(params)));
         let expected = json!({
             "method": "notifications/session_configured",
             "params": {
@@ -911,7 +911,7 @@ mod tests {
             }),
         };
 
-        let observed = to_val(&ServerNotification::CodexEvent(params));
+        let observed = to_val(&ServerNotification::CodexEvent(Box::new(params)));
         let expected = json!({
             "method": "notifications/exec_command_begin",
             "params": {
@@ -940,7 +940,7 @@ mod tests {
             }),
         };
 
-        let observed = to_val(&ServerNotification::CodexEvent(params));
+        let observed = to_val(&ServerNotification::CodexEvent(Box::new(params)));
         let expected = json!({
             "method": "notifications/mcp_tool_call_begin",
             "params": {
@@ -970,7 +970,7 @@ mod tests {
             }),
         };
 
-        let observed = to_val(&ServerNotification::CodexEvent(params));
+        let observed = to_val(&ServerNotification::CodexEvent(Box::new(params)));
         let expected = json!({
             "method": "notifications/patch_apply_end",
             "params": {
