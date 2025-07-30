@@ -304,6 +304,7 @@ pub enum ClientNotification {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use codex_core::protocol::McpInvocation;
     use pretty_assertions::assert_eq;
     use serde::Serialize;
     use serde_json::Value;
@@ -930,9 +931,11 @@ mod tests {
             meta: None,
             msg: EventMsg::McpToolCallBegin(codex_core::protocol::McpToolCallBeginEvent {
                 call_id: "m1".into(),
-                server: "calc".into(),
-                tool: "add".into(),
-                arguments: Some(json!({"a":1,"b":2})),
+                invocation: McpInvocation {
+                    server: "calc".into(),
+                    tool: "add".into(),
+                    arguments: Some(json!({"a":1,"b":2})),
+                },
             }),
         };
 
