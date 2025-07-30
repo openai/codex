@@ -947,9 +947,11 @@ mod tests {
                 "msg": {
                     "type": "mcp_tool_call_begin",
                     "call_id": "m1",
-                    "server": "calc",
-                    "tool": "add",
-                    "arguments": { "a": 1, "b": 2 }
+                    "invocation": {
+                        "server": "calc",
+                        "tool": "add",
+                        "arguments": { "a": 1, "b": 2 }
+                    }
                 }
             }
         });
