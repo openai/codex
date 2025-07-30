@@ -327,6 +327,7 @@ impl MessageProcessor {
                 self.handle_tool_call_codex_session_reply(id, arguments)
                     .await
             }
+            "send-user-message" => self.handle_tool_call_send_user_message(id, arguments).await,
             _ => {
                 let result = CallToolResult {
                     content: vec![ContentBlock::TextContent(TextContent {
