@@ -822,6 +822,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shlex",
+ "strum_macros 0.27.2",
  "tempfile",
  "tokio",
  "tokio-test",

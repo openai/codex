@@ -78,7 +78,7 @@ pub enum HistoryPersistence {
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct Tui {}
 
-#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Default, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SandboxMode {
     #[serde(rename = "read-only")]
