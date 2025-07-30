@@ -90,7 +90,7 @@ fn find_non_empty_candidate(
 
     for name in names {
         let candidate = dir.join(name);
-        let mut file = match File::open(&candidate) {
+        let file = match File::open(&candidate) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
             Err(e) => return Err(e),
             Ok(f) => f,
@@ -98,9 +98,10 @@ fn find_non_empty_candidate(
 
         let size = file.metadata()?.len() as usize;
         let to_read = std::cmp::min(size, max_bytes);
+        let mut reader = std::io::BufReader::new(file);
         let mut data = vec![0u8; to_read];
-        let read_n = file.read(&mut data)?;
-        let contents = String::from_utf8_lossy(&data[..read_n]).to_string();
+        reader.read_exact(&mut data)?;
+        let contents = String::from_utf8_lossy(&data).to_string();
         if contents.trim().is_empty() {
             continue;
         }
