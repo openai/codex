@@ -5,7 +5,6 @@ use crate::file_search::FileSearchManager;
 use crate::get_git_diff::get_git_diff;
 use crate::git_warning_screen::GitWarningOutcome;
 use crate::git_warning_screen::GitWarningScreen;
-use crate::scroll_event_helper::ScrollEventHelper;
 use crate::slash_command::SlashCommand;
 use crate::tui;
 use codex_core::config::Config;
@@ -13,8 +12,6 @@ use codex_core::protocol::Event;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
-use crossterm::event::MouseEvent;
-use crossterm::event::MouseEventKind;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -77,7 +74,6 @@ impl App<'_> {
         let (app_event_tx, app_event_rx) = channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
         let pending_redraw = Arc::new(AtomicBool::new(false));
-        let scroll_event_helper = ScrollEventHelper::new(app_event_tx.clone());
 
         // Spawn a dedicated thread for reading the crossterm event loop and
         // re-publishing the events as AppEvents, as appropriate.
@@ -99,18 +95,6 @@ impl App<'_> {
                                 }
                                 crossterm::event::Event::Resize(_, _) => {
                                     app_event_tx.send(AppEvent::RequestRedraw);
-                                }
-                                crossterm::event::Event::Mouse(MouseEvent {
-                                    kind: MouseEventKind::ScrollUp,
-                                    ..
-                                }) => {
-                                    scroll_event_helper.scroll_up();
-                                }
-                                crossterm::event::Event::Mouse(MouseEvent {
-                                    kind: MouseEventKind::ScrollDown,
-                                    ..
-                                }) => {
-                                    scroll_event_helper.scroll_down();
                                 }
                                 crossterm::event::Event::Paste(pasted) => {
                                     // Many terminals convert newlines to \r when
@@ -259,9 +243,6 @@ impl App<'_> {
                         }
                     };
                 }
-                AppEvent::Scroll(scroll_delta) => {
-                    self.dispatch_scroll_event(scroll_delta);
-                }
                 AppEvent::Paste(text) => {
                     self.dispatch_paste_event(text);
                 }
@@ -388,13 +369,6 @@ impl App<'_> {
     fn dispatch_paste_event(&mut self, pasted: String) {
         match &mut self.app_state {
             AppState::Chat { widget } => widget.handle_paste(pasted),
-            AppState::GitWarning { .. } => {}
-        }
-    }
-
-    fn dispatch_scroll_event(&mut self, scroll_delta: i32) {
-        match &mut self.app_state {
-            AppState::Chat { widget } => widget.handle_scroll_delta(scroll_delta),
             AppState::GitWarning { .. } => {}
         }
     }
