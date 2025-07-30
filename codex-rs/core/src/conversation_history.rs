@@ -30,6 +30,10 @@ impl ConversationHistory {
             }
         }
     }
+
+    pub(crate) fn truncate(&mut self, n: usize) {
+        self.items.truncate(n);
+    }
 }
 
 /// Anything that is not a system message or "reasoning" message is considered

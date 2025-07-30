@@ -897,9 +897,9 @@ async fn submission_loop(
                 if let Err(items) = sess.inject_input(summarization_prompt) {
                     run_task(sess.clone(), sub.id, items).await;
                     // only keep the last input item and clear the rest
-                    let mut pending_input = sess.state.lock().unwrap().pending_input.clone();
-                    pending_input.truncate(1);
-                    sess.state.lock().unwrap().pending_input = pending_input;
+                    let mut history = sess.state.lock().unwrap().history.clone();
+                    history.truncate(1);
+                    sess.state.lock().unwrap().history = history;
                 }
             }
             Op::Shutdown => {
