@@ -217,6 +217,7 @@ async fn process_chat_sse<S>(
                     .send(Ok(ResponseEvent::Completed {
                         response_id: String::new(),
                         token_usage: None,
+                        timestamp: None,
                     }))
                     .await;
                 return;
@@ -235,6 +236,7 @@ async fn process_chat_sse<S>(
                 .send(Ok(ResponseEvent::Completed {
                     response_id: String::new(),
                     token_usage: None,
+                    timestamp: None,
                 }))
                 .await;
             return;
@@ -262,6 +264,8 @@ async fn process_chat_sse<S>(
                         text: content.to_string(),
                     }],
                     id: None,
+                    token_usage: None,
+                    timestamp: None,
                 };
 
                 let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
@@ -323,6 +327,7 @@ async fn process_chat_sse<S>(
                     .send(Ok(ResponseEvent::Completed {
                         response_id: String::new(),
                         token_usage: None,
+                        timestamp: None,
                     }))
                     .await;
 
@@ -403,6 +408,7 @@ where
                 Poll::Ready(Some(Ok(ResponseEvent::Completed {
                     response_id,
                     token_usage,
+                    timestamp,
                 }))) => {
                     if !this.cumulative.is_empty() {
                         let aggregated_item = crate::models::ResponseItem::Message {
@@ -411,12 +417,15 @@ where
                             content: vec![crate::models::ContentItem::OutputText {
                                 text: std::mem::take(&mut this.cumulative),
                             }],
+                            token_usage: token_usage.clone(),
+                            timestamp: timestamp.clone(),
                         };
 
                         // Buffer Completed so it is returned *after* the aggregated message.
                         this.pending_completed = Some(ResponseEvent::Completed {
                             response_id,
                             token_usage,
+                            timestamp,
                         });
 
                         return Poll::Ready(Some(Ok(ResponseEvent::OutputItemDone(
@@ -428,6 +437,7 @@ where
                     return Poll::Ready(Some(Ok(ResponseEvent::Completed {
                         response_id,
                         token_usage,
+                        timestamp,
                     })));
                 }
                 Poll::Ready(Some(Ok(ResponseEvent::Created))) => {
