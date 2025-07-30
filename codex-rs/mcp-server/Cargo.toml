@@ -34,6 +34,7 @@ tokio = { version = "1", features = [
     "signal",
 ] }
 uuid = { version = "1", features = ["serde", "v4"] }
+strum_macros = "0.27.2"
 
 [dev-dependencies]
 assert_cmd = "2"
