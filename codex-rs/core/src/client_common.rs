@@ -192,8 +192,10 @@ mod tests {
 
     #[test]
     fn get_full_instructions_no_user_content() {
-        let mut prompt = Prompt::default();
-        prompt.user_instructions = Some("custom instruction".to_string());
+        let prompt = Prompt {
+            user_instructions: Some("custom instruction".to_string()),
+            ..Default::default()
+        };
         let expected = format!("{BASE_INSTRUCTIONS}\n{APPLY_PATCH_TOOL_INSTRUCTIONS}");
         let full = prompt.get_full_instructions("gpt-4.1");
         assert_eq!(full, expected);
