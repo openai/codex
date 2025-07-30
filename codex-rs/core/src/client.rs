@@ -32,6 +32,7 @@ use crate::error::Result;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
+use crate::models::ContentItem;
 use crate::models::ResponseItem;
 use crate::openai_tools::create_tools_json_for_responses_api;
 use crate::protocol::TokenUsage;
@@ -131,10 +132,20 @@ impl ModelClient {
             vec![]
         };
 
+        let mut input_with_instructions = Vec::with_capacity(prompt.input.len() + 1);
+        if let Some(ui) = &prompt.user_instructions {
+            input_with_instructions.push(ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText { text: ui.clone() }],
+            });
+        }
+        input_with_instructions.extend(prompt.input.clone());
+
         let payload = ResponsesApiRequest {
             model: &self.config.model,
             instructions: &full_instructions,
-            input: &prompt.input,
+            input: &input_with_instructions,
             tools: &tools_json,
             tool_choice: "auto",
             parallel_tool_calls: false,
