@@ -40,7 +40,7 @@ use crate::bottom_pane::InputResult;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell::CommandOutput;
 use crate::history_cell::HistoryCell;
-use crate::history_cell::PatchEventType;
+    use crate::history_cell::PatchEventType;
 use crate::user_approval_widget::ApprovalRequest;
 use codex_file_search::FileMatch;
 
@@ -283,6 +283,10 @@ impl ChatWidget<'_> {
             EventMsg::Error(ErrorEvent { message }) => {
                 self.add_to_history(HistoryCell::new_error_event(message.clone()));
                 self.bottom_pane.set_task_running(false);
+            }
+            EventMsg::PlanUpdate(update) => {
+                self.add_to_history(HistoryCell::new_plan_update(update));
+                self.request_redraw();
             }
             EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
                 call_id: _,
