@@ -1,7 +1,7 @@
 [package]
+edition = "2024"
 name = "codex-tui"
 version = { workspace = true }
-edition = "2024"
 
 [[bin]]
 name = "codex-tui"
@@ -20,12 +20,12 @@ base64 = "0.22.1"
 clap = { version = "4", features = ["derive"] }
 codex-ansi-escape = { path = "../ansi-escape" }
 codex-arg0 = { path = "../arg0" }
-codex-core = { path = "../core" }
 codex-common = { path = "../common", features = [
     "cli",
     "elapsed",
     "sandbox_summary",
 ] }
+codex-core = { path = "../core" }
 codex-file-search = { path = "../file-search" }
 codex-login = { path = "../login" }
 color-eyre = "0.6.3"

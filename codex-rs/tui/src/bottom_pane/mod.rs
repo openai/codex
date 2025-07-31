@@ -64,6 +64,10 @@ impl BottomPane<'_> {
         }
     }
 
+    pub fn desired_height(&self) -> u16 {
+        self.composer.desired_height()
+    }
+
     /// Forward a key event to the active view or the composer.
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> InputResult {
         if let Some(mut view) = self.active_view.take() {
