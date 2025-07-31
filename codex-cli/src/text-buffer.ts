@@ -457,7 +457,7 @@ export default class TextBuffer {
     // then, on the next call, the previous word. We should never delete the entire line.
     let start = this.cursorCol;
     let onlySpaces = true;
-    for (let i = 0; i < start; i++) {
+    for (let i = start - 1; i >= 0; i--) {
       if (isWordChar(arr[i])) {
         onlySpaces = false;
         break;
