@@ -7,16 +7,14 @@ use crate::codex_tool_config::CodexToolCallParam;
 use crate::codex_tool_config::CodexToolCallReplyParam;
 use crate::codex_tool_config::create_tool_for_codex_tool_call_param;
 use crate::codex_tool_config::create_tool_for_codex_tool_call_reply_param;
-use crate::mcp_protocol::ConversationSendMessageArgs;
-use crate::mcp_protocol::ConversationSendMessageResult;
 use crate::mcp_protocol::ToolCallRequestParams;
 use crate::mcp_protocol::ToolCallResponse;
 use crate::mcp_protocol::ToolCallResponseResult;
 use crate::outgoing_message::OutgoingMessageSender;
+use crate::tool_handlers::send_message::handle_send_message;
 
 use codex_core::Codex;
 use codex_core::config::Config as CodexConfig;
-use codex_core::protocol::Op;
 use codex_core::protocol::Submission;
 use mcp_types::CallToolRequestParams;
 use mcp_types::CallToolResult;
@@ -44,7 +42,7 @@ pub(crate) struct MessageProcessor {
     codex_linux_sandbox_exe: Option<PathBuf>,
     session_map: Arc<Mutex<HashMap<Uuid, Arc<Codex>>>>,
     running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, Uuid>>>,
-    running_session_id_set: Arc<Mutex<HashSet<Uuid>>>,
+    running_session_ids: Arc<Mutex<HashSet<Uuid>>>,
 }
 
 impl MessageProcessor {
@@ -60,8 +58,16 @@ impl MessageProcessor {
             codex_linux_sandbox_exe,
             session_map: Arc::new(Mutex::new(HashMap::new())),
             running_requests_id_to_codex_uuid: Arc::new(Mutex::new(HashMap::new())),
-            running_session_id_set: Arc::new(Mutex::new(HashSet::new())),
+            running_session_ids: Arc::new(Mutex::new(HashSet::new())),
         }
+    }
+
+    pub(crate) fn session_map(&self) -> Arc<Mutex<HashMap<Uuid, Arc<Codex>>>> {
+        self.session_map.clone()
+    }
+
+    pub(crate) fn running_session_ids(&self) -> Arc<Mutex<HashSet<Uuid>>> {
+        self.running_session_ids.clone()
     }
 
     pub(crate) async fn process_request(&mut self, request: JSONRPCRequest) {
@@ -343,7 +349,7 @@ impl MessageProcessor {
     async fn handle_new_tool_calls(&self, request_id: RequestId, params: ToolCallRequestParams) {
         match params {
             ToolCallRequestParams::ConversationSendMessage(args) => {
-                self.handle_tool_call_send_message(request_id, args).await;
+                handle_send_message(self, request_id, args).await;
             }
             _ => {
                 let result = CallToolResult {
@@ -552,123 +558,6 @@ impl MessageProcessor {
         });
     }
 
-    /// Send a message to a running Codex session using typed ConversationSendMessageArgs.
-    async fn handle_tool_call_send_message(
-        &self,
-        id: RequestId,
-        arguments: ConversationSendMessageArgs,
-    ) {
-        let ConversationSendMessageArgs {
-            conversation_id,
-            content: items,
-            parent_message_id: _,
-            conversation_overrides: _,
-        } = arguments;
-
-        if items.is_empty() {
-            self.send_response_with_optional_error(
-                id,
-                Some(ToolCallResponseResult::ConversationSendMessage(
-                    ConversationSendMessageResult::Error {
-                        message: "No content items provided".to_string(),
-                    },
-                )),
-                Some(true),
-            )
-            .await;
-            return;
-        }
-
-        let session_id = conversation_id.0;
-        if self
-            .running_session_id_set
-            .lock()
-            .await
-            .contains(&session_id)
-        {
-            self.send_response_with_optional_error(
-                id,
-                Some(ToolCallResponseResult::ConversationSendMessage(
-                    ConversationSendMessageResult::Error {
-                        message: "Session is already running".to_string(),
-                    },
-                )),
-                Some(true),
-            )
-            .await;
-            return;
-        }
-        if !session_exists(session_id, self.session_map.clone()).await {
-            self.send_response_with_optional_error(
-                id,
-                Some(ToolCallResponseResult::ConversationSendMessage(
-                    ConversationSendMessageResult::Error {
-                        message: "Session does not exist".to_string(),
-                    },
-                )),
-                Some(true),
-            )
-            .await;
-            return;
-        }
-        self.running_session_id_set.lock().await.insert(session_id);
-
-        let codex = {
-            let guard = self.session_map.lock().await;
-            guard.get(&session_id).cloned()
-        };
-
-        if codex.is_none() {
-            self.send_response_with_optional_error(
-                id,
-                Some(ToolCallResponseResult::ConversationSendMessage(
-                    ConversationSendMessageResult::Error {
-                        message: "Session not found in session map".to_string(),
-                    },
-                )),
-                Some(true),
-            )
-            .await;
-            return;
-        }
-
-        let request_id_string = match &id {
-            RequestId::String(s) => s.clone(),
-            RequestId::Integer(i) => i.to_string(),
-        };
-
-        if let Some(codex) = codex {
-            let submit_res = codex
-                .submit_with_id(Submission {
-                    id: request_id_string,
-                    op: Op::UserInput { items },
-                })
-                .await;
-
-            if let Err(e) = submit_res {
-                self.send_response_with_optional_error(
-                    id,
-                    Some(ToolCallResponseResult::ConversationSendMessage(
-                        ConversationSendMessageResult::Error {
-                            message: format!("Failed to submit user input: {e}"),
-                        },
-                    )),
-                    Some(true),
-                )
-                .await;
-                return;
-            }
-        }
-        self.send_response_with_optional_error(
-            id,
-            Some(ToolCallResponseResult::ConversationSendMessage(
-                ConversationSendMessageResult::Ok,
-            )),
-            Some(false),
-        )
-        .await;
-    }
-
     fn handle_set_level(
         &self,
         params: <mcp_types::SetLevelRequest as mcp_types::ModelContextProtocolRequest>::Params,
@@ -786,7 +675,7 @@ impl MessageProcessor {
         tracing::info!("notifications/message -> params: {:?}", params);
     }
 
-    async fn send_response_with_optional_error(
+    pub(crate) async fn send_response_with_optional_error(
         &self,
         id: RequestId,
         message: Option<ToolCallResponseResult>,
@@ -801,13 +690,4 @@ impl MessageProcessor {
         self.send_response::<mcp_types::CallToolRequest>(id.clone(), result)
             .await;
     }
-}
-
-async fn session_exists(
-    session_id: Uuid,
-    session_map: Arc<Mutex<HashMap<Uuid, Arc<Codex>>>>,
-) -> bool {
-    let session_map = session_map.lock().await;
-    session_map.contains_key(&session_id)
-    // TODO: check if session exists on disk as well
 }
