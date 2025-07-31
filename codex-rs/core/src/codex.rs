@@ -925,88 +925,6 @@ async fn submission_loop(
     debug!("Agent loop exited");
 }
 
-async fn run_compact_task(
-    sess: Arc<Session>,
-    sub_id: String,
-    input: Vec<InputItem>,
-    compact_instructions: String,
-) {
-    let start_event = Event {
-        id: sub_id.clone(),
-        msg: EventMsg::TaskStarted,
-    };
-    if sess.tx_event.send(start_event).await.is_err() {
-        return;
-    }
-
-    let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
-    let turn_input: Vec<ResponseItem> =
-        sess.turn_input_with_history(vec![initial_input_for_turn.clone().into()]);
-
-    let prompt = Prompt {
-        input: turn_input,
-        user_instructions: None,
-        store: !sess.disable_response_storage,
-        extra_tools: HashMap::new(),
-        base_instructions_override: Some(compact_instructions.clone()),
-    };
-
-    let max_retries = sess.client.get_provider().stream_max_retries();
-    let mut retries = 0;
-
-    loop {
-        let attempt_result = drain_to_completed(&sess, &prompt).await;
-
-        match attempt_result {
-            Ok(()) => break,
-            Err(CodexErr::Interrupted) => return,
-            Err(e) => {
-                if retries < max_retries {
-                    retries += 1;
-                    let delay = backoff(retries);
-                    sess.notify_background_event(
-                        &sub_id,
-                        format!(
-                            "stream error: {e}; retrying {retries}/{max_retries} in {delay:?}…"
-                        ),
-                    )
-                    .await;
-                    tokio::time::sleep(delay).await;
-                    continue;
-                } else {
-                    let event = Event {
-                        id: sub_id.clone(),
-                        msg: EventMsg::Error(ErrorEvent {
-                            message: e.to_string(),
-                        }),
-                    };
-                    sess.send_event(event).await;
-                    return;
-                }
-            }
-        }
-    }
-
-    sess.remove_task(&sub_id);
-    let event = Event {
-        id: sub_id.clone(),
-        msg: EventMsg::AgentMessage(AgentMessageEvent {
-            message: "Compact task completed".to_string(),
-        }),
-    };
-    sess.send_event(event).await;
-    let event = Event {
-        id: sub_id.clone(),
-        msg: EventMsg::TaskComplete(TaskCompleteEvent {
-            last_agent_message: None,
-        }),
-    };
-    sess.send_event(event).await;
-
-    let mut state = sess.state.lock().unwrap();
-    state.history.keep_last(1);
-}
-
 /// Takes a user message as input and runs a loop where, at each turn, the model
 /// replies with either:
 ///
@@ -1377,6 +1295,88 @@ async fn try_run_turn(
             }
         }
     }
+}
+
+async fn run_compact_task(
+    sess: Arc<Session>,
+    sub_id: String,
+    input: Vec<InputItem>,
+    compact_instructions: String,
+) {
+    let start_event = Event {
+        id: sub_id.clone(),
+        msg: EventMsg::TaskStarted,
+    };
+    if sess.tx_event.send(start_event).await.is_err() {
+        return;
+    }
+
+    let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
+    let turn_input: Vec<ResponseItem> =
+        sess.turn_input_with_history(vec![initial_input_for_turn.clone().into()]);
+
+    let prompt = Prompt {
+        input: turn_input,
+        user_instructions: None,
+        store: !sess.disable_response_storage,
+        extra_tools: HashMap::new(),
+        base_instructions_override: Some(compact_instructions.clone()),
+    };
+
+    let max_retries = sess.client.get_provider().stream_max_retries();
+    let mut retries = 0;
+
+    loop {
+        let attempt_result = drain_to_completed(&sess, &prompt).await;
+
+        match attempt_result {
+            Ok(()) => break,
+            Err(CodexErr::Interrupted) => return,
+            Err(e) => {
+                if retries < max_retries {
+                    retries += 1;
+                    let delay = backoff(retries);
+                    sess.notify_background_event(
+                        &sub_id,
+                        format!(
+                            "stream error: {e}; retrying {retries}/{max_retries} in {delay:?}…"
+                        ),
+                    )
+                    .await;
+                    tokio::time::sleep(delay).await;
+                    continue;
+                } else {
+                    let event = Event {
+                        id: sub_id.clone(),
+                        msg: EventMsg::Error(ErrorEvent {
+                            message: e.to_string(),
+                        }),
+                    };
+                    sess.send_event(event).await;
+                    return;
+                }
+            }
+        }
+    }
+
+    sess.remove_task(&sub_id);
+    let event = Event {
+        id: sub_id.clone(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "Compact task completed".to_string(),
+        }),
+    };
+    sess.send_event(event).await;
+    let event = Event {
+        id: sub_id.clone(),
+        msg: EventMsg::TaskComplete(TaskCompleteEvent {
+            last_agent_message: None,
+        }),
+    };
+    sess.send_event(event).await;
+
+    let mut state = sess.state.lock().unwrap();
+    state.history.keep_last(1);
 }
 
 async fn handle_response_item(
