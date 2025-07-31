@@ -237,6 +237,7 @@ async fn chatgpt_auth_sends_correct_request() {
     let request_session_id = request.headers.get("session_id").unwrap();
     let request_originator = request.headers.get("originator").unwrap();
     let request_authorization = request.headers.get("authorization").unwrap();
+    let request_chatgpt_account_id = request.headers.get("chatgpt-account-id").unwrap();
     let request_body = request.body_json::<serde_json::Value>().unwrap();
 
     assert!(current_session_id.is_some());
@@ -249,6 +250,7 @@ async fn chatgpt_auth_sends_correct_request() {
         request_authorization.to_str().unwrap(),
         "Bearer Access Token"
     );
+    assert_eq!(request_chatgpt_account_id.to_str().unwrap(), "account_id");
     assert!(!request_body["store"].as_bool().unwrap());
     assert!(request_body["stream"].as_bool().unwrap());
     assert_eq!(
@@ -332,7 +334,7 @@ fn auth_from_token(id_token: String) -> CodexAuth {
                 id_token,
                 access_token: "Access Token".to_string(),
                 refresh_token: "test".to_string(),
-                account_id: None,
+                account_id: Some("account_id".to_string()),
             }),
             last_refresh: Some(Utc::now()),
         }),
