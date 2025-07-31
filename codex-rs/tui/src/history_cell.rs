@@ -507,11 +507,16 @@ impl HistoryCell {
             let empty = width.saturating_sub(filled);
             let mut bar_spans: Vec<Span> = Vec::new();
             if filled > 0 {
-                bar_spans
-                    .push(Span::styled("█".repeat(filled), Style::default().fg(Color::Green)));
+                bar_spans.push(Span::styled(
+                    "█".repeat(filled),
+                    Style::default().fg(Color::Green),
+                ));
             }
             if empty > 0 {
-                bar_spans.push(Span::styled("░".repeat(empty), Style::default().fg(Color::Gray)));
+                bar_spans.push(Span::styled(
+                    "░".repeat(empty),
+                    Style::default().fg(Color::Gray),
+                ));
             }
             let progress_prefix = Span::raw("progress [");
             let progress_suffix = Span::raw("] ");
@@ -544,7 +549,9 @@ impl HistoryCell {
                     StepStatus::Completed => ("✓", Style::default().fg(Color::Green)),
                     StepStatus::InProgress => (
                         "▶",
-                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
                     ),
                     StepStatus::Pending => ("○", Style::default().fg(Color::Gray)),
                 };
