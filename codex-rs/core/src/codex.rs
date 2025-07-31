@@ -402,6 +402,12 @@ impl Session {
         let _ = self.tx_event.send(event).await;
     }
 
+    /// Build the full turn input by concatenating the current conversation
+    /// history with additional items for this turn.
+    pub fn turn_input_with_history(&self, extra: Vec<ResponseItem>) -> Vec<ResponseItem> {
+        [self.state.lock().unwrap().history.contents(), extra].concat()
+    }
+
     /// Returns the input if there was no task running to inject into
     pub fn inject_input(&self, input: Vec<InputItem>) -> Result<(), Vec<InputItem>> {
         let mut state = self.state.lock().unwrap();
@@ -502,7 +508,7 @@ pub(crate) struct AgentTask {
 impl AgentTask {
     fn spawn(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) -> Self {
         let handle =
-            tokio::spawn(run_task(Arc::clone(&sess), sub_id.clone(), input, None)).abort_handle();
+            tokio::spawn(run_task(Arc::clone(&sess), sub_id.clone(), input)).abort_handle();
         Self {
             sess,
             sub_id,
@@ -515,7 +521,7 @@ impl AgentTask {
         input: Vec<InputItem>,
         compact_instructions: String,
     ) -> Self {
-        let handle = tokio::spawn(run_compact(
+        let handle = tokio::spawn(run_compact_task(
             Arc::clone(&sess),
             sub_id.clone(),
             input,
@@ -909,16 +915,91 @@ async fn submission_loop(
     debug!("Agent loop exited");
 }
 
-async fn run_compact(
+async fn run_compact_task(
     sess: Arc<Session>,
     sub_id: String,
     input: Vec<InputItem>,
     compact_instructions: String,
 ) {
-    let _ = run_task(sess.clone(), sub_id, input, Some(compact_instructions)).await;
-    let mut history = sess.state.lock().unwrap().history.clone();
-    history.keep_last(1);
-    sess.state.lock().unwrap().history = history;
+    // Announce task start, mirroring run_task behavior.
+    let start_event = Event {
+        id: sub_id.clone(),
+        msg: EventMsg::TaskStarted,
+    };
+    if sess.tx_event.send(start_event).await.is_err() {
+        return;
+    }
+
+    // Build input like run_task: history + this turn's user input.
+    let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
+    let turn_input: Vec<ResponseItem> =
+        sess.turn_input_with_history(vec![initial_input_for_turn.clone().into()]);
+
+    let prompt = Prompt {
+        input: turn_input,
+        user_instructions: None,
+        // Do not record locally; server-side storage behavior still respects session config.
+        store: !sess.disable_response_storage,
+        extra_tools: HashMap::new(),
+        base_instructions_override: Some(compact_instructions.clone()),
+    };
+
+    let max_retries = sess.client.get_provider().stream_max_retries();
+    let mut retries = 0;
+
+    // Retry loop modeled after run_turn/try_run_turn.
+    loop {
+        let attempt_result = drain_to_completed(&sess, &prompt).await;
+
+        match attempt_result {
+            Ok(()) => break,
+            Err(CodexErr::Interrupted) => return,
+            Err(e) => {
+                if retries < max_retries {
+                    retries += 1;
+                    let delay = backoff(retries);
+                    sess.notify_background_event(
+                        &sub_id,
+                        format!(
+                            "stream error: {e}; retrying {retries}/{max_retries} in {delay:?}…"
+                        ),
+                    )
+                    .await;
+                    tokio::time::sleep(delay).await;
+                    continue;
+                } else {
+                    let event = Event {
+                        id: sub_id.clone(),
+                        msg: EventMsg::Error(ErrorEvent {
+                            message: e.to_string(),
+                        }),
+                    };
+                    sess.send_event(event).await;
+                    return;
+                }
+            }
+        }
+    }
+
+    // Mark task complete without sending/recording any response content.
+    sess.remove_task(&sub_id);
+    let event = Event {
+        id: sub_id.clone(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "Compact task completed".to_string(),
+        }),
+    };
+    sess.send_event(event).await;
+    let event = Event {
+        id: sub_id.clone(),
+        msg: EventMsg::TaskComplete(TaskCompleteEvent {
+            last_agent_message: None,
+        }),
+    };
+    sess.send_event(event).await;
+
+    let mut state = sess.state.lock().unwrap();
+    state.history.keep_last(1);
 }
 
 /// Takes a user message as input and runs a loop where, at each turn, the model
@@ -934,12 +1015,7 @@ async fn run_compact(
 ///   back to the model in the next turn.
 /// - If the model sends only an assistant message, we record it in the
 ///   conversation history and consider the task complete.
-async fn run_task(
-    sess: Arc<Session>,
-    sub_id: String,
-    input: Vec<InputItem>,
-    base_instructions_override: Option<String>,
-) {
+async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
     if input.is_empty() {
         return;
     }
@@ -972,8 +1048,7 @@ async fn run_task(
         // conversation history on each turn. The rollout file, however, should
         // only record the new items that originated in this turn so that it
         // represents an append-only log without duplicates.
-        let turn_input: Vec<ResponseItem> =
-            [sess.state.lock().unwrap().history.contents(), pending_input].concat();
+        let turn_input: Vec<ResponseItem> = sess.turn_input_with_history(pending_input);
 
         let turn_input_messages: Vec<String> = turn_input
             .iter()
@@ -988,14 +1063,7 @@ async fn run_task(
                 })
             })
             .collect();
-        match run_turn(
-            &sess,
-            sub_id.clone(),
-            turn_input,
-            base_instructions_override.clone(),
-        )
-        .await
-        {
+        match run_turn(&sess, sub_id.clone(), turn_input).await {
             Ok(turn_output) => {
                 let mut items_to_record_in_conversation_history = Vec::<ResponseItem>::new();
                 let mut responses = Vec::<ResponseInputItem>::new();
@@ -1123,7 +1191,6 @@ async fn run_turn(
     sess: &Session,
     sub_id: String,
     input: Vec<ResponseItem>,
-    base_instructions_override: Option<String>,
 ) -> CodexResult<Vec<ProcessedResponseItem>> {
     let extra_tools = sess.mcp_connection_manager.list_all_tools();
     let prompt = Prompt {
@@ -1131,7 +1198,7 @@ async fn run_turn(
         user_instructions: sess.user_instructions.clone(),
         store: !sess.disable_response_storage,
         extra_tools,
-        base_instructions_override: base_instructions_override.or(sess.base_instructions.clone()),
+        base_instructions_override: sess.base_instructions.clone(),
     };
 
     let mut retries = 0;
@@ -1787,4 +1854,21 @@ fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -> Option<St
             None
         }
     })
+}
+
+async fn drain_to_completed(sess: &Session, prompt: &Prompt) -> CodexResult<()> {
+    let mut stream = sess.client.clone().stream(prompt).await?;
+    loop {
+        let maybe_event = stream.next().await;
+        let Some(event) = maybe_event else {
+            return Err(CodexErr::Stream(
+                "stream closed before response.completed".into(),
+            ));
+        };
+        match event {
+            Ok(ResponseEvent::Completed { .. }) => return Ok(()),
+            Ok(_) => continue,
+            Err(e) => return Err(e),
+        }
+    }
 }

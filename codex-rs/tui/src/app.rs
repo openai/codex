@@ -275,7 +275,8 @@ impl App<'_> {
                     SlashCommand::Compact => {
                         if let AppState::Chat { widget } = &mut self.app_state {
                             widget.clear_token_usage();
-                            widget.submit_op(Op::SummarizeContext);
+                            self.app_event_tx
+                                .send(AppEvent::CodexOp(Op::SummarizeContext));
                         }
                     }
                     SlashCommand::Quit => {
