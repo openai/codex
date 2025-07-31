@@ -1,0 +1,44 @@
+# Codex CLI — Scripts Documentation
+
+The Codex CLI includes several important helper scripts for containerization, dependency setup, network/firewall hardening, and safe release engineering. These living in `codex-cli/scripts` are critical for secure, reproducible, and reliable development/CI workflows.
+
+---
+
+## Key Scripts
+
+### `run_in_container.sh`
+- Runs the Codex CLI (or arbitrary commands) inside a Docker container with the user’s working directory properly mounted.
+- Ensures commands run with correct user context, automatically cleans up containers, and isolates execution.
+- Supports environment variables for allowed network domains (e.g., `OPENAI_ALLOWED_DOMAINS`).
+
+### `init_firewall.sh`
+- Strictly configures outbound/inbound network rules for the Codex Docker container or runtime environment.
+- Whitelists only allowed domains (API endpoints), blocks all other outbound traffic, allows DNS and localhost, and configures per-domain IP whitelisting using `ipset` and `iptables`.
+- Uses `/etc/codex/allowed_domains.txt` if present.
+
+### `install_native_deps.sh`
+- Downloads and installs required native sandbox/runtime binaries for the CLI—including prebuilt Rust components where appropriate.
+- Supports development (bin/ directory) and release (package root) modes, and can include full Rust native CLI binaries for CODEX_RUST builds.
+- Resolves GitHub Actions release artifacts dynamically.
+
+### `build_container.sh`, `stage_release.sh`, `stage_rust_release.py`
+- Convenience scripts for building Docker images, staging releases, managing native/Rust packaging, and preparing project for stable releases.
+
+---
+
+## Example Workflow: Secure/Containerized Execution
+```bash
+./scripts/run_in_container.sh --work_dir ./my_project "codex 'run tests'"
+```
+
+## Example: Hardened Firewall
+```bash
+sudo ./scripts/init_firewall.sh
+# Now only api.openai.com (or whatever is whitelisted) can be accessed.
+```
+
+---
+
+## Related Documentation
+- [CLI Core Modules](./cli_modules.mdx)
+- [Repository Overview](./overview.mdx)

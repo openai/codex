@@ -1,0 +1,53 @@
+# Codex Rust Core — Package & Module Overview
+
+The `codex-rs` folder contains the high-performance Rust implementation of the Codex CLI/agent, designed to deliver robust, scalable, and secure command-line automation and TUI workflows for software development. The Rust core backs both user-facing CLI tools and machine integrations (e.g., MCP protocol), leveraging sandboxed execution and extensibility.
+
+---
+
+## Main Packages/Crates
+
+- **core/** — The business logic engine for all Codex agent workflows. Implements code editing, patching, agentic context, patch/apply formatting, and agent loop/protocol. See [`core/prompt.md`](../codex-rs/core/prompt.md) for agent guidelines and the custom patch protocol (`apply_patch`).
+- **exec/** — Minimal "headless" CLI for automation/CI: runs agent workflows non-interactively.
+- **tui/** — The terminal user interface and interactive TUI built on Ratatui. Launches fullscreen Codex sessions, advanced overlays, etc.
+- **cli/** — The CLI multitool, bundling featureful front ends: interactive chat, non-interactive, protocol server (proto), debug tools, completions, etc.
+- **common/** — Utility crate for code shared across crates (types, helpers, constants, etc.).
+
+---
+
+## Key Features & Protocols
+- **Sandboxing**: Uses advanced features (Apple Seatbelt, Landlock, etc.) for process isolation on macOS/Linux, per `--sandbox` CLI/config flag.
+- **Apply-patch/Code Edit Protocol**: Implements a custom, human- and machine-readable patch protocol (see [`core/prompt.md`](../codex-rs/core/prompt.md)) for atomic file edits and renames, tightly integrated with agent review/approval.
+- **Model Context Protocol (MCP)**: Server/client for model-centric agent orchestration (`codex mcp`).
+- **Notifications**: Configurable notifications script per [`config.md`](../codex-rs/config.md#notify).
+
+---
+
+## Configuration
+- Native binaries leverage `config.toml` for rich and granular settings (see [`config.md`](../codex-rs/config.md)).
+- Model/provider flexibility, custom environment variable overrides, notification hooks, sandbox policy, MCP servers, etc.
+- YAML, TOML, and command-line flag support for configuration.
+
+---
+
+## Example: Shell Sandbox Policy
+```bash
+codex --sandbox read-only
+codex --sandbox workspace-write  # Allows agent writes within repo only
+codex --sandbox danger-full-access  # Fully disables sandbox (dangerous)
+```
+
+## Example: Programmatic Use
+```bash
+# Launch as MCP server for protocol evaluation
+codex mcp
+# Use protocol server for batch edits/codebase refactoring
+codex proto --stdin < requests.ndjson
+```
+
+---
+
+## Related Documentation
+- [Configuration Reference](../codex-rs/config.md)
+- [Patch Protocol & Agent Prompt](../codex-rs/core/prompt.md)
+- [CLI Core Modules](./cli_modules.mdx)
+- [Repository Overview](./overview.mdx)

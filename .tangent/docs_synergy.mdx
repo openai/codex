@@ -1,0 +1,27 @@
+# Documentation Directory & Reference Docs
+
+The `docs/` and `codex-rs/docs/` directories in Codex provide reference, protocol, and legal documentation that complements the source code and .tangent developer documentation.
+
+---
+
+## Key Documentation Files
+
+- **docs/CLA.md** — Contributor License Agreement: The required terms for contributing code, documentation, or designs to Codex. Contributors must agree to these terms when submitting pull requests.
+- **codex-rs/docs/protocol_v1.md** — Agent/Protocol Reference: Defines the low-level protocol (used for UI<->agent communication, task/session/turn abstractions, event messaging, transport, etc.), aligned with codex-rs/core business logic. Essential for deep integration or building alternate UIs/automations outside the CLI.
+- **codex-rs/core/prompt.md** — The Codex agent's developer instructions and protocol for patching, agent boundaries, review/approval gates, and best practices when executing code-related tasks. Should be referenced by operators designing custom agents or patching mechanics.
+
+---
+
+## Synergy With .tangent Documentation
+- The files above should be referenced for protocol, legal, and integration purposes but are *not* a replacement for the comprehensive API/module/user docs now provided in `.tangent/`.
+- When developing, start with `.tangent/overview.mdx` and module docs, then refer to the above files if:
+  - You are writing integrations with the Codex agent (protocol details needed)
+  - You are extending Codex's CLI or TUI at the protocol/task/approval/event level
+  - Contributing code and need agreement/CLA terms
+
+---
+
+## Related Documentation
+- [Rust Core & Protocol](./rust_core.mdx)
+- [CLI Core Modules](./cli_modules.mdx)
+- [Overview/Architecture](./overview.mdx)
