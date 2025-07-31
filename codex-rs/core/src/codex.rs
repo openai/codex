@@ -502,16 +502,26 @@ pub(crate) struct AgentTask {
 impl AgentTask {
     fn spawn(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) -> Self {
         let handle =
-            tokio::spawn(run_task(Arc::clone(&sess), sub_id.clone(), input)).abort_handle();
+            tokio::spawn(run_task(Arc::clone(&sess), sub_id.clone(), input, None)).abort_handle();
         Self {
             sess,
             sub_id,
             handle,
         }
     }
-    fn compact(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) -> Self {
-        let handle =
-            tokio::spawn(run_compact(Arc::clone(&sess), sub_id.clone(), input)).abort_handle();
+    fn compact(
+        sess: Arc<Session>,
+        sub_id: String,
+        input: Vec<InputItem>,
+        compact_instructions: String,
+    ) -> Self {
+        let handle = tokio::spawn(run_compact(
+            Arc::clone(&sess),
+            sub_id.clone(),
+            input,
+            compact_instructions,
+        ))
+        .abort_handle();
         Self {
             sess,
             sub_id,
@@ -850,13 +860,16 @@ async fn submission_loop(
                 // Create a summarization request as user input
                 const SUMMARIZATION_PROMPT: &str = include_str!("../../../SUMMARY.md");
 
-                let summarization_prompt = vec![InputItem::Text {
-                    text: SUMMARIZATION_PROMPT.to_string(),
-                }];
-
                 // Attempt to inject input into current task
-                if let Err(items) = sess.inject_input(summarization_prompt) {
-                    let task = AgentTask::compact(sess.clone(), sub.id, items);
+                if let Err(items) = sess.inject_input(vec![InputItem::Text {
+                    text: "Start Summarization".to_string(),
+                }]) {
+                    let task = AgentTask::compact(
+                        sess.clone(),
+                        sub.id,
+                        items,
+                        SUMMARIZATION_PROMPT.to_string(),
+                    );
                     sess.set_task(task);
                 }
             }
@@ -896,8 +909,13 @@ async fn submission_loop(
     debug!("Agent loop exited");
 }
 
-async fn run_compact(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
-    run_task(sess.clone(), sub_id, input).await;
+async fn run_compact(
+    sess: Arc<Session>,
+    sub_id: String,
+    input: Vec<InputItem>,
+    compact_instructions: String,
+) {
+    let _ = run_task(sess.clone(), sub_id, input, Some(compact_instructions)).await;
     let mut history = sess.state.lock().unwrap().history.clone();
     history.keep_last(1);
     sess.state.lock().unwrap().history = history;
@@ -916,7 +934,12 @@ async fn run_compact(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) 
 ///   back to the model in the next turn.
 /// - If the model sends only an assistant message, we record it in the
 ///   conversation history and consider the task complete.
-async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
+async fn run_task(
+    sess: Arc<Session>,
+    sub_id: String,
+    input: Vec<InputItem>,
+    base_instructions_override: Option<String>,
+) {
     if input.is_empty() {
         return;
     }
@@ -928,7 +951,7 @@ async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
         return;
     }
 
-    let initial_input_for_turn = ResponseInputItem::from(input);
+    let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
     sess.record_conversation_items(&[initial_input_for_turn.clone().into()])
         .await;
 
@@ -965,7 +988,14 @@ async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
                 })
             })
             .collect();
-        match run_turn(&sess, sub_id.clone(), turn_input).await {
+        match run_turn(
+            &sess,
+            sub_id.clone(),
+            turn_input,
+            base_instructions_override.clone(),
+        )
+        .await
+        {
             Ok(turn_output) => {
                 let mut items_to_record_in_conversation_history = Vec::<ResponseItem>::new();
                 let mut responses = Vec::<ResponseInputItem>::new();
@@ -1093,6 +1123,7 @@ async fn run_turn(
     sess: &Session,
     sub_id: String,
     input: Vec<ResponseItem>,
+    base_instructions_override: Option<String>,
 ) -> CodexResult<Vec<ProcessedResponseItem>> {
     let extra_tools = sess.mcp_connection_manager.list_all_tools();
     let prompt = Prompt {
@@ -1100,7 +1131,7 @@ async fn run_turn(
         user_instructions: sess.user_instructions.clone(),
         store: !sess.disable_response_storage,
         extra_tools,
-        base_instructions_override: sess.base_instructions.clone(),
+        base_instructions_override: base_instructions_override.or(sess.base_instructions.clone()),
     };
 
     let mut retries = 0;
