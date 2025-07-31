@@ -12,6 +12,8 @@ use codex_core::protocol::Event;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
+use ratatui::layout::Offset;
+use ratatui::prelude::Backend;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -321,6 +323,44 @@ impl App<'_> {
     fn draw_next_frame(&mut self, terminal: &mut tui::Tui) -> Result<()> {
         // TODO: add a throttle to avoid redrawing too often
 
+        let screen_size = terminal.size()?;
+        let last_known_screen_size = terminal.last_known_screen_size;
+        if screen_size != last_known_screen_size {
+            let cursor_pos = terminal.get_cursor_position()?;
+            let last_known_cursor_pos = terminal.last_known_cursor_pos;
+            if cursor_pos.y != last_known_cursor_pos.y {
+                // The terminal was resized. The only point of reference we have for where our viewport
+                // was moved is the cursor position.
+                // NB this assumes that the cursor was not wrapped as part of the resize.
+                let cursor_delta = cursor_pos.y as i32 - last_known_cursor_pos.y as i32;
+
+                let new_viewport_area = terminal.viewport_area.offset(Offset {
+                    x: 0,
+                    y: cursor_delta,
+                });
+                terminal.set_viewport_area(new_viewport_area);
+                terminal.clear()?;
+            }
+        }
+
+        let size = terminal.size()?;
+        let desired_height = match &self.app_state {
+            AppState::Chat { widget } => widget.desired_height(),
+            AppState::GitWarning { .. } => 10,
+        };
+        let mut area = terminal.viewport_area;
+        area.height = desired_height;
+        area.width = size.width;
+        if area.bottom() > size.height {
+            terminal
+                .backend_mut()
+                .scroll_region_up(0..area.top(), area.bottom() - size.height)?;
+            area.y = size.height - area.height;
+        }
+        if area != terminal.viewport_area {
+            terminal.clear()?;
+            terminal.set_viewport_area(area);
+        }
         match &mut self.app_state {
             AppState::Chat { widget } => {
                 terminal.draw(|frame| frame.render_widget_ref(&**widget, frame.area()))?;
