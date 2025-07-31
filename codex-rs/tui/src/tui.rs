@@ -8,13 +8,12 @@ use crossterm::event::EnableBracketedPaste;
 use crossterm::event::KeyboardEnhancementFlags;
 use crossterm::event::PopKeyboardEnhancementFlags;
 use crossterm::event::PushKeyboardEnhancementFlags;
-use ratatui::Terminal;
-use ratatui::TerminalOptions;
-use ratatui::Viewport;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::disable_raw_mode;
 use ratatui::crossterm::terminal::enable_raw_mode;
+
+use crate::custom_terminal::Terminal;
 
 /// A type alias for the terminal type used in this application
 pub type Tui = Terminal<CrosstermBackend<Stdout>>;
@@ -37,19 +36,8 @@ pub fn init(_config: &Config) -> Result<Tui> {
     )?;
     set_panic_hook();
 
-    // Reserve a fixed number of lines for the interactive viewport (composer,
-    // status, popups). History is injected above using `insert_before`. This
-    // is an initial step of the refactor – later the height can become
-    // dynamic. For now a conservative default keeps enough room for the
-    // multi‑line composer while not occupying the whole screen.
-    const BOTTOM_VIEWPORT_HEIGHT: u16 = 8;
     let backend = CrosstermBackend::new(stdout());
-    let tui = Terminal::with_options(
-        backend,
-        TerminalOptions {
-            viewport: Viewport::Inline(BOTTOM_VIEWPORT_HEIGHT),
-        },
-    )?;
+    let tui = Terminal::with_options(backend)?;
     Ok(tui)
 }
 

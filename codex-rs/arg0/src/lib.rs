@@ -2,6 +2,8 @@ use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
 
+use codex_core::CODEX_APPLY_PATCH_ARG1;
+
 /// While we want to deploy the Codex CLI as a single executable for simplicity,
 /// we also want to expose some of its functionality as distinct CLIs, so we use
 /// the "arg0 trick" to determine which CLI to dispatch. This effectively allows
@@ -43,7 +45,7 @@ where
     }
 
     let argv1 = args.next().unwrap_or_default();
-    if argv1 == "--codex-run-as-apply-patch" {
+    if argv1 == CODEX_APPLY_PATCH_ARG1 {
         let patch_arg = args.next().and_then(|s| s.to_str().map(|s| s.to_owned()));
         let exit_code = match patch_arg {
             Some(patch_arg) => {
@@ -55,7 +57,7 @@ where
                 }
             }
             None => {
-                eprintln!("Error: --codex-run-as-apply-patch requires a UTF-8 PATCH argument.");
+                eprintln!("Error: {CODEX_APPLY_PATCH_ARG1} requires a UTF-8 PATCH argument.");
                 1
             }
         };

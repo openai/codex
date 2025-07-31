@@ -43,4 +43,5 @@ pub mod shell;
 mod user_notification;
 pub mod util;
 
+pub use apply_patch::CODEX_APPLY_PATCH_ARG1;
 pub use client_common::model_supports_reasoning_summaries;
