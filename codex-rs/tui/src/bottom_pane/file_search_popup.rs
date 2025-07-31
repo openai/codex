@@ -109,7 +109,7 @@ impl FileSearchPopup {
     }
 
     /// Preferred height (rows) including border.
-    pub(crate) fn calculate_required_height(&self, _area: &Rect) -> u16 {
+    pub(crate) fn calculate_required_height(&self) -> u16 {
         // Row count depends on whether we already have matches. If no matches
         // yet (e.g. initial search or query with no results) reserve a single
         // row so the popup is still visible. When matches are present we show

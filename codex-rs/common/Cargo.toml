@@ -1,7 +1,7 @@
 [package]
+edition = "2024"
 name = "codex-common"
 version = { workspace = true }
-edition = "2024"
 
 [lints]
 workspace = true
@@ -9,11 +9,11 @@ workspace = true
 [dependencies]
 clap = { version = "4", features = ["derive", "wrap_help"], optional = true }
 codex-core = { path = "../core" }
-toml = { version = "0.9", optional = true }
 serde = { version = "1", optional = true }
+toml = { version = "0.9", optional = true }
 
 [features]
 # Separate feature so that `clap` is not a mandatory dependency.
-cli = ["clap", "toml", "serde"]
+cli = ["clap", "serde", "toml"]
 elapsed = []
 sandbox_summary = []

@@ -1,5 +1,6 @@
 use anyhow::Context;
 use assert_cmd::prelude::*;
+use codex_core::CODEX_APPLY_PATCH_ARG1;
 use std::fs;
 use std::process::Command;
 use tempfile::tempdir;
@@ -16,7 +17,7 @@ fn test_standalone_exec_cli_can_use_apply_patch() -> anyhow::Result<()> {
 
     Command::cargo_bin("codex-exec")
         .context("should find binary for codex-exec")?
-        .arg("--codex-run-as-apply-patch")
+        .arg(CODEX_APPLY_PATCH_ARG1)
         .arg(
             r#"*** Begin Patch
 *** Update File: source.txt

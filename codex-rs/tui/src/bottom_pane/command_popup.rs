@@ -71,7 +71,7 @@ impl CommandPopup {
     /// Determine the preferred height of the popup. This is the number of
     /// rows required to show **at most** `MAX_POPUP_ROWS` commands plus the
     /// table/border overhead (one line at the top and one at the bottom).
-    pub(crate) fn calculate_required_height(&self, _area: &Rect) -> u16 {
+    pub(crate) fn calculate_required_height(&self) -> u16 {
         let matches = self.filtered_commands();
         let row_count = matches.len().clamp(1, MAX_POPUP_ROWS) as u16;
         // Account for the border added by the Block that wraps the table.

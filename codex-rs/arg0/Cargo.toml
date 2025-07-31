@@ -1,7 +1,7 @@
 [package]
+edition = "2024"
 name = "codex-arg0"
 version = { workspace = true }
-edition = "2024"
 
 [lib]
 name = "codex_arg0"

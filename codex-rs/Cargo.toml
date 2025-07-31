@@ -1,5 +1,4 @@
 [workspace]
-resolver = "2"
 members = [
     "ansi-escape",
     "apply-patch",
@@ -17,6 +16,7 @@ members = [
     "mcp-types",
     "tui",
 ]
+resolver = "2"
 
 [workspace.package]
 version = "0.0.0"
@@ -45,4 +45,3 @@ codegen-units = 1
 [patch.crates-io]
 # ratatui = { path = "../../ratatui" }
 ratatui = { git = "https://github.com/nornagon/ratatui", branch = "nornagon-v0.29.0-patch" }
-
