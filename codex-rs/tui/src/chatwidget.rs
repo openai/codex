@@ -384,7 +384,7 @@ impl ChatWidget<'_> {
             }) => {
                 let cmd = self.running_commands.remove(&call_id);
                 self.add_to_history(HistoryCell::new_completed_exec_command(
-                    cmd.map(|cmd| cmd.command.join(" ")).unwrap_or(call_id),
+                    cmd.map(|cmd| cmd.command).unwrap_or_else(|| vec![call_id]),
                     CommandOutput {
                         exit_code,
                         stdout,
