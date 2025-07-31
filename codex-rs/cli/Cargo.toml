@@ -1,7 +1,7 @@
 [package]
+edition = "2024"
 name = "codex-cli"
 version = { workspace = true }
-edition = "2024"
 
 [[bin]]
 name = "codex"
@@ -20,8 +20,8 @@ clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 codex-arg0 = { path = "../arg0" }
 codex-chatgpt = { path = "../chatgpt" }
-codex-core = { path = "../core" }
 codex-common = { path = "../common", features = ["cli"] }
+codex-core = { path = "../core" }
 codex-exec = { path = "../exec" }
 codex-login = { path = "../login" }
 codex-mcp-server = { path = "../mcp-server" }
