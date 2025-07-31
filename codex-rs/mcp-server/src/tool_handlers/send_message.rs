@@ -1,13 +1,17 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use codex_core::Codex;
-use codex_core::protocol::{Op, Submission};
+use codex_core::protocol::Op;
+use codex_core::protocol::Submission;
 use mcp_types::RequestId;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::mcp_protocol::{ConversationSendMessageArgs, ConversationSendMessageResult, ToolCallResponseResult};
+use crate::mcp_protocol::ConversationSendMessageArgs;
+use crate::mcp_protocol::ConversationSendMessageResult;
+use crate::mcp_protocol::ToolCallResponseResult;
 use crate::message_processor::MessageProcessor;
 
 #[derive(Debug)]
@@ -146,4 +150,4 @@ pub(crate) async fn handle_send_message(
             Some(false),
         )
         .await;
-} 
+}
