@@ -127,17 +127,11 @@ pub struct ToolCallResponse {
 
 impl From<ToolCallResponse> for CallToolResult {
     fn from(val: ToolCallResponse) -> Self {
-        val.into_result()
-    }
-}
-
-impl ToolCallResponse {
-    pub fn into_result(self) -> CallToolResult {
         let ToolCallResponse {
             request_id: _request_id,
             is_error,
             result,
-        } = self;
+        } = val;
         let (content, structured_content, is_error_out) = match result {
             Some(res) => match serde_json::to_value(&res) {
                 Ok(v) => {
@@ -165,6 +159,12 @@ impl ToolCallResponse {
             is_error: is_error_out,
             structured_content,
         }
+    }
+}
+
+impl ToolCallResponse {
+    fn into_result(self) -> CallToolResult {
+        CallToolResult::from(self)
     }
 }
 
