@@ -41,11 +41,13 @@ pub fn assess_patch_safety(
         }
     }
 
-    if is_write_patch_constrained_to_writable_paths(action, writable_roots, cwd) {
-        SafetyCheck::AutoApprove {
-            sandbox_type: SandboxType::None,
-        }
-    } else if policy == AskForApproval::OnFailure {
+    // Even though the patch *appears* to be constrained to writable paths, it
+    // is possible that paths in the patch are hard links to files outside the
+    // writable roots, so we should still run `apply_patch` in a sandbox in that
+    // case.
+    if is_write_patch_constrained_to_writable_paths(action, writable_roots, cwd)
+        || policy == AskForApproval::OnFailure
+    {
         // Only auto‑approve when we can actually enforce a sandbox. Otherwise
         // fall back to asking the user because the patch may touch arbitrary
         // paths outside the project.
