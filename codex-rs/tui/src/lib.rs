@@ -75,7 +75,7 @@ pub async fn run_main(
             config_profile: cli.config_profile.clone(),
             codex_linux_sandbox_exe,
             base_instructions: None,
-            include_plan_tool: None,
+            include_plan_tool: Some(true),
         };
         // Parse `-c` overrides from the CLI.
         let cli_kv_overrides = match cli.config_overrides.parse_overrides() {

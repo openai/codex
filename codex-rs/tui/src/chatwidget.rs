@@ -293,6 +293,10 @@ impl ChatWidget<'_> {
                 self.add_to_history(HistoryCell::new_error_event(message.clone()));
                 self.bottom_pane.set_task_running(false);
             }
+            EventMsg::PlanUpdate(update) => {
+                self.add_to_history(HistoryCell::new_plan_update(update));
+                self.request_redraw();
+            }
             EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
                 call_id: _,
                 command,
