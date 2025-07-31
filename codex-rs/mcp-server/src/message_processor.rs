@@ -16,6 +16,7 @@ use crate::tool_handlers::send_message::handle_send_message;
 use codex_core::Codex;
 use codex_core::config::Config as CodexConfig;
 use codex_core::protocol::Submission;
+use mcp_types::CallToolRequest;
 use mcp_types::CallToolRequestParams;
 use mcp_types::CallToolResult;
 use mcp_types::ClientRequest;
@@ -361,7 +362,7 @@ impl MessageProcessor {
                     is_error: Some(true),
                     structured_content: None,
                 };
-                self.send_response::<mcp_types::CallToolRequest>(request_id, result)
+                self.send_response::<CallToolRequest>(request_id, result)
                     .await;
             }
         }
