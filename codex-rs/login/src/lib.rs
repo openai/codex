@@ -123,6 +123,17 @@ impl CodexAuth {
             }
         }
     }
+
+    pub async fn get_account_id(&self) -> Option<String> {
+        match self.mode {
+            AuthMode::ApiKey => None,
+            AuthMode::ChatGPT => {
+                let token_data = self.get_token_data().await.ok()?;
+
+                token_data.account_id.clone()
+            }
+        }
+    }
 }
 
 // Loads the available auth information from the auth.json or OPENAI_API_KEY environment variable.
