@@ -35,7 +35,7 @@ sha1 = "0.10.6"
 shlex = "1.3.0"
 strum_macros = "0.27.2"
 thiserror = "2.0.12"
-time = { version = "0.3", features = ["formatting", "local-offset", "macros"] }
+time = { version = "0.3", features = ["formatting", "parsing", "local-offset", "macros"] }
 tokio = { version = "1", features = [
     "io-std",
     "macros",
