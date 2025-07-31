@@ -36,12 +36,12 @@ pub(crate) fn insert_history_lines(terminal: &mut tui::Tui, lines: Vec<Line>) {
             .backend_mut()
             .scroll_region_down(area.top()..screen_size.height, scroll_amount)
             .ok();
-        let cursor_top = area.top() - 1;
+        let cursor_top = area.top().saturating_sub(1);
         area.y += scroll_amount;
         terminal.set_viewport_area(area);
         cursor_top
     } else {
-        area.top() - 1
+        area.top().saturating_sub(1)
     };
 
     // Limit the scroll region to the lines from the top of the screen to the
