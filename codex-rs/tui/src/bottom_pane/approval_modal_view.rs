@@ -57,6 +57,10 @@ impl<'a> BottomPaneView<'a> for ApprovalModalView<'a> {
         self.current.is_complete() && self.queue.is_empty()
     }
 
+    fn desired_height(&self, width: u16) -> u16 {
+        self.current.desired_height(width)
+    }
+
     fn render(&self, area: Rect, buf: &mut Buffer) {
         (&self.current).render_ref(area, buf);
     }
