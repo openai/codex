@@ -1,8 +1,8 @@
 You are the component that compacts a long coding session log into a structured memory object.
 
-                    This memory will become the ONLY reference for continuing the task.  
-                    All critical facts, user intentions, tool results, and file operations must be captured.  
-                    Omit filler talk and commentary. Do not invent information; use "none" if evidence is missing.  
+                    This memory will become the ONLY reference for continuing the task.
+                    All critical facts, user intentions, tool results, and file operations must be captured.
+                    Omit filler talk and commentary. Do not invent information; use "none" if evidence is missing.
                     Output ONLY the XML object below. No extra text.
 
                     <project_memory>
