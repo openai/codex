@@ -61,6 +61,9 @@ pub(crate) fn insert_history_lines(terminal: &mut tui::Tui, lines: Vec<Line>) {
     // └──────────────────────────────┘
     queue!(std::io::stdout(), SetScrollRegion(1..area.top())).ok();
 
+    // NB: we are using MoveTo instead of set_cursor_position here to avoid messing with the
+    // terminal's last_known_cursor_position, which hopefully will still be accurate after we
+    // fetch/restore the cursor position. insert_history_lines should be cursor-position-neutral :)
     queue!(std::io::stdout(), MoveTo(0, cursor_top)).ok();
 
     for line in lines {
@@ -69,6 +72,8 @@ pub(crate) fn insert_history_lines(terminal: &mut tui::Tui, lines: Vec<Line>) {
     }
 
     queue!(std::io::stdout(), ResetScrollRegion).ok();
+
+    // Restore the cursor position to where it was before we started.
     if let Some(cursor_pos) = cursor_pos {
         queue!(std::io::stdout(), MoveTo(cursor_pos.x, cursor_pos.y)).ok();
     }
