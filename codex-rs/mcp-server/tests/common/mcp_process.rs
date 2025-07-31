@@ -214,7 +214,6 @@ impl McpProcess {
             params,
         });
         self.send_jsonrpc_message(message).await?;
-        eprintln!("send_request: Done");
         Ok(request_id)
     }
 
