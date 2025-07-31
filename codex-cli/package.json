@@ -65,7 +65,7 @@
     "@typescript-eslint/eslint-plugin": "^7.18.0",
     "@typescript-eslint/parser": "^7.18.0",
     "boxen": "^8.0.1",
-    "esbuild": "^0.25.2",
+    "esbuild": "^0.25.6",
     "eslint-plugin-import": "^2.31.0",
     "eslint-plugin-react": "^7.32.2",
     "eslint-plugin-react-hooks": "^4.6.0",
