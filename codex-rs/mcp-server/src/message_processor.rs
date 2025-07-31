@@ -797,7 +797,7 @@ impl MessageProcessor {
             is_error: error,
             result: message,
         };
-        let (result, id) = response.into_result();
+        let (result, id): (CallToolResult, RequestId) = response.into();
         self.send_response::<mcp_types::CallToolRequest>(id.clone(), result)
             .await;
     }
