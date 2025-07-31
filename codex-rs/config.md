@@ -67,6 +67,11 @@ env_key = "MISTRAL_API_KEY"
 
 Note that Azure requires `api-version` to be passed as a query parameter, so be sure to specify it as part of `query_params` when defining the Azure provider:
 
+
+This option lets you override and amend the default set of model providers bundled with Codex. This value is a map where the key is the value to use with `model_provider` to select the corresponding provider.
+
+For example, if you wanted to add a provider that uses the OpenAI 4o model via the chat completions API, then you can define the provider under model_providers with wire_api = "chat":
+
 ```toml
 [model_providers.azure]
 name = "Azure"
@@ -77,6 +82,7 @@ query_params = { api-version = "2025-04-01-preview" }
 ```
 
 It is also possible to configure a provider to include extra HTTP headers with a request. These can be hardcoded values (`http_headers`) or values read from environment variables (`env_http_headers`):
+
 
 ```toml
 [model_providers.example]
