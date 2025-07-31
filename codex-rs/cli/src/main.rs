@@ -8,6 +8,7 @@ use codex_chatgpt::apply_command::run_apply_command;
 use codex_cli::LandlockCommand;
 use codex_cli::SeatbeltCommand;
 use codex_cli::login::run_login_status;
+use codex_cli::login::run_login_with_api_key;
 use codex_cli::login::run_login_with_chatgpt;
 use codex_cli::proto;
 use codex_common::CliConfigOverrides;
@@ -92,6 +93,9 @@ struct LoginCommand {
     #[clap(skip)]
     config_overrides: CliConfigOverrides,
 
+    #[arg(long = "api-key", value_name = "API_KEY")]
+    api_key: Option<String>,
+
     #[command(subcommand)]
     action: Option<LoginSubcommand>,
 }
@@ -133,7 +137,11 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                     run_login_status(login_cli.config_overrides).await;
                 }
                 None => {
-                    run_login_with_chatgpt(login_cli.config_overrides).await;
+                    if let Some(api_key) = login_cli.api_key {
+                        run_login_with_api_key(login_cli.config_overrides, api_key).await;
+                    } else {
+                        run_login_with_chatgpt(login_cli.config_overrides).await;
+                    }
                 }
             }
         }
