@@ -1,7 +1,7 @@
 [package]
+edition = "2024"
 name = "codex-linux-sandbox"
 version = { workspace = true }
-edition = "2024"
 
 [[bin]]
 name = "codex-linux-sandbox"
@@ -19,8 +19,8 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 codex-common = { path = "../common", features = ["cli"] }
 codex-core = { path = "../core" }
-libc = "0.2.172"
 landlock = "0.4.1"
+libc = "0.2.172"
 seccompiler = "0.5.0"
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]

@@ -143,6 +143,10 @@ impl ChatWidget<'_> {
         }
     }
 
+    pub fn desired_height(&self) -> u16 {
+        self.bottom_pane.desired_height()
+    }
+
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
         self.bottom_pane.clear_ctrl_c_quit_hint();
 

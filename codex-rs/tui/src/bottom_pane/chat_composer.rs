@@ -71,6 +71,15 @@ impl ChatComposer<'_> {
         this
     }
 
+    pub fn desired_height(&self) -> u16 {
+        2 + self.textarea.lines().len() as u16
+            + match &self.active_popup {
+                ActivePopup::None => 0u16,
+                ActivePopup::Command(c) => c.calculate_required_height(),
+                ActivePopup::File(c) => c.calculate_required_height(),
+            }
+    }
+
     /// Returns true if the composer currently contains no user input.
     pub(crate) fn is_empty(&self) -> bool {
         self.textarea.is_empty()
@@ -460,6 +469,20 @@ impl ChatComposer<'_> {
                 self.textarea.insert_newline();
                 (InputResult::None, true)
             }
+            Input {
+                key: Key::Char('d'),
+                ctrl: true,
+                alt: false,
+                shift: false,
+            } => {
+                self.textarea.input(Input {
+                    key: Key::Delete,
+                    ctrl: false,
+                    alt: false,
+                    shift: false,
+                });
+                (InputResult::None, true)
+            }
             input => self.handle_input_basic(input),
         }
     }
@@ -651,7 +674,7 @@ impl WidgetRef for &ChatComposer<'_> {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         match &self.active_popup {
             ActivePopup::Command(popup) => {
-                let popup_height = popup.calculate_required_height(&area);
+                let popup_height = popup.calculate_required_height();
 
                 // Split the provided rect so that the popup is rendered at the
                 // *top* and the textarea occupies the remaining space below.
@@ -673,7 +696,7 @@ impl WidgetRef for &ChatComposer<'_> {
                 self.textarea.render(textarea_rect, buf);
             }
             ActivePopup::File(popup) => {
-                let popup_height = popup.calculate_required_height(&area);
+                let popup_height = popup.calculate_required_height();
 
                 let popup_rect = Rect {
                     x: area.x,
