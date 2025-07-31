@@ -475,7 +475,12 @@ impl ChatComposer<'_> {
                 alt: false,
                 shift: false,
             } => {
-                self.textarea.delete_line_by_head();
+                self.textarea.input(Input {
+                    key: Key::Delete,
+                    ctrl: false,
+                    alt: false,
+                    shift: false,
+                });
                 (InputResult::None, true)
             }
             input => self.handle_input_basic(input),
