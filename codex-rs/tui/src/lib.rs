@@ -41,6 +41,11 @@ mod text_formatting;
 mod tui;
 mod user_approval_widget;
 
+#[cfg(not(debug_assertions))]
+mod updates;
+#[cfg(not(debug_assertions))]
+use color_eyre::owo_colors::OwoColorize;
+
 pub use cli::Cli;
 
 pub async fn run_main(
@@ -138,6 +143,26 @@ pub async fn run_main(
         .with(file_layer)
         .with(tui_layer)
         .try_init();
+
+    #[allow(clippy::print_stderr)]
+    #[cfg(not(debug_assertions))]
+    if let Some(latest_version) = updates::get_upgrade_version(&config) {
+        let current_version = env!("CARGO_PKG_VERSION");
+        let exe = std::env::current_exe()?;
+        let update_command = if cfg!(target_os = "macos")
+            && (exe.starts_with("/opt/homebrew") || exe.starts_with("/usr/local"))
+        {
+            "brew upgrade codex"
+        } else {
+            "npm install -g @openai/codex@latest"
+        };
+
+        eprintln!(
+            "{} {current_version} -> {latest_version}. Run {update_command} to update.\n",
+            "✨⬆️ Update available!".bold().cyan(),
+            update_command = update_command.cyan().on_black()
+        );
+    }
 
     let show_login_screen = should_show_login_screen(&config);
     if show_login_screen {
