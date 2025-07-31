@@ -1,7 +1,7 @@
 [package]
+edition = "2024"
 name = "codex-core"
 version = { workspace = true }
-edition = "2024"
 
 [lib]
 name = "codex_core"
@@ -15,10 +15,10 @@ anyhow = "1"
 async-channel = "2.3.1"
 base64 = "0.22"
 bytes = "1.10.1"
-codex-apply-patch = { path = "../apply-patch" }
-codex-mcp-client = { path = "../mcp-client" }
 chrono = { version = "0.4", features = ["serde"] }
+codex-apply-patch = { path = "../apply-patch" }
 codex-login = { path = "../login" }
+codex-mcp-client = { path = "../mcp-client" }
 dirs = "6"
 env-flags = "0.1.1"
 eventsource-stream = "0.2.3"
@@ -49,8 +49,8 @@ tracing = { version = "0.1.41", features = ["log"] }
 tree-sitter = "0.25.8"
 tree-sitter-bash = "0.25.0"
 uuid = { version = "1", features = ["serde", "v4"] }
-wildmatch = "2.4.0"
 whoami = "1.6.0"
+wildmatch = "2.4.0"
 
 
 [target.'cfg(target_os = "linux")'.dependencies]
