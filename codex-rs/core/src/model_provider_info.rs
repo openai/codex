@@ -5,13 +5,18 @@
 //!   2. User-defined entries inside `~/.codex/config.toml` under the `model_providers`
 //!      key. These override or extend the defaults at runtime.
 
+use crate::error::EnvVarError;
+use crate::models::CachedAzureToken;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::env::VarError;
+use std::process::Command;
+use std::sync::Mutex;
+use std::sync::OnceLock;
 use std::time::Duration;
-
-use crate::error::EnvVarError;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 /// Value for the `OpenAI-Originator` header that is sent with requests to
 /// OpenAI.
@@ -19,6 +24,7 @@ const OPENAI_ORIGINATOR_HEADER: &str = "codex_cli_rs";
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS: u64 = 300_000;
 const DEFAULT_STREAM_MAX_RETRIES: u64 = 10;
 const DEFAULT_REQUEST_MAX_RETRIES: u64 = 4;
+static AZURE_TOKEN_CACHE: OnceLock<Mutex<Option<CachedAzureToken>>> = OnceLock::new();
 
 /// Wire protocol that the provider speaks. Most third-party services only
 /// implement the classic OpenAI Chat Completions JSON schema, whereas OpenAI
@@ -161,10 +167,22 @@ impl ModelProviderInfo {
     /// If `env_key` is Some, returns the API key for this provider if present
     /// (and non-empty) in the environment. If `env_key` is required but
     /// cannot be found, returns an error.
+    ///
     fn api_key(&self) -> crate::error::Result<Option<String>> {
         match &self.env_key {
             Some(env_key) => {
                 let env_value = std::env::var(env_key);
+
+                // Handle both missing env var and empty env var for Azure
+                let should_try_azure_cli = match &env_value {
+                    Err(VarError::NotPresent) => &self.name.to_lowercase() == "azure",
+                    _ => false,
+                };
+
+                if should_try_azure_cli {
+                    return self.get_azure_token(env_key);
+                }
+
                 env_value
                     .and_then(|v| {
                         if v.trim().is_empty() {
@@ -184,6 +202,111 @@ impl ModelProviderInfo {
         }
     }
 
+    fn get_azure_token(&self, env_key: &str) -> crate::error::Result<Option<String>> {
+        let cache = AZURE_TOKEN_CACHE.get_or_init(|| Mutex::new(None));
+
+        // Check if we have a valid cached token
+        {
+            let cached_token = cache.lock().map_err(|_| {
+                crate::error::CodexErr::EnvVar(EnvVarError {
+                    var: env_key.to_string(),
+                    instructions: Some("Failed to access cached Azure token".to_string()),
+                })
+            })?;
+
+            if let Some(token) = &*cached_token {
+                let current_time = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map_err(|_| {
+                        crate::error::CodexErr::EnvVar(EnvVarError {
+                            var: env_key.to_string(),
+                            instructions: Some("Failed to get current system time".to_string()),
+                        })
+                    })?
+                    .as_secs();
+
+                // Add a 5-minute buffer to refresh before actual expiry
+                let buffer_seconds = 300; // 5 minutes
+                if current_time + buffer_seconds < token.expires_on {
+                    return Ok(Some(token.access_token.clone()));
+                }
+            }
+        }
+
+        // Token is expired or doesn't exist, fetch a new one
+        let output = Command::new("az")
+            .args([
+                "account",
+                "get-access-token",
+                "--output",
+                "json",
+                "--resource",
+                "https://cognitiveservices.azure.com",
+            ])
+            .output()
+            .map_err(|_| {
+                crate::error::CodexErr::EnvVar(EnvVarError {
+                    var: env_key.to_string(),
+                    instructions: Some("Failed to execute 'az' command. Make sure Azure CLI is installed and you're logged in.".to_string()),
+                })
+            })?;
+
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout).map_err(|_| {
+            crate::error::CodexErr::EnvVar(EnvVarError {
+                var: env_key.to_string(),
+                instructions: Some(
+                    "Failed to parse Azure CLI output. Make sure you're logged in with 'az login'."
+                        .to_string(),
+                ),
+            })
+        })?;
+
+        let access_token = json["accessToken"]
+            .as_str()
+            .ok_or_else(|| {
+                crate::error::CodexErr::EnvVar(EnvVarError {
+                    var: env_key.to_string(),
+                    instructions: Some(
+                        "Azure CLI response missing 'accessToken' field".to_string(),
+                    ),
+                })
+            })?
+            .to_string();
+
+        let expires_on = json["expires_on"].as_u64().ok_or_else(|| {
+            crate::error::CodexErr::EnvVar(EnvVarError {
+                var: env_key.to_string(),
+                instructions: Some(
+                    "Azure CLI response missing or invalid 'expires_on' field".to_string(),
+                ),
+            })
+        })?;
+
+        // Cache the new token
+        {
+            // let mut cached_token = cache.lock().unwrap();
+            // *cached_token = Some(CachedAzureToken {
+            //     access_token: access_token.clone(),
+            //     expires_on,
+            // });
+            match cache.lock() {
+                Ok(mut cached_token) => {
+                    *cached_token = Some(CachedAzureToken {
+                        access_token: access_token.clone(),
+                        expires_on,
+                    });
+                }
+                Err(_) => {
+                    return Err(crate::error::CodexErr::EnvVar(EnvVarError {
+                        var: env_key.to_string(),
+                        instructions: Some("Failed to access cached Azure token".to_string()),
+                    }));
+                }
+            }
+        }
+
+        Ok(Some(access_token))
+    }
     /// Effective maximum number of request retries for this provider.
     pub fn request_max_retries(&self) -> u64 {
         self.request_max_retries
