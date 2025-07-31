@@ -480,6 +480,8 @@ impl ChatWidget<'_> {
 
     pub(crate) fn clear_token_usage(&mut self) {
         self.token_usage = TokenUsage::default();
+        self.bottom_pane
+            .set_token_usage(self.token_usage.clone(), self.config.model_context_window);
     }
 }
 
