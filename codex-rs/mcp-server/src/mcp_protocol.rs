@@ -125,16 +125,16 @@ pub struct ToolCallResponse {
     pub result: Option<ToolCallResponseResult>,
 }
 
-impl From<ToolCallResponse> for (CallToolResult, RequestId) {
+impl From<ToolCallResponse> for CallToolResult {
     fn from(val: ToolCallResponse) -> Self {
         val.into_result()
     }
 }
 
 impl ToolCallResponse {
-    pub fn into_result(self) -> (CallToolResult, RequestId) {
+    pub fn into_result(self) -> CallToolResult {
         let ToolCallResponse {
-            request_id,
+            request_id: _request_id,
             is_error,
             result,
         } = self;
@@ -160,14 +160,11 @@ impl ToolCallResponse {
             None => (vec![], None, is_error),
         };
 
-        (
-            CallToolResult {
-                content,
-                is_error: is_error_out,
-                structured_content,
-            },
-            request_id,
-        )
+        CallToolResult {
+            content,
+            is_error: is_error_out,
+            structured_content,
+        }
     }
 }
 
@@ -506,23 +503,22 @@ mod tests {
                 },
             )),
         };
+        let req_id = env.request_id.clone();
         let observed = to_val(&env.into_result());
-        let expected = json!([
-            {
-                "content": [
-                    { "type": "text", "text": "{\"conversation_id\":\"d0f6ecbe-84a2-41c1-b23d-b20473b25eab\",\"model\":\"o3\"}" }
-                ],
-                "structuredContent": {
-                    "conversation_id": "d0f6ecbe-84a2-41c1-b23d-b20473b25eab",
-                    "model": "o3"
-                }
-            },
-            1
-        ]);
+        let expected = json!({
+            "content": [
+                { "type": "text", "text": "{\"conversation_id\":\"d0f6ecbe-84a2-41c1-b23d-b20473b25eab\",\"model\":\"o3\"}" }
+            ],
+            "structuredContent": {
+                "conversation_id": "d0f6ecbe-84a2-41c1-b23d-b20473b25eab",
+                "model": "o3"
+            }
+        });
         assert_eq!(
             observed, expected,
             "response (ConversationCreate) must match"
         );
+        assert_eq!(req_id, RequestId::Integer(1));
     }
 
     #[test]
@@ -534,18 +530,17 @@ mod tests {
                 ConversationStreamResult {},
             )),
         };
+        let req_id = env.request_id.clone();
         let observed = to_val(&env.into_result());
-        let expected = json!([
-            {
-                "content": [ { "type": "text", "text": "{}" } ],
-                "structuredContent": {}
-            },
-            2
-        ]);
+        let expected = json!({
+            "content": [ { "type": "text", "text": "{}" } ],
+            "structuredContent": {}
+        });
         assert_eq!(
             observed, expected,
             "response (ConversationStream) must have empty object result"
         );
+        assert_eq!(req_id, RequestId::Integer(2));
     }
 
     #[test]
@@ -557,18 +552,17 @@ mod tests {
                 ConversationSendMessageResult::Ok,
             )),
         };
+        let req_id = env.request_id.clone();
         let observed = to_val(&env.into_result());
-        let expected = json!([
-            {
-                "content": [ { "type": "text", "text": "{\"status\":\"ok\"}" } ],
-                "structuredContent": { "status": "ok" }
-            },
-            3
-        ]);
+        let expected = json!({
+            "content": [ { "type": "text", "text": "{\"status\":\"ok\"}" } ],
+            "structuredContent": { "status": "ok" }
+        });
         assert_eq!(
             observed, expected,
             "response (ConversationSendMessageAccepted) must match"
         );
+        assert_eq!(req_id, RequestId::Integer(3));
     }
 
     #[test]
@@ -588,28 +582,27 @@ mod tests {
                 },
             )),
         };
+        let req_id = env.request_id.clone();
         let observed = to_val(&env.into_result());
-        let expected = json!([
-            {
-                "content": [
-                    { "type": "text", "text": "{\"conversations\":[{\"conversation_id\":\"67e55044-10b1-426f-9247-bb680e5fe0c8\",\"title\":\"Refactor config loader\"}],\"next_cursor\":\"next123\"}" }
+        let expected = json!({
+            "content": [
+                { "type": "text", "text": "{\"conversations\":[{\"conversation_id\":\"67e55044-10b1-426f-9247-bb680e5fe0c8\",\"title\":\"Refactor config loader\"}],\"next_cursor\":\"next123\"}" }
+            ],
+            "structuredContent": {
+                "conversations": [
+                    {
+                        "conversation_id": "67e55044-10b1-426f-9247-bb680e5fe0c8",
+                        "title": "Refactor config loader"
+                    }
                 ],
-                "structuredContent": {
-                    "conversations": [
-                        {
-                            "conversation_id": "67e55044-10b1-426f-9247-bb680e5fe0c8",
-                            "title": "Refactor config loader"
-                        }
-                    ],
-                    "next_cursor": "next123"
-                }
-            },
-            4
-        ]);
+                "next_cursor": "next123"
+            }
+        });
         assert_eq!(
             observed, expected,
             "response (ConversationsList with cursor) must match"
         );
+        assert_eq!(req_id, RequestId::Integer(4));
     }
 
     #[test]
@@ -619,18 +612,17 @@ mod tests {
             is_error: Some(true),
             result: None,
         };
+        let req_id = env.request_id.clone();
         let observed = to_val(&env.into_result());
-        let expected = json!([
-            {
-                "content": [],
-                "isError": true
-            },
-            4
-        ]);
+        let expected = json!({
+            "content": [],
+            "isError": true
+        });
         assert_eq!(
             observed, expected,
             "error response must omit `result` and include `isError`"
         );
+        assert_eq!(req_id, RequestId::Integer(4));
     }
 
     // ----- Notifications -----
