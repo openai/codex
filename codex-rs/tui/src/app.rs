@@ -362,7 +362,7 @@ impl App<'_> {
             AppState::GitWarning { .. } => 10,
         };
         let mut area = terminal.viewport_area;
-        area.height = desired_height;
+        area.height = desired_height.min(size.height);
         area.width = size.width;
         if area.bottom() > size.height {
             terminal
