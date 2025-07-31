@@ -86,6 +86,7 @@ impl ChatWidget<'_> {
         app_event_tx: AppEventSender,
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
+        enhanced_keys_supported: bool,
     ) -> Self {
         let (codex_op_tx, mut codex_op_rx) = unbounded_channel::<Op>();
 
@@ -131,6 +132,7 @@ impl ChatWidget<'_> {
             bottom_pane: BottomPane::new(BottomPaneParams {
                 app_event_tx,
                 has_input_focus: true,
+                enhanced_keys_supported,
             }),
             config,
             initial_user_message: create_initial_user_message(
