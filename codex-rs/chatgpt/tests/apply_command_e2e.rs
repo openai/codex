@@ -10,8 +10,13 @@ use tokio::process::Command;
 async fn create_temp_git_repo() -> anyhow::Result<TempDir> {
     let temp_dir = TempDir::new()?;
     let repo_path = temp_dir.path();
+    let envs = vec![
+        ("GIT_CONFIG_GLOBAL", "/dev/null"),
+        ("GIT_CONFIG_NOSYSTEM", "1"),
+    ];
 
     let output = Command::new("git")
+        .envs(envs.clone())
         .args(["init"])
         .current_dir(repo_path)
         .output()
@@ -25,12 +30,14 @@ async fn create_temp_git_repo() -> anyhow::Result<TempDir> {
     }
 
     Command::new("git")
+        .envs(envs.clone())
         .args(["config", "user.email", "test@example.com"])
         .current_dir(repo_path)
         .output()
         .await?;
 
     Command::new("git")
+        .envs(envs.clone())
         .args(["config", "user.name", "Test User"])
         .current_dir(repo_path)
         .output()
@@ -39,12 +46,14 @@ async fn create_temp_git_repo() -> anyhow::Result<TempDir> {
     std::fs::write(repo_path.join("README.md"), "# Test Repo\n")?;
 
     Command::new("git")
+        .envs(envs.clone())
         .args(["add", "README.md"])
         .current_dir(repo_path)
         .output()
         .await?;
 
     let output = Command::new("git")
+        .envs(envs.clone())
         .args(["commit", "-m", "Initial commit"])
         .current_dir(repo_path)
         .output()

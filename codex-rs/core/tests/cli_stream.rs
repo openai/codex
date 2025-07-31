@@ -1,7 +1,7 @@
 #![expect(clippy::unwrap_used)]
 
 use assert_cmd::Command as AssertCommand;
-use codex_core::exec::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use std::time::Duration;
 use std::time::Instant;
 use tempfile::TempDir;
@@ -460,9 +460,14 @@ async fn integration_git_info_unit_test() {
     // 1. Create temp directory for git repo
     let temp_dir = TempDir::new().unwrap();
     let git_repo = temp_dir.path().to_path_buf();
+    let envs = vec![
+        ("GIT_CONFIG_GLOBAL", "/dev/null"),
+        ("GIT_CONFIG_NOSYSTEM", "1"),
+    ];
 
     // 2. Initialize a git repository with some content
     let init_output = std::process::Command::new("git")
+        .envs(envs.clone())
         .args(["init"])
         .current_dir(&git_repo)
         .output()
@@ -471,12 +476,14 @@ async fn integration_git_info_unit_test() {
 
     // Configure git user (required for commits)
     std::process::Command::new("git")
+        .envs(envs.clone())
         .args(["config", "user.name", "Integration Test"])
         .current_dir(&git_repo)
         .output()
         .unwrap();
 
     std::process::Command::new("git")
+        .envs(envs.clone())
         .args(["config", "user.email", "test@example.com"])
         .current_dir(&git_repo)
         .output()
@@ -487,12 +494,14 @@ async fn integration_git_info_unit_test() {
     std::fs::write(&test_file, "integration test content").unwrap();
 
     std::process::Command::new("git")
+        .envs(envs.clone())
         .args(["add", "."])
         .current_dir(&git_repo)
         .output()
         .unwrap();
 
     let commit_output = std::process::Command::new("git")
+        .envs(envs.clone())
         .args(["commit", "-m", "Integration test commit"])
         .current_dir(&git_repo)
         .output()
@@ -501,6 +510,7 @@ async fn integration_git_info_unit_test() {
 
     // Create a branch to test branch detection
     std::process::Command::new("git")
+        .envs(envs.clone())
         .args(["checkout", "-b", "integration-test-branch"])
         .current_dir(&git_repo)
         .output()
@@ -508,6 +518,7 @@ async fn integration_git_info_unit_test() {
 
     // Add a remote to test repository URL detection
     std::process::Command::new("git")
+        .envs(envs.clone())
         .args([
             "remote",
             "add",

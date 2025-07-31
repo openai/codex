@@ -28,6 +28,9 @@ pub(crate) trait BottomPaneView<'a> {
         CancellationEvent::Ignored
     }
 
+    /// Return the desired height of the view.
+    fn desired_height(&self, width: u16) -> u16;
+
     /// Render the view: this will be displayed in place of the composer.
     fn render(&self, area: Rect, buf: &mut Buffer);
 

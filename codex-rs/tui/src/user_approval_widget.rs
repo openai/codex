@@ -17,13 +17,11 @@ use ratatui::layout::Rect;
 use ratatui::prelude::*;
 use ratatui::text::Line;
 use ratatui::text::Span;
-use ratatui::widgets::Block;
-use ratatui::widgets::BorderType;
-use ratatui::widgets::Borders;
 use ratatui::widgets::List;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
+use ratatui::widgets::Wrap;
 use tui_input::Input;
 use tui_input::backend::crossterm::EventHandler;
 
@@ -134,10 +132,9 @@ impl UserApprovalWidget<'_> {
                     None => cwd.display().to_string(),
                 };
                 let mut contents: Vec<Line> = vec![
-                    Line::from("Shell Command".bold()),
-                    Line::from(""),
                     Line::from(vec![
-                        format!("{cwd_str}$").dim(),
+                        Span::from(cwd_str).dim(),
+                        Span::from("$"),
                         Span::from(format!(" {cmd}")),
                     ]),
                     Line::from(""),
@@ -147,7 +144,7 @@ impl UserApprovalWidget<'_> {
                     contents.push(Line::from(""));
                 }
                 contents.extend(vec![Line::from("Allow command?"), Line::from("")]);
-                Paragraph::new(contents)
+                Paragraph::new(contents).wrap(Wrap { trim: false })
             }
             ApprovalRequest::ApplyPatch {
                 reason, grant_root, ..
@@ -313,21 +310,21 @@ impl UserApprovalWidget<'_> {
     pub(crate) fn is_complete(&self) -> bool {
         self.done
     }
+
+    pub(crate) fn desired_height(&self, width: u16) -> u16 {
+        self.get_confirmation_prompt_height(width - 2) + SELECT_OPTIONS.len() as u16 + 2
+    }
 }
 
 const PLAIN: Style = Style::new();
-const BLUE_FG: Style = Style::new().fg(Color::Blue);
+const BLUE_FG: Style = Style::new().fg(Color::LightCyan);
 
 impl WidgetRef for &UserApprovalWidget<'_> {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         // Take the area, wrap it in a block with a border, and divide up the
         // remaining area into two chunks: one for the confirmation prompt and
         // one for the response.
-        let outer = Block::default()
-            .title("Review")
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded);
-        let inner = outer.inner(area);
+        let inner = area.inner(Margin::new(0, 2));
 
         // Determine how many rows we can allocate for the static confirmation
         // prompt while *always* keeping enough space for the interactive
@@ -384,8 +381,18 @@ impl WidgetRef for &UserApprovalWidget<'_> {
             }
         };
 
-        outer.render(area, buf);
+        let border = ("◢◤")
+            .repeat((area.width / 2).into())
+            .fg(Color::LightYellow);
+
+        border.render_ref(area, buf);
+        Paragraph::new(" Execution Request ".bold().black().on_light_yellow())
+            .alignment(Alignment::Center)
+            .render_ref(area, buf);
+
         self.confirmation_prompt.clone().render(prompt_chunk, buf);
-        Widget::render(List::new(lines), response_chunk, buf);
+        List::new(lines).render_ref(response_chunk, buf);
+
+        border.render_ref(Rect::new(0, area.y + area.height - 1, area.width, 1), buf);
     }
 }
