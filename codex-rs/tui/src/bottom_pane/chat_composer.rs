@@ -39,6 +39,7 @@ pub(crate) struct ChatComposer<'a> {
     app_event_tx: AppEventSender,
     history: ChatComposerHistory,
     ctrl_c_quit_hint: bool,
+    use_shift_enter_hint: bool,
     dismissed_file_popup_token: Option<String>,
     current_file_query: Option<String>,
     pending_pastes: Vec<(String, String)>,
@@ -57,12 +58,15 @@ impl ChatComposer<'_> {
         textarea.set_placeholder_text(BASE_PLACEHOLDER_TEXT);
         textarea.set_cursor_line_style(ratatui::style::Style::default());
 
+        let use_shift_enter_hint = crate::tui::kitty_keyboard_supported().unwrap_or(false);
+
         let mut this = Self {
             textarea,
             active_popup: ActivePopup::None,
             app_event_tx,
             history: ChatComposerHistory::new(),
             ctrl_c_quit_hint: false,
+            use_shift_enter_hint,
             dismissed_file_popup_token: None,
             current_file_query: None,
             pending_pastes: Vec::new(),
@@ -647,9 +651,14 @@ impl ChatComposer<'_> {
                     border_style: Style::default(),
                 }
             } else {
+                let newline_hint = if self.use_shift_enter_hint {
+                    "Shift+Enter for newline"
+                } else {
+                    "Ctrl+J for newline"
+                };
+                let title = format!("Enter to send | Ctrl+D to quit | {}", newline_hint);
                 BlockState {
-                    right_title: Line::from("Enter to send | Ctrl+D to quit | Ctrl+J for newline")
-                        .alignment(Alignment::Right),
+                    right_title: Line::from(title).alignment(Alignment::Right),
                     border_style: Style::default(),
                 }
             }

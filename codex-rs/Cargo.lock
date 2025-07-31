@@ -853,6 +853,7 @@ dependencies = [
  "image",
  "insta",
  "lazy_static",
+ "libc",
  "mcp-types",
  "path-clean",
  "pretty_assertions",
