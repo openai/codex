@@ -327,14 +327,14 @@ fn auth_from_token(id_token: String) -> CodexAuth {
         AuthMode::ChatGPT,
         PathBuf::new(),
         Some(AuthDotJson {
-            tokens: TokenData {
+            openai_api_key: None,
+            tokens: Some(TokenData {
                 id_token,
                 access_token: "Access Token".to_string(),
                 refresh_token: "test".to_string(),
                 account_id: None,
-            },
-            last_refresh: Utc::now(),
-            openai_api_key: None,
+            }),
+            last_refresh: Some(Utc::now()),
         }),
     )
 }
