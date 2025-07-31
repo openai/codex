@@ -67,7 +67,7 @@ async fn test_send_message_success() {
 
     // Now exercise the send-user-message tool.
     let send_msg_request_id = mcp_process
-        .send_send_message_tool_call("Hello again", &session_id)
+        .send_user_message_tool_call("Hello again", &session_id)
         .await
         .expect("send send-message tool call");
 
@@ -117,7 +117,7 @@ async fn test_send_message_session_not_found() {
 
     let unknown = uuid::Uuid::new_v4().to_string();
     let req_id = mcp
-        .send_send_message_tool_call("ping", &unknown)
+        .send_user_message_tool_call("ping", &unknown)
         .await
         .expect("send tool");
 

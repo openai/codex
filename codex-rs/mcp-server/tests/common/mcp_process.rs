@@ -180,7 +180,7 @@ impl McpProcess {
         .await
     }
 
-    pub async fn send_send_user_message_tool_call(
+    pub async fn send_user_message_tool_call(
         &mut self,
         message: &str,
         session_id: &str,
