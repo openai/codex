@@ -8,6 +8,7 @@ use bottom_pane_view::ConditionalUpdate;
 use codex_core::protocol::TokenUsage;
 use codex_file_search::FileMatch;
 use crossterm::event::KeyEvent;
+use crossterm::terminal::supports_keyboard_enhancement;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::widgets::WidgetRef;
@@ -54,8 +55,13 @@ pub(crate) struct BottomPaneParams {
 
 impl BottomPane<'_> {
     pub fn new(params: BottomPaneParams) -> Self {
+        let enhanced_keys_supported = supports_keyboard_enhancement().unwrap_or(false);
         Self {
-            composer: ChatComposer::new(params.has_input_focus, params.app_event_tx.clone()),
+            composer: ChatComposer::new(
+                params.has_input_focus,
+                params.app_event_tx.clone(),
+                enhanced_keys_supported,
+            ),
             active_view: None,
             app_event_tx: params.app_event_tx,
             has_input_focus: params.has_input_focus,
