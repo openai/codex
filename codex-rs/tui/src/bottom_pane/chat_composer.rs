@@ -656,7 +656,7 @@ impl ChatComposer<'_> {
                 } else {
                     "Ctrl+J for newline"
                 };
-                let title = format!("Enter to send | Ctrl+D to quit | {}", newline_hint);
+                let title = format!("Enter to send | Ctrl+D to quit | {newline_hint}");
                 BlockState {
                     right_title: Line::from(title).alignment(Alignment::Right),
                     border_style: Style::default(),
