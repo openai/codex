@@ -9,6 +9,9 @@ use codex_common::summarize_sandbox_policy;
 use codex_core::WireApi;
 use codex_core::config::Config;
 use codex_core::model_supports_reasoning_summaries;
+use codex_core::plan_tool::PlanItemArg;
+use codex_core::plan_tool::StepStatus;
+use codex_core::plan_tool::UpdatePlanArgs;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::SessionConfiguredEvent;
@@ -109,6 +112,10 @@ pub(crate) enum HistoryCell {
     /// behaviour of `ActiveExecCommand` so the user sees *what* patch the
     /// model wants to apply before being prompted to approve or deny it.
     PendingPatch { view: TextBlock },
+
+    /// A human‑friendly rendering of the model's current plan and step
+    /// statuses provided via the `update_plan` tool.
+    PlanUpdate { view: TextBlock },
 }
 
 const TOOL_CALL_MAX_LINES: usize = 5;
@@ -130,6 +137,7 @@ impl HistoryCell {
             | HistoryCell::CompletedExecCommand { view }
             | HistoryCell::CompletedMcpToolCall { view }
             | HistoryCell::PendingPatch { view }
+            | HistoryCell::PlanUpdate { view }
             | HistoryCell::ActiveExecCommand { view, .. }
             | HistoryCell::ActiveMcpToolCall { view, .. } => {
                 view.lines.iter().map(line_to_static).collect()
@@ -473,6 +481,94 @@ impl HistoryCell {
             "".into(),
         ];
         HistoryCell::ErrorEvent {
+            view: TextBlock::new(lines),
+        }
+    }
+
+    /// Render a user‑friendly plan update with colourful status icons and a
+    /// simple progress indicator so users can follow along.
+    pub(crate) fn new_plan_update(update: UpdatePlanArgs) -> Self {
+        let UpdatePlanArgs { explanation, plan } = update;
+
+        let mut lines: Vec<Line<'static>> = Vec::new();
+
+        // Title
+        lines.push(Line::from("plan".magenta().bold()));
+
+        if !plan.is_empty() {
+            // Progress bar – show completed/total with a visual bar
+            let total = plan.len();
+            let completed = plan
+                .iter()
+                .filter(|p| matches!(p.status, StepStatus::Completed))
+                .count();
+            let width: usize = 20;
+            let filled = (completed * width + total / 2) / total;
+            let empty = width.saturating_sub(filled);
+            let mut bar_spans: Vec<Span> = Vec::new();
+            if filled > 0 {
+                bar_spans.push(Span::styled(
+                    "█".repeat(filled),
+                    Style::default().fg(Color::Green),
+                ));
+            }
+            if empty > 0 {
+                bar_spans.push(Span::styled(
+                    "░".repeat(empty),
+                    Style::default().fg(Color::Gray),
+                ));
+            }
+            let progress_prefix = Span::raw("progress [");
+            let progress_suffix = Span::raw("] ");
+            let fraction = Span::raw(format!("{completed}/{total}"));
+            let mut progress_line_spans = vec![progress_prefix];
+            progress_line_spans.extend(bar_spans);
+            progress_line_spans.push(progress_suffix);
+            progress_line_spans.push(fraction);
+            lines.push(Line::from(progress_line_spans));
+        }
+
+        // Optional explanation/note from the model
+        if let Some(expl) = explanation.and_then(|s| {
+            let t = s.trim().to_string();
+            if t.is_empty() { None } else { Some(t) }
+        }) {
+            lines.push(Line::from("note".gray().italic()));
+            for l in expl.lines() {
+                lines.push(Line::from(l.to_string()).gray());
+            }
+        }
+
+        // Steps (1‑based numbering) with fun, readable status icons
+        if plan.is_empty() {
+            lines.push(Line::from("(no steps provided)".gray().italic()));
+        } else {
+            for (idx, PlanItemArg { step, status }) in plan.into_iter().enumerate() {
+                let num = idx + 1;
+                let (icon, style): (&str, Style) = match status {
+                    StepStatus::Completed => ("✓", Style::default().fg(Color::Green)),
+                    StepStatus::InProgress => (
+                        "▶",
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    StepStatus::Pending => ("○", Style::default().fg(Color::Gray)),
+                };
+                let prefix = vec![
+                    Span::raw(format!("{num:>2}. [")),
+                    Span::styled(icon.to_string(), style),
+                    Span::raw("] "),
+                ];
+                let mut spans = prefix;
+                spans.push(Span::raw(step));
+                lines.push(Line::from(spans));
+            }
+        }
+
+        lines.push(Line::from(""));
+
+        HistoryCell::PlanUpdate {
             view: TextBlock::new(lines),
         }
     }
