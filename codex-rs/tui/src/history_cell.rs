@@ -503,7 +503,7 @@ impl HistoryCell {
                 .filter(|p| matches!(p.status, StepStatus::Completed))
                 .count();
             let width: usize = 20;
-            let filled = ((completed as f32 / total as f32) * width as f32).round() as usize;
+            let filled = (completed * width + total / 2) / total;
             let empty = width.saturating_sub(filled);
             let mut bar_spans: Vec<Span> = Vec::new();
             if filled > 0 {
