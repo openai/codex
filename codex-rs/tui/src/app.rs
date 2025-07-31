@@ -249,13 +249,13 @@ impl App<'_> {
                             }
                         }
                         KeyEvent {
-                            kind: KeyEventKind::Press,
+                            kind: KeyEventKind::Press | KeyEventKind::Repeat,
                             ..
                         } => {
                             self.dispatch_key_event(key_event);
                         }
                         _ => {
-                            // Ignore non-Press key events for now.
+                            // Ignore Release key events for now.
                         }
                     };
                 }
