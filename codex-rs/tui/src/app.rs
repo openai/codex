@@ -96,9 +96,6 @@ impl App<'_> {
                         if let Ok(event) = crossterm::event::read() {
                             match event {
                                 crossterm::event::Event::Key(key_event) => {
-                                    // Filter out key release events to avoid handling a single
-                                    // key press twice (press + release). Keep presses and
-                                    // auto‑repeats so holding a key continues to work.
                                     if key_event.kind != crossterm::event::KeyEventKind::Release {
                                         app_event_tx.send(AppEvent::KeyEvent(key_event));
                                     }
