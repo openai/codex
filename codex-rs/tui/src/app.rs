@@ -348,6 +348,9 @@ impl App<'_> {
             AppState::Chat { widget } => widget.desired_height(),
             AppState::GitWarning { .. } => 10,
         };
+
+        let max_dynamic = size.height.min(10);
+        let desired_height = desired_height.min(max_dynamic);
         let mut area = terminal.viewport_area;
         area.height = desired_height;
         area.width = size.width;
