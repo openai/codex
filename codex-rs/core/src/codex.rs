@@ -1376,7 +1376,7 @@ async fn run_compact_task(
     sess.send_event(event).await;
 
     let mut state = sess.state.lock().unwrap();
-    state.history.keep_last(1);
+    state.history.keep_last_messages(1);
 }
 
 async fn handle_response_item(
