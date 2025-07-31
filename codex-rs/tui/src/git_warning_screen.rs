@@ -27,6 +27,8 @@ const NO_GIT_ERROR: &str = "We recommend running codex inside a git repository. 
 This helps ensure that changes can be tracked and easily rolled back if necessary. \
 Do you wish to proceed?";
 
+const CONFIRMATION_PROMPT: &str = "press 'y' to continue, 'n' to quit";
+
 /// Result of handling a key event while the warning screen is active.
 pub(crate) enum GitWarningOutcome {
     /// User chose to proceed – switch to the main Chat UI.
@@ -62,7 +64,7 @@ impl WidgetRef for &GitWarningScreen {
         // Check if the available area is too small for our popup.
         if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
             // Fallback rendering: a simple abbreviated message that fits the available area.
-            let fallback_message = Paragraph::new(NO_GIT_ERROR)
+            let fallback_message = Paragraph::new(format!("{NO_GIT_ERROR} {CONFIRMATION_PROMPT}"))
                 .wrap(Wrap { trim: true })
                 .alignment(Alignment::Center);
             fallback_message.render(area, buf);
@@ -114,7 +116,7 @@ impl WidgetRef for &GitWarningScreen {
         let action_inner = action_block.inner(chunks[1]);
         action_block.render(chunks[1], buf);
 
-        let action_text = Paragraph::new("press 'y' to continue, 'n' to quit")
+        let action_text = Paragraph::new(CONFIRMATION_PROMPT)
             .alignment(Alignment::Center)
             .style(Style::default().add_modifier(Modifier::BOLD));
         action_text.render(action_inner, buf);
