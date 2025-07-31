@@ -509,6 +509,15 @@ impl AgentTask {
             handle,
         }
     }
+    fn compact(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) -> Self {
+        let handle =
+            tokio::spawn(run_compact(Arc::clone(&sess), sub_id.clone(), input)).abort_handle();
+        Self {
+            sess,
+            sub_id,
+            handle,
+        }
+    }
 
     fn abort(self) {
         if !self.handle.is_finished() {
@@ -895,11 +904,8 @@ async fn submission_loop(
 
                 // Attempt to inject input into current task
                 if let Err(items) = sess.inject_input(summarization_prompt) {
-                    run_task(sess.clone(), sub.id, items).await;
-                    // only keep the last input item and clear the rest
-                    let mut history = sess.state.lock().unwrap().history.clone();
-                    history.keep_last(1);
-                    sess.state.lock().unwrap().history = history;
+                    let task = AgentTask::compact(sess.clone(), sub.id, items);
+                    sess.set_task(task);
                 }
             }
             Op::Shutdown => {
@@ -936,6 +942,13 @@ async fn submission_loop(
         }
     }
     debug!("Agent loop exited");
+}
+
+async fn run_compact(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
+    run_task(sess.clone(), sub_id, input).await;
+    let mut history = sess.state.lock().unwrap().history.clone();
+    history.keep_last(1);
+    sess.state.lock().unwrap().history = history;
 }
 
 /// Takes a user message as input and runs a loop where, at each turn, the model
