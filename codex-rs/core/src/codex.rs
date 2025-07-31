@@ -864,7 +864,7 @@ async fn submission_loop(
                     }
                 });
             }
-            Op::SummarizeContext => {
+            Op::Compact => {
                 let sess = match sess.as_ref() {
                     Some(sess) => sess,
                     None => {

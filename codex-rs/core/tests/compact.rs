@@ -163,7 +163,7 @@ async fn summarize_context_three_requests_and_instructions() {
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     // 2) Summarize – second hit with summarization instructions.
-    codex.submit(Op::SummarizeContext).await.unwrap();
+    codex.submit(Op::Compact).await.unwrap();
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     // 3) Next user input – third hit; history should include only the summary.

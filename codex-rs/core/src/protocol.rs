@@ -124,7 +124,7 @@ pub enum Op {
     /// Request the agent to summarize the current conversation context.
     /// The agent will use its existing context (either conversation history or previous response id)
     /// to generate a summary which will be returned as an AgentMessage event.
-    SummarizeContext,
+    Compact,
     /// Request to shut down codex instance.
     Shutdown,
 }
