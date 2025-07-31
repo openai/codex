@@ -343,8 +343,7 @@ impl MessageProcessor {
     async fn handle_new_tool_calls(&self, request_id: RequestId, params: ToolCallRequestParams) {
         match params {
             ToolCallRequestParams::ConversationSendMessage(args) => {
-                self.handle_tool_call_send_user_message(request_id, args)
-                    .await;
+                self.handle_tool_call_send_message(request_id, args).await;
             }
             _ => {
                 let result = CallToolResult {
@@ -553,8 +552,8 @@ impl MessageProcessor {
         });
     }
 
-    /// Send a user message to a running Codex session using typed ConversationSendMessageArgs.
-    async fn handle_tool_call_send_user_message(
+    /// Send a message to a running Codex session using typed ConversationSendMessageArgs.
+    async fn handle_tool_call_send_message(
         &self,
         id: RequestId,
         arguments: ConversationSendMessageArgs,

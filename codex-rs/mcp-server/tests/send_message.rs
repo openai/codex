@@ -19,7 +19,7 @@ use tokio::time::timeout;
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_send_user_message_success() {
+async fn test_send_message_success() {
     // Spin up a mock completions server that immediately ends the Codex turn.
     // Two Codex turns hit the mock model (session start + send-user-message). Provide two SSE responses.
     let responses = vec![
@@ -67,9 +67,9 @@ async fn test_send_user_message_success() {
 
     // Now exercise the send-user-message tool.
     let send_msg_request_id = mcp_process
-        .send_send_user_message_tool_call("Hello again", &session_id)
+        .send_send_message_tool_call("Hello again", &session_id)
         .await
-        .expect("send send-user-message tool call");
+        .expect("send send-message tool call");
 
     let response: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -106,7 +106,7 @@ async fn test_send_user_message_success() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_send_user_message_session_not_found() {
+async fn test_send_message_session_not_found() {
     // Start MCP without creating a Codex session
     let codex_home = TempDir::new().expect("tempdir");
     let mut mcp = McpProcess::new(codex_home.path()).await.expect("spawn");
@@ -117,7 +117,7 @@ async fn test_send_user_message_session_not_found() {
 
     let unknown = uuid::Uuid::new_v4().to_string();
     let req_id = mcp
-        .send_send_user_message_tool_call("ping", &unknown)
+        .send_send_message_tool_call("ping", &unknown)
         .await
         .expect("send tool");
 
