@@ -1,4 +1,3 @@
-use crate::exec_command::escape_command;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::markdown::append_markdown;
 use crate::text_block::TextBlock;

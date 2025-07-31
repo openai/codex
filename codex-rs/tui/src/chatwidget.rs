@@ -47,6 +47,7 @@ use codex_file_search::FileMatch;
 
 struct RunningCommand {
     command: Vec<String>,
+    #[allow(dead_code)]
     cwd: PathBuf,
 }
 
