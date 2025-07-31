@@ -15,6 +15,7 @@ pub enum SlashCommand {
     New,
     Diff,
     Quit,
+    #[cfg(debug_assertions)]
     TestApproval,
 }
 
@@ -27,6 +28,7 @@ impl SlashCommand {
             SlashCommand::Diff => {
                 "Show git diff of the working directory (including untracked files)"
             }
+            #[cfg(debug_assertions)]
             SlashCommand::TestApproval => "Test approval request",
         }
     }

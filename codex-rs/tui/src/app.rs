@@ -300,6 +300,7 @@ impl App<'_> {
                             widget.add_diff_output(text);
                         }
                     }
+                    #[cfg(debug_assertions)]
                     SlashCommand::TestApproval => {
                         self.app_event_tx.send(AppEvent::CodexEvent(Event {
                             id: "1".to_string(),
