@@ -931,7 +931,6 @@ async fn run_compact_task(
     input: Vec<InputItem>,
     compact_instructions: String,
 ) {
-    // Announce task start, mirroring run_task behavior.
     let start_event = Event {
         id: sub_id.clone(),
         msg: EventMsg::TaskStarted,
@@ -940,7 +939,6 @@ async fn run_compact_task(
         return;
     }
 
-    // Build input like run_task: history + this turn's user input.
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
     let turn_input: Vec<ResponseItem> =
         sess.turn_input_with_history(vec![initial_input_for_turn.clone().into()]);
@@ -948,7 +946,6 @@ async fn run_compact_task(
     let prompt = Prompt {
         input: turn_input,
         user_instructions: None,
-        // Do not record locally; server-side storage behavior still respects session config.
         store: !sess.disable_response_storage,
         extra_tools: HashMap::new(),
         base_instructions_override: Some(compact_instructions.clone()),
@@ -957,7 +954,6 @@ async fn run_compact_task(
     let max_retries = sess.client.get_provider().stream_max_retries();
     let mut retries = 0;
 
-    // Retry loop modeled after run_turn/try_run_turn.
     loop {
         let attempt_result = drain_to_completed(&sess, &prompt).await;
 
@@ -991,7 +987,6 @@ async fn run_compact_task(
         }
     }
 
-    // Mark task complete without sending/recording any response content.
     sess.remove_task(&sub_id);
     let event = Event {
         id: sub_id.clone(),
