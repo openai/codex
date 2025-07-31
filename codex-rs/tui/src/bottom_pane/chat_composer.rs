@@ -469,6 +469,20 @@ impl ChatComposer<'_> {
                 self.textarea.insert_newline();
                 (InputResult::None, true)
             }
+            Input {
+                key: Key::Char('d'),
+                ctrl: true,
+                alt: false,
+                shift: false,
+            } => {
+                self.textarea.input(Input {
+                    key: Key::Delete,
+                    ctrl: false,
+                    alt: false,
+                    shift: false,
+                });
+                (InputResult::None, true)
+            }
             input => self.handle_input_basic(input),
         }
     }
