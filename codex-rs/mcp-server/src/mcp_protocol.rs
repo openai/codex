@@ -115,23 +115,19 @@ pub struct ConversationsListArgs {
 }
 
 // Responses
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolCallResponse {
     pub request_id: RequestId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_error: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", flatten)]
     pub result: Option<ToolCallResponseResult>,
 }
 
-impl Serialize for ToolCallResponse {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let call_tool_result = self.clone().into_result();
-        call_tool_result.serialize(serializer)
+impl From<ToolCallResponse> for (CallToolResult, RequestId) {
+    fn from(val: ToolCallResponse) -> Self {
+        val.into_result()
     }
 }
 
@@ -143,23 +139,20 @@ impl ToolCallResponse {
             result,
         } = self;
         let (content, structured_content, is_error_out) = match result {
-            Some(res) => match serde_json::to_string(&res) {
-                Ok(text) => {
+            Some(res) => match serde_json::to_value(&res) {
+                Ok(v) => {
                     let content = vec![ContentBlock::TextContent(TextContent {
-                        annotations: None,
-                        text,
                         r#type: "text".to_string(),
+                        text: v.to_string(),
+                        annotations: None,
                     })];
-                    match serde_json::to_value(res) {
-                        Ok(v) => (content, Some(v), is_error),
-                        Err(_e) => (content, None, Some(true)),
-                    }
+                    (content, Some(v), is_error)
                 }
                 Err(e) => {
                     let content = vec![ContentBlock::TextContent(TextContent {
-                        annotations: None,
-                        text: format!("Failed to serialize tool result: {e}"),
                         r#type: "text".to_string(),
+                        text: format!("Failed to serialize tool result: {e}"),
+                        annotations: None,
                     })];
                     (content, None, Some(true))
                 }
@@ -513,7 +506,7 @@ mod tests {
                 },
             )),
         };
-        let observed = to_val(&env);
+        let observed = to_val(&env.into_result());
         let expected = json!([
             {
                 "content": [
@@ -541,7 +534,7 @@ mod tests {
                 ConversationStreamResult {},
             )),
         };
-        let observed = to_val(&env);
+        let observed = to_val(&env.into_result());
         let expected = json!([
             {
                 "content": [ { "type": "text", "text": "{}" } ],
@@ -564,7 +557,7 @@ mod tests {
                 ConversationSendMessageResult::Ok,
             )),
         };
-        let observed = to_val(&env);
+        let observed = to_val(&env.into_result());
         let expected = json!([
             {
                 "content": [ { "type": "text", "text": "{\"status\":\"ok\"}" } ],
@@ -595,7 +588,7 @@ mod tests {
                 },
             )),
         };
-        let observed = to_val(&env);
+        let observed = to_val(&env.into_result());
         let expected = json!([
             {
                 "content": [
@@ -626,7 +619,7 @@ mod tests {
             is_error: Some(true),
             result: None,
         };
-        let observed = to_val(&env);
+        let observed = to_val(&env.into_result());
         let expected = json!([
             {
                 "content": [],
