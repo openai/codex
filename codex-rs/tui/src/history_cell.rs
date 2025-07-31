@@ -1,4 +1,4 @@
-use crate::exec_command::escape_command;
+use crate::exec_command::strip_bash_lc_and_escape;
 use crate::markdown::append_markdown;
 use crate::text_block::TextBlock;
 use crate::text_formatting::format_and_truncate_tool_result;
@@ -246,7 +246,7 @@ impl HistoryCell {
     }
 
     pub(crate) fn new_active_exec_command(command: Vec<String>) -> Self {
-        let command_escaped = escape_command(&command);
+        let command_escaped = strip_bash_lc_and_escape(&command);
 
         let lines: Vec<Line<'static>> = vec![
             Line::from(vec!["command".magenta(), " running...".dim()]),
@@ -259,7 +259,7 @@ impl HistoryCell {
         }
     }
 
-    pub(crate) fn new_completed_exec_command(command: String, output: CommandOutput) -> Self {
+    pub(crate) fn new_completed_exec_command(command: Vec<String>, output: CommandOutput) -> Self {
         let CommandOutput {
             exit_code,
             stdout,
@@ -283,7 +283,8 @@ impl HistoryCell {
 
         let src = if exit_code == 0 { stdout } else { stderr };
 
-        lines.push(Line::from(format!("$ {command}")));
+        let cmdline = strip_bash_lc_and_escape(&command);
+        lines.push(Line::from(format!("$ {cmdline}")));
         let mut lines_iter = src.lines();
         for raw in lines_iter.by_ref().take(TOOL_CALL_MAX_LINES) {
             lines.push(ansi_escape_line(raw).dim());
