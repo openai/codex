@@ -1,11 +1,13 @@
 use codex_core::protocol::TokenUsage;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
-use ratatui::layout::Alignment;
 use ratatui::layout::Rect;
+use ratatui::style::Color;
 use ratatui::style::Style;
+use ratatui::style::Styled;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
+use ratatui::text::Span;
 use ratatui::widgets::BorderType;
 use ratatui::widgets::Borders;
 use ratatui::widgets::Widget;
@@ -22,7 +24,7 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use codex_file_search::FileMatch;
 
-const BASE_PLACEHOLDER_TEXT: &str = "send a message";
+const BASE_PLACEHOLDER_TEXT: &str = "...";
 /// If the pasted content exceeds this number of characters, replace it with a
 /// placeholder in the UI.
 const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
@@ -72,9 +74,9 @@ impl ChatComposer<'_> {
     }
 
     pub fn desired_height(&self) -> u16 {
-        2 + self.textarea.lines().len() as u16
+        self.textarea.lines().len().max(1) as u16
             + match &self.active_popup {
-                ActivePopup::None => 0u16,
+                ActivePopup::None => 1u16,
                 ActivePopup::Command(c) => c.calculate_required_height(),
                 ActivePopup::File(c) => c.calculate_required_height(),
             }
@@ -635,37 +637,17 @@ impl ChatComposer<'_> {
     }
 
     fn update_border(&mut self, has_focus: bool) {
-        struct BlockState {
-            right_title: Line<'static>,
-            border_style: Style,
-        }
-
-        let bs = if has_focus {
-            if self.ctrl_c_quit_hint {
-                BlockState {
-                    right_title: Line::from("Ctrl+C to quit").alignment(Alignment::Right),
-                    border_style: Style::default(),
-                }
-            } else {
-                BlockState {
-                    right_title: Line::from("Enter to send | Ctrl+D to quit | Ctrl+J for newline")
-                        .alignment(Alignment::Right),
-                    border_style: Style::default(),
-                }
-            }
+        let border_style = if has_focus {
+            Style::default().fg(Color::Cyan)
         } else {
-            BlockState {
-                right_title: Line::from(""),
-                border_style: Style::default().dim(),
-            }
+            Style::default().dim()
         };
 
         self.textarea.set_block(
             ratatui::widgets::Block::default()
-                .title_bottom(bs.right_title)
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .border_style(bs.border_style),
+                .borders(Borders::LEFT)
+                .border_type(BorderType::QuadrantOutside)
+                .border_style(border_style),
         );
     }
 }
@@ -677,19 +659,19 @@ impl WidgetRef for &ChatComposer<'_> {
                 let popup_height = popup.calculate_required_height();
 
                 // Split the provided rect so that the popup is rendered at the
-                // *top* and the textarea occupies the remaining space below.
-                let popup_rect = Rect {
+                // **bottom** and the textarea occupies the remaining space above.
+                let popup_height = popup_height.min(area.height);
+                let textarea_rect = Rect {
                     x: area.x,
                     y: area.y,
                     width: area.width,
-                    height: popup_height.min(area.height),
+                    height: area.height.saturating_sub(popup_height),
                 };
-
-                let textarea_rect = Rect {
+                let popup_rect = Rect {
                     x: area.x,
-                    y: area.y + popup_rect.height,
+                    y: area.y + textarea_rect.height,
                     width: area.width,
-                    height: area.height.saturating_sub(popup_rect.height),
+                    height: popup_height,
                 };
 
                 popup.render(popup_rect, buf);
@@ -698,25 +680,51 @@ impl WidgetRef for &ChatComposer<'_> {
             ActivePopup::File(popup) => {
                 let popup_height = popup.calculate_required_height();
 
-                let popup_rect = Rect {
+                let popup_height = popup_height.min(area.height);
+                let textarea_rect = Rect {
                     x: area.x,
                     y: area.y,
                     width: area.width,
-                    height: popup_height.min(area.height),
-                };
-
-                let textarea_rect = Rect {
-                    x: area.x,
-                    y: area.y + popup_rect.height,
-                    width: area.width,
                     height: area.height.saturating_sub(popup_height),
+                };
+                let popup_rect = Rect {
+                    x: area.x,
+                    y: area.y + textarea_rect.height,
+                    width: area.width,
+                    height: popup_height,
                 };
 
                 popup.render(popup_rect, buf);
                 self.textarea.render(textarea_rect, buf);
             }
             ActivePopup::None => {
-                self.textarea.render(area, buf);
+                let mut textarea_rect = area;
+                textarea_rect.height = textarea_rect.height.saturating_sub(1);
+                self.textarea.render(textarea_rect, buf);
+                let mut bottom_line_rect = area;
+                bottom_line_rect.y += textarea_rect.height;
+                bottom_line_rect.height = 1;
+                let key_hint_style = Style::default().fg(Color::Cyan);
+                let hint = if self.ctrl_c_quit_hint {
+                    vec![
+                        Span::from(" "),
+                        "Ctrl+C again".set_style(key_hint_style),
+                        Span::from(" to quit"),
+                    ]
+                } else {
+                    vec![
+                        Span::from(" "),
+                        "⏎".set_style(key_hint_style),
+                        Span::from(" send   "),
+                        "Shift+⏎".set_style(key_hint_style),
+                        Span::from(" newline   "),
+                        "Ctrl+C".set_style(key_hint_style),
+                        Span::from(" quit"),
+                    ]
+                };
+                Line::from(hint)
+                    .style(Style::default().dim())
+                    .render_ref(bottom_line_rect, buf);
             }
         }
     }

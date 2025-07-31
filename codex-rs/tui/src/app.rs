@@ -9,7 +9,10 @@ use crate::slash_command::SlashCommand;
 use crate::tui;
 use codex_core::config::Config;
 use codex_core::protocol::Event;
+use codex_core::protocol::EventMsg;
+use codex_core::protocol::ExecApprovalRequestEvent;
 use color_eyre::eyre::Result;
+use crossterm::SynchronizedUpdate;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use ratatui::layout::Offset;
@@ -201,7 +204,7 @@ impl App<'_> {
                     self.schedule_redraw();
                 }
                 AppEvent::Redraw => {
-                    self.draw_next_frame(terminal)?;
+                    std::io::stdout().sync_update(|_| self.draw_next_frame(terminal))??;
                 }
                 AppEvent::KeyEvent(key_event) => {
                     match key_event {
@@ -297,6 +300,18 @@ impl App<'_> {
                             widget.add_diff_output(text);
                         }
                     }
+                    #[cfg(debug_assertions)]
+                    SlashCommand::TestApproval => {
+                        self.app_event_tx.send(AppEvent::CodexEvent(Event {
+                            id: "1".to_string(),
+                            msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
+                                call_id: "1".to_string(),
+                                command: vec!["git".into(), "apply".into()],
+                                cwd: self.config.cwd.clone(),
+                                reason: Some("test".to_string()),
+                            }),
+                        }));
+                    }
                 },
                 AppEvent::StartFileSearch(query) => {
                     self.file_search.on_user_query(query);
@@ -321,8 +336,6 @@ impl App<'_> {
     }
 
     fn draw_next_frame(&mut self, terminal: &mut tui::Tui) -> Result<()> {
-        // TODO: add a throttle to avoid redrawing too often
-
         let screen_size = terminal.size()?;
         let last_known_screen_size = terminal.last_known_screen_size;
         if screen_size != last_known_screen_size {
@@ -345,7 +358,7 @@ impl App<'_> {
 
         let size = terminal.size()?;
         let desired_height = match &self.app_state {
-            AppState::Chat { widget } => widget.desired_height(),
+            AppState::Chat { widget } => widget.desired_height(size.width),
             AppState::GitWarning { .. } => 10,
         };
         let mut area = terminal.viewport_area;
