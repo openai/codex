@@ -7,7 +7,10 @@ use serde::Serialize;
 use strum_macros::Display;
 use uuid::Uuid;
 
+use mcp_types::CallToolResult;
+use mcp_types::ContentBlock;
 use mcp_types::RequestId;
+use mcp_types::TextContent;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -112,7 +115,7 @@ pub struct ConversationsListArgs {
 }
 
 // Responses
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolCallResponse {
     pub request_id: RequestId,
@@ -120,6 +123,59 @@ pub struct ToolCallResponse {
     pub is_error: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<ToolCallResponseResult>,
+}
+
+impl Serialize for ToolCallResponse {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let call_tool_result = self.clone().into_result();
+        call_tool_result.serialize(serializer)
+    }
+}
+
+impl ToolCallResponse {
+    pub fn into_result(self) -> (CallToolResult, RequestId) {
+        let ToolCallResponse {
+            request_id,
+            is_error,
+            result,
+        } = self;
+        let (content, structured_content, is_error_out) = match result {
+            Some(res) => match serde_json::to_string(&res) {
+                Ok(text) => {
+                    let content = vec![ContentBlock::TextContent(TextContent {
+                        annotations: None,
+                        text,
+                        r#type: "text".to_string(),
+                    })];
+                    match serde_json::to_value(res) {
+                        Ok(v) => (content, Some(v), is_error),
+                        Err(_e) => (content, None, Some(true)),
+                    }
+                }
+                Err(e) => {
+                    let content = vec![ContentBlock::TextContent(TextContent {
+                        annotations: None,
+                        text: format!("Failed to serialize tool result: {e}"),
+                        r#type: "text".to_string(),
+                    })];
+                    (content, None, Some(true))
+                }
+            },
+            None => (vec![], None, is_error),
+        };
+
+        (
+            CallToolResult {
+                content,
+                is_error: is_error_out,
+                structured_content,
+            },
+            request_id,
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -141,8 +197,10 @@ pub struct ConversationCreateResult {
 pub struct ConversationStreamResult {}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ConversationSendMessageResult {
-    pub success: bool,
+#[serde(tag = "status", rename_all = "camelCase")]
+pub enum ConversationSendMessageResult {
+    Ok,
+    Error { message: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -456,13 +514,18 @@ mod tests {
             )),
         };
         let observed = to_val(&env);
-        let expected = json!({
-            "requestId": 1,
-            "result": {
-                "conversation_id": "d0f6ecbe-84a2-41c1-b23d-b20473b25eab",
-                "model": "o3"
-            }
-        });
+        let expected = json!([
+            {
+                "content": [
+                    { "type": "text", "text": "{\"conversation_id\":\"d0f6ecbe-84a2-41c1-b23d-b20473b25eab\",\"model\":\"o3\"}" }
+                ],
+                "structuredContent": {
+                    "conversation_id": "d0f6ecbe-84a2-41c1-b23d-b20473b25eab",
+                    "model": "o3"
+                }
+            },
+            1
+        ]);
         assert_eq!(
             observed, expected,
             "response (ConversationCreate) must match"
@@ -479,10 +542,13 @@ mod tests {
             )),
         };
         let observed = to_val(&env);
-        let expected = json!({
-            "requestId": 2,
-            "result": {}
-        });
+        let expected = json!([
+            {
+                "content": [ { "type": "text", "text": "{}" } ],
+                "structuredContent": {}
+            },
+            2
+        ]);
         assert_eq!(
             observed, expected,
             "response (ConversationStream) must have empty object result"
@@ -495,14 +561,17 @@ mod tests {
             request_id: RequestId::Integer(3),
             is_error: None,
             result: Some(ToolCallResponseResult::ConversationSendMessage(
-                ConversationSendMessageResult { success: true },
+                ConversationSendMessageResult::Ok,
             )),
         };
         let observed = to_val(&env);
-        let expected = json!({
-            "requestId": 3,
-            "result": { "success": true }
-        });
+        let expected = json!([
+            {
+                "content": [ { "type": "text", "text": "{\"status\":\"ok\"}" } ],
+                "structuredContent": { "status": "ok" }
+            },
+            3
+        ]);
         assert_eq!(
             observed, expected,
             "response (ConversationSendMessageAccepted) must match"
@@ -527,18 +596,23 @@ mod tests {
             )),
         };
         let observed = to_val(&env);
-        let expected = json!({
-            "requestId": 4,
-            "result": {
-                "conversations": [
-                    {
-                        "conversation_id": "67e55044-10b1-426f-9247-bb680e5fe0c8",
-                        "title": "Refactor config loader"
-                    }
+        let expected = json!([
+            {
+                "content": [
+                    { "type": "text", "text": "{\"conversations\":[{\"conversation_id\":\"67e55044-10b1-426f-9247-bb680e5fe0c8\",\"title\":\"Refactor config loader\"}],\"next_cursor\":\"next123\"}" }
                 ],
-                "next_cursor": "next123"
-            }
-        });
+                "structuredContent": {
+                    "conversations": [
+                        {
+                            "conversation_id": "67e55044-10b1-426f-9247-bb680e5fe0c8",
+                            "title": "Refactor config loader"
+                        }
+                    ],
+                    "next_cursor": "next123"
+                }
+            },
+            4
+        ]);
         assert_eq!(
             observed, expected,
             "response (ConversationsList with cursor) must match"
@@ -553,10 +627,13 @@ mod tests {
             result: None,
         };
         let observed = to_val(&env);
-        let expected = json!({
-            "requestId": 4,
-            "isError": true
-        });
+        let expected = json!([
+            {
+                "content": [],
+                "isError": true
+            },
+            4
+        ]);
         assert_eq!(
             observed, expected,
             "error response must omit `result` and include `isError`"
