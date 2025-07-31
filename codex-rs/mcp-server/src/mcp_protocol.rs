@@ -496,13 +496,18 @@ mod tests {
             )),
         };
         let observed = to_val(&env);
-        let expected = json!({
-            "requestId": 1,
-            "result": {
-                "conversation_id": "d0f6ecbe-84a2-41c1-b23d-b20473b25eab",
-                "model": "o3"
-            }
-        });
+        let expected = json!([
+            {
+                "content": [
+                    { "type": "text", "text": "{\"conversation_id\":\"d0f6ecbe-84a2-41c1-b23d-b20473b25eab\",\"model\":\"o3\"}" }
+                ],
+                "structuredContent": {
+                    "conversation_id": "d0f6ecbe-84a2-41c1-b23d-b20473b25eab",
+                    "model": "o3"
+                }
+            },
+            1
+        ]);
         assert_eq!(
             observed, expected,
             "response (ConversationCreate) must match"
@@ -519,10 +524,13 @@ mod tests {
             )),
         };
         let observed = to_val(&env);
-        let expected = json!({
-            "requestId": 2,
-            "result": {}
-        });
+        let expected = json!([
+            {
+                "content": [ { "type": "text", "text": "{}" } ],
+                "structuredContent": {}
+            },
+            2
+        ]);
         assert_eq!(
             observed, expected,
             "response (ConversationStream) must have empty object result"
@@ -539,12 +547,13 @@ mod tests {
             )),
         };
         let observed = to_val(&env);
-        let expected = json!({
-            "requestId": 3,
-            "result": {
-                "status": "ok"
-            }
-        });
+        let expected = json!([
+            {
+                "content": [ { "type": "text", "text": "{\"status\":\"ok\"}" } ],
+                "structuredContent": { "status": "ok" }
+            },
+            3
+        ]);
         assert_eq!(
             observed, expected,
             "response (ConversationSendMessageAccepted) must match"
@@ -569,18 +578,23 @@ mod tests {
             )),
         };
         let observed = to_val(&env);
-        let expected = json!({
-            "requestId": 4,
-            "result": {
-                "conversations": [
-                    {
-                        "conversation_id": "67e55044-10b1-426f-9247-bb680e5fe0c8",
-                        "title": "Refactor config loader"
-                    }
+        let expected = json!([
+            {
+                "content": [
+                    { "type": "text", "text": "{\"conversations\":[{\"conversation_id\":\"67e55044-10b1-426f-9247-bb680e5fe0c8\",\"title\":\"Refactor config loader\"}],\"next_cursor\":\"next123\"}" }
                 ],
-                "next_cursor": "next123"
-            }
-        });
+                "structuredContent": {
+                    "conversations": [
+                        {
+                            "conversation_id": "67e55044-10b1-426f-9247-bb680e5fe0c8",
+                            "title": "Refactor config loader"
+                        }
+                    ],
+                    "next_cursor": "next123"
+                }
+            },
+            4
+        ]);
         assert_eq!(
             observed, expected,
             "response (ConversationsList with cursor) must match"
@@ -595,10 +609,13 @@ mod tests {
             result: None,
         };
         let observed = to_val(&env);
-        let expected = json!({
-            "requestId": 4,
-            "isError": true
-        });
+        let expected = json!([
+            {
+                "content": [],
+                "isError": true
+            },
+            4
+        ]);
         assert_eq!(
             observed, expected,
             "error response must omit `result` and include `isError`"
