@@ -13,7 +13,6 @@ use crate::mcp_protocol::ToolCallRequestParams;
 use crate::mcp_protocol::ToolCallResponse;
 use crate::mcp_protocol::ToolCallResponseResult;
 use crate::outgoing_message::OutgoingMessageSender;
-use crate::send_user_message::create_tool_for_send_user_message_param;
 
 use codex_core::Codex;
 use codex_core::config::Config as CodexConfig;
@@ -296,7 +295,6 @@ impl MessageProcessor {
             tools: vec![
                 create_tool_for_codex_tool_call_param(),
                 create_tool_for_codex_tool_call_reply_param(),
-                create_tool_for_send_user_message_param(),
             ],
             next_cursor: None,
         };
