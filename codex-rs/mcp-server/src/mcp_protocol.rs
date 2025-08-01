@@ -174,8 +174,13 @@ pub enum ToolCallResponseResult {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "camelCase")]
 pub enum ConversationCreateResult {
-    Ok { conversation_id: ConversationId, model: String },
-    Error { message: String },
+    Ok {
+        conversation_id: ConversationId,
+        model: String,
+    },
+    Error {
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -515,6 +520,36 @@ mod tests {
             "response (ConversationCreate) must match"
         );
         assert_eq!(req_id, RequestId::Integer(1));
+    }
+
+    #[test]
+    fn response_error_conversation_create_full_schema() {
+        let env = ToolCallResponse {
+            request_id: RequestId::Integer(2),
+            is_error: Some(true),
+            result: Some(ToolCallResponseResult::ConversationCreate(
+                ConversationCreateResult::Error {
+                    message: "Failed to initialize session".into(),
+                },
+            )),
+        };
+        let req_id = env.request_id.clone();
+        let observed = to_val(&CallToolResult::from(env));
+        let expected = json!({
+            "content": [
+                { "type": "text", "text": "{\"message\":\"Failed to initialize session\",\"status\":\"error\"}" }
+            ],
+            "isError": true,
+            "structuredContent": {
+                "status": "error",
+                "message": "Failed to initialize session"
+            }
+        });
+        assert_eq!(
+            observed, expected,
+            "error response (ConversationCreate) must match"
+        );
+        assert_eq!(req_id, RequestId::Integer(2));
     }
 
     #[test]
