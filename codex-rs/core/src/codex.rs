@@ -91,6 +91,7 @@ use crate::safety::assess_safety_for_untrusted_command;
 use crate::shell;
 use crate::user_notification::UserNotification;
 use crate::util::backoff;
+use tokio::fs;
 
 /// The high-level interface to the Codex system.
 /// It operates as a queue pair where you send submissions and receive events.
@@ -945,7 +946,21 @@ async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
         return;
     }
 
-    let initial_input_for_turn = ResponseInputItem::from(input);
+    let mut effective_input = input;
+    let is_first_turn = {
+        let st = sess.state.lock().unwrap();
+        st.history.contents().is_empty()
+    };
+    if is_first_turn {
+        if let Some(env_text) = get_initial_env_context(&sess.cwd).await {
+            let mut prefixed = Vec::with_capacity(effective_input.len() + 1);
+            prefixed.push(InputItem::Text { text: env_text });
+            prefixed.extend(effective_input.into_iter());
+            effective_input = prefixed;
+        }
+    }
+
+    let initial_input_for_turn = ResponseInputItem::from(effective_input);
     sess.record_conversation_items(&[initial_input_for_turn.clone().into()])
         .await;
 
@@ -1104,6 +1119,128 @@ async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
         msg: EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }),
     };
     sess.tx_event.send(event).await.ok();
+}
+
+async fn get_initial_env_context(cwd: &Path) -> Option<String> {
+    const MAX_LINES: usize = 50;
+
+    let mut dir = match fs::read_dir(cwd).await {
+        Ok(d) => d,
+        Err(_) => return None,
+    };
+
+    let mut lines = Vec::with_capacity(MAX_LINES);
+    let mut seen = 0usize;
+    let mut truncated = false;
+    loop {
+        match dir.next_entry().await {
+            Ok(Some(entry)) => {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                if name.starts_with('.') {
+                    continue;
+                }
+                seen += 1;
+                if lines.len() < MAX_LINES {
+                    lines.push(name.to_string());
+                } else {
+                    truncated = true;
+                    break;
+                }
+            }
+            Ok(None) => break,
+            Err(_) => return None,
+        }
+    }
+
+    if lines.is_empty() {
+        return None;
+    }
+
+    let mut out = String::new();
+    out.push_str("Environment snapshot (output of `ls | head -n 50` in cwd):\n");
+    out.push_str(&format!("{}\n\n", cwd.display()));
+    for line in &lines {
+        out.push_str(line);
+        out.push('\n');
+    }
+    if truncated || seen > lines.len() {
+        out.push_str("… (truncated)\n");
+    }
+    Some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used)]
+    use super::get_initial_env_context;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn env_context_truncates_after_50_visible_entries() {
+        let tmp = TempDir::new().unwrap();
+
+        // Create 65 non-hidden files and a few hidden ones. Dotfiles should be skipped.
+        for i in 0..65u32 {
+            fs::write(tmp.path().join(format!("file_{i:03}.txt")), b"x").unwrap();
+        }
+        fs::write(tmp.path().join(".hidden_a"), b"x").unwrap();
+        fs::write(tmp.path().join(".hidden_b"), b"x").unwrap();
+
+        let ctx = get_initial_env_context(tmp.path())
+            .await
+            .expect("should produce context");
+
+        // Header and cwd should be present.
+        assert!(ctx.starts_with("Environment snapshot (output of `ls | head -n 50` in cwd):\n"));
+        assert!(ctx.contains(&format!("{}\n\n", tmp.path().display())));
+
+        // Count listed entries (exclude header/cwd/blank and possible truncation marker)
+        let mut count = 0usize;
+        let mut saw_truncated = false;
+        for line in ctx.lines().skip(2) {
+            if line.is_empty() {
+                continue;
+            }
+            if line == "… (truncated)" {
+                saw_truncated = true;
+                break;
+            }
+            count += 1;
+        }
+        assert_eq!(count, 50, "should list exactly 50 visible entries");
+        assert!(
+            saw_truncated,
+            "should indicate truncation when more than 50 entries exist"
+        );
+    }
+
+    #[tokio::test]
+    async fn env_context_no_truncation_when_fewer_than_50() {
+        let tmp = TempDir::new().unwrap();
+        // 3 visible + 1 hidden
+        for name in ["a.txt", "b.txt", "c.txt", ".secret"] {
+            fs::write(tmp.path().join(name), b"x").unwrap();
+        }
+
+        let ctx = get_initial_env_context(tmp.path())
+            .await
+            .expect("should produce context");
+
+        let mut lines = ctx.lines().skip(2).filter(|l| !l.is_empty());
+        let mut names = Vec::new();
+        for l in &mut lines {
+            if l == "… (truncated)" {
+                panic!("should not be truncated");
+            }
+            names.push(l.to_string());
+        }
+
+        // Hidden should be excluded; only 3 visible entries.
+        assert_eq!(names.len(), 3);
+        assert!(names.iter().all(|n| n != ".secret"));
+    }
 }
 
 async fn run_turn(
