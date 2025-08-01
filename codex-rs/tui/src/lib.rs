@@ -151,36 +151,23 @@ pub async fn run_main(
         let exe = std::env::current_exe()?;
         let managed_by_npm = std::env::var_os("CODEX_MANAGED_BY_NPM").is_some();
 
-        // Always show the header line first.
         eprintln!(
             "{} {current_version} -> {latest_version}.",
             "✨⬆️ Update available!".bold().cyan()
         );
 
-        // Prefer npm instructions when launched via the npm wrapper.
         if managed_by_npm {
             let npm_cmd = "npm install -g @openai/codex@latest";
             eprintln!("Run {} to update.", npm_cmd.cyan().on_black());
-
-            // On macOS, also mention Homebrew as an alternative.
-            if cfg!(target_os = "macos") {
-                let brew_cmd = "brew upgrade codex";
-                eprintln!(
-                    "Or, if installed with Homebrew: {}",
-                    brew_cmd.cyan().on_black()
-                );
-            }
         } else if cfg!(target_os = "macos")
             && (exe.starts_with("/opt/homebrew") || exe.starts_with("/usr/local"))
         {
-            // Likely installed via Homebrew – show brew instructions.
             let brew_cmd = "brew upgrade codex";
             eprintln!("Run {} to update.", brew_cmd.cyan().on_black());
         } else {
-            // Fallback: provide a generic message.
             eprintln!(
                 "See {} for the latest releases and installation options.",
-                "https://github.com/openai/codex/releases".cyan().on_black()
+                "https://github.com/openai/codex/releases/latest".cyan().on_black()
             );
         }
 
