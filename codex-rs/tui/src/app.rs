@@ -96,9 +96,7 @@ impl App<'_> {
                         if let Ok(event) = crossterm::event::read() {
                             match event {
                                 crossterm::event::Event::Key(key_event) => {
-                                    if key_event.kind == crossterm::event::KeyEventKind::Press {
-                                        app_event_tx.send(AppEvent::KeyEvent(key_event));
-                                    }
+                                    app_event_tx.send(AppEvent::KeyEvent(key_event));
                                 }
                                 crossterm::event::Event::Resize(_, _) => {
                                     app_event_tx.send(AppEvent::RequestRedraw);
