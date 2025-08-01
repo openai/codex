@@ -121,6 +121,10 @@ pub enum Op {
     /// Request a single history entry identified by `log_id` + `offset`.
     GetHistoryEntryRequest { offset: usize, log_id: u64 },
 
+    /// Request the agent to summarize the current conversation context.
+    /// The agent will use its existing context (either conversation history or previous response id)
+    /// to generate a summary which will be returned as an AgentMessage event.
+    Compact,
     /// Request to shut down codex instance.
     Shutdown,
 }
