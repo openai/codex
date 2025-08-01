@@ -50,12 +50,18 @@ pub(crate) struct BottomPane<'a> {
 pub(crate) struct BottomPaneParams {
     pub(crate) app_event_tx: AppEventSender,
     pub(crate) has_input_focus: bool,
+    pub(crate) enhanced_keys_supported: bool,
 }
 
 impl BottomPane<'_> {
     pub fn new(params: BottomPaneParams) -> Self {
+        let enhanced_keys_supported = params.enhanced_keys_supported;
         Self {
-            composer: ChatComposer::new(params.has_input_focus, params.app_event_tx.clone()),
+            composer: ChatComposer::new(
+                params.has_input_focus,
+                params.app_event_tx.clone(),
+                enhanced_keys_supported,
+            ),
             active_view: None,
             app_event_tx: params.app_event_tx,
             has_input_focus: params.has_input_focus,
@@ -298,6 +304,7 @@ mod tests {
         let mut pane = BottomPane::new(BottomPaneParams {
             app_event_tx: tx,
             has_input_focus: true,
+            enhanced_keys_supported: false,
         });
         pane.push_approval_request(exec_request());
         assert_eq!(CancellationEvent::Handled, pane.on_ctrl_c());
