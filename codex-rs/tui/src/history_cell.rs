@@ -545,24 +545,17 @@ impl HistoryCell {
         } else {
             for (idx, PlanItemArg { step, status }) in plan.into_iter().enumerate() {
                 let num = idx + 1;
-                let (icon, style): (&str, Style) = match status {
-                    StepStatus::Completed => ("✓", Style::default().fg(Color::Green)),
-                    StepStatus::InProgress => (
-                        "▶",
-                        Style::default()
-                            .fg(Color::Yellow)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    StepStatus::Pending => ("○", Style::default().fg(Color::Gray)),
+                let icon_span: Span = match status {
+                    StepStatus::Completed => Span::from("✓").fg(Color::Green),
+                    StepStatus::InProgress => Span::from("▶").fg(Color::Yellow).bold(),
+                    StepStatus::Pending => Span::from("○").fg(Color::Gray),
                 };
-                let prefix = vec![
-                    Span::raw(format!("{num:>2}. [")),
-                    Span::styled(icon.to_string(), style),
-                    Span::raw("] "),
-                ];
-                let mut spans = prefix;
-                spans.push(Span::raw(step));
-                lines.push(Line::from(spans));
+                lines.push(Line::from(vec![
+                    format!("{num:>2}. [").into(),
+                    icon_span,
+                    "] ".into(),
+                    step.into(),
+                ]));
             }
         }
 
