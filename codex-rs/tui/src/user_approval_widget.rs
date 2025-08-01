@@ -7,6 +7,7 @@
 //! driven workflow – a fully‑fledged visual match is not required.
 
 use std::path::PathBuf;
+use std::sync::LazyLock;
 
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
@@ -52,9 +53,6 @@ struct SelectOption {
     key: KeyCode,
     decision: ReviewDecision,
 }
-
-// keep in same order as in the TS implementation
-use std::sync::LazyLock;
 
 static COMMAND_SELECT_OPTIONS: LazyLock<Vec<SelectOption>> = LazyLock::new(|| {
     vec![
