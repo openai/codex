@@ -17,6 +17,7 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use ratatui::layout::Offset;
 use ratatui::prelude::Backend;
+use ratatui::text::Line;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -54,6 +55,8 @@ pub(crate) struct App<'a> {
 
     /// True when a redraw has been scheduled but not yet executed.
     pending_redraw: Arc<AtomicBool>,
+
+    pending_history_lines: Vec<Line<'static>>,
 
     /// Stored parameters needed to instantiate the ChatWidget later, e.g.,
     /// after dismissing the Git-repo warning.
@@ -152,6 +155,7 @@ impl App<'_> {
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
         Self {
             app_event_tx,
+            pending_history_lines: Vec::new(),
             app_event_rx,
             app_state,
             config,
@@ -197,7 +201,7 @@ impl App<'_> {
         while let Ok(event) = self.app_event_rx.recv() {
             match event {
                 AppEvent::InsertHistory(lines) => {
-                    crate::insert_history::insert_history_lines(terminal, lines);
+                    self.pending_history_lines.extend(lines);
                     self.app_event_tx.send(AppEvent::RequestRedraw);
                 }
                 AppEvent::RequestRedraw => {
@@ -408,6 +412,13 @@ impl App<'_> {
         if area != terminal.viewport_area {
             terminal.clear()?;
             terminal.set_viewport_area(area);
+        }
+        if !self.pending_history_lines.is_empty() {
+            crate::insert_history::insert_history_lines(
+                terminal,
+                self.pending_history_lines.clone(),
+            );
+            self.pending_history_lines.clear();
         }
         match &mut self.app_state {
             AppState::Chat { widget } => {
