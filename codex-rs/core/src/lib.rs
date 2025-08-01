@@ -39,7 +39,9 @@ mod project_doc;
 pub mod protocol;
 mod rollout;
 mod safety;
+pub mod seatbelt;
 pub mod shell;
+pub mod spawn;
 mod user_notification;
 pub mod util;
 
