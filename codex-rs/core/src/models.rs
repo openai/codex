@@ -9,12 +9,6 @@ use serde::ser::Serializer;
 
 use crate::protocol::InputItem;
 
-#[derive(Clone)]
-pub struct CachedAzureToken {
-    pub access_token: String,
-    pub expires_on: u64, // Unix timestamp
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseInputItem {

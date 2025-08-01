@@ -1,7 +1,4 @@
-use std::io::BufRead;
-use std::path::Path;
-use std::time::Duration;
-
+use crate::config::find_codex_home;
 use bytes::Bytes;
 use codex_login::AuthMode;
 use codex_login::CodexAuth;
@@ -11,6 +8,9 @@ use reqwest::StatusCode;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
+use std::io::BufRead;
+use std::path::Path;
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tokio_util::io::ReaderStream;
@@ -134,12 +134,35 @@ impl ModelClient {
         let base_url = match self.provider.base_url.clone() {
             Some(url) => url,
             None => match auth.mode {
-                AuthMode::ChatGPT => "https://chatgpt.com/backend-api/codex".to_string(),
                 AuthMode::ApiKey => "https://api.openai.com/v1".to_string(),
+                _ => "https://chatgpt.com/backend-api/codex".to_string(),
             },
         };
+        let query_string = self
+            .provider
+            .query_params
+            .as_ref()
+            .map_or_else(String::new, |params| {
+                let full_params = params
+                    .iter()
+                    .map(|(k, v)| format!("{k}={v}"))
+                    .collect::<Vec<_>>()
+                    .join("&");
+                format!("?{full_params}")
+            });
 
-        let token = auth.get_token().await?;
+        let codex_home = find_codex_home();
+        let Ok(codex_home) = codex_home else {
+            return Err(CodexErr::EnvVar(EnvVarError {
+                var: "CODEX_HOME".to_string(),
+                instructions: Some(
+                    "Set the CODEX_HOME environment variable to your Codex home directory."
+                        .to_string(),
+                ),
+            }));
+        };
+
+        let token = auth.get_token(&codex_home).await?;
 
         let full_instructions = prompt.get_full_instructions(&self.config.model);
         let tools_json = create_tools_json_for_responses_api(
@@ -194,7 +217,7 @@ impl ModelClient {
 
             let req_builder = self
                 .client
-                .post(format!("{base_url}/responses"))
+                .post(format!("{base_url}/responses{query_string}"))
                 .header("OpenAI-Beta", "responses=experimental")
                 .header("session_id", self.session_id.to_string())
                 .bearer_auth(&token)

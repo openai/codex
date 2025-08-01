@@ -24,7 +24,11 @@ pub async fn run_login_with_chatgpt(cli_config_overrides: CliConfigOverrides) ->
 pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
     let config = load_config_or_exit(cli_config_overrides);
 
-    match load_auth(&config.codex_home) {
+    match load_auth(
+        &config.codex_home,
+        &config.model_provider.name,
+        &config.model_provider.env_key,
+    ) {
         Ok(Some(auth)) => match auth.mode {
             AuthMode::ApiKey => {
                 if let Some(api_key) = auth.api_key.as_deref() {
@@ -32,6 +36,10 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
                 } else {
                     eprintln!("Logged in using an API key");
                 }
+                std::process::exit(0);
+            }
+            AuthMode::MicrosoftEntraID => {
+                eprintln!("Logged in using Azure CLI");
                 std::process::exit(0);
             }
             AuthMode::ChatGPT => {

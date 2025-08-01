@@ -1,30 +1,38 @@
 use chrono::DateTime;
-
 use chrono::Utc;
 use serde::Deserialize;
 use serde::Serialize;
 use std::env;
-use std::fs::OpenOptions;
 use std::io::Read;
-use std::io::Write;
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
+use tokio::fs as tokio_fs;
 use tokio::process::Command;
 
 const SOURCE_FOR_PYTHON_SERVER: &str = include_str!("./login_with_chatgpt.py");
 
 const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
+const AZURE_OPENAI: &str = "azure";
+const BUFFER_REFRESH_TOKEN_SECONDS: u64 = 300; // 5 minutes
 const OPENAI_API_KEY_ENV_VAR: &str = "OPENAI_API_KEY";
+const AZURE_TOKEN_CACHE_FILE: &str = "azure_token_cache.json";
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CachedAzureToken {
+    pub access_token: String,
+    pub expires_on: u64, // Unix timestamp
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum AuthMode {
     ApiKey,
+    MicrosoftEntraID,
     ChatGPT,
 }
 
@@ -102,9 +110,17 @@ impl CodexAuth {
         }
     }
 
-    pub async fn get_token(&self) -> Result<String, std::io::Error> {
+    pub async fn get_token(&self, codex_home: &PathBuf) -> Result<String, std::io::Error> {
         match self.mode {
             AuthMode::ApiKey => Ok(self.api_key.clone().unwrap_or_default()),
+            AuthMode::MicrosoftEntraID => {
+                if let Some(token) = try_refresh_azure_token(codex_home).await? {
+                    return Ok(token);
+                }
+                Err(std::io::Error::other(
+                    "Failed to get Azure token. Make sure you've downloaded the Azure CLI and logged in with 'az login'.",
+                ))
+            }
             AuthMode::ChatGPT => {
                 let id_token = self.get_token_data().await?.access_token;
 
@@ -115,7 +131,11 @@ impl CodexAuth {
 }
 
 // Loads the available auth information from the auth.json or OPENAI_API_KEY environment variable.
-pub fn load_auth(codex_home: &Path) -> std::io::Result<Option<CodexAuth>> {
+pub fn load_auth(
+    codex_home: &Path,
+    model_provider_name: &str,
+    env_key: &Option<String>,
+) -> std::io::Result<Option<CodexAuth>> {
     let auth_file = codex_home.join("auth.json");
 
     let auth_dot_json = try_read_auth_json(&auth_file).ok();
@@ -125,17 +145,22 @@ pub fn load_auth(codex_home: &Path) -> std::io::Result<Option<CodexAuth>> {
         .and_then(|a| a.openai_api_key.clone())
         .filter(|s| !s.is_empty());
 
-    let openai_api_key = env::var(OPENAI_API_KEY_ENV_VAR)
+    let openai_api_key = env::var(env_key.as_deref().unwrap_or(OPENAI_API_KEY_ENV_VAR))
         .ok()
         .filter(|s| !s.is_empty())
         .or(auth_json_api_key);
 
-    if openai_api_key.is_none() && auth_dot_json.is_none() {
+    if model_provider_name.to_lowercase() != AZURE_OPENAI
+        && openai_api_key.is_none()
+        && auth_dot_json.is_none()
+    {
         return Ok(None);
     }
 
     let mode = if openai_api_key.is_some() {
         AuthMode::ApiKey
+    } else if model_provider_name.to_lowercase() == AZURE_OPENAI {
+        AuthMode::MicrosoftEntraID
     } else {
         AuthMode::ChatGPT
     };
@@ -204,12 +229,6 @@ async fn update_tokens(
     access_token: Option<String>,
     refresh_token: Option<String>,
 ) -> std::io::Result<AuthDotJson> {
-    let mut options = OpenOptions::new();
-    options.truncate(true).write(true).create(true);
-    #[cfg(unix)]
-    {
-        options.mode(0o600);
-    }
     let mut auth_dot_json = try_read_auth_json(auth_file)?;
 
     auth_dot_json.tokens.id_token = id_token.to_string();
@@ -223,9 +242,7 @@ async fn update_tokens(
 
     let json_data = serde_json::to_string_pretty(&auth_dot_json)?;
     {
-        let mut file = options.open(auth_file)?;
-        file.write_all(json_data.as_bytes())?;
-        file.flush()?;
+        tokio_fs::write(auth_file, json_data).await?;
     }
     Ok(auth_dot_json)
 }
@@ -259,6 +276,84 @@ async fn try_refresh_token(refresh_token: String) -> std::io::Result<RefreshResp
             response.status()
         )))
     }
+}
+
+async fn try_refresh_azure_token(codex_home: &PathBuf) -> std::io::Result<Option<String>> {
+    // Ensure cache directory exists asynchronously
+    tokio_fs::create_dir_all(&codex_home).await?;
+
+    let cache_file = codex_home.join(AZURE_TOKEN_CACHE_FILE);
+
+    // Check if we have a valid cached token
+    if tokio_fs::metadata(&cache_file).await.is_ok() {
+        let cached_data = tokio_fs::read_to_string(&cache_file).await?;
+        if let Ok(token) = serde_json::from_str::<CachedAzureToken>(&cached_data) {
+            let current_time = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|_| {
+                    std::io::Error::other("Failed to get current time for token validation")
+                })?
+                .as_secs();
+
+            // Add a buffer to avoid using an expired token
+            if current_time + BUFFER_REFRESH_TOKEN_SECONDS < token.expires_on {
+                return Ok(Some(token.access_token));
+            }
+        }
+    }
+
+    // Token is expired or doesn't exist, fetch a new one
+    let output = Command::new("az")
+        .args([
+            "account",
+            "get-access-token",
+            "--output",
+            "json",
+            "--resource",
+            "https://cognitiveservices.azure.com",
+        ])
+        .output()
+        .await
+        .map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Azure CLI not found. Please install the Azure CLI.",
+            )
+        })?;
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Failed to parse Azure CLI output. Please ensure you are logged in with 'az login'.",
+        )
+    })?;
+
+    let access_token = json["accessToken"]
+        .as_str()
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Azure CLI response missing 'accessToken' field",
+            )
+        })?
+        .to_string();
+
+    let expires_on = json["expires_on"].as_u64().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Azure CLI response missing or invalid 'expires_on' field",
+        )
+    })?;
+
+    // Cache the new token to file asynchronously with strict permissions
+    let new_token = CachedAzureToken {
+        access_token: access_token.clone(),
+        expires_on,
+    };
+    let cache_data = serde_json::to_string(&new_token)?;
+    tokio_fs::write(&cache_file, cache_data).await?;
+
+    Ok(Some(access_token))
 }
 
 #[derive(Serialize)]

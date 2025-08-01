@@ -222,7 +222,11 @@ fn should_show_login_screen(config: &Config) -> bool {
         // Reading the OpenAI API key is an async operation because it may need
         // to refresh the token. Block on it.
         let codex_home = config.codex_home.clone();
-        match load_auth(&codex_home) {
+        match load_auth(
+            &codex_home,
+            &config.model_provider.name,
+            &config.model_provider.env_key,
+        ) {
             Ok(Some(_)) => false,
             Ok(None) => true,
             Err(err) => {
