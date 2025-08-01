@@ -13,6 +13,7 @@ use std::time::Duration;
 use mcp_types::CallToolResult;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_bytes::ByteBuf;
 use strum_macros::Display;
 use uuid::Uuid;
 
@@ -323,6 +324,12 @@ pub enum EventMsg {
     /// Notification that the server is about to execute a command.
     ExecCommandBegin(ExecCommandBeginEvent),
 
+    /// Incremental chunk of stdout from a running command.
+    ExecCommandStdoutDelta(ExecCommandStdoutDeltaEvent),
+
+    /// Incremental chunk of stderr from a running command.
+    ExecCommandStderrDelta(ExecCommandStderrDeltaEvent),
+
     ExecCommandEnd(ExecCommandEndEvent),
 
     ExecApprovalRequest(ExecApprovalRequestEvent),
@@ -474,6 +481,24 @@ pub struct ExecCommandEndEvent {
     pub stderr: String,
     /// The command's exit code.
     pub exit_code: i32,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ExecCommandStdoutDeltaEvent {
+    /// Identifier for the ExecCommandBegin that produced this chunk.
+    pub call_id: String,
+    /// Raw stdout bytes (may not be valid UTF-8).
+    #[serde(with = "serde_bytes")]
+    pub chunk: ByteBuf,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ExecCommandStderrDeltaEvent {
+    /// Identifier for the ExecCommandBegin that produced this chunk.
+    pub call_id: String,
+    /// Raw stderr bytes (may not be valid UTF-8).
+    #[serde(with = "serde_bytes")]
+    pub chunk: ByteBuf,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
