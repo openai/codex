@@ -162,12 +162,6 @@ impl From<ToolCallResponse> for CallToolResult {
     }
 }
 
-impl ToolCallResponse {
-    fn into_result(self) -> CallToolResult {
-        CallToolResult::from(self)
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ToolCallResponseResult {
