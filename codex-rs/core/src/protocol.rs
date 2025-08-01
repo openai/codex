@@ -325,7 +325,7 @@ pub enum EventMsg {
     ExecCommandBegin(ExecCommandBeginEvent),
 
     /// Incremental chunk of stdout from a running command.
-    ExecCommandStdout(ExecCommandStdoutEvent),
+    ExecCommandStdoutDelta(ExecCommandStdoutDeltaEvent),
 
     ExecCommandEnd(ExecCommandEndEvent),
 
@@ -481,7 +481,7 @@ pub struct ExecCommandEndEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct ExecCommandStdoutEvent {
+pub struct ExecCommandStdoutDeltaEvent {
     /// Identifier for the ExecCommandBegin that produced this chunk.
     pub call_id: String,
     /// Raw stdout bytes (may not be valid UTF-8).
