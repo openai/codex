@@ -291,7 +291,7 @@ pub(crate) async fn consume_truncated_output(
         ))
     })?;
 
-    let stdout_handle = tokio::spawn(read_capped_with_event(
+    let stdout_handle = tokio::spawn(read_capped(
         BufReader::new(stdout_reader),
         MAX_STREAM_OUTPUT,
         MAX_STREAM_OUTPUT_LINES,
@@ -301,6 +301,7 @@ pub(crate) async fn consume_truncated_output(
         BufReader::new(stderr_reader),
         MAX_STREAM_OUTPUT,
         MAX_STREAM_OUTPUT_LINES,
+        None,
     ));
 
     let interrupted = ctrl_c.notified();
@@ -334,7 +335,7 @@ pub(crate) async fn consume_truncated_output(
     })
 }
 
-async fn read_capped_with_event<R: AsyncRead + Unpin + Send + 'static>(
+async fn read_capped<R: AsyncRead + Unpin + Send + 'static>(
     mut reader: R,
     max_output: usize,
     max_lines: usize,
@@ -346,10 +347,12 @@ async fn read_capped_with_event<R: AsyncRead + Unpin + Send + 'static>(
     let mut remaining_bytes = max_output;
     let mut remaining_lines = max_lines;
 
-    while let Some(n) = {
+    loop {
         let n = reader.read(&mut tmp).await?;
-        if n == 0 { None } else { Some(n) }
-    } {
+        if n == 0 {
+            break;
+        }
+
         if let Some(stream) = &stream {
             let chunk = tmp[..n].to_vec();
             let event = Event {
@@ -361,42 +364,6 @@ async fn read_capped_with_event<R: AsyncRead + Unpin + Send + 'static>(
             };
             #[allow(clippy::let_unit_value)]
             let _ = stream.tx_event.send(event).await;
-        }
-
-        if remaining_bytes > 0 && remaining_lines > 0 {
-            let mut copy_len = 0;
-            for &b in &tmp[..n] {
-                if remaining_bytes == 0 || remaining_lines == 0 {
-                    break;
-                }
-                copy_len += 1;
-                remaining_bytes -= 1;
-                if b == b'\n' {
-                    remaining_lines -= 1;
-                }
-            }
-            buf.extend_from_slice(&tmp[..copy_len]);
-        }
-    }
-
-    Ok(buf)
-}
-
-async fn read_capped<R: AsyncRead + Unpin>(
-    mut reader: R,
-    max_output: usize,
-    max_lines: usize,
-) -> io::Result<Vec<u8>> {
-    let mut buf = Vec::with_capacity(max_output.min(8 * 1024));
-    let mut tmp = [0u8; 8192];
-
-    let mut remaining_bytes = max_output;
-    let mut remaining_lines = max_lines;
-
-    loop {
-        let n = reader.read(&mut tmp).await?;
-        if n == 0 {
-            break;
         }
 
         // Copy into the buffer only while we still have byte and line budget.
