@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 use anyhow::Result;
+use sha1::Digest;
 use uuid::Uuid;
 
 use crate::protocol::FileChange;
@@ -249,7 +250,17 @@ impl TurnDiffTracker {
                 aggregated.push_str(&format!("new mode {current_mode}\n"));
             }
 
-            aggregated.push_str(&format!("index {ZERO_OID}..{ZERO_OID}\n"));
+            // Compute blob object IDs for left and right contents.
+            let left_oid = left_content
+                .as_ref()
+                .map(|s| git_blob_sha1_hex(s))
+                .unwrap_or_else(|| ZERO_OID.to_string());
+            let right_oid = right_content
+                .as_ref()
+                .map(|s| git_blob_sha1_hex(s))
+                .unwrap_or_else(|| ZERO_OID.to_string());
+
+            aggregated.push_str(&format!("index {left_oid}..{right_oid}\n"));
 
             let old_header = if left_content.is_some() {
                 format!("a/{left_display}")
@@ -293,6 +304,22 @@ fn uuid_filename_for(path: &Path) -> String {
 }
 
 const ZERO_OID: &str = "0000000000000000000000000000000000000000";
+
+/// Compute the Git SHA-1 blob object ID for the given content.
+fn git_blob_sha1_hex(data: &str) -> String {
+    // Git blob hash is sha1 of: "blob <len>\0<data>"
+    let header = format!("blob {}\0", data.len());
+    let mut hasher = sha1::Sha1::new();
+    hasher.update(header.as_bytes());
+    hasher.update(data.as_bytes());
+    let digest = hasher.finalize();
+    let mut out = String::with_capacity(40);
+    for b in digest {
+        use std::fmt::Write;
+        let _ = write!(&mut out, "{b:02x}");
+    }
+    out
+}
 
 fn file_mode_for_path(path: &Path) -> Option<String> {
     #[cfg(unix)]
@@ -371,8 +398,9 @@ mod tests {
         let first = normalize_diff_for_test(&first, dir.path());
         let expected_first = {
             let mode = file_mode_for_path(&file).unwrap_or_else(|| "100644".to_string());
+            let right_oid = git_blob_sha1_hex("foo\n");
             format!(
-                "diff --git a/<TMP>/a.txt b/<TMP>/a.txt\nnew file mode {mode}\nindex {ZERO_OID}..{ZERO_OID}\n--- /dev/null\n+++ b/<TMP>/a.txt\n@@ -0,0 +1 @@\n+foo\n",
+                "diff --git a/<TMP>/a.txt b/<TMP>/a.txt\nnew file mode {mode}\nindex {ZERO_OID}..{right_oid}\n--- /dev/null\n+++ b/<TMP>/a.txt\n@@ -0,0 +1 @@\n+foo\n",
             )
         };
         assert_eq!(first, expected_first);
@@ -394,8 +422,9 @@ mod tests {
         let combined = normalize_diff_for_test(&combined, dir.path());
         let expected_combined = {
             let mode = file_mode_for_path(&file).unwrap_or_else(|| "100644".to_string());
+            let right_oid = git_blob_sha1_hex("foo\nbar\n");
             format!(
-                "diff --git a/<TMP>/a.txt b/<TMP>/a.txt\nnew file mode {mode}\nindex {ZERO_OID}..{ZERO_OID}\n--- /dev/null\n+++ b/<TMP>/a.txt\n@@ -0,0 +1,2 @@\n+foo\n+bar\n",
+                "diff --git a/<TMP>/a.txt b/<TMP>/a.txt\nnew file mode {mode}\nindex {ZERO_OID}..{right_oid}\n--- /dev/null\n+++ b/<TMP>/a.txt\n@@ -0,0 +1,2 @@\n+foo\n+bar\n",
             )
         };
         assert_eq!(combined, expected_combined);
@@ -417,9 +446,12 @@ mod tests {
         acc.get_unified_diff().unwrap();
         let diff = acc.unified_diff.clone().unwrap();
         let diff = normalize_diff_for_test(&diff, dir.path());
-        let expected = format!(
-            "diff --git a/<TMP>/b.txt b/<TMP>/b.txt\ndeleted file mode {baseline_mode}\nindex {ZERO_OID}..{ZERO_OID}\n--- a/<TMP>/b.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-x\n",
-        );
+        let expected = {
+            let left_oid = git_blob_sha1_hex("x\n");
+            format!(
+                "diff --git a/<TMP>/b.txt b/<TMP>/b.txt\ndeleted file mode {baseline_mode}\nindex {left_oid}..{ZERO_OID}\n--- a/<TMP>/b.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-x\n",
+            )
+        };
         assert_eq!(diff, expected);
     }
 
@@ -448,8 +480,10 @@ mod tests {
         let out = acc.unified_diff.clone().unwrap();
         let out = normalize_diff_for_test(&out, dir.path());
         let expected = {
+            let left_oid = git_blob_sha1_hex("line\n");
+            let right_oid = git_blob_sha1_hex("line2\n");
             format!(
-                "diff --git a/<TMP>/src.txt b/<TMP>/dst.txt\nindex {ZERO_OID}..{ZERO_OID}\n--- a/<TMP>/src.txt\n+++ b/<TMP>/dst.txt\n@@ -1 +1 @@\n-line\n+line2\n"
+                "diff --git a/<TMP>/src.txt b/<TMP>/dst.txt\nindex {left_oid}..{right_oid}\n--- a/<TMP>/src.txt\n+++ b/<TMP>/dst.txt\n@@ -1 +1 @@\n-line\n+line2\n"
             )
         };
         assert_eq!(out, expected);
@@ -480,8 +514,10 @@ mod tests {
         let first = acc.unified_diff.clone().unwrap();
         let first = normalize_diff_for_test(&first, dir.path());
         let expected_first = {
+            let left_oid = git_blob_sha1_hex("foo\n");
+            let right_oid = git_blob_sha1_hex("foo\nbar\n");
             format!(
-                "diff --git a/<TMP>/a.txt b/<TMP>/a.txt\nindex {ZERO_OID}..{ZERO_OID}\n--- a/<TMP>/a.txt\n+++ b/<TMP>/a.txt\n@@ -1 +1,2 @@\n foo\n+bar\n"
+                "diff --git a/<TMP>/a.txt b/<TMP>/a.txt\nindex {left_oid}..{right_oid}\n--- a/<TMP>/a.txt\n+++ b/<TMP>/a.txt\n@@ -1 +1,2 @@\n foo\n+bar\n"
             )
         };
         assert_eq!(first, expected_first);
@@ -497,9 +533,12 @@ mod tests {
         let combined = acc.unified_diff.clone().unwrap();
         let combined = normalize_diff_for_test(&combined, dir.path());
         let expected = {
+            let left_oid_a = git_blob_sha1_hex("foo\n");
+            let right_oid_a = git_blob_sha1_hex("foo\nbar\n");
+            let left_oid_b = git_blob_sha1_hex("z\n");
             format!(
-                "diff --git a/<TMP>/a.txt b/<TMP>/a.txt\nindex {ZERO_OID}..{ZERO_OID}\n--- a/<TMP>/a.txt\n+++ b/<TMP>/a.txt\n@@ -1 +1,2 @@\n foo\n+bar\n\
-                diff --git a/<TMP>/b.txt b/<TMP>/b.txt\ndeleted file mode {baseline_mode}\nindex {ZERO_OID}..{ZERO_OID}\n--- a/<TMP>/b.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-z\n",
+                "diff --git a/<TMP>/a.txt b/<TMP>/a.txt\nindex {left_oid_a}..{right_oid_a}\n--- a/<TMP>/a.txt\n+++ b/<TMP>/a.txt\n@@ -1 +1,2 @@\n foo\n+bar\n\
+                diff --git a/<TMP>/b.txt b/<TMP>/b.txt\ndeleted file mode {baseline_mode}\nindex {left_oid_b}..{ZERO_OID}\n--- a/<TMP>/b.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-z\n",
             )
         };
         assert_eq!(combined, expected);
