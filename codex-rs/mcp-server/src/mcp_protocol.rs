@@ -186,7 +186,7 @@ pub enum ConversationCreateResult {
 pub struct ConversationStreamResult {}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-// we need to remove t
+// TODO: remove this status because we have is_error field in the response.
 #[serde(tag = "status", rename_all = "camelCase")]
 pub enum ConversationSendMessageResult {
     Ok,
