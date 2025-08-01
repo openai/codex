@@ -216,18 +216,18 @@ where
 {
     let mut fg = Color::Reset;
     let mut bg = Color::Reset;
-    let mut modifier = Modifier::empty();
+    let mut last_modifier = Modifier::empty();
     for span in content {
-        let mut next_modifier = modifier;
-        next_modifier.insert(span.style.add_modifier);
-        next_modifier.remove(span.style.sub_modifier);
-        if next_modifier != modifier {
+        let mut modifier = Modifier::empty();
+        modifier.insert(span.style.add_modifier);
+        modifier.remove(span.style.sub_modifier);
+        if modifier != last_modifier {
             let diff = ModifierDiff {
-                from: modifier,
-                to: next_modifier,
+                from: last_modifier,
+                to: modifier,
             };
             diff.queue(&mut writer)?;
-            modifier = next_modifier;
+            last_modifier = modifier;
         }
         let next_fg = span.style.fg.unwrap_or(Color::Reset);
         let next_bg = span.style.bg.unwrap_or(Color::Reset);
@@ -249,4 +249,38 @@ where
         SetBackgroundColor(CColor::Reset),
         SetAttribute(crossterm::style::Attribute::Reset),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    #[test]
+    fn writes_bold_then_regular_spans() {
+        use ratatui::style::Stylize;
+
+        let spans = ["A".bold(), "B".into()];
+
+        let mut actual: Vec<u8> = Vec::new();
+        write_spans(&mut actual, spans.iter()).unwrap();
+
+        let mut expected: Vec<u8> = Vec::new();
+        queue!(
+            expected,
+            SetAttribute(crossterm::style::Attribute::Bold),
+            Print("A"),
+            SetAttribute(crossterm::style::Attribute::NormalIntensity),
+            Print("B"),
+            SetForegroundColor(CColor::Reset),
+            SetBackgroundColor(CColor::Reset),
+            SetAttribute(crossterm::style::Attribute::Reset),
+        )
+        .unwrap();
+
+        assert_eq!(
+            String::from_utf8(actual).unwrap(),
+            String::from_utf8(expected).unwrap()
+        );
+    }
 }

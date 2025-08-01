@@ -12,10 +12,6 @@ use std::env::VarError;
 use std::time::Duration;
 
 use crate::error::EnvVarError;
-
-/// Value for the `OpenAI-Originator` header that is sent with requests to
-/// OpenAI.
-const OPENAI_ORIGINATOR_HEADER: &str = "codex_cli_rs";
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS: u64 = 300_000;
 const DEFAULT_STREAM_MAX_RETRIES: u64 = 10;
 const DEFAULT_REQUEST_MAX_RETRIES: u64 = 4;
@@ -229,15 +225,9 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
             wire_api: WireApi::Responses,
             query_params: None,
             http_headers: Some(
-                [
-                    (
-                        "originator".to_string(),
-                        OPENAI_ORIGINATOR_HEADER.to_string(),
-                    ),
-                    ("version".to_string(), env!("CARGO_PKG_VERSION").to_string()),
-                ]
-                .into_iter()
-                .collect(),
+                [("version".to_string(), env!("CARGO_PKG_VERSION").to_string())]
+                    .into_iter()
+                    .collect(),
             ),
             env_http_headers: Some(
                 [
