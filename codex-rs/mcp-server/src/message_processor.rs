@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -7,11 +8,15 @@ use crate::codex_tool_config::CodexToolCallReplyParam;
 use crate::codex_tool_config::create_tool_for_codex_tool_call_param;
 use crate::codex_tool_config::create_tool_for_codex_tool_call_reply_param;
 use crate::mcp_protocol::ToolCallRequestParams;
+use crate::mcp_protocol::ToolCallResponse;
+use crate::mcp_protocol::ToolCallResponseResult;
 use crate::outgoing_message::OutgoingMessageSender;
+use crate::tool_handlers::send_message::handle_send_message;
 
 use codex_core::Codex;
 use codex_core::config::Config as CodexConfig;
 use codex_core::protocol::Submission;
+use mcp_types::CallToolRequest;
 use mcp_types::CallToolRequestParams;
 use mcp_types::CallToolResult;
 use mcp_types::ClientRequest;
@@ -38,6 +43,7 @@ pub(crate) struct MessageProcessor {
     codex_linux_sandbox_exe: Option<PathBuf>,
     session_map: Arc<Mutex<HashMap<Uuid, Arc<Codex>>>>,
     running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, Uuid>>>,
+    running_session_ids: Arc<Mutex<HashSet<Uuid>>>,
 }
 
 impl MessageProcessor {
@@ -53,7 +59,16 @@ impl MessageProcessor {
             codex_linux_sandbox_exe,
             session_map: Arc::new(Mutex::new(HashMap::new())),
             running_requests_id_to_codex_uuid: Arc::new(Mutex::new(HashMap::new())),
+            running_session_ids: Arc::new(Mutex::new(HashSet::new())),
         }
+    }
+
+    pub(crate) fn session_map(&self) -> Arc<Mutex<HashMap<Uuid, Arc<Codex>>>> {
+        self.session_map.clone()
+    }
+
+    pub(crate) fn running_session_ids(&self) -> Arc<Mutex<HashSet<Uuid>>> {
+        self.running_session_ids.clone()
     }
 
     pub(crate) async fn process_request(&mut self, request: JSONRPCRequest) {
@@ -332,19 +347,25 @@ impl MessageProcessor {
             }
         }
     }
-    async fn handle_new_tool_calls(&self, request_id: RequestId, _params: ToolCallRequestParams) {
-        // TODO: implement the new tool calls
-        let result = CallToolResult {
-            content: vec![ContentBlock::TextContent(TextContent {
-                r#type: "text".to_string(),
-                text: "Unknown tool".to_string(),
-                annotations: None,
-            })],
-            is_error: Some(true),
-            structured_content: None,
-        };
-        self.send_response::<mcp_types::CallToolRequest>(request_id, result)
-            .await;
+    async fn handle_new_tool_calls(&self, request_id: RequestId, params: ToolCallRequestParams) {
+        match params {
+            ToolCallRequestParams::ConversationSendMessage(args) => {
+                handle_send_message(self, request_id, args).await;
+            }
+            _ => {
+                let result = CallToolResult {
+                    content: vec![ContentBlock::TextContent(TextContent {
+                        r#type: "text".to_string(),
+                        text: "Unknown tool".to_string(),
+                        annotations: None,
+                    })],
+                    is_error: Some(true),
+                    structured_content: None,
+                };
+                self.send_response::<CallToolRequest>(request_id, result)
+                    .await;
+            }
+        }
     }
 
     async fn handle_tool_call_codex(&self, id: RequestId, arguments: Option<serde_json::Value>) {
@@ -653,5 +674,21 @@ impl MessageProcessor {
         params: <mcp_types::LoggingMessageNotification as mcp_types::ModelContextProtocolNotification>::Params,
     ) {
         tracing::info!("notifications/message -> params: {:?}", params);
+    }
+
+    pub(crate) async fn send_response_with_optional_error(
+        &self,
+        id: RequestId,
+        message: Option<ToolCallResponseResult>,
+        error: Option<bool>,
+    ) {
+        let response = ToolCallResponse {
+            request_id: id.clone(),
+            is_error: error,
+            result: message,
+        };
+        let result: CallToolResult = response.into();
+        self.send_response::<mcp_types::CallToolRequest>(id.clone(), result)
+            .await;
     }
 }
