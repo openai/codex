@@ -15,6 +15,7 @@ use crossterm::SynchronizedUpdate;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use crossterm::terminal::supports_keyboard_enhancement;
 use ratatui::layout::Offset;
 use ratatui::prelude::Backend;
 use ratatui::text::Line;
@@ -61,6 +62,8 @@ pub(crate) struct App<'a> {
     /// Stored parameters needed to instantiate the ChatWidget later, e.g.,
     /// after dismissing the Git-repo warning.
     chat_args: Option<ChatWidgetArgs>,
+
+    enhanced_keys_supported: bool,
 }
 
 /// Aggregate parameters needed to create a `ChatWidget`, as creation may be
@@ -70,6 +73,7 @@ struct ChatWidgetArgs {
     config: Config,
     initial_prompt: Option<String>,
     initial_images: Vec<PathBuf>,
+    enhanced_keys_supported: bool,
 }
 
 impl App<'_> {
@@ -82,6 +86,8 @@ impl App<'_> {
         let (app_event_tx, app_event_rx) = channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
         let pending_redraw = Arc::new(AtomicBool::new(false));
+
+        let enhanced_keys_supported = supports_keyboard_enhancement().unwrap_or(false);
 
         // Spawn a dedicated thread for reading the crossterm event loop and
         // re-publishing the events as AppEvents, as appropriate.
@@ -135,6 +141,7 @@ impl App<'_> {
                     config: config.clone(),
                     initial_prompt,
                     initial_images,
+                    enhanced_keys_supported,
                 }),
             )
         } else {
@@ -143,6 +150,7 @@ impl App<'_> {
                 app_event_tx.clone(),
                 initial_prompt,
                 initial_images,
+                enhanced_keys_supported,
             );
             (
                 AppState::Chat {
@@ -162,6 +170,7 @@ impl App<'_> {
             file_search,
             pending_redraw,
             chat_args,
+            enhanced_keys_supported,
         }
     }
 
@@ -284,6 +293,7 @@ impl App<'_> {
                             self.app_event_tx.clone(),
                             None,
                             Vec::new(),
+                            self.enhanced_keys_supported,
                         ));
                         self.app_state = AppState::Chat { widget: new_widget };
                         self.app_event_tx.send(AppEvent::RequestRedraw);
@@ -400,6 +410,7 @@ impl App<'_> {
             AppState::Chat { widget } => widget.desired_height(size.width),
             AppState::GitWarning { .. } => 10,
         };
+
         let mut area = terminal.viewport_area;
         area.height = desired_height.min(size.height);
         area.width = size.width;
@@ -451,6 +462,7 @@ impl App<'_> {
                         self.app_event_tx.clone(),
                         args.initial_prompt,
                         args.initial_images,
+                        args.enhanced_keys_supported,
                     ));
                     self.app_state = AppState::Chat { widget };
                     self.app_event_tx.send(AppEvent::RequestRedraw);
