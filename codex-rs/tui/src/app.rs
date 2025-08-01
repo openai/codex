@@ -15,6 +15,7 @@ use color_eyre::eyre::Result;
 use crossterm::SynchronizedUpdate;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
+use crossterm::event::KeyEventKind;
 use ratatui::layout::Offset;
 use ratatui::prelude::Backend;
 use std::path::PathBuf;
@@ -213,6 +214,7 @@ impl App<'_> {
                         KeyEvent {
                             code: KeyCode::Char('c'),
                             modifiers: crossterm::event::KeyModifiers::CONTROL,
+                            kind: KeyEventKind::Press,
                             ..
                         } => {
                             match &mut self.app_state {
@@ -227,6 +229,7 @@ impl App<'_> {
                         KeyEvent {
                             code: KeyCode::Char('d'),
                             modifiers: crossterm::event::KeyModifiers::CONTROL,
+                            kind: KeyEventKind::Press,
                             ..
                         } => {
                             match &mut self.app_state {
@@ -245,8 +248,14 @@ impl App<'_> {
                                 }
                             }
                         }
-                        _ => {
+                        KeyEvent {
+                            kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                            ..
+                        } => {
                             self.dispatch_key_event(key_event);
+                        }
+                        _ => {
+                            // Ignore Release key events for now.
                         }
                     };
                 }
