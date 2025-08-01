@@ -327,6 +327,9 @@ pub enum EventMsg {
     /// Incremental chunk of stdout from a running command.
     ExecCommandStdoutDelta(ExecCommandStdoutDeltaEvent),
 
+    /// Incremental chunk of stderr from a running command.
+    ExecCommandStderrDelta(ExecCommandStderrDeltaEvent),
+
     ExecCommandEnd(ExecCommandEndEvent),
 
     ExecApprovalRequest(ExecApprovalRequestEvent),
@@ -485,6 +488,15 @@ pub struct ExecCommandStdoutDeltaEvent {
     /// Identifier for the ExecCommandBegin that produced this chunk.
     pub call_id: String,
     /// Raw stdout bytes (may not be valid UTF-8).
+    #[serde(with = "serde_bytes")]
+    pub chunk: ByteBuf,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ExecCommandStderrDeltaEvent {
+    /// Identifier for the ExecCommandBegin that produced this chunk.
+    pub call_id: String,
+    /// Raw stderr bytes (may not be valid UTF-8).
     #[serde(with = "serde_bytes")]
     pub chunk: ByteBuf,
 }

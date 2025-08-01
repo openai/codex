@@ -22,6 +22,7 @@ use crate::error::Result;
 use crate::error::SandboxErr;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
+use crate::protocol::ExecCommandStderrDeltaEvent;
 use crate::protocol::ExecCommandStdoutDeltaEvent;
 use crate::protocol::SandboxPolicy;
 use crate::seatbelt::spawn_command_under_seatbelt;
@@ -296,12 +297,14 @@ pub(crate) async fn consume_truncated_output(
         MAX_STREAM_OUTPUT,
         MAX_STREAM_OUTPUT_LINES,
         stdout_stream.clone(),
+        false,
     ));
     let stderr_handle = tokio::spawn(read_capped(
         BufReader::new(stderr_reader),
         MAX_STREAM_OUTPUT,
         MAX_STREAM_OUTPUT_LINES,
         stdout_stream.clone(),
+        true,
     ));
 
     let interrupted = ctrl_c.notified();
@@ -340,6 +343,7 @@ async fn read_capped<R: AsyncRead + Unpin + Send + 'static>(
     max_output: usize,
     max_lines: usize,
     stream: Option<StdoutStream>,
+    is_stderr: bool,
 ) -> io::Result<Vec<u8>> {
     let mut buf = Vec::with_capacity(max_output.min(8 * 1024));
     let mut tmp = [0u8; 8192];
@@ -355,12 +359,20 @@ async fn read_capped<R: AsyncRead + Unpin + Send + 'static>(
 
         if let Some(stream) = &stream {
             let chunk = tmp[..n].to_vec();
-            let event = Event {
-                id: stream.sub_id.clone(),
-                msg: EventMsg::ExecCommandStdoutDelta(ExecCommandStdoutDeltaEvent {
+            let msg = if is_stderr {
+                EventMsg::ExecCommandStderrDelta(ExecCommandStderrDeltaEvent {
                     call_id: stream.call_id.clone(),
                     chunk: ByteBuf::from(chunk),
-                }),
+                })
+            } else {
+                EventMsg::ExecCommandStdoutDelta(ExecCommandStdoutDeltaEvent {
+                    call_id: stream.call_id.clone(),
+                    chunk: ByteBuf::from(chunk),
+                })
+            };
+            let event = Event {
+                id: stream.sub_id.clone(),
+                msg,
             };
             #[allow(clippy::let_unit_value)]
             let _ = stream.tx_event.send(event).await;
