@@ -172,6 +172,7 @@ pub enum ToolCallResponseResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
 pub enum ConversationCreateResult {
     Ok {
         conversation_id: ConversationId,
@@ -507,13 +508,11 @@ mod tests {
         let observed = to_val(&CallToolResult::from(env));
         let expected = json!({
             "content": [
-                { "type": "text", "text": "{\"Ok\":{\"conversation_id\":\"d0f6ecbe-84a2-41c1-b23d-b20473b25eab\",\"model\":\"o3\"}}" }
+                { "type": "text", "text": "{\"conversation_id\":\"d0f6ecbe-84a2-41c1-b23d-b20473b25eab\",\"model\":\"o3\"}" }
             ],
             "structuredContent": {
-                "Ok": {
-                    "conversation_id": "d0f6ecbe-84a2-41c1-b23d-b20473b25eab",
-                    "model": "o3"
-                }
+                "conversation_id": "d0f6ecbe-84a2-41c1-b23d-b20473b25eab",
+                "model": "o3"
             }
         });
         assert_eq!(
@@ -538,13 +537,11 @@ mod tests {
         let observed = to_val(&CallToolResult::from(env));
         let expected = json!({
             "content": [
-                { "type": "text", "text": "{\"Error\":{\"message\":\"Failed to initialize session\"}}" }
+                { "type": "text", "text": "{\"message\":\"Failed to initialize session\"}" }
             ],
             "isError": true,
             "structuredContent": {
-                "Error": {
-                    "message": "Failed to initialize session"
-                }
+                "message": "Failed to initialize session"
             }
         });
         assert_eq!(
