@@ -147,9 +147,7 @@ pub struct Config {
     /// Include an experimental plan tool that the model can use to update its current plan and status of each step.
     pub include_plan_tool: bool,
 
-    /// Optional internal originator string to include in outbound HTTP
-    /// requests as the `originator` header. If unset, the built‑in default
-    /// originator will be used.
+    /// The value for the `originator` header included with Responses API requests.
     pub internal_originator: Option<String>,
 }
 
@@ -342,10 +340,7 @@ pub struct ConfigToml {
     /// Experimental path to a file whose contents replace the built-in BASE_INSTRUCTIONS.
     pub experimental_instructions_file: Option<PathBuf>,
 
-    /// Optional internal originator string to include in outbound HTTP
-    /// requests as the `originator` header. This intentionally uses a dashed
-    /// key to match existing conventions in downstream systems.
-    #[serde(rename = "internal-originator")]
+    /// The value for the `originator` header included with Responses API requests.
     pub internal_originator: Option<String>,
 }
 
