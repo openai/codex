@@ -295,13 +295,13 @@ pub(crate) async fn consume_truncated_output(
         BufReader::new(stdout_reader),
         MAX_STREAM_OUTPUT,
         MAX_STREAM_OUTPUT_LINES,
-        stdout_stream,
+        stdout_stream.clone(),
     ));
     let stderr_handle = tokio::spawn(read_capped(
         BufReader::new(stderr_reader),
         MAX_STREAM_OUTPUT,
         MAX_STREAM_OUTPUT_LINES,
-        None,
+        stdout_stream.clone(),
     ));
 
     let interrupted = ctrl_c.notified();
