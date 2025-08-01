@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use codex_core::Codex;
@@ -13,34 +12,6 @@ use crate::mcp_protocol::ConversationSendMessageArgs;
 use crate::mcp_protocol::ConversationSendMessageResult;
 use crate::mcp_protocol::ToolCallResponseResult;
 use crate::message_processor::MessageProcessor;
-
-#[derive(Debug)]
-pub(crate) enum EnsureSessionError {
-    NotFound,
-    AlreadyRunning,
-}
-
-pub(crate) async fn ensure_session(
-    session_id: Uuid,
-    session_map: Arc<Mutex<HashMap<Uuid, Arc<Codex>>>>,
-    running_session_ids: Arc<Mutex<HashSet<Uuid>>>,
-) -> Result<Arc<Codex>, EnsureSessionError> {
-    let codex = {
-        let guard = session_map.lock().await;
-        guard.get(&session_id).cloned()
-    };
-
-    let Some(codex) = codex else {
-        // TODO: check if session exists on disk as well
-        return Err(EnsureSessionError::NotFound);
-    };
-
-    if running_session_ids.lock().await.contains(&session_id) {
-        return Err(EnsureSessionError::AlreadyRunning);
-    }
-
-    Ok(codex)
-}
 
 pub(crate) async fn handle_send_message(
     message_processor: &MessageProcessor,
@@ -70,15 +41,9 @@ pub(crate) async fn handle_send_message(
     }
 
     let session_id = conversation_id.0;
-    let codex = match ensure_session(
-        session_id,
-        message_processor.session_map(),
-        message_processor.running_session_ids(),
-    )
-    .await
-    {
-        Ok(c) => c,
-        Err(EnsureSessionError::NotFound) => {
+    let codex = match ensure_session(session_id, message_processor.session_map()).await {
+        Some(c) => c,
+        None => {
             message_processor
                 .send_response_with_optional_error(
                     id,
@@ -92,27 +57,33 @@ pub(crate) async fn handle_send_message(
                 .await;
             return;
         }
-        Err(EnsureSessionError::AlreadyRunning) => {
-            message_processor
-                .send_response_with_optional_error(
-                    id,
-                    Some(ToolCallResponseResult::ConversationSendMessage(
-                        ConversationSendMessageResult::Error {
-                            message: "Session is already running".to_string(),
-                        },
-                    )),
-                    Some(true),
-                )
-                .await;
-            return;
-        }
     };
 
-    message_processor
-        .running_session_ids()
-        .lock()
-        .await
-        .insert(session_id);
+    let mut already_running = false;
+    {
+        let running_sessions = message_processor.running_session_ids();
+        let mut running = running_sessions.lock().await;
+        if running.contains(&session_id) {
+            already_running = true;
+        } else {
+            running.insert(session_id);
+        }
+    }
+
+    if already_running {
+        message_processor
+            .send_response_with_optional_error(
+                id,
+                Some(ToolCallResponseResult::ConversationSendMessage(
+                    ConversationSendMessageResult::Error {
+                        message: "Session is already running".to_string(),
+                    },
+                )),
+                Some(true),
+            )
+            .await;
+        return;
+    }
 
     let request_id_string = match &id {
         RequestId::String(s) => s.clone(),
@@ -150,4 +121,12 @@ pub(crate) async fn handle_send_message(
             Some(false),
         )
         .await;
+}
+
+pub(crate) async fn ensure_session(
+    session_id: Uuid,
+    session_map: Arc<Mutex<HashMap<Uuid, Arc<Codex>>>>,
+) -> Option<Arc<Codex>> {
+    let guard = session_map.lock().await;
+    guard.get(&session_id).cloned()
 }
