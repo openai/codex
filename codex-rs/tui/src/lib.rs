@@ -149,19 +149,31 @@ pub async fn run_main(
     if let Some(latest_version) = updates::get_upgrade_version(&config) {
         let current_version = env!("CARGO_PKG_VERSION");
         let exe = std::env::current_exe()?;
-        let update_command = if cfg!(target_os = "macos")
-            && (exe.starts_with("/opt/homebrew") || exe.starts_with("/usr/local"))
-        {
-            "brew upgrade codex"
-        } else {
-            "npm install -g @openai/codex@latest"
-        };
+        let managed_by_npm = std::env::var_os("CODEX_MANAGED_BY_NPM").is_some();
 
         eprintln!(
-            "{} {current_version} -> {latest_version}. Run {update_command} to update.\n",
-            "✨⬆️ Update available!".bold().cyan(),
-            update_command = update_command.cyan().on_black()
+            "{} {current_version} -> {latest_version}.",
+            "✨⬆️ Update available!".bold().cyan()
         );
+
+        if managed_by_npm {
+            let npm_cmd = "npm install -g @openai/codex@latest";
+            eprintln!("Run {} to update.", npm_cmd.cyan().on_black());
+        } else if cfg!(target_os = "macos")
+            && (exe.starts_with("/opt/homebrew") || exe.starts_with("/usr/local"))
+        {
+            let brew_cmd = "brew upgrade codex";
+            eprintln!("Run {} to update.", brew_cmd.cyan().on_black());
+        } else {
+            eprintln!(
+                "See {} for the latest releases and installation options.",
+                "https://github.com/openai/codex/releases/latest"
+                    .cyan()
+                    .on_black()
+            );
+        }
+
+        eprintln!("");
     }
 
     let show_login_screen = should_show_login_screen(&config);

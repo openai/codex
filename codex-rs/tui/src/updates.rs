@@ -1,4 +1,4 @@
-#![cfg(not(debug_assertions))]
+#![cfg(any(not(debug_assertions), test))]
 
 use chrono::Duration;
 use chrono::Utc;
@@ -15,8 +15,11 @@ pub fn get_upgrade_version(config: &Config) -> Option<String> {
         None => true,
         Some(info) => info.last_checked_at < Utc::now() - Duration::hours(20),
     } {
+        // Refresh the cached latest version in the background so TUI startup
+        // isn’t blocked by a network call. The UI reads the previously cached
+        // value (if any) for this run; the next run shows the banner if needed.
         tokio::spawn(async move {
-            update_version(&version_file)
+            check_for_update(&version_file)
                 .await
                 .inspect_err(|e| tracing::error!("Failed to update version: {e}"))
         });
@@ -53,7 +56,7 @@ fn read_version_info(version_file: &Path) -> anyhow::Result<VersionInfo> {
     Ok(serde_json::from_str(&contents)?)
 }
 
-async fn update_version(version_file: &Path) -> anyhow::Result<()> {
+async fn check_for_update(version_file: &Path) -> anyhow::Result<()> {
     #[derive(serde::Deserialize, Debug, Clone)]
     struct ReleaseInfo {
         tag_name: String,
@@ -107,4 +110,29 @@ fn parse_version(v: &str) -> Option<(u64, u64, u64)> {
     let min = iter.next()?.parse::<u64>().ok()?;
     let pat = iter.next()?.parse::<u64>().ok()?;
     Some((maj, min, pat))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prerelease_version_is_not_considered_newer() {
+        assert_eq!(is_newer("0.11.0-beta.1", "0.11.0"), None);
+        assert_eq!(is_newer("1.0.0-rc.1", "1.0.0"), None);
+    }
+
+    #[test]
+    fn plain_semver_comparisons_work() {
+        assert_eq!(is_newer("0.11.1", "0.11.0"), Some(true));
+        assert_eq!(is_newer("0.11.0", "0.11.1"), Some(false));
+        assert_eq!(is_newer("1.0.0", "0.9.9"), Some(true));
+        assert_eq!(is_newer("0.9.9", "1.0.0"), Some(false));
+    }
+
+    #[test]
+    fn whitespace_is_ignored() {
+        assert_eq!(parse_version(" 1.2.3 \n"), Some((1, 2, 3)));
+        assert_eq!(is_newer(" 1.2.3 ", "1.2.2"), Some(true));
+    }
 }
