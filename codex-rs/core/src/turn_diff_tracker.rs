@@ -30,8 +30,6 @@ pub struct TurnDiffTracker {
     baseline_contents: HashMap<String, Option<String>>,
     /// Internal filename -> baseline file mode (100644 or 100755). Only set when baseline file existed.
     baseline_mode: HashMap<String, String>,
-    /// Aggregated unified diff for all accumulated changes across files.
-    pub unified_diff: Option<String>,
     /// Cache of known git worktree roots to avoid repeated filesystem walks.
     git_root_cache: Vec<PathBuf>,
 }
@@ -285,13 +283,11 @@ impl TurnDiffTracker {
             }
         }
 
-        self.unified_diff = if aggregated.trim().is_empty() {
-            None
+        if aggregated.trim().is_empty() {
+            Ok(None)
         } else {
-            Some(aggregated)
-        };
-
-        Ok(self.unified_diff.clone())
+            Ok(Some(aggregated))
+        }
     }
 }
 
@@ -393,8 +389,7 @@ mod tests {
 
         // Simulate apply: create the file on disk.
         fs::write(&file, "foo\n").unwrap();
-        acc.get_unified_diff().unwrap();
-        let first = acc.unified_diff.clone().unwrap();
+        let first = acc.get_unified_diff().unwrap().unwrap();
         let first = normalize_diff_for_test(&first, dir.path());
         let expected_first = {
             let mode = file_mode_for_path(&file).unwrap_or_else(|| "100644".to_string());
@@ -417,8 +412,7 @@ mod tests {
 
         // Simulate apply: append a new line.
         fs::write(&file, "foo\nbar\n").unwrap();
-        acc.get_unified_diff().unwrap();
-        let combined = acc.unified_diff.clone().unwrap();
+        let combined = acc.get_unified_diff().unwrap().unwrap();
         let combined = normalize_diff_for_test(&combined, dir.path());
         let expected_combined = {
             let mode = file_mode_for_path(&file).unwrap_or_else(|| "100644".to_string());
@@ -443,8 +437,7 @@ mod tests {
         // Simulate apply: delete the file from disk.
         let baseline_mode = file_mode_for_path(&file).unwrap_or_else(|| "100644".to_string());
         fs::remove_file(&file).unwrap();
-        acc.get_unified_diff().unwrap();
-        let diff = acc.unified_diff.clone().unwrap();
+        let diff = acc.get_unified_diff().unwrap().unwrap();
         let diff = normalize_diff_for_test(&diff, dir.path());
         let expected = {
             let left_oid = git_blob_sha1_hex("x\n");
@@ -476,8 +469,7 @@ mod tests {
         fs::rename(&src, &dest).unwrap();
         fs::write(&dest, "line2\n").unwrap();
 
-        acc.get_unified_diff().unwrap();
-        let out = acc.unified_diff.clone().unwrap();
+        let out = acc.get_unified_diff().unwrap().unwrap();
         let out = normalize_diff_for_test(&out, dir.path());
         let expected = {
             let left_oid = git_blob_sha1_hex("line\n");
@@ -510,8 +502,7 @@ mod tests {
         acc.on_patch_begin(&update_a).unwrap();
         // Simulate apply: modify a.txt on disk.
         fs::write(&a, "foo\nbar\n").unwrap();
-        acc.get_unified_diff().unwrap();
-        let first = acc.unified_diff.clone().unwrap();
+        let first = acc.get_unified_diff().unwrap().unwrap();
         let first = normalize_diff_for_test(&first, dir.path());
         let expected_first = {
             let left_oid = git_blob_sha1_hex("foo\n");
@@ -528,9 +519,8 @@ mod tests {
         // Simulate apply: delete b.txt.
         let baseline_mode = file_mode_for_path(&b).unwrap_or_else(|| "100644".to_string());
         fs::remove_file(&b).unwrap();
-        acc.get_unified_diff().unwrap();
 
-        let combined = acc.unified_diff.clone().unwrap();
+        let combined = acc.get_unified_diff().unwrap().unwrap();
         let combined = normalize_diff_for_test(&combined, dir.path());
         let expected = {
             let left_oid_a = git_blob_sha1_hex("foo\n");
