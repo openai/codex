@@ -22,8 +22,8 @@ use crate::error::Result;
 use crate::error::SandboxErr;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
-use crate::protocol::ExecCommandStderrDeltaEvent;
-use crate::protocol::ExecCommandStdoutDeltaEvent;
+use crate::protocol::ExecCommandOutputDeltaEvent;
+use crate::protocol::ExecOutputStream;
 use crate::protocol::SandboxPolicy;
 use crate::seatbelt::spawn_command_under_seatbelt;
 use crate::spawn::StdioPolicy;
@@ -359,17 +359,15 @@ async fn read_capped<R: AsyncRead + Unpin + Send + 'static>(
 
         if let Some(stream) = &stream {
             let chunk = tmp[..n].to_vec();
-            let msg = if is_stderr {
-                EventMsg::ExecCommandStderrDelta(ExecCommandStderrDeltaEvent {
-                    call_id: stream.call_id.clone(),
-                    chunk: ByteBuf::from(chunk),
-                })
-            } else {
-                EventMsg::ExecCommandStdoutDelta(ExecCommandStdoutDeltaEvent {
-                    call_id: stream.call_id.clone(),
-                    chunk: ByteBuf::from(chunk),
-                })
-            };
+            let msg = EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
+                call_id: stream.call_id.clone(),
+                stream: if is_stderr {
+                    ExecOutputStream::Stderr
+                } else {
+                    ExecOutputStream::Stdout
+                },
+                chunk: ByteBuf::from(chunk),
+            });
             let event = Event {
                 id: stream.sub_id.clone(),
                 msg,
