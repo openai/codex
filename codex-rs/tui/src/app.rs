@@ -10,6 +10,7 @@ use crate::tui;
 use codex_core::config::Config;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
+use codex_core::protocol::Op;
 use color_eyre::eyre::Result;
 use crossterm::SynchronizedUpdate;
 use crossterm::event::KeyCode;
@@ -297,6 +298,12 @@ impl App<'_> {
                         ));
                         self.app_state = AppState::Chat { widget: new_widget };
                         self.app_event_tx.send(AppEvent::RequestRedraw);
+                    }
+                    SlashCommand::Compact => {
+                        if let AppState::Chat { widget } = &mut self.app_state {
+                            widget.clear_token_usage();
+                            self.app_event_tx.send(AppEvent::CodexOp(Op::Compact));
+                        }
                     }
                     SlashCommand::Quit => {
                         break;
