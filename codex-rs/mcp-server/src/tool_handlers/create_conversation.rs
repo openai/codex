@@ -98,25 +98,24 @@ pub(crate) async fn handle_create_conversation(
     };
 
     // Expect SessionConfigured; if not, return error.
-    let effective_model =
-        if let EventMsg::SessionConfigured(SessionConfiguredEvent { model, .. }) =
-            &codex_conversation.session_configured.msg
-        {
-            model.clone()
-        } else {
-            message_processor
-                .send_response_with_optional_error(
-                    id,
-                    Some(ToolCallResponseResult::ConversationCreate(
-                        ConversationCreateResult::Error {
-                            message: "Expected SessionConfigured event".to_string(),
-                        },
-                    )),
-                    Some(true),
-                )
-                .await;
-            return;
-        };
+    let EventMsg::SessionConfigured(SessionConfiguredEvent { model, .. }) =
+        &codex_conversation.session_configured.msg
+    else {
+        message_processor
+            .send_response_with_optional_error(
+                id,
+                Some(ToolCallResponseResult::ConversationCreate(
+                    ConversationCreateResult::Error {
+                        message: "Expected SessionConfigured event".to_string(),
+                    },
+                )),
+                Some(true),
+            )
+            .await;
+        return;
+    };
+
+    let effective_model = model.clone();
 
     let session_id = codex_conversation.session_id;
     let codex_arc = Arc::new(codex_conversation.codex);
