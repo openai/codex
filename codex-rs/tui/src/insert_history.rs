@@ -250,3 +250,37 @@ where
         SetAttribute(crossterm::style::Attribute::Reset),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    #[test]
+    fn writes_bold_then_regular_spans() {
+        use ratatui::style::Stylize;
+
+        let spans = ["A".bold(), "B".into()];
+
+        let mut actual: Vec<u8> = Vec::new();
+        write_spans(&mut actual, spans.iter()).unwrap();
+
+        let mut expected: Vec<u8> = Vec::new();
+        queue!(
+            expected,
+            SetAttribute(crossterm::style::Attribute::Bold),
+            Print("A"),
+            SetAttribute(crossterm::style::Attribute::NormalIntensity),
+            Print("B"),
+            SetForegroundColor(CColor::Reset),
+            SetBackgroundColor(CColor::Reset),
+            SetAttribute(crossterm::style::Attribute::Reset),
+        )
+        .unwrap();
+
+        assert_eq!(
+            String::from_utf8(actual).unwrap(),
+            String::from_utf8(expected).unwrap()
+        );
+    }
+}
