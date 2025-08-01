@@ -65,6 +65,8 @@ base_url = "https://api.mistral.ai/v1"
 env_key = "MISTRAL_API_KEY"
 ```
 
+### Azure OpenAI
+
 Note that Azure requires `api-version` to be passed as a query parameter, so be sure to specify it as part of `query_params` when defining the Azure provider:
 
 ```toml
@@ -75,6 +77,35 @@ base_url = "https://YOUR_PROJECT_NAME.openai.azure.com/openai"
 env_key = "AZURE_OPENAI_API_KEY"  # Or "OPENAI_API_KEY", whichever you use.
 query_params = { api-version = "2025-04-01-preview" }
 ```
+
+**Support for Microsoft Entra ID for Keyless Authentication**
+
+If you prefer to use Microsoft Entra ID for keyless authentication, you can follow these steps to get it working:
+
+1. Install the Azure CLI [here](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli?view=azure-cli-latest).
+2. Login to the Azure CLI using the command `az login`.
+3. Deploy a model by going to the "Models + endpoints" section in [Azure AI Foundry](https://ai.azure.com/) project (Takes around 5 minutes for a newly deployed model to become available).
+4. Edit your codex config (located in `~/.codex/config.toml`) to something like this:
+
+```toml
+profile = "codex"
+disable_response_storage = true
+
+[model_providers.azurecodex]
+name = "Azure" # IMPORTANT: keep as "Azure" or "azure"
+# Make sure you set the appropriate subdomain for this URL.
+base_url = "https://YOUR_PROJECT_NAME/openai" # replace YOUR_PROJECT_NAME by visiting your Azure AI Foundry project and navigating to Overview > Azure OpenAI
+env_key = "AZURE_OPENAI_API_KEY" # placeholder for backwards compatibility, not actually used
+query_params = { api-version = "2025-04-01-preview" }
+wire_api = "responses" # Microsoft Entra ID is only implemented for responses wire_api
+
+[profiles.codex]
+model = "codex-mini"
+model_provider = "azurecodex"
+```
+
+
+```toml
 
 It is also possible to configure a provider to include extra HTTP headers with a request. These can be hardcoded values (`http_headers`) or values read from environment variables (`env_http_headers`):
 
