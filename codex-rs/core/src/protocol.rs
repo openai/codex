@@ -189,6 +189,16 @@ pub enum SandboxPolicy {
     },
 }
 
+/// A writable root path accompanied by a list of subpaths that should remain
+/// read‑only even when the root is writable. This is primarily used to ensure
+/// top‑level VCS metadata directories (e.g. `.git`) under a writable root are
+/// not modified by the agent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WritableRoot {
+    pub root: PathBuf,
+    pub read_only_subpaths: Vec<PathBuf>,
+}
+
 fn default_true() -> bool {
     true
 }
@@ -240,9 +250,10 @@ impl SandboxPolicy {
         }
     }
 
-    /// Returns the list of writable roots that should be passed down to the
-    /// Landlock rules installer, tailored to the current working directory.
-    pub fn get_writable_roots_with_cwd(&self, cwd: &Path) -> Vec<PathBuf> {
+    /// Returns the list of writable roots (tailored to the current working
+    /// directory) together with subpaths that should remain read‑only under
+    /// each writable root.
+    pub fn get_writable_roots_with_cwd(&self, cwd: &Path) -> Vec<WritableRoot> {
         match self {
             SandboxPolicy::DangerFullAccess => Vec::new(),
             SandboxPolicy::ReadOnly => Vec::new(),
@@ -251,24 +262,39 @@ impl SandboxPolicy {
                 include_default_writable_roots,
                 ..
             } => {
-                if !*include_default_writable_roots {
-                    return writable_roots.clone();
-                }
+                // Start from explicitly configured writable roots.
+                let mut roots: Vec<PathBuf> = writable_roots.clone();
 
-                let mut roots = writable_roots.clone();
-                roots.push(cwd.to_path_buf());
+                // Optionally include defaults (cwd and TMPDIR on macOS).
+                if *include_default_writable_roots {
+                    roots.push(cwd.to_path_buf());
 
-                // Also include the per-user tmp dir on macOS.
-                // Note this is added dynamically rather than storing it in
-                // writable_roots because writable_roots contains only static
-                // values deserialized from the config file.
-                if cfg!(target_os = "macos") {
-                    if let Some(tmpdir) = std::env::var_os("TMPDIR") {
-                        roots.push(PathBuf::from(tmpdir));
+                    // Also include the per-user tmp dir on macOS.
+                    // Note this is added dynamically rather than storing it in
+                    // `writable_roots` because `writable_roots` contains only static
+                    // values deserialized from the config file.
+                    if cfg!(target_os = "macos") {
+                        if let Some(tmpdir) = std::env::var_os("TMPDIR") {
+                            roots.push(PathBuf::from(tmpdir));
+                        }
                     }
                 }
 
+                // For each root, compute subpaths that should remain read-only.
                 roots
+                    .into_iter()
+                    .map(|writable_root| {
+                        let mut subpaths = Vec::new();
+                        let top_level_git = writable_root.join(".git");
+                        if top_level_git.is_dir() {
+                            subpaths.push(top_level_git);
+                        }
+                        WritableRoot {
+                            root: writable_root,
+                            read_only_subpaths: subpaths,
+                        }
+                    })
+                    .collect()
             }
         }
     }
