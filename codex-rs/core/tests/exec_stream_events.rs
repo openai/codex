@@ -11,15 +11,19 @@ use codex_core::exec::StdoutStream;
 use codex_core::exec::process_exec_tool_call;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
-use codex_core::protocol::ExecCommandStderrDeltaEvent;
-use codex_core::protocol::ExecCommandStdoutDeltaEvent;
+use codex_core::protocol::ExecCommandOutputDeltaEvent;
+use codex_core::protocol::ExecOutputStream;
 use codex_core::protocol::SandboxPolicy;
 use tokio::sync::Notify;
 
 fn collect_stdout_events(rx: Receiver<Event>) -> Vec<u8> {
     let mut out = Vec::new();
     while let Ok(ev) = rx.try_recv() {
-        if let EventMsg::ExecCommandStdoutDelta(ExecCommandStdoutDeltaEvent { chunk, .. }) = ev.msg
+        if let EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
+            stream: ExecOutputStream::Stdout,
+            chunk,
+            ..
+        }) = ev.msg
         {
             out.extend_from_slice(&chunk);
         }
@@ -126,7 +130,11 @@ async fn test_exec_stderr_stream_events_echo() {
     // Collect only stderr delta events
     let mut err = Vec::new();
     while let Ok(ev) = rx.try_recv() {
-        if let EventMsg::ExecCommandStderrDelta(ExecCommandStderrDeltaEvent { chunk, .. }) = ev.msg
+        if let EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
+            stream: ExecOutputStream::Stderr,
+            chunk,
+            ..
+        }) = ev.msg
         {
             err.extend_from_slice(&chunk);
         }
