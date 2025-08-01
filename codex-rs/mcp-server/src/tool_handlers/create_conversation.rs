@@ -128,7 +128,12 @@ pub(crate) async fn handle_create_conversation(
         message_processor.session_map(),
     )
     .await;
-    run_conversation_loop(codex_arc.clone(), message_processor.outgoing(), id.clone()).await;
+    // Run the conversation loop in the background so this request can return immediately.
+    let outgoing = message_processor.outgoing();
+    let spawn_id = id.clone();
+    tokio::spawn(async move {
+        run_conversation_loop(codex_arc.clone(), outgoing, spawn_id).await;
+    });
 
     // Reply with the new conversation id and effective model
     message_processor

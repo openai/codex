@@ -98,6 +98,7 @@ pub async fn run_conversation_loop(
                     | EventMsg::ExecCommandBegin(_)
                     | EventMsg::ExecCommandEnd(_)
                     | EventMsg::BackgroundEvent(_)
+                    | EventMsg::ExecCommandOutputDelta(_)
                     | EventMsg::PatchApplyBegin(_)
                     | EventMsg::PatchApplyEnd(_)
                     | EventMsg::GetHistoryEntryResponse(_)
