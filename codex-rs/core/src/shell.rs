@@ -220,6 +220,7 @@ mod tests {
                 Arc::new(Notify::new()),
                 &SandboxPolicy::DangerFullAccess,
                 &None,
+                None,
             )
             .await
             .unwrap();
