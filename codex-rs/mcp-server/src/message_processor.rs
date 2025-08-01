@@ -11,6 +11,7 @@ use crate::mcp_protocol::ToolCallRequestParams;
 use crate::mcp_protocol::ToolCallResponse;
 use crate::mcp_protocol::ToolCallResponseResult;
 use crate::outgoing_message::OutgoingMessageSender;
+use crate::tool_handlers::create_conversation::handle_create_conversation;
 use crate::tool_handlers::send_message::handle_send_message;
 
 use codex_core::Codex;
@@ -65,6 +66,10 @@ impl MessageProcessor {
 
     pub(crate) fn session_map(&self) -> Arc<Mutex<HashMap<Uuid, Arc<Codex>>>> {
         self.session_map.clone()
+    }
+
+    pub(crate) fn outgoing(&self) -> Arc<OutgoingMessageSender> {
+        self.outgoing.clone()
     }
 
     pub(crate) fn running_session_ids(&self) -> Arc<Mutex<HashSet<Uuid>>> {
@@ -349,6 +354,9 @@ impl MessageProcessor {
     }
     async fn handle_new_tool_calls(&self, request_id: RequestId, params: ToolCallRequestParams) {
         match params {
+            ToolCallRequestParams::ConversationCreate(args) => {
+                handle_create_conversation(self, request_id, args).await;
+            }
             ToolCallRequestParams::ConversationSendMessage(args) => {
                 handle_send_message(self, request_id, args).await;
             }
