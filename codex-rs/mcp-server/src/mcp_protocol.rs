@@ -498,7 +498,7 @@ mod tests {
             )),
         };
         let req_id = env.request_id.clone();
-        let observed = to_val(&env.into_result());
+        let observed = to_val(&CallToolResult::from(env));
         let expected = json!({
             "content": [
                 { "type": "text", "text": "{\"conversation_id\":\"d0f6ecbe-84a2-41c1-b23d-b20473b25eab\",\"model\":\"o3\"}" }
@@ -525,7 +525,7 @@ mod tests {
             )),
         };
         let req_id = env.request_id.clone();
-        let observed = to_val(&env.into_result());
+        let observed = to_val(&CallToolResult::from(env));
         let expected = json!({
             "content": [ { "type": "text", "text": "{}" } ],
             "structuredContent": {}
@@ -547,7 +547,7 @@ mod tests {
             )),
         };
         let req_id = env.request_id.clone();
-        let observed = to_val(&env.into_result());
+        let observed = to_val(&CallToolResult::from(env));
         let expected = json!({
             "content": [ { "type": "text", "text": "{\"status\":\"ok\"}" } ],
             "structuredContent": { "status": "ok" }
@@ -577,7 +577,7 @@ mod tests {
             )),
         };
         let req_id = env.request_id.clone();
-        let observed = to_val(&env.into_result());
+        let observed = to_val(&CallToolResult::from(env));
         let expected = json!({
             "content": [
                 { "type": "text", "text": "{\"conversations\":[{\"conversation_id\":\"67e55044-10b1-426f-9247-bb680e5fe0c8\",\"title\":\"Refactor config loader\"}],\"next_cursor\":\"next123\"}" }
@@ -607,7 +607,7 @@ mod tests {
             result: None,
         };
         let req_id = env.request_id.clone();
-        let observed = to_val(&env.into_result());
+        let observed = to_val(&CallToolResult::from(env));
         let expected = json!({
             "content": [],
             "isError": true
