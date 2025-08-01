@@ -686,6 +686,7 @@ LOGIN_SUCCESS_HTML = """<!DOCTYPE html>
         justify-content: center;
         position: relative;
         background: white;
+
         font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
       }
       .inner-container {
@@ -703,6 +704,7 @@ LOGIN_SUCCESS_HTML = """<!DOCTYPE html>
         align-items: center;
         gap: 20px;
         display: flex;
+        margin-top: 15vh;
       }
       .svg-wrapper {
         position: relative;
@@ -710,9 +712,9 @@ LOGIN_SUCCESS_HTML = """<!DOCTYPE html>
       .title {
         text-align: center;
         color: var(--text-primary, #0D0D0D);
-        font-size: 28px;
+        font-size: 32px;
         font-weight: 400;
-        line-height: 36.40px;
+        line-height: 40px;
         word-wrap: break-word;
       }
       .setup-box {
@@ -785,16 +787,26 @@ LOGIN_SUCCESS_HTML = """<!DOCTYPE html>
         word-wrap: break-word;
         text-decoration: none;
       }
+      .logo {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 4rem;
+        height: 4rem;
+        border-radius: 16px;
+        border: .5px solid rgba(0, 0, 0, 0.1);
+        box-shadow: rgba(0, 0, 0, 0.1) 0px 4px 16px 0px;
+        box-sizing: border-box;
+        background-color: rgb(255, 255, 255);
+      }
     </style>
   </head>
   <body>
     <div class="container">
       <div class="inner-container">
         <div class="content">
-          <div data-svg-wrapper class="svg-wrapper">
-            <svg width="56" height="56" viewBox="0 0 56 56" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M4.6665 28.0003C4.6665 15.1137 15.1132 4.66699 27.9998 4.66699C40.8865 4.66699 51.3332 15.1137 51.3332 28.0003C51.3332 40.887 40.8865 51.3337 27.9998 51.3337C15.1132 51.3337 4.6665 40.887 4.6665 28.0003ZM37.5093 18.5088C36.4554 17.7672 34.9999 18.0203 34.2583 19.0742L24.8508 32.4427L20.9764 28.1808C20.1095 27.2272 18.6338 27.1569 17.6803 28.0238C16.7267 28.8906 16.6565 30.3664 17.5233 31.3199L23.3566 37.7366C23.833 38.2606 24.5216 38.5399 25.2284 38.4958C25.9353 38.4517 26.5838 38.089 26.9914 37.5098L38.0747 21.7598C38.8163 20.7059 38.5632 19.2504 37.5093 18.5088Z" fill="var(--green-400, #04B84C)"/>
-            </svg>
+          <div class="logo">
+            <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="none" viewBox="0 0 32 32"><path stroke="#000" stroke-linecap="round" stroke-width="2.484" d="M22.356 19.797H17.17M9.662 12.29l1.979 3.576a.511.511 0 0 1-.005.504l-1.974 3.409M30.758 16c0 8.15-6.607 14.758-14.758 14.758-8.15 0-14.758-6.607-14.758-14.758C1.242 7.85 7.85 1.242 16 1.242c8.15 0 14.758 6.608 14.758 14.758Z"></path></svg>
           </div>
           <div class="title">Signed in to Codex CLI</div>
         </div>
