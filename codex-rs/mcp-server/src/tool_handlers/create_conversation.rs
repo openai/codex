@@ -26,7 +26,7 @@ pub(crate) async fn handle_create_conversation(
 ) {
     // Build ConfigOverrides from args
     let ConversationCreateArgs {
-        prompt: _prompt, // not used here; creation only establishes the session
+        prompt:_, // not used here; creation only establishes the session
         model,
         cwd,
         approval_policy,
