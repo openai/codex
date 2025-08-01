@@ -41,36 +41,28 @@ pub(crate) async fn handle_send_message(
     }
 
     let session_id = conversation_id.0;
-    let codex = match ensure_session(session_id, message_processor.session_map()).await {
-        Some(c) => c,
-        None => {
-            message_processor
-                .send_response_with_optional_error(
-                    id,
-                    Some(ToolCallResponseResult::ConversationSendMessage(
-                        ConversationSendMessageResult::Error {
-                            message: "Session does not exist".to_string(),
-                        },
-                    )),
-                    Some(true),
-                )
-                .await;
-            return;
-        }
+    let Some(codex) = get_session(session_id, message_processor.session_map()).await else {
+        message_processor
+            .send_response_with_optional_error(
+                id,
+                Some(ToolCallResponseResult::ConversationSendMessage(
+                    ConversationSendMessageResult::Error {
+                        message: "Session does not exist".to_string(),
+                    },
+                )),
+                Some(true),
+            )
+            .await;
+        return;
     };
 
-    let mut already_running = false;
-    {
+    let running = {
         let running_sessions = message_processor.running_session_ids();
-        let mut running = running_sessions.lock().await;
-        if running.contains(&session_id) {
-            already_running = true;
-        } else {
-            running.insert(session_id);
-        }
-    }
+        let mut running_sessions = running_sessions.lock().await;
+        !running_sessions.insert(session_id)
+    };
 
-    if already_running {
+    if running {
         message_processor
             .send_response_with_optional_error(
                 id,
@@ -123,7 +115,7 @@ pub(crate) async fn handle_send_message(
         .await;
 }
 
-pub(crate) async fn ensure_session(
+pub(crate) async fn get_session(
     session_id: Uuid,
     session_map: Arc<Mutex<HashMap<Uuid, Arc<Codex>>>>,
 ) -> Option<Arc<Codex>> {
