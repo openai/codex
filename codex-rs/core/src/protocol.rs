@@ -324,11 +324,8 @@ pub enum EventMsg {
     /// Notification that the server is about to execute a command.
     ExecCommandBegin(ExecCommandBeginEvent),
 
-    /// Incremental chunk of stdout from a running command.
-    ExecCommandStdoutDelta(ExecCommandStdoutDeltaEvent),
-
-    /// Incremental chunk of stderr from a running command.
-    ExecCommandStderrDelta(ExecCommandStderrDeltaEvent),
+    /// Incremental chunk of output from a running command.
+    ExecCommandOutputDelta(ExecCommandOutputDeltaEvent),
 
     ExecCommandEnd(ExecCommandEndEvent),
 
@@ -484,19 +481,19 @@ pub struct ExecCommandEndEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct ExecCommandStdoutDeltaEvent {
-    /// Identifier for the ExecCommandBegin that produced this chunk.
-    pub call_id: String,
-    /// Raw stdout bytes (may not be valid UTF-8).
-    #[serde(with = "serde_bytes")]
-    pub chunk: ByteBuf,
+#[serde(rename_all = "snake_case")]
+pub enum ExecOutputStream {
+    Stdout,
+    Stderr,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct ExecCommandStderrDeltaEvent {
+pub struct ExecCommandOutputDeltaEvent {
     /// Identifier for the ExecCommandBegin that produced this chunk.
     pub call_id: String,
-    /// Raw stderr bytes (may not be valid UTF-8).
+    /// Which stream produced this chunk.
+    pub stream: ExecOutputStream,
+    /// Raw bytes from the stream (may not be valid UTF-8).
     #[serde(with = "serde_bytes")]
     pub chunk: ByteBuf,
 }
