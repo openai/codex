@@ -207,7 +207,14 @@ impl ModelClient {
                 }
             }
 
-            let req_builder = self.provider.apply_http_headers(req_builder);
+            req_builder = self.provider.apply_http_headers(req_builder);
+
+            let originator = self
+                .config
+                .internal_originator
+                .as_deref()
+                .unwrap_or("codex_cli_rs");
+            req_builder = req_builder.header("originator", originator);
 
             let res = req_builder.send().await;
             if let Ok(resp) = &res {
