@@ -167,7 +167,9 @@ pub async fn run_main(
         } else {
             eprintln!(
                 "See {} for the latest releases and installation options.",
-                "https://github.com/openai/codex/releases/latest".cyan().on_black()
+                "https://github.com/openai/codex/releases/latest"
+                    .cyan()
+                    .on_black()
             );
         }
 
