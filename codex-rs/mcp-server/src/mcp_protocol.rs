@@ -7,7 +7,10 @@ use serde::Serialize;
 use strum_macros::Display;
 use uuid::Uuid;
 
+use mcp_types::CallToolResult;
+use mcp_types::ContentBlock;
 use mcp_types::RequestId;
+use mcp_types::TextContent;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -118,8 +121,45 @@ pub struct ToolCallResponse {
     pub request_id: RequestId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_error: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", flatten)]
     pub result: Option<ToolCallResponseResult>,
+}
+
+impl From<ToolCallResponse> for CallToolResult {
+    fn from(val: ToolCallResponse) -> Self {
+        let ToolCallResponse {
+            request_id: _request_id,
+            is_error,
+            result,
+        } = val;
+        match result {
+            Some(res) => match serde_json::to_value(&res) {
+                Ok(v) => CallToolResult {
+                    content: vec![ContentBlock::TextContent(TextContent {
+                        r#type: "text".to_string(),
+                        text: v.to_string(),
+                        annotations: None,
+                    })],
+                    is_error,
+                    structured_content: Some(v),
+                },
+                Err(e) => CallToolResult {
+                    content: vec![ContentBlock::TextContent(TextContent {
+                        r#type: "text".to_string(),
+                        text: format!("Failed to serialize tool result: {e}"),
+                        annotations: None,
+                    })],
+                    is_error: Some(true),
+                    structured_content: None,
+                },
+            },
+            None => CallToolResult {
+                content: vec![],
+                is_error,
+                structured_content: None,
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -132,17 +172,26 @@ pub enum ToolCallResponseResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ConversationCreateResult {
-    pub conversation_id: ConversationId,
-    pub model: String,
+#[serde(untagged)]
+pub enum ConversationCreateResult {
+    Ok {
+        conversation_id: ConversationId,
+        model: String,
+    },
+    Error {
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConversationStreamResult {}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ConversationSendMessageResult {
-    pub success: bool,
+// TODO: remove this status because we have is_error field in the response.
+#[serde(tag = "status", rename_all = "camelCase")]
+pub enum ConversationSendMessageResult {
+    Ok,
+    Error { message: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -449,16 +498,19 @@ mod tests {
             request_id: RequestId::Integer(1),
             is_error: None,
             result: Some(ToolCallResponseResult::ConversationCreate(
-                ConversationCreateResult {
+                ConversationCreateResult::Ok {
                     conversation_id: ConversationId(uuid!("d0f6ecbe-84a2-41c1-b23d-b20473b25eab")),
                     model: "o3".into(),
                 },
             )),
         };
-        let observed = to_val(&env);
+        let req_id = env.request_id.clone();
+        let observed = to_val(&CallToolResult::from(env));
         let expected = json!({
-            "requestId": 1,
-            "result": {
+            "content": [
+                { "type": "text", "text": "{\"conversation_id\":\"d0f6ecbe-84a2-41c1-b23d-b20473b25eab\",\"model\":\"o3\"}" }
+            ],
+            "structuredContent": {
                 "conversation_id": "d0f6ecbe-84a2-41c1-b23d-b20473b25eab",
                 "model": "o3"
             }
@@ -467,6 +519,36 @@ mod tests {
             observed, expected,
             "response (ConversationCreate) must match"
         );
+        assert_eq!(req_id, RequestId::Integer(1));
+    }
+
+    #[test]
+    fn response_error_conversation_create_full_schema() {
+        let env = ToolCallResponse {
+            request_id: RequestId::Integer(2),
+            is_error: Some(true),
+            result: Some(ToolCallResponseResult::ConversationCreate(
+                ConversationCreateResult::Error {
+                    message: "Failed to initialize session".into(),
+                },
+            )),
+        };
+        let req_id = env.request_id.clone();
+        let observed = to_val(&CallToolResult::from(env));
+        let expected = json!({
+            "content": [
+                { "type": "text", "text": "{\"message\":\"Failed to initialize session\"}" }
+            ],
+            "isError": true,
+            "structuredContent": {
+                "message": "Failed to initialize session"
+            }
+        });
+        assert_eq!(
+            observed, expected,
+            "error response (ConversationCreate) must match"
+        );
+        assert_eq!(req_id, RequestId::Integer(2));
     }
 
     #[test]
@@ -478,15 +560,17 @@ mod tests {
                 ConversationStreamResult {},
             )),
         };
-        let observed = to_val(&env);
+        let req_id = env.request_id.clone();
+        let observed = to_val(&CallToolResult::from(env));
         let expected = json!({
-            "requestId": 2,
-            "result": {}
+            "content": [ { "type": "text", "text": "{}" } ],
+            "structuredContent": {}
         });
         assert_eq!(
             observed, expected,
             "response (ConversationStream) must have empty object result"
         );
+        assert_eq!(req_id, RequestId::Integer(2));
     }
 
     #[test]
@@ -495,18 +579,20 @@ mod tests {
             request_id: RequestId::Integer(3),
             is_error: None,
             result: Some(ToolCallResponseResult::ConversationSendMessage(
-                ConversationSendMessageResult { success: true },
+                ConversationSendMessageResult::Ok,
             )),
         };
-        let observed = to_val(&env);
+        let req_id = env.request_id.clone();
+        let observed = to_val(&CallToolResult::from(env));
         let expected = json!({
-            "requestId": 3,
-            "result": { "success": true }
+            "content": [ { "type": "text", "text": "{\"status\":\"ok\"}" } ],
+            "structuredContent": { "status": "ok" }
         });
         assert_eq!(
             observed, expected,
             "response (ConversationSendMessageAccepted) must match"
         );
+        assert_eq!(req_id, RequestId::Integer(3));
     }
 
     #[test]
@@ -526,10 +612,13 @@ mod tests {
                 },
             )),
         };
-        let observed = to_val(&env);
+        let req_id = env.request_id.clone();
+        let observed = to_val(&CallToolResult::from(env));
         let expected = json!({
-            "requestId": 4,
-            "result": {
+            "content": [
+                { "type": "text", "text": "{\"conversations\":[{\"conversation_id\":\"67e55044-10b1-426f-9247-bb680e5fe0c8\",\"title\":\"Refactor config loader\"}],\"next_cursor\":\"next123\"}" }
+            ],
+            "structuredContent": {
                 "conversations": [
                     {
                         "conversation_id": "67e55044-10b1-426f-9247-bb680e5fe0c8",
@@ -543,6 +632,7 @@ mod tests {
             observed, expected,
             "response (ConversationsList with cursor) must match"
         );
+        assert_eq!(req_id, RequestId::Integer(4));
     }
 
     #[test]
@@ -552,15 +642,17 @@ mod tests {
             is_error: Some(true),
             result: None,
         };
-        let observed = to_val(&env);
+        let req_id = env.request_id.clone();
+        let observed = to_val(&CallToolResult::from(env));
         let expected = json!({
-            "requestId": 4,
+            "content": [],
             "isError": true
         });
         assert_eq!(
             observed, expected,
             "error response must omit `result` and include `isError`"
         );
+        assert_eq!(req_id, RequestId::Integer(4));
     }
 
     // ----- Notifications -----

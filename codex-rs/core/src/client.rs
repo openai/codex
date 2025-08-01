@@ -192,7 +192,7 @@ impl ModelClient {
         loop {
             attempt += 1;
 
-            let req_builder = self
+            let mut req_builder = self
                 .client
                 .post(format!("{base_url}/responses"))
                 .header("OpenAI-Beta", "responses=experimental")
@@ -201,7 +201,20 @@ impl ModelClient {
                 .header(reqwest::header::ACCEPT, "text/event-stream")
                 .json(&payload);
 
-            let req_builder = self.provider.apply_http_headers(req_builder);
+            if auth.mode == AuthMode::ChatGPT {
+                if let Some(account_id) = auth.get_account_id().await {
+                    req_builder = req_builder.header("chatgpt-account-id", account_id);
+                }
+            }
+
+            req_builder = self.provider.apply_http_headers(req_builder);
+
+            let originator = self
+                .config
+                .internal_originator
+                .as_deref()
+                .unwrap_or("codex_cli_rs");
+            req_builder = req_builder.header("originator", originator);
 
             let res = req_builder.send().await;
             if let Ok(resp) = &res {

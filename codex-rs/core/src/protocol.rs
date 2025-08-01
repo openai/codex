@@ -13,6 +13,7 @@ use std::time::Duration;
 use mcp_types::CallToolResult;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_bytes::ByteBuf;
 use strum_macros::Display;
 use uuid::Uuid;
 
@@ -121,6 +122,10 @@ pub enum Op {
     /// Request a single history entry identified by `log_id` + `offset`.
     GetHistoryEntryRequest { offset: usize, log_id: u64 },
 
+    /// Request the agent to summarize the current conversation context.
+    /// The agent will use its existing context (either conversation history or previous response id)
+    /// to generate a summary which will be returned as an AgentMessage event.
+    Compact,
     /// Request to shut down codex instance.
     Shutdown,
 }
@@ -175,7 +180,17 @@ pub enum SandboxPolicy {
         /// default.
         #[serde(default)]
         network_access: bool,
+
+        /// When set to `true`, will include defaults like the current working
+        /// directory and TMPDIR (on macOS). When `false`, only `writable_roots`
+        /// are used. (Mainly used for testing.)
+        #[serde(default = "default_true")]
+        include_default_writable_roots: bool,
     },
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl FromStr for SandboxPolicy {
@@ -199,6 +214,7 @@ impl SandboxPolicy {
         SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
             network_access: false,
+            include_default_writable_roots: true,
         }
     }
 
@@ -230,7 +246,15 @@ impl SandboxPolicy {
         match self {
             SandboxPolicy::DangerFullAccess => Vec::new(),
             SandboxPolicy::ReadOnly => Vec::new(),
-            SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
+            SandboxPolicy::WorkspaceWrite {
+                writable_roots,
+                include_default_writable_roots,
+                ..
+            } => {
+                if !*include_default_writable_roots {
+                    return writable_roots.clone();
+                }
+
                 let mut roots = writable_roots.clone();
                 roots.push(cwd.to_path_buf());
 
@@ -318,6 +342,9 @@ pub enum EventMsg {
 
     /// Notification that the server is about to execute a command.
     ExecCommandBegin(ExecCommandBeginEvent),
+
+    /// Incremental chunk of output from a running command.
+    ExecCommandOutputDelta(ExecCommandOutputDeltaEvent),
 
     ExecCommandEnd(ExecCommandEndEvent),
 
@@ -472,6 +499,24 @@ pub struct ExecCommandEndEvent {
     pub stderr: String,
     /// The command's exit code.
     pub exit_code: i32,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecOutputStream {
+    Stdout,
+    Stderr,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ExecCommandOutputDeltaEvent {
+    /// Identifier for the ExecCommandBegin that produced this chunk.
+    pub call_id: String,
+    /// Which stream produced this chunk.
+    pub stream: ExecOutputStream,
+    /// Raw bytes from the stream (may not be valid UTF-8).
+    #[serde(with = "serde_bytes")]
+    pub chunk: ByteBuf,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

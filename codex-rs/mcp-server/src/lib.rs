@@ -17,12 +17,14 @@ use tracing_subscriber::EnvFilter;
 
 mod codex_tool_config;
 mod codex_tool_runner;
+mod conversation_loop;
 mod exec_approval;
 mod json_to_toml;
-mod mcp_protocol;
-mod message_processor;
+pub mod mcp_protocol;
+pub(crate) mod message_processor;
 mod outgoing_message;
 mod patch_approval;
+pub(crate) mod tool_handlers;
 
 use crate::message_processor::MessageProcessor;
 use crate::outgoing_message::OutgoingMessage;

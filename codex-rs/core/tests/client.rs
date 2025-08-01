@@ -95,8 +95,8 @@ async fn includes_session_id_and_model_headers_in_request() {
     // get request from the server
     let request = &server.received_requests().await.unwrap()[0];
     let request_session_id = request.headers.get("session_id").unwrap();
-    let request_originator = request.headers.get("originator").unwrap();
     let request_authorization = request.headers.get("authorization").unwrap();
+    let request_originator = request.headers.get("originator").unwrap();
 
     assert!(current_session_id.is_some());
     assert_eq!(
@@ -171,6 +171,59 @@ async fn includes_base_instructions_override_in_request() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn originator_config_override_is_used() {
+    #![allow(clippy::unwrap_used)]
+
+    // Mock server
+    let server = MockServer::start().await;
+
+    let first = ResponseTemplate::new(200)
+        .insert_header("content-type", "text/event-stream")
+        .set_body_raw(sse_completed("resp1"), "text/event-stream");
+
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(first)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let model_provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+
+    let codex_home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&codex_home);
+    config.model_provider = model_provider;
+    config.internal_originator = Some("my_override".to_string());
+
+    let ctrl_c = std::sync::Arc::new(tokio::sync::Notify::new());
+    let CodexSpawnOk { codex, .. } = Codex::spawn(
+        config,
+        Some(CodexAuth::from_api_key("Test API Key".to_string())),
+        ctrl_c.clone(),
+    )
+    .await
+    .unwrap();
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: "hello".into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let request = &server.received_requests().await.unwrap()[0];
+    let request_originator = request.headers.get("originator").unwrap();
+    assert_eq!(request_originator.to_str().unwrap(), "my_override");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn chatgpt_auth_sends_correct_request() {
     #![allow(clippy::unwrap_used)]
 
@@ -235,8 +288,9 @@ async fn chatgpt_auth_sends_correct_request() {
     // get request from the server
     let request = &server.received_requests().await.unwrap()[0];
     let request_session_id = request.headers.get("session_id").unwrap();
-    let request_originator = request.headers.get("originator").unwrap();
     let request_authorization = request.headers.get("authorization").unwrap();
+    let request_originator = request.headers.get("originator").unwrap();
+    let request_chatgpt_account_id = request.headers.get("chatgpt-account-id").unwrap();
     let request_body = request.body_json::<serde_json::Value>().unwrap();
 
     assert!(current_session_id.is_some());
@@ -249,6 +303,7 @@ async fn chatgpt_auth_sends_correct_request() {
         request_authorization.to_str().unwrap(),
         "Bearer Access Token"
     );
+    assert_eq!(request_chatgpt_account_id.to_str().unwrap(), "account_id");
     assert!(!request_body["store"].as_bool().unwrap());
     assert!(request_body["stream"].as_bool().unwrap());
     assert_eq!(
@@ -332,7 +387,7 @@ fn auth_from_token(id_token: String) -> CodexAuth {
                 id_token,
                 access_token: "Access Token".to_string(),
                 refresh_token: "test".to_string(),
-                account_id: None,
+                account_id: Some("account_id".to_string()),
             }),
             last_refresh: Some(Utc::now()),
         }),

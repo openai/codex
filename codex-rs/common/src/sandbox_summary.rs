@@ -7,6 +7,7 @@ pub fn summarize_sandbox_policy(sandbox_policy: &SandboxPolicy) -> String {
         SandboxPolicy::WorkspaceWrite {
             writable_roots,
             network_access,
+            include_default_writable_roots,
         } => {
             let mut summary = "workspace-write".to_string();
             if !writable_roots.is_empty() {
@@ -18,6 +19,9 @@ pub fn summarize_sandbox_policy(sandbox_policy: &SandboxPolicy) -> String {
                         .collect::<Vec<_>>()
                         .join(", ")
                 ));
+            }
+            if !*include_default_writable_roots {
+                summary.push_str(" (exact writable roots)");
             }
             if *network_access {
                 summary.push_str(" (network access enabled)");

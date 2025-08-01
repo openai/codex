@@ -240,6 +240,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     cwd.to_string_lossy(),
                 );
             }
+            EventMsg::ExecCommandOutputDelta(_) => {}
             EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                 call_id,
                 stdout,

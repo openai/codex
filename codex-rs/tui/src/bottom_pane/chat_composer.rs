@@ -41,6 +41,7 @@ pub(crate) struct ChatComposer<'a> {
     app_event_tx: AppEventSender,
     history: ChatComposerHistory,
     ctrl_c_quit_hint: bool,
+    use_shift_enter_hint: bool,
     dismissed_file_popup_token: Option<String>,
     current_file_query: Option<String>,
     pending_pastes: Vec<(String, String)>,
@@ -54,10 +55,16 @@ enum ActivePopup {
 }
 
 impl ChatComposer<'_> {
-    pub fn new(has_input_focus: bool, app_event_tx: AppEventSender) -> Self {
+    pub fn new(
+        has_input_focus: bool,
+        app_event_tx: AppEventSender,
+        enhanced_keys_supported: bool,
+    ) -> Self {
         let mut textarea = TextArea::default();
         textarea.set_placeholder_text(BASE_PLACEHOLDER_TEXT);
         textarea.set_cursor_line_style(ratatui::style::Style::default());
+
+        let use_shift_enter_hint = enhanced_keys_supported;
 
         let mut this = Self {
             textarea,
@@ -65,6 +72,7 @@ impl ChatComposer<'_> {
             app_event_tx,
             history: ChatComposerHistory::new(),
             ctrl_c_quit_hint: false,
+            use_shift_enter_hint,
             dismissed_file_popup_token: None,
             current_file_query: None,
             pending_pastes: Vec::new(),
@@ -712,11 +720,16 @@ impl WidgetRef for &ChatComposer<'_> {
                         Span::from(" to quit"),
                     ]
                 } else {
+                    let newline_hint_key = if self.use_shift_enter_hint {
+                        "Shift+⏎"
+                    } else {
+                        "Ctrl+J"
+                    };
                     vec![
                         Span::from(" "),
                         "⏎".set_style(key_hint_style),
                         Span::from(" send   "),
-                        "Shift+⏎".set_style(key_hint_style),
+                        newline_hint_key.set_style(key_hint_style),
                         Span::from(" newline   "),
                         "Ctrl+C".set_style(key_hint_style),
                         Span::from(" quit"),
@@ -890,7 +903,7 @@ mod tests {
 
         let (tx, _rx) = std::sync::mpsc::channel();
         let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(true, sender);
+        let mut composer = ChatComposer::new(true, sender, false);
 
         let needs_redraw = composer.handle_paste("hello".to_string());
         assert!(needs_redraw);
@@ -913,7 +926,7 @@ mod tests {
 
         let (tx, _rx) = std::sync::mpsc::channel();
         let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(true, sender);
+        let mut composer = ChatComposer::new(true, sender, false);
 
         let large = "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 10);
         let needs_redraw = composer.handle_paste(large.clone());
@@ -942,7 +955,7 @@ mod tests {
         let large = "y".repeat(LARGE_PASTE_CHAR_THRESHOLD + 1);
         let (tx, _rx) = std::sync::mpsc::channel();
         let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(true, sender);
+        let mut composer = ChatComposer::new(true, sender, false);
 
         composer.handle_paste(large);
         assert_eq!(composer.pending_pastes.len(), 1);
@@ -978,7 +991,7 @@ mod tests {
 
         for (name, input) in test_cases {
             // Create a fresh composer for each test case
-            let mut composer = ChatComposer::new(true, sender.clone());
+            let mut composer = ChatComposer::new(true, sender.clone(), false);
 
             if let Some(text) = input {
                 composer.handle_paste(text);
@@ -1015,7 +1028,7 @@ mod tests {
 
         let (tx, _rx) = std::sync::mpsc::channel();
         let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(true, sender);
+        let mut composer = ChatComposer::new(true, sender, false);
 
         // Define test cases: (paste content, is_large)
         let test_cases = [
@@ -1088,7 +1101,7 @@ mod tests {
 
         let (tx, _rx) = std::sync::mpsc::channel();
         let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(true, sender);
+        let mut composer = ChatComposer::new(true, sender, false);
 
         // Define test cases: (content, is_large)
         let test_cases = [
@@ -1161,7 +1174,7 @@ mod tests {
 
         let (tx, _rx) = std::sync::mpsc::channel();
         let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(true, sender);
+        let mut composer = ChatComposer::new(true, sender, false);
 
         // Define test cases: (cursor_position_from_end, expected_pending_count)
         let test_cases = [

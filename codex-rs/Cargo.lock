@@ -695,6 +695,7 @@ dependencies = [
  "reqwest",
  "seccompiler",
  "serde",
+ "serde_bytes",
  "serde_json",
  "sha1",
  "shlex",
@@ -2644,6 +2645,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
+ "codex-core",
  "codex-mcp-server",
  "mcp-types",
  "pretty_assertions",
@@ -2651,6 +2653,7 @@ dependencies = [
  "shlex",
  "tempfile",
  "tokio",
+ "uuid",
  "wiremock",
 ]
 
@@ -3948,6 +3951,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5f0e2c6ed6606019b4e29e69dbaba95b11854410e5347d525002456dbbb786b6"
 dependencies = [
  "serde_derive",
+]
+
+[[package]]
+name = "serde_bytes"
+version = "0.11.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8437fd221bde2d4ca316d61b90e337e9e702b3820b87d63caa9ba6c02bd06d96"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
