@@ -31,6 +31,8 @@ pub struct TurnDiffTracker {
     baseline_mode: HashMap<String, String>,
     /// Aggregated unified diff for all accumulated changes across files.
     pub unified_diff: Option<String>,
+    /// Cache of known git worktree roots to avoid repeated filesystem walks.
+    git_root_cache: Vec<PathBuf>,
 }
 
 impl TurnDiffTracker {
@@ -108,6 +110,53 @@ impl TurnDiffTracker {
             .cloned()
     }
 
+    /// Find the git worktree root for a file/directory by walking up to the first ancestor containing a `.git` entry.
+    /// Uses a simple cache of known roots and avoids negative-result caching for simplicity.
+    fn find_git_root_cached(&mut self, start: &Path) -> Option<PathBuf> {
+        let dir = if start.is_dir() {
+            start
+        } else {
+            start.parent()?
+        };
+
+        // Fast path: if any cached root is an ancestor of this path, use it.
+        if let Some(root) = self
+            .git_root_cache
+            .iter()
+            .find(|r| dir.starts_with(r))
+            .cloned()
+        {
+            return Some(root);
+        }
+
+        // Walk up to find a `.git` marker.
+        let mut cur = dir.to_path_buf();
+        loop {
+            let git_marker = cur.join(".git");
+            if git_marker.is_dir() || git_marker.is_file() {
+                if !self.git_root_cache.iter().any(|r| r == &cur) {
+                    self.git_root_cache.push(cur.clone());
+                }
+                return Some(cur);
+            }
+            if let Some(parent) = cur.parent() {
+                cur = parent.to_path_buf();
+            } else {
+                return None;
+            }
+        }
+    }
+
+    /// Return a display string for `path` relative to its git root if found, else absolute.
+    fn relative_to_git_root_str(&mut self, path: &Path) -> String {
+        if let Some(root) = self.find_git_root_cached(path) {
+            if let Ok(rel) = path.strip_prefix(&root) {
+                return rel.display().to_string();
+            }
+        }
+        path.display().to_string()
+    }
+
     /// Recompute the aggregated unified diff by comparing all of the in-memory snapshots that were
     /// collected before the first time they were touched by apply_patch during this turn with
     /// the current repo state.
@@ -169,8 +218,8 @@ impl TurnDiffTracker {
                 continue;
             }
 
-            let left_display = baseline_external.display().to_string();
-            let right_display = current_external.display().to_string();
+            let left_display = self.relative_to_git_root_str(&baseline_external);
+            let right_display = self.relative_to_git_root_str(&current_external);
 
             // Diff the contents.
             let diff = similar::TextDiff::from_lines(left_text, right_text);
