@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Command;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -32,6 +33,9 @@ pub struct TurnDiffTracker {
     baseline_mode: HashMap<String, String>,
     /// Cache of known git worktree roots to avoid repeated filesystem walks.
     git_root_cache: Vec<PathBuf>,
+    /// Internal filename -> baseline blob OID as observed at the time the change was first seen.
+    /// ZERO_OID when the file did not exist.
+    baseline_oid: HashMap<String, String>,
 }
 
 impl TurnDiffTracker {
@@ -63,8 +67,17 @@ impl TurnDiffTracker {
                     if let Some(mode) = file_mode_for_path(path) {
                         self.baseline_mode.insert(internal.clone(), mode);
                     }
-                    Some(String::from_utf8_lossy(&contents).into_owned())
+                    let s = String::from_utf8_lossy(&contents).into_owned();
+                    // Record baseline OID from git for the file's repository, falling back to content hash.
+                    let oid = self
+                        .git_blob_oid_for_path(path)
+                        .unwrap_or_else(|| git_blob_sha1_hex(&s));
+                    self.baseline_oid.insert(internal.clone(), oid);
+                    Some(s)
                 } else {
+                    // When the file did not exist, record ZERO_OID as baseline.
+                    self.baseline_oid
+                        .insert(internal.clone(), ZERO_OID.to_string());
                     None
                 };
                 self.baseline_contents.insert(internal.clone(), baseline);
@@ -86,6 +99,7 @@ impl TurnDiffTracker {
                             .insert(i.clone(), path.clone());
                         // No on-disk file read here; treat as addition.
                         self.baseline_contents.insert(i.clone(), None);
+                        self.baseline_oid.insert(i.clone(), ZERO_OID.to_string());
                         i
                     }
                 };
@@ -154,6 +168,27 @@ impl TurnDiffTracker {
             }
         }
         path.display().to_string()
+    }
+
+    /// Ask git to compute the blob SHA-1 for the file at `path` within its repository.
+    /// Returns None if no repository is found or git invocation fails.
+    fn git_blob_oid_for_path(&mut self, path: &Path) -> Option<String> {
+        let root = self.find_git_root_cached(path)?;
+        // Compute a path relative to the repo root for better portability across platforms.
+        let rel = path.strip_prefix(&root).unwrap_or(path);
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .arg("hash-object")
+            .arg("--")
+            .arg(rel)
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if s.len() == 40 { Some(s) } else { None }
     }
 
     /// Recompute the aggregated unified diff by comparing all of the in-memory snapshots that were
@@ -248,15 +283,25 @@ impl TurnDiffTracker {
                 aggregated.push_str(&format!("new mode {current_mode}\n"));
             }
 
-            // Compute blob object IDs for left and right contents.
-            let left_oid = left_content
-                .as_ref()
-                .map(|s| git_blob_sha1_hex(s))
+            // Determine blob object IDs for left and right contents. Prefer stored OIDs
+            // captured from the original repo state when the change was first seen.
+            let left_oid = self
+                .baseline_oid
+                .get(&internal)
+                .cloned()
+                .or_else(|| {
+                    left_content
+                        .as_ref()
+                        .map(|s| git_blob_sha1_hex(s))
+                        .or(Some(ZERO_OID.to_string()))
+                })
                 .unwrap_or_else(|| ZERO_OID.to_string());
-            let right_oid = right_content
-                .as_ref()
-                .map(|s| git_blob_sha1_hex(s))
-                .unwrap_or_else(|| ZERO_OID.to_string());
+            let right_oid = if right_content.is_some() {
+                self.git_blob_oid_for_path(&current_external)
+                    .unwrap_or_else(|| git_blob_sha1_hex(right_text))
+            } else {
+                ZERO_OID.to_string()
+            };
 
             aggregated.push_str(&format!("index {left_oid}..{right_oid}\n"));
 
