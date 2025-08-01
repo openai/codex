@@ -146,6 +146,11 @@ pub struct Config {
 
     /// Include an experimental plan tool that the model can use to update its current plan and status of each step.
     pub include_plan_tool: bool,
+
+    /// Optional internal originator string to include in outbound HTTP
+    /// requests as the `originator` header. If unset, the built‑in default
+    /// originator will be used.
+    pub internal_originator: Option<String>,
 }
 
 impl Config {
@@ -336,6 +341,12 @@ pub struct ConfigToml {
 
     /// Experimental path to a file whose contents replace the built-in BASE_INSTRUCTIONS.
     pub experimental_instructions_file: Option<PathBuf>,
+
+    /// Optional internal originator string to include in outbound HTTP
+    /// requests as the `originator` header. This intentionally uses a dashed
+    /// key to match existing conventions in downstream systems.
+    #[serde(rename = "internal-originator")]
+    pub internal_originator: Option<String>,
 }
 
 impl ConfigToml {
@@ -529,6 +540,7 @@ impl Config {
 
             experimental_resume,
             include_plan_tool: include_plan_tool.unwrap_or(false),
+            internal_originator: cfg.internal_originator,
         };
         Ok(config)
     }
@@ -887,6 +899,7 @@ disable_response_storage = true
                 experimental_resume: None,
                 base_instructions: None,
                 include_plan_tool: false,
+                internal_originator: None,
             },
             o3_profile_config
         );
@@ -936,6 +949,7 @@ disable_response_storage = true
             experimental_resume: None,
             base_instructions: None,
             include_plan_tool: false,
+            internal_originator: None,
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -1000,6 +1014,7 @@ disable_response_storage = true
             experimental_resume: None,
             base_instructions: None,
             include_plan_tool: false,
+            internal_originator: None,
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);

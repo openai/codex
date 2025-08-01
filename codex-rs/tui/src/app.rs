@@ -10,7 +10,6 @@ use crate::tui;
 use codex_core::config::Config;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
-use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::Op;
 use color_eyre::eyre::Result;
 use crossterm::SynchronizedUpdate;

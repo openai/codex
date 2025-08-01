@@ -207,7 +207,16 @@ impl ModelClient {
                 }
             }
 
-            let req_builder = self.provider.apply_http_headers(req_builder);
+            let mut req_builder = self.provider.apply_http_headers(req_builder);
+            // Include `originator` for Responses API requests. Default to
+            // "codex_cli_rs" unless overridden via config. Not applied to
+            // Chat Completions requests.
+            let originator = self
+                .config
+                .internal_originator
+                .as_deref()
+                .unwrap_or("codex_cli_rs");
+            req_builder = req_builder.header("originator", originator);
 
             let res = req_builder.send().await;
             if let Ok(resp) = &res {
