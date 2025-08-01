@@ -12,6 +12,7 @@ use mcp_types::RequestId;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+use crate::conversation_loop::run_conversation_loop;
 use crate::json_to_toml::json_to_toml;
 use crate::mcp_protocol::ConversationCreateArgs;
 use crate::mcp_protocol::ConversationCreateResult;
@@ -26,7 +27,7 @@ pub(crate) async fn handle_create_conversation(
 ) {
     // Build ConfigOverrides from args
     let ConversationCreateArgs {
-        prompt:_, // not used here; creation only establishes the session
+        prompt: _, // not used here; creation only establishes the session
         model,
         cwd,
         approval_policy,
@@ -121,7 +122,13 @@ pub(crate) async fn handle_create_conversation(
     let codex_arc = Arc::new(codex_conversation.codex);
 
     // Store session for future calls
-    insert_session(session_id, codex_arc, message_processor.session_map()).await;
+    insert_session(
+        session_id,
+        codex_arc.clone(),
+        message_processor.session_map(),
+    )
+    .await;
+    run_conversation_loop(codex_arc.clone(), message_processor.outgoing(), id.clone()).await;
 
     // Reply with the new conversation id and effective model
     message_processor

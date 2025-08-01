@@ -68,6 +68,10 @@ impl MessageProcessor {
         self.session_map.clone()
     }
 
+    pub(crate) fn outgoing(&self) -> Arc<OutgoingMessageSender> {
+        self.outgoing.clone()
+    }
+
     pub(crate) fn running_session_ids(&self) -> Arc<Mutex<HashSet<Uuid>>> {
         self.running_session_ids.clone()
     }
