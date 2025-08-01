@@ -216,18 +216,18 @@ where
 {
     let mut fg = Color::Reset;
     let mut bg = Color::Reset;
-    let mut modifier = Modifier::empty();
+    let mut last_modifier = Modifier::empty();
     for span in content {
-        let mut next_modifier = modifier;
-        next_modifier.insert(span.style.add_modifier);
-        next_modifier.remove(span.style.sub_modifier);
-        if next_modifier != modifier {
+        let mut modifier = Modifier::empty();
+        modifier.insert(span.style.add_modifier);
+        modifier.remove(span.style.sub_modifier);
+        if modifier != last_modifier {
             let diff = ModifierDiff {
-                from: modifier,
-                to: next_modifier,
+                from: last_modifier,
+                to: modifier,
             };
             diff.queue(&mut writer)?;
-            modifier = next_modifier;
+            last_modifier = modifier;
         }
         let next_fg = span.style.fg.unwrap_or(Color::Reset);
         let next_bg = span.style.bg.unwrap_or(Color::Reset);
