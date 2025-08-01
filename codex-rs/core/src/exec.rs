@@ -10,12 +10,12 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use async_channel::Sender;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncReadExt;
 use tokio::io::BufReader;
 use tokio::process::Child;
 use tokio::sync::Notify;
-use async_channel::Sender;
 
 use crate::error::CodexErr;
 use crate::error::Result;
