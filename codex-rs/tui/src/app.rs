@@ -10,7 +10,6 @@ use crate::tui;
 use codex_core::config::Config;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
-use codex_core::protocol::ExecApprovalRequestEvent;
 use color_eyre::eyre::Result;
 use crossterm::SynchronizedUpdate;
 use crossterm::event::KeyCode;
@@ -313,14 +312,41 @@ impl App<'_> {
                     }
                     #[cfg(debug_assertions)]
                     SlashCommand::TestApproval => {
+                        use std::collections::HashMap;
+
+                        use codex_core::protocol::ApplyPatchApprovalRequestEvent;
+                        use codex_core::protocol::FileChange;
+
                         self.app_event_tx.send(AppEvent::CodexEvent(Event {
                             id: "1".to_string(),
-                            msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
-                                call_id: "1".to_string(),
-                                command: vec!["git".into(), "apply".into()],
-                                cwd: self.config.cwd.clone(),
-                                reason: Some("test".to_string()),
-                            }),
+                            // msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
+                            //     call_id: "1".to_string(),
+                            //     command: vec!["git".into(), "apply".into()],
+                            //     cwd: self.config.cwd.clone(),
+                            //     reason: Some("test".to_string()),
+                            // }),
+                            msg: EventMsg::ApplyPatchApprovalRequest(
+                                ApplyPatchApprovalRequestEvent {
+                                    call_id: "1".to_string(),
+                                    changes: HashMap::from([
+                                        (
+                                            PathBuf::from("/tmp/test.txt"),
+                                            FileChange::Add {
+                                                content: "test".to_string(),
+                                            },
+                                        ),
+                                        (
+                                            PathBuf::from("/tmp/test2.txt"),
+                                            FileChange::Update {
+                                                unified_diff: "+test\n-test2".to_string(),
+                                                move_path: None,
+                                            },
+                                        ),
+                                    ]),
+                                    reason: None,
+                                    grant_root: Some(PathBuf::from("/tmp")),
+                                },
+                            ),
                         }));
                     }
                 },
