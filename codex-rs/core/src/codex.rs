@@ -48,6 +48,7 @@ use crate::error::SandboxErr;
 use crate::exec::ExecParams;
 use crate::exec::ExecToolCallOutput;
 use crate::exec::SandboxType;
+use crate::exec::StdoutStream;
 use crate::exec::process_exec_tool_call;
 use crate::exec_env::create_env;
 use crate::mcp_connection_manager::McpConnectionManager;
@@ -1759,6 +1760,11 @@ async fn handle_container_exec_with_params(
         sess.ctrl_c.clone(),
         &sess.sandbox_policy,
         &sess.codex_linux_sandbox_exe,
+        Some(StdoutStream {
+            sub_id: sub_id.clone(),
+            call_id: call_id.clone(),
+            tx_event: sess.tx_event.clone(),
+        }),
     )
     .await;
 
@@ -1879,6 +1885,11 @@ async fn handle_sandbox_error(
                 sess.ctrl_c.clone(),
                 &sess.sandbox_policy,
                 &sess.codex_linux_sandbox_exe,
+                Some(StdoutStream {
+                    sub_id: sub_id.clone(),
+                    call_id: call_id.clone(),
+                    tx_event: sess.tx_event.clone(),
+                }),
             )
             .await;
 

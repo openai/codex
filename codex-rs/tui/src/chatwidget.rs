@@ -374,6 +374,7 @@ impl ChatWidget<'_> {
                 );
                 self.add_to_history(HistoryCell::new_active_exec_command(command));
             }
+            EventMsg::ExecCommandStdoutDelta(_) => {}
             EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
                 call_id: _,
                 auto_approved,

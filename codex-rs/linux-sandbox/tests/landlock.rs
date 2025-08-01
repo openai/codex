@@ -59,6 +59,7 @@ async fn run_cmd(cmd: &[&str], writable_roots: &[PathBuf], timeout_ms: u64) {
         ctrl_c,
         &sandbox_policy,
         &codex_linux_sandbox_exe,
+        None,
     )
     .await
     .unwrap();
@@ -149,6 +150,7 @@ async fn assert_network_blocked(cmd: &[&str]) {
         ctrl_c,
         &sandbox_policy,
         &codex_linux_sandbox_exe,
+        None,
     )
     .await;
 
