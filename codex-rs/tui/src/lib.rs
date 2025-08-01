@@ -149,19 +149,42 @@ pub async fn run_main(
     if let Some(latest_version) = updates::get_upgrade_version(&config) {
         let current_version = env!("CARGO_PKG_VERSION");
         let exe = std::env::current_exe()?;
-        let update_command = if cfg!(target_os = "macos")
+        let managed_by_npm = std::env::var_os("CODEX_MANAGED_BY_NPM").is_some();
+
+        // Always show the header line first.
+        eprintln!(
+            "{} {current_version} -> {latest_version}.",
+            "✨⬆️ Update available!".bold().cyan()
+        );
+
+        // Prefer npm instructions when launched via the npm wrapper.
+        if managed_by_npm {
+            let npm_cmd = "npm install -g @openai/codex@latest";
+            eprintln!("Run {} to update.", npm_cmd.cyan().on_black());
+
+            // On macOS, also mention Homebrew as an alternative.
+            if cfg!(target_os = "macos") {
+                let brew_cmd = "brew upgrade codex";
+                eprintln!(
+                    "Or, if installed with Homebrew: {}",
+                    brew_cmd.cyan().on_black()
+                );
+            }
+        } else if cfg!(target_os = "macos")
             && (exe.starts_with("/opt/homebrew") || exe.starts_with("/usr/local"))
         {
-            "brew upgrade codex"
+            // Likely installed via Homebrew – show brew instructions.
+            let brew_cmd = "brew upgrade codex";
+            eprintln!("Run {} to update.", brew_cmd.cyan().on_black());
         } else {
-            "npm install -g @openai/codex@latest"
-        };
+            // Fallback: provide a generic message.
+            eprintln!(
+                "See {} for the latest releases and installation options.",
+                "https://github.com/openai/codex/releases".cyan().on_black()
+            );
+        }
 
-        eprintln!(
-            "{} {current_version} -> {latest_version}. Run {update_command} to update.\n",
-            "✨⬆️ Update available!".bold().cyan(),
-            update_command = update_command.cyan().on_black()
-        );
+        eprintln!("");
     }
 
     let show_login_screen = should_show_login_screen(&config);

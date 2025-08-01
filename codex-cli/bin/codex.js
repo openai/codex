@@ -83,6 +83,7 @@ if (wantsNative && process.platform !== 'win32') {
 
   const child = spawn(binaryPath, process.argv.slice(2), {
     stdio: "inherit",
+    env: { ...process.env, CODEX_MANAGED_BY_NPM: "1" },
   });
 
   child.on("error", (err) => {
