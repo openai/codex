@@ -51,9 +51,9 @@ async fn test_conversation_create_and_send_message_ok() {
 
     // Structured content must include status=ok, a UUID conversation_id and the model we passed.
     let sc = &resp.result["structuredContent"];
-    let conv_id = sc["conversation_id"].as_str().expect("uuid string");
+    let conv_id = sc["Ok"]["conversation_id"].as_str().expect("uuid string");
     assert!(!conv_id.is_empty());
-    assert_eq!(sc["model"], json!("o3"));
+    assert_eq!(sc["Ok"]["model"], json!("o3"));
 
     // Now send a message to the created conversation and expect an OK result.
     let send_id = mcp
