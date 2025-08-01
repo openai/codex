@@ -172,9 +172,10 @@ pub enum ToolCallResponseResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ConversationCreateResult {
-    pub conversation_id: ConversationId,
-    pub model: String,
+#[serde(tag = "status", rename_all = "camelCase")]
+pub enum ConversationCreateResult {
+    Ok { conversation_id: ConversationId, model: String },
+    Error { message: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -491,7 +492,7 @@ mod tests {
             request_id: RequestId::Integer(1),
             is_error: None,
             result: Some(ToolCallResponseResult::ConversationCreate(
-                ConversationCreateResult {
+                ConversationCreateResult::Ok {
                     conversation_id: ConversationId(uuid!("d0f6ecbe-84a2-41c1-b23d-b20473b25eab")),
                     model: "o3".into(),
                 },
@@ -501,9 +502,10 @@ mod tests {
         let observed = to_val(&CallToolResult::from(env));
         let expected = json!({
             "content": [
-                { "type": "text", "text": "{\"conversation_id\":\"d0f6ecbe-84a2-41c1-b23d-b20473b25eab\",\"model\":\"o3\"}" }
+                { "type": "text", "text": "{\"conversation_id\":\"d0f6ecbe-84a2-41c1-b23d-b20473b25eab\",\"model\":\"o3\",\"status\":\"ok\"}" }
             ],
             "structuredContent": {
+                "status": "ok",
                 "conversation_id": "d0f6ecbe-84a2-41c1-b23d-b20473b25eab",
                 "model": "o3"
             }
