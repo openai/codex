@@ -132,32 +132,32 @@ impl From<ToolCallResponse> for CallToolResult {
             is_error,
             result,
         } = val;
-        let (content, structured_content, is_error_out) = match result {
+        match result {
             Some(res) => match serde_json::to_value(&res) {
-                Ok(v) => {
-                    let content = vec![ContentBlock::TextContent(TextContent {
+                Ok(v) => CallToolResult {
+                    content: vec![ContentBlock::TextContent(TextContent {
                         r#type: "text".to_string(),
                         text: v.to_string(),
                         annotations: None,
-                    })];
-                    (content, Some(v), is_error)
-                }
-                Err(e) => {
-                    let content = vec![ContentBlock::TextContent(TextContent {
+                    })],
+                    is_error,
+                    structured_content: Some(v),
+                },
+                Err(e) => CallToolResult {
+                    content: vec![ContentBlock::TextContent(TextContent {
                         r#type: "text".to_string(),
                         text: format!("Failed to serialize tool result: {e}"),
                         annotations: None,
-                    })];
-                    (content, None, Some(true))
-                }
+                    })],
+                    is_error: Some(true),
+                    structured_content: None,
+                },
             },
-            None => (vec![], None, is_error),
-        };
-
-        CallToolResult {
-            content,
-            is_error: is_error_out,
-            structured_content,
+            None => CallToolResult {
+                content: vec![],
+                is_error,
+                structured_content: None,
+            },
         }
     }
 }
