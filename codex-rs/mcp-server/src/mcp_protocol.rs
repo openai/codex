@@ -507,7 +507,7 @@ mod tests {
         let observed = to_val(&CallToolResult::from(env));
         let expected = json!({
             "content": [
-                { "type": "text", "text": "{\"conversation_id\":\"d0f6ecbe-84a2-41c1-b23d-b20473b25eab\",\"model\":\"o3\",\"status\":\"ok\"}" }
+                { "type": "text", "text": "{\"status\":\"ok\",\"conversation_id\":\"d0f6ecbe-84a2-41c1-b23d-b20473b25eab\",\"model\":\"o3\"}" }
             ],
             "structuredContent": {
                 "status": "ok",
@@ -537,7 +537,7 @@ mod tests {
         let observed = to_val(&CallToolResult::from(env));
         let expected = json!({
             "content": [
-                { "type": "text", "text": "{\"message\":\"Failed to initialize session\",\"status\":\"error\"}" }
+                { "type": "text", "text": "{\"status\":\"error\",\"message\":\"Failed to initialize session\"}" }
             ],
             "isError": true,
             "structuredContent": {
