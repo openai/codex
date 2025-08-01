@@ -1,8 +1,12 @@
+use std::env;
+
 use codex_common::CliConfigOverrides;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_login::AuthMode;
+use codex_login::OPENAI_API_KEY_ENV_VAR;
 use codex_login::load_auth;
+use codex_login::login_with_api_key;
 use codex_login::login_with_chatgpt;
 
 pub async fn run_login_with_chatgpt(cli_config_overrides: CliConfigOverrides) -> ! {
@@ -21,6 +25,24 @@ pub async fn run_login_with_chatgpt(cli_config_overrides: CliConfigOverrides) ->
     }
 }
 
+pub async fn run_login_with_api_key(
+    cli_config_overrides: CliConfigOverrides,
+    api_key: String,
+) -> ! {
+    let config = load_config_or_exit(cli_config_overrides);
+
+    match login_with_api_key(&config.codex_home, &api_key) {
+        Ok(_) => {
+            eprintln!("Successfully logged in");
+            std::process::exit(0);
+        }
+        Err(e) => {
+            eprintln!("Error logging in: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
 pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
     let config = load_config_or_exit(cli_config_overrides);
 
@@ -28,11 +50,26 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
         &config.codex_home,
         &config.model_provider.name,
         &config.model_provider.env_key,
+        true,
     ) {
         Ok(Some(auth)) => match auth.mode {
             AuthMode::ApiKey => {
                 if let Some(api_key) = auth.api_key.as_deref() {
                     eprintln!("Logged in using an API key - {}", safe_format_key(api_key));
+
+                    if let Ok(env_api_key) = env::var(
+                        &config
+                            .model_provider
+                            .env_key
+                            .as_deref()
+                            .unwrap_or(OPENAI_API_KEY_ENV_VAR),
+                    ) {
+                        if env_api_key == api_key {
+                            eprintln!(
+                                "   API loaded from OPENAI_API_KEY environment variable or .env file"
+                            );
+                        }
+                    }
                 } else {
                     eprintln!("Logged in using an API key");
                 }

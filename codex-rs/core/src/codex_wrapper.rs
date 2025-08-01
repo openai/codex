@@ -30,6 +30,7 @@ pub async fn init_codex(config: Config) -> anyhow::Result<CodexConversation> {
         &config.codex_home,
         &config.model_provider.name,
         &config.model_provider.env_key,
+        true,
     )?;
     let CodexSpawnOk {
         codex,

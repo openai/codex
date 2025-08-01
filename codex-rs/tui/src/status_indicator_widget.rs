@@ -73,6 +73,10 @@ impl StatusIndicatorWidget {
         }
     }
 
+    pub fn desired_height(&self, _width: u16) -> u16 {
+        1
+    }
+
     /// Update the line that is displayed in the widget.
     pub(crate) fn update_text(&mut self, text: String) {
         self.text = text.replace(['\n', '\r'], " ");
@@ -91,8 +95,8 @@ impl WidgetRef for StatusIndicatorWidget {
         let widget_style = Style::default();
         let block = Block::default()
             .padding(Padding::new(1, 0, 0, 0))
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
+            .borders(Borders::LEFT)
+            .border_type(BorderType::QuadrantOutside)
             .border_style(widget_style.dim());
         // Animated 3‑dot pattern inside brackets. The *active* dot is bold
         // white, the others are dim.

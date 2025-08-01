@@ -75,7 +75,7 @@ pub async fn run_main(
             config_profile: cli.config_profile.clone(),
             codex_linux_sandbox_exe,
             base_instructions: None,
-            include_plan_tool: None,
+            include_plan_tool: Some(true),
         };
         // Parse `-c` overrides from the CLI.
         let cli_kv_overrides = match cli.config_overrides.parse_overrides() {
@@ -176,9 +176,13 @@ fn run_ratatui_app(
     color_eyre::install()?;
 
     // Forward panic reports through tracing so they appear in the UI status
-    // line instead of interleaving raw panic output with the interface.
-    std::panic::set_hook(Box::new(|info| {
+    // line, but do not swallow the default/color-eyre panic handler.
+    // Chain to the previous hook so users still get a rich panic report
+    // (including backtraces) after we restore the terminal.
+    let prev_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
         tracing::error!("panic: {info}");
+        prev_hook(info);
     }));
     let mut terminal = tui::init(&config)?;
     terminal.clear()?;
@@ -226,6 +230,7 @@ fn should_show_login_screen(config: &Config) -> bool {
             &codex_home,
             &config.model_provider.name,
             &config.model_provider.env_key,
+            true,
         ) {
             Ok(Some(_)) => false,
             Ok(None) => true,

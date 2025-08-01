@@ -10,6 +10,7 @@ path = "lib.rs"
 anyhow = "1"
 assert_cmd = "2"
 codex-mcp-server = { path = "../.." }
+codex-core = { path = "../../../core" }
 mcp-types = { path = "../../../mcp-types" }
 pretty_assertions = "1.4.1"
 serde_json = "1"
@@ -22,3 +23,4 @@ tokio = { version = "1", features = [
     "rt-multi-thread",
 ] }
 wiremock = "0.6"
+uuid = { version = "1", features = ["serde", "v4"] }

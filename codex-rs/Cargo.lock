@@ -793,6 +793,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 
@@ -2642,6 +2643,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
+ "codex-core",
  "codex-mcp-server",
  "mcp-types",
  "pretty_assertions",
@@ -2649,6 +2651,7 @@ dependencies = [
  "shlex",
  "tempfile",
  "tokio",
+ "uuid",
  "wiremock",
 ]
 

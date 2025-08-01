@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -24,6 +25,7 @@ use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TokenUsage;
 use crossterm::event::KeyEvent;
+use crossterm::event::KeyEventKind;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::widgets::Widget;
@@ -44,6 +46,12 @@ use crate::history_cell::PatchEventType;
 use crate::user_approval_widget::ApprovalRequest;
 use codex_file_search::FileMatch;
 
+struct RunningCommand {
+    command: Vec<String>,
+    #[allow(dead_code)]
+    cwd: PathBuf,
+}
+
 pub(crate) struct ChatWidget<'a> {
     app_event_tx: AppEventSender,
     codex_op_tx: UnboundedSender<Op>,
@@ -56,6 +64,7 @@ pub(crate) struct ChatWidget<'a> {
     // We wait for the final AgentMessage event and then emit the full text
     // at once into scrollback so the history contains a single message.
     answer_buffer: String,
+    running_commands: HashMap<String, RunningCommand>,
 }
 
 struct UserMessage {
@@ -86,6 +95,7 @@ impl ChatWidget<'_> {
         app_event_tx: AppEventSender,
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
+        enhanced_keys_supported: bool,
     ) -> Self {
         let (codex_op_tx, mut codex_op_rx) = unbounded_channel::<Op>();
 
@@ -131,6 +141,7 @@ impl ChatWidget<'_> {
             bottom_pane: BottomPane::new(BottomPaneParams {
                 app_event_tx,
                 has_input_focus: true,
+                enhanced_keys_supported,
             }),
             config,
             initial_user_message: create_initial_user_message(
@@ -140,15 +151,18 @@ impl ChatWidget<'_> {
             token_usage: TokenUsage::default(),
             reasoning_buffer: String::new(),
             answer_buffer: String::new(),
+            running_commands: HashMap::new(),
         }
     }
 
-    pub fn desired_height(&self) -> u16 {
-        self.bottom_pane.desired_height()
+    pub fn desired_height(&self, width: u16) -> u16 {
+        self.bottom_pane.desired_height(width)
     }
 
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
-        self.bottom_pane.clear_ctrl_c_quit_hint();
+        if key_event.kind == KeyEventKind::Press {
+            self.bottom_pane.clear_ctrl_c_quit_hint();
+        }
 
         match self.bottom_pane.handle_key_event(key_event) {
             InputResult::Submitted(text) => {
@@ -284,6 +298,10 @@ impl ChatWidget<'_> {
                 self.add_to_history(HistoryCell::new_error_event(message.clone()));
                 self.bottom_pane.set_task_running(false);
             }
+            EventMsg::PlanUpdate(update) => {
+                self.add_to_history(HistoryCell::new_plan_update(update));
+                self.request_redraw();
+            }
             EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
                 call_id: _,
                 command,
@@ -343,12 +361,18 @@ impl ChatWidget<'_> {
                 self.request_redraw();
             }
             EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
-                call_id: _,
+                call_id,
                 command,
-                cwd: _,
+                cwd,
             }) => {
+                self.running_commands.insert(
+                    call_id,
+                    RunningCommand {
+                        command: command.clone(),
+                        cwd: cwd.clone(),
+                    },
+                );
                 self.add_to_history(HistoryCell::new_active_exec_command(command));
-                self.request_redraw();
             }
             EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
                 call_id: _,
@@ -361,7 +385,6 @@ impl ChatWidget<'_> {
                     PatchEventType::ApplyBegin { auto_approved },
                     changes,
                 ));
-                self.request_redraw();
             }
             EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                 call_id,
@@ -369,8 +392,9 @@ impl ChatWidget<'_> {
                 stdout,
                 stderr,
             }) => {
+                let cmd = self.running_commands.remove(&call_id);
                 self.add_to_history(HistoryCell::new_completed_exec_command(
-                    call_id,
+                    cmd.map(|cmd| cmd.command).unwrap_or_else(|| vec![call_id]),
                     CommandOutput {
                         exit_code,
                         stdout,
@@ -384,7 +408,6 @@ impl ChatWidget<'_> {
                 invocation,
             }) => {
                 self.add_to_history(HistoryCell::new_active_mcp_tool_call(invocation));
-                self.request_redraw();
             }
             EventMsg::McpToolCallEnd(McpToolCallEndEvent {
                 call_id: _,
@@ -419,7 +442,6 @@ impl ChatWidget<'_> {
             }
             event => {
                 self.add_to_history(HistoryCell::new_background_event(format!("{event:?}")));
-                self.request_redraw();
             }
         }
     }
@@ -436,7 +458,6 @@ impl ChatWidget<'_> {
 
     pub(crate) fn add_diff_output(&mut self, diff_output: String) {
         self.add_to_history(HistoryCell::new_diff_output(diff_output.clone()));
-        self.request_redraw();
     }
 
     /// Forward file-search results to the bottom pane.
@@ -480,6 +501,12 @@ impl ChatWidget<'_> {
 
     pub(crate) fn token_usage(&self) -> &TokenUsage {
         &self.token_usage
+    }
+
+    pub(crate) fn clear_token_usage(&mut self) {
+        self.token_usage = TokenUsage::default();
+        self.bottom_pane
+            .set_token_usage(self.token_usage.clone(), self.config.model_context_window);
     }
 }
 

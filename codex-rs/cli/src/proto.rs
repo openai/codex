@@ -40,6 +40,7 @@ pub async fn run_main(opts: ProtoCli) -> anyhow::Result<()> {
         &config.codex_home,
         &config.model_provider.name,
         &config.model_provider.env_key,
+        true,
     )?;
     let ctrl_c = notify_on_sigint();
     let CodexSpawnOk { codex, .. } = Codex::spawn(config, auth, ctrl_c.clone()).await?;

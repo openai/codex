@@ -4,7 +4,6 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -31,6 +30,7 @@ use tracing::trace;
 use tracing::warn;
 use uuid::Uuid;
 
+use crate::apply_patch::ApplyPatchExec;
 use crate::apply_patch::CODEX_APPLY_PATCH_ARG1;
 use crate::apply_patch::InternalApplyPatchInvocation;
 use crate::apply_patch::convert_apply_patch_to_protocol;
@@ -74,8 +74,11 @@ use crate::protocol::EventMsg;
 use crate::protocol::ExecApprovalRequestEvent;
 use crate::protocol::ExecCommandBeginEvent;
 use crate::protocol::ExecCommandEndEvent;
+use crate::protocol::FileChange;
 use crate::protocol::InputItem;
 use crate::protocol::Op;
+use crate::protocol::PatchApplyBeginEvent;
+use crate::protocol::PatchApplyEndEvent;
 use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::SessionConfiguredEvent;
@@ -358,20 +361,32 @@ impl Session {
         }
     }
 
-    async fn notify_exec_command_begin(
-        &self,
-        sub_id: &str,
-        call_id: &str,
-        command_for_display: Vec<String>,
-        command_cwd: &Path,
-    ) {
+    async fn notify_exec_command_begin(&self, exec_command_context: ExecCommandContext) {
+        let ExecCommandContext {
+            sub_id,
+            call_id,
+            command_for_display,
+            cwd,
+            apply_patch,
+        } = exec_command_context;
+        let msg = match apply_patch {
+            Some(ApplyPatchCommandContext {
+                user_explicitly_approved_this_action,
+                changes,
+            }) => EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
+                call_id,
+                auto_approved: !user_explicitly_approved_this_action,
+                changes,
+            }),
+            None => EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+                call_id,
+                command: command_for_display.clone(),
+                cwd,
+            }),
+        };
         let event = Event {
             id: sub_id.to_string(),
-            msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
-                call_id: call_id.to_string(),
-                command: command_for_display,
-                cwd: command_cwd.to_path_buf(),
-            }),
+            msg,
         };
         let _ = self.tx_event.send(event).await;
     }
@@ -383,18 +398,33 @@ impl Session {
         stdout: &str,
         stderr: &str,
         exit_code: i32,
+        is_apply_patch: bool,
     ) {
+        // Because stdout and stderr could each be up to 100 KiB, we send
+        // truncated versions.
         const MAX_STREAM_OUTPUT: usize = 5 * 1024; // 5KiB
+        let stdout = stdout.chars().take(MAX_STREAM_OUTPUT).collect();
+        let stderr = stderr.chars().take(MAX_STREAM_OUTPUT).collect();
+
+        let msg = if is_apply_patch {
+            EventMsg::PatchApplyEnd(PatchApplyEndEvent {
+                call_id: call_id.to_string(),
+                stdout,
+                stderr,
+                success: exit_code == 0,
+            })
+        } else {
+            EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+                call_id: call_id.to_string(),
+                stdout,
+                stderr,
+                exit_code,
+            })
+        };
+
         let event = Event {
             id: sub_id.to_string(),
-            // Because stdout and stderr could each be up to 100 KiB, we send
-            // truncated versions.
-            msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
-                call_id: call_id.to_string(),
-                stdout: stdout.chars().take(MAX_STREAM_OUTPUT).collect(),
-                stderr: stderr.chars().take(MAX_STREAM_OUTPUT).collect(),
-                exit_code,
-            }),
+            msg,
         };
         let _ = self.tx_event.send(event).await;
     }
@@ -410,6 +440,12 @@ impl Session {
             }),
         };
         let _ = self.tx_event.send(event).await;
+    }
+
+    /// Build the full turn input by concatenating the current conversation
+    /// history with additional items for this turn.
+    pub fn turn_input_with_history(&self, extra: Vec<ResponseItem>) -> Vec<ResponseItem> {
+        [self.state.lock().unwrap().history.contents(), extra].concat()
     }
 
     /// Returns the input if there was no task running to inject into
@@ -502,6 +538,21 @@ impl State {
     }
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct ExecCommandContext {
+    pub(crate) sub_id: String,
+    pub(crate) call_id: String,
+    pub(crate) command_for_display: Vec<String>,
+    pub(crate) cwd: PathBuf,
+    pub(crate) apply_patch: Option<ApplyPatchCommandContext>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ApplyPatchCommandContext {
+    pub(crate) user_explicitly_approved_this_action: bool,
+    pub(crate) changes: HashMap<PathBuf, FileChange>,
+}
+
 /// A series of Turns in response to user input.
 pub(crate) struct AgentTask {
     sess: Arc<Session>,
@@ -513,6 +564,25 @@ impl AgentTask {
     fn spawn(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) -> Self {
         let handle =
             tokio::spawn(run_task(Arc::clone(&sess), sub_id.clone(), input)).abort_handle();
+        Self {
+            sess,
+            sub_id,
+            handle,
+        }
+    }
+    fn compact(
+        sess: Arc<Session>,
+        sub_id: String,
+        input: Vec<InputItem>,
+        compact_instructions: String,
+    ) -> Self {
+        let handle = tokio::spawn(run_compact_task(
+            Arc::clone(&sess),
+            sub_id.clone(),
+            input,
+            compact_instructions,
+        ))
+        .abort_handle();
         Self {
             sess,
             sub_id,
@@ -839,6 +909,31 @@ async fn submission_loop(
                     }
                 });
             }
+            Op::Compact => {
+                let sess = match sess.as_ref() {
+                    Some(sess) => sess,
+                    None => {
+                        send_no_session_event(sub.id).await;
+                        continue;
+                    }
+                };
+
+                // Create a summarization request as user input
+                const SUMMARIZATION_PROMPT: &str = include_str!("../../../SUMMARY.md");
+
+                // Attempt to inject input into current task
+                if let Err(items) = sess.inject_input(vec![InputItem::Text {
+                    text: "Start Summarization".to_string(),
+                }]) {
+                    let task = AgentTask::compact(
+                        sess.clone(),
+                        sub.id,
+                        items,
+                        SUMMARIZATION_PROMPT.to_string(),
+                    );
+                    sess.set_task(task);
+                }
+            }
             Op::Shutdown => {
                 info!("Shutting down Codex instance");
 
@@ -900,7 +995,7 @@ async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
         return;
     }
 
-    let initial_input_for_turn = ResponseInputItem::from(input);
+    let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
     sess.record_conversation_items(&[initial_input_for_turn.clone().into()])
         .await;
 
@@ -921,8 +1016,7 @@ async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
         // conversation history on each turn. The rollout file, however, should
         // only record the new items that originated in this turn so that it
         // represents an append-only log without duplicates.
-        let turn_input: Vec<ResponseItem> =
-            [sess.state.lock().unwrap().history.contents(), pending_input].concat();
+        let turn_input: Vec<ResponseItem> = sess.turn_input_with_history(pending_input);
 
         let turn_input_messages: Vec<String> = turn_input
             .iter()
@@ -1248,6 +1342,88 @@ async fn try_run_turn(
     }
 }
 
+async fn run_compact_task(
+    sess: Arc<Session>,
+    sub_id: String,
+    input: Vec<InputItem>,
+    compact_instructions: String,
+) {
+    let start_event = Event {
+        id: sub_id.clone(),
+        msg: EventMsg::TaskStarted,
+    };
+    if sess.tx_event.send(start_event).await.is_err() {
+        return;
+    }
+
+    let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
+    let turn_input: Vec<ResponseItem> =
+        sess.turn_input_with_history(vec![initial_input_for_turn.clone().into()]);
+
+    let prompt = Prompt {
+        input: turn_input,
+        user_instructions: None,
+        store: !sess.disable_response_storage,
+        extra_tools: HashMap::new(),
+        base_instructions_override: Some(compact_instructions.clone()),
+    };
+
+    let max_retries = sess.client.get_provider().stream_max_retries();
+    let mut retries = 0;
+
+    loop {
+        let attempt_result = drain_to_completed(&sess, &prompt).await;
+
+        match attempt_result {
+            Ok(()) => break,
+            Err(CodexErr::Interrupted) => return,
+            Err(e) => {
+                if retries < max_retries {
+                    retries += 1;
+                    let delay = backoff(retries);
+                    sess.notify_background_event(
+                        &sub_id,
+                        format!(
+                            "stream error: {e}; retrying {retries}/{max_retries} in {delay:?}…"
+                        ),
+                    )
+                    .await;
+                    tokio::time::sleep(delay).await;
+                    continue;
+                } else {
+                    let event = Event {
+                        id: sub_id.clone(),
+                        msg: EventMsg::Error(ErrorEvent {
+                            message: e.to_string(),
+                        }),
+                    };
+                    sess.send_event(event).await;
+                    return;
+                }
+            }
+        }
+    }
+
+    sess.remove_task(&sub_id);
+    let event = Event {
+        id: sub_id.clone(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "Compact task completed".to_string(),
+        }),
+    };
+    sess.send_event(event).await;
+    let event = Event {
+        id: sub_id.clone(),
+        msg: EventMsg::TaskComplete(TaskCompleteEvent {
+            last_agent_message: None,
+        }),
+    };
+    sess.send_event(event).await;
+
+    let mut state = sess.state.lock().unwrap();
+    state.history.keep_last_messages(1);
+}
+
 async fn handle_response_item(
     sess: &Session,
     sub_id: &str,
@@ -1430,35 +1606,39 @@ async fn handle_container_exec_with_params(
     call_id: String,
 ) -> ResponseInputItem {
     // check if this was a patch, and apply it if so
-    let apply_patch_action_for_exec =
-        match maybe_parse_apply_patch_verified(&params.command, &params.cwd) {
-            MaybeApplyPatchVerified::Body(changes) => {
-                match apply_patch::apply_patch(sess, &sub_id, &call_id, changes).await {
-                    InternalApplyPatchInvocation::Output(item) => return item,
-                    InternalApplyPatchInvocation::DelegateToExec(action) => Some(action),
+    let apply_patch_exec = match maybe_parse_apply_patch_verified(&params.command, &params.cwd) {
+        MaybeApplyPatchVerified::Body(changes) => {
+            match apply_patch::apply_patch(sess, &sub_id, &call_id, changes).await {
+                InternalApplyPatchInvocation::Output(item) => return item,
+                InternalApplyPatchInvocation::DelegateToExec(apply_patch_exec) => {
+                    Some(apply_patch_exec)
                 }
             }
-            MaybeApplyPatchVerified::CorrectnessError(parse_error) => {
-                // It looks like an invocation of `apply_patch`, but we
-                // could not resolve it into a patch that would apply
-                // cleanly. Return to model for resample.
-                return ResponseInputItem::FunctionCallOutput {
-                    call_id,
-                    output: FunctionCallOutputPayload {
-                        content: format!("error: {parse_error:#}"),
-                        success: None,
-                    },
-                };
-            }
-            MaybeApplyPatchVerified::ShellParseError(error) => {
-                trace!("Failed to parse shell command, {error:?}");
-                None
-            }
-            MaybeApplyPatchVerified::NotApplyPatch => None,
-        };
+        }
+        MaybeApplyPatchVerified::CorrectnessError(parse_error) => {
+            // It looks like an invocation of `apply_patch`, but we
+            // could not resolve it into a patch that would apply
+            // cleanly. Return to model for resample.
+            return ResponseInputItem::FunctionCallOutput {
+                call_id,
+                output: FunctionCallOutputPayload {
+                    content: format!("error: {parse_error:#}"),
+                    success: None,
+                },
+            };
+        }
+        MaybeApplyPatchVerified::ShellParseError(error) => {
+            trace!("Failed to parse shell command, {error:?}");
+            None
+        }
+        MaybeApplyPatchVerified::NotApplyPatch => None,
+    };
 
-    let (params, safety, command_for_display) = match apply_patch_action_for_exec {
-        Some(ApplyPatchAction { patch, cwd, .. }) => {
+    let (params, safety, command_for_display) = match &apply_patch_exec {
+        Some(ApplyPatchExec {
+            action: ApplyPatchAction { patch, cwd, .. },
+            user_explicitly_approved_this_action,
+        }) => {
             let path_to_codex = std::env::current_exe()
                 .ok()
                 .map(|p| p.to_string_lossy().to_string());
@@ -1478,13 +1658,22 @@ async fn handle_container_exec_with_params(
                     CODEX_APPLY_PATCH_ARG1.to_string(),
                     patch.clone(),
                 ],
-                cwd,
+                cwd: cwd.clone(),
                 timeout_ms: params.timeout_ms,
                 env: HashMap::new(),
             };
-            let safety =
-                assess_safety_for_untrusted_command(sess.approval_policy, &sess.sandbox_policy);
-            (params, safety, vec!["apply_patch".to_string(), patch])
+            let safety = if *user_explicitly_approved_this_action {
+                SafetyCheck::AutoApprove {
+                    sandbox_type: SandboxType::None,
+                }
+            } else {
+                assess_safety_for_untrusted_command(sess.approval_policy, &sess.sandbox_policy)
+            };
+            (
+                params,
+                safety,
+                vec!["apply_patch".to_string(), patch.clone()],
+            )
         }
         None => {
             let safety = {
@@ -1545,7 +1734,22 @@ async fn handle_container_exec_with_params(
         }
     };
 
-    sess.notify_exec_command_begin(&sub_id, &call_id, command_for_display.clone(), &params.cwd)
+    let exec_command_context = ExecCommandContext {
+        sub_id: sub_id.clone(),
+        call_id: call_id.clone(),
+        command_for_display: command_for_display.clone(),
+        cwd: params.cwd.clone(),
+        apply_patch: apply_patch_exec.map(
+            |ApplyPatchExec {
+                 action,
+                 user_explicitly_approved_this_action,
+             }| ApplyPatchCommandContext {
+                user_explicitly_approved_this_action,
+                changes: convert_apply_patch_to_protocol(&action),
+            },
+        ),
+    };
+    sess.notify_exec_command_begin(exec_command_context.clone())
         .await;
 
     let params = maybe_run_with_user_profile(params, sess);
@@ -1567,8 +1771,15 @@ async fn handle_container_exec_with_params(
                 duration,
             } = output;
 
-            sess.notify_exec_command_end(&sub_id, &call_id, &stdout, &stderr, exit_code)
-                .await;
+            sess.notify_exec_command_end(
+                &sub_id,
+                &call_id,
+                &stdout,
+                &stderr,
+                exit_code,
+                exec_command_context.apply_patch.is_some(),
+            )
+            .await;
 
             let is_success = exit_code == 0;
             let content = format_exec_output(
@@ -1586,16 +1797,7 @@ async fn handle_container_exec_with_params(
             }
         }
         Err(CodexErr::Sandbox(error)) => {
-            handle_sandbox_error(
-                error,
-                sandbox_type,
-                params,
-                command_for_display,
-                sess,
-                sub_id,
-                call_id,
-            )
-            .await
+            handle_sandbox_error(params, exec_command_context, error, sandbox_type, sess).await
         }
         Err(e) => {
             // Handle non-sandbox errors
@@ -1611,14 +1813,17 @@ async fn handle_container_exec_with_params(
 }
 
 async fn handle_sandbox_error(
+    params: ExecParams,
+    exec_command_context: ExecCommandContext,
     error: SandboxErr,
     sandbox_type: SandboxType,
-    params: ExecParams,
-    command_for_display: Vec<String>,
     sess: &Session,
-    sub_id: String,
-    call_id: String,
 ) -> ResponseInputItem {
+    let call_id = exec_command_context.call_id.clone();
+    let sub_id = exec_command_context.sub_id.clone();
+    let cwd = exec_command_context.cwd.clone();
+    let is_apply_patch = exec_command_context.apply_patch.is_some();
+
     // Early out if the user never wants to be asked for approval; just return to the model immediately
     if sess.approval_policy == AskForApproval::Never {
         return ResponseInputItem::FunctionCallOutput {
@@ -1648,7 +1853,7 @@ async fn handle_sandbox_error(
             sub_id.clone(),
             call_id.clone(),
             params.command.clone(),
-            params.cwd.clone(),
+            cwd.clone(),
             Some("command failed; retry without sandbox?".to_string()),
         )
         .await;
@@ -1664,8 +1869,7 @@ async fn handle_sandbox_error(
             sess.notify_background_event(&sub_id, "retrying command without sandbox")
                 .await;
 
-            sess.notify_exec_command_begin(&sub_id, &call_id, command_for_display, &params.cwd)
-                .await;
+            sess.notify_exec_command_begin(exec_command_context).await;
 
             // This is an escalated retry; the policy will not be
             // examined and the sandbox has been set to `None`.
@@ -1687,8 +1891,15 @@ async fn handle_sandbox_error(
                         duration,
                     } = retry_output;
 
-                    sess.notify_exec_command_end(&sub_id, &call_id, &stdout, &stderr, exit_code)
-                        .await;
+                    sess.notify_exec_command_end(
+                        &sub_id,
+                        &call_id,
+                        &stdout,
+                        &stderr,
+                        exit_code,
+                        is_apply_patch,
+                    )
+                    .await;
 
                     let is_success = exit_code == 0;
                     let content = format_exec_output(
@@ -1777,4 +1988,21 @@ fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -> Option<St
             None
         }
     })
+}
+
+async fn drain_to_completed(sess: &Session, prompt: &Prompt) -> CodexResult<()> {
+    let mut stream = sess.client.clone().stream(prompt).await?;
+    loop {
+        let maybe_event = stream.next().await;
+        let Some(event) = maybe_event else {
+            return Err(CodexErr::Stream(
+                "stream closed before response.completed".into(),
+            ));
+        };
+        match event {
+            Ok(ResponseEvent::Completed { .. }) => return Ok(()),
+            Ok(_) => continue,
+            Err(e) => return Err(e),
+        }
+    }
 }

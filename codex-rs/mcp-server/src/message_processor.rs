@@ -6,6 +6,7 @@ use crate::codex_tool_config::CodexToolCallParam;
 use crate::codex_tool_config::CodexToolCallReplyParam;
 use crate::codex_tool_config::create_tool_for_codex_tool_call_param;
 use crate::codex_tool_config::create_tool_for_codex_tool_call_reply_param;
+use crate::mcp_protocol::ToolCallRequestParams;
 use crate::outgoing_message::OutgoingMessageSender;
 
 use codex_core::Codex;
@@ -300,6 +301,14 @@ impl MessageProcessor {
         params: <mcp_types::CallToolRequest as mcp_types::ModelContextProtocolRequest>::Params,
     ) {
         tracing::info!("tools/call -> params: {:?}", params);
+        // Serialize params into JSON and try to parse as new type
+        if let Ok(new_params) =
+            serde_json::to_value(&params).and_then(serde_json::from_value::<ToolCallRequestParams>)
+        {
+            // New tool call matched → forward
+            self.handle_new_tool_calls(id, new_params).await;
+            return;
+        }
         let CallToolRequestParams { name, arguments } = params;
 
         match name.as_str() {
@@ -322,6 +331,20 @@ impl MessageProcessor {
                     .await;
             }
         }
+    }
+    async fn handle_new_tool_calls(&self, request_id: RequestId, _params: ToolCallRequestParams) {
+        // TODO: implement the new tool calls
+        let result = CallToolResult {
+            content: vec![ContentBlock::TextContent(TextContent {
+                r#type: "text".to_string(),
+                text: "Unknown tool".to_string(),
+                annotations: None,
+            })],
+            is_error: Some(true),
+            structured_content: None,
+        };
+        self.send_response::<mcp_types::CallToolRequest>(request_id, result)
+            .await;
     }
 
     async fn handle_tool_call_codex(&self, id: RequestId, arguments: Option<serde_json::Value>) {
