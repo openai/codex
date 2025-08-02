@@ -35,17 +35,18 @@ export const HUNK_ADD_LINE_PREFIX = "+";
  * @returns null when the patch is invalid
  */
 export function parseApplyPatch(patch: string): Array<ApplyPatchOp> | null {
-  if (!patch.startsWith(PATCH_PREFIX)) {
+  const trimmed = patch.trimEnd();
+  if (!trimmed.startsWith(PATCH_PREFIX)) {
     // Patch must begin with '*** Begin Patch'
     return null;
-  } else if (!patch.endsWith(PATCH_SUFFIX)) {
+  } else if (!trimmed.endsWith(PATCH_SUFFIX)) {
     // Patch must end with '*** End Patch'
     return null;
   }
 
-  const patchBody = patch.slice(
+  const patchBody = trimmed.slice(
     PATCH_PREFIX.length,
-    patch.length - PATCH_SUFFIX.length,
+    trimmed.length - PATCH_SUFFIX.length,
   );
 
   const lines = patchBody.split("\n");
