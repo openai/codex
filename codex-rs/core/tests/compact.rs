@@ -4,7 +4,6 @@ use codex_core::Codex;
 use codex_core::CodexSpawnOk;
 use codex_core::ModelProviderInfo;
 use codex_core::built_in_model_providers;
-use codex_core::exec::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
@@ -89,13 +88,6 @@ const THIRD_USER_MSG: &str = "next turn";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn summarize_context_three_requests_and_instructions() {
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
-
     // Set up a mock server that we can inspect after the run.
     let server = MockServer::start().await;
 

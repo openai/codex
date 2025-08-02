@@ -324,16 +324,6 @@ where
         &mut self.buffers[self.current]
     }
 
-    /// Gets the backend
-    pub const fn backend(&self) -> &B {
-        &self.backend
-    }
-
-    /// Gets the backend as a mutable reference
-    pub fn backend_mut(&mut self) -> &mut B {
-        &mut self.backend
-    }
-
     /// Obtains a difference between the previous and the current buffer and passes it to the
     /// current backend for drawing.
     pub fn flush(&mut self) -> io::Result<()> {

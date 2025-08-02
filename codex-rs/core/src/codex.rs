@@ -1306,6 +1306,7 @@ async fn try_run_turn(
             }
         };
 
+        warn!("ResponseEvent: {event:?}");
         match event {
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(item) => {

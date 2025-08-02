@@ -13,7 +13,7 @@ use std::task::Poll;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tracing::debug;
-use tracing::trace;
+use tracing::warn;
 
 use crate::ModelProviderInfo;
 use crate::client_common::Prompt;
@@ -207,6 +207,7 @@ async fn process_chat_sse<S>(
     }
 
     let mut fn_call_state = FunctionCallState::default();
+    let mut assistant_text = String::new();
 
     loop {
         let sse = match timeout(idle_timeout, stream.next()).await {
@@ -249,26 +250,45 @@ async fn process_chat_sse<S>(
             Ok(v) => v,
             Err(_) => continue,
         };
-        trace!("chat_completions received SSE chunk: {chunk:?}");
+        warn!("chat_completions received SSE chunk: {chunk:?}");
 
         let choice_opt = chunk.get("choices").and_then(|c| c.get(0));
 
         if let Some(choice) = choice_opt {
-            // Handle assistant content tokens.
+            // Handle assistant content tokens as streaming deltas.
             if let Some(content) = choice
                 .get("delta")
                 .and_then(|d| d.get("content"))
                 .and_then(|c| c.as_str())
             {
-                let item = ResponseItem::Message {
-                    role: "assistant".to_string(),
-                    content: vec![ContentItem::OutputText {
-                        text: content.to_string(),
-                    }],
-                    id: None,
-                };
+                assistant_text.push_str(content);
+                let _ = tx_event
+                    .send(Ok(ResponseEvent::OutputTextDelta(content.to_string())))
+                    .await;
+            }
 
-                let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
+            // Forward any reasoning/thinking deltas if present.
+            if let Some(reasoning) = choice
+                .get("delta")
+                .and_then(|d| d.get("reasoning"))
+                .and_then(|c| c.as_str())
+            {
+                let _ = tx_event
+                    .send(Ok(ResponseEvent::ReasoningSummaryDelta(
+                        reasoning.to_string(),
+                    )))
+                    .await;
+            }
+            if let Some(reasoning_content) = choice
+                .get("delta")
+                .and_then(|d| d.get("reasoning_content"))
+                .and_then(|c| c.as_str())
+            {
+                let _ = tx_event
+                    .send(Ok(ResponseEvent::ReasoningSummaryDelta(
+                        reasoning_content.to_string(),
+                    )))
+                    .await;
             }
 
             // Handle streaming function / tool calls.
@@ -317,7 +337,18 @@ async fn process_chat_sse<S>(
                         let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
                     }
                     "stop" => {
-                        // Regular turn without tool-call.
+                        // Regular turn without tool-call. Emit the final assistant message
+                        // as a single OutputItemDone so non-delta consumers see the result.
+                        if !assistant_text.is_empty() {
+                            let item = ResponseItem::Message {
+                                role: "assistant".to_string(),
+                                content: vec![ContentItem::OutputText {
+                                    text: std::mem::take(&mut assistant_text),
+                                }],
+                                id: None,
+                            };
+                            let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
+                        }
                     }
                     _ => {}
                 }
@@ -359,6 +390,9 @@ pub(crate) struct AggregatedChatStream<S> {
     inner: S,
     cumulative: String,
     pending_completed: Option<ResponseEvent>,
+    // When true, do not emit a cumulative assistant message at Completed.
+    streaming_mode: bool,
+    // When true, forward reasoning deltas instead of ignoring them.
 }
 
 impl<S> Stream for AggregatedChatStream<S>
@@ -388,16 +422,21 @@ where
                     let is_assistant_delta = matches!(&item, crate::models::ResponseItem::Message { role, .. } if role == "assistant");
 
                     if is_assistant_delta {
-                        if let crate::models::ResponseItem::Message { content, .. } = &item {
-                            if let Some(text) = content.iter().find_map(|c| match c {
-                                crate::models::ContentItem::OutputText { text } => Some(text),
-                                _ => None,
-                            }) {
-                                this.cumulative.push_str(text);
+                        // Only use the final assistant message if we have not
+                        // seen any deltas; otherwise, deltas already built the
+                        // cumulative text and this would duplicate it.
+                        if this.cumulative.is_empty() {
+                            if let crate::models::ResponseItem::Message { content, .. } = &item {
+                                if let Some(text) = content.iter().find_map(|c| match c {
+                                    crate::models::ContentItem::OutputText { text } => Some(text),
+                                    _ => None,
+                                }) {
+                                    this.cumulative.push_str(text);
+                                }
                             }
                         }
 
-                        // Swallow partial assistant chunk; keep polling.
+                        // Swallow assistant message here; emit on Completed.
                         continue;
                     }
 
@@ -408,6 +447,10 @@ where
                     response_id,
                     token_usage,
                 }))) => {
+                    // Always emit a final OutputItemDone with the cumulative assistant text
+                    // so downstream consumers see a completed item, even when streaming mode
+                    // is enabled (which forwards deltas). This mirrors the Responses API
+                    // behaviour where `response.output_item.done` is emitted alongside deltas.
                     if !this.cumulative.is_empty() {
                         let aggregated_item = crate::models::ResponseItem::Message {
                             id: None,
@@ -439,11 +482,23 @@ where
                     // will never appear in a Chat Completions stream.
                     continue;
                 }
-                Poll::Ready(Some(Ok(ResponseEvent::OutputTextDelta(_))))
-                | Poll::Ready(Some(Ok(ResponseEvent::ReasoningSummaryDelta(_)))) => {
-                    // Deltas are ignored here since aggregation waits for the
-                    // final OutputItemDone.
-                    continue;
+                Poll::Ready(Some(Ok(ResponseEvent::OutputTextDelta(delta)))) => {
+                    // Always accumulate deltas so we can emit a final OutputItemDone at Completed.
+                    this.cumulative.push_str(&delta);
+                    if this.streaming_mode {
+                        // In streaming mode, also forward the delta immediately.
+                        return Poll::Ready(Some(Ok(ResponseEvent::OutputTextDelta(delta))));
+                    } else {
+                        continue;
+                    }
+                }
+                Poll::Ready(Some(Ok(ResponseEvent::ReasoningSummaryDelta(delta)))) => {
+                    if this.streaming_mode {
+                        return Poll::Ready(Some(Ok(ResponseEvent::ReasoningSummaryDelta(delta))));
+                    } else {
+                        // Reasoning deltas are intentionally ignored in aggregated mode.
+                        continue;
+                    }
                 }
             }
         }
@@ -476,8 +531,20 @@ pub(crate) trait AggregateStreamExt: Stream<Item = Result<ResponseEvent>> + Size
             inner: self,
             cumulative: String::new(),
             pending_completed: None,
+            streaming_mode: false,
         }
     }
 }
 
 impl<T> AggregateStreamExt for T where T: Stream<Item = Result<ResponseEvent>> + Sized {}
+
+impl<S> AggregatedChatStream<S> {
+    pub(crate) fn streaming_mode(inner: S) -> Self {
+        AggregatedChatStream {
+            inner,
+            cumulative: String::new(),
+            pending_completed: None,
+            streaming_mode: true,
+        }
+    }
+}
