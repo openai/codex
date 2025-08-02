@@ -483,6 +483,16 @@ Setting `hide_agent_reasoning` to `true` suppresses these events in **both** the
 hide_agent_reasoning = true   # defaults to false
 ```
 
+## show_reasoning_content
+
+When enabled, Codex will display the raw chain-of-thought text returned by the
+model for reasoning events. This content is not moderated and may contain
+hallucinations or other undesirable text, so it is disabled by default.
+
+```toml
+show_reasoning_content = true   # defaults to false
+```
+
 ## model_context_window
 
 The size of the context window for the model, in tokens.

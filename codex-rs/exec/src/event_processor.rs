@@ -40,7 +40,6 @@ pub(crate) fn create_config_summary_entries(config: &Config) -> Vec<(&'static st
             config.model_reasoning_summary.to_string(),
         ));
     }
-
     entries
 }
 

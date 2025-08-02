@@ -8,6 +8,7 @@ use codex_core::codex_wrapper::init_codex;
 use codex_core::config::Config;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
+use codex_core::protocol::AgentReasoningContentEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
 use codex_core::protocol::AgentReasoningEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
@@ -276,6 +277,10 @@ impl ChatWidget<'_> {
                 if !full.is_empty() {
                     self.add_to_history(HistoryCell::new_agent_reasoning(&self.config, full));
                 }
+                self.request_redraw();
+            }
+            EventMsg::AgentReasoningContent(AgentReasoningContentEvent { text }) => {
+                self.add_to_history(HistoryCell::new_agent_reasoning(&self.config, text));
                 self.request_redraw();
             }
             EventMsg::TaskStarted => {
