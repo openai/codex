@@ -11,8 +11,14 @@ use tokio::process::ChildStdout;
 
 use anyhow::Context;
 use assert_cmd::prelude::*;
+use codex_core::protocol::InputItem;
 use codex_mcp_server::CodexToolCallParam;
 use codex_mcp_server::CodexToolCallReplyParam;
+use codex_mcp_server::mcp_protocol::ConversationCreateArgs;
+use codex_mcp_server::mcp_protocol::ConversationId;
+use codex_mcp_server::mcp_protocol::ConversationSendMessageArgs;
+use codex_mcp_server::mcp_protocol::ToolCallRequestParams;
+
 use mcp_types::CallToolRequestParams;
 use mcp_types::ClientCapabilities;
 use mcp_types::Implementation;
@@ -29,6 +35,7 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::process::Command as StdCommand;
 use tokio::process::Command;
+use uuid::Uuid;
 
 pub struct McpProcess {
     next_request_id: AtomicI64,
@@ -170,6 +177,61 @@ impl McpProcess {
         self.send_request(
             mcp_types::CallToolRequest::METHOD,
             Some(serde_json::to_value(codex_tool_call_params)?),
+        )
+        .await
+    }
+
+    pub async fn send_user_message_tool_call(
+        &mut self,
+        message: &str,
+        session_id: &str,
+    ) -> anyhow::Result<i64> {
+        let params = ToolCallRequestParams::ConversationSendMessage(ConversationSendMessageArgs {
+            conversation_id: ConversationId(Uuid::parse_str(session_id)?),
+            content: vec![InputItem::Text {
+                text: message.to_string(),
+            }],
+            parent_message_id: None,
+            conversation_overrides: None,
+        });
+        self.send_request(
+            mcp_types::CallToolRequest::METHOD,
+            Some(serde_json::to_value(params)?),
+        )
+        .await
+    }
+
+    pub async fn send_conversation_create_tool_call(
+        &mut self,
+        prompt: &str,
+        model: &str,
+        cwd: &str,
+    ) -> anyhow::Result<i64> {
+        let params = ToolCallRequestParams::ConversationCreate(ConversationCreateArgs {
+            prompt: prompt.to_string(),
+            model: model.to_string(),
+            cwd: cwd.to_string(),
+            approval_policy: None,
+            sandbox: None,
+            config: None,
+            profile: None,
+            base_instructions: None,
+        });
+        self.send_request(
+            mcp_types::CallToolRequest::METHOD,
+            Some(serde_json::to_value(params)?),
+        )
+        .await
+    }
+
+    pub async fn send_conversation_create_with_args(
+        &mut self,
+        args: ConversationCreateArgs,
+    ) -> anyhow::Result<i64> {
+        let params = ToolCallRequestParams::ConversationCreate(args);
+        self.send_request(
+            mcp_types::CallToolRequest::METHOD,
+            Some(serde_json::to_value(params)?),
         )
         .await
     }

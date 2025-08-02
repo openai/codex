@@ -31,6 +31,7 @@ rand = "0.9"
 reqwest = { version = "0.12", features = ["json", "stream"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_bytes = "0.11"
 sha1 = "0.10.6"
 shlex = "1.3.0"
 strum_macros = "0.27.2"

@@ -36,7 +36,11 @@ pub(crate) fn apply_sandbox_policy_to_current_thread(
     }
 
     if !sandbox_policy.has_full_disk_write_access() {
-        let writable_roots = sandbox_policy.get_writable_roots_with_cwd(cwd);
+        let writable_roots = sandbox_policy
+            .get_writable_roots_with_cwd(cwd)
+            .into_iter()
+            .map(|writable_root| writable_root.root)
+            .collect();
         install_filesystem_landlock_rules_on_current_thread(writable_roots)?;
     }
 
