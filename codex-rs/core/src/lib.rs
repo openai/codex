@@ -42,6 +42,7 @@ mod safety;
 pub mod seatbelt;
 pub mod shell;
 pub mod spawn;
+pub mod turn_diff_tracker;
 mod user_notification;
 pub mod util;
 
