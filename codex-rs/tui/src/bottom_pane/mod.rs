@@ -18,6 +18,7 @@ mod chat_composer;
 mod chat_composer_history;
 mod command_popup;
 mod file_search_popup;
+mod model_selection_popup;
 mod status_indicator_view;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,6 +69,12 @@ impl BottomPane<'_> {
             is_task_running: false,
             ctrl_c_quit_hint: false,
         }
+    }
+
+    /// Show the model-selection popup in the composer.
+    pub(crate) fn show_model_selector(&mut self, current_model: &str, options: Vec<String>) {
+        self.composer.open_model_selector(current_model, options);
+        self.request_redraw();
     }
 
     pub fn desired_height(&self, width: u16) -> u16 {

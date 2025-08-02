@@ -6,6 +6,8 @@ use std::time::Duration;
 use codex_core::codex_wrapper::CodexConversation;
 use codex_core::codex_wrapper::init_codex;
 use codex_core::config::Config;
+use codex_core::config::ConfigToml;
+use codex_core::openai_model_info::get_all_model_names;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
@@ -64,6 +66,7 @@ pub(crate) struct ChatWidget<'a> {
     // We wait for the final AgentMessage event and then emit the full text
     // at once into scrollback so the history contains a single message.
     answer_buffer: String,
+    new_session: bool,
     running_commands: HashMap<String, RunningCommand>,
 }
 
@@ -151,6 +154,7 @@ impl ChatWidget<'_> {
             token_usage: TokenUsage::default(),
             reasoning_buffer: String::new(),
             answer_buffer: String::new(),
+            new_session: true,
             running_commands: HashMap::new(),
         }
     }
@@ -224,8 +228,12 @@ impl ChatWidget<'_> {
             EventMsg::SessionConfigured(event) => {
                 self.bottom_pane
                     .set_history_metadata(event.history_log_id, event.history_entry_count);
+
                 // Record session information at the top of the conversation.
-                self.add_to_history(HistoryCell::new_session_info(&self.config, event, true));
+                if self.new_session {
+                    self.add_to_history(HistoryCell::new_session_info(&self.config, event, true));
+                    self.new_session = false;
+                }
 
                 if let Some(user_message) = self.initial_user_message.take() {
                     // If the user provided an initial message, add it to the
@@ -502,6 +510,62 @@ impl ChatWidget<'_> {
 
     pub(crate) fn token_usage(&self) -> &TokenUsage {
         &self.token_usage
+    }
+
+    /// Open the model selection view in the bottom pane.
+    pub(crate) fn show_model_selector(&mut self) {
+        let current = self.config.model.clone();
+
+        let mut options = get_all_model_names()
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>();
+
+        // Always include the currently configured model (covers custom values).
+        options.push(current.clone());
+
+        // Append any models found in config.toml profiles and top-level model.
+        let config_path = self.config.codex_home.join("config.toml");
+        if let Ok(contents) = std::fs::read_to_string(&config_path) {
+            if let Ok(cfg) = toml::from_str::<ConfigToml>(&contents) {
+                let mut config_models: Vec<String> = Vec::new();
+                if let Some(m) = cfg.model {
+                    config_models.push(m);
+                }
+                for (_name, profile) in cfg.profiles.into_iter() {
+                    if let Some(m) = profile.model {
+                        config_models.push(m);
+                    }
+                }
+                // Alphabetical ordering for config models.
+                config_models.sort();
+                options.extend(config_models);
+            }
+        }
+
+        self.bottom_pane.show_model_selector(&current, options);
+    }
+
+    /// Update the current model and reconfigure the running Codex session.
+    pub(crate) fn update_model_and_reconfigure(&mut self, model: String) {
+        // Update local config so UI reflects the new model.
+        let changed = self.config.model != model;
+        self.config.model = model.clone();
+
+        // Emit an event in the conversation log so the change is visible.
+        if changed {
+            self.add_to_history(HistoryCell::new_background_event(format!(
+                "Set model to {model}."
+            )));
+        }
+
+        // Reconfigure the agent session with the same provider and policies.
+        // Build the op from the config to avoid drift when fields are added.
+        let op = self
+            .config
+            .to_configure_session_op(None, self.config.user_instructions.clone());
+        self.submit_op(op);
+        self.request_redraw();
     }
 
     pub(crate) fn clear_token_usage(&mut self) {

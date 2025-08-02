@@ -1,14 +1,9 @@
+use codex_common::fuzzy_match::fuzzy_indices as common_fuzzy_indices;
+use codex_common::fuzzy_match::fuzzy_match as common_fuzzy_match;
 use ignore::WalkBuilder;
 use ignore::overrides::OverrideBuilder;
-use nucleo_matcher::Matcher;
-use nucleo_matcher::Utf32Str;
-use nucleo_matcher::pattern::AtomKind;
-use nucleo_matcher::pattern::CaseMatching;
-use nucleo_matcher::pattern::Normalization;
-use nucleo_matcher::pattern::Pattern;
 use serde::Serialize;
 use std::cell::UnsafeCell;
-use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::num::NonZero;
 use std::path::Path;
@@ -24,17 +19,13 @@ pub use cli::Cli;
 
 /// A single match result returned from the search.
 ///
-/// * `score` – Relevance score returned by `nucleo_matcher`.
+/// * `score` – Relevance score from the fuzzy matcher (smaller is better).
 /// * `path`  – Path to the matched file (relative to the search directory).
-/// * `indices` – Optional list of character indices that matched the query.
-///   These are only filled when the caller of [`run`] sets
-///   `compute_indices` to `true`.  The indices vector follows the
-///   guidance from `nucleo_matcher::Pattern::indices`: they are
-///   unique and sorted in ascending order so that callers can use
-///   them directly for highlighting.
+/// * `indices` – Optional list of character positions that matched the query.
+///   These are unique and sorted so callers can use them directly for highlighting.
 #[derive(Debug, Clone, Serialize)]
 pub struct FileMatch {
-    pub score: u32,
+    pub score: i32,
     pub path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub indices: Option<Vec<u32>>, // Sorted & deduplicated when present
@@ -130,7 +121,6 @@ pub fn run(
     cancel_flag: Arc<AtomicBool>,
     compute_indices: bool,
 ) -> anyhow::Result<FileSearchResults> {
-    let pattern = create_pattern(pattern_text);
     // Create one BestMatchesList per worker thread so that each worker can
     // operate independently. The results across threads will be merged when
     // the traversal is complete.
@@ -139,13 +129,7 @@ pub fn run(
         num_best_matches_lists,
     } = create_worker_count(threads);
     let best_matchers_per_worker: Vec<UnsafeCell<BestMatchesList>> = (0..num_best_matches_lists)
-        .map(|_| {
-            UnsafeCell::new(BestMatchesList::new(
-                limit.get(),
-                pattern.clone(),
-                Matcher::new(nucleo_matcher::Config::DEFAULT),
-            ))
-        })
+        .map(|_| UnsafeCell::new(BestMatchesList::new(limit.get(), pattern_text.to_string())))
         .collect();
 
     // Use the same tree-walker library that ripgrep uses. We use it directly so
@@ -220,47 +204,33 @@ pub fn run(
     }
 
     // Merge results across best_matchers_per_worker.
-    let mut global_heap: BinaryHeap<Reverse<(u32, String)>> = BinaryHeap::new();
+    let mut global_heap: BinaryHeap<(i32, String)> = BinaryHeap::new();
     let mut total_match_count = 0;
     for best_list_cell in best_matchers_per_worker.iter() {
         let best_list = unsafe { &*best_list_cell.get() };
         total_match_count += best_list.num_matches;
-        for &Reverse((score, ref line)) in best_list.binary_heap.iter() {
+        for &(score, ref line) in best_list.binary_heap.iter() {
             if global_heap.len() < limit.get() {
-                global_heap.push(Reverse((score, line.clone())));
-            } else if let Some(min_element) = global_heap.peek() {
-                if score > min_element.0.0 {
+                global_heap.push((score, line.clone()));
+            } else if let Some(&(worst_score, _)) = global_heap.peek() {
+                if score < worst_score {
                     global_heap.pop();
-                    global_heap.push(Reverse((score, line.clone())));
+                    global_heap.push((score, line.clone()));
                 }
             }
         }
     }
 
-    let mut raw_matches: Vec<(u32, String)> = global_heap.into_iter().map(|r| r.0).collect();
+    let mut raw_matches: Vec<(i32, String)> = global_heap.into_iter().collect();
     sort_matches(&mut raw_matches);
 
     // Transform into `FileMatch`, optionally computing indices.
-    let mut matcher = if compute_indices {
-        Some(Matcher::new(nucleo_matcher::Config::DEFAULT))
-    } else {
-        None
-    };
-
     let matches: Vec<FileMatch> = raw_matches
         .into_iter()
         .map(|(score, path)| {
             let indices = if compute_indices {
-                let mut buf = Vec::<char>::new();
-                let haystack: Utf32Str<'_> = Utf32Str::new(&path, &mut buf);
-                let mut idx_vec: Vec<u32> = Vec::new();
-                if let Some(ref mut m) = matcher {
-                    // Ignore the score returned from indices – we already have `score`.
-                    pattern.indices(haystack, m, &mut idx_vec);
-                }
-                idx_vec.sort_unstable();
-                idx_vec.dedup();
-                Some(idx_vec)
+                common_fuzzy_indices(&path, pattern_text)
+                    .map(|v| v.into_iter().map(|i| i as u32).collect())
             } else {
                 None
             };
@@ -279,9 +249,9 @@ pub fn run(
     })
 }
 
-/// Sort matches in-place by descending score, then ascending path.
-fn sort_matches(matches: &mut [(u32, String)]) {
-    matches.sort_by(|a, b| match b.0.cmp(&a.0) {
+/// Sort matches in-place by ascending score, then ascending path.
+fn sort_matches(matches: &mut [(i32, String)]) {
+    matches.sort_by(|a, b| match a.0.cmp(&b.0) {
         std::cmp::Ordering::Equal => a.1.cmp(&b.1),
         other => other,
     });
@@ -291,39 +261,31 @@ fn sort_matches(matches: &mut [(u32, String)]) {
 struct BestMatchesList {
     max_count: usize,
     num_matches: usize,
-    pattern: Pattern,
-    matcher: Matcher,
-    binary_heap: BinaryHeap<Reverse<(u32, String)>>,
-
-    /// Internal buffer for converting strings to UTF-32.
-    utf32buf: Vec<char>,
+    pattern: String,
+    binary_heap: BinaryHeap<(i32, String)>,
 }
 
 impl BestMatchesList {
-    fn new(max_count: usize, pattern: Pattern, matcher: Matcher) -> Self {
+    fn new(max_count: usize, pattern: String) -> Self {
         Self {
             max_count,
             num_matches: 0,
             pattern,
-            matcher,
             binary_heap: BinaryHeap::new(),
-            utf32buf: Vec::<char>::new(),
         }
     }
 
     fn insert(&mut self, line: &str) {
-        let haystack: Utf32Str<'_> = Utf32Str::new(line, &mut self.utf32buf);
-        if let Some(score) = self.pattern.score(haystack, &mut self.matcher) {
-            // In the tests below, we verify that score() returns None for a
-            // non-match, so we can categorically increment the count here.
+        if let Some((_indices, score)) = common_fuzzy_match(line, &self.pattern) {
+            // Count all matches; non-matches return None above.
             self.num_matches += 1;
 
             if self.binary_heap.len() < self.max_count {
-                self.binary_heap.push(Reverse((score, line.to_string())));
-            } else if let Some(min_element) = self.binary_heap.peek() {
-                if score > min_element.0.0 {
+                self.binary_heap.push((score, line.to_string()));
+            } else if let Some(&(worst_score, _)) = self.binary_heap.peek() {
+                if score < worst_score {
                     self.binary_heap.pop();
-                    self.binary_heap.push(Reverse((score, line.to_string())));
+                    self.binary_heap.push((score, line.to_string()));
                 }
             }
         }
@@ -354,28 +316,16 @@ fn create_worker_count(num_workers: NonZero<usize>) -> WorkerCount {
     }
 }
 
-fn create_pattern(pattern: &str) -> Pattern {
-    Pattern::new(
-        pattern,
-        CaseMatching::Smart,
-        Normalization::Smart,
-        AtomKind::Fuzzy,
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn verify_score_is_none_for_non_match() {
-        let mut utf32buf = Vec::<char>::new();
-        let line = "hello";
-        let mut matcher = Matcher::new(nucleo_matcher::Config::DEFAULT);
-        let haystack: Utf32Str<'_> = Utf32Str::new(line, &mut utf32buf);
-        let pattern = create_pattern("zzz");
-        let score = pattern.score(haystack, &mut matcher);
-        assert_eq!(score, None);
+    fn verify_no_match_does_not_increment_or_push() {
+        let mut list = BestMatchesList::new(5, "zzz".to_string());
+        list.insert("hello");
+        assert_eq!(list.num_matches, 0);
+        assert_eq!(list.binary_heap.len(), 0);
     }
 
     #[test]
@@ -388,11 +338,11 @@ mod tests {
 
         sort_matches(&mut matches);
 
-        // Highest score first; ties broken alphabetically.
+        // Lowest score first; ties broken alphabetically.
         let expected = vec![
+            (90, "zzz".to_string()),
             (100, "a_path".to_string()),
             (100, "b_path".to_string()),
-            (90, "zzz".to_string()),
         ];
 
         assert_eq!(matches, expected);

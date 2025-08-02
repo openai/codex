@@ -45,6 +45,28 @@ enum AppState<'a> {
     GitWarning { screen: GitWarningScreen },
 }
 
+/// Strip a single pair of surrounding quotes from the provided string if present.
+/// Supports straight and common curly quotes: '…', "…", ‘…’, “…”.
+pub fn strip_surrounding_quotes(s: &str) -> &str {
+    // Opening/closing pairs (note curly quotes differ on each side)
+    const QUOTE_PAIRS: &[(char, char)] = &[('"', '"'), ('\'', '\''), ('“', '”'), ('‘', '’')];
+
+    let t = s.trim();
+    if t.len() < 2 {
+        return t;
+    }
+
+    for &(open, close) in QUOTE_PAIRS {
+        if t.starts_with(open) && t.ends_with(close) {
+            let start = open.len_utf8();
+            let end = t.len() - close.len_utf8();
+            return &t[start..end];
+        }
+    }
+
+    t
+}
+
 pub(crate) struct App<'a> {
     app_event_tx: AppEventSender,
     app_event_rx: Receiver<AppEvent>,
@@ -279,6 +301,16 @@ impl App<'_> {
                 AppEvent::ExitRequest => {
                     break;
                 }
+                AppEvent::SelectModel(model) => {
+                    if let AppState::Chat { widget } = &mut self.app_state {
+                        widget.update_model_and_reconfigure(model);
+                    }
+                }
+                AppEvent::OpenModelSelector => {
+                    if let AppState::Chat { widget } = &mut self.app_state {
+                        widget.show_model_selector();
+                    }
+                }
                 AppEvent::CodexOp(op) => match &mut self.app_state {
                     AppState::Chat { widget } => widget.submit_op(op),
                     AppState::GitWarning { .. } => {}
@@ -367,6 +399,37 @@ impl App<'_> {
                                 },
                             ),
                         }));
+                    }
+                    SlashCommand::Model => {
+                        // Open the model selector when `/model` has no arguments.
+                        if let AppState::Chat { widget } = &mut self.app_state {
+                            widget.show_model_selector();
+                        }
+                    }
+                },
+                AppEvent::DispatchCommandWithArgs(command, args) => match command {
+                    SlashCommand::Model => {
+                        let arg = args.trim();
+                        if let AppState::Chat { widget } = &mut self.app_state {
+                            // Normalize commonly quoted inputs like \"o3\" or 'o3' or “o3”.
+                            let normalized = strip_surrounding_quotes(arg).trim().to_string();
+                            if !normalized.is_empty() {
+                                widget.update_model_and_reconfigure(normalized);
+                            }
+                        }
+                    }
+                    #[cfg(debug_assertions)]
+                    SlashCommand::TestApproval => {
+                        // Ignore args; forward to the existing no-args handler
+                        self.app_event_tx.send(AppEvent::DispatchCommand(command));
+                    }
+                    SlashCommand::New
+                    | SlashCommand::Quit
+                    | SlashCommand::Diff
+                    | SlashCommand::Compact => {
+                        // For other commands, fall back to existing handling.
+                        // We can ignore args for now.
+                        self.app_event_tx.send(AppEvent::DispatchCommand(command));
                     }
                 },
                 AppEvent::StartFileSearch(query) => {
@@ -495,6 +558,47 @@ impl App<'_> {
         match &mut self.app_state {
             AppState::Chat { widget } => widget.handle_codex_event(event),
             AppState::GitWarning { .. } => {}
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_surrounding_quotes;
+
+    #[test]
+    fn strip_surrounding_quotes_cases() {
+        let cases = vec![
+            ("o3", "o3"),
+            ("\"codex-mini-latest\"", "codex-mini-latest"),
+            ("another_model", "another_model"),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(strip_surrounding_quotes(input), expected.to_string());
+        }
+    }
+
+    #[test]
+    fn model_command_args_extraction_and_normalization() {
+        let cases = vec![
+            ("/model", "", ""),
+            ("/model o3", "o3", "o3"),
+            ("/model another_model", "another_model", "another_model"),
+        ];
+        for (line, raw_expected, norm_expected) in cases {
+            // Extract raw args as in chat_composer
+            let raw = if let Some(stripped) = line.strip_prefix('/') {
+                let token = stripped.trim_start();
+                let cmd_token = token.split_whitespace().next().unwrap_or("");
+                let rest = &token[cmd_token.len()..];
+                rest.trim_start().to_string()
+            } else {
+                String::new()
+            };
+            assert_eq!(raw, raw_expected, "raw args for '{line}'");
+            // Normalize as in app dispatch logic
+            let normalized = strip_surrounding_quotes(&raw).trim().to_string();
+            assert_eq!(normalized, norm_expected, "normalized args for '{line}'");
         }
     }
 }

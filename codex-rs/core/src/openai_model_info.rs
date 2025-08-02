@@ -69,3 +69,8 @@ pub(crate) fn get_model_info(name: &str) -> Option<ModelInfo> {
         _ => None,
     }
 }
+
+/// Return a curated list of commonly-used OpenAI model names for selection UIs.
+pub fn get_all_model_names() -> Vec<&'static str> {
+    vec!["codex-mini-latest", "o3", "o4-mini", "gpt-4.1", "gpt-4o"]
+}

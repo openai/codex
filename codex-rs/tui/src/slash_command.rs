@@ -15,6 +15,7 @@ pub enum SlashCommand {
     New,
     Compact,
     Diff,
+    Model,
     Quit,
     #[cfg(debug_assertions)]
     TestApproval,
@@ -27,6 +28,7 @@ impl SlashCommand {
             SlashCommand::New => "Start a new chat.",
             SlashCommand::Compact => "Compact the chat history.",
             SlashCommand::Quit => "Exit the application.",
+            SlashCommand::Model => "Select the model to use.",
             SlashCommand::Diff => {
                 "Show git diff of the working directory (including untracked files)"
             }
