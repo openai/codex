@@ -46,13 +46,24 @@ pub async fn run_login_with_api_key(
 pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
     let config = load_config_or_exit(cli_config_overrides);
 
-    match load_auth(&config.codex_home, true) {
+    match load_auth(
+        &config.codex_home,
+        &config.model_provider.name,
+        &config.model_provider.env_key,
+        true,
+    ) {
         Ok(Some(auth)) => match auth.mode {
             AuthMode::ApiKey => {
                 if let Some(api_key) = auth.api_key.as_deref() {
                     eprintln!("Logged in using an API key - {}", safe_format_key(api_key));
 
-                    if let Ok(env_api_key) = env::var(OPENAI_API_KEY_ENV_VAR) {
+                    if let Ok(env_api_key) = env::var(
+                        &config
+                            .model_provider
+                            .env_key
+                            .as_deref()
+                            .unwrap_or(OPENAI_API_KEY_ENV_VAR),
+                    ) {
                         if env_api_key == api_key {
                             eprintln!(
                                 "   API loaded from OPENAI_API_KEY environment variable or .env file"
@@ -62,6 +73,10 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
                 } else {
                     eprintln!("Logged in using an API key");
                 }
+                std::process::exit(0);
+            }
+            AuthMode::MicrosoftEntraID => {
+                eprintln!("Logged in using Azure CLI");
                 std::process::exit(0);
             }
             AuthMode::ChatGPT => {
