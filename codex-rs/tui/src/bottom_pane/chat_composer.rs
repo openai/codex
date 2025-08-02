@@ -324,8 +324,6 @@ impl ChatComposer {
     ///   one additional character, that token (without `@`) is returned.
     fn current_at_token(textarea: &TextArea) -> Option<String> {
         let cursor_offset = textarea.cursor();
-        tracing::info!("textarea: {:?}", textarea);
-        tracing::info!("cursor_offset: {}", cursor_offset);
         let text = textarea.text();
 
         // Split the line at the cursor position so we can search for word
