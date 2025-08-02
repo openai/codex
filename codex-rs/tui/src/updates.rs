@@ -1,7 +1,10 @@
 #![cfg(any(not(debug_assertions), test))]
 
+use chrono::DateTime;
 use chrono::Duration;
 use chrono::Utc;
+use serde::Deserialize;
+use serde::Serialize;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -35,20 +38,18 @@ pub fn get_upgrade_version(config: &Config) -> Option<String> {
     })
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 struct VersionInfo {
     latest_version: String,
     // ISO-8601 timestamp (RFC3339)
-    last_checked_at: chrono::DateTime<chrono::Utc>,
+    last_checked_at: DateTime<Utc>,
 }
 
-const VERSION_FILENAME: &str = "version.jsonl";
+const VERSION_FILENAME: &str = "version.json";
 const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/openai/codex/releases/latest";
 
 fn version_filepath(config: &Config) -> PathBuf {
-    let mut path = config.codex_home.clone();
-    path.push(VERSION_FILENAME);
-    path
+    config.codex_home.join(VERSION_FILENAME)
 }
 
 fn read_version_info(version_file: &Path) -> anyhow::Result<VersionInfo> {
@@ -56,13 +57,15 @@ fn read_version_info(version_file: &Path) -> anyhow::Result<VersionInfo> {
     Ok(serde_json::from_str(&contents)?)
 }
 
-async fn check_for_update(version_file: &Path) -> anyhow::Result<()> {
-    #[derive(serde::Deserialize, Debug, Clone)]
-    struct ReleaseInfo {
-        tag_name: String,
-    }
+#[derive(Deserialize, Debug, Clone)]
+struct ReleaseInfo {
+    tag_name: String,
+}
 
-    let resp = reqwest::Client::new()
+async fn check_for_update(version_file: &Path) -> anyhow::Result<()> {
+    let ReleaseInfo {
+        tag_name: latest_tag_name,
+    } = reqwest::Client::new()
         .get(LATEST_RELEASE_URL)
         .header(
             "User-Agent",
@@ -77,23 +80,19 @@ async fn check_for_update(version_file: &Path) -> anyhow::Result<()> {
         .json::<ReleaseInfo>()
         .await?;
 
-    let latest_tag_name = resp.tag_name;
-
     let info = VersionInfo {
         latest_version: latest_tag_name
             .strip_prefix("rust-v")
-            .ok_or_else(|| {
-                anyhow::anyhow!("Failed to parse latest tag name '{}'", latest_tag_name)
-            })?
+            .ok_or_else(|| anyhow::anyhow!("Failed to parse latest tag name '{latest_tag_name}'"))?
             .into(),
-        last_checked_at: chrono::Utc::now(),
+        last_checked_at: Utc::now(),
     };
 
     let json_line = format!("{}\n", serde_json::to_string(&info)?);
     if let Some(parent) = version_file.parent() {
-        tokio::fs::create_dir_all(parent).await.ok();
+        tokio::fs::create_dir_all(parent).await?;
     }
-    tokio::fs::write(version_file, json_line).await.ok();
+    tokio::fs::write(version_file, json_line).await?;
     Ok(())
 }
 
