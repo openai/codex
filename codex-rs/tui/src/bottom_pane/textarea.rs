@@ -80,19 +80,30 @@ impl TextArea {
         textwrap::wrap(&self.text, width as usize).len() as u16
     }
 
-    #[allow(clippy::unwrap_used)]
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        let lines = textwrap::wrap(&self.text[..self.cursor_pos], area.width as usize);
-        // textwrap trims trailing whitespace, so we need to add it back.
-        let last_line = lines.last().unwrap();
-        let whitespace_before_cursor = self.text[..self.cursor_pos]
-            .chars()
-            .rev()
-            .take_while(|&c| c == ' ')
-            .count();
-        let row = lines.len() as u16;
-        let col = last_line.width() as u16 + whitespace_before_cursor as u16;
-        Some((area.x + col, area.y + row - 1))
+        let lines = textwrap::wrap(&self.text, area.width as usize);
+        for (i, line) in lines.iter().enumerate() {
+            match line {
+                std::borrow::Cow::Borrowed(line) => {
+                    let line_start =
+                        unsafe { line.as_ptr().offset_from(self.text.as_ptr()) as usize };
+                    let line_end = line_start
+                        + line.len()
+                        + self.text[line_start + line.len()..]
+                            .chars()
+                            .take_while(|c| *c == ' ')
+                            .count();
+                    if (line_start <= self.cursor_pos && self.cursor_pos < line_end)
+                        || (line_end == self.text.len() && self.cursor_pos == line_end)
+                    {
+                        let col = self.text[line_start..self.cursor_pos].width() as u16;
+                        return Some((area.x + col, area.y + i as u16));
+                    }
+                }
+                std::borrow::Cow::Owned(_) => unreachable!(),
+            }
+        }
+        unreachable!()
     }
 
     pub fn is_empty(&self) -> bool {
