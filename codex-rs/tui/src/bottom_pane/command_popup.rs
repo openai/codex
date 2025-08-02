@@ -25,6 +25,8 @@ pub(crate) struct CommandPopup {
     command_filter: String,
     all_commands: Vec<(&'static str, SlashCommand)>,
     selected_idx: Option<usize>,
+    // Index of the first visible row in the filtered list.
+    scroll_top: usize,
 }
 
 impl CommandPopup {
@@ -33,6 +35,7 @@ impl CommandPopup {
             command_filter: String::new(),
             all_commands: built_in_slash_commands(),
             selected_idx: None,
+            scroll_top: 0,
         }
     }
 
@@ -66,26 +69,28 @@ impl CommandPopup {
             0 => None,
             _ => Some(self.selected_idx.unwrap_or(0).min(matches_len - 1)),
         };
+
+        self.adjust_scroll(matches_len);
     }
 
     /// Determine the preferred height of the popup. This is the number of
-    /// rows required to show **at most** `MAX_POPUP_ROWS` commands plus the
-    /// table/border overhead (one line at the top and one at the bottom).
+    /// rows required to show at most MAX_POPUP_ROWS commands.
     pub(crate) fn calculate_required_height(&self) -> u16 {
         self.filtered_commands().len().clamp(1, MAX_POPUP_ROWS) as u16
     }
 
     /// Return the list of commands that match the current filter. Matching is
-    /// performed using a *prefix* comparison on the command name.
+    /// performed using a case-insensitive prefix comparison on the command name.
     fn filtered_commands(&self) -> Vec<&SlashCommand> {
+        let filter = self.command_filter.as_str();
         self.all_commands
             .iter()
             .filter_map(|(_name, cmd)| {
-                if self.command_filter.is_empty()
-                    || cmd
-                        .command()
-                        .starts_with(&self.command_filter.to_ascii_lowercase())
-                {
+                if filter.is_empty() {
+                    return Some(cmd);
+                }
+                let name = cmd.command();
+                if name.len() >= filter.len() && name[..filter.len()].eq_ignore_ascii_case(filter) {
                     Some(cmd)
                 } else {
                     None
@@ -96,26 +101,30 @@ impl CommandPopup {
 
     /// Move the selection cursor one step up.
     pub(crate) fn move_up(&mut self) {
-        if let Some(len) = self.filtered_commands().len().checked_sub(1) {
-            if len == usize::MAX {
-                return;
-            }
+        let matches = self.filtered_commands();
+        let len = matches.len();
+        if len == 0 {
+            self.selected_idx = None;
+            self.scroll_top = 0;
+            return;
         }
 
-        if let Some(idx) = self.selected_idx {
-            if idx > 0 {
-                self.selected_idx = Some(idx - 1);
-            }
-        } else if !self.filtered_commands().is_empty() {
-            self.selected_idx = Some(0);
+        match self.selected_idx {
+            Some(idx) if idx > 0 => self.selected_idx = Some(idx - 1),
+            Some(_) => self.selected_idx = Some(len - 1), // wrap to last
+            None => self.selected_idx = Some(0),
         }
+
+        self.adjust_scroll(len);
     }
 
     /// Move the selection cursor one step down.
     pub(crate) fn move_down(&mut self) {
-        let matches_len = self.filtered_commands().len();
+        let matches = self.filtered_commands();
+        let matches_len = matches.len();
         if matches_len == 0 {
             self.selected_idx = None;
+            self.scroll_top = 0;
             return;
         }
 
@@ -123,17 +132,41 @@ impl CommandPopup {
             Some(idx) if idx + 1 < matches_len => {
                 self.selected_idx = Some(idx + 1);
             }
+            Some(_idx_last) => {
+                self.selected_idx = Some(0);
+            }
             None => {
                 self.selected_idx = Some(0);
             }
-            _ => {}
         }
+
+        self.adjust_scroll(matches_len);
     }
 
     /// Return currently selected command, if any.
     pub(crate) fn selected_command(&self) -> Option<&SlashCommand> {
         let matches = self.filtered_commands();
         self.selected_idx.and_then(|idx| matches.get(idx).copied())
+    }
+
+    fn adjust_scroll(&mut self, matches_len: usize) {
+        if matches_len == 0 {
+            self.scroll_top = 0;
+            return;
+        }
+        let visible_rows = MAX_POPUP_ROWS.min(matches_len);
+        if let Some(sel) = self.selected_idx {
+            if sel < self.scroll_top {
+                self.scroll_top = sel;
+            } else {
+                let bottom = self.scroll_top + visible_rows - 1;
+                if sel > bottom {
+                    self.scroll_top = sel + 1 - visible_rows;
+                }
+            }
+        } else {
+            self.scroll_top = 0;
+        }
     }
 }
 
@@ -142,10 +175,8 @@ impl WidgetRef for CommandPopup {
         let matches = self.filtered_commands();
 
         let mut rows: Vec<Row> = Vec::new();
-        let visible_matches: Vec<&SlashCommand> =
-            matches.into_iter().take(MAX_POPUP_ROWS).collect();
 
-        if visible_matches.is_empty() {
+        if matches.is_empty() {
             rows.push(Row::new(vec![
                 Cell::from(""),
                 Cell::from("No matching commands").add_modifier(Modifier::ITALIC),
@@ -153,10 +184,32 @@ impl WidgetRef for CommandPopup {
         } else {
             let default_style = Style::default();
             let command_style = Style::default().fg(Color::LightBlue);
-            for (idx, cmd) in visible_matches.iter().enumerate() {
+            let max_rows_from_area = area.height as usize;
+            let visible_rows = MAX_POPUP_ROWS
+                .min(matches.len())
+                .min(max_rows_from_area.max(1));
+
+            let mut start_idx = self.scroll_top.min(matches.len().saturating_sub(1));
+            if let Some(sel) = self.selected_idx {
+                if sel < start_idx {
+                    start_idx = sel;
+                } else if visible_rows > 0 {
+                    let bottom = start_idx + visible_rows - 1;
+                    if sel > bottom {
+                        start_idx = sel + 1 - visible_rows;
+                    }
+                }
+            }
+
+            for (global_idx, cmd) in matches
+                .iter()
+                .enumerate()
+                .skip(start_idx)
+                .take(visible_rows)
+            {
                 rows.push(Row::new(vec![
                     Cell::from(Line::from(vec![
-                        if Some(idx) == self.selected_idx {
+                        if Some(global_idx) == self.selected_idx {
                             Span::styled(
                                 "›",
                                 Style::default().bg(Color::DarkGray).fg(Color::LightCyan),
@@ -186,5 +239,69 @@ impl WidgetRef for CommandPopup {
         // );
 
         table.render(area, buf);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+
+    #[test]
+    fn move_down_wraps_to_top() {
+        let mut popup = CommandPopup::new();
+        // Show all commands by simulating composer input starting with '/'.
+        popup.on_composer_text_change("/".to_string());
+        let len = popup.filtered_commands().len();
+        assert!(len > 0);
+
+        // Move to last item.
+        for _ in 0..len.saturating_sub(1) {
+            popup.move_down();
+        }
+        // Next move_down should wrap to index 0.
+        popup.move_down();
+        assert_eq!(popup.selected_idx, Some(0));
+    }
+
+    #[test]
+    fn move_up_wraps_to_bottom() {
+        let mut popup = CommandPopup::new();
+        popup.on_composer_text_change("/".to_string());
+        let len = popup.filtered_commands().len();
+        assert!(len > 0);
+
+        // Initial selection is 0; moving up should wrap to last.
+        popup.move_up();
+        assert_eq!(popup.selected_idx, Some(len - 1));
+    }
+
+    #[test]
+    fn respects_tiny_terminal_height_when_rendering() {
+        let mut popup = CommandPopup::new();
+        popup.on_composer_text_change("/".to_string());
+        assert!(popup.filtered_commands().len() >= 3);
+
+        let area = Rect::new(0, 0, 50, 2);
+        let mut buf = Buffer::empty(area);
+        popup.render(area, &mut buf);
+
+        let mut non_empty_rows = 0u16;
+        for y in 0..area.height {
+            let mut row_has_content = false;
+            for x in 0..area.width {
+                let c = buf[(x, y)].symbol();
+                if !c.trim().is_empty() {
+                    row_has_content = true;
+                    break;
+                }
+            }
+            if row_has_content {
+                non_empty_rows += 1;
+            }
+        }
+
+        assert_eq!(non_empty_rows, 2);
     }
 }

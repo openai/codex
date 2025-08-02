@@ -108,7 +108,6 @@ impl FileSearchPopup {
             .map(|file_match| file_match.path.as_str())
     }
 
-    /// Preferred height (rows) including border.
     pub(crate) fn calculate_required_height(&self) -> u16 {
         // Row count depends on whether we already have matches. If no matches
         // yet (e.g. initial search or query with no results) reserve a single
