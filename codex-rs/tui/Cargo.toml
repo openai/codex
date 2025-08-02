@@ -17,6 +17,7 @@ workspace = true
 [dependencies]
 anyhow = "1"
 base64 = "0.22.1"
+chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
 codex-ansi-escape = { path = "../ansi-escape" }
 codex-arg0 = { path = "../arg0" }
@@ -41,10 +42,9 @@ ratatui = { version = "0.29.0", features = [
 ] }
 ratatui-image = "8.0.0"
 regex-lite = "0.1"
+reqwest = { version = "0.12", features = ["json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
-chrono = { version = "0.4", features = ["serde"] }
-reqwest = { version = "0.12", features = ["json"] }
 shlex = "1.3.0"
 strum = "0.27.2"
 strum_macros = "0.27.2"
