@@ -25,6 +25,7 @@ mod bottom_pane;
 mod chatwidget;
 mod citation_regex;
 mod cli;
+mod clipboard_paste;
 mod custom_terminal;
 mod exec_command;
 mod file_search;

@@ -5,6 +5,7 @@ use ratatui::text::Line;
 
 use crate::slash_command::SlashCommand;
 
+#[derive(Debug)]
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum AppEvent {
     CodexEvent(Event),
@@ -48,4 +49,12 @@ pub(crate) enum AppEvent {
     },
 
     InsertHistory(Vec<Line<'static>>),
+
+    /// Image pasted via Cmd+V (clipboard image attachment).
+    AttachImage {
+        path: std::path::PathBuf,
+        width: u32,
+        height: u32,
+        format_label: &'static str,
+    },
 }

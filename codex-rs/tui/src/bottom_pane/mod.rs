@@ -268,6 +268,27 @@ impl BottomPane<'_> {
         self.composer.on_file_search_result(query, matches);
         self.request_redraw();
     }
+
+    pub(crate) fn attach_image(
+        &mut self,
+        path: std::path::PathBuf,
+        width: u32,
+        height: u32,
+        format_label: &str,
+    ) {
+        if self.active_view.is_none() {
+            let needs_redraw = self
+                .composer
+                .attach_image(path, width, height, format_label);
+            if needs_redraw {
+                self.request_redraw();
+            }
+        }
+    }
+
+    pub(crate) fn take_recent_submission_images(&mut self) -> Vec<std::path::PathBuf> {
+        self.composer.take_recent_submission_images()
+    }
 }
 
 impl WidgetRef for &BottomPane<'_> {

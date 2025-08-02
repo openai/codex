@@ -23,6 +23,7 @@ use super::file_search_popup::FileSearchPopup;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use codex_file_search::FileMatch;
+use std::path::Path;
 
 const BASE_PLACEHOLDER_TEXT: &str = "...";
 /// If the pasted content exceeds this number of characters, replace it with a
@@ -45,12 +46,16 @@ pub(crate) struct ChatComposer<'a> {
     dismissed_file_popup_token: Option<String>,
     current_file_query: Option<String>,
     pending_pastes: Vec<(String, String)>,
+    attached_images: Vec<(String, std::path::PathBuf)>,
+    recent_submission_images: Vec<std::path::PathBuf>,
+    /// When true we are in an explicit file search session initiated via @file.
+    file_search_mode: bool,
 }
 
 /// Popup state – at most one can be visible at any time.
 enum ActivePopup {
     None,
-    Command(CommandPopup),
+    Slash(CommandPopup),
     File(FileSearchPopup),
 }
 
@@ -76,6 +81,9 @@ impl ChatComposer<'_> {
             dismissed_file_popup_token: None,
             current_file_query: None,
             pending_pastes: Vec::new(),
+            attached_images: Vec::new(),
+            recent_submission_images: Vec::new(),
+            file_search_mode: false,
         };
         this.update_border(has_input_focus);
         this
@@ -85,7 +93,7 @@ impl ChatComposer<'_> {
         self.textarea.lines().len().max(1) as u16
             + match &self.active_popup {
                 ActivePopup::None => 1u16,
-                ActivePopup::Command(c) => c.calculate_required_height(),
+                ActivePopup::Slash(c) => c.calculate_required_height(),
                 ActivePopup::File(c) => c.calculate_required_height(),
             }
     }
@@ -155,9 +163,26 @@ impl ChatComposer<'_> {
         } else {
             self.textarea.insert_str(&pasted);
         }
-        self.sync_command_popup();
+        self.sync_slash_command_popup();
         self.sync_file_search_popup();
         true
+    }
+
+    pub fn attach_image(
+        &mut self,
+        path: std::path::PathBuf,
+        width: u32,
+        height: u32,
+        format_label: &str,
+    ) -> bool {
+        let placeholder = format!("[image {width}x{height} {format_label}]");
+        self.textarea.insert_str(&placeholder);
+        self.attached_images.push((placeholder, path));
+        true
+    }
+
+    pub fn take_recent_submission_images(&mut self) -> Vec<std::path::PathBuf> {
+        std::mem::take(&mut self.recent_submission_images)
     }
 
     /// Integrate results from an asynchronous file search.
@@ -185,14 +210,14 @@ impl ChatComposer<'_> {
     /// Handle a key event coming from the main UI.
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
         let result = match &mut self.active_popup {
-            ActivePopup::Command(_) => self.handle_key_event_with_slash_popup(key_event),
+            ActivePopup::Slash(_) => self.handle_key_event_with_slash_popup(key_event),
             ActivePopup::File(_) => self.handle_key_event_with_file_popup(key_event),
             ActivePopup::None => self.handle_key_event_without_popup(key_event),
         };
 
         // Update (or hide/show) popup after processing the key.
-        self.sync_command_popup();
-        if matches!(self.active_popup, ActivePopup::Command(_)) {
+        self.sync_slash_command_popup();
+        if matches!(self.active_popup, ActivePopup::Slash(_)) {
             self.dismissed_file_popup_token = None;
         } else {
             self.sync_file_search_popup();
@@ -203,7 +228,7 @@ impl ChatComposer<'_> {
 
     /// Handle key event when the slash-command popup is visible.
     fn handle_key_event_with_slash_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
-        let ActivePopup::Command(popup) = &mut self.active_popup else {
+        let ActivePopup::Slash(popup) = &mut self.active_popup else {
             unreachable!();
         };
 
@@ -283,6 +308,7 @@ impl ChatComposer<'_> {
                     self.dismissed_file_popup_token = Some(tok.to_string());
                 }
                 self.active_popup = ActivePopup::None;
+                self.file_search_mode = false; // end session
                 (InputResult::None, true)
             }
             Input { key: Key::Tab, .. }
@@ -294,9 +320,73 @@ impl ChatComposer<'_> {
             } => {
                 if let Some(sel) = popup.selected_match() {
                     let sel_path = sel.to_string();
-                    // Drop popup borrow before using self mutably again.
-                    self.insert_selected_path(&sel_path);
+                    // If selected path looks like an image (png/jpeg), attach as image instead of inserting text.
+                    let is_image = {
+                        let lower = sel_path.to_ascii_lowercase();
+                        lower.ends_with(".png")
+                            || lower.ends_with(".jpg")
+                            || lower.ends_with(".jpeg")
+                    };
+                    if is_image {
+                        // Determine dimensions; if that fails fall back to normal path insertion.
+                        let path_buf = std::path::PathBuf::from(&sel_path);
+                        match image::image_dimensions(&path_buf) {
+                            Ok((w, h)) => {
+                                // Remove the current @token (mirror logic from insert_selected_path without inserting text)
+                                let (row, col) = self.textarea.cursor();
+                                let mut lines: Vec<String> = self.textarea.lines().to_vec();
+                                if let Some(line) = lines.get_mut(row) {
+                                    let cursor_byte_offset = cursor_byte_offset(line, col);
+                                    if let Some((start, end)) =
+                                        at_token_bounds(line, cursor_byte_offset, true)
+                                    {
+                                        let mut new_line =
+                                            String::with_capacity(line.len() - (end - start));
+                                        new_line.push_str(&line[..start]);
+                                        new_line.push_str(&line[end..]);
+                                        *line = new_line;
+                                        let new_text = lines.join("\n");
+                                        self.textarea.select_all();
+                                        self.textarea.cut();
+                                        let _ = self.textarea.insert_str(new_text);
+                                    }
+                                }
+                                let format_label = match Path::new(&sel_path)
+                                    .extension()
+                                    .and_then(|e| e.to_str())
+                                    .map(|s| s.to_ascii_lowercase())
+                                {
+                                    Some(ext) if ext == "png" => "PNG",
+                                    Some(ext) if ext == "jpg" || ext == "jpeg" => "JPEG",
+                                    _ => "IMG",
+                                };
+                                self.app_event_tx.send(AppEvent::AttachImage {
+                                    path: path_buf.clone(),
+                                    width: w,
+                                    height: h,
+                                    format_label,
+                                });
+                                tracing::info!(
+                                    "file_search_image selected path={:?} width={} height={} format={}",
+                                    path_buf,
+                                    w,
+                                    h,
+                                    format_label
+                                );
+                                // Optionally add a trailing space to keep typing fluid.
+                                let _ = self.textarea.insert_str(" ");
+                            }
+                            Err(_) => {
+                                // Fallback to plain path insertion if metadata read fails.
+                                self.insert_selected_path(&sel_path);
+                            }
+                        }
+                    } else {
+                        // Non-image: original behavior.
+                        self.insert_selected_path(&sel_path);
+                    }
                     self.active_popup = ActivePopup::None;
+                    self.file_search_mode = false; // end session on selection
                     return (InputResult::None, true);
                 }
                 (InputResult::None, false)
@@ -317,97 +407,41 @@ impl ChatComposer<'_> {
     ///   one additional character, that token (without `@`) is returned.
     fn current_at_token(textarea: &tui_textarea::TextArea) -> Option<String> {
         let (row, col) = textarea.cursor();
-
-        // Guard against out-of-bounds rows.
         let line = textarea.lines().get(row)?.as_str();
+        let cursor_byte_offset = cursor_byte_offset(line, col);
+        let (start, end) = at_token_bounds(line, cursor_byte_offset, false)?;
+        Some(line[start + 1..end].to_string())
+    }
 
-        // Calculate byte offset for cursor position
-        let cursor_byte_offset = line.chars().take(col).map(|c| c.len_utf8()).sum::<usize>();
-
-        // Split the line at the cursor position so we can search for word
-        // boundaries on both sides.
-        let before_cursor = &line[..cursor_byte_offset];
-        let after_cursor = &line[cursor_byte_offset..];
-
-        // Find start index (first character **after** the previous multi-byte whitespace).
-        let start_idx = before_cursor
-            .char_indices()
-            .rfind(|(_, c)| c.is_whitespace())
-            .map(|(idx, c)| idx + c.len_utf8())
-            .unwrap_or(0);
-
-        // Find end index (first multi-byte whitespace **after** the cursor position).
-        let end_rel_idx = after_cursor
-            .char_indices()
-            .find(|(_, c)| c.is_whitespace())
-            .map(|(idx, _)| idx)
-            .unwrap_or(after_cursor.len());
-        let end_idx = cursor_byte_offset + end_rel_idx;
-
-        if start_idx >= end_idx {
-            return None;
-        }
-
-        let token = &line[start_idx..end_idx];
-
-        if token.starts_with('@') && token.len() > 1 {
-            Some(token[1..].to_string())
-        } else {
-            None
-        }
+    /// Similar to `current_at_token` but returns Some("") if cursor is on a bare '@' token (no body yet).
+    fn current_at_token_allow_empty(textarea: &tui_textarea::TextArea) -> Option<String> {
+        let (row, col) = textarea.cursor();
+        let line = textarea.lines().get(row)?.as_str();
+        let cursor_byte_offset = cursor_byte_offset(line, col);
+        let (start, end) = at_token_bounds(line, cursor_byte_offset, true)?;
+        Some(line[start + 1..end].to_string()) // body may be empty
     }
 
     /// Replace the active `@token` (the one under the cursor) with `path`.
-    ///
-    /// The algorithm mirrors `current_at_token` so replacement works no matter
-    /// where the cursor is within the token and regardless of how many
-    /// `@tokens` exist in the line.
+    /// Mirrors legacy logic using new shared helpers.
     fn insert_selected_path(&mut self, path: &str) {
         let (row, col) = self.textarea.cursor();
-
-        // Materialize the textarea lines so we can mutate them easily.
         let mut lines: Vec<String> = self.textarea.lines().to_vec();
-
         if let Some(line) = lines.get_mut(row) {
-            // Calculate byte offset for cursor position
-            let cursor_byte_offset = line.chars().take(col).map(|c| c.len_utf8()).sum::<usize>();
-
-            let before_cursor = &line[..cursor_byte_offset];
-            let after_cursor = &line[cursor_byte_offset..];
-
-            // Determine token boundaries.
-            let start_idx = before_cursor
-                .char_indices()
-                .rfind(|(_, c)| c.is_whitespace())
-                .map(|(idx, c)| idx + c.len_utf8())
-                .unwrap_or(0);
-
-            let end_rel_idx = after_cursor
-                .char_indices()
-                .find(|(_, c)| c.is_whitespace())
-                .map(|(idx, _)| idx)
-                .unwrap_or(after_cursor.len());
-            let end_idx = cursor_byte_offset + end_rel_idx;
-
-            // Replace the slice `[start_idx, end_idx)` with the chosen path and a trailing space.
-            let mut new_line =
-                String::with_capacity(line.len() - (end_idx - start_idx) + path.len() + 1);
-            new_line.push_str(&line[..start_idx]);
-            new_line.push_str(path);
-            new_line.push(' ');
-            new_line.push_str(&line[end_idx..]);
-
-            *line = new_line;
-
-            // Re-populate the textarea.
-            let new_text = lines.join("\n");
-            self.textarea.select_all();
-            self.textarea.cut();
-            let _ = self.textarea.insert_str(new_text);
-
-            // Note: tui-textarea currently exposes only relative cursor
-            // movements. Leaving the cursor position unchanged is acceptable
-            // as subsequent typing will move the cursor naturally.
+            let cursor_byte_offset = cursor_byte_offset(line, col);
+            if let Some((start, end)) = token_bounds(line, cursor_byte_offset) {
+                let mut new_line =
+                    String::with_capacity(line.len() - (end - start) + path.len() + 1);
+                new_line.push_str(&line[..start]);
+                new_line.push_str(path);
+                new_line.push(' ');
+                new_line.push_str(&line[end..]);
+                *line = new_line;
+                let new_text = lines.join("\n");
+                self.textarea.select_all();
+                self.textarea.cut();
+                let _ = self.textarea.insert_str(new_text);
+            }
         }
     }
 
@@ -460,10 +494,33 @@ impl ChatComposer<'_> {
                 }
                 self.pending_pastes.clear();
 
+                // If removing all image placeholders leaves only whitespace, treat as empty (no submission).
+                let mut content_without_images = text.clone();
+                for (placeholder, _) in &self.attached_images {
+                    content_without_images = content_without_images.replace(placeholder, "");
+                }
+                if content_without_images.trim().is_empty() {
+                    return (InputResult::None, true);
+                }
+
+                // Consume image placeholders and stage their paths (text now guaranteed non-empty after removal).
+                let mut attached_paths = Vec::new();
+                for (placeholder, path) in &self.attached_images {
+                    if text.contains(placeholder) {
+                        text = text.replace(placeholder, "");
+                        attached_paths.push(path.clone());
+                    }
+                }
+                if !attached_paths.is_empty() {
+                    self.recent_submission_images = attached_paths;
+                    text = text.trim().to_string();
+                }
+
                 if text.is_empty() {
                     (InputResult::None, true)
                 } else {
                     self.history.record_local_submission(&text);
+                    self.attached_images.clear();
                     (InputResult::Submitted(text), true)
                 }
             }
@@ -505,6 +562,11 @@ impl ChatComposer<'_> {
             ..
         } = input
         {
+            // First try image placeholders (any backspace inside one removes it entirely)
+            if self.try_remove_image_placeholder_on_backspace() {
+                return (InputResult::None, true);
+            }
+            // Then try pasted-content placeholders (only when at end)
             if self.try_remove_placeholder_at_cursor() {
                 return (InputResult::None, true);
             }
@@ -524,6 +586,13 @@ impl ChatComposer<'_> {
         // Normal input handling
         self.textarea.input(input);
         let text_after = self.textarea.lines().join("\n");
+
+        // Start/continue an explicit file-search session when the cursor is on an @token.
+        if Self::current_at_token_allow_empty(&self.textarea).is_some() {
+            self.file_search_mode = true;
+            // Allow popup to show for this token.
+            self.dismissed_file_popup_token = None;
+        }
 
         // Check if any placeholders were removed and remove their corresponding pending pastes
         self.pending_pastes
@@ -575,10 +644,67 @@ impl ChatComposer<'_> {
         }
     }
 
+    /// Attempts to remove an attached image placeholder if a backspace occurs *anywhere* inside it.
+    /// Returns true if a placeholder + image mapping was removed.
+    fn try_remove_image_placeholder_on_backspace(&mut self) -> bool {
+        if self.attached_images.is_empty() {
+            return false;
+        }
+
+        // Materialize full text and compute global cursor + deletion indices.
+        let lines: Vec<String> = self.textarea.lines().to_vec();
+        let (cursor_row, cursor_col) = self.textarea.cursor();
+
+        // Compute global char index of cursor (in characters, since placeholders are ASCII).
+        let mut global_index: usize = 0;
+        for (i, line) in lines.iter().enumerate() {
+            if i == cursor_row {
+                global_index += cursor_col;
+                break;
+            } else {
+                global_index += line.chars().count() + 1; // +1 for the newline that will be joined
+            }
+        }
+        if global_index == 0 {
+            return false;
+        }
+        let deletion_index = global_index - 1; // char that will be removed by backspace
+
+        let text = lines.join("\n");
+
+        // Iterate over attached images; search each placeholder occurrence.
+        for idx in 0..self.attached_images.len() {
+            let (placeholder, _path) = &self.attached_images[idx];
+            let ph_len = placeholder.len();
+            let mut search_from = 0;
+            while let Some(rel_pos) = text[search_from..].find(placeholder) {
+                let ph_start = search_from + rel_pos;
+                let ph_end = ph_start + ph_len; // exclusive
+                if deletion_index >= ph_start && deletion_index < ph_end {
+                    // Deletion inside this placeholder: remove entire placeholder.
+                    let mut new_text = String::with_capacity(text.len() - ph_len);
+                    new_text.push_str(&text[..ph_start]);
+                    new_text.push_str(&text[ph_end..]);
+
+                    // Replace textarea contents.
+                    self.textarea.select_all();
+                    self.textarea.cut();
+                    let _ = self.textarea.insert_str(new_text);
+
+                    // Remove attached image entry.
+                    self.attached_images.remove(idx);
+                    return true;
+                }
+                search_from = ph_start + ph_len; // continue searching for additional occurrences
+            }
+        }
+        false
+    }
+
     /// Synchronize `self.command_popup` with the current text in the
     /// textarea. This must be called after every modification that can change
     /// the text so the popup is shown/updated/hidden as appropriate.
-    fn sync_command_popup(&mut self) {
+    fn sync_slash_command_popup(&mut self) {
         // Inspect only the first line to decide whether to show the popup. In
         // the common case (no leading slash) we avoid copying the entire
         // textarea contents.
@@ -591,7 +717,7 @@ impl ChatComposer<'_> {
 
         let input_starts_with_slash = first_line.starts_with('/');
         match &mut self.active_popup {
-            ActivePopup::Command(popup) => {
+            ActivePopup::Slash(popup) => {
                 if input_starts_with_slash {
                     popup.on_composer_text_change(first_line.to_string());
                 } else {
@@ -600,9 +726,9 @@ impl ChatComposer<'_> {
             }
             _ => {
                 if input_starts_with_slash {
-                    let mut command_popup = CommandPopup::new();
+                    let mut command_popup = CommandPopup::slash();
                     command_popup.on_composer_text_change(first_line.to_string());
-                    self.active_popup = ActivePopup::Command(command_popup);
+                    self.active_popup = ActivePopup::Slash(command_popup);
                 }
             }
         }
@@ -611,31 +737,42 @@ impl ChatComposer<'_> {
     /// Synchronize `self.file_search_popup` with the current text in the textarea.
     /// Note this is only called when self.active_popup is NOT Command.
     fn sync_file_search_popup(&mut self) {
-        // Determine if there is an @token underneath the cursor.
-        let query = match Self::current_at_token(&self.textarea) {
-            Some(token) => token,
-            None => {
-                self.active_popup = ActivePopup::None;
-                self.dismissed_file_popup_token = None;
-                return;
-            }
+        // Only active during an explicit @file initiated session.
+        if !self.file_search_mode {
+            return;
+        }
+
+        // Determine current query (may be empty if user just selected @file and hasn't typed yet).
+        let query_opt = Self::current_at_token_allow_empty(&self.textarea);
+        let Some(query) = query_opt else {
+            // Token removed – end session.
+            self.active_popup = ActivePopup::None;
+            self.dismissed_file_popup_token = None;
+            self.file_search_mode = false;
+            return;
         };
 
         // If user dismissed popup for this exact query, don't reopen until text changes.
         if self.dismissed_file_popup_token.as_ref() == Some(&query) {
             return;
         }
-
-        self.app_event_tx
-            .send(AppEvent::StartFileSearch(query.clone()));
+        // Only trigger a search when query non-empty. (Empty shows an idle popup.)
+        if !query.is_empty() {
+            self.app_event_tx
+                .send(AppEvent::StartFileSearch(query.clone()));
+        }
 
         match &mut self.active_popup {
             ActivePopup::File(popup) => {
-                popup.set_query(&query);
+                if !query.is_empty() {
+                    popup.set_query(&query);
+                }
             }
             _ => {
                 let mut popup = FileSearchPopup::new();
-                popup.set_query(&query);
+                if !query.is_empty() {
+                    popup.set_query(&query);
+                }
                 self.active_popup = ActivePopup::File(popup);
             }
         }
@@ -663,7 +800,7 @@ impl ChatComposer<'_> {
 impl WidgetRef for &ChatComposer<'_> {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         match &self.active_popup {
-            ActivePopup::Command(popup) => {
+            ActivePopup::Slash(popup) => {
                 let popup_height = popup.calculate_required_height();
 
                 // Split the provided rect so that the popup is rendered at the
@@ -743,8 +880,66 @@ impl WidgetRef for &ChatComposer<'_> {
     }
 }
 
+// -----------------------------------------------------------------------------
+// Shared helper functions for token boundary calculations.
+// Centralizing these reduces subtle divergence between behaviors that rely on
+// the exact same definition of a *token* (whitespace-delimited) and *@token*.
+// -----------------------------------------------------------------------------
+
+/// Convert a cursor column expressed in characters (as provided by tui-textarea)
+/// to a byte offset into `line`.
+fn cursor_byte_offset(line: &str, cursor_col_chars: usize) -> usize {
+    line.chars()
+        .take(cursor_col_chars)
+        .map(|c| c.len_utf8())
+        .sum()
+}
+
+/// Return (start_byte, end_byte) of the token (whitespace-delimited) containing
+/// `cursor_byte_offset`. Returns None if there is no non-empty token.
+fn token_bounds(line: &str, cursor_byte_offset: usize) -> Option<(usize, usize)> {
+    if cursor_byte_offset > line.len() {
+        return None;
+    }
+    let before = &line[..cursor_byte_offset];
+    let after = &line[cursor_byte_offset..];
+    let start = before
+        .char_indices()
+        .rfind(|(_, c)| c.is_whitespace())
+        .map(|(i, c)| i + c.len_utf8())
+        .unwrap_or(0);
+    let end_rel = after
+        .char_indices()
+        .find(|(_, c)| c.is_whitespace())
+        .map(|(i, _)| i)
+        .unwrap_or(after.len());
+    let end = cursor_byte_offset + end_rel;
+    if start >= end {
+        None
+    } else {
+        Some((start, end))
+    }
+}
+
+/// Like `token_bounds` but ensures the token starts with '@'. If `allow_empty`
+/// is false, requires at least one character after '@'. Returns byte bounds.
+fn at_token_bounds(
+    line: &str,
+    cursor_byte_offset: usize,
+    allow_empty: bool,
+) -> Option<(usize, usize)> {
+    let (start, end) = token_bounds(line, cursor_byte_offset)?;
+    let token = &line[start..end];
+    if token.starts_with('@') && (allow_empty || token.len() > 1) {
+        Some((start, end))
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::ActivePopup;
     use crate::bottom_pane::AppEventSender;
     use crate::bottom_pane::ChatComposer;
     use crate::bottom_pane::InputResult;
@@ -1213,5 +1408,98 @@ mod tests {
                 (false, 0), // After deleting from end
             ]
         );
+    }
+
+    // --- Image attachment tests ---
+    #[test]
+    fn attach_image_and_submit_includes_image_paths() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(true, sender, false);
+        let path = std::path::PathBuf::from("/tmp/image1.png");
+        assert!(composer.attach_image(path.clone(), 32, 16, "PNG"));
+        composer.handle_paste(" hi".into());
+        let (result, _) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        match result {
+            InputResult::Submitted(text) => assert_eq!(text, "hi"),
+            _ => panic!("expected Submitted"),
+        }
+        let imgs = composer.take_recent_submission_images();
+        assert_eq!(imgs.len(), 1);
+        assert_eq!(imgs[0], path);
+    }
+
+    #[test]
+    fn attach_image_without_text_not_submitted() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(true, sender, false);
+        let path = std::path::PathBuf::from("/tmp/image2.png");
+        assert!(composer.attach_image(path.clone(), 10, 5, "PNG"));
+        let (result, _) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(result, InputResult::None));
+        assert!(composer.take_recent_submission_images().is_empty());
+        assert_eq!(composer.attached_images.len(), 1); // still pending
+    }
+
+    #[test]
+    fn image_placeholder_removed_on_backspace_anywhere() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(true, sender, false);
+        let path = std::path::PathBuf::from("/tmp/image3.png");
+        assert!(composer.attach_image(path.clone(), 20, 10, "PNG"));
+        let placeholder = composer.attached_images[0].0.clone();
+
+        // Case 1: backspace at end
+        composer.textarea.move_cursor(tui_textarea::CursorMove::End);
+        composer.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        assert!(!composer.textarea.lines().join("\n").contains(&placeholder));
+        assert!(composer.attached_images.is_empty());
+
+        // Re-add and test backspace in middle
+        assert!(composer.attach_image(path.clone(), 20, 10, "PNG"));
+        let placeholder2 = composer.attached_images[0].0.clone();
+        // Move cursor to roughly middle of placeholder
+        let mid = (placeholder2.len() / 2) as u16;
+        composer
+            .textarea
+            .move_cursor(tui_textarea::CursorMove::Jump(0, mid));
+        composer.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        assert!(!composer.textarea.lines().join("\n").contains(&placeholder2));
+        assert!(composer.attached_images.is_empty());
+    }
+
+    #[test]
+    fn at_symbol_opens_file_popup_and_enter_closes_it() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(true, sender, false);
+
+        // Type '@' to open file search popup
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('@'), KeyModifiers::NONE));
+        // Popup should be the File popup, and we should be in file_search_mode
+        assert!(matches!(composer.active_popup, ActivePopup::File(_)));
+        assert!(composer.file_search_mode);
+
+        // Press Enter to select current item and close popup/session
+        composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(composer.active_popup, ActivePopup::None));
+        assert!(!composer.file_search_mode);
     }
 }

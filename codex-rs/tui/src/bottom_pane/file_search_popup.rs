@@ -15,6 +15,7 @@ use ratatui::widgets::Row;
 use ratatui::widgets::Table;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
+use std::fs;
 
 /// Maximum number of suggestions shown in the popup.
 const MAX_RESULTS: usize = 8;
@@ -36,13 +37,16 @@ pub(crate) struct FileSearchPopup {
 
 impl FileSearchPopup {
     pub(crate) fn new() -> Self {
-        Self {
+        // If pending_query is empty, pre-populate matches with files in current dir.
+        let mut popup = Self {
             display_query: String::new(),
             pending_query: String::new(),
             waiting: true,
             matches: Vec::new(),
             selected_idx: None,
-        }
+        };
+        popup.populate_current_dir_if_empty_query();
+        popup
     }
 
     /// Update the query and reset state to *waiting*.
@@ -62,6 +66,12 @@ impl FileSearchPopup {
         if !keep_existing {
             self.matches.clear();
             self.selected_idx = None;
+        }
+
+        // If query is empty, show files in current directory.
+        if query.is_empty() {
+            self.populate_current_dir_if_empty_query();
+            self.waiting = false;
         }
     }
 
@@ -118,6 +128,44 @@ impl FileSearchPopup {
 
         self.matches.len().clamp(1, MAX_RESULTS) as u16
     }
+
+    /// Populate matches with files in the current directory if the query is empty.
+    fn populate_current_dir_if_empty_query(&mut self) {
+        if !self.pending_query.is_empty() {
+            return;
+        }
+        // Only populate if matches is empty (avoid overwriting search results).
+        if !self.matches.is_empty() {
+            return;
+        }
+        let mut entries: Vec<FileMatch> = Vec::new();
+        if let Ok(read_dir) = fs::read_dir(".") {
+            for entry in read_dir.flatten().take(MAX_RESULTS) {
+                if let Ok(file_type) = entry.file_type() {
+                    // Skip hidden files (dotfiles) for a cleaner popup.
+                    let file_name = entry.file_name();
+                    let file_name_str = file_name.to_string_lossy();
+                    if file_name_str.starts_with('.') {
+                        continue;
+                    }
+                    // Only show files and directories (not symlinks, etc).
+                    if file_type.is_file() || file_type.is_dir() {
+                        entries.push(FileMatch {
+                            path: file_name_str.to_string(),
+                            indices: Some(Vec::new()), // No highlights for empty query.
+                            score: 0,
+                        });
+                    }
+                }
+            }
+        }
+        self.matches = entries;
+        self.selected_idx = if self.matches.is_empty() {
+            None
+        } else {
+            Some(0)
+        };
+    }
 }
 
 impl WidgetRef for &FileSearchPopup {
@@ -171,6 +219,13 @@ impl WidgetRef for &FileSearchPopup {
                 })
                 .collect()
         };
+
+        let mut title = format!(" @{} ", self.pending_query);
+        if self.pending_query.is_empty() {
+            title.push_str(" (type to search)");
+        } else if self.waiting {
+            title.push_str(" (searching …)");
+        }
 
         let table = Table::new(rows, vec![Constraint::Percentage(100)])
             .block(

@@ -22,23 +22,25 @@ const FIRST_COLUMN_WIDTH: u16 = 20;
 use ratatui::style::Modifier;
 
 pub(crate) struct CommandPopup {
+    prefix: char,
     command_filter: String,
     all_commands: Vec<(&'static str, SlashCommand)>,
     selected_idx: Option<usize>,
 }
 
 impl CommandPopup {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(prefix: char, all_commands: Vec<(&'static str, SlashCommand)>) -> Self {
         Self {
+            prefix,
             command_filter: String::new(),
-            all_commands: built_in_slash_commands(),
+            all_commands,
             selected_idx: None,
         }
     }
 
     /// Update the filter string based on the current composer text. The text
     /// passed in is expected to start with a leading '/'. Everything after the
-    /// *first* '/" on the *first* line becomes the active filter that is used
+    /// *first* '/' on the *first* line becomes the active filter that is used
     /// to narrow down the list of available commands.
     pub(crate) fn on_composer_text_change(&mut self, text: String) {
         let first_line = text.lines().next().unwrap_or("");
@@ -49,7 +51,6 @@ impl CommandPopup {
             // shows the help for `/clear`.
             let token = stripped.trim_start();
             let cmd_token = token.split_whitespace().next().unwrap_or("");
-
             // Update the filter keeping the original case (commands are all
             // lower-case for now but this may change in the future).
             self.command_filter = cmd_token.to_string();
@@ -137,6 +138,12 @@ impl CommandPopup {
     }
 }
 
+impl CommandPopup {
+    pub(crate) fn slash() -> Self {
+        CommandPopup::new('/', built_in_slash_commands())
+    }
+}
+
 impl WidgetRef for CommandPopup {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let matches = self.filtered_commands();
@@ -164,7 +171,7 @@ impl WidgetRef for CommandPopup {
                         } else {
                             Span::styled(QUADRANT_LEFT_HALF, Style::default().fg(Color::DarkGray))
                         },
-                        Span::styled(format!("/{}", cmd.command()), command_style),
+                        Span::styled(format!("{}{}", self.prefix, cmd.command()), command_style),
                     ])),
                     Cell::from(cmd.description().to_string()).style(default_style),
                 ]));

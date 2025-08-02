@@ -31,7 +31,7 @@ codex-file-search = { path = "../file-search" }
 codex-login = { path = "../login" }
 color-eyre = "0.6.3"
 crossterm = { version = "0.28.1", features = ["bracketed-paste"] }
-image = { version = "^0.25.6", default-features = false, features = ["jpeg"] }
+image = { version = "^0.25.6", default-features = false, features = ["jpeg", "png"] }
 lazy_static = "1"
 mcp-types = { path = "../mcp-types" }
 path-clean = "1.0.1"
@@ -64,6 +64,7 @@ tui-textarea = "0.7.0"
 unicode-segmentation = "1.12.0"
 unicode-width = "0.1"
 uuid = "1"
+arboard = "3"
 
 
 
