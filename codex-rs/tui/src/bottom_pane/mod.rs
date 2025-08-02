@@ -79,7 +79,15 @@ impl BottomPane<'_> {
     }
 
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        self.composer.cursor_pos(area)
+        // Hide the cursor whenever an overlay view is active (e.g. the
+        // status indicator shown while a task is running, or approval modal).
+        // In these states the textarea is not interactable, so we should not
+        // show its caret.
+        if self.active_view.is_some() {
+            None
+        } else {
+            self.composer.cursor_pos(area)
+        }
     }
 
     /// Forward a key event to the active view or the composer.
