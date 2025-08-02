@@ -177,8 +177,19 @@ impl HistoryCell {
                 ]),
             ];
 
+            // Show which AGENTS.md is being used (or 'none' if unavailable).
+            let agents_value = if config.project_doc_max_bytes > 0 {
+                match codex_core::discover_project_doc_path(config) {
+                    Ok(Some(path)) => path.display().to_string(),
+                    _ => "none".to_string(),
+                }
+            } else {
+                "none".to_string()
+            };
+
             let mut entries = vec![
                 ("workdir", config.cwd.display().to_string()),
+                ("agents.md", agents_value),
                 ("model", config.model.clone()),
                 ("provider", config.model_provider_id.clone()),
                 ("approval", config.approval_policy.to_string()),

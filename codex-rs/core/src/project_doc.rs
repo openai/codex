@@ -12,8 +12,11 @@
 //!     exists, the search stops – we do **not** walk past the Git root.
 
 use crate::config::Config;
+use std::fs;
+use std::io::Read;
 use std::path::Path;
 use tokio::io::AsyncReadExt;
+use tokio::io::BufReader;
 use tracing::error;
 
 /// Currently, we only match the filename `AGENTS.md` exactly.
@@ -22,6 +25,89 @@ const CANDIDATE_FILENAMES: &[&str] = &["AGENTS.md"];
 /// When both `Config::instructions` and the project doc are present, they will
 /// be concatenated with the following separator.
 const PROJECT_DOC_SEPARATOR: &str = "\n\n--- project-doc ---\n\n";
+
+/// Public helper that returns the discovered AGENTS.md path.
+/// Returns `Ok(None)` when no suitable file is found or
+/// `project_doc_max_bytes == 0`.
+pub fn discover_project_doc_path(config: &Config) -> std::io::Result<Option<std::path::PathBuf>> {
+    if config.project_doc_max_bytes > 0 {
+        discover_project_doc_path_from_dir(
+            &config.cwd,
+            CANDIDATE_FILENAMES,
+            config.project_doc_max_bytes,
+        )
+    } else {
+        Ok(None)
+    }
+}
+
+fn discover_project_doc_path_from_dir(
+    start_dir: &Path,
+    names: &[&str],
+    max_bytes: usize,
+) -> std::io::Result<Option<std::path::PathBuf>> {
+    // Canonicalize the path so that we do not end up in an infinite loop when
+    // `cwd` contains `..` components.
+    let mut dir = start_dir.to_path_buf();
+    if let Ok(canon) = dir.canonicalize() {
+        dir = canon;
+    }
+
+    // Attempt in the working directory first.
+    if let Some(path) = find_non_empty_candidate(&dir, names, max_bytes)? {
+        return Ok(Some(path));
+    }
+
+    // Walk up towards the filesystem root, stopping once we encounter the Git root.
+    while let Some(parent) = dir.parent() {
+        let git_marker = dir.join(".git");
+        let git_exists = match fs::metadata(&git_marker) {
+            Ok(_) => true,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+            Err(e) => return Err(e),
+        };
+
+        if git_exists {
+            if let Some(path) = find_non_empty_candidate(&dir, names, max_bytes)? {
+                return Ok(Some(path));
+            }
+            break; // do not walk past the Git root
+        }
+
+        dir = parent.to_path_buf();
+    }
+
+    Ok(None)
+}
+
+fn find_non_empty_candidate(
+    dir: &Path,
+    names: &[&str],
+    max_bytes: usize,
+) -> std::io::Result<Option<std::path::PathBuf>> {
+    for name in names {
+        let candidate = dir.join(name);
+        let file = match fs::File::open(&candidate) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e),
+            Ok(f) => f,
+        };
+
+        let size = file.metadata()?.len() as usize;
+        let to_read = std::cmp::min(size, max_bytes);
+        let mut reader = std::io::BufReader::new(file);
+        let mut data = vec![0u8; to_read];
+        reader.read_exact(&mut data)?;
+        let contents = String::from_utf8_lossy(&data).to_string();
+        if contents.trim().is_empty() {
+            continue;
+        }
+
+        return Ok(Some(candidate));
+    }
+
+    Ok(None)
+}
 
 /// Combines `Config::instructions` and `AGENTS.md` (if present) into a single
 /// string of instructions.
@@ -49,87 +135,33 @@ pub(crate) async fn get_user_instructions(config: &Config) -> Option<String> {
 /// the function returns `Ok(None)`. Unexpected I/O failures bubble up as
 /// `Err` so callers can decide how to handle them.
 async fn find_project_doc(config: &Config) -> std::io::Result<Option<String>> {
+    let Some(path) = discover_project_doc_path(config)? else {
+        return Ok(None);
+    };
+
     let max_bytes = config.project_doc_max_bytes;
 
-    // Attempt to load from the working directory first.
-    if let Some(doc) = load_first_candidate(&config.cwd, CANDIDATE_FILENAMES, max_bytes).await? {
-        return Ok(Some(doc));
+    let file = tokio::fs::File::open(&path).await?;
+    let size = file.metadata().await?.len() as usize;
+
+    let reader = BufReader::new(file);
+    let mut data = Vec::with_capacity(std::cmp::min(size, max_bytes));
+    let mut limited = reader.take(max_bytes as u64);
+    limited.read_to_end(&mut data).await?;
+
+    if size > max_bytes {
+        tracing::warn!(
+            "Project doc `{}` exceeds {max_bytes} bytes - truncating.",
+            path.display(),
+        );
     }
 
-    // Walk up towards the filesystem root, stopping once we encounter the Git
-    // repository root. The presence of **either** a `.git` *file* or
-    // *directory* counts.
-    let mut dir = config.cwd.clone();
-
-    // Canonicalize the path so that we do not end up in an infinite loop when
-    // `cwd` contains `..` components.
-    if let Ok(canon) = dir.canonicalize() {
-        dir = canon;
+    let contents = String::from_utf8_lossy(&data).to_string();
+    if contents.trim().is_empty() {
+        return Ok(None);
     }
 
-    while let Some(parent) = dir.parent() {
-        // `.git` can be a *file* (for worktrees or submodules) or a *dir*.
-        let git_marker = dir.join(".git");
-        let git_exists = match tokio::fs::metadata(&git_marker).await {
-            Ok(_) => true,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
-            Err(e) => return Err(e),
-        };
-
-        if git_exists {
-            // We are at the repo root – attempt one final load.
-            if let Some(doc) = load_first_candidate(&dir, CANDIDATE_FILENAMES, max_bytes).await? {
-                return Ok(Some(doc));
-            }
-            break;
-        }
-
-        dir = parent.to_path_buf();
-    }
-
-    Ok(None)
-}
-
-/// Attempt to load the first candidate file found in `dir`. Returns the file
-/// contents (truncated if it exceeds `max_bytes`) when successful.
-async fn load_first_candidate(
-    dir: &Path,
-    names: &[&str],
-    max_bytes: usize,
-) -> std::io::Result<Option<String>> {
-    for name in names {
-        let candidate = dir.join(name);
-
-        let file = match tokio::fs::File::open(&candidate).await {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(e) => return Err(e),
-            Ok(f) => f,
-        };
-
-        let size = file.metadata().await?.len();
-
-        let reader = tokio::io::BufReader::new(file);
-        let mut data = Vec::with_capacity(std::cmp::min(size as usize, max_bytes));
-        let mut limited = reader.take(max_bytes as u64);
-        limited.read_to_end(&mut data).await?;
-
-        if size as usize > max_bytes {
-            tracing::warn!(
-                "Project doc `{}` exceeds {max_bytes} bytes - truncating.",
-                candidate.display(),
-            );
-        }
-
-        let contents = String::from_utf8_lossy(&data).to_string();
-        if contents.trim().is_empty() {
-            // Empty file – treat as not found.
-            continue;
-        }
-
-        return Ok(Some(contents));
-    }
-
-    Ok(None)
+    Ok(Some(contents))
 }
 
 #[cfg(test)]
@@ -232,6 +264,68 @@ mod tests {
         // Build config pointing at the nested dir.
         let mut cfg = make_config(&repo, 4096, None);
         cfg.cwd = nested;
+
+        let res = get_user_instructions(&cfg).await.expect("doc expected");
+        assert_eq!(res, "root level doc");
+    }
+
+    /// Test if AGENTS.md located in the current working directory is preferred over the repo root.
+    #[tokio::test]
+    async fn prefers_cwd_doc_over_repo_root() {
+        let repo = tempfile::tempdir().expect("tempdir");
+
+        // Simulate a git repository at repo root.
+        std::fs::write(repo.path().join(".git"), "gitdir: /dev/null\n").unwrap();
+
+        // Create AGENTS.md at repo root and in a nested cwd.
+        fs::write(repo.path().join("AGENTS.md"), "root level doc").unwrap();
+        let nested = repo.path().join("workspace/crate_b");
+        std::fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("AGENTS.md"), "nested cwd doc").unwrap();
+
+        // Build config pointing at the nested dir.
+        let mut cfg = make_config(&repo, 4096, None);
+        cfg.cwd = nested.clone();
+
+        // Path discovery should prefer the nested cwd doc.
+        let discovered = super::discover_project_doc_path(&cfg)
+            .expect("discovery should succeed")
+            .expect("path should be found");
+        let discovered_canon = fs::canonicalize(&discovered).expect("canonicalize discovered");
+        let expected_canon =
+            fs::canonicalize(nested.join("AGENTS.md")).expect("canonicalize expected");
+        assert_eq!(discovered_canon, expected_canon);
+
+        // get_user_instructions should load the nested document contents.
+        let res = get_user_instructions(&cfg).await.expect("doc expected");
+        assert_eq!(res, "nested cwd doc");
+    }
+
+    /// Test if AGENTS.md at the repo root is used when none exists in cwd.
+    #[tokio::test]
+    async fn falls_back_to_repo_root_when_cwd_missing_doc() {
+        let repo = tempfile::tempdir().expect("tempdir");
+
+        // Simulate a git repository at repo root.
+        std::fs::write(repo.path().join(".git"), "gitdir: /dev/null\n").unwrap();
+
+        // Create AGENTS.md only at repo root.
+        fs::write(repo.path().join("AGENTS.md"), "root level doc").unwrap();
+
+        // Nested cwd without its own AGENTS.md.
+        let nested = repo.path().join("nested/dir");
+        std::fs::create_dir_all(&nested).unwrap();
+
+        let mut cfg = make_config(&repo, 4096, None);
+        cfg.cwd = nested;
+
+        let discovered = super::discover_project_doc_path(&cfg)
+            .expect("discovery should succeed")
+            .expect("path should be found");
+        let discovered_canon = fs::canonicalize(&discovered).expect("canonicalize discovered");
+        let expected_canon =
+            fs::canonicalize(repo.path().join("AGENTS.md")).expect("canonicalize expected");
+        assert_eq!(discovered_canon, expected_canon);
 
         let res = get_user_instructions(&cfg).await.expect("doc expected");
         assert_eq!(res, "root level doc");
