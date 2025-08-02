@@ -843,6 +843,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
+ "chrono",
  "clap",
  "codex-ansi-escape",
  "codex-arg0",
@@ -861,6 +862,8 @@ dependencies = [
  "ratatui",
  "ratatui-image",
  "regex-lite",
+ "reqwest",
+ "serde",
  "serde_json",
  "shlex",
  "strum 0.27.2",
