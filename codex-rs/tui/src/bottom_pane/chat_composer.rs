@@ -3,6 +3,8 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
+use ratatui::layout::Constraint;
+use ratatui::layout::Layout;
 use ratatui::layout::Margin;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
@@ -14,6 +16,7 @@ use ratatui::text::Span;
 use ratatui::widgets::Block;
 use ratatui::widgets::BorderType;
 use ratatui::widgets::Borders;
+use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
 
@@ -24,7 +27,9 @@ use super::file_search_popup::FileSearchPopup;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::textarea::TextArea;
+use crate::bottom_pane::textarea::TextAreaState;
 use codex_file_search::FileMatch;
+use std::cell::RefCell;
 
 const BASE_PLACEHOLDER_TEXT: &str = "...";
 /// If the pasted content exceeds this number of characters, replace it with a
@@ -44,6 +49,7 @@ struct TokenUsageInfo {
 
 pub(crate) struct ChatComposer {
     textarea: TextArea,
+    textarea_state: RefCell<TextAreaState>,
     active_popup: ActivePopup,
     app_event_tx: AppEventSender,
     history: ChatComposerHistory,
@@ -73,6 +79,7 @@ impl ChatComposer {
 
         Self {
             textarea: TextArea::new(),
+            textarea_state: RefCell::new(TextAreaState::default()),
             active_popup: ActivePopup::None,
             app_event_tx,
             history: ChatComposerHistory::new(),
@@ -96,13 +103,18 @@ impl ChatComposer {
     }
 
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        let textarea_rect = Rect {
-            x: area.x + 1,
-            y: area.y,
-            width: area.width - 1,
-            height: area.height - 1,
+        let popup_height = match &self.active_popup {
+            ActivePopup::Command(popup) => popup.calculate_required_height(),
+            ActivePopup::File(popup) => popup.calculate_required_height(),
+            ActivePopup::None => 1,
         };
-        self.textarea.cursor_pos(textarea_rect)
+        let [textarea_rect, _] =
+            Layout::vertical([Constraint::Min(0), Constraint::Max(popup_height)]).areas(area);
+        let mut textarea_rect = textarea_rect;
+        textarea_rect.width = textarea_rect.width.saturating_sub(1);
+        textarea_rect.x += 1;
+        let state = self.textarea_state.borrow();
+        self.textarea.cursor_pos_with_state(textarea_rect, &state)
     }
 
     /// Returns true if the composer currently contains no user input.
@@ -326,37 +338,85 @@ impl ChatComposer {
         let cursor_offset = textarea.cursor();
         let text = textarea.text();
 
-        // Split the line at the cursor position so we can search for word
-        // boundaries on both sides.
-        let before_cursor = &text[..cursor_offset];
-        let after_cursor = &text[cursor_offset..];
+        // Adjust the provided byte offset to the nearest valid char boundary at or before it.
+        let mut safe_cursor = cursor_offset.min(text.len());
+        // If we're not on a char boundary, move back to the start of the current char.
+        if safe_cursor < text.len() && !text.is_char_boundary(safe_cursor) {
+            // Find the last valid boundary <= cursor_offset.
+            safe_cursor = text
+                .char_indices()
+                .map(|(i, _)| i)
+                .take_while(|&i| i <= cursor_offset)
+                .last()
+                .unwrap_or(0);
+        }
 
-        // Find start index (first character **after** the previous multi-byte whitespace).
-        let start_idx = before_cursor
+        // Split the line around the (now safe) cursor position.
+        let before_cursor = &text[..safe_cursor];
+        let after_cursor = &text[safe_cursor..];
+
+        // Detect whether we're on whitespace at the cursor boundary.
+        let at_whitespace = if safe_cursor < text.len() {
+            text[safe_cursor..]
+                .chars()
+                .next()
+                .map(|c| c.is_whitespace())
+                .unwrap_or(false)
+        } else {
+            false
+        };
+
+        // Left candidate: token containing the cursor position.
+        let start_left = before_cursor
             .char_indices()
             .rfind(|(_, c)| c.is_whitespace())
             .map(|(idx, c)| idx + c.len_utf8())
             .unwrap_or(0);
-
-        // Find end index (first multi-byte whitespace **after** the cursor position).
-        let end_rel_idx = after_cursor
+        let end_left_rel = after_cursor
             .char_indices()
             .find(|(_, c)| c.is_whitespace())
             .map(|(idx, _)| idx)
             .unwrap_or(after_cursor.len());
-        let end_idx = cursor_offset + end_rel_idx;
-
-        if start_idx >= end_idx {
-            return None;
-        }
-
-        let token = &text[start_idx..end_idx];
-
-        if token.starts_with('@') && token.len() > 1 {
-            Some(token[1..].to_string())
+        let end_left = safe_cursor + end_left_rel;
+        let token_left = if start_left < end_left {
+            Some(&text[start_left..end_left])
         } else {
             None
+        };
+
+        // Right candidate: token immediately after any whitespace from the cursor.
+        let ws_len_right: usize = after_cursor
+            .chars()
+            .take_while(|c| c.is_whitespace())
+            .map(|c| c.len_utf8())
+            .sum();
+        let start_right = safe_cursor + ws_len_right;
+        let end_right_rel = text[start_right..]
+            .char_indices()
+            .find(|(_, c)| c.is_whitespace())
+            .map(|(idx, _)| idx)
+            .unwrap_or(text.len() - start_right);
+        let end_right = start_right + end_right_rel;
+        let token_right = if start_right < end_right {
+            Some(&text[start_right..end_right])
+        } else {
+            None
+        };
+
+        let left_at = token_left
+            .filter(|t| t.starts_with('@') && t.len() > 1)
+            .map(|t| t[1..].to_string());
+        let right_at = token_right
+            .filter(|t| t.starts_with('@') && t.len() > 1)
+            .map(|t| t[1..].to_string());
+
+        if at_whitespace {
+            return right_at.or(left_at);
         }
+        if after_cursor.starts_with('@') {
+            return right_at.or(left_at);
+        }
+        left_at.or(right_at)
     }
 
     /// Replace the active `@token` (the one under the cursor) with `path`.
@@ -571,105 +631,22 @@ impl ChatComposer {
 
 impl WidgetRef for &ChatComposer {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
+        let popup_height = match &self.active_popup {
+            ActivePopup::Command(popup) => popup.calculate_required_height(),
+            ActivePopup::File(popup) => popup.calculate_required_height(),
+            ActivePopup::None => 1,
+        };
+        let [textarea_rect, popup_rect] =
+            Layout::vertical([Constraint::Min(0), Constraint::Max(popup_height)]).areas(area);
         match &self.active_popup {
             ActivePopup::Command(popup) => {
-                let popup_height = popup.calculate_required_height();
-
-                // Split the provided rect so that the popup is rendered at the
-                // **bottom** and the textarea occupies the remaining space above.
-                let popup_height = popup_height.min(area.height);
-                let textarea_rect = Rect {
-                    x: area.x,
-                    y: area.y,
-                    width: area.width,
-                    height: area.height.saturating_sub(popup_height),
-                };
-                let popup_rect = Rect {
-                    x: area.x,
-                    y: area.y + textarea_rect.height,
-                    width: area.width,
-                    height: popup_height,
-                };
-
-                popup.render(popup_rect, buf);
-                (&self.textarea).render_ref(textarea_rect, buf);
+                popup.render_ref(popup_rect, buf);
             }
             ActivePopup::File(popup) => {
-                let popup_height = popup.calculate_required_height();
-
-                let popup_height = popup_height.min(area.height);
-                let textarea_rect = Rect {
-                    x: area.x,
-                    y: area.y,
-                    width: area.width,
-                    height: area.height.saturating_sub(popup_height),
-                };
-                let popup_rect = Rect {
-                    x: area.x,
-                    y: area.y + textarea_rect.height,
-                    width: area.width,
-                    height: popup_height,
-                };
-
-                popup.render(popup_rect, buf);
-                (&self.textarea).render_ref(textarea_rect, buf);
+                popup.render_ref(popup_rect, buf);
             }
             ActivePopup::None => {
-                let mut textarea_rect = area;
-                textarea_rect.height = textarea_rect.height.saturating_sub(1);
-                textarea_rect.width = textarea_rect.width.saturating_sub(1);
-                Block::default()
-                    .border_style(Style::default().dim())
-                    .borders(Borders::LEFT)
-                    .border_type(BorderType::QuadrantOutside)
-                    .border_style(Style::default().fg(if self.has_focus {
-                        Color::Cyan
-                    } else {
-                        Color::Gray
-                    }))
-                    .render_ref(
-                        Rect::new(textarea_rect.x, textarea_rect.y, 1, textarea_rect.height),
-                        buf,
-                    );
-                textarea_rect.x += 1;
-                (&self.textarea).render_ref(textarea_rect, buf);
-                if self.textarea.text().is_empty() {
-                    let placeholder = if let Some(token_usage_info) = &self.token_usage_info {
-                        let token_usage = &token_usage_info.token_usage;
-                        let model_context_window = token_usage_info.model_context_window;
-                        match (token_usage.total_tokens, model_context_window) {
-                            (total_tokens, Some(context_window)) => {
-                                let percent_remaining: u8 = if context_window > 0 {
-                                    // Calculate the percentage of context left.
-                                    let percent = 100.0
-                                        - (total_tokens as f32 / context_window as f32 * 100.0);
-                                    percent.clamp(0.0, 100.0) as u8
-                                } else {
-                                    // If we don't have a context window, we cannot compute the
-                                    // percentage.
-                                    100
-                                };
-                                // When https://github.com/openai/codex/issues/1257 is resolved,
-                                // check if `percent_remaining < 25`, and if so, recommend
-                                // /compact.
-                                format!(
-                                    "{BASE_PLACEHOLDER_TEXT} — {percent_remaining}% context left"
-                                )
-                            }
-                            (total_tokens, None) => {
-                                format!("{BASE_PLACEHOLDER_TEXT} — {total_tokens} tokens used")
-                            }
-                        }
-                    } else {
-                        BASE_PLACEHOLDER_TEXT.to_string()
-                    };
-                    Line::from(placeholder)
-                        .style(Style::default().dim())
-                        .render_ref(textarea_rect.inner(Margin::new(1, 0)), buf);
-                }
-                let mut bottom_line_rect = area;
-                bottom_line_rect.y += textarea_rect.height;
-                bottom_line_rect.height = 1;
+                let bottom_line_rect = popup_rect;
                 let key_hint_style = Style::default().fg(Color::Cyan);
                 let hint = if self.ctrl_c_quit_hint {
                     vec![
@@ -697,6 +674,56 @@ impl WidgetRef for &ChatComposer {
                     .style(Style::default().dim())
                     .render_ref(bottom_line_rect, buf);
             }
+        }
+        Block::default()
+            .border_style(Style::default().dim())
+            .borders(Borders::LEFT)
+            .border_type(BorderType::QuadrantOutside)
+            .border_style(Style::default().fg(if self.has_focus {
+                Color::Cyan
+            } else {
+                Color::Gray
+            }))
+            .render_ref(
+                Rect::new(textarea_rect.x, textarea_rect.y, 1, textarea_rect.height),
+                buf,
+            );
+        let mut textarea_rect = textarea_rect;
+        textarea_rect.width = textarea_rect.width.saturating_sub(1);
+        textarea_rect.x += 1;
+        let mut state = self.textarea_state.borrow_mut();
+        StatefulWidgetRef::render_ref(&(&self.textarea), textarea_rect, buf, &mut state);
+        if self.textarea.text().is_empty() {
+            let placeholder = if let Some(token_usage_info) = &self.token_usage_info {
+                let token_usage = &token_usage_info.token_usage;
+                let model_context_window = token_usage_info.model_context_window;
+                match (token_usage.total_tokens, model_context_window) {
+                    (total_tokens, Some(context_window)) => {
+                        let percent_remaining: u8 = if context_window > 0 {
+                            // Calculate the percentage of context left.
+                            let percent =
+                                100.0 - (total_tokens as f32 / context_window as f32 * 100.0);
+                            percent.clamp(0.0, 100.0) as u8
+                        } else {
+                            // If we don't have a context window, we cannot compute the
+                            // percentage.
+                            100
+                        };
+                        // When https://github.com/openai/codex/issues/1257 is resolved,
+                        // check if `percent_remaining < 25`, and if so, recommend
+                        // /compact.
+                        format!("{BASE_PLACEHOLDER_TEXT} — {percent_remaining}% context left")
+                    }
+                    (total_tokens, None) => {
+                        format!("{BASE_PLACEHOLDER_TEXT} — {total_tokens} tokens used")
+                    }
+                }
+            } else {
+                BASE_PLACEHOLDER_TEXT.to_string()
+            };
+            Line::from(placeholder)
+                .style(Style::default().dim())
+                .render_ref(textarea_rect.inner(Margin::new(1, 0)), buf);
         }
     }
 }

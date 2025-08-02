@@ -4,6 +4,7 @@ use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
+use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::WidgetRef;
 use std::cell::Ref;
 use std::cell::RefCell;
@@ -25,8 +26,11 @@ struct WrapCache {
     lines: Vec<Range<usize>>,
 }
 
-// TODO:
-// - [ ] scrolling
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct TextAreaState {
+    /// Index into wrapped lines of the first visible line.
+    scroll: u16,
+}
 
 impl TextArea {
     pub fn new() -> Self {
@@ -98,13 +102,32 @@ impl TextArea {
 
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         let lines = self.wrapped_lines(area.width);
-        for (i, ls) in lines.iter().enumerate() {
+        lines.iter().enumerate().find_map(|(i, ls)| {
             if ls.contains(&self.cursor_pos) {
                 let col = self.text[ls.start..self.cursor_pos].width() as u16;
-                return Some((area.x + col, area.y + i as u16));
+                Some((area.x + col, area.y + i as u16))
+            } else {
+                None
             }
-        }
-        unreachable!("No line contains the cursor");
+        })
+    }
+
+    /// Compute the on-screen cursor position taking scrolling into account.
+    pub fn cursor_pos_with_state(&self, area: Rect, state: &TextAreaState) -> Option<(u16, u16)> {
+        let lines = self.wrapped_lines(area.width);
+        let effective_scroll = self.effective_scroll(area.height, &lines, state.scroll);
+        lines.iter().enumerate().find_map(|(i, ls)| {
+            if ls.contains(&self.cursor_pos) {
+                let col = self.text[ls.start..self.cursor_pos].width() as u16;
+                let screen_row = i
+                    .saturating_sub(effective_scroll as usize)
+                    .try_into()
+                    .unwrap_or(0);
+                Some((area.x + col, area.y + screen_row))
+            } else {
+                None
+            }
+        })
     }
 
     pub fn is_empty(&self) -> bool {
@@ -392,6 +415,47 @@ impl TextArea {
         let cache = self.wrap_cache.borrow();
         Ref::map(cache, |c| &c.as_ref().unwrap().lines)
     }
+
+    /// Calculate the scroll offset that should be used to satisfy the
+    /// invariants given the current area size and wrapped lines.
+    ///
+    /// - Cursor is always on screen.
+    /// - No scrolling if content fits in the area.
+    fn effective_scroll(
+        &self,
+        area_height: u16,
+        lines: &[Range<usize>],
+        current_scroll: u16,
+    ) -> u16 {
+        let total_lines = lines.len() as u16;
+        if area_height >= total_lines {
+            return 0;
+        }
+
+        // Where is the cursor within wrapped lines?
+        let cursor_line_idx = lines
+            .iter()
+            .enumerate()
+            .find_map(|(i, r)| {
+                if r.contains(&self.cursor_pos) {
+                    Some(i as u16)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0);
+
+        let max_scroll = total_lines.saturating_sub(area_height);
+        let mut scroll = current_scroll.min(max_scroll);
+
+        // Ensure cursor is visible within [scroll, scroll + area_height)
+        if cursor_line_idx < scroll {
+            scroll = cursor_line_idx;
+        } else if cursor_line_idx >= scroll + area_height {
+            scroll = cursor_line_idx + 1 - area_height;
+        }
+        scroll
+    }
 }
 
 impl WidgetRef for &TextArea {
@@ -400,6 +464,24 @@ impl WidgetRef for &TextArea {
         for (i, ls) in lines.iter().enumerate() {
             let s = &self.text[ls.start..ls.end - 1];
             buf.set_string(area.x, area.y + i as u16, s, Style::default());
+        }
+    }
+}
+
+impl StatefulWidgetRef for &TextArea {
+    type State = TextAreaState;
+
+    fn render_ref(&self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
+        let lines = self.wrapped_lines(area.width);
+        let scroll = self.effective_scroll(area.height, &lines, state.scroll);
+        state.scroll = scroll;
+
+        let start = scroll as usize;
+        let end = (scroll + area.height).min(lines.len() as u16) as usize;
+        for (row, ls) in (start..end).enumerate() {
+            let r = &lines[ls];
+            let s = &self.text[r.start..r.end - 1];
+            buf.set_string(area.x, area.y + row as u16, s, Style::default());
         }
     }
 }
