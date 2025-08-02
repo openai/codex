@@ -1,11 +1,16 @@
-#![cfg(target_os = "macos")]
+#![cfg(any(target_os = "macos", target_os = "linux"))]
 #![expect(clippy::expect_used)]
 
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 
+#[cfg(target_os = "linux")]
+use assert_cmd::cargo::cargo_bin;
+#[cfg(target_os = "linux")]
+use codex_core::exec::spawn_command_under_linux_sandbox;
 use codex_core::protocol::SandboxPolicy;
+#[cfg(target_os = "macos")]
 use codex_core::seatbelt::spawn_command_under_seatbelt;
 use codex_core::spawn::CODEX_SANDBOX_ENV_VAR;
 use codex_core::spawn::StdioPolicy;
@@ -30,6 +35,38 @@ impl TestScenario {
         if std::env::var(CODEX_SANDBOX_ENV_VAR) == Ok("seatbelt".to_string()) {
             eprintln!("{CODEX_SANDBOX_ENV_VAR} is set to 'seatbelt', skipping test.");
             return;
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            // If the sandbox helper is not functional in this environment,
+            // skip the test rather than fail.
+            let exe = cargo_bin("codex-linux-sandbox");
+            let mut child = match spawn_command_under_linux_sandbox(
+                exe,
+                vec!["/usr/bin/true".to_string()],
+                &SandboxPolicy::ReadOnly,
+                std::env::current_dir().expect("should be able to get current dir"),
+                StdioPolicy::RedirectForShellTool,
+                HashMap::new(),
+            )
+            .await
+            {
+                Ok(child) => child,
+                Err(_) => {
+                    eprintln!("codex-linux-sandbox unavailable, skipping test.");
+                    return;
+                }
+            };
+            if !child
+                .wait()
+                .await
+                .expect("should be able to wait for child process")
+                .success()
+            {
+                eprintln!("codex-linux-sandbox failed, skipping test.");
+                return;
+            }
         }
 
         assert_eq!(
@@ -175,21 +212,46 @@ fn create_test_scenario(tmp: &TempDir) -> TestScenario {
 /// Note that `path` must be absolute.
 async fn touch(path: &Path, policy: &SandboxPolicy) -> bool {
     assert!(path.is_absolute(), "Path must be absolute: {path:?}");
-    let mut child = spawn_command_under_seatbelt(
-        vec![
-            "/usr/bin/touch".to_string(),
-            path.to_string_lossy().to_string(),
-        ],
-        policy,
-        std::env::current_dir().expect("should be able to get current dir"),
-        StdioPolicy::RedirectForShellTool,
-        HashMap::new(),
-    )
-    .await
-    .expect("should be able to spawn command under seatbelt");
-    child
-        .wait()
+    #[cfg(target_os = "macos")]
+    {
+        let mut child = spawn_command_under_seatbelt(
+            vec![
+                "/usr/bin/touch".to_string(),
+                path.to_string_lossy().to_string(),
+            ],
+            policy,
+            std::env::current_dir().expect("should be able to get current dir"),
+            StdioPolicy::RedirectForShellTool,
+            HashMap::new(),
+        )
         .await
-        .expect("should be able to wait for child process")
-        .success()
+        .expect("should be able to spawn command under seatbelt");
+        child
+            .wait()
+            .await
+            .expect("should be able to wait for child process")
+            .success()
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let exe = cargo_bin("codex-linux-sandbox");
+        let mut child = spawn_command_under_linux_sandbox(
+            exe,
+            vec![
+                "/usr/bin/touch".to_string(),
+                path.to_string_lossy().to_string(),
+            ],
+            policy,
+            std::env::current_dir().expect("should be able to get current dir"),
+            StdioPolicy::RedirectForShellTool,
+            HashMap::new(),
+        )
+        .await
+        .expect("should be able to spawn command under linux sandbox");
+        child
+            .wait()
+            .await
+            .expect("should be able to wait for child process")
+            .success()
+    }
 }

@@ -675,6 +675,7 @@ dependencies = [
  "bytes",
  "chrono",
  "codex-apply-patch",
+ "codex-linux-sandbox",
  "codex-login",
  "codex-mcp-client",
  "core_test_support",
