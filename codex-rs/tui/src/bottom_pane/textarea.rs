@@ -18,6 +18,7 @@ pub(crate) struct TextArea {
     text: String,
     cursor_pos: usize,
     wrap_cache: RefCell<Option<WrapCache>>,
+    preferred_col: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -38,6 +39,7 @@ impl TextArea {
             text: String::new(),
             cursor_pos: 0,
             wrap_cache: RefCell::new(None),
+            preferred_col: None,
         }
     }
 
@@ -45,6 +47,7 @@ impl TextArea {
         self.text = text.to_string();
         self.cursor_pos = self.cursor_pos.clamp(0, self.text.len());
         self.wrap_cache.replace(None);
+        self.preferred_col = None;
     }
 
     pub fn text(&self) -> &str {
@@ -61,6 +64,7 @@ impl TextArea {
         if pos <= self.cursor_pos {
             self.cursor_pos += text.len();
         }
+        self.preferred_col = None;
     }
 
     pub fn replace_range(&mut self, range: std::ops::Range<usize>, text: &str) {
@@ -73,6 +77,7 @@ impl TextArea {
 
         self.text.replace_range(range, text);
         self.wrap_cache.replace(None);
+        self.preferred_col = None;
 
         // Update the cursor position to account for the edit.
         self.cursor_pos = if self.cursor_pos < start {
@@ -94,6 +99,7 @@ impl TextArea {
 
     pub fn set_cursor(&mut self, pos: usize) {
         self.cursor_pos = pos.clamp(0, self.text.len());
+        self.preferred_col = None;
     }
 
     pub fn desired_height(&self, width: u16) -> u16 {
@@ -132,6 +138,28 @@ impl TextArea {
 
     pub fn is_empty(&self) -> bool {
         self.text.is_empty()
+    }
+
+    fn current_display_col(&self) -> usize {
+        let bol = self.beginning_of_current_line();
+        self.text[bol..self.cursor_pos].width()
+    }
+
+    fn move_to_display_col_on_line(
+        &mut self,
+        line_start: usize,
+        line_end: usize,
+        target_col: usize,
+    ) {
+        let mut width_so_far = 0usize;
+        for (i, g) in self.text[line_start..line_end].grapheme_indices(true) {
+            width_so_far += g.width();
+            if width_so_far > target_col {
+                self.cursor_pos = line_start + i;
+                return;
+            }
+        }
+        self.cursor_pos = line_end;
     }
 
     fn beginning_of_current_line(&self) -> usize {
@@ -254,6 +282,7 @@ impl TextArea {
                     Ok(None) => self.cursor_pos = 0, // Already at start.
                     Err(_) => self.cursor_pos = self.cursor_pos.saturating_sub(1),
                 }
+                self.preferred_col = None;
             }
             KeyEvent {
                 code: KeyCode::Right,
@@ -270,54 +299,54 @@ impl TextArea {
                     Ok(None) => self.cursor_pos = self.text.len(), // Already at end.
                     Err(_) => self.cursor_pos = self.cursor_pos.saturating_add(1),
                 }
+                self.preferred_col = None;
             }
             KeyEvent {
                 code: KeyCode::Up, ..
             } => {
                 if let Some(prev_nl) = self.text[..self.cursor_pos].rfind('\n') {
-                    let cursor_column = self.text[prev_nl..self.cursor_pos].width();
-                    let prev_line_start = self.text[..prev_nl].rfind('\n').unwrap_or(0);
-                    let mut width_so_far = 0;
-                    for (i, w) in self.text[prev_line_start..prev_nl].grapheme_indices(true) {
-                        width_so_far += w.width();
-                        if width_so_far > cursor_column {
-                            self.cursor_pos = prev_line_start + i;
-                            return;
+                    let target_col = match self.preferred_col {
+                        Some(c) => c,
+                        None => {
+                            let c = self.current_display_col();
+                            self.preferred_col = Some(c);
+                            c
                         }
-                    }
-                    self.cursor_pos = prev_nl;
+                    };
+                    let prev_line_start =
+                        self.text[..prev_nl].rfind('\n').map(|i| i + 1).unwrap_or(0);
+                    let prev_line_end = prev_nl;
+                    self.move_to_display_col_on_line(prev_line_start, prev_line_end, target_col);
                 } else {
                     self.cursor_pos = 0;
+                    self.preferred_col = None;
                 }
             }
             KeyEvent {
                 code: KeyCode::Down,
                 ..
             } => {
-                let prev_nl = self.text[..self.cursor_pos]
-                    .rfind('\n')
-                    .map(|i| i + 1)
-                    .unwrap_or(0);
-                let cursor_column = self.text[prev_nl..self.cursor_pos].width();
+                let target_col = match self.preferred_col {
+                    Some(c) => c,
+                    None => {
+                        let c = self.current_display_col();
+                        self.preferred_col = Some(c);
+                        c
+                    }
+                };
                 if let Some(next_nl) = self.text[self.cursor_pos..]
                     .find('\n')
                     .map(|i| i + self.cursor_pos)
                 {
-                    let next_line_end = self.text[next_nl + 1..]
+                    let next_line_start = next_nl + 1;
+                    let next_line_end = self.text[next_line_start..]
                         .find('\n')
-                        .map(|i| i + next_nl + 1)
+                        .map(|i| i + next_line_start)
                         .unwrap_or(self.text.len());
-                    let mut width_so_far = 0;
-                    for (i, w) in self.text[next_nl + 1..next_line_end].grapheme_indices(true) {
-                        width_so_far += w.width();
-                        if width_so_far > cursor_column {
-                            self.cursor_pos = next_nl + 1 + i;
-                            return;
-                        }
-                    }
-                    self.cursor_pos = next_line_end;
+                    self.move_to_display_col_on_line(next_line_start, next_line_end, target_col);
                 } else {
                     self.cursor_pos = self.text.len();
+                    self.preferred_col = None;
                 }
             }
             KeyEvent {
@@ -325,6 +354,7 @@ impl TextArea {
                 ..
             } => {
                 self.cursor_pos = self.beginning_of_current_line();
+                self.preferred_col = None;
             }
             KeyEvent {
                 code: KeyCode::Char('a'),
@@ -338,12 +368,14 @@ impl TextArea {
                 } else {
                     self.cursor_pos = bol;
                 }
+                self.preferred_col = None;
             }
 
             KeyEvent {
                 code: KeyCode::End, ..
             } => {
                 self.cursor_pos = self.end_of_current_line();
+                self.preferred_col = None;
             }
             KeyEvent {
                 code: KeyCode::Char('e'),
@@ -357,6 +389,7 @@ impl TextArea {
                 } else {
                     self.cursor_pos = eol;
                 }
+                self.preferred_col = None;
             }
             KeyEvent {
                 code: KeyCode::Left,
@@ -364,6 +397,7 @@ impl TextArea {
                 ..
             } => {
                 self.cursor_pos = self.beginning_of_previous_word();
+                self.preferred_col = None;
             }
             KeyEvent {
                 code: KeyCode::Right,
@@ -371,6 +405,7 @@ impl TextArea {
                 ..
             } => {
                 self.cursor_pos = self.end_of_next_word();
+                self.preferred_col = None;
             }
             o => {
                 tracing::info!("Unhandled key event in TextArea: {:?}", o);
