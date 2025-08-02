@@ -6,14 +6,13 @@ use std::process::Command;
 
 use anyhow::Context;
 use anyhow::Result;
-use sha1::Digest;
 use uuid::Uuid;
 
 use crate::protocol::FileChange;
 
 struct BaselineFileInfo {
     path: Option<PathBuf>,
-    contents: Option<String>,
+    contents_bytes: Option<Vec<u8>>,
     mode: Option<String>,
     oid: Option<String>,
 }
@@ -58,15 +57,14 @@ impl TurnDiffTracker {
                     .insert(internal.clone(), path.clone());
 
                 // If the file exists on disk now, snapshot as baseline; else leave missing to represent /dev/null.
-                let (contents, mode, oid) = if path.exists() {
+                let (contents_bytes, mode, oid) = if path.exists() {
                     let contents_bytes = fs::read(path)
                         .with_context(|| format!("failed to read original {}", path.display()))?;
-                    let s = String::from_utf8_lossy(&contents_bytes).into_owned();
                     let mode = file_mode_for_path(path);
                     let oid = self
                         .git_blob_oid_for_path(path)
-                        .unwrap_or_else(|| git_blob_sha1_hex(&s));
-                    (Some(s), mode, Some(oid))
+                        .unwrap_or_else(|| git_blob_sha1_hex_bytes(&contents_bytes));
+                    (Some(contents_bytes), mode, Some(oid))
                 } else {
                     (None, None, Some(ZERO_OID.to_string()))
                 };
@@ -75,7 +73,7 @@ impl TurnDiffTracker {
                     internal.clone(),
                     BaselineFileInfo {
                         path: Some(path.clone()),
-                        contents,
+                        contents_bytes,
                         mode,
                         oid,
                     },
@@ -99,7 +97,7 @@ impl TurnDiffTracker {
                             i.clone(),
                             BaselineFileInfo {
                                 path: Some(path.clone()),
-                                contents: None,
+                                contents_bytes: None,
                                 mode: None,
                                 oid: Some(ZERO_OID.to_string()),
                             },
@@ -160,6 +158,15 @@ impl TurnDiffTracker {
                 }
                 return Some(cur);
             }
+
+            // On Windows, avoid walking above the drive or UNC share root.
+            #[cfg(windows)]
+            {
+                if is_windows_drive_or_unc_root(&cur) {
+                    return None;
+                }
+            }
+
             if let Some(parent) = cur.parent() {
                 cur = parent.to_path_buf();
             } else {
@@ -170,12 +177,16 @@ impl TurnDiffTracker {
 
     /// Return a display string for `path` relative to its git root if found, else absolute.
     fn relative_to_git_root_str(&mut self, path: &Path) -> String {
-        if let Some(root) = self.find_git_root_cached(path) {
+        let s = if let Some(root) = self.find_git_root_cached(path) {
             if let Ok(rel) = path.strip_prefix(&root) {
-                return rel.display().to_string();
+                rel.display().to_string()
+            } else {
+                path.display().to_string()
             }
-        }
-        path.display().to_string()
+        } else {
+            path.display().to_string()
+        };
+        s.replace('\\', "/")
     }
 
     /// Ask git to compute the blob SHA-1 for the file at `path` within its repository.
@@ -206,21 +217,16 @@ impl TurnDiffTracker {
         let mut aggregated = String::new();
 
         // Compute diffs per tracked internal file in a stable order by external path.
-        let mut internals: Vec<String> = self.baseline_file_info.keys().cloned().collect();
-        // Sort lexicographically by external path to match git behavior.
-        internals.sort_by_key(|a| {
-            let path = self.get_path_for_internal(a);
-            match path {
-                Some(p) => p
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .map(|s| s.to_owned())
-                    .unwrap_or_default(),
-                None => String::new(),
-            }
+        let mut baseline_file_names: Vec<String> =
+            self.baseline_file_info.keys().cloned().collect();
+        // Sort lexicographically by full repo-relative path to match git behavior.
+        baseline_file_names.sort_by_key(|internal| {
+            self.get_path_for_internal(internal)
+                .map(|p| self.relative_to_git_root_str(&p))
+                .unwrap_or_default()
         });
 
-        for internal in internals {
+        for internal in baseline_file_names {
             // Baseline external must exist for any tracked internal.
             let baseline_external = match self
                 .baseline_file_info
@@ -235,42 +241,36 @@ impl TurnDiffTracker {
                 None => continue,
             };
 
-            let left_content = self
+            let left_bytes = self
                 .baseline_file_info
                 .get(&internal)
-                .and_then(|i| i.contents.clone());
+                .and_then(|i| i.contents_bytes.clone());
 
-            let right_content = if current_external.exists() {
+            let right_bytes = if current_external.exists() {
                 let contents = fs::read(&current_external).with_context(|| {
                     format!(
                         "failed to read current file for diff {}",
                         current_external.display()
                     )
                 })?;
-                Some(String::from_utf8_lossy(&contents).into_owned())
+                Some(contents)
             } else {
                 None
             };
 
-            let left_text = left_content.as_deref().unwrap_or("");
-            let right_text = right_content.as_deref().unwrap_or("");
-
-            if left_text == right_text {
+            // Fast path: identical bytes or both missing.
+            if left_bytes.as_deref() == right_bytes.as_deref() {
                 continue;
             }
 
             let left_display = self.relative_to_git_root_str(&baseline_external);
             let right_display = self.relative_to_git_root_str(&current_external);
 
-            // Diff the contents.
-            let diff = similar::TextDiff::from_lines(left_text, right_text);
-
             // Emit a git-style header for better readability and parity with previous behavior.
             aggregated.push_str(&format!("diff --git a/{left_display} b/{right_display}\n"));
 
-            // Emit file mode lines and index line similar to git.
-            let is_add = left_content.is_none() && right_content.is_some();
-            let is_delete = left_content.is_some() && right_content.is_none();
+            let is_add = left_bytes.is_none() && right_bytes.is_some();
+            let is_delete = left_bytes.is_some() && right_bytes.is_none();
 
             // Determine modes.
             let baseline_mode = self
@@ -297,41 +297,86 @@ impl TurnDiffTracker {
                 .get(&internal)
                 .and_then(|i| i.oid.clone())
                 .or_else(|| {
-                    left_content
+                    left_bytes
                         .as_ref()
-                        .map(|s| git_blob_sha1_hex(s))
+                        .map(|b| git_blob_sha1_hex_bytes(b))
                         .or(Some(ZERO_OID.to_string()))
                 })
                 .unwrap_or_else(|| ZERO_OID.to_string());
-            let right_oid = if right_content.is_some() {
+            let right_oid = if let Some(b) = right_bytes.as_ref() {
                 self.git_blob_oid_for_path(&current_external)
-                    .unwrap_or_else(|| git_blob_sha1_hex(right_text))
+                    .unwrap_or_else(|| git_blob_sha1_hex_bytes(b))
             } else {
                 ZERO_OID.to_string()
             };
 
-            aggregated.push_str(&format!("index {left_oid}..{right_oid}\n"));
+            // If either side isn't valid UTF-8, emit a binary diff header and continue.
+            let left_text = left_bytes
+                .as_deref()
+                .and_then(|b| std::str::from_utf8(b).ok());
+            let right_text = right_bytes
+                .as_deref()
+                .and_then(|b| std::str::from_utf8(b).ok());
 
-            let old_header = if left_content.is_some() {
-                format!("a/{left_display}")
-            } else {
-                "/dev/null".to_string()
+            // Prefer text diffs when possible:
+            // - both sides are valid UTF-8
+            // - OR one side is missing (add/delete) and the present side is valid UTF-8
+            let can_text_diff = match (left_text, right_text, is_add, is_delete) {
+                (Some(_), Some(_), _, _) => true,
+                (_, Some(_), true, _) => true, // add: left missing, right text
+                (Some(_), _, _, true) => true, // delete: left text, right missing
+                _ => false,
             };
-            let new_header = if right_content.is_some() {
-                format!("b/{right_display}")
+
+            if can_text_diff {
+                // Diff the contents as text, treating missing side as empty string.
+                let l = left_text.unwrap_or("");
+                let r = right_text.unwrap_or("");
+
+                // Emit index line without mode suffix to preserve current test expectations.
+                aggregated.push_str(&format!("index {left_oid}..{right_oid}\n"));
+
+                let old_header = if left_bytes.is_some() {
+                    format!("a/{left_display}")
+                } else {
+                    "/dev/null".to_string()
+                };
+                let new_header = if right_bytes.is_some() {
+                    format!("b/{right_display}")
+                } else {
+                    "/dev/null".to_string()
+                };
+
+                let diff = similar::TextDiff::from_lines(l, r);
+                let unified = diff
+                    .unified_diff()
+                    .context_radius(3)
+                    .header(&old_header, &new_header)
+                    .to_string();
+
+                aggregated.push_str(&unified);
+                if !aggregated.ends_with('\n') {
+                    aggregated.push('\n');
+                }
             } else {
-                "/dev/null".to_string()
-            };
-
-            let unified = diff
-                .unified_diff()
-                .context_radius(3)
-                .header(&old_header, &new_header)
-                .to_string();
-
-            aggregated.push_str(&unified);
-            if !aggregated.ends_with('\n') {
-                aggregated.push('\n');
+                // Binary or invalid UTF-8: emit header only.
+                aggregated.push_str(&format!("index {left_oid}..{right_oid}\n"));
+                let old_header = if left_bytes.is_some() {
+                    format!("a/{left_display}")
+                } else {
+                    "/dev/null".to_string()
+                };
+                let new_header = if right_bytes.is_some() {
+                    format!("b/{right_display}")
+                } else {
+                    "/dev/null".to_string()
+                };
+                aggregated.push_str(&format!("--- {old_header}\n"));
+                aggregated.push_str(&format!("+++ {new_header}\n"));
+                aggregated.push_str("Binary files differ\n");
+                if !aggregated.ends_with('\n') {
+                    aggregated.push('\n');
+                }
             }
         }
 
@@ -353,15 +398,14 @@ fn uuid_filename_for(path: &Path) -> String {
 
 const ZERO_OID: &str = "0000000000000000000000000000000000000000";
 
-/// Compute the Git SHA-1 blob object ID for the given content.
-/// This should only be used as a fallback if we can't get the OID from the original repo state
-/// or if the original file is not in a git repo.
-fn git_blob_sha1_hex(data: &str) -> String {
+/// Compute the Git SHA-1 blob object ID for the given content (bytes).
+fn git_blob_sha1_hex_bytes(data: &[u8]) -> String {
     // Git blob hash is sha1 of: "blob <len>\0<data>"
     let header = format!("blob {}\0", data.len());
+    use sha1::Digest;
     let mut hasher = sha1::Sha1::new();
     hasher.update(header.as_bytes());
-    hasher.update(data.as_bytes());
+    hasher.update(data);
     let digest = hasher.finalize();
     let mut out = String::with_capacity(40);
     for b in digest {
@@ -391,6 +435,16 @@ fn file_mode_for_path(path: &Path) -> Option<String> {
     }
 }
 
+#[cfg(windows)]
+fn is_windows_drive_or_unc_root(p: &std::path::Path) -> bool {
+    use std::path::Component;
+    let mut comps = p.components();
+    matches!(
+        (comps.next(), comps.next(), comps.next()),
+        (Some(Component::Prefix(_)), Some(Component::RootDir), None)
+    )
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
@@ -398,8 +452,14 @@ mod tests {
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
 
+    /// Compute the Git SHA-1 blob object ID for the given content (string).
+    /// This delegates to the bytes version to avoid UTF-8 lossy conversions here.
+    fn git_blob_sha1_hex(data: &str) -> String {
+        git_blob_sha1_hex_bytes(data.as_bytes())
+    }
+
     fn normalize_diff_for_test(input: &str, root: &Path) -> String {
-        let root_str = root.display().to_string();
+        let root_str = root.display().to_string().replace('\\', "/");
         let replaced = input.replace(&root_str, "<TMP>");
         // Split into blocks on lines starting with "diff --git ", sort blocks for determinism, and rejoin
         let mut blocks: Vec<String> = Vec::new();
@@ -536,6 +596,52 @@ mod tests {
     }
 
     #[test]
+    fn move_without_content_change_yields_no_diff() {
+        let dir = tempdir().unwrap();
+        let src = dir.path().join("moved.txt");
+        let dest = dir.path().join("renamed.txt");
+        fs::write(&src, "same\n").unwrap();
+
+        let mut acc = TurnDiffTracker::new();
+        let mv_changes = HashMap::from([(
+            src.clone(),
+            FileChange::Update {
+                unified_diff: "".to_owned(),
+                move_path: Some(dest.clone()),
+            },
+        )]);
+        acc.on_patch_begin(&mv_changes).unwrap();
+
+        // Simulate apply: move only, no content change.
+        fs::rename(&src, &dest).unwrap();
+
+        let diff = acc.get_unified_diff().unwrap();
+        assert_eq!(diff, None);
+    }
+
+    #[test]
+    fn move_declared_but_file_only_appears_at_dest_is_add() {
+        let dir = tempdir().unwrap();
+        let src = dir.path().join("src.txt");
+        let dest = dir.path().join("dest.txt");
+        let mut acc = TurnDiffTracker::new();
+        let mv = HashMap::from([(
+            src.clone(),
+            FileChange::Update {
+                unified_diff: "".into(),
+                move_path: Some(dest.clone()),
+            },
+        )]);
+        acc.on_patch_begin(&mv).unwrap();
+        // No file existed initially; create only dest
+        fs::write(&dest, "hello\n").unwrap();
+        let diff = acc.get_unified_diff().unwrap().unwrap();
+        assert!(diff.contains("new file mode"));
+        assert!(diff.contains("--- /dev/null"));
+        assert!(diff.contains("+++ b/"));
+    }
+
+    #[test]
     fn update_persists_across_new_baseline_for_new_file() {
         let dir = tempdir().unwrap();
         let a = dir.path().join("a.txt");
@@ -586,5 +692,42 @@ mod tests {
             )
         };
         assert_eq!(combined, expected);
+    }
+
+    #[test]
+    fn binary_files_differ_update() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("bin.dat");
+
+        // Initial non-UTF8 bytes
+        let left_bytes: Vec<u8> = vec![0xff, 0xfe, 0xfd, 0x00];
+        // Updated non-UTF8 bytes
+        let right_bytes: Vec<u8> = vec![0x01, 0x02, 0x03, 0x00];
+
+        fs::write(&file, &left_bytes).unwrap();
+
+        let mut acc = TurnDiffTracker::new();
+        let update_changes = HashMap::from([(
+            file.clone(),
+            FileChange::Update {
+                unified_diff: "".to_owned(),
+                move_path: None,
+            },
+        )]);
+        acc.on_patch_begin(&update_changes).unwrap();
+
+        // Apply update on disk
+        fs::write(&file, &right_bytes).unwrap();
+
+        let diff = acc.get_unified_diff().unwrap().unwrap();
+        let diff = normalize_diff_for_test(&diff, dir.path());
+        let expected = {
+            let left_oid = git_blob_sha1_hex_bytes(&left_bytes);
+            let right_oid = git_blob_sha1_hex_bytes(&right_bytes);
+            format!(
+                "diff --git a/<TMP>/bin.dat b/<TMP>/bin.dat\nindex {left_oid}..{right_oid}\n--- a/<TMP>/bin.dat\n+++ b/<TMP>/bin.dat\nBinary files differ\n"
+            )
+        };
+        assert_eq!(diff, expected);
     }
 }
