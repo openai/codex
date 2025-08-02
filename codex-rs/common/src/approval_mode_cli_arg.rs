@@ -18,6 +18,9 @@ pub enum ApprovalModeCliArg {
     /// will escalate to the user to ask for un-sandboxed execution.
     OnFailure,
 
+    /// Only ask for approval if the model requests it.
+    OnRequest,
+
     /// Never ask for user approval
     /// Execution failures are immediately returned to the model.
     Never,
@@ -28,6 +31,7 @@ impl From<ApprovalModeCliArg> for AskForApproval {
         match value {
             ApprovalModeCliArg::Untrusted => AskForApproval::UnlessTrusted,
             ApprovalModeCliArg::OnFailure => AskForApproval::OnFailure,
+            ApprovalModeCliArg::OnRequest => AskForApproval::OnRequest,
             ApprovalModeCliArg::Never => AskForApproval::Never,
         }
     }

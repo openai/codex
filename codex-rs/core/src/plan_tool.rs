@@ -39,8 +39,11 @@ pub struct UpdatePlanArgs {
 
 pub(crate) static PLAN_TOOL: LazyLock<OpenAiTool> = LazyLock::new(|| {
     let mut plan_item_props = BTreeMap::new();
-    plan_item_props.insert("step".to_string(), JsonSchema::String);
-    plan_item_props.insert("status".to_string(), JsonSchema::String);
+    plan_item_props.insert("step".to_string(), JsonSchema::String { description: None });
+    plan_item_props.insert(
+        "status".to_string(),
+        JsonSchema::String { description: None },
+    );
 
     let plan_items_schema = JsonSchema::Array {
         items: Box::new(JsonSchema::Object {
@@ -51,7 +54,10 @@ pub(crate) static PLAN_TOOL: LazyLock<OpenAiTool> = LazyLock::new(|| {
     };
 
     let mut properties = BTreeMap::new();
-    properties.insert("explanation".to_string(), JsonSchema::String);
+    properties.insert(
+        "explanation".to_string(),
+        JsonSchema::String { description: None },
+    );
     properties.insert("plan".to_string(), plan_items_schema);
 
     OpenAiTool::Function(ResponsesApiTool {
@@ -66,7 +72,7 @@ Until all the steps are finished, there should always be exactly one in_progress
 Call the update_plan tool whenever you finish a step, marking the completed step as `completed` and marking the next step as `in_progress`.
 Before running a command, consider whether or not you have completed the previous step, and make sure to mark it as completed before moving on to the next step.
 Sometimes, you may need to change plans in the middle of a task: call `update_plan` with the updated plan and make sure to provide an `explanation` of the rationale when doing so.
-When all steps are completed, call update_plan one last time with all steps marked as `completed`."#,
+When all steps are completed, call update_plan one last time with all steps marked as `completed`."#.to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,

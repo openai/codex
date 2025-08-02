@@ -207,7 +207,7 @@ pub(crate) struct Session {
     base_instructions: Option<String>,
     user_instructions: Option<String>,
     pub(crate) approval_policy: AskForApproval,
-    sandbox_policy: SandboxPolicy,
+    pub(crate) sandbox_policy: SandboxPolicy,
     shell_environment_policy: ShellEnvironmentPolicy,
     pub(crate) writable_roots: Mutex<Vec<PathBuf>>,
     disable_response_storage: bool,
@@ -1277,7 +1277,13 @@ async fn try_run_turn(
         })
     };
 
-    let mut stream = sess.client.clone().stream(&prompt).await?;
+    // only provide the sandbox policy if the approval policy is OnRequest
+    let sandbox_policy = if sess.approval_policy == AskForApproval::OnRequest {
+        Some(sess.sandbox_policy.clone())
+    } else {
+        None
+    };
+    let mut stream = sess.client.clone().stream(&prompt, sandbox_policy).await?;
 
     let mut output = Vec::new();
     loop {
@@ -1478,6 +1484,8 @@ async fn handle_response_item(
                 command: action.command,
                 workdir: action.working_directory,
                 timeout_ms: action.timeout_ms,
+                with_escalated_permissions: None,
+                justification: None,
             };
             let effective_call_id = match (call_id, id) {
                 (Some(call_id), _) => call_id,
@@ -1563,6 +1571,8 @@ fn to_exec_params(params: ShellToolCallParams, sess: &Session) -> ExecParams {
         cwd: sess.resolve_path(params.workdir.clone()),
         timeout_ms: params.timeout_ms,
         env: create_env(&sess.shell_environment_policy),
+        with_escalated_permissions: params.with_escalated_permissions,
+        justification: params.justification,
     }
 }
 
@@ -1662,13 +1672,19 @@ async fn handle_container_exec_with_params(
                 cwd: cwd.clone(),
                 timeout_ms: params.timeout_ms,
                 env: HashMap::new(),
+                with_escalated_permissions: None,
+                justification: None,
             };
             let safety = if *user_explicitly_approved_this_action {
                 SafetyCheck::AutoApprove {
                     sandbox_type: SandboxType::None,
                 }
             } else {
-                assess_safety_for_untrusted_command(sess.approval_policy, &sess.sandbox_policy)
+                assess_safety_for_untrusted_command(
+                    sess.approval_policy,
+                    &sess.sandbox_policy,
+                    params.with_escalated_permissions.unwrap_or(false),
+                )
             };
             (
                 params,
@@ -1684,6 +1700,7 @@ async fn handle_container_exec_with_params(
                     sess.approval_policy,
                     &sess.sandbox_policy,
                     &state.approved_commands,
+                    params.with_escalated_permissions.unwrap_or(false),
                 )
             };
             let command_for_display = params.command.clone();
@@ -1700,7 +1717,7 @@ async fn handle_container_exec_with_params(
                     call_id.clone(),
                     params.command.clone(),
                     params.cwd.clone(),
-                    None,
+                    params.justification.clone(),
                 )
                 .await;
             match rx_approve.await.unwrap_or_default() {
@@ -1830,8 +1847,11 @@ async fn handle_sandbox_error(
     let cwd = exec_command_context.cwd.clone();
     let is_apply_patch = exec_command_context.apply_patch.is_some();
 
-    // Early out if the user never wants to be asked for approval; just return to the model immediately
-    if sess.approval_policy == AskForApproval::Never {
+    // Early out if either the user never wants to be asked for approval, or
+    // we're letting the model manage escalation requests.
+    if sess.approval_policy == AskForApproval::Never
+        || sess.approval_policy == AskForApproval::OnRequest
+    {
         return ResponseInputItem::FunctionCallOutput {
             call_id,
             output: FunctionCallOutputPayload {
@@ -2002,7 +2022,7 @@ fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -> Option<St
 }
 
 async fn drain_to_completed(sess: &Session, prompt: &Prompt) -> CodexResult<()> {
-    let mut stream = sess.client.clone().stream(prompt).await?;
+    let mut stream = sess.client.clone().stream(prompt, None).await?;
     loop {
         let maybe_event = stream.next().await;
         let Some(event) = maybe_event else {

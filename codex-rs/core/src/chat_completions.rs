@@ -24,6 +24,7 @@ use crate::error::Result;
 use crate::models::ContentItem;
 use crate::models::ResponseItem;
 use crate::openai_tools::create_tools_json_for_chat_completions_api;
+use crate::protocol::SandboxPolicy;
 use crate::util::backoff;
 
 /// Implementation for the classic Chat Completions API.
@@ -33,6 +34,7 @@ pub(crate) async fn stream_chat_completions(
     include_plan_tool: bool,
     client: &reqwest::Client,
     provider: &ModelProviderInfo,
+    sandbox_policy: Option<SandboxPolicy>,
 ) -> Result<ResponseStream> {
     // Build messages array
     let mut messages = Vec::<serde_json::Value>::new();
@@ -110,7 +112,12 @@ pub(crate) async fn stream_chat_completions(
         }
     }
 
-    let tools_json = create_tools_json_for_chat_completions_api(prompt, model, include_plan_tool)?;
+    let tools_json = create_tools_json_for_chat_completions_api(
+        prompt,
+        model,
+        include_plan_tool,
+        sandbox_policy,
+    )?;
     let payload = json!({
         "model": model,
         "messages": messages,
