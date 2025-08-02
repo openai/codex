@@ -180,11 +180,8 @@ impl ModelClient {
             include,
         };
 
-        trace!(
-            "POST to {}: {}",
-            self.provider.get_full_url(),
-            serde_json::to_string(&payload)?
-        );
+        let full_url = format!("{base_url}/responses");
+        trace!("POST to {}: {}", full_url, serde_json::to_string(&payload)?);
 
         let mut attempt = 0;
         let max_retries = self.provider.request_max_retries();
@@ -194,7 +191,7 @@ impl ModelClient {
 
             let mut req_builder = self
                 .client
-                .post(format!("{base_url}/responses"))
+                .post(&full_url)
                 .header("OpenAI-Beta", "responses=experimental")
                 .header("session_id", self.session_id.to_string())
                 .bearer_auth(&token)
