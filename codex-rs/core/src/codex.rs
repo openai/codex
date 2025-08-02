@@ -1373,7 +1373,7 @@ async fn run_compact_task(
     let mut retries = 0;
 
     loop {
-        let attempt_result = drain_to_completed(&sess, &prompt).await;
+        let attempt_result = drain_to_completed(&sess, &sub_id, &prompt).await;
 
         match attempt_result {
             Ok(()) => break,
