@@ -17,6 +17,11 @@ use crate::protocol::SandboxPolicy;
 /// attributes, so this may change in the future.
 pub const CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR: &str = "CODEX_SANDBOX_NETWORK_DISABLED";
 
+/// Should be set when the process is spawned under a sandbox. Currently, the
+/// value is "seatbelt" for macOS, but it may change in the future to
+/// accommodate sandboxing configuration and other sandboxing mechanisms.
+pub const CODEX_SANDBOX_ENV_VAR: &str = "CODEX_SANDBOX";
+
 #[derive(Debug, Clone, Copy)]
 pub enum StdioPolicy {
     RedirectForShellTool,
