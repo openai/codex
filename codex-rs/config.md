@@ -243,6 +243,21 @@ By default, `reasoning` is only set on requests to OpenAI models that are known 
 model_supports_reasoning_summaries = true
 ```
 
+## experimental_include_plan_tool
+
+Controls whether to expose the experimental plan tool (named `update_plan`) to the model and include the corresponding guidance in the system prompt.
+
+Default behavior:
+- For known models (anything hardcoded in the models list), this is disabled by default.
+- For unknown models whose name starts with "gpt-", this is enabled by default so new GPT-family models get the feature without a CLI update.
+
+When enabled, the model can call `update_plan` to keep an up-to-date, step-by-step plan for the task and Codex will render plan updates in the UI. When disabled, the tool is not advertised to the model and the “Plan updates” section is omitted from the prompt; any unsolicited `update_plan` calls will be treated as unsupported.
+
+```toml
+# Enable the experimental plan tool and prompt instructions
+experimental_include_plan_tool = true
+```
+
 ## sandbox_mode
 
 Codex executes model-generated shell commands inside an OS-level sandbox.

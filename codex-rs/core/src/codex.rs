@@ -225,6 +225,9 @@ pub(crate) struct Session {
     state: Mutex<State>,
     codex_linux_sandbox_exe: Option<PathBuf>,
     user_shell: shell::Shell,
+
+    /// Whether the experimental plan tool is enabled for this session.
+    include_plan_tool: bool,
 }
 
 impl Session {
@@ -791,6 +794,7 @@ async fn submission_loop(
                     codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
                     disable_response_storage,
                     user_shell: default_shell,
+                    include_plan_tool: config.include_plan_tool,
                 }));
 
                 // Patch restored state into the newly created session.
@@ -1531,7 +1535,19 @@ async fn handle_function_call(
             };
             handle_container_exec_with_params(params, sess, sub_id, call_id).await
         }
-        "update_plan" => handle_update_plan(sess, arguments, sub_id, call_id).await,
+        "update_plan" => {
+            if sess.include_plan_tool {
+                handle_update_plan(sess, arguments, sub_id, call_id).await
+            } else {
+                ResponseInputItem::FunctionCallOutput {
+                    call_id,
+                    output: FunctionCallOutputPayload {
+                        content: format!("unsupported call: {name}"),
+                        success: None,
+                    },
+                }
+            }
+        }
         _ => {
             match sess.mcp_connection_manager.parse_tool_name(&name) {
                 Some((server, tool_name)) => {

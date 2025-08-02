@@ -342,6 +342,10 @@ pub struct ConfigToml {
 
     /// The value for the `originator` header included with Responses API requests.
     pub internal_originator: Option<String>,
+
+    /// Include an experimental plan tool that the model can use to update its current plan and status of each step.
+    /// This is experimental and may be removed in the future.
+    pub experimental_include_plan_tool: Option<bool>,
 }
 
 impl ConfigToml {
@@ -476,6 +480,7 @@ impl Config {
         });
 
         let experimental_resume = cfg.experimental_resume;
+        let is_unknown_gpt = openai_model_info.is_none() && model.starts_with("gpt-");
 
         // Load base instructions override from a file if specified. If the
         // path is relative, resolve it against the effective cwd so the
@@ -527,7 +532,7 @@ impl Config {
 
             model_supports_reasoning_summaries: cfg
                 .model_supports_reasoning_summaries
-                .unwrap_or(false),
+                .unwrap_or(is_unknown_gpt),
 
             chatgpt_base_url: config_profile
                 .chatgpt_base_url
@@ -535,7 +540,9 @@ impl Config {
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
 
             experimental_resume,
-            include_plan_tool: include_plan_tool.unwrap_or(false),
+            include_plan_tool: include_plan_tool
+                .or(cfg.experimental_include_plan_tool)
+                .unwrap_or(is_unknown_gpt),
             internal_originator: cfg.internal_originator,
         };
         Ok(config)
@@ -648,6 +655,73 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
+
+    #[test]
+    fn test_plan_and_reasoning_defaults_known_vs_unknown() -> std::io::Result<()> {
+        let fixture = create_test_fixture()?;
+
+        // Unknown GPT-like model -> defaults ON for plan tool and reasoning summaries override.
+        let unknown_gpt_overrides = ConfigOverrides {
+            model: Some("gpt-unknown-2025".to_string()),
+            cwd: Some(fixture.cwd()),
+            ..Default::default()
+        };
+        let unknown_gpt_cfg = Config::load_from_base_config_with_overrides(
+            fixture.cfg.clone(),
+            unknown_gpt_overrides,
+            fixture.codex_home(),
+        )?;
+        assert!(
+            unknown_gpt_cfg.include_plan_tool,
+            "plan tool should default to ON for unknown GPT-like models"
+        );
+        assert!(
+            unknown_gpt_cfg.model_supports_reasoning_summaries,
+            "reasoning summaries should default to ON for unknown GPT-like models"
+        );
+
+        // Unknown non-GPT model -> defaults OFF for both.
+        let unknown_non_gpt_overrides = ConfigOverrides {
+            model: Some("my-new-model".to_string()),
+            cwd: Some(fixture.cwd()),
+            ..Default::default()
+        };
+        let unknown_non_gpt_cfg = Config::load_from_base_config_with_overrides(
+            fixture.cfg.clone(),
+            unknown_non_gpt_overrides,
+            fixture.codex_home(),
+        )?;
+        assert!(
+            !unknown_non_gpt_cfg.include_plan_tool,
+            "plan tool should default to OFF for unknown non-GPT models"
+        );
+        assert!(
+            !unknown_non_gpt_cfg.model_supports_reasoning_summaries,
+            "reasoning summaries should default to OFF for unknown non-GPT models"
+        );
+
+        // Known model -> defaults OFF for plan tool and reasoning summaries override value.
+        let known_overrides = ConfigOverrides {
+            model: Some("gpt-3.5-turbo".to_string()),
+            cwd: Some(fixture.cwd()),
+            ..Default::default()
+        };
+        let known_cfg = Config::load_from_base_config_with_overrides(
+            fixture.cfg.clone(),
+            known_overrides,
+            fixture.codex_home(),
+        )?;
+        assert!(
+            !known_cfg.include_plan_tool,
+            "plan tool should default to OFF for known models"
+        );
+        assert!(
+            !known_cfg.model_supports_reasoning_summaries,
+            "reasoning summaries override should default to OFF for known models"
+        );
+
+        Ok(())
+    }
 
     #[test]
     fn test_toml_parsing() {
