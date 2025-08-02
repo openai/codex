@@ -13,6 +13,7 @@ use crate::mcp_protocol::ToolCallResponseResult;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::tool_handlers::create_conversation::handle_create_conversation;
 use crate::tool_handlers::send_message::handle_send_message;
+use crate::tool_handlers::stream_conversation;
 
 use codex_core::Codex;
 use codex_core::config::Config as CodexConfig;
@@ -35,6 +36,7 @@ use mcp_types::ServerNotification;
 use mcp_types::TextContent;
 use serde_json::json;
 use tokio::sync::Mutex;
+use tokio::sync::watch;
 use tokio::task;
 use uuid::Uuid;
 
@@ -45,6 +47,10 @@ pub(crate) struct MessageProcessor {
     session_map: Arc<Mutex<HashMap<Uuid, Arc<Codex>>>>,
     running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, Uuid>>>,
     running_session_ids: Arc<Mutex<HashSet<Uuid>>>,
+    // Per-session streaming state signal (true when client connected via ConversationStream)
+    streaming_session_senders: Arc<Mutex<HashMap<Uuid, watch::Sender<bool>>>>,
+    // Track request IDs to the original ToolCallRequestParams for cancellation handling
+    tool_request_map: Arc<Mutex<HashMap<RequestId, ToolCallRequestParams>>>,
 }
 
 impl MessageProcessor {
@@ -61,6 +67,8 @@ impl MessageProcessor {
             session_map: Arc::new(Mutex::new(HashMap::new())),
             running_requests_id_to_codex_uuid: Arc::new(Mutex::new(HashMap::new())),
             running_session_ids: Arc::new(Mutex::new(HashSet::new())),
+            streaming_session_senders: Arc::new(Mutex::new(HashMap::new())),
+            tool_request_map: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -74,6 +82,12 @@ impl MessageProcessor {
 
     pub(crate) fn running_session_ids(&self) -> Arc<Mutex<HashSet<Uuid>>> {
         self.running_session_ids.clone()
+    }
+
+    pub(crate) fn streaming_session_senders(
+        &self,
+    ) -> Arc<Mutex<HashMap<Uuid, watch::Sender<bool>>>> {
+        self.streaming_session_senders.clone()
     }
 
     pub(crate) async fn process_request(&mut self, request: JSONRPCRequest) {
@@ -353,12 +367,23 @@ impl MessageProcessor {
         }
     }
     async fn handle_new_tool_calls(&self, request_id: RequestId, params: ToolCallRequestParams) {
+        // Track the request to allow graceful cancellation routing later.
+        {
+            let mut guard = self.tool_request_map.lock().await;
+            guard.insert(request_id.clone(), params.clone());
+        }
         match params {
             ToolCallRequestParams::ConversationCreate(args) => {
                 handle_create_conversation(self, request_id, args).await;
             }
             ToolCallRequestParams::ConversationSendMessage(args) => {
                 handle_send_message(self, request_id, args).await;
+            }
+            ToolCallRequestParams::ConversationStream(args) => {
+                crate::tool_handlers::stream_conversation::handle_stream_conversation(
+                    self, request_id, args,
+                )
+                .await;
             }
             _ => {
                 let result = CallToolResult {
@@ -584,12 +609,27 @@ impl MessageProcessor {
     // ---------------------------------------------------------------------
     // Notification handlers
     // ---------------------------------------------------------------------
-
+    #[allow(clippy::collapsible_match)]
     async fn handle_cancelled_notification(
         &self,
         params: <mcp_types::CancelledNotification as mcp_types::ModelContextProtocolNotification>::Params,
     ) {
         let request_id = params.request_id;
+        // First, route cancellation for tracked tool calls (e.g., ConversationStream)
+        if let Some(orig) = {
+            let mut guard = self.tool_request_map.lock().await;
+            guard.remove(&request_id)
+        } {
+            match orig {
+                ToolCallRequestParams::ConversationStream(args) => {
+                    stream_conversation::handle_cancel(self, &args).await;
+                    return;
+                }
+                _ => {
+                    // TODO: Implement later. Things like interrupt.
+                }
+            }
+        }
         // Create a stable string form early for logging and submission id.
         let request_id_string = match &request_id {
             RequestId::String(s) => s.clone(),

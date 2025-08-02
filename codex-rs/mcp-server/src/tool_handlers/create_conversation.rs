@@ -10,6 +10,7 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::SessionConfiguredEvent;
 use mcp_types::RequestId;
 use tokio::sync::Mutex;
+use tokio::sync::watch;
 use uuid::Uuid;
 
 use crate::conversation_loop::run_conversation_loop;
@@ -128,11 +129,28 @@ pub(crate) async fn handle_create_conversation(
         message_processor.session_map(),
     )
     .await;
+
+    // Create per-session streaming control channel (initially disabled)
+    let (stream_tx, stream_rx) = watch::channel(false);
+    {
+        let senders = message_processor.streaming_session_senders();
+        let mut guard = senders.lock().await;
+        guard.insert(session_id, stream_tx);
+    }
     // Run the conversation loop in the background so this request can return immediately.
     let outgoing = message_processor.outgoing();
     let spawn_id = id.clone();
+    let running_sessions = message_processor.running_session_ids();
     tokio::spawn(async move {
-        run_conversation_loop(codex_arc.clone(), outgoing, spawn_id).await;
+        run_conversation_loop(
+            codex_arc.clone(),
+            outgoing,
+            spawn_id,
+            stream_rx,
+            session_id,
+            running_sessions,
+        )
+        .await;
     });
 
     // Reply with the new conversation id and effective model
