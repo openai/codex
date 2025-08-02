@@ -11,6 +11,13 @@ use uuid::Uuid;
 
 use crate::protocol::FileChange;
 
+struct BaselineFileInfo {
+    path: Option<PathBuf>,
+    contents: Option<String>,
+    mode: Option<String>,
+    oid: Option<String>,
+}
+
 /// Tracks sets of changes to files and exposes the overall unified diff.
 /// Internally, the way this works is now:
 /// 1. Maintain an in-memory baseline snapshot of files when they are first seen.
@@ -22,20 +29,13 @@ use crate::protocol::FileChange;
 pub struct TurnDiffTracker {
     /// Map external path -> internal filename (uuid + same extension).
     external_to_temp_name: HashMap<PathBuf, String>,
-    /// Internal filename -> external path as of baseline snapshot.
-    temp_name_to_baseline_external: HashMap<String, PathBuf>,
     /// Internal filename -> external path as of current accumulated state (after applying all changes).
     /// This is where renames are tracked.
     temp_name_to_current_external: HashMap<String, PathBuf>,
-    /// Internal filename -> baseline file contents (None means the file did not exist, i.e. /dev/null).
-    baseline_contents: HashMap<String, Option<String>>,
-    /// Internal filename -> baseline file mode (100644 or 100755). Only set when baseline file existed.
-    baseline_mode: HashMap<String, String>,
+    /// Internal filename -> baseline file info.
+    baseline_file_info: HashMap<String, BaselineFileInfo>,
     /// Cache of known git worktree roots to avoid repeated filesystem walks.
     git_root_cache: Vec<PathBuf>,
-    /// Internal filename -> baseline blob OID as observed at the time the change was first seen.
-    /// ZERO_OID when the file did not exist.
-    baseline_oid: HashMap<String, String>,
 }
 
 impl TurnDiffTracker {
@@ -54,33 +54,32 @@ impl TurnDiffTracker {
                 let internal = uuid_filename_for(path);
                 self.external_to_temp_name
                     .insert(path.clone(), internal.clone());
-                self.temp_name_to_baseline_external
-                    .insert(internal.clone(), path.clone());
                 self.temp_name_to_current_external
                     .insert(internal.clone(), path.clone());
 
                 // If the file exists on disk now, snapshot as baseline; else leave missing to represent /dev/null.
-                let baseline = if path.exists() {
-                    let contents = fs::read(path)
+                let (contents, mode, oid) = if path.exists() {
+                    let contents_bytes = fs::read(path)
                         .with_context(|| format!("failed to read original {}", path.display()))?;
-                    // Capture baseline mode for later file mode lines.
-                    if let Some(mode) = file_mode_for_path(path) {
-                        self.baseline_mode.insert(internal.clone(), mode);
-                    }
-                    let s = String::from_utf8_lossy(&contents).into_owned();
-                    // Record baseline OID from git for the file's repository, falling back to content hash.
+                    let s = String::from_utf8_lossy(&contents_bytes).into_owned();
+                    let mode = file_mode_for_path(path);
                     let oid = self
                         .git_blob_oid_for_path(path)
                         .unwrap_or_else(|| git_blob_sha1_hex(&s));
-                    self.baseline_oid.insert(internal.clone(), oid);
-                    Some(s)
+                    (Some(s), mode, Some(oid))
                 } else {
-                    // When the file did not exist, record ZERO_OID as baseline.
-                    self.baseline_oid
-                        .insert(internal.clone(), ZERO_OID.to_string());
-                    None
+                    (None, None, Some(ZERO_OID.to_string()))
                 };
-                self.baseline_contents.insert(internal.clone(), baseline);
+
+                self.baseline_file_info.insert(
+                    internal.clone(),
+                    BaselineFileInfo {
+                        path: Some(path.clone()),
+                        contents,
+                        mode,
+                        oid,
+                    },
+                );
             }
 
             // Track rename/move in current mapping if provided in an Update.
@@ -95,11 +94,16 @@ impl TurnDiffTracker {
                         // This should be rare, but if we haven't mapped the source, create it with no baseline.
                         let i = uuid_filename_for(path);
                         self.external_to_temp_name.insert(path.clone(), i.clone());
-                        self.temp_name_to_baseline_external
-                            .insert(i.clone(), path.clone());
                         // No on-disk file read here; treat as addition.
-                        self.baseline_contents.insert(i.clone(), None);
-                        self.baseline_oid.insert(i.clone(), ZERO_OID.to_string());
+                        self.baseline_file_info.insert(
+                            i.clone(),
+                            BaselineFileInfo {
+                                path: Some(path.clone()),
+                                contents: None,
+                                mode: None,
+                                oid: Some(ZERO_OID.to_string()),
+                            },
+                        );
                         i
                     }
                 };
@@ -119,8 +123,12 @@ impl TurnDiffTracker {
     fn get_path_for_internal(&self, internal: &str) -> Option<PathBuf> {
         self.temp_name_to_current_external
             .get(internal)
-            .or_else(|| self.temp_name_to_baseline_external.get(internal))
             .cloned()
+            .or_else(|| {
+                self.baseline_file_info
+                    .get(internal)
+                    .and_then(|info| info.path.clone())
+            })
     }
 
     /// Find the git worktree root for a file/directory by walking up to the first ancestor containing a `.git` entry.
@@ -198,11 +206,7 @@ impl TurnDiffTracker {
         let mut aggregated = String::new();
 
         // Compute diffs per tracked internal file in a stable order by external path.
-        let mut internals: Vec<String> = self
-            .temp_name_to_baseline_external
-            .keys()
-            .cloned()
-            .collect();
+        let mut internals: Vec<String> = self.baseline_file_info.keys().cloned().collect();
         // Sort lexicographically by external path to match git behavior.
         internals.sort_by_key(|a| {
             let path = self.get_path_for_internal(a);
@@ -218,8 +222,12 @@ impl TurnDiffTracker {
 
         for internal in internals {
             // Baseline external must exist for any tracked internal.
-            let baseline_external = match self.temp_name_to_baseline_external.get(&internal) {
-                Some(p) => p.clone(),
+            let baseline_external = match self
+                .baseline_file_info
+                .get(&internal)
+                .and_then(|i| i.path.clone())
+            {
+                Some(p) => p,
                 None => continue,
             };
             let current_external = match self.get_path_for_internal(&internal) {
@@ -228,10 +236,9 @@ impl TurnDiffTracker {
             };
 
             let left_content = self
-                .baseline_contents
+                .baseline_file_info
                 .get(&internal)
-                .cloned()
-                .unwrap_or(None);
+                .and_then(|i| i.contents.clone());
 
             let right_content = if current_external.exists() {
                 let contents = fs::read(&current_external).with_context(|| {
@@ -267,9 +274,9 @@ impl TurnDiffTracker {
 
             // Determine modes.
             let baseline_mode = self
-                .baseline_mode
+                .baseline_file_info
                 .get(&internal)
-                .cloned()
+                .and_then(|i| i.mode.clone())
                 .unwrap_or_else(|| "100644".to_string());
             let current_mode =
                 file_mode_for_path(&current_external).unwrap_or_else(|| "100644".to_string());
@@ -286,9 +293,9 @@ impl TurnDiffTracker {
             // Determine blob object IDs for left and right contents. Prefer stored OIDs
             // captured from the original repo state when the change was first seen.
             let left_oid = self
-                .baseline_oid
+                .baseline_file_info
                 .get(&internal)
-                .cloned()
+                .and_then(|i| i.oid.clone())
                 .or_else(|| {
                     left_content
                         .as_ref()
@@ -347,6 +354,8 @@ fn uuid_filename_for(path: &Path) -> String {
 const ZERO_OID: &str = "0000000000000000000000000000000000000000";
 
 /// Compute the Git SHA-1 blob object ID for the given content.
+/// This should only be used as a fallback if we can't get the OID from the original repo state
+/// or if the original file is not in a git repo.
 fn git_blob_sha1_hex(data: &str) -> String {
     // Git blob hash is sha1 of: "blob <len>\0<data>"
     let header = format!("blob {}\0", data.len());
