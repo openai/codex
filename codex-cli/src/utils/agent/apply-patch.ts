@@ -280,12 +280,22 @@ class Parser {
         this.lines,
         this.index,
       );
-      const [newIndex, fuzz] = find_context(
-        fileLines,
-        nextChunkContext,
-        index,
-        eof,
-      );
+      let [newIndex, fuzz] = find_context(
+				fileLines,
+				nextChunkContext,
+				index,
+				eof,
+			);
+			if (newIndex === -1) {
+				// The model sometimes returns patches out of order,
+				// so try searching for context from the beginning of the file.
+				[newIndex, fuzz] = find_context(
+					fileLines,
+					nextChunkContext,
+					0,
+					eof,
+				);
+			}
       if (newIndex === -1) {
         const ctxText = nextChunkContext.join("\n");
         if (eof) {

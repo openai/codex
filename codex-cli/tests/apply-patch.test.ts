@@ -161,6 +161,26 @@ test("process_patch - move file (rename)", () => {
   expect(fs.removals).toEqual(["old.txt"]);
 });
 
+test("process_patch - tolerate out-of-order patch sections", () => {
+  const patch = `*** Begin Patch
+*** Update File: a.txt
+@@
+-world
++world hello
+@@
+-hello
++hello world
+*** End Patch`;
+  const fs = createInMemoryFS({
+    "a.txt": "hello\nworld",
+    "c.txt": "to be removed",
+  });
+  process_patch(patch, fs.openFn, fs.writeFn, fs.removeFn);
+  expect(fs.writes).toEqual({
+    "a.txt": "hello world\nworld hello",
+  });
+});
+
 test("process_patch - combined add, update, delete", () => {
   const patch = `*** Begin Patch
 *** Add File: added.txt
