@@ -430,6 +430,8 @@ fn file_mode_for_path(path: &Path) -> Option<String> {
     }
     #[cfg(not(unix))]
     {
+        // Suppress unused variable warning
+        let _ = path;
         // Default to non-executable on non-unix.
         Some("100644".to_string())
     }
