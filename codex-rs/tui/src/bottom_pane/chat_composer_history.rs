@@ -199,7 +199,7 @@ mod tests {
 
         // First Up should request offset 2 (latest) and await async data.
         assert!(history.should_handle_navigation("", 0));
-        assert!(history.navigate_up(&tx).is_some());
+        assert!(history.navigate_up(&tx).is_none()); // don't replace the text yet
 
         // Verify that an AppEvent::CodexOp with the correct GetHistoryEntryRequest was sent.
         let event = rx.try_recv().expect("expected AppEvent to be sent");
@@ -221,7 +221,7 @@ mod tests {
         );
 
         // Next Up should move to offset 1.
-        assert!(history.navigate_up(&tx).is_some());
+        assert!(history.navigate_up(&tx).is_none()); // don't replace the text yet
 
         // Verify second CodexOp event for offset 1.
         let event2 = rx.try_recv().expect("expected second event");

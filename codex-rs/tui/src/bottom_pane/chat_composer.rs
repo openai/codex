@@ -847,13 +847,13 @@ mod tests {
             // Full-width space boundaries
             (
                 "test　@İstanbul",
-                6,
+                8,
                 Some("İstanbul".to_string()),
                 "@ token after full-width space",
             ),
             (
                 "@ЙЦУ　@诶",
-                6,
+                10,
                 Some("诶".to_string()),
                 "Full-width space between Unicode tokens",
             ),
