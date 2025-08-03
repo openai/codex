@@ -177,8 +177,7 @@ async fn live_shell_function_call() {
         match ev.msg {
             EventMsg::ExecCommandBegin(codex_core::protocol::ExecCommandBeginEvent {
                 command,
-                call_id: _,
-                cwd: _,
+                ..
             }) => {
                 assert_eq!(command, vec!["echo", MARKER]);
                 saw_begin = true;
@@ -186,8 +185,7 @@ async fn live_shell_function_call() {
             EventMsg::ExecCommandEnd(codex_core::protocol::ExecCommandEndEvent {
                 stdout,
                 exit_code,
-                call_id: _,
-                stderr: _,
+                ..
             }) => {
                 assert_eq!(exit_code, 0, "echo returned non‑zero exit code");
                 assert!(stdout.contains(MARKER));
