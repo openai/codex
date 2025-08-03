@@ -523,6 +523,8 @@ pub struct ExecCommandEndEvent {
     pub stderr: String,
     /// The command's exit code.
     pub exit_code: i32,
+    /// The duration of the command execution.
+    pub duration: Duration,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
