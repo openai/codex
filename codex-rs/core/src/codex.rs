@@ -396,11 +396,15 @@ impl Session {
         &self,
         sub_id: &str,
         call_id: &str,
-        stdout: &str,
-        stderr: &str,
-        exit_code: i32,
+        output: &ExecToolCallOutput,
         is_apply_patch: bool,
     ) {
+        let ExecToolCallOutput {
+            stdout,
+            stderr,
+            duration,
+            exit_code,
+        } = output;
         // Because stdout and stderr could each be up to 100 KiB, we send
         // truncated versions.
         const MAX_STREAM_OUTPUT: usize = 5 * 1024; // 5KiB
@@ -412,14 +416,15 @@ impl Session {
                 call_id: call_id.to_string(),
                 stdout,
                 stderr,
-                success: exit_code == 0,
+                success: *exit_code == 0,
             })
         } else {
             EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                 call_id: call_id.to_string(),
                 stdout,
                 stderr,
-                exit_code,
+                duration: *duration,
+                exit_code: *exit_code,
             })
         };
 
@@ -1775,23 +1780,21 @@ async fn handle_container_exec_with_params(
                 stdout,
                 stderr,
                 duration,
-            } = output;
+            } = &output;
 
             sess.notify_exec_command_end(
                 &sub_id,
                 &call_id,
-                &stdout,
-                &stderr,
-                exit_code,
+                &output,
                 exec_command_context.apply_patch.is_some(),
             )
             .await;
 
-            let is_success = exit_code == 0;
+            let is_success = *exit_code == 0;
             let content = format_exec_output(
-                if is_success { &stdout } else { &stderr },
-                exit_code,
-                duration,
+                if is_success { stdout } else { stderr },
+                *exit_code,
+                *duration,
             );
 
             ResponseInputItem::FunctionCallOutput {
@@ -1900,23 +1903,16 @@ async fn handle_sandbox_error(
                         stdout,
                         stderr,
                         duration,
-                    } = retry_output;
+                    } = &retry_output;
 
-                    sess.notify_exec_command_end(
-                        &sub_id,
-                        &call_id,
-                        &stdout,
-                        &stderr,
-                        exit_code,
-                        is_apply_patch,
-                    )
-                    .await;
+                    sess.notify_exec_command_end(&sub_id, &call_id, &retry_output, is_apply_patch)
+                        .await;
 
-                    let is_success = exit_code == 0;
+                    let is_success = *exit_code == 0;
                     let content = format_exec_output(
-                        if is_success { &stdout } else { &stderr },
-                        exit_code,
-                        duration,
+                        if is_success { stdout } else { stderr },
+                        *exit_code,
+                        *duration,
                     );
 
                     ResponseInputItem::FunctionCallOutput {
