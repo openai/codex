@@ -987,7 +987,6 @@ mod tests {
     fn cursor_pos_with_state_basic_and_scroll_behaviors() {
         // Case 1: No wrapping needed, height fits — scroll ignored, y maps directly.
         let mut t = ta_with("hello world");
-        // Place cursor after "hel"
         t.set_cursor(3);
         let area = Rect::new(2, 5, 20, 3);
         // Even if an absurd scroll is provided, when content fits the area the
