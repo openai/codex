@@ -14,6 +14,7 @@ use assert_cmd::prelude::*;
 use codex_core::protocol::InputItem;
 use codex_mcp_server::CodexToolCallParam;
 use codex_mcp_server::CodexToolCallReplyParam;
+use codex_mcp_server::mcp_protocol::ConversationCreateArgs;
 use codex_mcp_server::mcp_protocol::ConversationId;
 use codex_mcp_server::mcp_protocol::ConversationSendMessageArgs;
 use codex_mcp_server::mcp_protocol::ToolCallRequestParams;
@@ -193,6 +194,41 @@ impl McpProcess {
             parent_message_id: None,
             conversation_overrides: None,
         });
+        self.send_request(
+            mcp_types::CallToolRequest::METHOD,
+            Some(serde_json::to_value(params)?),
+        )
+        .await
+    }
+
+    pub async fn send_conversation_create_tool_call(
+        &mut self,
+        prompt: &str,
+        model: &str,
+        cwd: &str,
+    ) -> anyhow::Result<i64> {
+        let params = ToolCallRequestParams::ConversationCreate(ConversationCreateArgs {
+            prompt: prompt.to_string(),
+            model: model.to_string(),
+            cwd: cwd.to_string(),
+            approval_policy: None,
+            sandbox: None,
+            config: None,
+            profile: None,
+            base_instructions: None,
+        });
+        self.send_request(
+            mcp_types::CallToolRequest::METHOD,
+            Some(serde_json::to_value(params)?),
+        )
+        .await
+    }
+
+    pub async fn send_conversation_create_with_args(
+        &mut self,
+        args: ConversationCreateArgs,
+    ) -> anyhow::Result<i64> {
+        let params = ToolCallRequestParams::ConversationCreate(args);
         self.send_request(
             mcp_types::CallToolRequest::METHOD,
             Some(serde_json::to_value(params)?),

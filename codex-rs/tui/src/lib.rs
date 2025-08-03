@@ -41,6 +41,11 @@ mod text_formatting;
 mod tui;
 mod user_approval_widget;
 
+#[cfg(not(debug_assertions))]
+mod updates;
+#[cfg(not(debug_assertions))]
+use color_eyre::owo_colors::OwoColorize;
+
 pub use cli::Cli;
 
 pub async fn run_main(
@@ -138,6 +143,38 @@ pub async fn run_main(
         .with(file_layer)
         .with(tui_layer)
         .try_init();
+
+    #[allow(clippy::print_stderr)]
+    #[cfg(not(debug_assertions))]
+    if let Some(latest_version) = updates::get_upgrade_version(&config) {
+        let current_version = env!("CARGO_PKG_VERSION");
+        let exe = std::env::current_exe()?;
+        let managed_by_npm = std::env::var_os("CODEX_MANAGED_BY_NPM").is_some();
+
+        eprintln!(
+            "{} {current_version} -> {latest_version}.",
+            "✨⬆️ Update available!".bold().cyan()
+        );
+
+        if managed_by_npm {
+            let npm_cmd = "npm install -g @openai/codex@latest";
+            eprintln!("Run {} to update.", npm_cmd.cyan().on_black());
+        } else if cfg!(target_os = "macos")
+            && (exe.starts_with("/opt/homebrew") || exe.starts_with("/usr/local"))
+        {
+            let brew_cmd = "brew upgrade codex";
+            eprintln!("Run {} to update.", brew_cmd.cyan().on_black());
+        } else {
+            eprintln!(
+                "See {} for the latest releases and installation options.",
+                "https://github.com/openai/codex/releases/latest"
+                    .cyan()
+                    .on_black()
+            );
+        }
+
+        eprintln!("");
+    }
 
     let show_login_screen = should_show_login_screen(&config);
     if show_login_screen {

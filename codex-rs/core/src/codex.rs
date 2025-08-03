@@ -48,6 +48,7 @@ use crate::error::SandboxErr;
 use crate::exec::ExecParams;
 use crate::exec::ExecToolCallOutput;
 use crate::exec::SandboxType;
+use crate::exec::StdoutStream;
 use crate::exec::process_exec_tool_call;
 use crate::exec_env::create_env;
 use crate::mcp_connection_manager::McpConnectionManager;
@@ -395,11 +396,15 @@ impl Session {
         &self,
         sub_id: &str,
         call_id: &str,
-        stdout: &str,
-        stderr: &str,
-        exit_code: i32,
+        output: &ExecToolCallOutput,
         is_apply_patch: bool,
     ) {
+        let ExecToolCallOutput {
+            stdout,
+            stderr,
+            duration,
+            exit_code,
+        } = output;
         // Because stdout and stderr could each be up to 100 KiB, we send
         // truncated versions.
         const MAX_STREAM_OUTPUT: usize = 5 * 1024; // 5KiB
@@ -411,14 +416,15 @@ impl Session {
                 call_id: call_id.to_string(),
                 stdout,
                 stderr,
-                success: exit_code == 0,
+                success: *exit_code == 0,
             })
         } else {
             EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                 call_id: call_id.to_string(),
                 stdout,
                 stderr,
-                exit_code,
+                duration: *duration,
+                exit_code: *exit_code,
             })
         };
 
@@ -1372,7 +1378,7 @@ async fn run_compact_task(
     let mut retries = 0;
 
     loop {
-        let attempt_result = drain_to_completed(&sess, &prompt).await;
+        let attempt_result = drain_to_completed(&sess, &sub_id, &prompt).await;
 
         match attempt_result {
             Ok(()) => break,
@@ -1759,6 +1765,11 @@ async fn handle_container_exec_with_params(
         sess.ctrl_c.clone(),
         &sess.sandbox_policy,
         &sess.codex_linux_sandbox_exe,
+        Some(StdoutStream {
+            sub_id: sub_id.clone(),
+            call_id: call_id.clone(),
+            tx_event: sess.tx_event.clone(),
+        }),
     )
     .await;
 
@@ -1769,23 +1780,21 @@ async fn handle_container_exec_with_params(
                 stdout,
                 stderr,
                 duration,
-            } = output;
+            } = &output;
 
             sess.notify_exec_command_end(
                 &sub_id,
                 &call_id,
-                &stdout,
-                &stderr,
-                exit_code,
+                &output,
                 exec_command_context.apply_patch.is_some(),
             )
             .await;
 
-            let is_success = exit_code == 0;
+            let is_success = *exit_code == 0;
             let content = format_exec_output(
-                if is_success { &stdout } else { &stderr },
-                exit_code,
-                duration,
+                if is_success { stdout } else { stderr },
+                *exit_code,
+                *duration,
             );
 
             ResponseInputItem::FunctionCallOutput {
@@ -1879,6 +1888,11 @@ async fn handle_sandbox_error(
                 sess.ctrl_c.clone(),
                 &sess.sandbox_policy,
                 &sess.codex_linux_sandbox_exe,
+                Some(StdoutStream {
+                    sub_id: sub_id.clone(),
+                    call_id: call_id.clone(),
+                    tx_event: sess.tx_event.clone(),
+                }),
             )
             .await;
 
@@ -1889,23 +1903,16 @@ async fn handle_sandbox_error(
                         stdout,
                         stderr,
                         duration,
-                    } = retry_output;
+                    } = &retry_output;
 
-                    sess.notify_exec_command_end(
-                        &sub_id,
-                        &call_id,
-                        &stdout,
-                        &stderr,
-                        exit_code,
-                        is_apply_patch,
-                    )
-                    .await;
+                    sess.notify_exec_command_end(&sub_id, &call_id, &retry_output, is_apply_patch)
+                        .await;
 
-                    let is_success = exit_code == 0;
+                    let is_success = *exit_code == 0;
                     let content = format_exec_output(
-                        if is_success { &stdout } else { &stderr },
-                        exit_code,
-                        duration,
+                        if is_success { stdout } else { stderr },
+                        *exit_code,
+                        *duration,
                     );
 
                     ResponseInputItem::FunctionCallOutput {
@@ -1990,7 +1997,7 @@ fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -> Option<St
     })
 }
 
-async fn drain_to_completed(sess: &Session, prompt: &Prompt) -> CodexResult<()> {
+async fn drain_to_completed(sess: &Session, sub_id: &str, prompt: &Prompt) -> CodexResult<()> {
     let mut stream = sess.client.clone().stream(prompt).await?;
     loop {
         let maybe_event = stream.next().await;
@@ -2000,7 +2007,32 @@ async fn drain_to_completed(sess: &Session, prompt: &Prompt) -> CodexResult<()> 
             ));
         };
         match event {
-            Ok(ResponseEvent::Completed { .. }) => return Ok(()),
+            Ok(ResponseEvent::OutputItemDone(item)) => {
+                // Record only to in-memory conversation history; avoid state snapshot.
+                let mut state = sess.state.lock().unwrap();
+                state.history.record_items(std::slice::from_ref(&item));
+            }
+            Ok(ResponseEvent::Completed {
+                response_id: _,
+                token_usage,
+            }) => {
+                let token_usage = match token_usage {
+                    Some(usage) => usage,
+                    None => {
+                        return Err(CodexErr::Stream(
+                            "token_usage was None in ResponseEvent::Completed".into(),
+                        ));
+                    }
+                };
+                sess.tx_event
+                    .send(Event {
+                        id: sub_id.to_string(),
+                        msg: EventMsg::TokenCount(token_usage),
+                    })
+                    .await
+                    .ok();
+                return Ok(());
+            }
             Ok(_) => continue,
             Err(e) => return Err(e),
         }
