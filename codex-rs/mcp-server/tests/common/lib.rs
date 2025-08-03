@@ -4,8 +4,6 @@ mod responses;
 
 pub use mcp_process::McpProcess;
 pub use mock_model_server::create_mock_chat_completions_server;
-#[allow(unused_imports)]
 pub use responses::create_apply_patch_sse_response;
-#[allow(unused_imports)]
 pub use responses::create_final_assistant_message_sse_response;
 pub use responses::create_shell_sse_response;

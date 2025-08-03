@@ -1,7 +1,7 @@
 [package]
+edition = "2024"
 name = "codex-login"
 version = { workspace = true }
-edition = "2024"
 
 [lints]
 workspace = true
@@ -18,3 +18,6 @@ tokio = { version = "1", features = [
     "rt-multi-thread",
     "signal",
 ] }
+
+[dev-dependencies]
+tempfile = "3"

@@ -11,8 +11,14 @@ use tokio::process::ChildStdout;
 
 use anyhow::Context;
 use assert_cmd::prelude::*;
+use codex_core::protocol::InputItem;
 use codex_mcp_server::CodexToolCallParam;
 use codex_mcp_server::CodexToolCallReplyParam;
+use codex_mcp_server::mcp_protocol::ConversationCreateArgs;
+use codex_mcp_server::mcp_protocol::ConversationId;
+use codex_mcp_server::mcp_protocol::ConversationSendMessageArgs;
+use codex_mcp_server::mcp_protocol::ToolCallRequestParams;
+
 use mcp_types::CallToolRequestParams;
 use mcp_types::ClientCapabilities;
 use mcp_types::Implementation;
@@ -29,6 +35,7 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::process::Command as StdCommand;
 use tokio::process::Command;
+use uuid::Uuid;
 
 pub struct McpProcess {
     next_request_id: AtomicI64,
@@ -174,6 +181,61 @@ impl McpProcess {
         .await
     }
 
+    pub async fn send_user_message_tool_call(
+        &mut self,
+        message: &str,
+        session_id: &str,
+    ) -> anyhow::Result<i64> {
+        let params = ToolCallRequestParams::ConversationSendMessage(ConversationSendMessageArgs {
+            conversation_id: ConversationId(Uuid::parse_str(session_id)?),
+            content: vec![InputItem::Text {
+                text: message.to_string(),
+            }],
+            parent_message_id: None,
+            conversation_overrides: None,
+        });
+        self.send_request(
+            mcp_types::CallToolRequest::METHOD,
+            Some(serde_json::to_value(params)?),
+        )
+        .await
+    }
+
+    pub async fn send_conversation_create_tool_call(
+        &mut self,
+        prompt: &str,
+        model: &str,
+        cwd: &str,
+    ) -> anyhow::Result<i64> {
+        let params = ToolCallRequestParams::ConversationCreate(ConversationCreateArgs {
+            prompt: prompt.to_string(),
+            model: model.to_string(),
+            cwd: cwd.to_string(),
+            approval_policy: None,
+            sandbox: None,
+            config: None,
+            profile: None,
+            base_instructions: None,
+        });
+        self.send_request(
+            mcp_types::CallToolRequest::METHOD,
+            Some(serde_json::to_value(params)?),
+        )
+        .await
+    }
+
+    pub async fn send_conversation_create_with_args(
+        &mut self,
+        args: ConversationCreateArgs,
+    ) -> anyhow::Result<i64> {
+        let params = ToolCallRequestParams::ConversationCreate(args);
+        self.send_request(
+            mcp_types::CallToolRequest::METHOD,
+            Some(serde_json::to_value(params)?),
+        )
+        .await
+    }
+
     async fn send_request(
         &mut self,
         method: &str,
@@ -191,8 +253,6 @@ impl McpProcess {
         Ok(request_id)
     }
 
-    // allow dead code
-    #[allow(dead_code)]
     pub async fn send_response(
         &mut self,
         id: RequestId,
@@ -220,8 +280,6 @@ impl McpProcess {
         let message = serde_json::from_str::<JSONRPCMessage>(&line)?;
         Ok(message)
     }
-    // allow dead code
-    #[allow(dead_code)]
     pub async fn read_stream_until_request_message(&mut self) -> anyhow::Result<JSONRPCRequest> {
         loop {
             let message = self.read_jsonrpc_message().await?;
@@ -244,8 +302,6 @@ impl McpProcess {
         }
     }
 
-    // allow dead code
-    #[allow(dead_code)]
     pub async fn read_stream_until_response_message(
         &mut self,
         request_id: RequestId,
@@ -276,27 +332,49 @@ impl McpProcess {
     pub async fn read_stream_until_configured_response_message(
         &mut self,
     ) -> anyhow::Result<String> {
+        let mut sid_old: Option<String> = None;
+        let mut sid_new: Option<String> = None;
         loop {
             let message = self.read_jsonrpc_message().await?;
             eprint!("message: {message:?}");
 
             match message {
                 JSONRPCMessage::Notification(notification) => {
-                    if notification.method == "codex/event" {
-                        if let Some(params) = notification.params {
+                    if let Some(params) = notification.params {
+                        // Back-compat schema: method == "codex/event" and msg.type == "session_configured"
+                        if notification.method == "codex/event" {
                             if let Some(msg) = params.get("msg") {
-                                if let Some(msg_type) = msg.get("type") {
-                                    if msg_type == "session_configured" {
-                                        if let Some(session_id) = msg.get("session_id") {
-                                            return Ok(session_id
-                                                .to_string()
-                                                .trim_matches('"')
-                                                .to_string());
-                                        }
+                                if msg.get("type").and_then(|v| v.as_str())
+                                    == Some("session_configured")
+                                {
+                                    if let Some(session_id) =
+                                        msg.get("session_id").and_then(|v| v.as_str())
+                                    {
+                                        sid_old = Some(session_id.to_string());
                                     }
                                 }
                             }
                         }
+                        // New schema: method is the Display of EventMsg::SessionConfigured => "SessionConfigured"
+                        if notification.method == "session_configured" {
+                            if let Some(msg) = params.get("msg") {
+                                if let Some(session_id) =
+                                    msg.get("session_id").and_then(|v| v.as_str())
+                                {
+                                    sid_new = Some(session_id.to_string());
+                                }
+                            }
+                        }
+                    }
+
+                    if sid_old.is_some() && sid_new.is_some() {
+                        // Both seen, they must match
+                        assert_eq!(
+                            sid_old.as_ref().unwrap(),
+                            sid_new.as_ref().unwrap(),
+                            "session_id mismatch between old and new schema"
+                        );
+                        return Ok(sid_old.unwrap());
                     }
                 }
                 JSONRPCMessage::Request(_) => {
@@ -312,8 +390,6 @@ impl McpProcess {
         }
     }
 
-    // allow dead code
-    #[allow(dead_code)]
     pub async fn send_notification(
         &mut self,
         method: &str,

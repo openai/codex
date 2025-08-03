@@ -21,10 +21,14 @@ pub(crate) async fn chatgpt_get_request<T: DeserializeOwned>(
     let token =
         get_chatgpt_token_data().ok_or_else(|| anyhow::anyhow!("ChatGPT token not available"))?;
 
+    let account_id = token.account_id.ok_or_else(|| {
+        anyhow::anyhow!("ChatGPT account ID not available, please re-run `codex login`")
+    });
+
     let response = client
         .get(&url)
         .bearer_auth(&token.access_token)
-        .header("chatgpt-account-id", &token.account_id)
+        .header("chatgpt-account-id", account_id?)
         .header("Content-Type", "application/json")
         .header("User-Agent", "codex-cli")
         .send()

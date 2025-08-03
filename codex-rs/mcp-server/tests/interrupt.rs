@@ -1,9 +1,9 @@
 #![cfg(unix)]
-mod common;
+// Support code lives in the `mcp_test_support` crate under tests/common.
 
 use std::path::Path;
 
-use codex_core::exec::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_mcp_server::CodexToolCallParam;
 use mcp_types::JSONRPCResponse;
 use mcp_types::RequestId;
@@ -11,9 +11,9 @@ use serde_json::json;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-use crate::common::McpProcess;
-use crate::common::create_mock_chat_completions_server;
-use crate::common::create_shell_sse_response;
+use mcp_test_support::McpProcess;
+use mcp_test_support::create_mock_chat_completions_server;
+use mcp_test_support::create_shell_sse_response;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
@@ -81,6 +81,7 @@ async fn shell_command_interruption() -> anyhow::Result<()> {
             sandbox: None,
             config: None,
             base_instructions: None,
+            include_plan_tool: None,
         })
         .await?;
 

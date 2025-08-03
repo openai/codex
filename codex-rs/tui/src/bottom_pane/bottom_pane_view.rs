@@ -4,6 +4,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
 use super::BottomPane;
+use super::CancellationEvent;
 
 /// Type to use for a method that may require a redraw of the UI.
 pub(crate) enum ConditionalUpdate {
@@ -22,8 +23,13 @@ pub(crate) trait BottomPaneView<'a> {
         false
     }
 
-    /// Height required to render the view.
-    fn calculate_required_height(&self, area: &Rect) -> u16;
+    /// Handle Ctrl-C while this view is active.
+    fn on_ctrl_c(&mut self, _pane: &mut BottomPane<'a>) -> CancellationEvent {
+        CancellationEvent::Ignored
+    }
+
+    /// Return the desired height of the view.
+    fn desired_height(&self, width: u16) -> u16;
 
     /// Render the view: this will be displayed in place of the composer.
     fn render(&self, area: Rect, buf: &mut Buffer);

@@ -95,6 +95,12 @@ codex login
 
 If you complete the process successfully, you should have a `~/.codex/auth.json` file that contains the credentials that Codex will use.
 
+To verify whether you are currently logged in, run:
+
+```
+codex login status
+```
+
 If you encounter problems with the login flow, please comment on <https://github.com/openai/codex/issues/1243>.
 
 <details>

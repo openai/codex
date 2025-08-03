@@ -13,9 +13,11 @@ pub enum SlashCommand {
     // DO NOT ALPHA-SORT! Enum order is presentation order in the popup, so
     // more frequently used commands should be listed first.
     New,
+    Compact,
     Diff,
     Quit,
-    ToggleMouseMode,
+    #[cfg(debug_assertions)]
+    TestApproval,
 }
 
 impl SlashCommand {
@@ -23,13 +25,13 @@ impl SlashCommand {
     pub fn description(self) -> &'static str {
         match self {
             SlashCommand::New => "Start a new chat.",
-            SlashCommand::ToggleMouseMode => {
-                "Toggle mouse mode (enable for scrolling, disable for text selection)"
-            }
+            SlashCommand::Compact => "Compact the chat history.",
             SlashCommand::Quit => "Exit the application.",
             SlashCommand::Diff => {
                 "Show git diff of the working directory (including untracked files)"
             }
+            #[cfg(debug_assertions)]
+            SlashCommand::TestApproval => "Test approval request",
         }
     }
 

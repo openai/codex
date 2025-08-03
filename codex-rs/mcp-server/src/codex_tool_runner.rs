@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use codex_core::Codex;
+use codex_core::codex_wrapper::CodexConversation;
 use codex_core::codex_wrapper::init_codex;
 use codex_core::config::Config as CodexConfig;
 use codex_core::protocol::AgentMessageEvent;
@@ -26,6 +27,7 @@ use uuid::Uuid;
 
 use crate::exec_approval::handle_exec_approval_request;
 use crate::outgoing_message::OutgoingMessageSender;
+use crate::outgoing_message::OutgoingNotificationMeta;
 use crate::patch_approval::handle_patch_approval_request;
 
 pub(crate) const INVALID_PARAMS_ERROR_CODE: i64 = -32602;
@@ -42,7 +44,12 @@ pub async fn run_codex_tool_session(
     session_map: Arc<Mutex<HashMap<Uuid, Arc<Codex>>>>,
     running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, Uuid>>>,
 ) {
-    let (codex, first_event, _ctrl_c, session_id) = match init_codex(config).await {
+    let CodexConversation {
+        codex,
+        session_configured,
+        session_id,
+        ..
+    } = match init_codex(config).await {
         Ok(res) => res,
         Err(e) => {
             let result = CallToolResult {
@@ -65,8 +72,12 @@ pub async fn run_codex_tool_session(
     session_map.lock().await.insert(session_id, codex.clone());
     drop(session_map);
 
-    // Send initial SessionConfigured event.
-    outgoing.send_event_as_notification(&first_event).await;
+    outgoing
+        .send_event_as_notification(
+            &session_configured,
+            Some(OutgoingNotificationMeta::new(Some(id.clone()))),
+        )
+        .await;
 
     // Use the original MCP request ID as the `sub_id` for the Codex submission so that
     // any events emitted for this tool-call can be correlated with the
@@ -150,7 +161,12 @@ async fn run_codex_tool_session_inner(
     loop {
         match codex.next_event().await {
             Ok(event) => {
-                outgoing.send_event_as_notification(&event).await;
+                outgoing
+                    .send_event_as_notification(
+                        &event,
+                        Some(OutgoingNotificationMeta::new(Some(request_id.clone()))),
+                    )
+                    .await;
 
                 match event.msg {
                     EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
@@ -242,11 +258,13 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::McpToolCallBegin(_)
                     | EventMsg::McpToolCallEnd(_)
                     | EventMsg::ExecCommandBegin(_)
+                    | EventMsg::ExecCommandOutputDelta(_)
                     | EventMsg::ExecCommandEnd(_)
                     | EventMsg::BackgroundEvent(_)
                     | EventMsg::PatchApplyBegin(_)
                     | EventMsg::PatchApplyEnd(_)
                     | EventMsg::GetHistoryEntryResponse(_)
+                    | EventMsg::PlanUpdate(_)
                     | EventMsg::ShutdownComplete => {
                         // For now, we do not do anything extra for these
                         // events. Note that

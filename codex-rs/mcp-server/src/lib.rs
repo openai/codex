@@ -13,14 +13,18 @@ use tokio::sync::mpsc;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
+use tracing_subscriber::EnvFilter;
 
 mod codex_tool_config;
 mod codex_tool_runner;
+mod conversation_loop;
 mod exec_approval;
 mod json_to_toml;
-mod message_processor;
+pub mod mcp_protocol;
+pub(crate) mod message_processor;
 mod outgoing_message;
 mod patch_approval;
+pub(crate) mod tool_handlers;
 
 use crate::message_processor::MessageProcessor;
 use crate::outgoing_message::OutgoingMessage;
@@ -43,6 +47,7 @@ pub async fn run_main(codex_linux_sandbox_exe: Option<PathBuf>) -> IoResult<()> 
     // control the log level with `RUST_LOG`.
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
+        .with_env_filter(EnvFilter::from_default_env())
         .init();
 
     // Set up channels.

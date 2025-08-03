@@ -34,11 +34,6 @@ pub(crate) struct StatusIndicatorWidget {
     /// time).
     text: String,
 
-    /// Height in terminal rows – matches the height of the textarea at the
-    /// moment the task started so the UI does not jump when we toggle between
-    /// input mode and loading mode.
-    height: u16,
-
     frame_idx: Arc<AtomicUsize>,
     running: Arc<AtomicBool>,
     // Keep one sender alive to prevent the channel from closing while the
@@ -50,7 +45,7 @@ pub(crate) struct StatusIndicatorWidget {
 
 impl StatusIndicatorWidget {
     /// Create a new status indicator and start the animation timer.
-    pub(crate) fn new(app_event_tx: AppEventSender, height: u16) -> Self {
+    pub(crate) fn new(app_event_tx: AppEventSender) -> Self {
         let frame_idx = Arc::new(AtomicUsize::new(0));
         let running = Arc::new(AtomicBool::new(true));
 
@@ -72,16 +67,14 @@ impl StatusIndicatorWidget {
 
         Self {
             text: String::from("waiting for logs…"),
-            height: height.max(3),
             frame_idx,
             running,
             _app_event_tx: app_event_tx,
         }
     }
 
-    /// Preferred height in terminal rows.
-    pub(crate) fn get_height(&self) -> u16 {
-        self.height
+    pub fn desired_height(&self, _width: u16) -> u16 {
+        1
     }
 
     /// Update the line that is displayed in the widget.
@@ -102,8 +95,8 @@ impl WidgetRef for StatusIndicatorWidget {
         let widget_style = Style::default();
         let block = Block::default()
             .padding(Padding::new(1, 0, 0, 0))
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
+            .borders(Borders::LEFT)
+            .border_type(BorderType::QuadrantOutside)
             .border_style(widget_style.dim());
         // Animated 3‑dot pattern inside brackets. The *active* dot is bold
         // white, the others are dim.

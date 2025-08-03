@@ -20,15 +20,15 @@
 use std::time::Duration;
 
 use codex_core::Codex;
+use codex_core::CodexSpawnOk;
 use codex_core::error::CodexErr;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
-mod test_support;
+use core_test_support::load_default_config_for_test;
 use tempfile::TempDir;
-use test_support::load_default_config_for_test;
 use tokio::sync::Notify;
 use tokio::time::timeout;
 
@@ -49,8 +49,8 @@ async fn spawn_codex() -> Result<Codex, CodexErr> {
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider.request_max_retries = Some(2);
     config.model_provider.stream_max_retries = Some(2);
-    let (agent, _init_id, _session_id) =
-        Codex::spawn(config, std::sync::Arc::new(Notify::new())).await?;
+    let CodexSpawnOk { codex: agent, .. } =
+        Codex::spawn(config, None, std::sync::Arc::new(Notify::new())).await?;
 
     Ok(agent)
 }

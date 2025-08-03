@@ -1,11 +1,13 @@
 use codex_core::protocol::TokenUsage;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
-use ratatui::layout::Alignment;
 use ratatui::layout::Rect;
+use ratatui::style::Color;
 use ratatui::style::Style;
+use ratatui::style::Styled;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
+use ratatui::text::Span;
 use ratatui::widgets::BorderType;
 use ratatui::widgets::Borders;
 use ratatui::widgets::Widget;
@@ -22,12 +24,7 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use codex_file_search::FileMatch;
 
-/// Minimum number of visible text rows inside the textarea.
-const MIN_TEXTAREA_ROWS: usize = 1;
-/// Rows consumed by the border.
-const BORDER_LINES: u16 = 2;
-
-const BASE_PLACEHOLDER_TEXT: &str = "send a message";
+const BASE_PLACEHOLDER_TEXT: &str = "...";
 /// If the pasted content exceeds this number of characters, replace it with a
 /// placeholder in the UI.
 const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
@@ -44,6 +41,7 @@ pub(crate) struct ChatComposer<'a> {
     app_event_tx: AppEventSender,
     history: ChatComposerHistory,
     ctrl_c_quit_hint: bool,
+    use_shift_enter_hint: bool,
     dismissed_file_popup_token: Option<String>,
     current_file_query: Option<String>,
     pending_pastes: Vec<(String, String)>,
@@ -57,10 +55,16 @@ enum ActivePopup {
 }
 
 impl ChatComposer<'_> {
-    pub fn new(has_input_focus: bool, app_event_tx: AppEventSender) -> Self {
+    pub fn new(
+        has_input_focus: bool,
+        app_event_tx: AppEventSender,
+        enhanced_keys_supported: bool,
+    ) -> Self {
         let mut textarea = TextArea::default();
         textarea.set_placeholder_text(BASE_PLACEHOLDER_TEXT);
         textarea.set_cursor_line_style(ratatui::style::Style::default());
+
+        let use_shift_enter_hint = enhanced_keys_supported;
 
         let mut this = Self {
             textarea,
@@ -68,12 +72,22 @@ impl ChatComposer<'_> {
             app_event_tx,
             history: ChatComposerHistory::new(),
             ctrl_c_quit_hint: false,
+            use_shift_enter_hint,
             dismissed_file_popup_token: None,
             current_file_query: None,
             pending_pastes: Vec::new(),
         };
         this.update_border(has_input_focus);
         this
+    }
+
+    pub fn desired_height(&self) -> u16 {
+        self.textarea.lines().len().max(1) as u16
+            + match &self.active_popup {
+                ActivePopup::None => 1u16,
+                ActivePopup::Command(c) => c.calculate_required_height(),
+                ActivePopup::File(c) => c.calculate_required_height(),
+            }
     }
 
     /// Returns true if the composer currently contains no user input.
@@ -130,10 +144,6 @@ impl ChatComposer<'_> {
     ) -> bool {
         self.history
             .on_entry_response(log_id, offset, entry, &mut self.textarea)
-    }
-
-    pub fn set_input_focus(&mut self, has_focus: bool) {
-        self.update_border(has_focus);
     }
 
     pub fn handle_paste(&mut self, pasted: String) -> bool {
@@ -469,6 +479,20 @@ impl ChatComposer<'_> {
                 self.textarea.insert_newline();
                 (InputResult::None, true)
             }
+            Input {
+                key: Key::Char('d'),
+                ctrl: true,
+                alt: false,
+                shift: false,
+            } => {
+                self.textarea.input(Input {
+                    key: Key::Delete,
+                    ctrl: false,
+                    alt: false,
+                    shift: false,
+                });
+                (InputResult::None, true)
+            }
             input => self.handle_input_basic(input),
         }
     }
@@ -484,6 +508,17 @@ impl ChatComposer<'_> {
             if self.try_remove_placeholder_at_cursor() {
                 return (InputResult::None, true);
             }
+        }
+
+        if let Input {
+            key: Key::Char('u'),
+            ctrl: true,
+            alt: false,
+            ..
+        } = input
+        {
+            self.textarea.delete_line_by_head();
+            return (InputResult::None, true);
         }
 
         // Normal input handling
@@ -609,57 +644,19 @@ impl ChatComposer<'_> {
         self.dismissed_file_popup_token = None;
     }
 
-    pub fn calculate_required_height(&self, area: &Rect) -> u16 {
-        let rows = self.textarea.lines().len().max(MIN_TEXTAREA_ROWS);
-        let num_popup_rows = match &self.active_popup {
-            ActivePopup::Command(popup) => popup.calculate_required_height(area),
-            ActivePopup::File(popup) => popup.calculate_required_height(area),
-            ActivePopup::None => 0,
-        };
-
-        rows as u16 + BORDER_LINES + num_popup_rows
-    }
-
     fn update_border(&mut self, has_focus: bool) {
-        struct BlockState {
-            right_title: Line<'static>,
-            border_style: Style,
-        }
-
-        let bs = if has_focus {
-            if self.ctrl_c_quit_hint {
-                BlockState {
-                    right_title: Line::from("Ctrl+C to quit").alignment(Alignment::Right),
-                    border_style: Style::default(),
-                }
-            } else {
-                BlockState {
-                    right_title: Line::from("Enter to send | Ctrl+D to quit | Ctrl+J for newline")
-                        .alignment(Alignment::Right),
-                    border_style: Style::default(),
-                }
-            }
+        let border_style = if has_focus {
+            Style::default().fg(Color::Cyan)
         } else {
-            BlockState {
-                right_title: Line::from(""),
-                border_style: Style::default().dim(),
-            }
+            Style::default().dim()
         };
 
         self.textarea.set_block(
             ratatui::widgets::Block::default()
-                .title_bottom(bs.right_title)
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .border_style(bs.border_style),
+                .borders(Borders::LEFT)
+                .border_type(BorderType::QuadrantOutside)
+                .border_style(border_style),
         );
-    }
-
-    pub(crate) fn is_popup_visible(&self) -> bool {
-        match self.active_popup {
-            ActivePopup::Command(_) | ActivePopup::File(_) => true,
-            ActivePopup::None => false,
-        }
     }
 }
 
@@ -667,49 +664,80 @@ impl WidgetRef for &ChatComposer<'_> {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         match &self.active_popup {
             ActivePopup::Command(popup) => {
-                let popup_height = popup.calculate_required_height(&area);
+                let popup_height = popup.calculate_required_height();
 
                 // Split the provided rect so that the popup is rendered at the
-                // *top* and the textarea occupies the remaining space below.
-                let popup_rect = Rect {
+                // **bottom** and the textarea occupies the remaining space above.
+                let popup_height = popup_height.min(area.height);
+                let textarea_rect = Rect {
                     x: area.x,
                     y: area.y,
                     width: area.width,
-                    height: popup_height.min(area.height),
+                    height: area.height.saturating_sub(popup_height),
                 };
-
-                let textarea_rect = Rect {
+                let popup_rect = Rect {
                     x: area.x,
-                    y: area.y + popup_rect.height,
+                    y: area.y + textarea_rect.height,
                     width: area.width,
-                    height: area.height.saturating_sub(popup_rect.height),
+                    height: popup_height,
                 };
 
                 popup.render(popup_rect, buf);
                 self.textarea.render(textarea_rect, buf);
             }
             ActivePopup::File(popup) => {
-                let popup_height = popup.calculate_required_height(&area);
+                let popup_height = popup.calculate_required_height();
 
-                let popup_rect = Rect {
+                let popup_height = popup_height.min(area.height);
+                let textarea_rect = Rect {
                     x: area.x,
                     y: area.y,
                     width: area.width,
-                    height: popup_height.min(area.height),
-                };
-
-                let textarea_rect = Rect {
-                    x: area.x,
-                    y: area.y + popup_rect.height,
-                    width: area.width,
                     height: area.height.saturating_sub(popup_height),
+                };
+                let popup_rect = Rect {
+                    x: area.x,
+                    y: area.y + textarea_rect.height,
+                    width: area.width,
+                    height: popup_height,
                 };
 
                 popup.render(popup_rect, buf);
                 self.textarea.render(textarea_rect, buf);
             }
             ActivePopup::None => {
-                self.textarea.render(area, buf);
+                let mut textarea_rect = area;
+                textarea_rect.height = textarea_rect.height.saturating_sub(1);
+                self.textarea.render(textarea_rect, buf);
+                let mut bottom_line_rect = area;
+                bottom_line_rect.y += textarea_rect.height;
+                bottom_line_rect.height = 1;
+                let key_hint_style = Style::default().fg(Color::Cyan);
+                let hint = if self.ctrl_c_quit_hint {
+                    vec![
+                        Span::from(" "),
+                        "Ctrl+C again".set_style(key_hint_style),
+                        Span::from(" to quit"),
+                    ]
+                } else {
+                    let newline_hint_key = if self.use_shift_enter_hint {
+                        "Shift+⏎"
+                    } else {
+                        "Ctrl+J"
+                    };
+                    vec![
+                        Span::from(" "),
+                        "⏎".set_style(key_hint_style),
+                        Span::from(" send   "),
+                        newline_hint_key.set_style(key_hint_style),
+                        Span::from(" newline   "),
+                        "Ctrl+C".set_style(key_hint_style),
+                        Span::from(" quit"),
+                    ]
+                };
+                Line::from(hint)
+                    .style(Style::default().dim())
+                    .render_ref(bottom_line_rect, buf);
             }
         }
     }
@@ -875,7 +903,7 @@ mod tests {
 
         let (tx, _rx) = std::sync::mpsc::channel();
         let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(true, sender);
+        let mut composer = ChatComposer::new(true, sender, false);
 
         let needs_redraw = composer.handle_paste("hello".to_string());
         assert!(needs_redraw);
@@ -898,7 +926,7 @@ mod tests {
 
         let (tx, _rx) = std::sync::mpsc::channel();
         let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(true, sender);
+        let mut composer = ChatComposer::new(true, sender, false);
 
         let large = "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 10);
         let needs_redraw = composer.handle_paste(large.clone());
@@ -927,7 +955,7 @@ mod tests {
         let large = "y".repeat(LARGE_PASTE_CHAR_THRESHOLD + 1);
         let (tx, _rx) = std::sync::mpsc::channel();
         let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(true, sender);
+        let mut composer = ChatComposer::new(true, sender, false);
 
         composer.handle_paste(large);
         assert_eq!(composer.pending_pastes.len(), 1);
@@ -963,7 +991,7 @@ mod tests {
 
         for (name, input) in test_cases {
             // Create a fresh composer for each test case
-            let mut composer = ChatComposer::new(true, sender.clone());
+            let mut composer = ChatComposer::new(true, sender.clone(), false);
 
             if let Some(text) = input {
                 composer.handle_paste(text);
@@ -1000,7 +1028,7 @@ mod tests {
 
         let (tx, _rx) = std::sync::mpsc::channel();
         let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(true, sender);
+        let mut composer = ChatComposer::new(true, sender, false);
 
         // Define test cases: (paste content, is_large)
         let test_cases = [
@@ -1073,7 +1101,7 @@ mod tests {
 
         let (tx, _rx) = std::sync::mpsc::channel();
         let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(true, sender);
+        let mut composer = ChatComposer::new(true, sender, false);
 
         // Define test cases: (content, is_large)
         let test_cases = [
@@ -1146,7 +1174,7 @@ mod tests {
 
         let (tx, _rx) = std::sync::mpsc::channel();
         let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(true, sender);
+        let mut composer = ChatComposer::new(true, sender, false);
 
         // Define test cases: (cursor_position_from_end, expected_pending_count)
         let test_cases = [

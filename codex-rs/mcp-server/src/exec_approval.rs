@@ -18,7 +18,7 @@ use crate::codex_tool_runner::INVALID_PARAMS_ERROR_CODE;
 
 /// Conforms to [`mcp_types::ElicitRequestParams`] so that it can be used as the
 /// `params` field of an [`ElicitRequest`].
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct ExecApprovalElicitRequestParams {
     // These fields are required so that `params`
     // conforms to ElicitRequestParams.

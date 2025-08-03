@@ -20,6 +20,12 @@ mod command_popup;
 mod file_search_popup;
 mod status_indicator_view;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CancellationEvent {
+    Ignored,
+    Handled,
+}
+
 pub(crate) use chat_composer::ChatComposer;
 pub(crate) use chat_composer::InputResult;
 
@@ -44,18 +50,31 @@ pub(crate) struct BottomPane<'a> {
 pub(crate) struct BottomPaneParams {
     pub(crate) app_event_tx: AppEventSender,
     pub(crate) has_input_focus: bool,
+    pub(crate) enhanced_keys_supported: bool,
 }
 
 impl BottomPane<'_> {
     pub fn new(params: BottomPaneParams) -> Self {
+        let enhanced_keys_supported = params.enhanced_keys_supported;
         Self {
-            composer: ChatComposer::new(params.has_input_focus, params.app_event_tx.clone()),
+            composer: ChatComposer::new(
+                params.has_input_focus,
+                params.app_event_tx.clone(),
+                enhanced_keys_supported,
+            ),
             active_view: None,
             app_event_tx: params.app_event_tx,
             has_input_focus: params.has_input_focus,
             is_task_running: false,
             ctrl_c_quit_hint: false,
         }
+    }
+
+    pub fn desired_height(&self, width: u16) -> u16 {
+        self.active_view
+            .as_ref()
+            .map(|v| v.desired_height(width))
+            .unwrap_or(self.composer.desired_height())
     }
 
     /// Forward a key event to the active view or the composer.
@@ -65,10 +84,8 @@ impl BottomPane<'_> {
             if !view.is_complete() {
                 self.active_view = Some(view);
             } else if self.is_task_running {
-                let height = self.composer.calculate_required_height(&Rect::default());
                 self.active_view = Some(Box::new(StatusIndicatorView::new(
                     self.app_event_tx.clone(),
-                    height,
                 )));
             }
             self.request_redraw();
@@ -80,6 +97,33 @@ impl BottomPane<'_> {
             }
             input_result
         }
+    }
+
+    /// Handle Ctrl-C in the bottom pane. If a modal view is active it gets a
+    /// chance to consume the event (e.g. to dismiss itself).
+    pub(crate) fn on_ctrl_c(&mut self) -> CancellationEvent {
+        let mut view = match self.active_view.take() {
+            Some(view) => view,
+            None => return CancellationEvent::Ignored,
+        };
+
+        let event = view.on_ctrl_c(self);
+        match event {
+            CancellationEvent::Handled => {
+                if !view.is_complete() {
+                    self.active_view = Some(view);
+                } else if self.is_task_running {
+                    self.active_view = Some(Box::new(StatusIndicatorView::new(
+                        self.app_event_tx.clone(),
+                    )));
+                }
+                self.show_ctrl_c_quit_hint();
+            }
+            CancellationEvent::Ignored => {
+                self.active_view = Some(view);
+            }
+        }
+        event
     }
 
     pub fn handle_paste(&mut self, pasted: String) {
@@ -104,12 +148,6 @@ impl BottomPane<'_> {
                 }
             }
         }
-    }
-
-    /// Update the UI to reflect whether this `BottomPane` has input focus.
-    pub(crate) fn set_input_focus(&mut self, has_focus: bool) {
-        self.has_input_focus = has_focus;
-        self.composer.set_input_focus(has_focus);
     }
 
     pub(crate) fn show_ctrl_c_quit_hint(&mut self) {
@@ -138,10 +176,8 @@ impl BottomPane<'_> {
         match (running, self.active_view.is_some()) {
             (true, false) => {
                 // Show status indicator overlay.
-                let height = self.composer.calculate_required_height(&Rect::default());
                 self.active_view = Some(Box::new(StatusIndicatorView::new(
                     self.app_event_tx.clone(),
-                    height,
                 )));
                 self.request_redraw();
             }
@@ -203,21 +239,8 @@ impl BottomPane<'_> {
     }
 
     /// Height (terminal rows) required by the current bottom pane.
-    pub fn calculate_required_height(&self, area: &Rect) -> u16 {
-        if let Some(view) = &self.active_view {
-            view.calculate_required_height(area)
-        } else {
-            self.composer.calculate_required_height(area)
-        }
-    }
-
     pub(crate) fn request_redraw(&self) {
         self.app_event_tx.send(AppEvent::RequestRedraw)
-    }
-
-    /// Returns true when a popup inside the composer is visible.
-    pub(crate) fn is_popup_visible(&self) -> bool {
-        self.active_view.is_none() && self.composer.is_popup_visible()
     }
 
     // --- History helpers ---
@@ -255,5 +278,37 @@ impl WidgetRef for &BottomPane<'_> {
         } else {
             (&self.composer).render_ref(area, buf);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_event::AppEvent;
+    use std::path::PathBuf;
+    use std::sync::mpsc::channel;
+
+    fn exec_request() -> ApprovalRequest {
+        ApprovalRequest::Exec {
+            id: "1".to_string(),
+            command: vec!["echo".into(), "ok".into()],
+            cwd: PathBuf::from("."),
+            reason: None,
+        }
+    }
+
+    #[test]
+    fn ctrl_c_on_modal_consumes_and_shows_quit_hint() {
+        let (tx_raw, _rx) = channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+        });
+        pane.push_approval_request(exec_request());
+        assert_eq!(CancellationEvent::Handled, pane.on_ctrl_c());
+        assert!(pane.ctrl_c_quit_hint_visible());
+        assert_eq!(CancellationEvent::Ignored, pane.on_ctrl_c());
     }
 }

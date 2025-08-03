@@ -41,11 +41,13 @@ pub fn assess_patch_safety(
         }
     }
 
-    if is_write_patch_constrained_to_writable_paths(action, writable_roots, cwd) {
-        SafetyCheck::AutoApprove {
-            sandbox_type: SandboxType::None,
-        }
-    } else if policy == AskForApproval::OnFailure {
+    // Even though the patch *appears* to be constrained to writable paths, it
+    // is possible that paths in the patch are hard links to files outside the
+    // writable roots, so we should still run `apply_patch` in a sandbox in that
+    // case.
+    if is_write_patch_constrained_to_writable_paths(action, writable_roots, cwd)
+        || policy == AskForApproval::OnFailure
+    {
         // Only auto‑approve when we can actually enforce a sandbox. Otherwise
         // fall back to asking the user because the patch may touch arbitrary
         // paths outside the project.
@@ -75,9 +77,6 @@ pub fn assess_command_safety(
     sandbox_policy: &SandboxPolicy,
     approved: &HashSet<Vec<String>>,
 ) -> SafetyCheck {
-    use AskForApproval::*;
-    use SandboxPolicy::*;
-
     // A command is "trusted" because either:
     // - it belongs to a set of commands we consider "safe" by default, or
     // - the user has explicitly approved the command for this session
@@ -96,6 +95,16 @@ pub fn assess_command_safety(
             sandbox_type: SandboxType::None,
         };
     }
+
+    assess_safety_for_untrusted_command(approval_policy, sandbox_policy)
+}
+
+pub(crate) fn assess_safety_for_untrusted_command(
+    approval_policy: AskForApproval,
+    sandbox_policy: &SandboxPolicy,
+) -> SafetyCheck {
+    use AskForApproval::*;
+    use SandboxPolicy::*;
 
     match (approval_policy, sandbox_policy) {
         (UnlessTrusted, _) => {

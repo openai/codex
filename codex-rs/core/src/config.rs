@@ -143,6 +143,12 @@ pub struct Config {
 
     /// Experimental rollout resume path (absolute path to .jsonl; undocumented).
     pub experimental_resume: Option<PathBuf>,
+
+    /// Include an experimental plan tool that the model can use to update its current plan and status of each step.
+    pub include_plan_tool: bool,
+
+    /// The value for the `originator` header included with Responses API requests.
+    pub internal_originator: Option<String>,
 }
 
 impl Config {
@@ -333,6 +339,9 @@ pub struct ConfigToml {
 
     /// Experimental path to a file whose contents replace the built-in BASE_INSTRUCTIONS.
     pub experimental_instructions_file: Option<PathBuf>,
+
+    /// The value for the `originator` header included with Responses API requests.
+    pub internal_originator: Option<String>,
 }
 
 impl ConfigToml {
@@ -347,6 +356,7 @@ impl ConfigToml {
                 Some(s) => SandboxPolicy::WorkspaceWrite {
                     writable_roots: s.writable_roots.clone(),
                     network_access: s.network_access,
+                    include_default_writable_roots: true,
                 },
                 None => SandboxPolicy::new_workspace_write_policy(),
             },
@@ -366,6 +376,7 @@ pub struct ConfigOverrides {
     pub config_profile: Option<String>,
     pub codex_linux_sandbox_exe: Option<PathBuf>,
     pub base_instructions: Option<String>,
+    pub include_plan_tool: Option<bool>,
 }
 
 impl Config {
@@ -388,6 +399,7 @@ impl Config {
             config_profile: config_profile_key,
             codex_linux_sandbox_exe,
             base_instructions,
+            include_plan_tool,
         } = overrides;
 
         let config_profile = match config_profile_key.as_ref().or(cfg.profile.as_ref()) {
@@ -465,9 +477,14 @@ impl Config {
 
         let experimental_resume = cfg.experimental_resume;
 
-        let base_instructions = base_instructions.or(Self::get_base_instructions(
+        // Load base instructions override from a file if specified. If the
+        // path is relative, resolve it against the effective cwd so the
+        // behaviour matches other path-like config values.
+        let file_base_instructions = Self::get_base_instructions(
             cfg.experimental_instructions_file.as_ref(),
-        ));
+            &resolved_cwd,
+        )?;
+        let base_instructions = base_instructions.or(file_base_instructions);
 
         let config = Self {
             model,
@@ -518,6 +535,8 @@ impl Config {
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
 
             experimental_resume,
+            include_plan_tool: include_plan_tool.unwrap_or(false),
+            internal_originator: cfg.internal_originator,
         };
         Ok(config)
     }
@@ -539,13 +558,46 @@ impl Config {
         })
     }
 
-    fn get_base_instructions(path: Option<&PathBuf>) -> Option<String> {
-        let path = path.as_ref()?;
+    fn get_base_instructions(
+        path: Option<&PathBuf>,
+        cwd: &Path,
+    ) -> std::io::Result<Option<String>> {
+        let p = match path.as_ref() {
+            None => return Ok(None),
+            Some(p) => p,
+        };
 
-        std::fs::read_to_string(path)
-            .ok()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
+        // Resolve relative paths against the provided cwd to make CLI
+        // overrides consistent regardless of where the process was launched
+        // from.
+        let full_path = if p.is_relative() {
+            cwd.join(p)
+        } else {
+            p.to_path_buf()
+        };
+
+        let contents = std::fs::read_to_string(&full_path).map_err(|e| {
+            std::io::Error::new(
+                e.kind(),
+                format!(
+                    "failed to read experimental instructions file {}: {e}",
+                    full_path.display()
+                ),
+            )
+        })?;
+
+        let s = contents.trim().to_string();
+        if s.is_empty() {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "experimental instructions file is empty: {}",
+                    full_path.display()
+                ),
+            ))
+        } else {
+            Ok(Some(s))
+        }
     }
 }
 
@@ -676,6 +728,7 @@ writable_roots = [
             SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![PathBuf::from("/tmp")],
                 network_access: false,
+                include_default_writable_roots: true,
             },
             sandbox_workspace_write_cfg.derive_sandbox_policy(sandbox_mode_override)
         );
@@ -751,7 +804,7 @@ disable_response_storage = true
 
         let openai_chat_completions_provider = ModelProviderInfo {
             name: "OpenAI using Chat Completions".to_string(),
-            base_url: "https://api.openai.com/v1".to_string(),
+            base_url: Some("https://api.openai.com/v1".to_string()),
             env_key: Some("OPENAI_API_KEY".to_string()),
             wire_api: crate::WireApi::Chat,
             env_key_instructions: None,
@@ -761,6 +814,7 @@ disable_response_storage = true
             request_max_retries: Some(4),
             stream_max_retries: Some(10),
             stream_idle_timeout_ms: Some(300_000),
+            requires_auth: false,
         };
         let model_provider_map = {
             let mut model_provider_map = built_in_model_providers();
@@ -791,7 +845,7 @@ disable_response_storage = true
     ///
     /// 1. custom command-line argument, e.g. `--model o3`
     /// 2. as part of a profile, where the `--profile` is specified via a CLI
-    ///    (or in the config file itelf)
+    ///    (or in the config file itself)
     /// 3. as an entry in `config.toml`, e.g. `model = "o3"`
     /// 4. the default value for a required field defined in code, e.g.,
     ///    `crate::flags::OPENAI_DEFAULT_MODEL`
@@ -841,6 +895,8 @@ disable_response_storage = true
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
                 experimental_resume: None,
                 base_instructions: None,
+                include_plan_tool: false,
+                internal_originator: None,
             },
             o3_profile_config
         );
@@ -889,6 +945,8 @@ disable_response_storage = true
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             experimental_resume: None,
             base_instructions: None,
+            include_plan_tool: false,
+            internal_originator: None,
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -952,6 +1010,8 @@ disable_response_storage = true
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             experimental_resume: None,
             base_instructions: None,
+            include_plan_tool: false,
+            internal_originator: None,
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);

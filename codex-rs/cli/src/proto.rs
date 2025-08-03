@@ -4,10 +4,12 @@ use std::sync::Arc;
 use clap::Parser;
 use codex_common::CliConfigOverrides;
 use codex_core::Codex;
+use codex_core::CodexSpawnOk;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::protocol::Submission;
 use codex_core::util::notify_on_sigint;
+use codex_login::load_auth;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
 use tracing::error;
@@ -34,8 +36,9 @@ pub async fn run_main(opts: ProtoCli) -> anyhow::Result<()> {
         .map_err(anyhow::Error::msg)?;
 
     let config = Config::load_with_cli_overrides(overrides_vec, ConfigOverrides::default())?;
+    let auth = load_auth(&config.codex_home, true)?;
     let ctrl_c = notify_on_sigint();
-    let (codex, _init_id, _session_id) = Codex::spawn(config, ctrl_c.clone()).await?;
+    let CodexSpawnOk { codex, .. } = Codex::spawn(config, auth, ctrl_c.clone()).await?;
     let codex = Arc::new(codex);
 
     // Task that reads JSON lines from stdin and forwards to Submission Queue

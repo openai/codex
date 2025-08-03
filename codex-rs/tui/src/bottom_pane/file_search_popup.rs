@@ -109,18 +109,14 @@ impl FileSearchPopup {
     }
 
     /// Preferred height (rows) including border.
-    pub(crate) fn calculate_required_height(&self, _area: &Rect) -> u16 {
+    pub(crate) fn calculate_required_height(&self) -> u16 {
         // Row count depends on whether we already have matches. If no matches
         // yet (e.g. initial search or query with no results) reserve a single
         // row so the popup is still visible. When matches are present we show
         // up to MAX_RESULTS regardless of the waiting flag so the list
         // remains stable while a newer search is in-flight.
-        let rows = if self.matches.is_empty() {
-            1
-        } else {
-            self.matches.len().clamp(1, MAX_RESULTS)
-        } as u16;
-        rows + 2 // border
+
+        self.matches.len().clamp(1, MAX_RESULTS) as u16
     }
 }
 
@@ -128,7 +124,14 @@ impl WidgetRef for &FileSearchPopup {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         // Prepare rows.
         let rows: Vec<Row> = if self.matches.is_empty() {
-            vec![Row::new(vec![Cell::from(" no matches ")])]
+            vec![Row::new(vec![
+                Cell::from(if self.waiting {
+                    "(searching …)"
+                } else {
+                    "no matches"
+                })
+                .style(Style::new().add_modifier(Modifier::ITALIC | Modifier::DIM)),
+            ])]
         } else {
             self.matches
                 .iter()
@@ -169,17 +172,12 @@ impl WidgetRef for &FileSearchPopup {
                 .collect()
         };
 
-        let mut title = format!(" @{} ", self.pending_query);
-        if self.waiting {
-            title.push_str(" (searching …)");
-        }
-
         let table = Table::new(rows, vec![Constraint::Percentage(100)])
             .block(
                 Block::default()
-                    .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded)
-                    .title(title),
+                    .borders(Borders::LEFT)
+                    .border_type(BorderType::QuadrantOutside)
+                    .border_style(Style::default().fg(Color::DarkGray)),
             )
             .widths([Constraint::Percentage(100)]);
 
