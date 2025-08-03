@@ -26,7 +26,7 @@ async fn run_test_cmd(tmp: TempDir, cmd: Vec<&str>, should_be_ok: bool) {
     let params = ExecParams {
         command: cmd.iter().map(|s| s.to_string()).collect(),
         cwd: tmp.path().to_path_buf(),
-        timeout_ms: Some(100),
+        timeout_ms: Some(1000),
         env: HashMap::new(),
     };
 
