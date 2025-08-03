@@ -147,4 +147,8 @@ const READ_ONLY_SEATBELT_POLICY = `
   (sysctl-name "kern.version")
   (sysctl-name "sysctl.proc_cputype")
   (sysctl-name-prefix "hw.perflevel")
-)`.trim();
+)
+
+; Added on top of Chrome profile
+; Needed for python multiprocessing on MacOS for the SemLock
+(allow ipc-posix-sem)`.trim();
