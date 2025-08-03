@@ -509,6 +509,10 @@ impl ChatWidget<'_> {
         self.bottom_pane
             .set_token_usage(self.token_usage.clone(), self.config.model_context_window);
     }
+
+    pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
+        self.bottom_pane.cursor_pos(area)
+    }
 }
 
 impl WidgetRef for &ChatWidget<'_> {

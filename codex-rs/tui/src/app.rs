@@ -438,14 +438,15 @@ impl App<'_> {
             );
             self.pending_history_lines.clear();
         }
-        match &mut self.app_state {
+        terminal.draw(|frame| match &mut self.app_state {
             AppState::Chat { widget } => {
-                terminal.draw(|frame| frame.render_widget_ref(&**widget, frame.area()))?;
+                if let Some((x, y)) = widget.cursor_pos(frame.area()) {
+                    frame.set_cursor_position((x, y));
+                }
+                frame.render_widget_ref(&**widget, frame.area())
             }
-            AppState::GitWarning { screen } => {
-                terminal.draw(|frame| frame.render_widget_ref(&*screen, frame.area()))?;
-            }
-        }
+            AppState::GitWarning { screen } => frame.render_widget_ref(&*screen, frame.area()),
+        })?;
         Ok(())
     }
 
