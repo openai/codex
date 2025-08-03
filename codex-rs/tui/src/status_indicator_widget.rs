@@ -57,7 +57,9 @@ impl StatusIndicatorWidget {
             thread::spawn(move || {
                 let mut counter = 0usize;
                 while running_clone.load(Ordering::Relaxed) {
-                    std::thread::sleep(Duration::from_millis(200));
+                    // ~15 frames per cycle across "Working" with padding. At
+                    // ~70ms per frame this yields ≈1.05s per shimmer pass.
+                    std::thread::sleep(Duration::from_millis(100));
                     counter = counter.wrapping_add(1);
                     frame_idx_clone.store(counter, Ordering::Relaxed);
                     app_event_tx_clone.send(AppEvent::RequestRedraw);
@@ -98,46 +100,52 @@ impl WidgetRef for StatusIndicatorWidget {
             .borders(Borders::LEFT)
             .border_type(BorderType::QuadrantOutside)
             .border_style(widget_style.dim());
-        // Animated 3‑dot pattern inside brackets. The *active* dot is bold
-        // white, the others are dim.
-        const DOT_COUNT: usize = 3;
+        // Shimmer animation: pulse a moving gradient across the header text.
+        // We animate the word "Working" by sweeping a bright band across the
+        // characters, leaving the rest of the line subdued.
         let idx = self.frame_idx.load(std::sync::atomic::Ordering::Relaxed);
-        let phase = idx % (DOT_COUNT * 2 - 2);
-        let active = if phase < DOT_COUNT {
-            phase
-        } else {
-            (DOT_COUNT * 2 - 2) - phase
-        };
+        let header_text = "Working";
+        let header_chars: Vec<char> = header_text.chars().collect();
+
+        // Position of the shimmer (moves left->right and loops with padding so
+        // the band can fully leave/enter the word smoothly).
+        let padding = 4usize; // virtual padding around the word for smoother loop
+        let period = header_chars.len() + padding * 2;
+        let pos = idx % period;
+
+        // Width of the bright band (in characters).
+        let band_half_width: f32 = 2.0;
 
         let mut header_spans: Vec<Span<'static>> = Vec::new();
+        for (i, ch) in header_chars.iter().enumerate() {
+            // Map character index into the padded loop space.
+            let i_pos = i as isize + padding as isize;
+            let pos = pos as isize;
+            let dist = (i_pos - pos).abs() as f32;
 
-        header_spans.push(Span::styled(
-            "Working ",
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        ));
-
-        header_spans.push(Span::styled(
-            "[",
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        ));
-
-        for i in 0..DOT_COUNT {
-            let style = if i == active {
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD)
+            // Raised-cosine falloff for smooth pulse within the band.
+            let t = if dist <= band_half_width {
+                // cosine window from 0..pi
+                let x = std::f32::consts::PI * (dist / band_half_width);
+                0.5 * (1.0 + x.cos())
             } else {
-                Style::default().dim()
+                0.0
             };
-            header_spans.push(Span::styled(".", style));
+
+            // Base brightness is dim; add highlight from the pulse.
+            let brightness = 0.4 + 0.6 * t; // 0.4..1.0
+            let level = (brightness * 255.0).clamp(0.0, 255.0) as u8;
+            let color = Color::Rgb(level, level, level);
+
+            header_spans.push(Span::styled(
+                ch.to_string(),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            ));
         }
 
+        // Add a trailing space after the header.
         header_spans.push(Span::styled(
-            "] ",
+            " ",
             Style::default()
                 .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
