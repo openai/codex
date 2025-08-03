@@ -109,6 +109,7 @@ impl TextArea {
         self.wrapped_lines(width).len() as u16
     }
 
+    #[allow(dead_code)]
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         let lines = self.wrapped_lines(area.width);
         lines.iter().enumerate().find_map(|(i, ls)| {
@@ -283,27 +284,27 @@ impl TextArea {
                 code: KeyCode::Home,
                 ..
             } => {
-                self.move_cursor_to_beginning_of_line();
+                self.move_cursor_to_beginning_of_line(false);
             }
             KeyEvent {
                 code: KeyCode::Char('a'),
                 modifiers: KeyModifiers::CONTROL,
                 ..
             } => {
-                self.move_cursor_to_beginning_of_line_or_up();
+                self.move_cursor_to_beginning_of_line(true);
             }
 
             KeyEvent {
                 code: KeyCode::End, ..
             } => {
-                self.move_cursor_to_end_of_line();
+                self.move_cursor_to_end_of_line(false);
             }
             KeyEvent {
                 code: KeyCode::Char('e'),
                 modifiers: KeyModifiers::CONTROL,
                 ..
             } => {
-                self.move_cursor_to_end_of_line_or_down();
+                self.move_cursor_to_end_of_line(true);
             }
             KeyEvent {
                 code: KeyCode::Left,
@@ -424,13 +425,9 @@ impl TextArea {
         }
     }
 
-    pub fn move_cursor_to_beginning_of_line(&mut self) {
-        self.set_cursor(self.beginning_of_current_line());
-    }
-
-    pub fn move_cursor_to_beginning_of_line_or_up(&mut self) {
+    pub fn move_cursor_to_beginning_of_line(&mut self, move_up_at_bol: bool) {
         let bol = self.beginning_of_current_line();
-        if self.cursor_pos == bol {
+        if move_up_at_bol && self.cursor_pos == bol {
             self.set_cursor(self.beginning_of_line(self.cursor_pos.saturating_sub(1)));
         } else {
             self.set_cursor(bol);
@@ -438,14 +435,11 @@ impl TextArea {
         self.preferred_col = None;
     }
 
-    pub fn move_cursor_to_end_of_line(&mut self) {
-        self.set_cursor(self.end_of_current_line());
-    }
-
-    pub fn move_cursor_to_end_of_line_or_down(&mut self) {
+    pub fn move_cursor_to_end_of_line(&mut self, move_down_at_eol: bool) {
         let eol = self.end_of_current_line();
-        if self.cursor_pos == eol {
-            self.set_cursor(self.end_of_line(self.cursor_pos.saturating_add(1)));
+        if move_down_at_eol && self.cursor_pos == eol {
+            let next_pos = (self.cursor_pos.saturating_add(1)).min(self.text.len());
+            self.set_cursor(self.end_of_line(next_pos));
         } else {
             self.set_cursor(eol);
         }
@@ -555,5 +549,281 @@ impl StatefulWidgetRef for &TextArea {
             let s = &self.text[r.start..r.end - 1];
             buf.set_string(area.x, area.y + row as u16, s, Style::default());
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    // crossterm types are intentionally not imported here to avoid unused warnings
+
+    fn ta_with(text: &str) -> TextArea {
+        let mut t = TextArea::new();
+        t.insert_str(text);
+        t
+    }
+
+    #[test]
+    fn insert_and_replace_update_cursor_and_text() {
+        // insert helpers
+        let mut t = ta_with("hello");
+        t.set_cursor(5);
+        t.insert_str("!");
+        assert_eq!(t.text(), "hello!");
+        assert_eq!(t.cursor(), 6);
+
+        t.insert_str_at(0, "X");
+        assert_eq!(t.text(), "Xhello!");
+        assert_eq!(t.cursor(), 7);
+
+        // Insert after the cursor should not move it
+        t.set_cursor(1);
+        let end = t.text().len();
+        t.insert_str_at(end, "Y");
+        assert_eq!(t.text(), "Xhello!Y");
+        assert_eq!(t.cursor(), 1);
+
+        // replace_range cases
+        // 1) cursor before range
+        let mut t = ta_with("abcd");
+        t.set_cursor(1);
+        t.replace_range(2..3, "Z");
+        assert_eq!(t.text(), "abZd");
+        assert_eq!(t.cursor(), 1);
+
+        // 2) cursor inside range
+        let mut t = ta_with("abcd");
+        t.set_cursor(2);
+        t.replace_range(1..3, "Q");
+        assert_eq!(t.text(), "aQd");
+        assert_eq!(t.cursor(), 2);
+
+        // 3) cursor after range with shifted by diff
+        let mut t = ta_with("abcd");
+        t.set_cursor(4);
+        t.replace_range(0..1, "AA");
+        assert_eq!(t.text(), "AAbcd");
+        assert_eq!(t.cursor(), 5);
+    }
+
+    #[test]
+    fn delete_backward_and_forward_edges() {
+        let mut t = ta_with("abc");
+        t.set_cursor(1);
+        t.delete_backward(1);
+        assert_eq!(t.text(), "bc");
+        assert_eq!(t.cursor(), 0);
+
+        // deleting backward at start is a no-op
+        t.set_cursor(0);
+        t.delete_backward(1);
+        assert_eq!(t.text(), "bc");
+        assert_eq!(t.cursor(), 0);
+
+        // forward delete removes next grapheme
+        t.set_cursor(1);
+        t.delete_forward(1);
+        assert_eq!(t.text(), "b");
+        assert_eq!(t.cursor(), 1);
+
+        // forward delete at end is a no-op
+        t.set_cursor(t.text().len());
+        t.delete_forward(1);
+        assert_eq!(t.text(), "b");
+    }
+
+    #[test]
+    fn delete_backward_word_and_kill_line_variants() {
+        // delete backward word at end removes the whole previous word
+        let mut t = ta_with("hello   world  ");
+        t.set_cursor(t.text().len());
+        t.delete_backward_word();
+        assert_eq!(t.text(), "hello   ");
+        assert_eq!(t.cursor(), 8);
+
+        // From inside a word, delete from word start to cursor
+        let mut t = ta_with("foo bar");
+        t.set_cursor(6); // inside "bar" (after 'a')
+        t.delete_backward_word();
+        assert_eq!(t.text(), "foo r");
+        assert_eq!(t.cursor(), 4);
+
+        // From end, delete the last word only
+        let mut t = ta_with("foo bar");
+        t.set_cursor(t.text().len());
+        t.delete_backward_word();
+        assert_eq!(t.text(), "foo ");
+        assert_eq!(t.cursor(), 4);
+
+        // kill_to_end_of_line when not at EOL
+        let mut t = ta_with("abc\ndef");
+        t.set_cursor(1); // on first line, middle
+        t.kill_to_end_of_line();
+        assert_eq!(t.text(), "a\ndef");
+        assert_eq!(t.cursor(), 1);
+
+        // kill_to_end_of_line when at EOL deletes newline
+        let mut t = ta_with("abc\ndef");
+        t.set_cursor(3); // EOL of first line
+        t.kill_to_end_of_line();
+        assert_eq!(t.text(), "abcdef");
+        assert_eq!(t.cursor(), 3);
+
+        // kill_to_beginning_of_line from middle of line
+        let mut t = ta_with("abc\ndef");
+        t.set_cursor(5); // on second line, after 'e'
+        t.kill_to_beginning_of_line();
+        assert_eq!(t.text(), "abc\nef");
+
+        // kill_to_beginning_of_line at beginning of non-first line removes the previous newline
+        let mut t = ta_with("abc\ndef");
+        t.set_cursor(4); // beginning of second line
+        t.kill_to_beginning_of_line();
+        assert_eq!(t.text(), "abcdef");
+        assert_eq!(t.cursor(), 3);
+    }
+
+    #[test]
+    fn cursor_left_and_right_handle_graphemes() {
+        let mut t = ta_with("a👍b");
+        t.set_cursor(t.text().len());
+
+        t.move_cursor_left(); // before 'b'
+        let after_first_left = t.cursor();
+        t.move_cursor_left(); // before '👍'
+        let after_second_left = t.cursor();
+        t.move_cursor_left(); // before 'a'
+        let after_third_left = t.cursor();
+
+        assert!(after_first_left < t.text().len());
+        assert!(after_second_left < after_first_left);
+        assert!(after_third_left < after_second_left);
+
+        // Move right back to end safely
+        t.move_cursor_right();
+        t.move_cursor_right();
+        t.move_cursor_right();
+        assert_eq!(t.cursor(), t.text().len());
+    }
+
+    #[test]
+    fn cursor_vertical_movement_across_lines_and_bounds() {
+        let mut t = ta_with("short\nloooooooooong\nmid");
+        // Place cursor on second line, column 5
+        let second_line_start = 6; // after first '\n'
+        t.set_cursor(second_line_start + 5);
+
+        // Move up: target column preserved, clamped by line length
+        t.move_cursor_up();
+        assert_eq!(t.cursor(), 5); // first line has len 5
+
+        // Move up again goes to start of text
+        t.move_cursor_up();
+        assert_eq!(t.cursor(), 0);
+
+        // Move down: from start to target col tracked
+        t.move_cursor_down();
+        // On first move down, we should land on second line, at col 0 (target col remembered as 0)
+        let pos_after_down = t.cursor();
+        assert!(pos_after_down >= second_line_start);
+
+        // Move down again to third line; clamp to its length
+        t.move_cursor_down();
+        let third_line_start = t.text().find("mid").unwrap();
+        let third_line_end = third_line_start + 3;
+        assert!(t.cursor() >= third_line_start && t.cursor() <= third_line_end);
+
+        // Moving down at last line jumps to end
+        t.move_cursor_down();
+        assert_eq!(t.cursor(), t.text().len());
+    }
+
+    #[test]
+    fn home_end_and_emacs_style_home_end() {
+        let mut t = ta_with("one\ntwo\nthree");
+        // Position at middle of second line
+        let second_line_start = t.text().find("two").unwrap();
+        t.set_cursor(second_line_start + 1);
+
+        t.move_cursor_to_beginning_of_line(false);
+        assert_eq!(t.cursor(), second_line_start);
+
+        // Ctrl-A behavior: if at BOL, go to beginning of previous line
+        t.move_cursor_to_beginning_of_line(true);
+        assert_eq!(t.cursor(), 0); // beginning of first line
+
+        // Move to EOL of first line
+        t.move_cursor_to_end_of_line(false);
+        assert_eq!(t.cursor(), 3);
+
+        // Ctrl-E: if at EOL, go to end of next line
+        t.move_cursor_to_end_of_line(true);
+        // end of second line ("two") is right before its '\n'
+        let end_second_nl = t.text().find("\nthree").unwrap();
+        assert_eq!(t.cursor(), end_second_nl);
+    }
+
+    #[test]
+    fn end_of_line_or_down_at_end_of_text() {
+        let mut t = ta_with("one\ntwo");
+        // Place cursor at absolute end of the text
+        t.set_cursor(t.text().len());
+        // Should remain at end without panicking
+        t.move_cursor_to_end_of_line(true);
+        assert_eq!(t.cursor(), t.text().len());
+
+        // Also verify behavior when at EOL of a non-final line:
+        let eol_first_line = 3; // index of '\n' in "one\ntwo"
+        t.set_cursor(eol_first_line);
+        t.move_cursor_to_end_of_line(true);
+        assert_eq!(t.cursor(), t.text().len()); // moves to end of next (last) line
+    }
+
+    #[test]
+    fn word_navigation_helpers() {
+        let t = ta_with("  alpha  beta   gamma");
+        let mut t = t; // make mutable for set_cursor
+        // Put cursor after "alpha"
+        let after_alpha = t.text().find("alpha").unwrap() + "alpha".len();
+        t.set_cursor(after_alpha);
+        assert_eq!(t.beginning_of_previous_word(), 2); // skip initial spaces
+
+        // Put cursor at start of beta
+        let beta_start = t.text().find("beta").unwrap();
+        t.set_cursor(beta_start);
+        assert_eq!(t.end_of_next_word(), beta_start + "beta".len());
+
+        // If at end, end_of_next_word returns len
+        t.set_cursor(t.text().len());
+        assert_eq!(t.end_of_next_word(), t.text().len());
+    }
+
+    #[test]
+    fn wrapping_and_cursor_positions() {
+        let mut t = ta_with("hello world here");
+        let area = Rect::new(0, 0, 6, 10); // width 6 -> wraps words
+        // desired height counts wrapped lines
+        assert!(t.desired_height(area.width) >= 3);
+
+        // Place cursor in "world"
+        let world_start = t.text().find("world").unwrap();
+        t.set_cursor(world_start + 3);
+        let (_x, y) = t.cursor_pos(area).unwrap();
+        assert_eq!(y, 1); // world should be on second wrapped line
+
+        // With state and small height, cursor is mapped onto visible row
+        let mut state = TextAreaState::default();
+        let small_area = Rect::new(0, 0, 6, 1);
+        // First call: cursor not visible -> effective scroll ensures it is
+        let (_x, y) = t.cursor_pos_with_state(small_area, &state).unwrap();
+        assert_eq!(y, 0);
+
+        // Render with state to update actual scroll value
+        let mut buf = Buffer::empty(small_area);
+        ratatui::widgets::StatefulWidgetRef::render_ref(&(&t), small_area, &mut buf, &mut state);
+        // After render, state.scroll should be adjusted so cursor row fits
+        let effective_lines = t.desired_height(small_area.width);
+        assert!(state.scroll < effective_lines);
     }
 }
