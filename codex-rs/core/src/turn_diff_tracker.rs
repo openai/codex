@@ -6,6 +6,7 @@ use std::process::Command;
 
 use anyhow::Context;
 use anyhow::Result;
+use anyhow::anyhow;
 use uuid::Uuid;
 
 use crate::protocol::FileChange;
@@ -28,11 +29,11 @@ struct BaselineFileInfo {
 pub struct TurnDiffTracker {
     /// Map external path -> internal filename (uuid + same extension).
     external_to_temp_name: HashMap<PathBuf, String>,
-    /// Internal filename -> external path as of current accumulated state (after applying all changes).
-    /// This is where renames are tracked.
-    temp_name_to_current_external: HashMap<String, PathBuf>,
     /// Internal filename -> baseline file info.
     baseline_file_info: HashMap<String, BaselineFileInfo>,
+    /// Internal filename -> external path as of current accumulated state (after applying all changes).
+    /// This is where renames are tracked.
+    temp_name_to_current_path: HashMap<String, PathBuf>,
     /// Cache of known git worktree roots to avoid repeated filesystem walks.
     git_root_cache: Vec<PathBuf>,
 }
@@ -53,17 +54,22 @@ impl TurnDiffTracker {
                 let internal = uuid_filename_for(path);
                 self.external_to_temp_name
                     .insert(path.clone(), internal.clone());
-                self.temp_name_to_current_external
+                self.temp_name_to_current_path
                     .insert(internal.clone(), path.clone());
 
                 // If the file exists on disk now, snapshot as baseline; else leave missing to represent /dev/null.
                 let (contents_bytes, mode, oid) = if path.exists() {
-                    let contents_bytes = fs::read(path)
-                        .with_context(|| format!("failed to read original {}", path.display()))?;
                     let mode = file_mode_for_path(path);
-                    let oid = self
-                        .git_blob_oid_for_path(path)
-                        .unwrap_or_else(|| git_blob_sha1_hex_bytes(&contents_bytes));
+                    let mode_str = mode.as_deref().unwrap_or(REGULAR_MODE);
+                    let contents_bytes = blob_bytes(path, mode_str)
+                        .unwrap_or_default()
+                        .unwrap_or_default();
+                    let oid = if mode.as_deref() == Some(SYMLINK_MODE) {
+                        git_blob_sha1_hex_bytes(&contents_bytes)
+                    } else {
+                        self.git_blob_oid_for_path(path)
+                            .unwrap_or_else(|| git_blob_sha1_hex_bytes(&contents_bytes))
+                    };
                     (Some(contents_bytes), mode, Some(oid))
                 } else {
                     (None, None, Some(ZERO_OID.to_string()))
@@ -91,8 +97,6 @@ impl TurnDiffTracker {
                     None => {
                         // This should be rare, but if we haven't mapped the source, create it with no baseline.
                         let i = uuid_filename_for(path);
-                        self.external_to_temp_name.insert(path.clone(), i.clone());
-                        // No on-disk file read here; treat as addition.
                         self.baseline_file_info.insert(
                             i.clone(),
                             BaselineFileInfo {
@@ -106,7 +110,7 @@ impl TurnDiffTracker {
                     }
                 };
                 // Update current external mapping for temp file name.
-                self.temp_name_to_current_external
+                self.temp_name_to_current_path
                     .insert(uuid_filename.clone(), dest.clone());
                 // Update forward file_mapping: external current -> internal name.
                 self.external_to_temp_name.remove(path);
@@ -119,7 +123,7 @@ impl TurnDiffTracker {
     }
 
     fn get_path_for_internal(&self, internal: &str) -> Option<PathBuf> {
-        self.temp_name_to_current_external
+        self.temp_name_to_current_path
             .get(internal)
             .cloned()
             .or_else(|| {
@@ -241,22 +245,21 @@ impl TurnDiffTracker {
                 None => continue,
             };
 
+            // Determine modes early; needed to read symlink content correctly.
+            let baseline_mode = self
+                .baseline_file_info
+                .get(&internal)
+                .and_then(|i| i.mode.clone())
+                .unwrap_or_else(|| REGULAR_MODE.to_string());
+            let current_mode =
+                file_mode_for_path(&current_external).unwrap_or_else(|| REGULAR_MODE.to_string());
+
             let left_bytes = self
                 .baseline_file_info
                 .get(&internal)
                 .and_then(|i| i.contents_bytes.clone());
 
-            let right_bytes = if current_external.exists() {
-                let contents = fs::read(&current_external).with_context(|| {
-                    format!(
-                        "failed to read current file for diff {}",
-                        current_external.display()
-                    )
-                })?;
-                Some(contents)
-            } else {
-                None
-            };
+            let right_bytes = blob_bytes(&current_external, &current_mode)?;
 
             // Fast path: identical bytes or both missing.
             if left_bytes.as_deref() == right_bytes.as_deref() {
@@ -271,15 +274,6 @@ impl TurnDiffTracker {
 
             let is_add = left_bytes.is_none() && right_bytes.is_some();
             let is_delete = left_bytes.is_some() && right_bytes.is_none();
-
-            // Determine modes.
-            let baseline_mode = self
-                .baseline_file_info
-                .get(&internal)
-                .and_then(|i| i.mode.clone())
-                .unwrap_or_else(|| "100644".to_string());
-            let current_mode =
-                file_mode_for_path(&current_external).unwrap_or_else(|| "100644".to_string());
 
             if is_add {
                 aggregated.push_str(&format!("new file mode {current_mode}\n"));
@@ -304,8 +298,12 @@ impl TurnDiffTracker {
                 })
                 .unwrap_or_else(|| ZERO_OID.to_string());
             let right_oid = if let Some(b) = right_bytes.as_ref() {
-                self.git_blob_oid_for_path(&current_external)
-                    .unwrap_or_else(|| git_blob_sha1_hex_bytes(b))
+                if current_mode == SYMLINK_MODE {
+                    git_blob_sha1_hex_bytes(b)
+                } else {
+                    self.git_blob_oid_for_path(&current_external)
+                        .unwrap_or_else(|| git_blob_sha1_hex_bytes(b))
+                }
             } else {
                 ZERO_OID.to_string()
             };
@@ -396,8 +394,6 @@ fn uuid_filename_for(path: &Path) -> String {
     }
 }
 
-const ZERO_OID: &str = "0000000000000000000000000000000000000000";
-
 /// Compute the Git SHA-1 blob object ID for the given content (bytes).
 fn git_blob_sha1_hex_bytes(data: &[u8]) -> String {
     // Git blob hash is sha1 of: "blob <len>\0<data>"
@@ -415,26 +411,60 @@ fn git_blob_sha1_hex_bytes(data: &[u8]) -> String {
     out
 }
 
+const ZERO_OID: &str = "0000000000000000000000000000000000000000";
+const REGULAR_MODE: &str = "100644";
+const EXECUTABLE_MODE: &str = "100755";
+const SYMLINK_MODE: &str = "120000";
+
+#[cfg(unix)]
 fn file_mode_for_path(path: &Path) -> Option<String> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let meta = fs::metadata(path).ok()?;
-        let mode = meta.permissions().mode();
-        let is_exec = (mode & 0o111) != 0;
-        Some(if is_exec {
-            "100755".to_string()
+    use std::os::unix::fs::PermissionsExt;
+    let meta = fs::symlink_metadata(path).ok()?;
+    let ft = meta.file_type();
+    if ft.is_symlink() {
+        return Some(SYMLINK_MODE.to_string());
+    }
+    let mode = meta.permissions().mode();
+    let is_exec = (mode & 0o111) != 0;
+    Some(if is_exec {
+        EXECUTABLE_MODE.into()
+    } else {
+        REGULAR_MODE.into()
+    })
+}
+
+#[cfg(not(unix))]
+fn file_mode_for_path(_path: &Path) -> Option<String> {
+    // Default to non-executable on non-unix.
+    Some(REGULAR_MODE.to_string())
+}
+
+fn blob_bytes(path: &Path, mode: &str) -> Result<Option<Vec<u8>>> {
+    if path.exists() {
+        let contents = if mode == SYMLINK_MODE {
+            symlink_blob_bytes(path)
+                .ok_or_else(|| anyhow!("failed to read symlink target for {}", path.display()))?
         } else {
-            "100644".to_string()
-        })
+            fs::read(path).with_context(|| {
+                format!("failed to read current file for diff {}", path.display())
+            })?
+        };
+        Ok(Some(contents))
+    } else {
+        Ok(None)
     }
-    #[cfg(not(unix))]
-    {
-        // Suppress unused variable warning
-        let _ = path;
-        // Default to non-executable on non-unix.
-        Some("100644".to_string())
-    }
+}
+
+#[cfg(unix)]
+fn symlink_blob_bytes(path: &Path) -> Option<Vec<u8>> {
+    use std::os::unix::ffi::OsStrExt;
+    let target = std::fs::read_link(path).ok()?;
+    Some(target.as_os_str().as_bytes().to_vec())
+}
+
+#[cfg(not(unix))]
+fn symlink_blob_bytes(_path: &Path) -> Option<Vec<u8>> {
+    None
 }
 
 #[cfg(windows)]
@@ -508,7 +538,7 @@ mod tests {
         let first = acc.get_unified_diff().unwrap().unwrap();
         let first = normalize_diff_for_test(&first, dir.path());
         let expected_first = {
-            let mode = file_mode_for_path(&file).unwrap_or_else(|| "100644".to_string());
+            let mode = file_mode_for_path(&file).unwrap_or_else(|| REGULAR_MODE.to_string());
             let right_oid = git_blob_sha1_hex("foo\n");
             format!(
                 "diff --git a/<TMP>/a.txt b/<TMP>/a.txt\nnew file mode {mode}\nindex {ZERO_OID}..{right_oid}\n--- /dev/null\n+++ b/<TMP>/a.txt\n@@ -0,0 +1 @@\n+foo\n",
@@ -531,7 +561,7 @@ mod tests {
         let combined = acc.get_unified_diff().unwrap().unwrap();
         let combined = normalize_diff_for_test(&combined, dir.path());
         let expected_combined = {
-            let mode = file_mode_for_path(&file).unwrap_or_else(|| "100644".to_string());
+            let mode = file_mode_for_path(&file).unwrap_or_else(|| REGULAR_MODE.to_string());
             let right_oid = git_blob_sha1_hex("foo\nbar\n");
             format!(
                 "diff --git a/<TMP>/a.txt b/<TMP>/a.txt\nnew file mode {mode}\nindex {ZERO_OID}..{right_oid}\n--- /dev/null\n+++ b/<TMP>/a.txt\n@@ -0,0 +1,2 @@\n+foo\n+bar\n",
@@ -551,7 +581,7 @@ mod tests {
         acc.on_patch_begin(&del_changes).unwrap();
 
         // Simulate apply: delete the file from disk.
-        let baseline_mode = file_mode_for_path(&file).unwrap_or_else(|| "100644".to_string());
+        let baseline_mode = file_mode_for_path(&file).unwrap_or_else(|| REGULAR_MODE.to_string());
         fs::remove_file(&file).unwrap();
         let diff = acc.get_unified_diff().unwrap().unwrap();
         let diff = normalize_diff_for_test(&diff, dir.path());
@@ -679,7 +709,7 @@ mod tests {
         let del_b = HashMap::from([(b.clone(), FileChange::Delete)]);
         acc.on_patch_begin(&del_b).unwrap();
         // Simulate apply: delete b.txt.
-        let baseline_mode = file_mode_for_path(&b).unwrap_or_else(|| "100644".to_string());
+        let baseline_mode = file_mode_for_path(&b).unwrap_or_else(|| REGULAR_MODE.to_string());
         fs::remove_file(&b).unwrap();
 
         let combined = acc.get_unified_diff().unwrap().unwrap();
