@@ -842,6 +842,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
+ "chrono",
  "clap",
  "codex-ansi-escape",
  "codex-arg0",
@@ -857,6 +858,7 @@ dependencies = [
  "mcp-types",
  "path-clean",
  "pretty_assertions",
+ "rand 0.8.5",
  "ratatui",
  "ratatui-image",
  "regex-lite",

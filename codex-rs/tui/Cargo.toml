@@ -67,3 +67,5 @@ uuid = "1"
 [dev-dependencies]
 insta = "1.43.1"
 pretty_assertions = "1"
+rand = "0.8"
+chrono = { version = "0.4", features = ["serde"] }

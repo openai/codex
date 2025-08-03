@@ -327,11 +327,47 @@ impl TextArea {
 
     // ####### Input Functions #######
     pub fn delete_backward(&mut self, n: usize) {
-        self.replace_range(self.cursor_pos.saturating_sub(n)..self.cursor_pos, "");
+        if n == 0 || self.cursor_pos == 0 {
+            return;
+        }
+        let mut gc =
+            unicode_segmentation::GraphemeCursor::new(self.cursor_pos, self.text.len(), false);
+        let mut target = self.cursor_pos;
+        for _ in 0..n {
+            match gc.prev_boundary(&self.text, 0) {
+                Ok(Some(b)) => target = b,
+                Ok(None) => {
+                    target = 0;
+                    break;
+                }
+                Err(_) => {
+                    target = target.saturating_sub(1);
+                }
+            }
+        }
+        self.replace_range(target..self.cursor_pos, "");
     }
 
     pub fn delete_forward(&mut self, n: usize) {
-        self.replace_range(self.cursor_pos..self.cursor_pos.saturating_add(n), "");
+        if n == 0 || self.cursor_pos >= self.text.len() {
+            return;
+        }
+        let mut gc =
+            unicode_segmentation::GraphemeCursor::new(self.cursor_pos, self.text.len(), false);
+        let mut target = self.cursor_pos;
+        for _ in 0..n {
+            match gc.next_boundary(&self.text, 0) {
+                Ok(Some(b)) => target = b,
+                Ok(None) => {
+                    target = self.text.len();
+                    break;
+                }
+                Err(_) => {
+                    target = target.saturating_add(1);
+                }
+            }
+        }
+        self.replace_range(self.cursor_pos..target, "");
     }
 
     pub fn delete_backward_word(&mut self) {
@@ -341,7 +377,9 @@ impl TextArea {
     pub fn kill_to_end_of_line(&mut self) {
         let eol = self.end_of_current_line();
         if self.cursor_pos == eol {
-            self.replace_range(self.cursor_pos..eol + 1, "");
+            if eol < self.text.len() {
+                self.replace_range(self.cursor_pos..eol + 1, "");
+            }
         } else {
             self.replace_range(self.cursor_pos..eol, "");
         }
@@ -350,7 +388,9 @@ impl TextArea {
     pub fn kill_to_beginning_of_line(&mut self) {
         let bol = self.beginning_of_current_line();
         if self.cursor_pos == bol {
-            self.replace_range(bol - 1..bol, "");
+            if bol > 0 {
+                self.replace_range(bol - 1..bol, "");
+            }
         } else {
             self.replace_range(bol..self.cursor_pos, "");
         }
@@ -635,6 +675,48 @@ impl StatefulWidgetRef for &TextArea {
 mod tests {
     use super::*;
     // crossterm types are intentionally not imported here to avoid unused warnings
+    use rand::prelude::*;
+
+    fn rand_grapheme(rng: &mut rand::rngs::StdRng) -> String {
+        let r: u8 = rng.gen_range(0..100);
+        match r {
+            0..=4 => "\n".to_string(),
+            5..=12 => " ".to_string(),
+            13..=35 => (rng.gen_range(b'a'..=b'z') as char).to_string(),
+            36..=45 => (rng.gen_range(b'A'..=b'Z') as char).to_string(),
+            46..=52 => (rng.gen_range(b'0'..=b'9') as char).to_string(),
+            53..=65 => {
+                // Some emoji (wide graphemes)
+                let choices = ["👍", "😊", "🐍", "🚀", "🧪", "🌟"];
+                choices[rng.gen_range(0..choices.len())].to_string()
+            }
+            66..=75 => {
+                // CJK wide characters
+                let choices = ["漢", "字", "測", "試", "你", "好", "界", "编", "码"];
+                choices[rng.gen_range(0..choices.len())].to_string()
+            }
+            76..=85 => {
+                // Combining mark sequences
+                let base = ["e", "a", "o", "n", "u"][rng.gen_range(0..5)];
+                let marks = ["\u{0301}", "\u{0308}", "\u{0302}", "\u{0303}"];
+                format!("{}{}", base, marks[rng.gen_range(0..marks.len())])
+            }
+            86..=92 => {
+                // Some non-latin single codepoints (Greek, Cyrillic, Hebrew)
+                let choices = ["Ω", "β", "Ж", "ю", "ש", "م", "ह"];
+                choices[rng.gen_range(0..choices.len())].to_string()
+            }
+            _ => {
+                // ZWJ sequences (single graphemes but multi-codepoint)
+                let choices = [
+                    "👩\u{200D}💻", // woman technologist
+                    "👨\u{200D}💻", // man technologist
+                    "🏳️\u{200D}🌈", // rainbow flag
+                ];
+                choices[rng.gen_range(0..choices.len())].to_string()
+            }
+        }
+    }
 
     fn ta_with(text: &str) -> TextArea {
         let mut t = TextArea::new();
@@ -1072,5 +1154,146 @@ mod tests {
         // Moving up should take us back to the original position
         t.move_cursor_up();
         assert_eq!(t.cursor(), "👍👍".len());
+    }
+
+    #[test]
+    fn fuzz_textarea_randomized() {
+        // Deterministic seed for reproducibility
+        // Seed the RNG based on the current day in Pacific Time (PST/PDT). This
+        // keeps the fuzz test deterministic within a day while still varying
+        // day-to-day to improve coverage.
+        #[allow(clippy::unwrap_used)]
+        let pst_today_seed: u64 = (chrono::Utc::now() - chrono::Duration::hours(8))
+            .date_naive()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp() as u64;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(pst_today_seed);
+
+        for _case in 0..10_000 {
+            let mut ta = TextArea::new();
+            let mut state = TextAreaState::default();
+            // Start with a random base string
+            let base_len = rng.gen_range(0..30);
+            let mut base = String::new();
+            for _ in 0..base_len {
+                base.push_str(&rand_grapheme(&mut rng));
+            }
+            ta.set_text(&base);
+            // Choose a valid char boundary for initial cursor
+            let mut boundaries: Vec<usize> = vec![0];
+            boundaries.extend(ta.text().char_indices().map(|(i, _)| i).skip(1));
+            boundaries.push(ta.text().len());
+            let init = boundaries[rng.gen_range(0..boundaries.len())];
+            ta.set_cursor(init);
+
+            let mut width: u16 = rng.gen_range(1..=12);
+            let mut height: u16 = rng.gen_range(1..=4);
+
+            for _step in 0..200 {
+                // Mostly stable width/height, occasionally change
+                if rng.gen_bool(0.1) {
+                    width = rng.gen_range(1..=12);
+                }
+                if rng.gen_bool(0.1) {
+                    height = rng.gen_range(1..=4);
+                }
+
+                // Pick an operation
+                match rng.gen_range(0..14) {
+                    0 => {
+                        // insert small random string at cursor
+                        let len = rng.gen_range(0..6);
+                        let mut s = String::new();
+                        for _ in 0..len {
+                            s.push_str(&rand_grapheme(&mut rng));
+                        }
+                        ta.insert_str(&s);
+                    }
+                    1 => {
+                        // replace_range with small random slice
+                        let mut b: Vec<usize> = vec![0];
+                        b.extend(ta.text().char_indices().map(|(i, _)| i).skip(1));
+                        b.push(ta.text().len());
+                        let i1 = rng.gen_range(0..b.len());
+                        let i2 = rng.gen_range(0..b.len());
+                        let (start, end) = if b[i1] <= b[i2] {
+                            (b[i1], b[i2])
+                        } else {
+                            (b[i2], b[i1])
+                        };
+                        let insert_len = rng.gen_range(0..=4);
+                        let mut s = String::new();
+                        for _ in 0..insert_len {
+                            s.push_str(&rand_grapheme(&mut rng));
+                        }
+                        let before = ta.text().len();
+                        ta.replace_range(start..end, &s);
+                        let after = ta.text().len();
+                        assert_eq!(
+                            after as isize,
+                            before as isize + (s.len() as isize) - ((end - start) as isize)
+                        );
+                    }
+                    2 => ta.delete_backward(rng.gen_range(0..=3)),
+                    3 => ta.delete_forward(rng.gen_range(0..=3)),
+                    4 => ta.delete_backward_word(),
+                    5 => ta.kill_to_beginning_of_line(),
+                    6 => ta.kill_to_end_of_line(),
+                    7 => ta.move_cursor_left(),
+                    8 => ta.move_cursor_right(),
+                    9 => ta.move_cursor_up(),
+                    10 => ta.move_cursor_down(),
+                    11 => ta.move_cursor_to_beginning_of_line(true),
+                    12 => ta.move_cursor_to_end_of_line(true),
+                    _ => {
+                        // Jump to word boundaries
+                        if rng.gen_bool(0.5) {
+                            let p = ta.beginning_of_previous_word();
+                            ta.set_cursor(p);
+                        } else {
+                            let p = ta.end_of_next_word();
+                            ta.set_cursor(p);
+                        }
+                    }
+                }
+
+                // Sanity invariants
+                assert!(ta.cursor() <= ta.text().len());
+
+                // Render and compute cursor positions; ensure they are in-bounds and do not panic
+                let area = Rect::new(0, 0, width, height);
+                // Stateless render into an area tall enough for all wrapped lines
+                let total_lines = ta.desired_height(width);
+                let full_area = Rect::new(0, 0, width, total_lines.max(1));
+                let mut buf = Buffer::empty(full_area);
+                ratatui::widgets::WidgetRef::render_ref(&(&ta), full_area, &mut buf);
+
+                // cursor_pos: x must be within width when present
+                let _ = ta.cursor_pos(area);
+
+                // cursor_pos_with_state: always within viewport rows
+                let (_x, _y) = ta
+                    .cursor_pos_with_state(area, &state)
+                    .unwrap_or((area.x, area.y));
+
+                // Stateful render should not panic, and updates scroll
+                let mut sbuf = Buffer::empty(area);
+                ratatui::widgets::StatefulWidgetRef::render_ref(
+                    &(&ta),
+                    area,
+                    &mut sbuf,
+                    &mut state,
+                );
+
+                // After wrapping, desired height equals the number of lines we would render without scroll
+                let total_lines = total_lines as usize;
+                // state.scroll must not exceed total_lines when content fits within area height
+                if (height as usize) >= total_lines {
+                    assert_eq!(state.scroll, 0);
+                }
+            }
+        }
     }
 }
