@@ -112,32 +112,27 @@ impl TextArea {
     #[allow(dead_code)]
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         let lines = self.wrapped_lines(area.width);
-        lines.iter().enumerate().find_map(|(i, ls)| {
-            if ls.contains(&self.cursor_pos) {
-                let col = self.text[ls.start..self.cursor_pos].width() as u16;
-                Some((area.x + col, area.y + i as u16))
-            } else {
-                None
-            }
-        })
+        let i = Self::wrapped_line_index_by_start(&lines, self.cursor_pos)?;
+        let ls = &lines[i];
+        let col = self.text[ls.start..self.cursor_pos].width() as u16;
+        Some((area.x + col, area.y + i as u16))
     }
 
     /// Compute the on-screen cursor position taking scrolling into account.
     pub fn cursor_pos_with_state(&self, area: Rect, state: &TextAreaState) -> Option<(u16, u16)> {
         let lines = self.wrapped_lines(area.width);
         let effective_scroll = self.effective_scroll(area.height, &lines, state.scroll);
-        lines.iter().enumerate().find_map(|(i, ls)| {
-            if ls.contains(&self.cursor_pos) {
-                let col = self.text[ls.start..self.cursor_pos].width() as u16;
-                let screen_row = i
-                    .saturating_sub(effective_scroll as usize)
-                    .try_into()
-                    .unwrap_or(0);
-                Some((area.x + col, area.y + screen_row))
-            } else {
-                None
-            }
-        })
+        let i = match Self::wrapped_line_index_by_start(&lines, self.cursor_pos) {
+            Some(i) => i,
+            None => return None,
+        };
+        let ls = &lines[i];
+        let col = self.text[ls.start..self.cursor_pos].width() as u16;
+        let screen_row = i
+            .saturating_sub(effective_scroll as usize)
+            .try_into()
+            .unwrap_or(0);
+        Some((area.x + col, area.y + screen_row))
     }
 
     pub fn is_empty(&self) -> bool {
@@ -147,6 +142,15 @@ impl TextArea {
     fn current_display_col(&self) -> usize {
         let bol = self.beginning_of_current_line();
         self.text[bol..self.cursor_pos].width()
+    }
+
+    fn wrapped_line_index_by_start(lines: &[Range<usize>], pos: usize) -> Option<usize> {
+        lines
+            .iter()
+            .enumerate()
+            .filter(|(_i, r)| pos >= r.start)
+            .map(|(i, _)| i)
+            .last()
     }
 
     fn move_to_display_col_on_line(
@@ -382,6 +386,50 @@ impl TextArea {
     }
 
     pub fn move_cursor_up(&mut self) {
+        // If we have a wrapping cache, prefer navigating across wrapped (visual) lines.
+        if let Some((target_col, maybe_line)) = {
+            let cache_ref = self.wrap_cache.borrow();
+            if let Some(cache) = cache_ref.as_ref() {
+                let lines = &cache.lines;
+                if let Some(idx) = Self::wrapped_line_index_by_start(lines, self.cursor_pos) {
+                    let cur_range = &lines[idx];
+                    let target_col = self
+                        .preferred_col
+                        .unwrap_or_else(|| self.text[cur_range.start..self.cursor_pos].width());
+                    if idx > 0 {
+                        let prev = &lines[idx - 1];
+                        let line_start = prev.start;
+                        let line_end = prev.end.saturating_sub(1);
+                        Some((target_col, Some((line_start, line_end))))
+                    } else {
+                        Some((target_col, None))
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } {
+            // We had wrapping info. Apply movement accordingly.
+            match maybe_line {
+                Some((line_start, line_end)) => {
+                    if self.preferred_col.is_none() {
+                        self.preferred_col = Some(target_col);
+                    }
+                    self.move_to_display_col_on_line(line_start, line_end, target_col);
+                    return;
+                }
+                None => {
+                    // Already at first visual line -> move to start
+                    self.cursor_pos = 0;
+                    self.preferred_col = None;
+                    return;
+                }
+            }
+        }
+
+        // Fallback to logical line navigation if we don't have wrapping info yet.
         if let Some(prev_nl) = self.text[..self.cursor_pos].rfind('\n') {
             let target_col = match self.preferred_col {
                 Some(c) => c,
@@ -401,6 +449,49 @@ impl TextArea {
     }
 
     pub fn move_cursor_down(&mut self) {
+        // If we have a wrapping cache, prefer navigating across wrapped (visual) lines.
+        if let Some((target_col, move_to_last)) = {
+            let cache_ref = self.wrap_cache.borrow();
+            if let Some(cache) = cache_ref.as_ref() {
+                let lines = &cache.lines;
+                if let Some(idx) = Self::wrapped_line_index_by_start(lines, self.cursor_pos) {
+                    let cur_range = &lines[idx];
+                    let target_col = self
+                        .preferred_col
+                        .unwrap_or_else(|| self.text[cur_range.start..self.cursor_pos].width());
+                    if idx + 1 < lines.len() {
+                        let next = &lines[idx + 1];
+                        let line_start = next.start;
+                        let line_end = next.end.saturating_sub(1);
+                        Some((target_col, Some((line_start, line_end))))
+                    } else {
+                        Some((target_col, None))
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } {
+            match move_to_last {
+                Some((line_start, line_end)) => {
+                    if self.preferred_col.is_none() {
+                        self.preferred_col = Some(target_col);
+                    }
+                    self.move_to_display_col_on_line(line_start, line_end, target_col);
+                    return;
+                }
+                None => {
+                    // Already on last visual line -> move to end
+                    self.cursor_pos = self.text.len();
+                    self.preferred_col = None;
+                    return;
+                }
+            }
+        }
+
+        // Fallback to logical line navigation if we don't have wrapping info yet.
         let target_col = match self.preferred_col {
             Some(c) => c,
             None => {
@@ -498,18 +589,10 @@ impl TextArea {
             return 0;
         }
 
-        // Where is the cursor within wrapped lines?
-        let cursor_line_idx = lines
-            .iter()
-            .enumerate()
-            .find_map(|(i, r)| {
-                if r.contains(&self.cursor_pos) {
-                    Some(i as u16)
-                } else {
-                    None
-                }
-            })
-            .unwrap_or(0);
+        // Where is the cursor within wrapped lines? Prefer assigning boundary positions
+        // (where pos equals the start of a wrapped line) to that later line.
+        let cursor_line_idx = Self::wrapped_line_index_by_start(lines, self.cursor_pos)
+            .unwrap_or(0) as u16;
 
         let max_scroll = total_lines.saturating_sub(area_height);
         let mut scroll = current_scroll.min(max_scroll);
@@ -825,5 +908,88 @@ mod tests {
         // After render, state.scroll should be adjusted so cursor row fits
         let effective_lines = t.desired_height(small_area.width);
         assert!(state.scroll < effective_lines);
+    }
+
+    #[test]
+    fn wrapped_navigation_across_visual_lines() {
+        let mut t = ta_with("abcdefghij");
+        // Force wrapping at width 4: lines -> ["abcd", "efgh", "ij"]
+        let _ = t.desired_height(4);
+
+        // From the very start, moving down should go to the start of the next wrapped line (index 4)
+        t.set_cursor(0);
+        t.move_cursor_down();
+        assert_eq!(t.cursor(), 4);
+
+        // Cursor at boundary index 4 should be displayed at start of second wrapped line
+        t.set_cursor(4);
+        let area = Rect::new(0, 0, 4, 10);
+        let (x, y) = t.cursor_pos(area).unwrap();
+        assert_eq!((x, y), (0, 1));
+
+        // With state and small height, cursor should be visible at row 0, col 0
+        let small_area = Rect::new(0, 0, 4, 1);
+        let state = TextAreaState::default();
+        let (x, y) = t.cursor_pos_with_state(small_area, &state).unwrap();
+        assert_eq!((x, y), (0, 0));
+
+        // Place cursor in the middle of the second wrapped line ("efgh"), at 'g'
+        t.set_cursor(6);
+        // Move up should go to same column on previous wrapped line -> index 2 ('c')
+        t.move_cursor_up();
+        assert_eq!(t.cursor(), 2);
+
+        // Move down should return to same position on the next wrapped line -> back to index 6 ('g')
+        t.move_cursor_down();
+        assert_eq!(t.cursor(), 6);
+
+        // Move down again should go to third wrapped line. Target col is 2, but the line has len 2 -> clamp to end
+        t.move_cursor_down();
+        assert_eq!(t.cursor(), t.text().len());
+    }
+
+    #[test]
+    fn wrapped_navigation_with_newlines_and_spaces() {
+        // Include spaces and an explicit newline to exercise boundaries
+        let mut t = ta_with("word1  word2\nword3");
+        // Width 6 will wrap "word1  " and then "word2" before the newline
+        let _ = t.desired_height(6);
+
+        // Put cursor on the second wrapped line before the newline, at column 1 of "word2"
+        let start_word2 = t.text().find("word2").unwrap();
+        t.set_cursor(start_word2 + 1);
+
+        // Up should go to first wrapped line, column 1 -> index 1
+        t.move_cursor_up();
+        assert_eq!(t.cursor(), 1);
+
+        // Down should return to the same visual column on "word2"
+        t.move_cursor_down();
+        assert_eq!(t.cursor(), start_word2 + 1);
+
+        // Down again should cross the logical newline to the next visual line ("word3"), clamped to its length if needed
+        t.move_cursor_down();
+        let start_word3 = t.text().find("word3").unwrap();
+        assert!(t.cursor() >= start_word3 && t.cursor() <= start_word3 + "word3".len());
+    }
+
+    #[test]
+    fn wrapped_navigation_with_wide_graphemes() {
+        // Four thumbs up, each of display width 2, with width 3 to force wrapping inside grapheme boundaries
+        let mut t = ta_with("👍👍👍👍");
+        let _ = t.desired_height(3);
+
+        // Put cursor after the second emoji (which should be on first wrapped line)
+        t.set_cursor("👍👍".len());
+
+        // Move down should go to the start of the next wrapped line (same column preserved but clamped)
+        t.move_cursor_down();
+        // We expect to land somewhere within the third emoji or at the start of it
+        let pos_after_down = t.cursor();
+        assert!(pos_after_down >= "👍👍".len());
+
+        // Moving up should take us back to the original position
+        t.move_cursor_up();
+        assert_eq!(t.cursor(), "👍👍".len());
     }
 }
