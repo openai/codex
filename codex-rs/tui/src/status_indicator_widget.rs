@@ -48,6 +48,8 @@ impl StatusIndicatorWidget {
     pub(crate) fn new(app_event_tx: AppEventSender) -> Self {
         let frame_idx = Arc::new(AtomicUsize::new(0));
         let running = Arc::new(AtomicBool::new(true));
+
+        // Animation thread.
         {
             let frame_idx_clone = Arc::clone(&frame_idx);
             let running_clone = Arc::clone(&running);
@@ -146,8 +148,13 @@ impl WidgetRef for StatusIndicatorWidget {
                 .add_modifier(Modifier::BOLD),
         ));
 
+        // Ensure we do not overflow width.
         let inner_width = block.inner(area).width as usize;
 
+        // Sanitize and colour‑strip the potentially colourful log text.  This
+        // ensures that **no** raw ANSI escape sequences leak into the
+        // back‑buffer which would otherwise cause cursor jumps or stray
+        // artefacts when the terminal is resized.
         let line = ansi_escape_line(&self.text);
         let mut sanitized_tail: String = line
             .spans
@@ -156,6 +163,8 @@ impl WidgetRef for StatusIndicatorWidget {
             .collect::<Vec<_>>()
             .join("");
 
+        // Truncate *after* stripping escape codes so width calculation is
+        // accurate. See UTF‑8 boundary comments above.
         let header_len: usize = header_spans.iter().map(|s| s.content.len()).sum();
 
         if header_len + sanitized_tail.len() > inner_width {
@@ -174,6 +183,9 @@ impl WidgetRef for StatusIndicatorWidget {
 
         let mut spans = header_spans;
 
+        // Re‑apply the DIM modifier so the tail appears visually subdued
+        // irrespective of the colour information preserved by
+        // `ansi_escape_line`.
         spans.push(Span::styled(sanitized_tail, Style::default().dim()));
 
         let paragraph = Paragraph::new(Line::from(spans))
