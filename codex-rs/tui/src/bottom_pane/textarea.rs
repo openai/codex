@@ -111,11 +111,7 @@ impl TextArea {
 
     #[allow(dead_code)]
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        let lines = self.wrapped_lines(area.width);
-        let i = Self::wrapped_line_index_by_start(&lines, self.cursor_pos)?;
-        let ls = &lines[i];
-        let col = self.text[ls.start..self.cursor_pos].width() as u16;
-        Some((area.x + col, area.y + i as u16))
+        self.cursor_pos_with_state(area, &TextAreaState::default())
     }
 
     /// Compute the on-screen cursor position taking scrolling into account.
