@@ -48,8 +48,6 @@ impl StatusIndicatorWidget {
     pub(crate) fn new(app_event_tx: AppEventSender) -> Self {
         let frame_idx = Arc::new(AtomicUsize::new(0));
         let running = Arc::new(AtomicBool::new(true));
-
-        // Animation thread.
         {
             let frame_idx_clone = Arc::clone(&frame_idx);
             let running_clone = Arc::clone(&running);
@@ -57,8 +55,6 @@ impl StatusIndicatorWidget {
             thread::spawn(move || {
                 let mut counter = 0usize;
                 while running_clone.load(Ordering::Relaxed) {
-                    // ~15 frames per cycle across "Working" with padding. At
-                    // ~70ms per frame this yields ≈1.05s per shimmer pass.
                     std::thread::sleep(Duration::from_millis(100));
                     counter = counter.wrapping_add(1);
                     frame_idx_clone.store(counter, Ordering::Relaxed);
@@ -100,50 +96,49 @@ impl WidgetRef for StatusIndicatorWidget {
             .borders(Borders::LEFT)
             .border_type(BorderType::QuadrantOutside)
             .border_style(widget_style.dim());
-        // Shimmer animation: pulse a moving gradient across the header text.
-        // We animate the word "Working" by sweeping a bright band across the
-        // characters, leaving the rest of the line subdued.
         let idx = self.frame_idx.load(std::sync::atomic::Ordering::Relaxed);
         let header_text = "Working";
         let header_chars: Vec<char> = header_text.chars().collect();
 
-        // Position of the shimmer (moves left->right and loops with padding so
-        // the band can fully leave/enter the word smoothly).
         let padding = 4usize; // virtual padding around the word for smoother loop
         let period = header_chars.len() + padding * 2;
         let pos = idx % period;
 
+        let has_true_color = supports_color::on_cached(supports_color::Stream::Stdout)
+            .map(|level| level.has_16m)
+            .unwrap_or(false);
+
         // Width of the bright band (in characters).
-        let band_half_width: f32 = 2.0;
+        let band_half_width = 2.0;
 
         let mut header_spans: Vec<Span<'static>> = Vec::new();
         for (i, ch) in header_chars.iter().enumerate() {
-            // Map character index into the padded loop space.
             let i_pos = i as isize + padding as isize;
             let pos = pos as isize;
             let dist = (i_pos - pos).abs() as f32;
 
-            // Raised-cosine falloff for smooth pulse within the band.
             let t = if dist <= band_half_width {
-                // cosine window from 0..pi
                 let x = std::f32::consts::PI * (dist / band_half_width);
                 0.5 * (1.0 + x.cos())
             } else {
                 0.0
             };
 
-            // Base brightness is dim; add highlight from the pulse.
-            let brightness = 0.4 + 0.6 * t; // 0.4..1.0
+            let brightness = 0.4 + 0.6 * t;
             let level = (brightness * 255.0).clamp(0.0, 255.0) as u8;
-            let color = Color::Rgb(level, level, level);
+            let style = if has_true_color {
+                Style::default()
+                    .fg(Color::Rgb(level, level, level))
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                // Bold makes dark gray and gray look the same, so don't use it
+                // when true color is not supported.
+                Style::default().fg(color_for_level(level))
+            };
 
-            header_spans.push(Span::styled(
-                ch.to_string(),
-                Style::default().fg(color).add_modifier(Modifier::BOLD),
-            ));
+            header_spans.push(Span::styled(ch.to_string(), style));
         }
 
-        // Add a trailing space after the header.
         header_spans.push(Span::styled(
             " ",
             Style::default()
@@ -151,13 +146,8 @@ impl WidgetRef for StatusIndicatorWidget {
                 .add_modifier(Modifier::BOLD),
         ));
 
-        // Ensure we do not overflow width.
         let inner_width = block.inner(area).width as usize;
 
-        // Sanitize and colour‑strip the potentially colourful log text.  This
-        // ensures that **no** raw ANSI escape sequences leak into the
-        // back‑buffer which would otherwise cause cursor jumps or stray
-        // artefacts when the terminal is resized.
         let line = ansi_escape_line(&self.text);
         let mut sanitized_tail: String = line
             .spans
@@ -166,8 +156,6 @@ impl WidgetRef for StatusIndicatorWidget {
             .collect::<Vec<_>>()
             .join("");
 
-        // Truncate *after* stripping escape codes so width calculation is
-        // accurate. See UTF‑8 boundary comments above.
         let header_len: usize = header_spans.iter().map(|s| s.content.len()).sum();
 
         if header_len + sanitized_tail.len() > inner_width {
@@ -186,14 +174,21 @@ impl WidgetRef for StatusIndicatorWidget {
 
         let mut spans = header_spans;
 
-        // Re‑apply the DIM modifier so the tail appears visually subdued
-        // irrespective of the colour information preserved by
-        // `ansi_escape_line`.
         spans.push(Span::styled(sanitized_tail, Style::default().dim()));
 
         let paragraph = Paragraph::new(Line::from(spans))
             .block(block)
             .alignment(Alignment::Left);
         paragraph.render_ref(area, buf);
+    }
+}
+
+fn color_for_level(level: u8) -> Color {
+    if level < 128 {
+        Color::DarkGray
+    } else if level < 192 {
+        Color::Gray
+    } else {
+        Color::White
     }
 }
