@@ -73,6 +73,9 @@ impl TextArea {
         let end = range.end.clamp(0, self.text.len());
         let removed_len = end - start;
         let inserted_len = text.len();
+        if removed_len == 0 && inserted_len == 0 {
+            return;
+        }
         let diff = inserted_len as isize - removed_len as isize;
 
         self.text.replace_range(range, text);
@@ -162,21 +165,24 @@ impl TextArea {
         self.cursor_pos = line_end;
     }
 
+    fn beginning_of_line(&self, pos: usize) -> usize {
+        self.text[..pos].rfind('\n').map(|i| i + 1).unwrap_or(0)
+    }
     fn beginning_of_current_line(&self) -> usize {
-        self.text[..self.cursor_pos]
-            .rfind('\n')
-            .map(|i| i + 1)
-            .unwrap_or(0)
+        self.beginning_of_line(self.cursor_pos)
     }
 
-    fn end_of_current_line(&self) -> usize {
-        self.text[self.cursor_pos..]
+    fn end_of_line(&self, pos: usize) -> usize {
+        self.text[pos..]
             .find('\n')
-            .map(|i| i + self.cursor_pos)
+            .map(|i| i + pos)
             .unwrap_or(self.text.len())
     }
+    fn end_of_current_line(&self) -> usize {
+        self.end_of_line(self.cursor_pos)
+    }
 
-    fn beginning_of_previous_word(&self) -> usize {
+    pub(crate) fn beginning_of_previous_word(&self) -> usize {
         if let Some(first_non_ws) = self.text[..self.cursor_pos].rfind(|c: char| !c.is_whitespace())
         {
             self.text[..first_non_ws]
@@ -188,7 +194,7 @@ impl TextArea {
         }
     }
 
-    fn end_of_next_word(&self) -> usize {
+    pub(crate) fn end_of_next_word(&self) -> usize {
         let Some(first_non_ws) = self.text[self.cursor_pos..].find(|c: char| !c.is_whitespace())
         else {
             return self.text.len();
@@ -219,49 +225,32 @@ impl TextArea {
             KeyEvent {
                 code: KeyCode::Backspace,
                 ..
-            } => self.replace_range(self.cursor_pos.saturating_sub(1)..self.cursor_pos, ""),
+            } => self.delete_backward(1),
             KeyEvent {
                 code: KeyCode::Delete,
                 ..
-            } => self.replace_range(self.cursor_pos..self.cursor_pos + 1, ""),
+            } => self.delete_forward(1),
 
             KeyEvent {
                 code: KeyCode::Char('w'),
                 modifiers: KeyModifiers::CONTROL,
                 ..
             } => {
-                self.replace_range(self.beginning_of_previous_word()..self.cursor_pos, "");
+                self.delete_backward_word();
             }
             KeyEvent {
                 code: KeyCode::Char('u'),
                 modifiers: KeyModifiers::CONTROL,
                 ..
             } => {
-                if self.cursor_pos > 0 {
-                    let bol = self.beginning_of_current_line();
-                    if self.cursor_pos == bol {
-                        self.replace_range(bol - 1..bol, "");
-                    } else {
-                        self.replace_range(bol..self.cursor_pos, "");
-                    }
-                }
+                self.kill_to_beginning_of_line();
             }
             KeyEvent {
                 code: KeyCode::Char('k'),
                 modifiers: KeyModifiers::CONTROL,
                 ..
             } => {
-                if self.cursor_pos < self.text.len() {
-                    let eol = self.text[self.cursor_pos..]
-                        .find('\n')
-                        .map(|i| i + self.cursor_pos)
-                        .unwrap_or(self.text.len());
-                    if self.cursor_pos == eol {
-                        self.replace_range(self.cursor_pos..eol + 1, "");
-                    } else {
-                        self.replace_range(self.cursor_pos..eol, "");
-                    }
-                }
+                self.kill_to_end_of_line();
             }
 
             // Cursor movement
@@ -270,148 +259,196 @@ impl TextArea {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                // Move the cursor left by a single grapheme cluster
-                // rather than a single byte.
-                let mut gc = unicode_segmentation::GraphemeCursor::new(
-                    self.cursor_pos,
-                    self.text.len(),
-                    false,
-                );
-                match gc.prev_boundary(&self.text, 0) {
-                    Ok(Some(boundary)) => self.cursor_pos = boundary,
-                    Ok(None) => self.cursor_pos = 0, // Already at start.
-                    Err(_) => self.cursor_pos = self.cursor_pos.saturating_sub(1),
-                }
-                self.preferred_col = None;
+                self.move_cursor_left();
             }
             KeyEvent {
                 code: KeyCode::Right,
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                let mut gc = unicode_segmentation::GraphemeCursor::new(
-                    self.cursor_pos,
-                    self.text.len(),
-                    false,
-                );
-                match gc.next_boundary(&self.text, 0) {
-                    Ok(Some(boundary)) => self.cursor_pos = boundary,
-                    Ok(None) => self.cursor_pos = self.text.len(), // Already at end.
-                    Err(_) => self.cursor_pos = self.cursor_pos.saturating_add(1),
-                }
-                self.preferred_col = None;
+                self.move_cursor_right();
             }
             KeyEvent {
                 code: KeyCode::Up, ..
             } => {
-                if let Some(prev_nl) = self.text[..self.cursor_pos].rfind('\n') {
-                    let target_col = match self.preferred_col {
-                        Some(c) => c,
-                        None => {
-                            let c = self.current_display_col();
-                            self.preferred_col = Some(c);
-                            c
-                        }
-                    };
-                    let prev_line_start =
-                        self.text[..prev_nl].rfind('\n').map(|i| i + 1).unwrap_or(0);
-                    let prev_line_end = prev_nl;
-                    self.move_to_display_col_on_line(prev_line_start, prev_line_end, target_col);
-                } else {
-                    self.cursor_pos = 0;
-                    self.preferred_col = None;
-                }
+                self.move_cursor_up();
             }
             KeyEvent {
                 code: KeyCode::Down,
                 ..
             } => {
-                let target_col = match self.preferred_col {
-                    Some(c) => c,
-                    None => {
-                        let c = self.current_display_col();
-                        self.preferred_col = Some(c);
-                        c
-                    }
-                };
-                if let Some(next_nl) = self.text[self.cursor_pos..]
-                    .find('\n')
-                    .map(|i| i + self.cursor_pos)
-                {
-                    let next_line_start = next_nl + 1;
-                    let next_line_end = self.text[next_line_start..]
-                        .find('\n')
-                        .map(|i| i + next_line_start)
-                        .unwrap_or(self.text.len());
-                    self.move_to_display_col_on_line(next_line_start, next_line_end, target_col);
-                } else {
-                    self.cursor_pos = self.text.len();
-                    self.preferred_col = None;
-                }
+                self.move_cursor_down();
             }
             KeyEvent {
                 code: KeyCode::Home,
                 ..
             } => {
-                self.cursor_pos = self.beginning_of_current_line();
-                self.preferred_col = None;
+                self.move_cursor_to_beginning_of_line();
             }
             KeyEvent {
                 code: KeyCode::Char('a'),
                 modifiers: KeyModifiers::CONTROL,
                 ..
             } => {
-                let bol = self.beginning_of_current_line();
-                if self.cursor_pos == bol {
-                    self.cursor_pos = self.cursor_pos.saturating_sub(1);
-                    self.cursor_pos = self.beginning_of_current_line();
-                } else {
-                    self.cursor_pos = bol;
-                }
-                self.preferred_col = None;
+                self.move_cursor_to_beginning_of_line_or_up();
             }
 
             KeyEvent {
                 code: KeyCode::End, ..
             } => {
-                self.cursor_pos = self.end_of_current_line();
-                self.preferred_col = None;
+                self.move_cursor_to_end_of_line();
             }
             KeyEvent {
                 code: KeyCode::Char('e'),
                 modifiers: KeyModifiers::CONTROL,
                 ..
             } => {
-                let eol = self.end_of_current_line();
-                if self.cursor_pos == eol {
-                    self.cursor_pos = (self.cursor_pos + 1).min(self.text.len());
-                    self.cursor_pos = self.end_of_current_line();
-                } else {
-                    self.cursor_pos = eol;
-                }
-                self.preferred_col = None;
+                self.move_cursor_to_end_of_line_or_down();
             }
             KeyEvent {
                 code: KeyCode::Left,
                 modifiers: KeyModifiers::CONTROL,
                 ..
             } => {
-                self.cursor_pos = self.beginning_of_previous_word();
-                self.preferred_col = None;
+                self.set_cursor(self.beginning_of_previous_word());
             }
             KeyEvent {
                 code: KeyCode::Right,
                 modifiers: KeyModifiers::CONTROL,
                 ..
             } => {
-                self.cursor_pos = self.end_of_next_word();
-                self.preferred_col = None;
+                self.set_cursor(self.end_of_next_word());
             }
             o => {
-                tracing::info!("Unhandled key event in TextArea: {:?}", o);
+                tracing::debug!("Unhandled key event in TextArea: {:?}", o);
             }
         }
-        self.cursor_pos = self.cursor_pos.clamp(0, self.text.len());
+    }
+
+    // ####### Input Functions #######
+    pub fn delete_backward(&mut self, n: usize) {
+        self.replace_range(self.cursor_pos.saturating_sub(n)..self.cursor_pos, "");
+    }
+
+    pub fn delete_forward(&mut self, n: usize) {
+        self.replace_range(self.cursor_pos..self.cursor_pos.saturating_add(n), "");
+    }
+
+    pub fn delete_backward_word(&mut self) {
+        self.replace_range(self.beginning_of_previous_word()..self.cursor_pos, "");
+    }
+
+    pub fn kill_to_end_of_line(&mut self) {
+        let eol = self.end_of_current_line();
+        if self.cursor_pos == eol {
+            self.replace_range(self.cursor_pos..eol + 1, "");
+        } else {
+            self.replace_range(self.cursor_pos..eol, "");
+        }
+    }
+
+    pub fn kill_to_beginning_of_line(&mut self) {
+        let bol = self.beginning_of_current_line();
+        if self.cursor_pos == bol {
+            self.replace_range(bol - 1..bol, "");
+        } else {
+            self.replace_range(bol..self.cursor_pos, "");
+        }
+    }
+
+    /// Move the cursor left by a single grapheme cluster.
+    pub fn move_cursor_left(&mut self) {
+        let mut gc =
+            unicode_segmentation::GraphemeCursor::new(self.cursor_pos, self.text.len(), false);
+        match gc.prev_boundary(&self.text, 0) {
+            Ok(Some(boundary)) => self.cursor_pos = boundary,
+            Ok(None) => self.cursor_pos = 0, // Already at start.
+            Err(_) => self.cursor_pos = self.cursor_pos.saturating_sub(1),
+        }
+        self.preferred_col = None;
+    }
+
+    /// Move the cursor right by a single grapheme cluster.
+    pub fn move_cursor_right(&mut self) {
+        let mut gc =
+            unicode_segmentation::GraphemeCursor::new(self.cursor_pos, self.text.len(), false);
+        match gc.next_boundary(&self.text, 0) {
+            Ok(Some(boundary)) => self.cursor_pos = boundary,
+            Ok(None) => self.cursor_pos = self.text.len(), // Already at end.
+            Err(_) => self.cursor_pos = self.cursor_pos.saturating_add(1),
+        }
+        self.preferred_col = None;
+    }
+
+    pub fn move_cursor_up(&mut self) {
+        if let Some(prev_nl) = self.text[..self.cursor_pos].rfind('\n') {
+            let target_col = match self.preferred_col {
+                Some(c) => c,
+                None => {
+                    let c = self.current_display_col();
+                    self.preferred_col = Some(c);
+                    c
+                }
+            };
+            let prev_line_start = self.text[..prev_nl].rfind('\n').map(|i| i + 1).unwrap_or(0);
+            let prev_line_end = prev_nl;
+            self.move_to_display_col_on_line(prev_line_start, prev_line_end, target_col);
+        } else {
+            self.cursor_pos = 0;
+            self.preferred_col = None;
+        }
+    }
+
+    pub fn move_cursor_down(&mut self) {
+        let target_col = match self.preferred_col {
+            Some(c) => c,
+            None => {
+                let c = self.current_display_col();
+                self.preferred_col = Some(c);
+                c
+            }
+        };
+        if let Some(next_nl) = self.text[self.cursor_pos..]
+            .find('\n')
+            .map(|i| i + self.cursor_pos)
+        {
+            let next_line_start = next_nl + 1;
+            let next_line_end = self.text[next_line_start..]
+                .find('\n')
+                .map(|i| i + next_line_start)
+                .unwrap_or(self.text.len());
+            self.move_to_display_col_on_line(next_line_start, next_line_end, target_col);
+        } else {
+            self.cursor_pos = self.text.len();
+            self.preferred_col = None;
+        }
+    }
+
+    pub fn move_cursor_to_beginning_of_line(&mut self) {
+        self.set_cursor(self.beginning_of_current_line());
+    }
+
+    pub fn move_cursor_to_beginning_of_line_or_up(&mut self) {
+        let bol = self.beginning_of_current_line();
+        if self.cursor_pos == bol {
+            self.set_cursor(self.beginning_of_line(self.cursor_pos.saturating_sub(1)));
+        } else {
+            self.set_cursor(bol);
+        }
+        self.preferred_col = None;
+    }
+
+    pub fn move_cursor_to_end_of_line(&mut self) {
+        self.set_cursor(self.end_of_current_line());
+    }
+
+    pub fn move_cursor_to_end_of_line_or_down(&mut self) {
+        let eol = self.end_of_current_line();
+        if self.cursor_pos == eol {
+            self.set_cursor(self.end_of_line(self.cursor_pos.saturating_add(1)));
+        } else {
+            self.set_cursor(eol);
+        }
     }
 
     #[allow(clippy::unwrap_used)]
