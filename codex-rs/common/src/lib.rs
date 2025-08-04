@@ -23,3 +23,6 @@ mod sandbox_summary;
 
 #[cfg(feature = "sandbox_summary")]
 pub use sandbox_summary::summarize_sandbox_policy;
+
+// Shared fuzzy matcher (used by TUI selection popups and other UI filtering)
+pub mod fuzzy_match;
