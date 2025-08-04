@@ -46,10 +46,9 @@ impl EventProcessor for EventProcessorWithJsonOutput {
                 CodexStatus::Running
             }
             EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) => {
-                handle_last_message(
-                    last_agent_message.as_deref(),
-                    self.last_message_path.as_deref(),
-                );
+                if let Some(output_file) = self.last_message_path.as_deref() {
+                    handle_last_message(last_agent_message.as_deref(), output_file);
+                }
                 CodexStatus::InitiateShutdown
             }
             EventMsg::ShutdownComplete => CodexStatus::Shutdown,
