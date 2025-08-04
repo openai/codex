@@ -104,9 +104,8 @@ impl ModelProviderInfo {
         Ok(self.apply_http_headers(builder))
     }
 
-    pub(crate) fn get_full_url(&self) -> String {
-        let query_string = self
-            .query_params
+    pub fn get_query_string(&self) -> String {
+        self.query_params
             .as_ref()
             .map_or_else(String::new, |params| {
                 let full_params = params
@@ -115,7 +114,11 @@ impl ModelProviderInfo {
                     .collect::<Vec<_>>()
                     .join("&");
                 format!("?{full_params}")
-            });
+            })
+    }
+
+    pub(crate) fn get_full_url(&self) -> String {
+        let query_string = self.get_query_string();
         let base_url = self
             .base_url
             .clone()
@@ -157,7 +160,7 @@ impl ModelProviderInfo {
     /// If `env_key` is Some, returns the API key for this provider if present
     /// (and non-empty) in the environment. If `env_key` is required but
     /// cannot be found, returns an error.
-    fn api_key(&self) -> crate::error::Result<Option<String>> {
+    pub fn api_key(&self) -> crate::error::Result<Option<String>> {
         match &self.env_key {
             Some(env_key) => {
                 let env_value = std::env::var(env_key);
