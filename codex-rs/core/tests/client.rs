@@ -402,9 +402,8 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
         .mount(&server)
         .await;
 
-    // Start from built-in OpenAI provider and override fields like the CLI -c would
     let provider = ModelProviderInfo {
-        name: "openai".to_string(),
+        name: "custom".to_string(),
         base_url: Some(format!("{}/openai", server.uri())),
         env_key: Some("TEST_API_KEY_ENV_VAR".to_string()),
         query_params: Some(std::collections::HashMap::from([(
@@ -430,7 +429,6 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
     // Init session
     let codex_home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&codex_home);
-    config.model = "codex-mini".to_string();
     config.model_provider = provider;
 
     let ctrl_c = std::sync::Arc::new(tokio::sync::Notify::new());
