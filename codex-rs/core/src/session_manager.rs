@@ -37,15 +37,6 @@ pub async fn get_conversations(
     page_size: usize,
     cursor: Option<&str>,
 ) -> io::Result<ConversationsPage> {
-    if page_size == 0 {
-        return Ok(ConversationsPage {
-            paths: Vec::new(),
-            next_cursor: None,
-            scanned_files: 0,
-            reached_scan_cap: false,
-        });
-    }
-
     let mut root = config.codex_home.clone();
     root.push(SESSIONS_SUBDIR);
     if !root.exists() {
@@ -57,7 +48,7 @@ pub async fn get_conversations(
         });
     }
 
-    let anchor = cursor.and_then(parse_cursor_token);
+    let anchor = cursor.and_then(parse_cursor);
 
     let result = tokio::task::spawn_blocking({
         let root = root.clone();
@@ -89,7 +80,7 @@ fn traverse_directories_for_paths(
     let (anchor_ts, anchor_id) =
         anchor.unwrap_or_else(|| (OffsetDateTime::UNIX_EPOCH, Uuid::nil()));
 
-    let year_dirs = collect_dirs_desc(&root, |s| s.parse::<i32>().ok())?;
+    let year_dirs = collect_dirs_desc(&root, |s| s.parse::<u16>().ok())?;
 
     'outer: for (_year, year_path) in year_dirs.iter() {
         if scanned_files >= MAX_SCAN_FILES {
@@ -147,7 +138,7 @@ fn traverse_directories_for_paths(
 /// Pagination cursor token format: "<file_ts>|<uuid>" where `file_ts` matches the
 /// filename timestamp portion (YYYY-MM-DDThh-mm-ss) used in rollout filenames.
 /// The cursor orders files by timestamp desc, then UUID desc.
-fn parse_cursor_token(token: &str) -> Option<(OffsetDateTime, Uuid)> {
+fn parse_cursor(token: &str) -> Option<(OffsetDateTime, Uuid)> {
     let (file_ts, uuid_str) = token.split_once('|')?;
     let Ok(uuid) = Uuid::parse_str(uuid_str) else {
         return None;
@@ -172,8 +163,8 @@ fn build_next_cursor(paths: &[PathBuf]) -> Option<String> {
     ))
 }
 
-// Helper: collect immediate subdirectories of `parent`, parse their (string) names with `parse`,
-// and return them sorted descending by the parsed key.
+/// Collects immediate subdirectories of `parent`, parses their (string) names with `parse`,
+/// and returns them sorted descending by the parsed key.
 fn collect_dirs_desc<T, F>(parent: &Path, parse: F) -> io::Result<Vec<(T, PathBuf)>>
 where
     T: Ord + Copy,
@@ -192,7 +183,7 @@ where
     Ok(vec)
 }
 
-// Helper: collect files in `parent`, parse with `parse(name_str, path)` into arbitrary value.
+// Collects files in a directory and parses them with `parse`.
 fn collect_files<T, F>(parent: &Path, parse: F) -> io::Result<Vec<T>>
 where
     F: Fn(&str, &Path) -> Option<T>,
@@ -210,18 +201,18 @@ where
 }
 
 fn parse_timestamp_uuid_from_filename(name: &str) -> Option<(OffsetDateTime, Uuid)> {
-    // Format: rollout-YYYY-MM-DDThh-mm-ss-<uuid>.jsonl
+    // Expected: rollout-YYYY-MM-DDThh-mm-ss-<uuid>.jsonl
     let core = name.strip_prefix("rollout-")?.strip_suffix(".jsonl")?;
-    if core.len() < 37 {
-        return None;
-    } // need at least dt + '-' + 36
-    let uuid_part = &core[core.len() - 36..];
-    let dt_part = &core[..core.len() - 37]; // strip trailing '-' before uuid
-    let Ok(uuid) = Uuid::parse_str(uuid_part) else {
-        return None;
-    };
+
+    // Scan from the right for a '-' such that the suffix parses as a UUID.
+    let (sep_idx, uuid) = core
+        .match_indices('-')
+        .rev()
+        .find_map(|(i, _)| Uuid::parse_str(&core[i + 1..]).ok().map(|u| (i, u)))?;
+
+    let ts_str = &core[..sep_idx];
     let format: &[FormatItem] =
         format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
-    let ts = PrimitiveDateTime::parse(dt_part, format).ok()?.assume_utc();
+    let ts = PrimitiveDateTime::parse(ts_str, format).ok()?.assume_utc();
     Some((ts, uuid))
 }
