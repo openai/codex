@@ -2,6 +2,7 @@ use codex_core::protocol::Event;
 use codex_file_search::FileMatch;
 use crossterm::event::KeyEvent;
 use ratatui::text::Line;
+use std::time::Duration;
 
 use crate::slash_command::SlashCommand;
 
@@ -14,6 +15,11 @@ pub(crate) enum AppEvent {
 
     /// Actually draw the next frame.
     Redraw,
+
+    /// Schedule periodic frames from the main loop. The first frame will be
+    /// scheduled roughly after the provided duration and continue at that
+    /// cadence until the application exits.
+    ScheduleFrameIn(Duration),
 
     KeyEvent(KeyEvent),
 

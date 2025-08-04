@@ -5,6 +5,7 @@ use crate::file_search::FileSearchManager;
 use crate::get_git_diff::get_git_diff;
 use crate::git_warning_screen::GitWarningOutcome;
 use crate::git_warning_screen::GitWarningScreen;
+use crate::shimmer_text::init_process_start;
 use crate::slash_command::SlashCommand;
 use crate::tui;
 use codex_core::config::Config;
@@ -21,13 +22,10 @@ use ratatui::layout::Offset;
 use ratatui::prelude::Backend;
 use ratatui::text::Line;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 use std::sync::mpsc::Receiver;
 use std::sync::mpsc::channel;
-use std::thread;
 use std::time::Duration;
+use std::time::Instant;
 
 /// Time window for debouncing redraw requests.
 const REDRAW_DEBOUNCE: Duration = Duration::from_millis(10);
@@ -55,9 +53,6 @@ pub(crate) struct App<'a> {
 
     file_search: FileSearchManager,
 
-    /// True when a redraw has been scheduled but not yet executed.
-    pending_redraw: Arc<AtomicBool>,
-
     pending_history_lines: Vec<Line<'static>>,
 
     /// Stored parameters needed to instantiate the ChatWidget later, e.g.,
@@ -65,6 +60,10 @@ pub(crate) struct App<'a> {
     chat_args: Option<ChatWidgetArgs>,
 
     enhanced_keys_supported: bool,
+
+    /// Channel to schedule one-shot animation frames; coalesced by a single
+    /// scheduler thread.
+    frame_schedule_tx: std::sync::mpsc::Sender<Instant>,
 }
 
 /// Aggregate parameters needed to create a `ChatWidget`, as creation may be
@@ -86,7 +85,6 @@ impl App<'_> {
     ) -> Self {
         let (app_event_tx, app_event_rx) = channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
-        let pending_redraw = Arc::new(AtomicBool::new(false));
 
         let enhanced_keys_supported = supports_keyboard_enhancement().unwrap_or(false);
 
@@ -133,6 +131,9 @@ impl App<'_> {
             });
         }
 
+        // Initialize process start time for synchronized animations.
+        init_process_start();
+
         let (app_state, chat_args) = if show_git_warning {
             (
                 AppState::GitWarning {
@@ -162,6 +163,50 @@ impl App<'_> {
         };
 
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+
+        // Spawn a single scheduler thread that coalesces both debounced redraw
+        // requests and animation frame requests, and emits a single Redraw event
+        // at the earliest requested time.
+        let (frame_tx, frame_rx) = channel::<Instant>();
+        {
+            let app_event_tx = app_event_tx.clone();
+            std::thread::spawn(move || {
+                use std::sync::mpsc::RecvTimeoutError;
+                let mut next_deadline: Option<Instant> = None;
+                loop {
+                    // If no scheduled deadline, block until we get one.
+                    if next_deadline.is_none() {
+                        match frame_rx.recv() {
+                            Ok(deadline) => next_deadline = Some(deadline),
+                            Err(_) => break, // channel closed; exit thread
+                        }
+                    }
+
+                    #[allow(clippy::expect_used)]
+                    let deadline = next_deadline.expect("set above");
+                    let now = Instant::now();
+                    let timeout = if deadline > now {
+                        deadline - now
+                    } else {
+                        Duration::from_millis(0)
+                    };
+
+                    match frame_rx.recv_timeout(timeout) {
+                        Ok(new_deadline) => {
+                            // Coalesce by keeping the earliest deadline.
+                            next_deadline =
+                                Some(next_deadline.map_or(new_deadline, |d| d.min(new_deadline)));
+                        }
+                        Err(RecvTimeoutError::Timeout) => {
+                            // Fire once, then clear the deadline.
+                            app_event_tx.send(AppEvent::Redraw);
+                            next_deadline = None;
+                        }
+                        Err(RecvTimeoutError::Disconnected) => break,
+                    }
+                }
+            });
+        }
         Self {
             app_event_tx,
             pending_history_lines: Vec::new(),
@@ -169,9 +214,9 @@ impl App<'_> {
             app_state,
             config,
             file_search,
-            pending_redraw,
             chat_args,
             enhanced_keys_supported,
+            frame_schedule_tx: frame_tx,
         }
     }
 
@@ -181,32 +226,13 @@ impl App<'_> {
         self.app_event_tx.clone()
     }
 
-    /// Schedule a redraw if one is not already pending.
-    #[allow(clippy::unwrap_used)]
-    fn schedule_redraw(&self) {
-        // Attempt to set the flag to `true`. If it was already `true`, another
-        // redraw is already pending so we can return early.
-        if self
-            .pending_redraw
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .is_err()
-        {
-            return;
-        }
-
-        let tx = self.app_event_tx.clone();
-        let pending_redraw = self.pending_redraw.clone();
-        thread::spawn(move || {
-            thread::sleep(REDRAW_DEBOUNCE);
-            tx.send(AppEvent::Redraw);
-            pending_redraw.store(false, Ordering::SeqCst);
-        });
+    fn schedule_frame_in(&self, dur: Duration) {
+        let _ = self.frame_schedule_tx.send(Instant::now() + dur);
     }
 
     pub(crate) fn run(&mut self, terminal: &mut tui::Tui) -> Result<()> {
-        // Insert an event to trigger the first render.
-        let app_event_tx = self.app_event_tx.clone();
-        app_event_tx.send(AppEvent::RequestRedraw);
+        // Trigger the first render immediately via the frame scheduler.
+        let _ = self.frame_schedule_tx.send(Instant::now());
 
         while let Ok(event) = self.app_event_rx.recv() {
             match event {
@@ -215,7 +241,10 @@ impl App<'_> {
                     self.app_event_tx.send(AppEvent::RequestRedraw);
                 }
                 AppEvent::RequestRedraw => {
-                    self.schedule_redraw();
+                    self.schedule_frame_in(REDRAW_DEBOUNCE);
+                }
+                AppEvent::ScheduleFrameIn(dur) => {
+                    self.schedule_frame_in(dur);
                 }
                 AppEvent::Redraw => {
                     std::io::stdout().sync_update(|_| self.draw_next_frame(terminal))??;

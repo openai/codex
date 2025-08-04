@@ -42,6 +42,7 @@ use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::InputResult;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell::CommandOutput;
+use crate::history_cell::DynamicHeightWidgetRef;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::PatchEventType;
 use crate::user_approval_widget::ApprovalRequest;
@@ -379,7 +380,10 @@ impl ChatWidget<'_> {
                         cwd: cwd.clone(),
                     },
                 );
-                self.active_history_cell = Some(HistoryCell::new_active_exec_command(command));
+                self.active_history_cell = Some(HistoryCell::new_active_exec_command(
+                    command,
+                    self.app_event_tx.clone(),
+                ));
             }
             EventMsg::ExecCommandOutputDelta(_) => {
                 // TODO

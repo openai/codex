@@ -34,6 +34,7 @@ mod history_cell;
 mod insert_history;
 mod log_layer;
 mod markdown;
+mod shimmer_text;
 mod slash_command;
 mod status_indicator_widget;
 mod text_block;
