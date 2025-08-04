@@ -93,9 +93,7 @@ impl ModelClient {
                 // Wrap it with the aggregation adapter so callers see *only*
                 // the final assistant message per turn (matching the
                 // behaviour of the Responses API).
-                let mut aggregated = if self.config.show_reasoning_content
-                    && !self.config.hide_agent_reasoning
-                {
+                let mut aggregated = if !self.config.hide_agent_reasoning {
                     crate::chat_completions::AggregatedChatStream::streaming_mode(response_stream)
                 } else {
                     response_stream.aggregate()
