@@ -56,6 +56,7 @@ use crate::mcp_tool_call::handle_mcp_tool_call;
 use crate::models::ContentItem;
 use crate::models::FunctionCallOutputPayload;
 use crate::models::LocalShellAction;
+use crate::models::ReasoningItemContent;
 use crate::models::ReasoningItemReasoningSummary;
 use crate::models::ResponseInputItem;
 use crate::models::ResponseItem;
@@ -64,6 +65,7 @@ use crate::plan_tool::handle_update_plan;
 use crate::project_doc::get_user_instructions;
 use crate::protocol::AgentMessageDeltaEvent;
 use crate::protocol::AgentMessageEvent;
+use crate::protocol::AgentReasoningContentEvent;
 use crate::protocol::AgentReasoningDeltaEvent;
 use crate::protocol::AgentReasoningEvent;
 use crate::protocol::ApplyPatchApprovalRequestEvent;
@@ -227,6 +229,7 @@ pub(crate) struct Session {
     state: Mutex<State>,
     codex_linux_sandbox_exe: Option<PathBuf>,
     user_shell: shell::Shell,
+    show_reasoning_content: bool,
 }
 
 impl Session {
@@ -822,6 +825,7 @@ async fn submission_loop(
                     codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
                     disable_response_storage,
                     user_shell: default_shell,
+                    show_reasoning_content: config.show_reasoning_content,
                 }));
 
                 // Patch restored state into the newly created session.
@@ -1133,6 +1137,7 @@ async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
                                 id,
                                 summary,
                                 encrypted_content,
+                                content,
                             },
                             None,
                         ) => {
@@ -1140,6 +1145,7 @@ async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
                                 id: id.clone(),
                                 summary: summary.clone(),
                                 encrypted_content: encrypted_content.clone(),
+                                content: content.clone(),
                             });
                         }
                         _ => {
@@ -1315,7 +1321,6 @@ async fn try_run_turn(
     };
 
     let mut stream = sess.client.clone().stream(&prompt).await?;
-
     let mut output = Vec::new();
     loop {
         // Poll the next item from the model stream. We must inspect *both* Ok and Err
@@ -1339,6 +1344,7 @@ async fn try_run_turn(
             }
         };
 
+        warn!("ResponseEvent: {event:?}");
         match event {
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(item) => {
@@ -1493,7 +1499,12 @@ async fn handle_response_item(
             }
             None
         }
-        ResponseItem::Reasoning { summary, .. } => {
+        ResponseItem::Reasoning {
+            id: _,
+            summary,
+            content,
+            encrypted_content: _,
+        } => {
             for item in summary {
                 let text = match item {
                     ReasoningItemReasoningSummary::SummaryText { text } => text,
@@ -1503,6 +1514,19 @@ async fn handle_response_item(
                     msg: EventMsg::AgentReasoning(AgentReasoningEvent { text }),
                 };
                 sess.tx_event.send(event).await.ok();
+            }
+            if sess.show_reasoning_content && content.is_some() {
+                let content = content.unwrap();
+                for item in content {
+                    let text = match item {
+                        ReasoningItemContent::ReasoningText { text } => text,
+                    };
+                    let event = Event {
+                        id: sub_id.to_string(),
+                        msg: EventMsg::AgentReasoningContent(AgentReasoningContentEvent { text }),
+                    };
+                    sess.tx_event.send(event).await.ok();
+                }
             }
             None
         }
