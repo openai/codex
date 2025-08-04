@@ -329,10 +329,7 @@ if __name__ == '__main__':
         .await
         .expect("should be able to spawn python under seatbelt");
 
-        let status = child
-            .wait()
-            .await
-            .expect("should wait for child process");
+        let status = child.wait().await.expect("should wait for child process");
         assert!(status.success(), "python exited with {status:?}");
     }
 
