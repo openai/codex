@@ -97,6 +97,7 @@ pub async fn run_conversation_loop(
                     | EventMsg::McpToolCallEnd(_)
                     | EventMsg::ExecCommandBegin(_)
                     | EventMsg::ExecCommandEnd(_)
+                    | EventMsg::TurnDiff(_)
                     | EventMsg::BackgroundEvent(_)
                     | EventMsg::ExecCommandOutputDelta(_)
                     | EventMsg::PatchApplyBegin(_)

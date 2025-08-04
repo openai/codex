@@ -20,6 +20,7 @@ use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TokenUsage;
+use codex_core::protocol::TurnDiffEvent;
 use owo_colors::OwoColorize;
 use owo_colors::Style;
 use shlex::try_join;
@@ -399,6 +400,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 stdout,
                 stderr,
                 success,
+                ..
             }) => {
                 let patch_begin = self.call_id_to_patch.remove(&call_id);
 
@@ -427,6 +429,10 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 for line in output.lines() {
                     println!("{}", line.style(self.dimmed));
                 }
+            }
+            EventMsg::TurnDiff(TurnDiffEvent { unified_diff }) => {
+                ts_println!(self, "{}", "turn diff:".style(self.magenta));
+                println!("{unified_diff}");
             }
             EventMsg::ExecApprovalRequest(_) => {
                 // Should we exit?

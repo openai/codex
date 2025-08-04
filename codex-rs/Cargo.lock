@@ -699,6 +699,7 @@ dependencies = [
  "serde_json",
  "sha1",
  "shlex",
+ "similar",
  "strum_macros 0.27.2",
  "tempfile",
  "thiserror 2.0.12",
