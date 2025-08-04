@@ -263,6 +263,7 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::BackgroundEvent(_)
                     | EventMsg::PatchApplyBegin(_)
                     | EventMsg::PatchApplyEnd(_)
+                    | EventMsg::TurnDiff(_)
                     | EventMsg::GetHistoryEntryResponse(_)
                     | EventMsg::PlanUpdate(_)
                     | EventMsg::ShutdownComplete => {
