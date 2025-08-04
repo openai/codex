@@ -107,7 +107,6 @@ impl EventProcessorWithHumanOutput {
 
 struct ExecCommandBegin {
     command: Vec<String>,
-    start_time: Instant,
 }
 
 struct PatchApplyBegin {
@@ -229,7 +228,6 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     call_id.clone(),
                     ExecCommandBegin {
                         command: command.clone(),
-                        start_time: Instant::now(),
                     },
                 );
                 ts_println!(
@@ -245,16 +243,14 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 call_id,
                 stdout,
                 stderr,
+                duration,
                 exit_code,
             }) => {
                 let exec_command = self.call_id_to_command.remove(&call_id);
-                let (duration, call) = if let Some(ExecCommandBegin {
-                    command,
-                    start_time,
-                }) = exec_command
+                let (duration, call) = if let Some(ExecCommandBegin { command, .. }) = exec_command
                 {
                     (
-                        format!(" in {}", format_elapsed(start_time)),
+                        format!(" in {}", format_duration(duration)),
                         format!("{}", escape_command(&command).style(self.bold)),
                     )
                 } else {

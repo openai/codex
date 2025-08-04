@@ -48,6 +48,8 @@ serde_json = { version = "1", features = ["preserve_order"] }
 shlex = "1.3.0"
 strum = "0.27.2"
 strum_macros = "0.27.2"
+supports-color = "3.0.2"
+textwrap = "0.16.2"
 tokio = { version = "1", features = [
     "io-std",
     "macros",
@@ -60,7 +62,6 @@ tracing-appender = "0.2.3"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 tui-input = "0.14.0"
 tui-markdown = "0.3.3"
-tui-textarea = "0.7.0"
 unicode-segmentation = "1.12.0"
 unicode-width = "0.1"
 uuid = "1"
@@ -70,3 +71,5 @@ uuid = "1"
 [dev-dependencies]
 insta = "1.43.1"
 pretty_assertions = "1"
+rand = "0.8"
+chrono = { version = "0.4", features = ["serde"] }

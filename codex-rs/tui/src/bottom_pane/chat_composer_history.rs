@@ -1,8 +1,5 @@
 use std::collections::HashMap;
 
-use tui_textarea::CursorMove;
-use tui_textarea::TextArea;
-
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use codex_core::protocol::Op;
@@ -67,59 +64,52 @@ impl ChatComposerHistory {
 
     /// Should Up/Down key presses be interpreted as history navigation given
     /// the current content and cursor position of `textarea`?
-    pub fn should_handle_navigation(&self, textarea: &TextArea) -> bool {
+    pub fn should_handle_navigation(&self, text: &str, cursor: usize) -> bool {
         if self.history_entry_count == 0 && self.local_history.is_empty() {
             return false;
         }
 
-        if textarea.is_empty() {
+        if text.is_empty() {
             return true;
         }
 
         // Textarea is not empty – only navigate when cursor is at start and
         // text matches last recalled history entry so regular editing is not
         // hijacked.
-        let (row, col) = textarea.cursor();
-        if row != 0 || col != 0 {
+        if cursor != 0 {
             return false;
         }
 
-        let lines = textarea.lines();
-        matches!(&self.last_history_text, Some(prev) if prev == &lines.join("\n"))
+        matches!(&self.last_history_text, Some(prev) if prev == text)
     }
 
     /// Handle <Up>. Returns true when the key was consumed and the caller
     /// should request a redraw.
-    pub fn navigate_up(&mut self, textarea: &mut TextArea, app_event_tx: &AppEventSender) -> bool {
+    pub fn navigate_up(&mut self, app_event_tx: &AppEventSender) -> Option<String> {
         let total_entries = self.history_entry_count + self.local_history.len();
         if total_entries == 0 {
-            return false;
+            return None;
         }
 
         let next_idx = match self.history_cursor {
             None => (total_entries as isize) - 1,
-            Some(0) => return true, // already at oldest
+            Some(0) => return None, // already at oldest
             Some(idx) => idx - 1,
         };
 
         self.history_cursor = Some(next_idx);
-        self.populate_history_at_index(next_idx as usize, textarea, app_event_tx);
-        true
+        self.populate_history_at_index(next_idx as usize, app_event_tx)
     }
 
     /// Handle <Down>.
-    pub fn navigate_down(
-        &mut self,
-        textarea: &mut TextArea,
-        app_event_tx: &AppEventSender,
-    ) -> bool {
+    pub fn navigate_down(&mut self, app_event_tx: &AppEventSender) -> Option<String> {
         let total_entries = self.history_entry_count + self.local_history.len();
         if total_entries == 0 {
-            return false;
+            return None;
         }
 
         let next_idx_opt = match self.history_cursor {
-            None => return false, // not browsing
+            None => return None, // not browsing
             Some(idx) if (idx as usize) + 1 >= total_entries => None,
             Some(idx) => Some(idx + 1),
         };
@@ -127,16 +117,15 @@ impl ChatComposerHistory {
         match next_idx_opt {
             Some(idx) => {
                 self.history_cursor = Some(idx);
-                self.populate_history_at_index(idx as usize, textarea, app_event_tx);
+                self.populate_history_at_index(idx as usize, app_event_tx)
             }
             None => {
                 // Past newest – clear and exit browsing mode.
                 self.history_cursor = None;
                 self.last_history_text = None;
-                self.replace_textarea_content(textarea, "");
+                Some(String::new())
             }
         }
-        true
     }
 
     /// Integrate a GetHistoryEntryResponse event.
@@ -145,19 +134,18 @@ impl ChatComposerHistory {
         log_id: u64,
         offset: usize,
         entry: Option<String>,
-        textarea: &mut TextArea,
-    ) -> bool {
+    ) -> Option<String> {
         if self.history_log_id != Some(log_id) {
-            return false;
+            return None;
         }
-        let Some(text) = entry else { return false };
+        let text = entry?;
         self.fetched_history.insert(offset, text.clone());
 
         if self.history_cursor == Some(offset as isize) {
-            self.replace_textarea_content(textarea, &text);
-            return true;
+            self.last_history_text = Some(text.clone());
+            return Some(text);
         }
-        false
+        None
     }
 
     // ---------------------------------------------------------------------
@@ -167,21 +155,20 @@ impl ChatComposerHistory {
     fn populate_history_at_index(
         &mut self,
         global_idx: usize,
-        textarea: &mut TextArea,
         app_event_tx: &AppEventSender,
-    ) {
+    ) -> Option<String> {
         if global_idx >= self.history_entry_count {
             // Local entry.
             if let Some(text) = self
                 .local_history
                 .get(global_idx - self.history_entry_count)
             {
-                let t = text.clone();
-                self.replace_textarea_content(textarea, &t);
+                self.last_history_text = Some(text.clone());
+                return Some(text.clone());
             }
         } else if let Some(text) = self.fetched_history.get(&global_idx) {
-            let t = text.clone();
-            self.replace_textarea_content(textarea, &t);
+            self.last_history_text = Some(text.clone());
+            return Some(text.clone());
         } else if let Some(log_id) = self.history_log_id {
             let op = Op::GetHistoryEntryRequest {
                 offset: global_idx,
@@ -189,14 +176,7 @@ impl ChatComposerHistory {
             };
             app_event_tx.send(AppEvent::CodexOp(op));
         }
-    }
-
-    fn replace_textarea_content(&mut self, textarea: &mut TextArea, text: &str) {
-        textarea.select_all();
-        textarea.cut();
-        let _ = textarea.insert_str(text);
-        textarea.move_cursor(CursorMove::Jump(0, 0));
-        self.last_history_text = Some(text.to_string());
+        None
     }
 }
 
@@ -217,11 +197,9 @@ mod tests {
         // Pretend there are 3 persistent entries.
         history.set_metadata(1, 3);
 
-        let mut textarea = TextArea::default();
-
         // First Up should request offset 2 (latest) and await async data.
-        assert!(history.should_handle_navigation(&textarea));
-        assert!(history.navigate_up(&mut textarea, &tx));
+        assert!(history.should_handle_navigation("", 0));
+        assert!(history.navigate_up(&tx).is_none()); // don't replace the text yet
 
         // Verify that an AppEvent::CodexOp with the correct GetHistoryEntryRequest was sent.
         let event = rx.try_recv().expect("expected AppEvent to be sent");
@@ -235,14 +213,15 @@ mod tests {
             },
             history_request1
         );
-        assert_eq!(textarea.lines().join("\n"), ""); // still empty
 
         // Inject the async response.
-        assert!(history.on_entry_response(1, 2, Some("latest".into()), &mut textarea));
-        assert_eq!(textarea.lines().join("\n"), "latest");
+        assert_eq!(
+            Some("latest".into()),
+            history.on_entry_response(1, 2, Some("latest".into()))
+        );
 
         // Next Up should move to offset 1.
-        assert!(history.navigate_up(&mut textarea, &tx));
+        assert!(history.navigate_up(&tx).is_none()); // don't replace the text yet
 
         // Verify second CodexOp event for offset 1.
         let event2 = rx.try_recv().expect("expected second event");
@@ -257,7 +236,9 @@ mod tests {
             history_request_2
         );
 
-        history.on_entry_response(1, 1, Some("older".into()), &mut textarea);
-        assert_eq!(textarea.lines().join("\n"), "older");
+        assert_eq!(
+            Some("older".into()),
+            history.on_entry_response(1, 1, Some("older".into()))
+        );
     }
 }
