@@ -1595,11 +1595,11 @@ fn parse_container_exec_arguments(
 
 fn maybe_run_with_user_profile(params: ExecParams, sess: &Session) -> ExecParams {
     if sess.shell_environment_policy.use_profile {
-        let command = sess
+        let wrapped_params = sess
             .user_shell
-            .format_default_shell_invocation(params.command.clone());
-        if let Some(command) = command {
-            return ExecParams { command, ..params };
+            .format_default_shell_invocation(params.clone());
+        if let Some(wrapped_params) = wrapped_params {
+            return wrapped_params;
         }
     }
     params
