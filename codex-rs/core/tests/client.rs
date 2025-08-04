@@ -397,6 +397,7 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
         .and(path("/openai/responses"))
         .and(query_param("api-version", "2025-04-01-preview"))
         .and(header_regex("Custom-Header", "Value"))
+        .and(header_regex("Authorization", "Bearer Test API Key"))
         .respond_with(first)
         .expect(1)
         .mount(&server)
