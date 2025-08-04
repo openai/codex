@@ -103,35 +103,56 @@ mod tests {
 
     #[test]
     fn prefer_contiguous_match_over_spread() {
-        let (_idx_a, score_a) = fuzzy_match("abc", "abc").expect("expected match");
-        let (_idx_b, score_b) = fuzzy_match("a-b-c", "abc").expect("expected match");
+        let (_idx_a, score_a) = match fuzzy_match("abc", "abc") {
+            Some(v) => v,
+            None => panic!("expected a match"),
+        };
+        let (_idx_b, score_b) = match fuzzy_match("a-b-c", "abc") {
+            Some(v) => v,
+            None => panic!("expected a match"),
+        };
         assert!(score_a < score_b);
     }
 
     #[test]
     fn start_of_string_bonus_applies() {
-        let (_idx_a, score_a) = fuzzy_match("file_name", "file").expect("expected match");
-        let (_idx_b, score_b) = fuzzy_match("my_file_name", "file").expect("expected match");
+        let (_idx_a, score_a) = match fuzzy_match("file_name", "file") {
+            Some(v) => v,
+            None => panic!("expected a match"),
+        };
+        let (_idx_b, score_b) = match fuzzy_match("my_file_name", "file") {
+            Some(v) => v,
+            None => panic!("expected a match"),
+        };
         assert!(score_a < score_b);
     }
 
     #[test]
     fn empty_needle_matches_with_max_score_and_no_indices() {
-        let (idx, score) = fuzzy_match("anything", "").expect("empty needle should match");
+        let (idx, score) = match fuzzy_match("anything", "") {
+            Some(v) => v,
+            None => panic!("empty needle should match"),
+        };
         assert!(idx.is_empty());
         assert_eq!(score, i32::MAX);
     }
 
     #[test]
     fn case_insensitive_matching_basic() {
-        let (idx, _score) = fuzzy_match("Hello", "heL").expect("expected match");
+        let (idx, _score) = match fuzzy_match("Hello", "heL") {
+            Some(v) => v,
+            None => panic!("expected a match"),
+        };
         assert_eq!(idx, vec![0, 1, 2]);
     }
 
     #[test]
     fn indices_are_deduped_for_multichar_lowercase_expansion() {
         let needle = "\u{0069}\u{0307}"; // "i" + combining dot above
-        let (idx, _score) = fuzzy_match("İ", needle).expect("expected match");
+        let (idx, _score) = match fuzzy_match("İ", needle) {
+            Some(v) => v,
+            None => panic!("expected a match"),
+        };
         assert_eq!(idx, vec![0]);
     }
 }
