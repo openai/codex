@@ -6,7 +6,7 @@ use crate::client_common::Prompt;
 use crate::tools::CodexTool;
 
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct ResponsesApiTool {
+pub struct ResponsesApiTool {
     pub(crate) name: &'static str,
     pub(crate) description: &'static str,
     pub(crate) strict: bool,
@@ -17,7 +17,7 @@ pub(crate) struct ResponsesApiTool {
 /// Responses API.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type")]
-pub enum OpenAiTool {
+pub(crate) enum OpenAiTool {
     #[serde(rename = "function")]
     Function(ResponsesApiTool),
     #[serde(rename = "local_shell")]

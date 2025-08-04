@@ -6,7 +6,7 @@ use crate::openai_tools::OpenAiTool;
 use crate::plan_tool::PLAN_TOOL;
 
 #[derive(Debug, Clone, Serialize)]
-pub enum CodexTool {
+pub(crate) enum CodexTool {
     McpTool {
         fully_qualified_name: String,
         tool: Box<Tool>,
@@ -33,7 +33,7 @@ impl ToolFlags {
     }
 }
 
-pub fn get_codex_tools(flags: ToolFlags, extra_tools: Vec<CodexTool>) -> Vec<CodexTool> {
+pub(crate) fn get_codex_tools(flags: ToolFlags, extra_tools: Vec<CodexTool>) -> Vec<CodexTool> {
     let mut tools: Vec<CodexTool> = Vec::new();
 
     if !flags.local_shell && !flags.shell {
