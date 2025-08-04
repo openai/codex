@@ -5,6 +5,8 @@
 //!   2. User-defined entries inside `~/.codex/config.toml` under the `model_providers`
 //!      key. These override or extend the defaults at runtime.
 
+use codex_login::AuthMode;
+use codex_login::CodexAuth;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -88,17 +90,24 @@ impl ModelProviderInfo {
     /// When `require_api_key` is true and the provider declares an `env_key`
     /// but the variable is missing/empty, returns an [`Err`] identical to the
     /// one produced by [`ModelProviderInfo::api_key`].
-    pub fn create_request_builder<'a>(
+    pub async fn create_request_builder<'a>(
         &'a self,
         client: &'a reqwest::Client,
+        auth: &Option<CodexAuth>,
     ) -> crate::error::Result<reqwest::RequestBuilder> {
-        let url = self.get_full_url();
+        let mut auth = auth;
+        let fallback_auth;
+        if auth.is_none() {
+            fallback_auth = self.get_fallback_auth()?;
+            auth = &fallback_auth;
+        }
+
+        let url = self.get_full_url(&auth);
 
         let mut builder = client.post(url);
 
-        let api_key = self.api_key()?;
-        if let Some(key) = api_key {
-            builder = builder.bearer_auth(key);
+        if let Some(auth) = auth {
+            builder = builder.bearer_auth(auth.get_token().await?);
         }
 
         Ok(self.apply_http_headers(builder))
@@ -117,7 +126,7 @@ impl ModelProviderInfo {
             })
     }
 
-    pub(crate) fn get_full_url(&self) -> String {
+    pub(crate) fn get_full_url(&self, auth: &Option<CodexAuth>) -> String {
         let query_string = self.get_query_string();
         let base_url = self
             .base_url
@@ -125,9 +134,15 @@ impl ModelProviderInfo {
             .unwrap_or("https://api.openai.com/v1".to_string());
 
         match self.wire_api {
-            WireApi::Responses => {
-                format!("{base_url}/responses{query_string}")
-            }
+            WireApi::Responses => match auth {
+                Some(CodexAuth {
+                    mode: AuthMode::ChatGPT,
+                    ..
+                }) => {
+                    format!("{base_url}/codex/responses{query_string}")
+                }
+                _ => format!("{base_url}/responses{query_string}"),
+            },
             WireApi::Chat => format!("{base_url}/chat/completions{query_string}"),
         }
     }
@@ -200,6 +215,14 @@ impl ModelProviderInfo {
         self.stream_idle_timeout_ms
             .map(Duration::from_millis)
             .unwrap_or(Duration::from_millis(DEFAULT_STREAM_IDLE_TIMEOUT_MS))
+    }
+
+    fn get_fallback_auth(&self) -> crate::error::Result<Option<CodexAuth>> {
+        let api_key = self.api_key()?;
+        if let Some(api_key) = api_key {
+            return Ok(Some(CodexAuth::from_api_key(api_key)));
+        }
+        Ok(None)
     }
 }
 

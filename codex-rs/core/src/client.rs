@@ -121,26 +121,11 @@ impl ModelClient {
             return stream_from_fixture(path, self.provider.clone()).await;
         }
 
-        let mut auth = self.auth.clone();
-
-        if auth.is_none() {
-            let api_key = self.provider.api_key()?;
-            if let Some(api_key) = api_key {
-                auth = Some(CodexAuth::from_api_key(api_key));
-            }
-        }
+        let auth = self.auth.clone();
 
         let auth_mode = auth.as_ref().map(|a| a.mode);
 
         let store = prompt.store && auth_mode != Some(AuthMode::ChatGPT);
-
-        let base_url = match self.provider.base_url.clone() {
-            Some(url) => url,
-            None => match auth_mode {
-                Some(AuthMode::ChatGPT) => "https://chatgpt.com/backend-api/codex".to_string(),
-                _ => "https://api.openai.com/v1".to_string(),
-            },
-        };
 
         let full_instructions = prompt.get_full_instructions(&self.config.model);
         let tools_json = create_tools_json_for_responses_api(
@@ -184,33 +169,33 @@ impl ModelClient {
         let mut attempt = 0;
         let max_retries = self.provider.request_max_retries();
 
-        // Precompute query string once for all retry attempts.
-        let query_string = self.provider.get_query_string();
-
-        let url = format!("{base_url}/responses{query_string}");
-        trace!("POST to {url}: {}", serde_json::to_string(&payload)?);
+        trace!(
+            "POST to {}: {}",
+            self.provider.get_full_url(&auth),
+            serde_json::to_string(&payload)?
+        );
 
         loop {
             attempt += 1;
+
             let mut req_builder = self
-                .client
-                .post(url.clone())
+                .provider
+                .create_request_builder(&self.client, &auth)
+                .await?;
+
+            req_builder = req_builder
                 .header("OpenAI-Beta", "responses=experimental")
                 .header("session_id", self.session_id.to_string())
                 .header(reqwest::header::ACCEPT, "text/event-stream")
                 .json(&payload);
 
             if let Some(auth) = auth.as_ref() {
-                req_builder = req_builder.bearer_auth(&auth.get_token().await?);
-
                 if auth.mode == AuthMode::ChatGPT {
                     if let Some(account_id) = auth.get_account_id().await {
                         req_builder = req_builder.header("chatgpt-account-id", account_id);
                     }
                 }
             }
-
-            req_builder = self.provider.apply_http_headers(req_builder);
 
             let originator = self
                 .config
