@@ -121,7 +121,7 @@ impl ModelClient {
             return stream_from_fixture(path, self.provider.clone()).await;
         }
 
-        let mut auth = self.auth.as_ref().cloned();
+        let mut auth = self.auth.clone();
 
         if auth.is_none() {
             let api_key = self.provider.api_key()?;
