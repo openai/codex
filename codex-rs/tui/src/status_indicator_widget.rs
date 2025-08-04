@@ -151,42 +151,44 @@ impl WidgetRef for StatusIndicatorWidget {
         // Ensure we do not overflow width.
         let inner_width = block.inner(area).width as usize;
 
-        // Sanitize and colour‑strip the potentially colourful log text.  This
-        // ensures that **no** raw ANSI escape sequences leak into the
-        // back‑buffer which would otherwise cause cursor jumps or stray
-        // artefacts when the terminal is resized.
-        let line = ansi_escape_line(&self.text);
-        let mut sanitized_tail: String = line
-            .spans
-            .iter()
-            .map(|s| s.content.as_ref())
-            .collect::<Vec<_>>()
-            .join("");
-
-        // Truncate *after* stripping escape codes so width calculation is
-        // accurate. See UTF‑8 boundary comments above.
-        let header_len: usize = header_spans.iter().map(|s| s.content.len()).sum();
-
-        if header_len + sanitized_tail.len() > inner_width {
-            let available_bytes = inner_width.saturating_sub(header_len);
-
-            if sanitized_tail.is_char_boundary(available_bytes) {
-                sanitized_tail.truncate(available_bytes);
-            } else {
-                let mut idx = available_bytes;
-                while idx < sanitized_tail.len() && !sanitized_tail.is_char_boundary(idx) {
-                    idx += 1;
-                }
-                sanitized_tail.truncate(idx);
-            }
-        }
-
         let mut spans = header_spans;
 
-        // Re‑apply the DIM modifier so the tail appears visually subdued
-        // irrespective of the colour information preserved by
-        // `ansi_escape_line`.
-        spans.push(Span::styled(sanitized_tail, Style::default().dim()));
+        #[cfg(debug_assertions)]
+        {
+            // Sanitize and colour‑strip the potentially colourful log text.  This
+            // ensures that **no** raw ANSI escape sequences leak into the
+            // back‑buffer which would otherwise cause cursor jumps or stray
+            // artefacts when the terminal is resized.
+            let line = ansi_escape_line(&self.text);
+            let mut sanitized_tail: String = line
+                .spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<Vec<_>>()
+                .join("");
+
+            // Truncate *after* stripping escape codes so width calculation is
+            // accurate. See UTF‑8 boundary comments above.
+            let header_len: usize = spans.iter().map(|s| s.content.len()).sum();
+
+            if header_len + sanitized_tail.len() > inner_width {
+                let available_bytes = inner_width.saturating_sub(header_len);
+
+                if sanitized_tail.is_char_boundary(available_bytes) {
+                    sanitized_tail.truncate(available_bytes);
+                } else {
+                    let mut idx = available_bytes;
+                    while idx < sanitized_tail.len() && !sanitized_tail.is_char_boundary(idx) {
+                        idx += 1;
+                    }
+                    sanitized_tail.truncate(idx);
+                }
+            }
+            // Re‑apply the DIM modifier so the tail appears visually subdued
+            // irrespective of the colour information preserved by
+            // `ansi_escape_line`.
+            spans.push(Span::styled(sanitized_tail, Style::default().dim()));
+        }
 
         let paragraph = Paragraph::new(Line::from(spans))
             .block(block)
