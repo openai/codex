@@ -102,7 +102,7 @@ impl ModelProviderInfo {
             auth = &fallback_auth;
         }
 
-        let url = self.get_full_url(&auth);
+        let url = self.get_full_url(auth);
 
         let mut builder = client.post(url);
 
@@ -139,7 +139,7 @@ impl ModelProviderInfo {
                     mode: AuthMode::ChatGPT,
                     ..
                 }) => {
-                    format!("{base_url}/codex/responses{query_string}")
+                    format!("{base_url}/responses{query_string}")
                 }
                 _ => format!("{base_url}/responses{query_string}"),
             },
