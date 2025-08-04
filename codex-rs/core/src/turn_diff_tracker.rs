@@ -413,6 +413,7 @@ fn git_blob_sha1_hex_bytes(data: &[u8]) -> String {
 
 const ZERO_OID: &str = "0000000000000000000000000000000000000000";
 const REGULAR_MODE: &str = "100644";
+#[cfg(unix)]
 const EXECUTABLE_MODE: &str = "100755";
 const SYMLINK_MODE: &str = "120000";
 
