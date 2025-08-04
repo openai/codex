@@ -7,27 +7,31 @@ use std::process::Command;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
+use sha1::digest::Output;
 use uuid::Uuid;
 
 use crate::protocol::FileChange;
 
+const ZERO_OID: &str = "0000000000000000000000000000000000000000";
+const DEV_NULL: &str = "/dev/null";
+
 struct BaselineFileInfo {
-    path: Option<PathBuf>,
-    contents_bytes: Option<Vec<u8>>,
-    mode: Option<String>,
-    oid: Option<String>,
+    path: PathBuf,
+    content: Vec<u8>,
+    mode: FileMode,
+    oid: String,
 }
 
 /// Tracks sets of changes to files and exposes the overall unified diff.
 /// Internally, the way this works is now:
 /// 1. Maintain an in-memory baseline snapshot of files when they are first seen.
 ///    For new additions, do not create a baseline so that diffs are shown as proper additions (using /dev/null).
-/// 2. Keep a stable internal filename (uuid + same extension) per external path for rename tracking.
+/// 2. Keep a stable internal filename (uuid) per external path for rename tracking.
 /// 3. To compute the aggregated unified diff, compare each baseline snapshot to the current file on disk entirely in-memory
 ///    using the `similar` crate and emit unified diffs with rewritten external paths.
 #[derive(Default)]
 pub struct TurnDiffTracker {
-    /// Map external path -> internal filename (uuid + same extension).
+    /// Map external path -> internal filename (uuid).
     external_to_temp_name: HashMap<PathBuf, String>,
     /// Internal filename -> baseline file info.
     baseline_file_info: HashMap<String, BaselineFileInfo>,
@@ -47,43 +51,46 @@ impl TurnDiffTracker {
     /// - Creates an in-memory baseline snapshot for files that already exist on disk when first seen.
     /// - For additions, we intentionally do not create a baseline snapshot so that diffs are proper additions.
     /// - Also updates internal mappings for move/rename events.
-    pub fn on_patch_begin(&mut self, changes: &HashMap<PathBuf, FileChange>) -> Result<()> {
+    pub fn on_patch_begin(&mut self, changes: &HashMap<PathBuf, FileChange>) {
         for (path, change) in changes.iter() {
             // Ensure a stable internal filename exists for this external path.
             if !self.external_to_temp_name.contains_key(path) {
-                let internal = uuid_filename_for(path);
+                let internal = Uuid::new_v4().to_string();
                 self.external_to_temp_name
                     .insert(path.clone(), internal.clone());
                 self.temp_name_to_current_path
                     .insert(internal.clone(), path.clone());
 
                 // If the file exists on disk now, snapshot as baseline; else leave missing to represent /dev/null.
-                let (contents_bytes, mode, oid) = if path.exists() {
+                let baseline_file_info = if path.exists() {
                     let mode = file_mode_for_path(path);
-                    let mode_str = mode.as_deref().unwrap_or(REGULAR_MODE);
-                    let contents_bytes = blob_bytes(path, mode_str)
-                        .unwrap_or_default()
-                        .unwrap_or_default();
-                    let oid = if mode.as_deref() == Some(SYMLINK_MODE) {
-                        git_blob_sha1_hex_bytes(&contents_bytes)
+                    let mode_val = mode.unwrap_or(FileMode::Regular);
+                    let content = blob_bytes(path, &mode_val).unwrap_or_default();
+                    let oid = if mode == Some(FileMode::Symlink) {
+                        format!("{:x}", git_blob_sha1_hex_bytes(&content))
                     } else {
                         self.git_blob_oid_for_path(path)
-                            .unwrap_or_else(|| git_blob_sha1_hex_bytes(&contents_bytes))
+                            .unwrap_or_else(|| format!("{:x}", git_blob_sha1_hex_bytes(&content)))
                     };
-                    (Some(contents_bytes), mode, Some(oid))
+                    Some(BaselineFileInfo {
+                        path: path.clone(),
+                        content,
+                        mode: mode_val,
+                        oid,
+                    })
                 } else {
-                    (None, None, Some(ZERO_OID.to_string()))
+                    Some(BaselineFileInfo {
+                        path: path.clone(),
+                        content: vec![],
+                        mode: FileMode::Regular,
+                        oid: ZERO_OID.to_string(),
+                    })
                 };
 
-                self.baseline_file_info.insert(
-                    internal.clone(),
-                    BaselineFileInfo {
-                        path: Some(path.clone()),
-                        contents_bytes,
-                        mode,
-                        oid,
-                    },
-                );
+                if let Some(baseline_file_info) = baseline_file_info {
+                    self.baseline_file_info
+                        .insert(internal.clone(), baseline_file_info);
+                }
             }
 
             // Track rename/move in current mapping if provided in an Update.
@@ -96,14 +103,14 @@ impl TurnDiffTracker {
                     Some(i) => i.clone(),
                     None => {
                         // This should be rare, but if we haven't mapped the source, create it with no baseline.
-                        let i = uuid_filename_for(path);
+                        let i = Uuid::new_v4().to_string();
                         self.baseline_file_info.insert(
                             i.clone(),
                             BaselineFileInfo {
-                                path: Some(path.clone()),
-                                contents_bytes: None,
-                                mode: None,
-                                oid: Some(ZERO_OID.to_string()),
+                                path: path.clone(),
+                                content: vec![],
+                                mode: FileMode::Regular,
+                                oid: ZERO_OID.to_string(),
                             },
                         );
                         i
@@ -118,8 +125,6 @@ impl TurnDiffTracker {
                     .insert(dest.clone(), uuid_filename);
             };
         }
-
-        Ok(())
     }
 
     fn get_path_for_internal(&self, internal: &str) -> Option<PathBuf> {
@@ -129,7 +134,7 @@ impl TurnDiffTracker {
             .or_else(|| {
                 self.baseline_file_info
                     .get(internal)
-                    .and_then(|info| info.path.clone())
+                    .map(|info| info.path.clone())
             })
     }
 
@@ -231,150 +236,9 @@ impl TurnDiffTracker {
         });
 
         for internal in baseline_file_names {
-            // Baseline external must exist for any tracked internal.
-            let baseline_external = match self
-                .baseline_file_info
-                .get(&internal)
-                .and_then(|i| i.path.clone())
-            {
-                Some(p) => p,
-                None => continue,
-            };
-            let current_external = match self.get_path_for_internal(&internal) {
-                Some(p) => p,
-                None => continue,
-            };
-
-            // Determine modes early; needed to read symlink content correctly.
-            let baseline_mode = self
-                .baseline_file_info
-                .get(&internal)
-                .and_then(|i| i.mode.clone())
-                .unwrap_or_else(|| REGULAR_MODE.to_string());
-            let current_mode =
-                file_mode_for_path(&current_external).unwrap_or_else(|| REGULAR_MODE.to_string());
-
-            let left_bytes = self
-                .baseline_file_info
-                .get(&internal)
-                .and_then(|i| i.contents_bytes.clone());
-
-            let right_bytes = blob_bytes(&current_external, &current_mode)?;
-
-            // Fast path: identical bytes or both missing.
-            if left_bytes.as_deref() == right_bytes.as_deref() {
-                continue;
-            }
-
-            let left_display = self.relative_to_git_root_str(&baseline_external);
-            let right_display = self.relative_to_git_root_str(&current_external);
-
-            // Emit a git-style header for better readability and parity with previous behavior.
-            aggregated.push_str(&format!("diff --git a/{left_display} b/{right_display}\n"));
-
-            let is_add = left_bytes.is_none() && right_bytes.is_some();
-            let is_delete = left_bytes.is_some() && right_bytes.is_none();
-
-            if is_add {
-                aggregated.push_str(&format!("new file mode {current_mode}\n"));
-            } else if is_delete {
-                aggregated.push_str(&format!("deleted file mode {baseline_mode}\n"));
-            } else if baseline_mode != current_mode {
-                aggregated.push_str(&format!("old mode {baseline_mode}\n"));
-                aggregated.push_str(&format!("new mode {current_mode}\n"));
-            }
-
-            // Determine blob object IDs for left and right contents. Prefer stored OIDs
-            // captured from the original repo state when the change was first seen.
-            let left_oid = self
-                .baseline_file_info
-                .get(&internal)
-                .and_then(|i| i.oid.clone())
-                .or_else(|| {
-                    left_bytes
-                        .as_ref()
-                        .map(|b| git_blob_sha1_hex_bytes(b))
-                        .or(Some(ZERO_OID.to_string()))
-                })
-                .unwrap_or_else(|| ZERO_OID.to_string());
-            let right_oid = if let Some(b) = right_bytes.as_ref() {
-                if current_mode == SYMLINK_MODE {
-                    git_blob_sha1_hex_bytes(b)
-                } else {
-                    self.git_blob_oid_for_path(&current_external)
-                        .unwrap_or_else(|| git_blob_sha1_hex_bytes(b))
-                }
-            } else {
-                ZERO_OID.to_string()
-            };
-
-            // If either side isn't valid UTF-8, emit a binary diff header and continue.
-            let left_text = left_bytes
-                .as_deref()
-                .and_then(|b| std::str::from_utf8(b).ok());
-            let right_text = right_bytes
-                .as_deref()
-                .and_then(|b| std::str::from_utf8(b).ok());
-
-            // Prefer text diffs when possible:
-            // - both sides are valid UTF-8
-            // - OR one side is missing (add/delete) and the present side is valid UTF-8
-            let can_text_diff = match (left_text, right_text, is_add, is_delete) {
-                (Some(_), Some(_), _, _) => true,
-                (_, Some(_), true, _) => true, // add: left missing, right text
-                (Some(_), _, _, true) => true, // delete: left text, right missing
-                _ => false,
-            };
-
-            if can_text_diff {
-                // Diff the contents as text, treating missing side as empty string.
-                let l = left_text.unwrap_or("");
-                let r = right_text.unwrap_or("");
-
-                // Emit index line without mode suffix to preserve current test expectations.
-                aggregated.push_str(&format!("index {left_oid}..{right_oid}\n"));
-
-                let old_header = if left_bytes.is_some() {
-                    format!("a/{left_display}")
-                } else {
-                    "/dev/null".to_string()
-                };
-                let new_header = if right_bytes.is_some() {
-                    format!("b/{right_display}")
-                } else {
-                    "/dev/null".to_string()
-                };
-
-                let diff = similar::TextDiff::from_lines(l, r);
-                let unified = diff
-                    .unified_diff()
-                    .context_radius(3)
-                    .header(&old_header, &new_header)
-                    .to_string();
-
-                aggregated.push_str(&unified);
-                if !aggregated.ends_with('\n') {
-                    aggregated.push('\n');
-                }
-            } else {
-                // Binary or invalid UTF-8: emit header only.
-                aggregated.push_str(&format!("index {left_oid}..{right_oid}\n"));
-                let old_header = if left_bytes.is_some() {
-                    format!("a/{left_display}")
-                } else {
-                    "/dev/null".to_string()
-                };
-                let new_header = if right_bytes.is_some() {
-                    format!("b/{right_display}")
-                } else {
-                    "/dev/null".to_string()
-                };
-                aggregated.push_str(&format!("--- {old_header}\n"));
-                aggregated.push_str(&format!("+++ {new_header}\n"));
-                aggregated.push_str("Binary files differ\n");
-                if !aggregated.ends_with('\n') {
-                    aggregated.push('\n');
-                }
+            aggregated.push_str(self.get_file_diff(&internal).as_str());
+            if !aggregated.ends_with('\n') {
+                aggregated.push('\n');
             }
         }
 
@@ -384,75 +248,197 @@ impl TurnDiffTracker {
             Ok(Some(aggregated))
         }
     }
-}
 
-fn uuid_filename_for(path: &Path) -> String {
-    let id = Uuid::new_v4().to_string();
-    match path.extension().and_then(|e| e.to_str()) {
-        Some(ext) if !ext.is_empty() => format!("{id}.{ext}"),
-        _ => id,
+    fn get_file_diff(&mut self, internal_file_name: &str) -> String {
+        let mut aggregated = String::new();
+
+        // Snapshot lightweight fields only.
+        let (baseline_external_path, baseline_mode, left_oid) = {
+            if let Some(info) = self.baseline_file_info.get(internal_file_name) {
+                (info.path.clone(), info.mode, info.oid.clone())
+            } else {
+                (PathBuf::new(), FileMode::Regular, ZERO_OID.to_string())
+            }
+        };
+        let current_external_path = match self.get_path_for_internal(internal_file_name) {
+            Some(p) => p,
+            None => return aggregated,
+        };
+
+        let current_mode = file_mode_for_path(&current_external_path).unwrap_or(FileMode::Regular);
+        let right_bytes = blob_bytes(&current_external_path, &current_mode);
+
+        // Compute displays with &mut self before borrowing any baseline content.
+        let left_display = self.relative_to_git_root_str(&baseline_external_path);
+        let right_display = self.relative_to_git_root_str(&current_external_path);
+
+        // Compute right oid before borrowing baseline content.
+        let right_oid = if let Some(b) = right_bytes.as_ref() {
+            if current_mode == FileMode::Symlink {
+                format!("{:x}", git_blob_sha1_hex_bytes(b))
+            } else {
+                self.git_blob_oid_for_path(&current_external_path)
+                    .unwrap_or_else(|| format!("{:x}", git_blob_sha1_hex_bytes(b)))
+            }
+        } else {
+            ZERO_OID.to_string()
+        };
+
+        // Borrow baseline content only after all &mut self uses are done.
+        let left_present = left_oid.as_str() != ZERO_OID;
+        let left_bytes: Option<&[u8]> = if left_present {
+            self.baseline_file_info
+                .get(internal_file_name)
+                .map(|i| i.content.as_slice())
+        } else {
+            None
+        };
+
+        // Fast path: identical bytes or both missing.
+        if left_bytes == right_bytes.as_deref() {
+            return aggregated;
+        }
+
+        aggregated.push_str(&format!("diff --git a/{left_display} b/{right_display}\n"));
+
+        let is_add = !left_present && right_bytes.is_some();
+        let is_delete = left_present && right_bytes.is_none();
+
+        if is_add {
+            aggregated.push_str(&format!("new file mode {current_mode}\n"));
+        } else if is_delete {
+            aggregated.push_str(&format!("deleted file mode {baseline_mode}\n"));
+        } else if baseline_mode != current_mode {
+            aggregated.push_str(&format!("old mode {baseline_mode}\n"));
+            aggregated.push_str(&format!("new mode {current_mode}\n"));
+        }
+
+        let left_text = left_bytes.and_then(|b| std::str::from_utf8(b).ok());
+        let right_text = right_bytes
+            .as_deref()
+            .and_then(|b| std::str::from_utf8(b).ok());
+
+        let can_text_diff = matches!(
+            (left_text, right_text, is_add, is_delete),
+            (Some(_), Some(_), _, _) | (_, Some(_), true, _) | (Some(_), _, _, true)
+        );
+
+        if can_text_diff {
+            let l = left_text.unwrap_or("");
+            let r = right_text.unwrap_or("");
+
+            aggregated.push_str(&format!("index {left_oid}..{right_oid}\n"));
+
+            let old_header = if left_present {
+                format!("a/{left_display}")
+            } else {
+                DEV_NULL.to_string()
+            };
+            let new_header = if right_bytes.is_some() {
+                format!("b/{right_display}")
+            } else {
+                DEV_NULL.to_string()
+            };
+
+            let diff = similar::TextDiff::from_lines(l, r);
+            let unified = diff
+                .unified_diff()
+                .context_radius(3)
+                .header(&old_header, &new_header)
+                .to_string();
+
+            aggregated.push_str(&unified);
+        } else {
+            aggregated.push_str(&format!("index {left_oid}..{right_oid}\n"));
+            let old_header = if left_present {
+                format!("a/{left_display}")
+            } else {
+                DEV_NULL.to_string()
+            };
+            let new_header = if right_bytes.is_some() {
+                format!("b/{right_display}")
+            } else {
+                DEV_NULL.to_string()
+            };
+            aggregated.push_str(&format!("--- {old_header}\n"));
+            aggregated.push_str(&format!("+++ {new_header}\n"));
+            aggregated.push_str("Binary files differ\n");
+        }
+        aggregated
     }
 }
 
 /// Compute the Git SHA-1 blob object ID for the given content (bytes).
-fn git_blob_sha1_hex_bytes(data: &[u8]) -> String {
+fn git_blob_sha1_hex_bytes(data: &[u8]) -> Output<sha1::Sha1> {
     // Git blob hash is sha1 of: "blob <len>\0<data>"
     let header = format!("blob {}\0", data.len());
     use sha1::Digest;
     let mut hasher = sha1::Sha1::new();
     hasher.update(header.as_bytes());
     hasher.update(data);
-    let digest = hasher.finalize();
-    let mut out = String::with_capacity(40);
-    for b in digest {
-        use std::fmt::Write;
-        let _ = write!(&mut out, "{b:02x}");
-    }
-    out
+    hasher.finalize()
 }
 
-const ZERO_OID: &str = "0000000000000000000000000000000000000000";
-const REGULAR_MODE: &str = "100644";
-#[cfg(unix)]
-const EXECUTABLE_MODE: &str = "100755";
-const SYMLINK_MODE: &str = "120000";
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FileMode {
+    Regular,
+    #[cfg(unix)]
+    Executable,
+    Symlink,
+}
+
+impl FileMode {
+    fn as_str(&self) -> &'static str {
+        match self {
+            FileMode::Regular => "100644",
+            #[cfg(unix)]
+            FileMode::Executable => "100755",
+            FileMode::Symlink => "120000",
+        }
+    }
+}
+
+impl std::fmt::Display for FileMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
 
 #[cfg(unix)]
-fn file_mode_for_path(path: &Path) -> Option<String> {
+fn file_mode_for_path(path: &Path) -> Option<FileMode> {
     use std::os::unix::fs::PermissionsExt;
     let meta = fs::symlink_metadata(path).ok()?;
     let ft = meta.file_type();
     if ft.is_symlink() {
-        return Some(SYMLINK_MODE.to_string());
+        return Some(FileMode::Symlink);
     }
     let mode = meta.permissions().mode();
     let is_exec = (mode & 0o111) != 0;
     Some(if is_exec {
-        EXECUTABLE_MODE.into()
+        FileMode::Executable
     } else {
-        REGULAR_MODE.into()
+        FileMode::Regular
     })
 }
 
 #[cfg(not(unix))]
-fn file_mode_for_path(_path: &Path) -> Option<String> {
+fn file_mode_for_path(_path: &Path) -> Option<FileMode> {
     // Default to non-executable on non-unix.
-    Some(REGULAR_MODE.to_string())
+    Some(FileMode::Regular)
 }
 
-fn blob_bytes(path: &Path, mode: &str) -> Result<Option<Vec<u8>>> {
+fn blob_bytes(path: &Path, mode: &FileMode) -> Option<Vec<u8>> {
     if path.exists() {
-        let contents = if mode == SYMLINK_MODE {
+        let contents = if *mode == FileMode::Symlink {
             symlink_blob_bytes(path)
-                .ok_or_else(|| anyhow!("failed to read symlink target for {}", path.display()))?
+                .ok_or_else(|| anyhow!("failed to read symlink target for {}", path.display()))
         } else {
-            fs::read(path).with_context(|| {
-                format!("failed to read current file for diff {}", path.display())
-            })?
+            fs::read(path)
+                .with_context(|| format!("failed to read current file for diff {}", path.display()))
         };
-        Ok(Some(contents))
+        contents.ok()
     } else {
-        Ok(None)
+        None
     }
 }
 
@@ -488,7 +474,7 @@ mod tests {
     /// Compute the Git SHA-1 blob object ID for the given content (string).
     /// This delegates to the bytes version to avoid UTF-8 lossy conversions here.
     fn git_blob_sha1_hex(data: &str) -> String {
-        git_blob_sha1_hex_bytes(data.as_bytes())
+        format!("{:x}", git_blob_sha1_hex_bytes(data.as_bytes()))
     }
 
     fn normalize_diff_for_test(input: &str, root: &Path) -> String {
@@ -532,17 +518,24 @@ mod tests {
                 content: "foo\n".to_string(),
             },
         )]);
-        acc.on_patch_begin(&add_changes).unwrap();
+        acc.on_patch_begin(&add_changes);
 
         // Simulate apply: create the file on disk.
         fs::write(&file, "foo\n").unwrap();
         let first = acc.get_unified_diff().unwrap().unwrap();
         let first = normalize_diff_for_test(&first, dir.path());
         let expected_first = {
-            let mode = file_mode_for_path(&file).unwrap_or_else(|| REGULAR_MODE.to_string());
+            let mode = file_mode_for_path(&file).unwrap_or(FileMode::Regular);
             let right_oid = git_blob_sha1_hex("foo\n");
             format!(
-                "diff --git a/<TMP>/a.txt b/<TMP>/a.txt\nnew file mode {mode}\nindex {ZERO_OID}..{right_oid}\n--- /dev/null\n+++ b/<TMP>/a.txt\n@@ -0,0 +1 @@\n+foo\n",
+                r#"diff --git a/<TMP>/a.txt b/<TMP>/a.txt
+new file mode {mode}
+index {ZERO_OID}..{right_oid}
+--- {DEV_NULL}
++++ b/<TMP>/a.txt
+@@ -0,0 +1 @@
++foo
+"#,
             )
         };
         assert_eq!(first, expected_first);
@@ -555,17 +548,25 @@ mod tests {
                 move_path: None,
             },
         )]);
-        acc.on_patch_begin(&update_changes).unwrap();
+        acc.on_patch_begin(&update_changes);
 
         // Simulate apply: append a new line.
         fs::write(&file, "foo\nbar\n").unwrap();
         let combined = acc.get_unified_diff().unwrap().unwrap();
         let combined = normalize_diff_for_test(&combined, dir.path());
         let expected_combined = {
-            let mode = file_mode_for_path(&file).unwrap_or_else(|| REGULAR_MODE.to_string());
+            let mode = file_mode_for_path(&file).unwrap_or(FileMode::Regular);
             let right_oid = git_blob_sha1_hex("foo\nbar\n");
             format!(
-                "diff --git a/<TMP>/a.txt b/<TMP>/a.txt\nnew file mode {mode}\nindex {ZERO_OID}..{right_oid}\n--- /dev/null\n+++ b/<TMP>/a.txt\n@@ -0,0 +1,2 @@\n+foo\n+bar\n",
+                r#"diff --git a/<TMP>/a.txt b/<TMP>/a.txt
+new file mode {mode}
+index {ZERO_OID}..{right_oid}
+--- {DEV_NULL}
++++ b/<TMP>/a.txt
+@@ -0,0 +1,2 @@
++foo
++bar
+"#,
             )
         };
         assert_eq!(combined, expected_combined);
@@ -579,17 +580,24 @@ mod tests {
 
         let mut acc = TurnDiffTracker::new();
         let del_changes = HashMap::from([(file.clone(), FileChange::Delete)]);
-        acc.on_patch_begin(&del_changes).unwrap();
+        acc.on_patch_begin(&del_changes);
 
         // Simulate apply: delete the file from disk.
-        let baseline_mode = file_mode_for_path(&file).unwrap_or_else(|| REGULAR_MODE.to_string());
+        let baseline_mode = file_mode_for_path(&file).unwrap_or(FileMode::Regular);
         fs::remove_file(&file).unwrap();
         let diff = acc.get_unified_diff().unwrap().unwrap();
         let diff = normalize_diff_for_test(&diff, dir.path());
         let expected = {
             let left_oid = git_blob_sha1_hex("x\n");
             format!(
-                "diff --git a/<TMP>/b.txt b/<TMP>/b.txt\ndeleted file mode {baseline_mode}\nindex {left_oid}..{ZERO_OID}\n--- a/<TMP>/b.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-x\n",
+                r#"diff --git a/<TMP>/b.txt b/<TMP>/b.txt
+deleted file mode {baseline_mode}
+index {left_oid}..{ZERO_OID}
+--- a/<TMP>/b.txt
++++ {DEV_NULL}
+@@ -1 +0,0 @@
+-x
+"#,
             )
         };
         assert_eq!(diff, expected);
@@ -610,7 +618,7 @@ mod tests {
                 move_path: Some(dest.clone()),
             },
         )]);
-        acc.on_patch_begin(&mv_changes).unwrap();
+        acc.on_patch_begin(&mv_changes);
 
         // Simulate apply: move and update content.
         fs::rename(&src, &dest).unwrap();
@@ -622,14 +630,21 @@ mod tests {
             let left_oid = git_blob_sha1_hex("line\n");
             let right_oid = git_blob_sha1_hex("line2\n");
             format!(
-                "diff --git a/<TMP>/src.txt b/<TMP>/dst.txt\nindex {left_oid}..{right_oid}\n--- a/<TMP>/src.txt\n+++ b/<TMP>/dst.txt\n@@ -1 +1 @@\n-line\n+line2\n"
+                r#"diff --git a/<TMP>/src.txt b/<TMP>/dst.txt
+index {left_oid}..{right_oid}
+--- a/<TMP>/src.txt
++++ b/<TMP>/dst.txt
+@@ -1 +1 @@
+-line
++line2
+"#
             )
         };
         assert_eq!(out, expected);
     }
 
     #[test]
-    fn move_without_content_change_yields_no_diff() {
+    fn move_without_1change_yields_no_diff() {
         let dir = tempdir().unwrap();
         let src = dir.path().join("moved.txt");
         let dest = dir.path().join("renamed.txt");
@@ -643,7 +658,7 @@ mod tests {
                 move_path: Some(dest.clone()),
             },
         )]);
-        acc.on_patch_begin(&mv_changes).unwrap();
+        acc.on_patch_begin(&mv_changes);
 
         // Simulate apply: move only, no content change.
         fs::rename(&src, &dest).unwrap();
@@ -665,13 +680,26 @@ mod tests {
                 move_path: Some(dest.clone()),
             },
         )]);
-        acc.on_patch_begin(&mv).unwrap();
+        acc.on_patch_begin(&mv);
         // No file existed initially; create only dest
         fs::write(&dest, "hello\n").unwrap();
         let diff = acc.get_unified_diff().unwrap().unwrap();
-        assert!(diff.contains("new file mode"));
-        assert!(diff.contains("--- /dev/null"));
-        assert!(diff.contains("+++ b/"));
+        let diff = normalize_diff_for_test(&diff, dir.path());
+        let expected = {
+            let mode = file_mode_for_path(&dest).unwrap_or(FileMode::Regular);
+            let right_oid = git_blob_sha1_hex("hello\n");
+            format!(
+                r#"diff --git a/<TMP>/src.txt b/<TMP>/dest.txt
+new file mode {mode}
+index {ZERO_OID}..{right_oid}
+--- {DEV_NULL}
++++ b/<TMP>/dest.txt
+@@ -0,0 +1 @@
++hello
+"#,
+            )
+        };
+        assert_eq!(diff, expected);
     }
 
     #[test]
@@ -692,7 +720,7 @@ mod tests {
                 move_path: None,
             },
         )]);
-        acc.on_patch_begin(&update_a).unwrap();
+        acc.on_patch_begin(&update_a);
         // Simulate apply: modify a.txt on disk.
         fs::write(&a, "foo\nbar\n").unwrap();
         let first = acc.get_unified_diff().unwrap().unwrap();
@@ -701,16 +729,23 @@ mod tests {
             let left_oid = git_blob_sha1_hex("foo\n");
             let right_oid = git_blob_sha1_hex("foo\nbar\n");
             format!(
-                "diff --git a/<TMP>/a.txt b/<TMP>/a.txt\nindex {left_oid}..{right_oid}\n--- a/<TMP>/a.txt\n+++ b/<TMP>/a.txt\n@@ -1 +1,2 @@\n foo\n+bar\n"
+                r#"diff --git a/<TMP>/a.txt b/<TMP>/a.txt
+index {left_oid}..{right_oid}
+--- a/<TMP>/a.txt
++++ b/<TMP>/a.txt
+@@ -1 +1,2 @@
+ foo
++bar
+"#
             )
         };
         assert_eq!(first, expected_first);
 
         // Next: introduce a brand-new path b.txt into baseline snapshots via a delete change.
         let del_b = HashMap::from([(b.clone(), FileChange::Delete)]);
-        acc.on_patch_begin(&del_b).unwrap();
+        acc.on_patch_begin(&del_b);
         // Simulate apply: delete b.txt.
-        let baseline_mode = file_mode_for_path(&b).unwrap_or_else(|| REGULAR_MODE.to_string());
+        let baseline_mode = file_mode_for_path(&b).unwrap_or(FileMode::Regular);
         fs::remove_file(&b).unwrap();
 
         let combined = acc.get_unified_diff().unwrap().unwrap();
@@ -720,8 +755,21 @@ mod tests {
             let right_oid_a = git_blob_sha1_hex("foo\nbar\n");
             let left_oid_b = git_blob_sha1_hex("z\n");
             format!(
-                "diff --git a/<TMP>/a.txt b/<TMP>/a.txt\nindex {left_oid_a}..{right_oid_a}\n--- a/<TMP>/a.txt\n+++ b/<TMP>/a.txt\n@@ -1 +1,2 @@\n foo\n+bar\n\
-                diff --git a/<TMP>/b.txt b/<TMP>/b.txt\ndeleted file mode {baseline_mode}\nindex {left_oid_b}..{ZERO_OID}\n--- a/<TMP>/b.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-z\n",
+                r#"diff --git a/<TMP>/a.txt b/<TMP>/a.txt
+index {left_oid_a}..{right_oid_a}
+--- a/<TMP>/a.txt
++++ b/<TMP>/a.txt
+@@ -1 +1,2 @@
+ foo
++bar
+diff --git a/<TMP>/b.txt b/<TMP>/b.txt
+deleted file mode {baseline_mode}
+index {left_oid_b}..{ZERO_OID}
+--- a/<TMP>/b.txt
++++ {DEV_NULL}
+@@ -1 +0,0 @@
+-z
+"#,
             )
         };
         assert_eq!(combined, expected);
@@ -747,7 +795,7 @@ mod tests {
                 move_path: None,
             },
         )]);
-        acc.on_patch_begin(&update_changes).unwrap();
+        acc.on_patch_begin(&update_changes);
 
         // Apply update on disk
         fs::write(&file, &right_bytes).unwrap();
@@ -755,12 +803,85 @@ mod tests {
         let diff = acc.get_unified_diff().unwrap().unwrap();
         let diff = normalize_diff_for_test(&diff, dir.path());
         let expected = {
-            let left_oid = git_blob_sha1_hex_bytes(&left_bytes);
-            let right_oid = git_blob_sha1_hex_bytes(&right_bytes);
+            let left_oid = format!("{:x}", git_blob_sha1_hex_bytes(&left_bytes));
+            let right_oid = format!("{:x}", git_blob_sha1_hex_bytes(&right_bytes));
             format!(
-                "diff --git a/<TMP>/bin.dat b/<TMP>/bin.dat\nindex {left_oid}..{right_oid}\n--- a/<TMP>/bin.dat\n+++ b/<TMP>/bin.dat\nBinary files differ\n"
+                r#"diff --git a/<TMP>/bin.dat b/<TMP>/bin.dat
+index {left_oid}..{right_oid}
+--- a/<TMP>/bin.dat
++++ b/<TMP>/bin.dat
+Binary files differ
+"#
             )
         };
         assert_eq!(diff, expected);
+    }
+
+    #[test]
+    fn filenames_with_spaces_add_and_update() {
+        let mut acc = TurnDiffTracker::new();
+
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("name with spaces.txt");
+
+        // First patch: add file (baseline should be /dev/null).
+        let add_changes = HashMap::from([(
+            file.clone(),
+            FileChange::Add {
+                content: "foo\n".to_string(),
+            },
+        )]);
+        acc.on_patch_begin(&add_changes);
+
+        // Simulate apply: create the file on disk.
+        fs::write(&file, "foo\n").unwrap();
+        let first = acc.get_unified_diff().unwrap().unwrap();
+        let first = normalize_diff_for_test(&first, dir.path());
+        let expected_first = {
+            let mode = file_mode_for_path(&file).unwrap_or(FileMode::Regular);
+            let right_oid = git_blob_sha1_hex("foo\n");
+            format!(
+                r#"diff --git a/<TMP>/name with spaces.txt b/<TMP>/name with spaces.txt
+new file mode {mode}
+index {ZERO_OID}..{right_oid}
+--- {DEV_NULL}
++++ b/<TMP>/name with spaces.txt
+@@ -0,0 +1 @@
++foo
+"#,
+            )
+        };
+        assert_eq!(first, expected_first);
+
+        // Second patch: update the file on disk.
+        let update_changes = HashMap::from([(
+            file.clone(),
+            FileChange::Update {
+                unified_diff: "".to_owned(),
+                move_path: None,
+            },
+        )]);
+        acc.on_patch_begin(&update_changes);
+
+        // Simulate apply: append a new line with a space.
+        fs::write(&file, "foo\nbar baz\n").unwrap();
+        let combined = acc.get_unified_diff().unwrap().unwrap();
+        let combined = normalize_diff_for_test(&combined, dir.path());
+        let expected_combined = {
+            let mode = file_mode_for_path(&file).unwrap_or(FileMode::Regular);
+            let right_oid = git_blob_sha1_hex("foo\nbar baz\n");
+            format!(
+                r#"diff --git a/<TMP>/name with spaces.txt b/<TMP>/name with spaces.txt
+new file mode {mode}
+index {ZERO_OID}..{right_oid}
+--- {DEV_NULL}
++++ b/<TMP>/name with spaces.txt
+@@ -0,0 +1,2 @@
++foo
++bar baz
+"#,
+            )
+        };
+        assert_eq!(combined, expected_combined);
     }
 }

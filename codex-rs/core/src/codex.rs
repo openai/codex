@@ -381,7 +381,7 @@ impl Session {
                 user_explicitly_approved_this_action,
                 changes,
             }) => {
-                let _ = turn_diff_tracker.on_patch_begin(&changes);
+                turn_diff_tracker.on_patch_begin(&changes);
 
                 EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
                     call_id,
