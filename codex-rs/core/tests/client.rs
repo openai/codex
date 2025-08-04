@@ -397,7 +397,7 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
         .and(path("/openai/responses"))
         .and(query_param("api-version", "2025-04-01-preview"))
         .and(header_regex("Custom-Header", "Value"))
-        .and(header_regex("Authorization", "Bearer Test API Key"))
+        .and(header_regex("Authorization", "Bearer .+"))
         .respond_with(first)
         .expect(1)
         .mount(&server)
@@ -406,7 +406,8 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
     let provider = ModelProviderInfo {
         name: "custom".to_string(),
         base_url: Some(format!("{}/openai", server.uri())),
-        env_key: Some("TEST_API_KEY_ENV_VAR".to_string()),
+        // Reuse the existing environment variable to avoid using unsafe code
+        env_key: Some("USER".to_string()),
         query_params: Some(std::collections::HashMap::from([(
             "api-version".to_string(),
             "2025-04-01-preview".to_string(),
@@ -424,9 +425,6 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
         requires_auth: false,
     };
 
-    unsafe {
-        std::env::set_var("TEST_API_KEY_ENV_VAR", "Test API Key");
-    }
     // Init session
     let codex_home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&codex_home);
