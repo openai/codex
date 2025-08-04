@@ -57,6 +57,10 @@ pub struct Config {
     /// users are only interested in the final agent responses.
     pub hide_agent_reasoning: bool,
 
+    /// When `true`, the raw chain-of-thought text from reasoning events will be
+    /// displayed in the UI in addition to the reasoning summaries.
+    pub show_reasoning_content: bool,
+
     /// Disable server-side response storage (sends the full conversation
     /// context with every request). Currently necessary for OpenAI customers
     /// who have opted into Zero Data Retention (ZDR).
@@ -325,6 +329,10 @@ pub struct ConfigToml {
     /// UI/output. Defaults to `false`.
     pub hide_agent_reasoning: Option<bool>,
 
+    /// When set to `true`, raw chain-of-thought text from reasoning events will
+    /// be shown in the UI.
+    pub show_reasoning_content: Option<bool>,
+
     pub model_reasoning_effort: Option<ReasoningEffort>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
 
@@ -488,6 +496,19 @@ impl Config {
             Self::get_base_instructions(experimental_instructions_path, &resolved_cwd)?;
         let base_instructions = base_instructions.or(file_base_instructions);
 
+        // Resolve hide/show reasoning flags with consistent precedence:
+        // if hide is true, force show_reasoning_content to false.
+        let hide_agent_reasoning_val = cfg.hide_agent_reasoning.unwrap_or(false);
+        let show_reasoning_content_val = if hide_agent_reasoning_val {
+            false
+        } else {
+            cfg.show_reasoning_content.unwrap_or(false)
+        };
+
+        if cfg.hide_agent_reasoning == Some(true) && cfg.show_reasoning_content == Some(true) {
+            tracing::warn!("Ignoring show_reasoning_content because hide_agent_reasoning is true");
+        }
+
         let config = Self {
             model,
             model_context_window,
@@ -517,7 +538,8 @@ impl Config {
             tui: cfg.tui.unwrap_or_default(),
             codex_linux_sandbox_exe,
 
-            hide_agent_reasoning: cfg.hide_agent_reasoning.unwrap_or(false),
+            hide_agent_reasoning: hide_agent_reasoning_val,
+            show_reasoning_content: show_reasoning_content_val,
             model_reasoning_effort: config_profile
                 .model_reasoning_effort
                 .or(cfg.model_reasoning_effort)
@@ -891,6 +913,7 @@ disable_response_storage = true
                 tui: Tui::default(),
                 codex_linux_sandbox_exe: None,
                 hide_agent_reasoning: false,
+                show_reasoning_content: false,
                 model_reasoning_effort: ReasoningEffort::High,
                 model_reasoning_summary: ReasoningSummary::Detailed,
                 model_supports_reasoning_summaries: false,
@@ -941,6 +964,7 @@ disable_response_storage = true
             tui: Tui::default(),
             codex_linux_sandbox_exe: None,
             hide_agent_reasoning: false,
+            show_reasoning_content: false,
             model_reasoning_effort: ReasoningEffort::default(),
             model_reasoning_summary: ReasoningSummary::default(),
             model_supports_reasoning_summaries: false,
@@ -1006,6 +1030,7 @@ disable_response_storage = true
             tui: Tui::default(),
             codex_linux_sandbox_exe: None,
             hide_agent_reasoning: false,
+            show_reasoning_content: false,
             model_reasoning_effort: ReasoningEffort::default(),
             model_reasoning_summary: ReasoningSummary::default(),
             model_supports_reasoning_summaries: false,
