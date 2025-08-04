@@ -188,8 +188,7 @@ impl ModelClient {
         let query_string = self.provider.get_query_string();
 
         let url = format!("{base_url}/responses{query_string}");
-
-        trace!("POST to {}: {}", url, serde_json::to_string(&payload)?);
+        trace!("POST to {url}: {}", serde_json::to_string(&payload)?);
 
         loop {
             attempt += 1;

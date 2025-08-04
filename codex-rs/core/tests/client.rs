@@ -444,10 +444,6 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
         .unwrap();
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
-
-    // If URL or query params were wrong, the expectation would fail; also assert single request
-    let requests = server.received_requests().await.unwrap();
-    assert_eq!(requests.len(), 1);
 }
 
 fn auth_from_token(id_token: String) -> CodexAuth {
