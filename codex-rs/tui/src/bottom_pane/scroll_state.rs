@@ -113,4 +113,3 @@ mod tests {
         assert_eq!(s.scroll_top, 0);
     }
 }
-

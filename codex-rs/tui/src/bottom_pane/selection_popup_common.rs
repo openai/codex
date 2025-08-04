@@ -124,4 +124,3 @@ pub(crate) fn render_rows(
 
     table.render(area, buf);
 }
-
