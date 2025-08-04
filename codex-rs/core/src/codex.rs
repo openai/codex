@@ -94,6 +94,9 @@ use crate::safety::SafetyCheck;
 use crate::safety::assess_command_safety;
 use crate::safety::assess_safety_for_untrusted_command;
 use crate::shell;
+use crate::tools::CodexTool;
+use crate::tools::ToolFlags;
+use crate::tools::get_codex_tools;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::user_notification::UserNotification;
 use crate::util::backoff;
@@ -216,6 +219,7 @@ pub(crate) struct Session {
     shell_environment_policy: ShellEnvironmentPolicy,
     pub(crate) writable_roots: Mutex<Vec<PathBuf>>,
     disable_response_storage: bool,
+    pub(crate) config: Arc<Config>,
 
     /// Manager for external MCP servers/tools.
     mcp_connection_manager: McpConnectionManager,
@@ -810,6 +814,7 @@ async fn submission_loop(
                 let default_shell = shell::default_user_shell().await;
                 sess = Some(Arc::new(Session {
                     client,
+                    config: config.clone(),
                     tx_event: tx_event.clone(),
                     ctrl_c: Arc::clone(&ctrl_c),
                     user_instructions,
@@ -1204,12 +1209,26 @@ async fn run_turn(
     sub_id: String,
     input: Vec<ResponseItem>,
 ) -> CodexResult<Vec<ProcessedResponseItem>> {
-    let extra_tools = sess.mcp_connection_manager.list_all_tools();
+    let extra_tools = sess
+        .mcp_connection_manager
+        .list_all_tools()
+        .into_iter()
+        .map(|(fully_qualified_name, tool)| CodexTool::McpTool {
+            fully_qualified_name,
+            tool: Box::new(tool),
+        })
+        .collect();
+
+    let tools = get_codex_tools(
+        ToolFlags::default(&sess.config.model, sess.config.include_plan_tool),
+        extra_tools,
+    );
+
     let prompt = Prompt {
         input,
         user_instructions: sess.user_instructions.clone(),
         store: !sess.disable_response_storage,
-        extra_tools,
+        tools,
         base_instructions_override: sess.base_instructions.clone(),
     };
 
@@ -1436,7 +1455,10 @@ async fn run_compact_task(
         input: turn_input,
         user_instructions: None,
         store: !sess.disable_response_storage,
-        extra_tools: HashMap::new(),
+        tools: get_codex_tools(
+            ToolFlags::default(&sess.config.model, sess.config.include_plan_tool),
+            Vec::new(),
+        ),
         base_instructions_override: Some(compact_instructions.clone()),
     };
 

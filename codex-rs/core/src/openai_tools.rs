@@ -3,8 +3,7 @@ use serde_json::json;
 use std::collections::BTreeMap;
 
 use crate::client_common::Prompt;
-use crate::model_family::ModelFamily;
-use crate::plan_tool::PLAN_TOOL;
+use crate::tools::CodexTool;
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct ResponsesApiTool {
@@ -18,7 +17,7 @@ pub(crate) struct ResponsesApiTool {
 /// Responses API.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type")]
-pub(crate) enum OpenAiTool {
+pub enum OpenAiTool {
     #[serde(rename = "function")]
     Function(ResponsesApiTool),
     #[serde(rename = "local_shell")]
@@ -69,30 +68,23 @@ fn create_shell_tool() -> OpenAiTool {
 /// Responses API:
 /// https://platform.openai.com/docs/guides/function-calling?api-mode=responses
 pub(crate) fn create_tools_json_for_responses_api(
-    prompt: &Prompt,
-    model_family: &ModelFamily,
-    include_plan_tool: bool,
+    tools: &Vec<CodexTool>,
 ) -> crate::error::Result<Vec<serde_json::Value>> {
-    // Assemble tool list: built-in tools + any extra tools from the prompt.
-    let mut openai_tools = vec![create_shell_tool()];
-    if model_family.uses_local_shell_tool {
-        openai_tools.push(OpenAiTool::LocalShell {});
-    }
-
-    let mut tools_json = Vec::with_capacity(openai_tools.len() + prompt.extra_tools.len() + 1);
-    for tool in openai_tools.iter() {
-        tools_json.push(serde_json::to_value(tool)?);
-    }
-    tools_json.extend(
-        prompt
-            .extra_tools
-            .clone()
-            .into_iter()
-            .map(|(name, tool)| mcp_tool_to_openai_tool(name, tool)),
-    );
-
-    if include_plan_tool {
-        tools_json.push(serde_json::to_value(PLAN_TOOL.clone())?);
+    let mut tools_json = Vec::new();
+    for tool in tools {
+        match tool {
+            CodexTool::OpenAiTool(tool) => {
+                tools_json.push(serde_json::to_value(tool)?);
+            }
+            CodexTool::McpTool {
+                fully_qualified_name,
+                tool,
+            } => {
+                let openai_tool =
+                    mcp_tool_to_openai_tool(fully_qualified_name.clone(), *tool.clone());
+                tools_json.push(openai_tool);
+            }
+        }
     }
 
     Ok(tools_json)
@@ -103,13 +95,10 @@ pub(crate) fn create_tools_json_for_responses_api(
 /// https://platform.openai.com/docs/guides/function-calling?api-mode=chat
 pub(crate) fn create_tools_json_for_chat_completions_api(
     prompt: &Prompt,
-    model_family: &ModelFamily,
-    include_plan_tool: bool,
 ) -> crate::error::Result<Vec<serde_json::Value>> {
     // We start with the JSON for the Responses API and than rewrite it to match
     // the chat completions tool call format.
-    let responses_api_tools_json =
-        create_tools_json_for_responses_api(prompt, model_family, include_plan_tool)?;
+    let responses_api_tools_json = create_tools_json_for_responses_api(&prompt.tools)?;
     let tools_json = responses_api_tools_json
         .into_iter()
         .filter_map(|mut tool| {

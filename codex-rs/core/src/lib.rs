@@ -44,9 +44,9 @@ pub(crate) mod safety;
 pub mod seatbelt;
 pub mod shell;
 pub mod spawn;
+pub mod tools;
 pub mod turn_diff_tracker;
 mod user_notification;
 pub mod util;
-
 pub use apply_patch::CODEX_APPLY_PATCH_ARG1;
 pub use safety::get_platform_sandbox;
