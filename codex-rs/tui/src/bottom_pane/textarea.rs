@@ -210,7 +210,7 @@ impl TextArea {
                 ..
             } => self.insert_str(&c.to_string()),
             KeyEvent {
-                code: KeyCode::Char('j'),
+                code: KeyCode::Char('j' | 'm'),
                 modifiers: KeyModifiers::CONTROL,
                 ..
             }
@@ -220,10 +220,21 @@ impl TextArea {
             } => self.insert_str("\n"),
             KeyEvent {
                 code: KeyCode::Backspace,
+                modifiers: KeyModifiers::ALT,
+                ..
+            } => self.delete_backward_word(),
+            KeyEvent {
+                code: KeyCode::Backspace,
+                modifiers: KeyModifiers::NONE,
                 ..
             } => self.delete_backward(1),
             KeyEvent {
                 code: KeyCode::Delete,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('d'),
+                modifiers: KeyModifiers::CONTROL,
                 ..
             } => self.delete_forward(1),
 
@@ -303,14 +314,14 @@ impl TextArea {
             }
             KeyEvent {
                 code: KeyCode::Left,
-                modifiers: KeyModifiers::CONTROL,
+                modifiers: KeyModifiers::CONTROL | KeyModifiers::ALT,
                 ..
             } => {
                 self.set_cursor(self.beginning_of_previous_word());
             }
             KeyEvent {
                 code: KeyCode::Right,
-                modifiers: KeyModifiers::CONTROL,
+                modifiers: KeyModifiers::CONTROL | KeyModifiers::ALT,
                 ..
             } => {
                 self.set_cursor(self.end_of_next_word());
