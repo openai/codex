@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 pub use cli::Cli;
+use codex_core::BUILT_IN_OSS_MODEL_PROVIDER_ID;
 use codex_core::codex_wrapper::CodexConversation;
 use codex_core::codex_wrapper::{self};
 use codex_core::config::Config;
@@ -35,6 +36,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     let Cli {
         images,
         model,
+        oss,
         config_profile,
         full_auto,
         dangerously_bypass_approvals_and_sandbox,
@@ -114,6 +116,24 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         sandbox_mode_cli_arg.map(Into::<SandboxMode>::into)
     };
 
+    // When using `--oss`, let the bootstrapper pick the model (defaulting to
+    // gpt-oss:20b) and ensure it is present locally. Also, force the built‑in
+    // `oss` model provider.
+    let model_provider_override = if oss {
+        Some(BUILT_IN_OSS_MODEL_PROVIDER_ID.to_owned())
+    } else {
+        None
+    };
+    let model = if oss {
+        Some(
+            codex_ollama::ensure_oss_ready(model.clone())
+                .await
+                .map_err(|e| anyhow::anyhow!("OSS setup failed: {e}"))?,
+        )
+    } else {
+        model
+    };
+
     // Load configuration and determine approval policy
     let overrides = ConfigOverrides {
         model,
@@ -123,10 +143,12 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         approval_policy: Some(AskForApproval::Never),
         sandbox_mode,
         cwd: cwd.map(|p| p.canonicalize().unwrap_or(p)),
-        model_provider: None,
+        model_provider: model_provider_override,
         codex_linux_sandbox_exe,
         base_instructions: None,
         include_plan_tool: None,
+        default_disable_response_storage: oss.then_some(true),
+        default_show_raw_agent_reasoning: oss.then_some(true),
     };
     // Parse `-c` overrides.
     let cli_kv_overrides = match config_overrides.parse_overrides() {
