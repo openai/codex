@@ -11,7 +11,7 @@ use crate::plan_tool::PLAN_TOOL;
 pub struct ResponsesApiTool {
     pub(crate) name: String,
     pub(crate) description: String,
-    /// TOOD: Validation. When strict is set to true, the JSON schema,
+    /// TODO: Validation. When strict is set to true, the JSON schema,
     /// `required` and `additional_properties` must be present. All fields in
     /// `properties` must be present in `required`.
     pub(crate) strict: bool,
