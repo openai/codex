@@ -252,8 +252,7 @@ async fn run_codex_tool_session_inner(
                     EventMsg::AgentMessage(AgentMessageEvent { .. }) => {
                         // TODO: think how we want to support this in the MCP
                     }
-                    EventMsg::AgentReasoningContent(_)
-                    | EventMsg::TaskStarted
+                    EventMsg::TaskStarted
                     | EventMsg::TokenCount(_)
                     | EventMsg::AgentReasoning(_)
                     | EventMsg::McpToolCallBegin(_)
