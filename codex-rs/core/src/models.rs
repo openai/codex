@@ -45,8 +45,6 @@ pub enum ResponseItem {
     Reasoning {
         id: String,
         summary: Vec<ReasoningItemReasoningSummary>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        content: Option<Vec<ReasoningItemContent>>,
         encrypted_content: Option<String>,
     },
     LocalShellCall {
@@ -136,12 +134,6 @@ pub struct LocalShellExecAction {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ReasoningItemReasoningSummary {
     SummaryText { text: String },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ReasoningItemContent {
-    ReasoningText { text: String },
 }
 
 impl From<Vec<InputItem>> for ResponseInputItem {

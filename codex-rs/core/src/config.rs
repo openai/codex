@@ -488,10 +488,6 @@ impl Config {
             Self::get_base_instructions(experimental_instructions_path, &resolved_cwd)?;
         let base_instructions = base_instructions.or(file_base_instructions);
 
-        // Resolve hide/show reasoning flags with consistent precedence:
-        // if hide is true, force show_reasoning_content to false.
-        let hide_agent_reasoning_val = cfg.hide_agent_reasoning.unwrap_or(false);
-
         let config = Self {
             model,
             model_context_window,
@@ -521,7 +517,7 @@ impl Config {
             tui: cfg.tui.unwrap_or_default(),
             codex_linux_sandbox_exe,
 
-            hide_agent_reasoning: hide_agent_reasoning_val,
+            hide_agent_reasoning: cfg.hide_agent_reasoning.unwrap_or(false),
             model_reasoning_effort: config_profile
                 .model_reasoning_effort
                 .or(cfg.model_reasoning_effort)

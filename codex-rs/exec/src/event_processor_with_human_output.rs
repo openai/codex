@@ -4,7 +4,6 @@ use codex_core::config::Config;
 use codex_core::plan_tool::UpdatePlanArgs;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
-use codex_core::protocol::AgentReasoningContentEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
 use codex_core::protocol::BackgroundEventEvent;
 use codex_core::protocol::ErrorEvent;
@@ -201,14 +200,6 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     self.reasoning_started = true;
                 }
                 print!("{delta}");
-                #[allow(clippy::expect_used)]
-                std::io::stdout().flush().expect("could not flush stdout");
-            }
-            EventMsg::AgentReasoningContent(AgentReasoningContentEvent { text }) => {
-                if !self.show_agent_reasoning {
-                    return CodexStatus::Running;
-                }
-                print!("{text}");
                 #[allow(clippy::expect_used)]
                 std::io::stdout().flush().expect("could not flush stdout");
             }
