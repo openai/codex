@@ -226,53 +226,93 @@ impl ModelProviderInfo {
     }
 }
 
+const DEFAULT_OLLAMA_PORT: u32 = 11434;
+
+pub const BUILT_IN_OSS_MODEL_PROVIDER_ID: &str = "oss";
+
 /// Built-in default provider list.
 pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
     use ModelProviderInfo as P;
 
-    // We do not want to be in the business of adjucating which third-party
-    // providers are bundled with Codex CLI, so we only include the OpenAI
-    // provider by default. Users are encouraged to add to `model_providers`
-    // in config.toml to add their own providers.
-    [(
-        "openai",
-        P {
-            name: "OpenAI".into(),
-            // Allow users to override the default OpenAI endpoint by
-            // exporting `OPENAI_BASE_URL`. This is useful when pointing
-            // Codex at a proxy, mock server, or Azure-style deployment
-            // without requiring a full TOML override for the built-in
-            // OpenAI provider.
-            base_url: std::env::var("OPENAI_BASE_URL")
+    // These CODEX_OSS_ environment variables are experimental: we may
+    // switch to reading values from config.toml instead.
+    let codex_oss_base_url = match std::env::var("CODEX_OSS_BASE_URL")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+    {
+        Some(url) => url,
+        None => format!(
+            "http://localhost:{port}/v1",
+            port = std::env::var("CODEX_OSS_PORT")
                 .ok()
-                .filter(|v| !v.trim().is_empty()),
-            env_key: None,
-            env_key_instructions: None,
-            wire_api: WireApi::Responses,
-            query_params: None,
-            http_headers: Some(
-                [("version".to_string(), env!("CARGO_PKG_VERSION").to_string())]
+                .filter(|v| !v.trim().is_empty())
+                .and_then(|v| v.parse::<u32>().ok())
+                .unwrap_or(DEFAULT_OLLAMA_PORT)
+        ),
+    };
+
+    // We do not want to be in the business of adjucating which third-party
+    // providers are bundled with Codex CLI, so we only include the OpenAI and
+    // open source ("oss") providers by default. Users are encouraged to add to
+    // `model_providers` in config.toml to add their own providers.
+    [
+        (
+            "openai",
+            P {
+                name: "OpenAI".into(),
+                // Allow users to override the default OpenAI endpoint by
+                // exporting `OPENAI_BASE_URL`. This is useful when pointing
+                // Codex at a proxy, mock server, or Azure-style deployment
+                // without requiring a full TOML override for the built-in
+                // OpenAI provider.
+                base_url: std::env::var("OPENAI_BASE_URL")
+                    .ok()
+                    .filter(|v| !v.trim().is_empty()),
+                env_key: None,
+                env_key_instructions: None,
+                wire_api: WireApi::Responses,
+                query_params: None,
+                http_headers: Some(
+                    [("version".to_string(), env!("CARGO_PKG_VERSION").to_string())]
+                        .into_iter()
+                        .collect(),
+                ),
+                env_http_headers: Some(
+                    [
+                        (
+                            "OpenAI-Organization".to_string(),
+                            "OPENAI_ORGANIZATION".to_string(),
+                        ),
+                        ("OpenAI-Project".to_string(), "OPENAI_PROJECT".to_string()),
+                    ]
                     .into_iter()
                     .collect(),
-            ),
-            env_http_headers: Some(
-                [
-                    (
-                        "OpenAI-Organization".to_string(),
-                        "OPENAI_ORGANIZATION".to_string(),
-                    ),
-                    ("OpenAI-Project".to_string(), "OPENAI_PROJECT".to_string()),
-                ]
-                .into_iter()
-                .collect(),
-            ),
-            // Use global defaults for retry/timeout unless overridden in config.toml.
-            request_max_retries: None,
-            stream_max_retries: None,
-            stream_idle_timeout_ms: None,
-            requires_auth: true,
-        },
-    )]
+                ),
+                // Use global defaults for retry/timeout unless overridden in config.toml.
+                request_max_retries: None,
+                stream_max_retries: None,
+                stream_idle_timeout_ms: None,
+                requires_auth: true,
+            },
+        ),
+        (
+            BUILT_IN_OSS_MODEL_PROVIDER_ID,
+            P {
+                name: "Open Source".into(),
+                base_url: Some(codex_oss_base_url),
+                env_key: None,
+                env_key_instructions: None,
+                wire_api: WireApi::Chat,
+                query_params: None,
+                http_headers: None,
+                env_http_headers: None,
+                request_max_retries: None,
+                stream_max_retries: None,
+                stream_idle_timeout_ms: None,
+                requires_auth: false,
+            },
+        ),
+    ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), v))
     .collect()
