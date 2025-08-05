@@ -9,6 +9,7 @@ use codex_login::AuthMode;
 use codex_login::CodexAuth;
 use serde::Deserialize;
 use serde::Serialize;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::env::VarError;
 use std::time::Duration;
@@ -95,25 +96,24 @@ impl ModelProviderInfo {
         client: &'a reqwest::Client,
         auth: &Option<CodexAuth>,
     ) -> crate::error::Result<reqwest::RequestBuilder> {
-        let mut auth = auth;
-        let fallback_auth;
-        if auth.is_none() {
-            fallback_auth = self.get_fallback_auth()?;
-            auth = &fallback_auth;
-        }
+        let auth: Cow<'_, Option<CodexAuth>> = if auth.is_some() {
+            Cow::Borrowed(auth)
+        } else {
+            Cow::Owned(self.get_fallback_auth()?)
+        };
 
-        let url = self.get_full_url(auth);
+        let url = self.get_full_url(&auth);
 
         let mut builder = client.post(url);
 
-        if let Some(auth) = auth {
+        if let Some(auth) = auth.as_ref() {
             builder = builder.bearer_auth(auth.get_token().await?);
         }
 
         Ok(self.apply_http_headers(builder))
     }
 
-    pub fn get_query_string(&self) -> String {
+    fn get_query_string(&self) -> String {
         self.query_params
             .as_ref()
             .map_or_else(String::new, |params| {
@@ -127,22 +127,25 @@ impl ModelProviderInfo {
     }
 
     pub(crate) fn get_full_url(&self, auth: &Option<CodexAuth>) -> String {
+        let default_base_url = if matches!(
+            auth,
+            Some(CodexAuth {
+                mode: AuthMode::ChatGPT,
+                ..
+            })
+        ) {
+            "https://chatgpt.com/backend-api/codex"
+        } else {
+            "https://api.openai.com/v1"
+        };
         let query_string = self.get_query_string();
         let base_url = self
             .base_url
             .clone()
-            .unwrap_or("https://api.openai.com/v1".to_string());
+            .unwrap_or(default_base_url.to_string());
 
         match self.wire_api {
-            WireApi::Responses => match auth {
-                Some(CodexAuth {
-                    mode: AuthMode::ChatGPT,
-                    ..
-                }) => {
-                    format!("{base_url}/responses{query_string}")
-                }
-                _ => format!("{base_url}/responses{query_string}"),
-            },
+            WireApi::Responses => format!("{base_url}/responses{query_string}"),
             WireApi::Chat => format!("{base_url}/chat/completions{query_string}"),
         }
     }
@@ -150,10 +153,7 @@ impl ModelProviderInfo {
     /// Apply provider-specific HTTP headers (both static and environment-based)
     /// onto an existing `reqwest::RequestBuilder` and return the updated
     /// builder.
-    pub fn apply_http_headers(
-        &self,
-        mut builder: reqwest::RequestBuilder,
-    ) -> reqwest::RequestBuilder {
+    fn apply_http_headers(&self, mut builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         if let Some(extra) = &self.http_headers {
             for (k, v) in extra {
                 builder = builder.header(k, v);
