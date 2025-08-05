@@ -234,23 +234,6 @@ pub const BUILT_IN_OSS_MODEL_PROVIDER_ID: &str = "oss";
 pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
     use ModelProviderInfo as P;
 
-    // These CODEX_OSS_ environment variables are experimental: we may
-    // switch to reading values from config.toml instead.
-    let codex_oss_base_url = match std::env::var("CODEX_OSS_BASE_URL")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-    {
-        Some(url) => url,
-        None => format!(
-            "http://localhost:{port}/v1",
-            port = std::env::var("CODEX_OSS_PORT")
-                .ok()
-                .filter(|v| !v.trim().is_empty())
-                .and_then(|v| v.parse::<u32>().ok())
-                .unwrap_or(DEFAULT_OLLAMA_PORT)
-        ),
-    };
-
     // We do not want to be in the business of adjucating which third-party
     // providers are bundled with Codex CLI, so we only include the OpenAI and
     // open source ("oss") providers by default. Users are encouraged to add to
@@ -295,27 +278,49 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
                 requires_auth: true,
             },
         ),
-        (
-            BUILT_IN_OSS_MODEL_PROVIDER_ID,
-            P {
-                name: "Open Source".into(),
-                base_url: Some(codex_oss_base_url),
-                env_key: None,
-                env_key_instructions: None,
-                wire_api: WireApi::Chat,
-                query_params: None,
-                http_headers: None,
-                env_http_headers: None,
-                request_max_retries: None,
-                stream_max_retries: None,
-                stream_idle_timeout_ms: None,
-                requires_auth: false,
-            },
-        ),
+        (BUILT_IN_OSS_MODEL_PROVIDER_ID, create_oss_provider()),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), v))
     .collect()
+}
+
+pub fn create_oss_provider() -> ModelProviderInfo {
+    // These CODEX_OSS_ environment variables are experimental: we may
+    // switch to reading values from config.toml instead.
+    let codex_oss_base_url = match std::env::var("CODEX_OSS_BASE_URL")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+    {
+        Some(url) => url,
+        None => format!(
+            "http://localhost:{port}/v1",
+            port = std::env::var("CODEX_OSS_PORT")
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+                .and_then(|v| v.parse::<u32>().ok())
+                .unwrap_or(DEFAULT_OLLAMA_PORT)
+        ),
+    };
+
+    create_oss_provider_with_base_url(&codex_oss_base_url)
+}
+
+pub fn create_oss_provider_with_base_url(base_url: &str) -> ModelProviderInfo {
+    ModelProviderInfo {
+        name: "gpt-oss".into(),
+        base_url: Some(base_url.into()),
+        env_key: None,
+        env_key_instructions: None,
+        wire_api: WireApi::Chat,
+        query_params: None,
+        http_headers: None,
+        env_http_headers: None,
+        request_max_retries: None,
+        stream_max_retries: None,
+        stream_idle_timeout_ms: None,
+        requires_auth: false,
+    }
 }
 
 #[cfg(test)]

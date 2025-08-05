@@ -10,6 +10,7 @@ use codex_core::config_types::SandboxMode;
 use codex_core::protocol::AskForApproval;
 use codex_core::util::is_inside_git_repo;
 use codex_login::load_auth;
+use codex_ollama::DEFAULT_OSS_MODEL;
 use log_layer::TuiLogLayer;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -71,25 +72,27 @@ pub async fn run_main(
         )
     };
 
+    // When using `--oss`, let the bootstrapper pick the model (defaulting to
+    // gpt-oss:20b) and ensure it is present locally. Also, force the built‑in
+    // `oss` model provider.
+    let model = if let Some(model) = &cli.model {
+        Some(model.clone())
+    } else if cli.oss {
+        Some(DEFAULT_OSS_MODEL.to_owned())
+    } else {
+        None // No model specified, will use the default.
+    };
+
     let model_provider_override = if cli.oss {
         Some(BUILT_IN_OSS_MODEL_PROVIDER_ID.to_owned())
     } else {
         None
     };
+
     let config = {
         // Load configuration and support CLI overrides.
         let overrides = ConfigOverrides {
-            // When using `--oss`, let the bootstrapper pick the model
-            // (defaulting to gpt-oss:20b) and ensure it is present locally.
-            model: if cli.oss {
-                Some(
-                    codex_ollama::ensure_oss_ready(cli.model.clone())
-                        .await
-                        .map_err(|e| std::io::Error::other(format!("OSS setup failed: {e}")))?,
-                )
-            } else {
-                cli.model.clone()
-            },
+            model,
             approval_policy,
             sandbox_mode,
             cwd: cli.cwd.clone().map(|p| p.canonicalize().unwrap_or(p)),
@@ -153,6 +156,12 @@ pub async fn run_main(
         .with_writer(non_blocking)
         .with_target(false)
         .with_filter(env_filter());
+
+    if cli.oss {
+        codex_ollama::ensure_oss_ready(&config)
+            .await
+            .map_err(|e| std::io::Error::other(format!("OSS setup failed: {e}")))?;
+    }
 
     // Channel that carries formatted log lines to the UI.
     let (log_tx, log_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
