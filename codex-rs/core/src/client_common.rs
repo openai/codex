@@ -72,6 +72,7 @@ pub enum ResponseEvent {
     },
     OutputTextDelta(String),
     ReasoningSummaryDelta(String),
+    ReasoningContentDelta(String),
 }
 
 #[derive(Debug, Serialize)]

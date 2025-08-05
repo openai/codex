@@ -9,6 +9,8 @@ use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
 use codex_core::protocol::AgentReasoningEvent;
+use codex_core::protocol::AgentReasoningRawContentDeltaEvent;
+use codex_core::protocol::AgentReasoningRawContentEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::Event;
@@ -61,6 +63,7 @@ pub(crate) struct ChatWidget<'a> {
     initial_user_message: Option<UserMessage>,
     token_usage: TokenUsage,
     reasoning_buffer: String,
+    content_buffer: String,
     // Buffer for streaming assistant answer text; we do not surface partial
     // We wait for the final AgentMessage event and then emit the full text
     // at once into scrollback so the history contains a single message.
@@ -101,6 +104,24 @@ fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Optio
 }
 
 impl ChatWidget<'_> {
+    fn emit_stream_header(&mut self, kind: StreamKind) {
+        use ratatui::text::Line as RLine;
+        if self.stream_header_emitted {
+            return;
+        }
+        let header = match kind {
+            StreamKind::Reasoning => RLine::from("thinking".magenta().italic()),
+            StreamKind::Answer => RLine::from("codex".magenta().bold()),
+        };
+        self.app_event_tx
+            .send(AppEvent::InsertHistory(vec![header]));
+        self.stream_header_emitted = true;
+    }
+    fn finalize_active_stream(&mut self) {
+        if let Some(kind) = self.current_stream {
+            self.finalize_stream(kind);
+        }
+    }
     pub(crate) fn new(
         config: Config,
         app_event_tx: AppEventSender,
@@ -161,6 +182,7 @@ impl ChatWidget<'_> {
             ),
             token_usage: TokenUsage::default(),
             reasoning_buffer: String::new(),
+            content_buffer: String::new(),
             answer_buffer: String::new(),
             running_commands: HashMap::new(),
             live_builder: RowBuilder::new(80),
@@ -276,6 +298,20 @@ impl ChatWidget<'_> {
                 self.finalize_stream(StreamKind::Reasoning);
                 self.request_redraw();
             }
+            EventMsg::AgentReasoningRawContentDelta(AgentReasoningRawContentDeltaEvent {
+                delta,
+            }) => {
+                // Treat raw reasoning content the same as summarized reasoning for UI flow.
+                self.begin_stream(StreamKind::Reasoning);
+                self.reasoning_buffer.push_str(&delta);
+                self.stream_push_and_maybe_commit(&delta);
+                self.request_redraw();
+            }
+            EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { text: _ }) => {
+                // Finalize the raw reasoning stream just like the summarized reasoning event.
+                self.finalize_stream(StreamKind::Reasoning);
+                self.request_redraw();
+            }
             EventMsg::TaskStarted => {
                 self.bottom_pane.clear_ctrl_c_quit_hint();
                 self.bottom_pane.set_task_running(true);
@@ -299,6 +335,14 @@ impl ChatWidget<'_> {
             EventMsg::Error(ErrorEvent { message }) => {
                 self.add_to_history(HistoryCell::new_error_event(message.clone()));
                 self.bottom_pane.set_task_running(false);
+                self.bottom_pane.clear_live_ring();
+                self.live_builder = RowBuilder::new(self.live_builder.width());
+                self.current_stream = None;
+                self.stream_header_emitted = false;
+                self.answer_buffer.clear();
+                self.reasoning_buffer.clear();
+                self.content_buffer.clear();
+                self.request_redraw();
             }
             EventMsg::PlanUpdate(update) => {
                 // Commit plan updates directly to history (no status-line preview).
@@ -310,6 +354,7 @@ impl ChatWidget<'_> {
                 cwd,
                 reason,
             }) => {
+                self.finalize_active_stream();
                 // Log a background summary immediately so the history is chronological.
                 let cmdline = strip_bash_lc_and_escape(&command);
                 let text = format!(
@@ -336,6 +381,7 @@ impl ChatWidget<'_> {
                 reason,
                 grant_root,
             }) => {
+                self.finalize_active_stream();
                 // ------------------------------------------------------------------
                 // Before we even prompt the user for approval we surface the patch
                 // summary in the main conversation so that the dialog appears in a
@@ -365,6 +411,10 @@ impl ChatWidget<'_> {
                 command,
                 cwd,
             }) => {
+                self.finalize_active_stream();
+                // Ensure the status indicator is visible while the command runs.
+                self.bottom_pane
+                    .update_status_text("running command".to_string());
                 self.running_commands.insert(
                     call_id,
                     RunningCommand {
@@ -408,6 +458,7 @@ impl ChatWidget<'_> {
                 call_id: _,
                 invocation,
             }) => {
+                self.finalize_active_stream();
                 self.add_to_history(HistoryCell::new_active_mcp_tool_call(invocation));
             }
             EventMsg::McpToolCallEnd(McpToolCallEndEvent {
@@ -451,7 +502,9 @@ impl ChatWidget<'_> {
 
     /// Update the live log preview while a task is running.
     pub(crate) fn update_latest_log(&mut self, line: String) {
-        self.bottom_pane.update_status_text(line);
+        if self.bottom_pane.is_task_running() {
+            self.bottom_pane.update_status_text(line);
+        }
     }
 
     fn request_redraw(&mut self) {
@@ -478,8 +531,15 @@ impl ChatWidget<'_> {
         if self.bottom_pane.is_task_running() {
             self.bottom_pane.clear_ctrl_c_quit_hint();
             self.submit_op(Op::Interrupt);
+            self.bottom_pane.set_task_running(false);
+            self.bottom_pane.clear_live_ring();
+            self.live_builder = RowBuilder::new(self.live_builder.width());
+            self.current_stream = None;
+            self.stream_header_emitted = false;
             self.answer_buffer.clear();
             self.reasoning_buffer.clear();
+            self.content_buffer.clear();
+            self.request_redraw();
             CancellationEvent::Ignored
         } else if self.bottom_pane.ctrl_c_quit_hint_visible() {
             self.submit_op(Op::Shutdown);
@@ -518,6 +578,12 @@ impl ChatWidget<'_> {
 
 impl ChatWidget<'_> {
     fn begin_stream(&mut self, kind: StreamKind) {
+        if let Some(current) = self.current_stream {
+            if current != kind {
+                self.finalize_stream(current);
+            }
+        }
+
         if self.current_stream != Some(kind) {
             self.current_stream = Some(kind);
             self.stream_header_emitted = false;
@@ -526,6 +592,7 @@ impl ChatWidget<'_> {
             // Ensure the waiting status is visible (composer replaced).
             self.bottom_pane
                 .update_status_text("waiting for model".to_string());
+            self.emit_stream_header(kind);
         }
     }
 

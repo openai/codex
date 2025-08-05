@@ -483,6 +483,19 @@ Setting `hide_agent_reasoning` to `true` suppresses these events in **both** the
 hide_agent_reasoning = true   # defaults to false
 ```
 
+## show_raw_agent_reasoning
+
+Surfaces the model’s raw chain-of-thought ("raw reasoning content") when available.
+
+Notes:
+- Only takes effect if the selected model/provider actually emits raw reasoning content. Many models do not. When unsupported, this option has no visible effect.
+- Raw reasoning may include intermediate thoughts or sensitive context. Enable only if acceptable for your workflow.
+
+Example:
+```toml
+show_raw_agent_reasoning = true  # defaults to false
+```
+
 ## model_context_window
 
 The size of the context window for the model, in tokens.

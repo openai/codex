@@ -5,6 +5,8 @@ use codex_core::plan_tool::UpdatePlanArgs;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
+use codex_core::protocol::AgentReasoningRawContentDeltaEvent;
+use codex_core::protocol::AgentReasoningRawContentEvent;
 use codex_core::protocol::BackgroundEventEvent;
 use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::Event;
@@ -55,8 +57,10 @@ pub(crate) struct EventProcessorWithHumanOutput {
 
     /// Whether to include `AgentReasoning` events in the output.
     show_agent_reasoning: bool,
+    show_raw_agent_reasoning: bool,
     answer_started: bool,
     reasoning_started: bool,
+    raw_reasoning_started: bool,
     last_message_path: Option<PathBuf>,
 }
 
@@ -81,8 +85,10 @@ impl EventProcessorWithHumanOutput {
                 green: Style::new().green(),
                 cyan: Style::new().cyan(),
                 show_agent_reasoning: !config.hide_agent_reasoning,
+                show_raw_agent_reasoning: config.show_raw_agent_reasoning,
                 answer_started: false,
                 reasoning_started: false,
+                raw_reasoning_started: false,
                 last_message_path,
             }
         } else {
@@ -97,8 +103,10 @@ impl EventProcessorWithHumanOutput {
                 green: Style::new(),
                 cyan: Style::new(),
                 show_agent_reasoning: !config.hide_agent_reasoning,
+                show_raw_agent_reasoning: config.show_raw_agent_reasoning,
                 answer_started: false,
                 reasoning_started: false,
+                raw_reasoning_started: false,
                 last_message_path,
             }
         }
@@ -198,6 +206,32 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                         "thinking".style(self.italic).style(self.magenta),
                     );
                     self.reasoning_started = true;
+                }
+                print!("{delta}");
+                #[allow(clippy::expect_used)]
+                std::io::stdout().flush().expect("could not flush stdout");
+            }
+            EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { text }) => {
+                if !self.show_raw_agent_reasoning {
+                    return CodexStatus::Running;
+                }
+                if !self.raw_reasoning_started {
+                    print!("{text}");
+                    #[allow(clippy::expect_used)]
+                    std::io::stdout().flush().expect("could not flush stdout");
+                } else {
+                    println!();
+                    self.raw_reasoning_started = false;
+                }
+            }
+            EventMsg::AgentReasoningRawContentDelta(AgentReasoningRawContentDeltaEvent {
+                delta,
+            }) => {
+                if !self.show_raw_agent_reasoning {
+                    return CodexStatus::Running;
+                }
+                if !self.raw_reasoning_started {
+                    self.raw_reasoning_started = true;
                 }
                 print!("{delta}");
                 #[allow(clippy::expect_used)]
