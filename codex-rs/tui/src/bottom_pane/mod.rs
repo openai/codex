@@ -138,6 +138,11 @@ impl BottomPane<'_> {
             view.handle_key_event(self, key_event);
             if !view.is_complete() {
                 self.active_view = Some(view);
+            } else if self.is_task_running {
+                let mut v = StatusIndicatorView::new(self.app_event_tx.clone());
+                v.update_text("waiting for model".to_string());
+                self.active_view = Some(Box::new(v));
+                self.status_view_active = true;
             }
             self.request_redraw();
             InputResult::None
@@ -163,6 +168,12 @@ impl BottomPane<'_> {
             CancellationEvent::Handled => {
                 if !view.is_complete() {
                     self.active_view = Some(view);
+                } else if self.is_task_running {
+                    // Modal aborted but task still running – restore status indicator.
+                    let mut v = StatusIndicatorView::new(self.app_event_tx.clone());
+                    v.update_text("waiting for model".to_string());
+                    self.active_view = Some(Box::new(v));
+                    self.status_view_active = true;
                 }
                 self.show_ctrl_c_quit_hint();
             }
@@ -549,7 +560,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn overlay_not_shown_above_approval_modal() {
         let (tx_raw, _rx) = channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
@@ -577,6 +587,48 @@ mod tests {
             !r0.contains("Working"),
             "overlay Working header should not render above modal"
         );
+    }
+
+    #[test]
+    fn composer_not_shown_after_denied_if_task_running() {
+        let (tx_raw, rx) = channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx.clone(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+        });
+
+        // Start a running task so the status indicator replaces the composer.
+        pane.set_task_running(true);
+        pane.update_status_text("waiting for model".to_string());
+
+        // Push an approval modal (e.g., command approval) which should hide the status view.
+        pane.push_approval_request(exec_request());
+
+        // Simulate pressing 'n' (deny) on the modal.
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        pane.handle_key_event(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+
+        // After denial, since the task is still running, the status indicator
+        // should be restored as the active view; the composer should NOT be visible.
+        assert!(pane.status_view_active, "status view should be active after denial");
+        assert!(pane.active_view.is_some(), "active view should be present");
+
+        // Render and ensure the top row includes the Working header instead of the composer.
+        // Give the animation thread a moment to tick.
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        let area = Rect::new(0, 0, 40, 3);
+        let mut buf = Buffer::empty(area);
+        (&pane).render_ref(area, &mut buf);
+        let mut row0 = String::new();
+        for x in 0..area.width {
+            row0.push(buf[(x, 0)].symbol().chars().next().unwrap_or(' '));
+        }
+        assert!(row0.contains("Working"), "expected Working header after denial: {row0:?}");
+
+        // Drain the channel to avoid unused warnings.
+        drop(rx);
     }
 
     #[test]
