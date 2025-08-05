@@ -1,8 +1,8 @@
 use mcp_types::Tool;
 use serde::Serialize;
 
-use crate::openai_tools::DEFAULT_SHELL_TOOL;
 use crate::openai_tools::OpenAiTool;
+use crate::openai_tools::create_shell_tool;
 use crate::plan_tool::PLAN_TOOL;
 
 #[derive(Debug, Clone, Serialize)]
@@ -51,7 +51,7 @@ pub(crate) fn get_codex_tools(flags: ToolFlags, extra_tools: Vec<CodexTool>) -> 
     }
 
     if flags.shell {
-        tools.push(CodexTool::OpenAiTool(DEFAULT_SHELL_TOOL.clone()));
+        tools.push(CodexTool::OpenAiTool(create_shell_tool()));
     }
 
     tools.extend(extra_tools);
