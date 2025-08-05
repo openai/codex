@@ -192,7 +192,7 @@ impl OllamaClient {
                     return Ok(());
                 }
                 PullEvent::Error(err) => {
-                    // Emperically, ollama returns a 200 OK response even when
+                    // Empirically, ollama returns a 200 OK response even when
                     // the output stream includes an error message. Verify with:
                     //
                     // `curl -i http://localhost:11434/api/pull -d '{ "model": "foobarbaz" }'`
