@@ -108,7 +108,7 @@ If you encounter problems with the login flow, please comment on <https://github
 
 Codex also allows you to use other providers that support the OpenAI Chat Completions (or Responses) API.
 
-To do so, you must first define custom [providers](./config.md#model_providers) in `~/.codex/config.toml`. For example, the provider for a standard Ollama setup would be defined as follows:
+To do so, you must first define custom [providers](./codex-rs/config.md#model_providers) in `~/.codex/config.toml`. For example, the provider for a standard Ollama setup would be defined as follows:
 
 ```toml
 [model_providers.ollama]
