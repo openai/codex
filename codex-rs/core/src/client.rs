@@ -126,7 +126,7 @@ impl ModelClient {
 
         let auth = self.auth.clone();
 
-        let auth_mode = auth.as_ref().map(|a| a.mode.clone());
+        let auth_mode = auth.as_ref().map(|a| a.mode);
 
         let store = prompt.store && auth_mode != Some(AuthMode::ChatGPT);
 

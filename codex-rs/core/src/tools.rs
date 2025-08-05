@@ -1,10 +1,13 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
+use std::collections::HashMap;
 
-use mcp_types::{Tool, ToolInputSchema};
+use mcp_types::Tool;
 use serde::Serialize;
 
 use crate::model_family;
-use crate::openai_tools::{JsonSchema, OpenAiTool, ResponsesApiTool};
+use crate::openai_tools::JsonSchema;
+use crate::openai_tools::OpenAiTool;
+use crate::openai_tools::ResponsesApiTool;
 use crate::plan_tool::PLAN_TOOL;
 
 #[derive(Debug, Clone, Serialize)]
@@ -103,7 +106,10 @@ pub(crate) fn create_shell_tool() -> OpenAiTool {
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod tests {
+    use mcp_types::ToolInputSchema;
+
     use super::*;
 
     #[test]
@@ -114,7 +120,6 @@ mod tests {
         let tools = get_codex_tools(&config, Some(HashMap::new()));
 
         assert_eq!(tools.len(), 2);
-        eprintln!("{:?}", tools);
         assert!(matches!(
             tools[0],
             CodexTool::OpenAiTool(OpenAiTool::LocalShell {})
