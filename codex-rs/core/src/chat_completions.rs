@@ -22,6 +22,7 @@ use crate::client_common::ResponseStream;
 use crate::error::CodexErr;
 use crate::error::Result;
 use crate::models::ContentItem;
+use crate::models::ReasoningItemContent;
 use crate::models::ResponseItem;
 use crate::openai_tools::create_tools_json_for_chat_completions_api;
 use crate::util::backoff;
@@ -208,6 +209,7 @@ async fn process_chat_sse<S>(
 
     let mut fn_call_state = FunctionCallState::default();
     let mut assistant_text = String::new();
+    let mut reasoning_text = String::new();
 
     loop {
         let sse = match timeout(idle_timeout, stream.next()).await {
@@ -236,6 +238,31 @@ async fn process_chat_sse<S>(
 
         // OpenAI Chat streaming sends a literal string "[DONE]" when finished.
         if sse.data.trim() == "[DONE]" {
+            // Emit any finalized items before closing so downstream consumers receive
+            // terminal events for both assistant content and raw reasoning.
+            if !assistant_text.is_empty() {
+                let item = ResponseItem::Message {
+                    role: "assistant".to_string(),
+                    content: vec![ContentItem::OutputText {
+                        text: std::mem::take(&mut assistant_text),
+                    }],
+                    id: None,
+                };
+                let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
+            }
+
+            if !reasoning_text.is_empty() {
+                let item = ResponseItem::Reasoning {
+                    id: String::new(),
+                    summary: Vec::new(),
+                    content: Some(vec![ReasoningItemContent::ReasoningText {
+                        text: std::mem::take(&mut reasoning_text),
+                    }]),
+                    encrypted_content: None,
+                };
+                let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
+            }
+
             let _ = tx_event
                 .send(Ok(ResponseEvent::Completed {
                     response_id: String::new(),
@@ -332,7 +359,21 @@ async fn process_chat_sse<S>(
             if let Some(finish_reason) = choice.get("finish_reason").and_then(|v| v.as_str()) {
                 match finish_reason {
                     "tool_calls" if fn_call_state.active => {
-                        // Build the FunctionCall response item.
+                        // First, flush the terminal raw reasoning so UIs can finalize
+                        // the reasoning stream before any exec/tool events begin.
+                        if !reasoning_text.is_empty() {
+                            let item = ResponseItem::Reasoning {
+                                id: String::new(),
+                                summary: Vec::new(),
+                                content: Some(vec![ReasoningItemContent::ReasoningText {
+                                    text: std::mem::take(&mut reasoning_text),
+                                }]),
+                                encrypted_content: None,
+                            };
+                            let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
+                        }
+
+                        // Then emit the FunctionCall response item.
                         let item = ResponseItem::FunctionCall {
                             id: None,
                             name: fn_call_state.name.clone().unwrap_or_else(|| "".to_string()),
@@ -340,7 +381,6 @@ async fn process_chat_sse<S>(
                             call_id: fn_call_state.call_id.clone().unwrap_or_else(String::new),
                         };
 
-                        // Emit it downstream.
                         let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
                     }
                     "stop" => {
@@ -353,6 +393,18 @@ async fn process_chat_sse<S>(
                                     text: std::mem::take(&mut assistant_text),
                                 }],
                                 id: None,
+                            };
+                            let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
+                        }
+                        // Also emit a terminal Reasoning item so UIs can finalize raw reasoning.
+                        if !reasoning_text.is_empty() {
+                            let item = ResponseItem::Reasoning {
+                                id: String::new(),
+                                summary: Vec::new(),
+                                content: Some(vec![ReasoningItemContent::ReasoningText {
+                                    text: std::mem::take(&mut reasoning_text),
+                                }]),
+                                encrypted_content: None,
                             };
                             let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
                         }
@@ -461,15 +513,17 @@ where
                     // Build any aggregated items in the correct order: Reasoning first, then Message.
                     let mut emitted_any = false;
 
-                    if !this.cumulative_reasoning.is_empty() {
+                    if !this.cumulative_reasoning.is_empty()
+                        && matches!(this.mode, AggregateMode::AggregatedOnly)
+                    {
                         let aggregated_reasoning = crate::models::ResponseItem::Reasoning {
                             id: String::new(),
-                            summary: vec![
-                                crate::models::ReasoningItemReasoningSummary::SummaryText {
+                            summary: Vec::new(),
+                            content: Some(vec![
+                                crate::models::ReasoningItemContent::ReasoningText {
                                     text: std::mem::take(&mut this.cumulative_reasoning),
                                 },
-                            ],
-                            content: None,
+                            ]),
                             encrypted_content: None,
                         };
                         this.pending
