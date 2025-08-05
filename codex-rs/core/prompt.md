@@ -52,8 +52,7 @@ You MUST adhere to the following criteria when executing the task:
   - Do NOT show the full contents of large files you have already written, unless the user explicitly asks for them.
 
 ## Using the shell command `apply_patch` to edit files
-
-Your patch language is a stripped‑down, file‑oriented diff format designed to be easy to parse and safe to apply. You can think of it as a high‑level envelope:
+`apply_patch` is a shell command for editing files. Your patch language is a stripped‑down, file‑oriented diff format designed to be easy to parse and safe to apply. You can think of it as a high‑level envelope:
 
 *** Begin Patch
 [ one or more file sections ]
@@ -105,6 +104,7 @@ It is important to remember:
 
 - You must include a header with your intended action (Add/Delete/Update)
 - You must prefix new lines with `+` even when creating a new file
+- You must follow this schema exactly when providing a patch
 
 You can invoke apply_patch with the following shell command:
 
@@ -133,3 +133,4 @@ A tool named `update_plan` is available. Use it to keep an up‑to‑date, step�
 - Whenever you finish a step, call `update_plan` again, marking the finished step as `completed` and the next step as `in_progress`.
 - If your plan needs to change, call `update_plan` with the revised steps and include an `explanation` describing the change.
 - When all steps are complete, make a final `update_plan` call with all steps marked `completed`.
+
