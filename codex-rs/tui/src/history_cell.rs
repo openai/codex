@@ -7,7 +7,6 @@ use codex_common::elapsed::format_duration;
 use codex_common::summarize_sandbox_policy;
 use codex_core::WireApi;
 use codex_core::config::Config;
-use codex_core::model_supports_reasoning_summaries;
 use codex_core::plan_tool::PlanItemArg;
 use codex_core::plan_tool::StepStatus;
 use codex_core::plan_tool::UpdatePlanArgs;
@@ -177,7 +176,7 @@ impl HistoryCell {
                 ("sandbox", summarize_sandbox_policy(&config.sandbox_policy)),
             ];
             if config.model_provider.wire_api == WireApi::Responses
-                && model_supports_reasoning_summaries(config)
+                && config.model_family.supports_reasoning_summaries
             {
                 entries.push((
                     "reasoning effort",

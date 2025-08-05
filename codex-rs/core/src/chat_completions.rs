@@ -21,6 +21,7 @@ use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
 use crate::error::CodexErr;
 use crate::error::Result;
+use crate::model_family::ModelFamily;
 use crate::models::ContentItem;
 use crate::models::ResponseItem;
 use crate::openai_tools::create_tools_json_for_chat_completions_api;
@@ -29,7 +30,7 @@ use crate::util::backoff;
 /// Implementation for the classic Chat Completions API.
 pub(crate) async fn stream_chat_completions(
     prompt: &Prompt,
-    model: &str,
+    model_family: &ModelFamily,
     include_plan_tool: bool,
     client: &reqwest::Client,
     provider: &ModelProviderInfo,
@@ -37,7 +38,7 @@ pub(crate) async fn stream_chat_completions(
     // Build messages array
     let mut messages = Vec::<serde_json::Value>::new();
 
-    let full_instructions = prompt.get_full_instructions(model);
+    let full_instructions = prompt.get_full_instructions(model_family);
     messages.push(json!({"role": "system", "content": full_instructions}));
 
     if let Some(instr) = &prompt.get_formatted_user_instructions() {
@@ -110,9 +111,10 @@ pub(crate) async fn stream_chat_completions(
         }
     }
 
-    let tools_json = create_tools_json_for_chat_completions_api(prompt, model, include_plan_tool)?;
+    let tools_json =
+        create_tools_json_for_chat_completions_api(prompt, model_family, include_plan_tool)?;
     let payload = json!({
-        "model": model,
+        "model": model_family.slug,
         "messages": messages,
         "stream": true,
         "tools": tools_json,
