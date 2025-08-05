@@ -139,7 +139,7 @@ mod tests {
 
     #[test]
     fn case_insensitive_matching_basic() {
-        let (idx, _score) = match fuzzy_match("Hello", "heLL") {
+        let (idx, _score) = match fuzzy_match("FooBar", "foO") {
             Some(v) => v,
             None => panic!("expected a match"),
         };
