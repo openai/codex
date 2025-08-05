@@ -40,7 +40,7 @@ pub(crate) async fn stream_chat_completions(
     let full_instructions = prompt.get_full_instructions(model);
     messages.push(json!({"role": "system", "content": full_instructions}));
 
-    if let Some(instr) = &prompt.user_instructions {
+    if let Some(instr) = &prompt.get_formatted_user_instructions() {
         messages.push(json!({"role": "user", "content": instr}));
     }
 
@@ -120,7 +120,7 @@ pub(crate) async fn stream_chat_completions(
 
     debug!(
         "POST to {}: {}",
-        provider.get_full_url(),
+        provider.get_full_url(&None),
         serde_json::to_string_pretty(&payload).unwrap_or_default()
     );
 
@@ -129,7 +129,7 @@ pub(crate) async fn stream_chat_completions(
     loop {
         attempt += 1;
 
-        let req_builder = provider.create_request_builder(client)?;
+        let req_builder = provider.create_request_builder(client, &None).await?;
 
         let res = req_builder
             .header(reqwest::header::ACCEPT, "text/event-stream")
