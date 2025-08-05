@@ -541,6 +541,42 @@ mod tests {
     }
 
     #[test]
+    fn status_indicator_visible_during_command_execution() {
+        let (tx_raw, _rx) = channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+        });
+
+        // Begin a task: show initial status.
+        pane.set_task_running(true);
+        pane.update_status_text("waiting for model".to_string());
+
+        // Simulate an approval modal which temporarily hides the status view.
+        pane.push_approval_request(exec_request());
+
+        // Re-enable a status line as would happen when a long-running command begins.
+        // This should present the status indicator even while modal logic may be active.
+        pane.update_status_text("running command".to_string());
+
+        // Allow some frames so the animation thread ticks.
+        std::thread::sleep(std::time::Duration::from_millis(120));
+
+        // Render and confirm the line contains the "Working" header.
+        let area = Rect::new(0, 0, 40, 3);
+        let mut buf = Buffer::empty(area);
+        (&pane).render_ref(area, &mut buf);
+
+        let mut row0 = String::new();
+        for x in 0..area.width {
+            row0.push(buf[(x, 0)].symbol().chars().next().unwrap_or(' '));
+        }
+        assert!(row0.contains("Working"), "expected Working header: {row0:?}");
+    }
+
+    #[test]
     fn bottom_padding_present_for_status_view() {
         let (tx_raw, _rx) = channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);

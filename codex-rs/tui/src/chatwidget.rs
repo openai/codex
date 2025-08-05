@@ -104,6 +104,11 @@ fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Optio
 }
 
 impl ChatWidget<'_> {
+    fn finalize_active_stream(&mut self) {
+        if let Some(kind) = self.current_stream {
+            self.finalize_stream(kind);
+        }
+    }
     pub(crate) fn new(
         config: Config,
         app_event_tx: AppEventSender,
@@ -336,6 +341,7 @@ impl ChatWidget<'_> {
                 cwd,
                 reason,
             }) => {
+                self.finalize_active_stream();
                 // Log a background summary immediately so the history is chronological.
                 let cmdline = strip_bash_lc_and_escape(&command);
                 let text = format!(
@@ -362,6 +368,7 @@ impl ChatWidget<'_> {
                 reason,
                 grant_root,
             }) => {
+                self.finalize_active_stream();
                 // ------------------------------------------------------------------
                 // Before we even prompt the user for approval we surface the patch
                 // summary in the main conversation so that the dialog appears in a
@@ -391,6 +398,10 @@ impl ChatWidget<'_> {
                 command,
                 cwd,
             }) => {
+                self.finalize_active_stream();
+                // Ensure the status indicator is visible while the command runs.
+                self.bottom_pane
+                    .update_status_text("running command".to_string());
                 self.running_commands.insert(
                     call_id,
                     RunningCommand {
@@ -434,6 +445,7 @@ impl ChatWidget<'_> {
                 call_id: _,
                 invocation,
             }) => {
+                self.finalize_active_stream();
                 self.add_to_history(HistoryCell::new_active_mcp_tool_call(invocation));
             }
             EventMsg::McpToolCallEnd(McpToolCallEndEvent {
