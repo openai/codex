@@ -458,6 +458,7 @@ class _ApiKeyHTTPServer(http.server.HTTPServer):
             "code_challenge": self.pkce.code_challenge,
             "code_challenge_method": "S256",
             "id_token_add_organizations": "true",
+            "codex_cli_simplified_flow": "true",
             "state": self.state,
         }
         return f"{self.issuer}/oauth/authorize?" + urllib.parse.urlencode(params)
