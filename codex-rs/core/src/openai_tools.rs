@@ -56,7 +56,7 @@ static DEFAULT_TOOLS: LazyLock<Vec<OpenAiTool>> = LazyLock::new(|| {
 
     vec![OpenAiTool::Function(ResponsesApiTool {
         name: "shell",
-        description: "Runs a shell command, and returns its output.",
+        description: "Runs a shell command and returns its output",
         strict: false,
         parameters: JsonSchema::Object {
             properties,
