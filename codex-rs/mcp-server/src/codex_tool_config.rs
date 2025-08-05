@@ -158,8 +158,8 @@ impl CodexToolCallParam {
             codex_linux_sandbox_exe,
             base_instructions,
             include_plan_tool,
-            default_disable_response_storage: None,
-            default_show_raw_agent_reasoning: None,
+            disable_response_storage: None,
+            show_raw_agent_reasoning: None,
         };
 
         let cli_overrides = cli_overrides

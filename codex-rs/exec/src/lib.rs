@@ -147,8 +147,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         codex_linux_sandbox_exe,
         base_instructions: None,
         include_plan_tool: None,
-        default_disable_response_storage: oss.then_some(true),
-        default_show_raw_agent_reasoning: oss.then_some(true),
+        disable_response_storage: oss.then_some(true),
+        show_raw_agent_reasoning: oss.then_some(true),
     };
     // Parse `-c` overrides.
     let cli_kv_overrides = match config_overrides.parse_overrides() {
