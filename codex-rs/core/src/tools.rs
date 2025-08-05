@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 
-use mcp_types::Tool;
+use mcp_types::{Tool, ToolInputSchema};
 use serde::Serialize;
 
 use crate::model_family;
@@ -29,7 +29,7 @@ pub struct ToolsConfig {
 }
 
 impl ToolsConfig {
-    pub fn build(model_family: &model_family::ModelFamily, include_plan_tool: bool) -> Self {
+    pub fn new(model_family: &model_family::ModelFamily, include_plan_tool: bool) -> Self {
         let shell_type = if model_family.uses_local_shell_tool {
             ShellToolType::LocalShell
         } else {
@@ -100,4 +100,88 @@ pub(crate) fn create_shell_tool() -> OpenAiTool {
             additional_properties: false,
         },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_codex_tools() {
+        let model_family = model_family::find_family_for_model("codex-mini-latest")
+            .expect("codex-mini-latest should be a valid model family");
+        let config = ToolsConfig::new(&model_family, true);
+        let tools = get_codex_tools(&config, Some(HashMap::new()));
+
+        assert_eq!(tools.len(), 2);
+        eprintln!("{:?}", tools);
+        assert!(matches!(
+            tools[0],
+            CodexTool::OpenAiTool(OpenAiTool::LocalShell {})
+        ));
+        assert!(matches!(
+            tools[1],
+            CodexTool::OpenAiTool(OpenAiTool::Function(ResponsesApiTool {
+                name: "update_plan",
+                ..
+            }))
+        ));
+    }
+
+    #[test]
+    fn test_get_codex_tools_default_shell() {
+        let model_family =
+            model_family::find_family_for_model("o3").expect("o3 should be a valid model family");
+        let config = ToolsConfig::new(&model_family, true);
+        let tools = get_codex_tools(&config, Some(HashMap::new()));
+
+        assert_eq!(tools.len(), 2);
+        assert!(matches!(
+            tools[0],
+            CodexTool::OpenAiTool(OpenAiTool::Function(ResponsesApiTool { name: "shell", .. }))
+        ));
+        assert!(matches!(
+            tools[1],
+            CodexTool::OpenAiTool(OpenAiTool::Function(ResponsesApiTool {
+                name: "update_plan",
+                ..
+            }))
+        ));
+    }
+
+    #[test]
+    fn test_get_codex_tools_mcp_tools() {
+        let model_family =
+            model_family::find_family_for_model("o3").expect("o3 should be a valid model family");
+        let config = ToolsConfig::new(&model_family, false);
+        let tools = get_codex_tools(
+            &config,
+            Some(HashMap::from([(
+                "test_server/do_something_cool".to_string(),
+                Tool {
+                    name: "do_something_cool".to_string(),
+                    input_schema: ToolInputSchema {
+                        properties: Some(serde_json::json!({})),
+                        required: None,
+                        r#type: "object".to_string(),
+                    },
+                    output_schema: None,
+                    title: None,
+                    annotations: None,
+                    description: None,
+                },
+            )])),
+        );
+
+        assert_eq!(tools.len(), 2);
+        assert!(matches!(
+            tools[0],
+            CodexTool::OpenAiTool(OpenAiTool::Function(ResponsesApiTool { name: "shell", .. }))
+        ));
+        assert!(matches!(
+            tools[1],
+            CodexTool::McpTool { ref fully_qualified_name, .. }
+            if fully_qualified_name == "test_server/do_something_cool"
+        ));
+    }
 }

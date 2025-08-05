@@ -813,10 +813,7 @@ async fn submission_loop(
                 let default_shell = shell::default_user_shell().await;
                 sess = Some(Arc::new(Session {
                     client,
-                    tools_config: ToolsConfig::build(
-                        &config.model_family,
-                        config.include_plan_tool,
-                    ),
+                    tools_config: ToolsConfig::new(&config.model_family, config.include_plan_tool),
                     tx_event: tx_event.clone(),
                     ctrl_c: Arc::clone(&ctrl_c),
                     user_instructions,
