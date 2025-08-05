@@ -65,8 +65,7 @@ Each step should be a short, 1-sentence description.
 Until all the steps are finished, there should always be exactly one in_progress step in the plan.
 Call the update_plan tool whenever you finish a step, marking the completed step as `completed` and marking the next step as `in_progress`.
 Before running a command, consider whether or not you have completed the previous step, and make sure to mark it as completed before moving on to the next step.
-Sometimes, you may need to change plans in the middle of a task: call `update_plan` with the updated plan and make sure to provide an `explanation` of the rationale when doing so.
-When all steps are completed, call update_plan one last time with all steps marked as `completed`."#,
+Sometimes, you may need to change plans in the middle of a task: call `update_plan` with the updated plan and make sure to provide an `explanation` of the rationale when doing so."#,
         strict: false,
         parameters: JsonSchema::Object {
             properties,
