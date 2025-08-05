@@ -860,7 +860,7 @@ dependencies = [
  "mcp-types",
  "path-clean",
  "pretty_assertions",
- "rand 0.8.5",
+ "rand 0.9.2",
  "ratatui",
  "ratatui-image",
  "regex-lite",
