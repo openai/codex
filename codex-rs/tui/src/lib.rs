@@ -3,6 +3,7 @@
 // alternate‑screen mode starts; that file opts‑out locally via `allow`.
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 use app::App;
+use codex_core::BUILT_IN_OSS_MODEL_PROVIDER_ID;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config_types::SandboxMode;
@@ -70,18 +71,35 @@ pub async fn run_main(
         )
     };
 
+    let model_provider_override = if cli.oss {
+        Some(BUILT_IN_OSS_MODEL_PROVIDER_ID.to_owned())
+    } else {
+        None
+    };
     let config = {
         // Load configuration and support CLI overrides.
         let overrides = ConfigOverrides {
-            model: cli.model.clone(),
+            // When using `--oss`, let the bootstrapper pick the model
+            // (defaulting to gpt-oss:20b) and ensure it is present locally.
+            model: if cli.oss {
+                Some(
+                    codex_ollama::ensure_oss_ready(cli.model.clone())
+                        .await
+                        .map_err(|e| std::io::Error::other(format!("OSS setup failed: {e}")))?,
+                )
+            } else {
+                cli.model.clone()
+            },
             approval_policy,
             sandbox_mode,
             cwd: cli.cwd.clone().map(|p| p.canonicalize().unwrap_or(p)),
-            model_provider: None,
+            model_provider: model_provider_override,
             config_profile: cli.config_profile.clone(),
             codex_linux_sandbox_exe,
             base_instructions: None,
             include_plan_tool: Some(true),
+            default_disable_response_storage: cli.oss.then_some(true),
+            default_show_raw_agent_reasoning: cli.oss.then_some(true),
         };
         // Parse `-c` overrides from the CLI.
         let cli_kv_overrides = match cli.config_overrides.parse_overrides() {

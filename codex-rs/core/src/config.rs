@@ -385,6 +385,8 @@ pub struct ConfigOverrides {
     pub codex_linux_sandbox_exe: Option<PathBuf>,
     pub base_instructions: Option<String>,
     pub include_plan_tool: Option<bool>,
+    pub default_disable_response_storage: Option<bool>,
+    pub default_show_raw_agent_reasoning: Option<bool>,
 }
 
 impl Config {
@@ -408,6 +410,8 @@ impl Config {
             codex_linux_sandbox_exe,
             base_instructions,
             include_plan_tool,
+            default_disable_response_storage,
+            default_show_raw_agent_reasoning,
         } = overrides;
 
         let config_profile = match config_profile_key.as_ref().or(cfg.profile.as_ref()) {
@@ -525,6 +529,7 @@ impl Config {
             disable_response_storage: config_profile
                 .disable_response_storage
                 .or(cfg.disable_response_storage)
+                .or(default_disable_response_storage)
                 .unwrap_or(false),
             notify: cfg.notify,
             user_instructions,
@@ -539,7 +544,10 @@ impl Config {
             codex_linux_sandbox_exe,
 
             hide_agent_reasoning: cfg.hide_agent_reasoning.unwrap_or(false),
-            show_raw_agent_reasoning: cfg.show_raw_agent_reasoning.unwrap_or(false),
+            show_raw_agent_reasoning: cfg
+                .show_raw_agent_reasoning
+                .or(default_show_raw_agent_reasoning)
+                .unwrap_or(false),
             model_reasoning_effort: config_profile
                 .model_reasoning_effort
                 .or(cfg.model_reasoning_effort)

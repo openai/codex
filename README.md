@@ -18,6 +18,7 @@ This is the home of the **Codex CLI**, which is a coding agent from OpenAI that 
 - [Quickstart](#quickstart)
   - [OpenAI API Users](#openai-api-users)
   - [OpenAI Plus/Pro Users](#openai-pluspro-users)
+  - [Using OpenAI Open Source Models](#using-open-source-models)
 - [Why Codex?](#why-codex)
 - [Security model & permissions](#security-model--permissions)
   - [Platform sandboxing details](#platform-sandboxing-details)
@@ -183,6 +184,41 @@ codex --full-auto "create the fanciest todo-list app"
 That's it - Codex will scaffold a file, run it inside a sandbox, install any
 missing dependencies, and show you the live result. Approve the changes and
 they'll be committed to your working directory.
+
+---
+
+## Using Open Source Models
+
+Codex can run fully locally against an OpenAI‑compatible OSS host (like Ollama) using the `--oss` flag:
+
+- Interactive UI:
+  - codex --oss
+- Non‑interactive (programmatic) mode:
+  - echo "Refactor utils" | codex exec --oss
+
+Model selection when using `--oss`:
+
+- If you omit `-m/--model`, Codex defaults to -m gpt-oss:20b and will verify it exists locally (downloading if needed).
+- To pick a different size, pass one of:
+  - -m "gpt-oss:20b"
+  - -m "gpt-oss:120b"
+
+Point Codex at your own OSS host:
+
+- By default, `--oss` talks to http://localhost:11434/v1.
+- To use a different host, set one of these environment variables before running Codex:
+  - CODEX_OSS_BASE_URL, for example:
+    - CODEX_OSS_BASE_URL="http://my-ollama.example.com:11434/v1" codex --oss -m gpt-oss:20b
+  - or CODEX_OSS_PORT (when the host is localhost):
+    - CODEX_OSS_PORT=11434 codex --oss
+
+Advanced: you can persist this in your config instead of environment variables by overriding the built‑in `oss` provider in `~/.codex/config.toml`:
+
+```toml
+[model_providers.oss]
+name = "Open Source"
+base_url = "http://my-ollama.example.com:11434/v1"
+```
 
 ---
 
