@@ -9,7 +9,6 @@ use codex_login::AuthMode;
 use codex_login::CodexAuth;
 use serde::Deserialize;
 use serde::Serialize;
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::env::VarError;
 use std::time::Duration;
@@ -96,17 +95,23 @@ impl ModelProviderInfo {
         client: &'a reqwest::Client,
         auth: &Option<CodexAuth>,
     ) -> crate::error::Result<reqwest::RequestBuilder> {
-        let auth: Cow<'_, Option<CodexAuth>> = if auth.is_some() {
-            Cow::Borrowed(auth)
-        } else {
-            Cow::Owned(self.get_fallback_auth()?)
+        let effective_auth = match self.api_key() {
+            Ok(Some(key)) => Some(CodexAuth::from_api_key(key)),
+            Ok(None) => auth.clone(),
+            Err(err) => {
+                if auth.is_some() {
+                    auth.clone()
+                } else {
+                    return Err(err);
+                }
+            }
         };
 
-        let url = self.get_full_url(&auth);
+        let url = self.get_full_url(&effective_auth);
 
         let mut builder = client.post(url);
 
-        if let Some(auth) = auth.as_ref() {
+        if let Some(auth) = effective_auth.as_ref() {
             builder = builder.bearer_auth(auth.get_token().await?);
         }
 
