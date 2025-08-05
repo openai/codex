@@ -1,3 +1,4 @@
+use crate::citation_regex::CITATION_REGEX;
 use codex_core::config::Config;
 use codex_core::config_types::UriBasedFileOpener;
 use ratatui::text::Line;
@@ -5,8 +6,7 @@ use ratatui::text::Span;
 use std::borrow::Cow;
 use std::path::Path;
 
-use crate::citation_regex::CITATION_REGEX;
-
+#[allow(dead_code)]
 pub(crate) fn append_markdown(
     markdown_source: &str,
     lines: &mut Vec<Line<'static>>,
@@ -15,6 +15,7 @@ pub(crate) fn append_markdown(
     append_markdown_with_opener_and_cwd(markdown_source, lines, config.file_opener, &config.cwd);
 }
 
+#[allow(dead_code)]
 fn append_markdown_with_opener_and_cwd(
     markdown_source: &str,
     lines: &mut Vec<Line<'static>>,
@@ -60,6 +61,7 @@ fn append_markdown_with_opener_and_cwd(
 /// ```text
 /// <scheme>://file<ABS_PATH>:<LINE>
 /// ```
+#[allow(dead_code)]
 fn rewrite_file_citations<'a>(
     src: &'a str,
     file_opener: UriBasedFileOpener,

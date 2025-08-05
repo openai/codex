@@ -1,5 +1,4 @@
 use crate::exec_command::strip_bash_lc_and_escape;
-use crate::markdown::append_markdown;
 use crate::text_block::TextBlock;
 use crate::text_formatting::format_and_truncate_tool_result;
 use base64::Engine;
@@ -68,12 +67,7 @@ pub(crate) enum HistoryCell {
     /// Message from the user.
     UserPrompt { view: TextBlock },
 
-    /// Message from the agent.
-    AgentMessage { view: TextBlock },
-
-    /// Reasoning event from the agent.
-    AgentReasoning { view: TextBlock },
-
+    // AgentMessage and AgentReasoning variants were unused and have been removed.
     /// An exec tool call that has not finished yet.
     ActiveExecCommand { view: TextBlock },
 
@@ -128,8 +122,6 @@ impl HistoryCell {
         match self {
             HistoryCell::WelcomeMessage { view }
             | HistoryCell::UserPrompt { view }
-            | HistoryCell::AgentMessage { view }
-            | HistoryCell::AgentReasoning { view }
             | HistoryCell::BackgroundEvent { view }
             | HistoryCell::GitDiffOutput { view }
             | HistoryCell::ErrorEvent { view }
@@ -227,28 +219,6 @@ impl HistoryCell {
         lines.push(Line::from(""));
 
         HistoryCell::UserPrompt {
-            view: TextBlock::new(lines),
-        }
-    }
-
-    pub(crate) fn new_agent_message(config: &Config, message: String) -> Self {
-        let mut lines: Vec<Line<'static>> = Vec::new();
-        lines.push(Line::from("codex".magenta().bold()));
-        append_markdown(&message, &mut lines, config);
-        lines.push(Line::from(""));
-
-        HistoryCell::AgentMessage {
-            view: TextBlock::new(lines),
-        }
-    }
-
-    pub(crate) fn new_agent_reasoning(config: &Config, text: String) -> Self {
-        let mut lines: Vec<Line<'static>> = Vec::new();
-        lines.push(Line::from("thinking".magenta().italic()));
-        append_markdown(&text, &mut lines, config);
-        lines.push(Line::from(""));
-
-        HistoryCell::AgentReasoning {
             view: TextBlock::new(lines),
         }
     }
