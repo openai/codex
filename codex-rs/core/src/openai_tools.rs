@@ -195,12 +195,7 @@ pub(crate) fn get_openai_tools(
             match mcp_tool_to_openai_tool(name.clone(), tool.clone()) {
                 Ok(converted_tool) => tools.push(OpenAiTool::Function(converted_tool)),
                 Err(e) => {
-                    eprintln!("Failed to convert {name:?} MCP tool to OpenAI tool: {e:?}");
-                    tracing::error!(
-                        "Failed to convert {:?} MCP tool to OpenAI tool: {:?}",
-                        name,
-                        e,
-                    );
+                    tracing::error!("Failed to convert {name:?} MCP tool to OpenAI tool: {e:?}");
                 }
             }
         }
@@ -217,7 +212,7 @@ mod tests {
 
     use super::*;
 
-    fn assert_eq_tool_names(tools: &Vec<OpenAiTool>, expected_names: &Vec<&str>) {
+    fn assert_eq_tool_names(tools: &[OpenAiTool], expected_names: &[&str]) {
         let tool_names = tools
             .iter()
             .map(|tool| match tool {
@@ -229,15 +224,12 @@ mod tests {
         assert_eq!(
             tool_names.len(),
             expected_names.len(),
-            "tool_name mismatch, {:?}, {:?}",
-            tool_names,
-            expected_names,
+            "tool_name mismatch, {tool_names:?}, {expected_names:?}",
         );
         for (name, expected_name) in tool_names.iter().zip(expected_names.iter()) {
             assert_eq!(
                 name, expected_name,
-                "tool_name mismatch, {:?}, {:?}",
-                name, expected_name
+                "tool_name mismatch, {name:?}, {expected_name:?}"
             );
         }
     }
@@ -249,7 +241,7 @@ mod tests {
         let config = ToolsConfig::new(&model_family, true);
         let tools = get_openai_tools(&config, Some(HashMap::new()));
 
-        assert_eq_tool_names(&tools, &vec!["local_shell", "update_plan"]);
+        assert_eq_tool_names(&tools, &["local_shell", "update_plan"]);
     }
 
     #[test]
@@ -258,7 +250,7 @@ mod tests {
         let config = ToolsConfig::new(&model_family, true);
         let tools = get_openai_tools(&config, Some(HashMap::new()));
 
-        assert_eq_tool_names(&tools, &vec!["shell", "update_plan"]);
+        assert_eq_tool_names(&tools, &["shell", "update_plan"]);
     }
 
     #[test]
@@ -303,7 +295,7 @@ mod tests {
             )])),
         );
 
-        assert_eq_tool_names(&tools, &vec!["shell", "test_server/do_something_cool"]);
+        assert_eq_tool_names(&tools, &["shell", "test_server/do_something_cool"]);
 
         assert_eq!(
             tools[1],
