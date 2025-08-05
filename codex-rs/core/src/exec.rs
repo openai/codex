@@ -140,11 +140,7 @@ pub async fn process_exec_tool_call(
 
             let exit_code = raw_output.exit_status.code().unwrap_or(-1);
 
-            // NOTE(ragona): This is much less restrictive than the previous check. If we exec
-            // a command, and it returns anything other than success, we assume that it may have
-            // been a sandboxing error and allow the user to retry. (The user of course may choose
-            // not to retry, or in a non-interactive mode, would automatically reject the approval.)
-            if exit_code != 0 && sandbox_type != SandboxType::None {
+            if exit_code != 0 && is_likely_sandbox_denied(sandbox_type, exit_code) {
                 return Err(CodexErr::Sandbox(SandboxErr::Denied(
                     exit_code, stdout, stderr,
                 )));
@@ -221,6 +217,26 @@ fn create_linux_sandbox_command_args(
     linux_cmd.extend(command);
 
     linux_cmd
+}
+
+/// We don't have a fully deterministic way to tell if our command failed
+/// because of the sandbox - a command in the user's zshrc file might hit an
+/// error, but the command itself might fail or succeed for other reasons.
+/// For now, we conservatively check for 'command not found' (exit code 127),
+/// and can add additional cases as necessary.
+fn is_likely_sandbox_denied(sandbox_type: SandboxType, exit_code: i32) -> bool {
+    if sandbox_type == SandboxType::None {
+        return false;
+    }
+
+    // Quick rejects: well-known non-sandbox shell exit codes
+    // 127: command not found, 2: misuse of shell builtins
+    if exit_code == 127 {
+        return false;
+    }
+
+    // For all other cases, we assume the sandbox is the cause
+    true
 }
 
 #[derive(Debug)]

@@ -4,6 +4,7 @@ use chrono::Utc;
 use codex_core::Codex;
 use codex_core::CodexSpawnOk;
 use codex_core::ModelProviderInfo;
+use codex_core::WireApi;
 use codex_core::built_in_model_providers;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
@@ -21,8 +22,10 @@ use tempfile::TempDir;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
+use wiremock::matchers::header_regex;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
+use wiremock::matchers::query_param;
 
 /// Build minimal SSE stream with completed marker using the JSON fixture.
 fn sse_completed(id: &str) -> String {
@@ -373,9 +376,90 @@ async fn includes_user_instructions_message_in_request() {
         request_body["input"][0]["content"][0]["text"]
             .as_str()
             .unwrap()
-            .starts_with("be nice")
+            .starts_with("<user_instructions>\n\nbe nice")
+    );
+    assert!(
+        request_body["input"][0]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .ends_with("</user_instructions>")
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn azure_overrides_assign_properties_used_for_responses_url() {
+    #![allow(clippy::unwrap_used)]
+
+    let existing_env_var_with_random_value = if cfg!(windows) { "USERNAME" } else { "USER" };
+
+    // Mock server
+    let server = MockServer::start().await;
+
+    // First request – must NOT include `previous_response_id`.
+    let first = ResponseTemplate::new(200)
+        .insert_header("content-type", "text/event-stream")
+        .set_body_raw(sse_completed("resp1"), "text/event-stream");
+
+    // Expect POST to /openai/responses with api-version query param
+    Mock::given(method("POST"))
+        .and(path("/openai/responses"))
+        .and(query_param("api-version", "2025-04-01-preview"))
+        .and(header_regex("Custom-Header", "Value"))
+        .and(header_regex(
+            "Authorization",
+            format!(
+                "Bearer {}",
+                std::env::var(existing_env_var_with_random_value).unwrap()
+            )
+            .as_str(),
+        ))
+        .respond_with(first)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let provider = ModelProviderInfo {
+        name: "custom".to_string(),
+        base_url: Some(format!("{}/openai", server.uri())),
+        // Reuse the existing environment variable to avoid using unsafe code
+        env_key: Some(existing_env_var_with_random_value.to_string()),
+        query_params: Some(std::collections::HashMap::from([(
+            "api-version".to_string(),
+            "2025-04-01-preview".to_string(),
+        )])),
+        env_key_instructions: None,
+        wire_api: WireApi::Responses,
+        http_headers: Some(std::collections::HashMap::from([(
+            "Custom-Header".to_string(),
+            "Value".to_string(),
+        )])),
+        env_http_headers: None,
+        request_max_retries: None,
+        stream_max_retries: None,
+        stream_idle_timeout_ms: None,
+        requires_auth: false,
+    };
+
+    // Init session
+    let codex_home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&codex_home);
+    config.model_provider = provider;
+
+    let ctrl_c = std::sync::Arc::new(tokio::sync::Notify::new());
+    let CodexSpawnOk { codex, .. } = Codex::spawn(config, None, ctrl_c.clone()).await.unwrap();
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: "hello".into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+}
+
 fn auth_from_token(id_token: String) -> CodexAuth {
     CodexAuth::new(
         None,

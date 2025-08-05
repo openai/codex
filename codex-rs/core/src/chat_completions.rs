@@ -21,6 +21,7 @@ use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
 use crate::error::CodexErr;
 use crate::error::Result;
+use crate::model_family::ModelFamily;
 use crate::models::ContentItem;
 use crate::models::ResponseItem;
 use crate::openai_tools::create_tools_json_for_chat_completions_api;
@@ -29,7 +30,7 @@ use crate::util::backoff;
 /// Implementation for the classic Chat Completions API.
 pub(crate) async fn stream_chat_completions(
     prompt: &Prompt,
-    model: &str,
+    model_family: &ModelFamily,
     include_plan_tool: bool,
     client: &reqwest::Client,
     provider: &ModelProviderInfo,
@@ -37,10 +38,10 @@ pub(crate) async fn stream_chat_completions(
     // Build messages array
     let mut messages = Vec::<serde_json::Value>::new();
 
-    let full_instructions = prompt.get_full_instructions(model);
+    let full_instructions = prompt.get_full_instructions(model_family);
     messages.push(json!({"role": "system", "content": full_instructions}));
 
-    if let Some(instr) = &prompt.user_instructions {
+    if let Some(instr) = &prompt.get_formatted_user_instructions() {
         messages.push(json!({"role": "user", "content": instr}));
     }
 
@@ -110,9 +111,10 @@ pub(crate) async fn stream_chat_completions(
         }
     }
 
-    let tools_json = create_tools_json_for_chat_completions_api(prompt, model, include_plan_tool)?;
+    let tools_json =
+        create_tools_json_for_chat_completions_api(prompt, model_family, include_plan_tool)?;
     let payload = json!({
-        "model": model,
+        "model": model_family.slug,
         "messages": messages,
         "stream": true,
         "tools": tools_json,
@@ -120,7 +122,7 @@ pub(crate) async fn stream_chat_completions(
 
     debug!(
         "POST to {}: {}",
-        provider.get_full_url(),
+        provider.get_full_url(&None),
         serde_json::to_string_pretty(&payload).unwrap_or_default()
     );
 
@@ -129,7 +131,7 @@ pub(crate) async fn stream_chat_completions(
     loop {
         attempt += 1;
 
-        let req_builder = provider.create_request_builder(client)?;
+        let req_builder = provider.create_request_builder(client, &None).await?;
 
         let res = req_builder
             .header(reqwest::header::ACCEPT, "text/event-stream")
@@ -260,6 +262,11 @@ async fn process_chat_sse<S>(
                 .and_then(|d| d.get("content"))
                 .and_then(|c| c.as_str())
             {
+                // Emit a delta so downstream consumers can stream text live.
+                let _ = tx_event
+                    .send(Ok(ResponseEvent::OutputTextDelta(content.to_string())))
+                    .await;
+
                 let item = ResponseItem::Message {
                     role: "assistant".to_string(),
                     content: vec![ContentItem::OutputText {
@@ -439,11 +446,14 @@ where
                     // will never appear in a Chat Completions stream.
                     continue;
                 }
-                Poll::Ready(Some(Ok(ResponseEvent::OutputTextDelta(_))))
-                | Poll::Ready(Some(Ok(ResponseEvent::ReasoningSummaryDelta(_)))) => {
-                    // Deltas are ignored here since aggregation waits for the
-                    // final OutputItemDone.
-                    continue;
+                Poll::Ready(Some(Ok(ResponseEvent::OutputTextDelta(delta)))) => {
+                    // Forward deltas unchanged so callers can stream text
+                    // live while still receiving a single aggregated
+                    // OutputItemDone at the end of the turn.
+                    return Poll::Ready(Some(Ok(ResponseEvent::OutputTextDelta(delta))));
+                }
+                Poll::Ready(Some(Ok(ResponseEvent::ReasoningSummaryDelta(delta)))) => {
+                    return Poll::Ready(Some(Ok(ResponseEvent::ReasoningSummaryDelta(delta))));
                 }
             }
         }

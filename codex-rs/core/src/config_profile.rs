@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use std::path::PathBuf;
 
 use crate::config_types::ReasoningEffort;
 use crate::config_types::ReasoningSummary;
@@ -17,4 +18,5 @@ pub struct ConfigProfile {
     pub model_reasoning_effort: Option<ReasoningEffort>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
     pub chatgpt_base_url: Option<String>,
+    pub experimental_instructions_file: Option<PathBuf>,
 }
