@@ -94,8 +94,7 @@ use crate::safety::SafetyCheck;
 use crate::safety::assess_command_safety;
 use crate::safety::assess_safety_for_untrusted_command;
 use crate::shell;
-use crate::tools::CodexTool;
-use crate::tools::ToolFlags;
+use crate::tools::ToolsConfig;
 use crate::tools::get_codex_tools;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::user_notification::UserNotification;
@@ -1209,19 +1208,9 @@ async fn run_turn(
     sub_id: String,
     input: Vec<ResponseItem>,
 ) -> CodexResult<Vec<ProcessedResponseItem>> {
-    let extra_tools = sess
-        .mcp_connection_manager
-        .list_all_tools()
-        .into_iter()
-        .map(|(fully_qualified_name, tool)| CodexTool::McpTool {
-            fully_qualified_name,
-            tool: Box::new(tool),
-        })
-        .collect();
-
     let tools = get_codex_tools(
-        ToolFlags::default(&sess.config.model, sess.config.include_plan_tool),
-        extra_tools,
+        ToolsConfig::build(&sess.config.model_family, sess.config.include_plan_tool),
+        Some(sess.mcp_connection_manager.list_all_tools()),
     );
 
     let prompt = Prompt {
@@ -1456,8 +1445,8 @@ async fn run_compact_task(
         user_instructions: None,
         store: !sess.disable_response_storage,
         tools: get_codex_tools(
-            ToolFlags::default(&sess.config.model, sess.config.include_plan_tool),
-            Vec::new(),
+            ToolsConfig::build(&sess.config.model_family, sess.config.include_plan_tool),
+            None,
         ),
         base_instructions_override: Some(compact_instructions.clone()),
     };

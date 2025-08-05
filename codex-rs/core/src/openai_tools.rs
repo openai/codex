@@ -2,7 +2,6 @@ use serde::Serialize;
 use serde_json::json;
 use std::collections::BTreeMap;
 
-use crate::client_common::Prompt;
 use crate::tools::CodexTool;
 
 #[derive(Debug, Clone, Serialize)]
@@ -41,29 +40,6 @@ pub(crate) enum JsonSchema {
     },
 }
 
-fn create_shell_tool() -> OpenAiTool {
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "command".to_string(),
-        JsonSchema::Array {
-            items: Box::new(JsonSchema::String),
-        },
-    );
-    properties.insert("workdir".to_string(), JsonSchema::String);
-    properties.insert("timeout".to_string(), JsonSchema::Number);
-
-    OpenAiTool::Function(ResponsesApiTool {
-        name: "shell",
-        description: "Runs a shell command and returns its output",
-        strict: false,
-        parameters: JsonSchema::Object {
-            properties,
-            required: &["command"],
-            additional_properties: false,
-        },
-    })
-}
-
 /// Returns JSON values that are compatible with Function Calling in the
 /// Responses API:
 /// https://platform.openai.com/docs/guides/function-calling?api-mode=responses
@@ -94,11 +70,11 @@ pub(crate) fn create_tools_json_for_responses_api(
 /// Chat Completions API:
 /// https://platform.openai.com/docs/guides/function-calling?api-mode=chat
 pub(crate) fn create_tools_json_for_chat_completions_api(
-    prompt: &Prompt,
+    tools: &Vec<CodexTool>,
 ) -> crate::error::Result<Vec<serde_json::Value>> {
     // We start with the JSON for the Responses API and than rewrite it to match
     // the chat completions tool call format.
-    let responses_api_tools_json = create_tools_json_for_responses_api(&prompt.tools)?;
+    let responses_api_tools_json = create_tools_json_for_responses_api(tools)?;
     let tools_json = responses_api_tools_json
         .into_iter()
         .filter_map(|mut tool| {

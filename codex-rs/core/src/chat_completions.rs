@@ -111,7 +111,7 @@ pub(crate) async fn stream_chat_completions(
         }
     }
 
-    let tools_json = create_tools_json_for_chat_completions_api(prompt)?;
+    let tools_json = create_tools_json_for_chat_completions_api(&prompt.tools)?;
     let payload = json!({
         "model": model_family.slug,
         "messages": messages,
