@@ -376,7 +376,13 @@ async fn includes_user_instructions_message_in_request() {
         request_body["input"][0]["content"][0]["text"]
             .as_str()
             .unwrap()
-            .starts_with("be nice")
+            .starts_with("<user_instructions>\n\nbe nice")
+    );
+    assert!(
+        request_body["input"][0]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .ends_with("</user_instructions>")
     );
 }
 

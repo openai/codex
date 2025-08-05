@@ -144,11 +144,11 @@ impl ModelClient {
         };
 
         let mut input_with_instructions = Vec::with_capacity(prompt.input.len() + 1);
-        if let Some(ui) = &prompt.user_instructions {
+        if let Some(ui) = prompt.get_formatted_user_instructions() {
             input_with_instructions.push(ResponseItem::Message {
                 id: None,
                 role: "user".to_string(),
-                content: vec![ContentItem::InputText { text: ui.clone() }],
+                content: vec![ContentItem::InputText { text: ui }],
             });
         }
         input_with_instructions.extend(prompt.input.clone());
