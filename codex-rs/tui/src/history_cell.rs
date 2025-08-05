@@ -106,6 +106,9 @@ pub(crate) enum HistoryCell {
     /// model wants to apply before being prompted to approve or deny it.
     PendingPatch { view: TextBlock },
 
+    /// A patch failed to apply.
+    PatchFailed { view: TextBlock },
+
     /// A human‑friendly rendering of the model's current plan and step
     /// statuses provided via the `update_plan` tool.
     PlanUpdate { view: TextBlock },
@@ -128,6 +131,7 @@ impl HistoryCell {
             | HistoryCell::CompletedExecCommand { view }
             | HistoryCell::CompletedMcpToolCall { view }
             | HistoryCell::PendingPatch { view }
+            | HistoryCell::PatchFailed { view }
             | HistoryCell::PlanUpdate { view }
             | HistoryCell::ActiveExecCommand { view, .. }
             | HistoryCell::ActiveMcpToolCall { view, .. } => {
@@ -139,6 +143,7 @@ impl HistoryCell {
             ],
         }
     }
+
     pub(crate) fn new_session_info(
         config: &Config,
         event: SessionConfiguredEvent,
@@ -595,6 +600,18 @@ impl HistoryCell {
         lines.push(Line::from(""));
 
         HistoryCell::PendingPatch {
+            view: TextBlock::new(lines),
+        }
+    }
+
+    pub fn new_patch_failed_event(stdout: String, stderr: String) -> Self {
+        let lines: Vec<Line<'static>> = vec![
+            Line::from("patch failed".red().bold()),
+            Line::from(stdout),
+            Line::from(stderr),
+            Line::from(""),
+        ];
+        HistoryCell::PatchFailed {
             view: TextBlock::new(lines),
         }
     }

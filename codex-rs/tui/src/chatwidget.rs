@@ -23,6 +23,7 @@ use codex_core::protocol::McpToolCallBeginEvent;
 use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
+use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TokenUsage;
 use crossterm::event::KeyEvent;
@@ -434,6 +435,16 @@ impl ChatWidget<'_> {
                     PatchEventType::ApplyBegin { auto_approved },
                     changes,
                 ));
+            }
+            EventMsg::PatchApplyEnd(PatchApplyEndEvent {
+                call_id: _,
+                stdout,
+                stderr,
+                success,
+            }) => {
+                if !success {
+                    self.add_to_history(HistoryCell::new_patch_failed_event(stdout, stderr));
+                }
             }
             EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                 call_id,
