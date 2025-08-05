@@ -104,6 +104,18 @@ fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Optio
 }
 
 impl ChatWidget<'_> {
+    fn emit_stream_header(&mut self, kind: StreamKind) {
+        use ratatui::text::Line as RLine;
+        if self.stream_header_emitted {
+            return;
+        }
+        let header = match kind {
+            StreamKind::Reasoning => RLine::from("thinking".magenta().italic()),
+            StreamKind::Answer => RLine::from("codex".magenta().bold()),
+        };
+        self.app_event_tx.send(AppEvent::InsertHistory(vec![header]));
+        self.stream_header_emitted = true;
+    }
     fn finalize_active_stream(&mut self) {
         if let Some(kind) = self.current_stream {
             self.finalize_stream(kind);
@@ -579,6 +591,7 @@ impl ChatWidget<'_> {
             // Ensure the waiting status is visible (composer replaced).
             self.bottom_pane
                 .update_status_text("waiting for model".to_string());
+            self.emit_stream_header(kind);
         }
     }
 
