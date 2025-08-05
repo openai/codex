@@ -359,6 +359,12 @@ pub enum EventMsg {
     /// Agent reasoning delta event from agent.
     AgentReasoningDelta(AgentReasoningDeltaEvent),
 
+    /// Raw chain-of-thought from agent.
+    AgentReasoningRawContent(AgentReasoningRawContentEvent),
+
+    /// Agent reasoning content delta event from agent.
+    AgentReasoningRawContentDelta(AgentReasoningRawContentDeltaEvent),
+
     /// Ack the client's configure message.
     SessionConfigured(SessionConfiguredEvent),
 
@@ -462,6 +468,16 @@ pub struct AgentMessageDeltaEvent {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AgentReasoningEvent {
     pub text: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AgentReasoningRawContentEvent {
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AgentReasoningRawContentDeltaEvent {
+    pub delta: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

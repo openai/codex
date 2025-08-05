@@ -11,6 +11,10 @@ path = "src/main.rs"
 name = "codex_tui"
 path = "src/lib.rs"
 
+[features]
+# Enable vt100-based tests (emulator) when running with `--features vt100-tests`.
+vt100-tests = []
+
 [lints]
 workspace = true
 
@@ -29,6 +33,7 @@ codex-common = { path = "../common", features = [
 codex-core = { path = "../core" }
 codex-file-search = { path = "../file-search" }
 codex-login = { path = "../login" }
+codex-ollama = { path = "../ollama" }
 color-eyre = "0.6.3"
 crossterm = { version = "0.28.1", features = ["bracketed-paste"] }
 image = { version = "^0.25.6", default-features = false, features = ["jpeg"] }
@@ -73,3 +78,4 @@ insta = "1.43.1"
 pretty_assertions = "1"
 rand = "0.8"
 chrono = { version = "0.4", features = ["serde"] }
+vt100 = "0.16.2"

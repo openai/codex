@@ -1,5 +1,4 @@
 use crate::exec_command::strip_bash_lc_and_escape;
-use crate::markdown::append_markdown;
 use crate::text_block::TextBlock;
 use crate::text_formatting::format_and_truncate_tool_result;
 use base64::Engine;
@@ -8,7 +7,6 @@ use codex_common::elapsed::format_duration;
 use codex_common::summarize_sandbox_policy;
 use codex_core::WireApi;
 use codex_core::config::Config;
-use codex_core::model_supports_reasoning_summaries;
 use codex_core::plan_tool::PlanItemArg;
 use codex_core::plan_tool::StepStatus;
 use codex_core::plan_tool::UpdatePlanArgs;
@@ -68,12 +66,7 @@ pub(crate) enum HistoryCell {
     /// Message from the user.
     UserPrompt { view: TextBlock },
 
-    /// Message from the agent.
-    AgentMessage { view: TextBlock },
-
-    /// Reasoning event from the agent.
-    AgentReasoning { view: TextBlock },
-
+    // AgentMessage and AgentReasoning variants were unused and have been removed.
     /// An exec tool call that has not finished yet.
     ActiveExecCommand { view: TextBlock },
 
@@ -128,8 +121,6 @@ impl HistoryCell {
         match self {
             HistoryCell::WelcomeMessage { view }
             | HistoryCell::UserPrompt { view }
-            | HistoryCell::AgentMessage { view }
-            | HistoryCell::AgentReasoning { view }
             | HistoryCell::BackgroundEvent { view }
             | HistoryCell::GitDiffOutput { view }
             | HistoryCell::ErrorEvent { view }
@@ -185,7 +176,7 @@ impl HistoryCell {
                 ("sandbox", summarize_sandbox_policy(&config.sandbox_policy)),
             ];
             if config.model_provider.wire_api == WireApi::Responses
-                && model_supports_reasoning_summaries(config)
+                && config.model_family.supports_reasoning_summaries
             {
                 entries.push((
                     "reasoning effort",
@@ -227,28 +218,6 @@ impl HistoryCell {
         lines.push(Line::from(""));
 
         HistoryCell::UserPrompt {
-            view: TextBlock::new(lines),
-        }
-    }
-
-    pub(crate) fn new_agent_message(config: &Config, message: String) -> Self {
-        let mut lines: Vec<Line<'static>> = Vec::new();
-        lines.push(Line::from("codex".magenta().bold()));
-        append_markdown(&message, &mut lines, config);
-        lines.push(Line::from(""));
-
-        HistoryCell::AgentMessage {
-            view: TextBlock::new(lines),
-        }
-    }
-
-    pub(crate) fn new_agent_reasoning(config: &Config, text: String) -> Self {
-        let mut lines: Vec<Line<'static>> = Vec::new();
-        lines.push(Line::from("thinking".magenta().italic()));
-        append_markdown(&text, &mut lines, config);
-        lines.push(Line::from(""));
-
-        HistoryCell::AgentReasoning {
             view: TextBlock::new(lines),
         }
     }
