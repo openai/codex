@@ -55,7 +55,7 @@ fn create_shell_tool() -> OpenAiTool {
 
     OpenAiTool::Function(ResponsesApiTool {
         name: "shell",
-        description: "Runs a shell command, and returns its output.",
+        description: "Runs a shell command and returns its output",
         strict: false,
         parameters: JsonSchema::Object {
             properties,
