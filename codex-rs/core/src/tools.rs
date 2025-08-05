@@ -47,7 +47,7 @@ impl ToolsConfig {
 /// Note that the keys of mcp_tools should be fully qualified names. See
 /// [`McpConnectionManager`] for more details.
 pub(crate) fn get_codex_tools(
-    config: ToolsConfig,
+    config: &ToolsConfig,
     mcp_tools: Option<HashMap<String, Tool>>,
 ) -> Vec<CodexTool> {
     let mut tools: Vec<CodexTool> = Vec::new();

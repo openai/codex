@@ -218,7 +218,7 @@ pub(crate) struct Session {
     shell_environment_policy: ShellEnvironmentPolicy,
     pub(crate) writable_roots: Mutex<Vec<PathBuf>>,
     disable_response_storage: bool,
-    pub(crate) config: Arc<Config>,
+    tools_config: ToolsConfig,
 
     /// Manager for external MCP servers/tools.
     mcp_connection_manager: McpConnectionManager,
@@ -813,7 +813,10 @@ async fn submission_loop(
                 let default_shell = shell::default_user_shell().await;
                 sess = Some(Arc::new(Session {
                     client,
-                    config: config.clone(),
+                    tools_config: ToolsConfig::build(
+                        &config.model_family,
+                        config.include_plan_tool,
+                    ),
                     tx_event: tx_event.clone(),
                     ctrl_c: Arc::clone(&ctrl_c),
                     user_instructions,
@@ -1209,7 +1212,7 @@ async fn run_turn(
     input: Vec<ResponseItem>,
 ) -> CodexResult<Vec<ProcessedResponseItem>> {
     let tools = get_codex_tools(
-        ToolsConfig::build(&sess.config.model_family, sess.config.include_plan_tool),
+        &sess.tools_config,
         Some(sess.mcp_connection_manager.list_all_tools()),
     );
 
@@ -1444,10 +1447,7 @@ async fn run_compact_task(
         input: turn_input,
         user_instructions: None,
         store: !sess.disable_response_storage,
-        tools: get_codex_tools(
-            ToolsConfig::build(&sess.config.model_family, sess.config.include_plan_tool),
-            None,
-        ),
+        tools: Vec::new(),
         base_instructions_override: Some(compact_instructions.clone()),
     };
 
