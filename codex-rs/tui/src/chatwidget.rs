@@ -5,11 +5,14 @@ use std::sync::Arc;
 use codex_core::codex_wrapper::CodexConversation;
 use codex_core::codex_wrapper::init_codex;
 use codex_core::config::Config;
+use codex_core::config::ConfigToml;
+use codex_core::openai_model_info::get_all_model_names;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
 use codex_core::protocol::AgentReasoningEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
+use codex_core::protocol::AskForApproval;
 use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
@@ -43,6 +46,7 @@ use crate::history_cell::CommandOutput;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::PatchEventType;
 use crate::user_approval_widget::ApprovalRequest;
+use codex_core::protocol::SandboxPolicy;
 use codex_file_search::FileMatch;
 
 struct RunningCommand {
@@ -63,7 +67,10 @@ pub(crate) struct ChatWidget<'a> {
     // We wait for the final AgentMessage event and then emit the full text
     // at once into scrollback so the history contains a single message.
     answer_buffer: String,
+    new_session: bool,
     running_commands: HashMap<String, RunningCommand>,
+    cli_flags_used: Vec<String>,
+    cli_model: Option<String>,
 }
 
 struct UserMessage {
@@ -95,6 +102,8 @@ impl ChatWidget<'_> {
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
         enhanced_keys_supported: bool,
+        cli_flags_used: Vec<String>,
+        cli_model: Option<String>,
     ) -> Self {
         let (codex_op_tx, mut codex_op_rx) = unbounded_channel::<Op>();
 
@@ -150,7 +159,10 @@ impl ChatWidget<'_> {
             token_usage: TokenUsage::default(),
             reasoning_buffer: String::new(),
             answer_buffer: String::new(),
+            new_session: true,
             running_commands: HashMap::new(),
+            cli_flags_used,
+            cli_model,
         }
     }
 
@@ -223,8 +235,22 @@ impl ChatWidget<'_> {
             EventMsg::SessionConfigured(event) => {
                 self.bottom_pane
                     .set_history_metadata(event.history_log_id, event.history_entry_count);
+
                 // Record session information at the top of the conversation.
-                self.add_to_history(HistoryCell::new_session_info(&self.config, event, true));
+                if self.new_session {
+                    let flags: Option<&[String]> = if self.cli_flags_used.is_empty() {
+                        None
+                    } else {
+                        Some(&self.cli_flags_used)
+                    };
+                    self.add_to_history(HistoryCell::new_session_info(
+                        &self.config,
+                        event,
+                        true,
+                        flags,
+                    ));
+                    self.new_session = false;
+                }
 
                 if let Some(user_message) = self.initial_user_message.take() {
                     // If the user provided an initial message, add it to the
@@ -508,6 +534,103 @@ impl ChatWidget<'_> {
         self.token_usage = TokenUsage::default();
         self.bottom_pane
             .set_token_usage(self.token_usage.clone(), self.config.model_context_window);
+    }
+
+    /// Open the model selection view in the bottom pane.
+    pub(crate) fn show_model_selector(&mut self) {
+        use std::collections::HashSet;
+
+        let current = self.config.model.clone();
+
+        // Collect unique options from built-ins, current config, CLI, and config.toml.
+        let mut set: HashSet<String> = get_all_model_names()
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        // Always include the currently configured model (covers custom values).
+        set.insert(current.clone());
+
+        // Include model specified via --model if present.
+        if let Some(m) = &self.cli_model {
+            set.insert(m.clone());
+        }
+
+        // Append any models found in config.toml profiles and top-level model.
+        let config_path = self.config.codex_home.join("config.toml");
+        if let Ok(contents) = std::fs::read_to_string(&config_path) {
+            if let Ok(cfg) = toml::from_str::<ConfigToml>(&contents) {
+                if let Some(m) = cfg.model {
+                    set.insert(m);
+                }
+                for (_name, profile) in cfg.profiles.into_iter() {
+                    if let Some(m) = profile.model {
+                        set.insert(m);
+                    }
+                }
+            }
+        }
+
+        // Present options in a stable order for the UI.
+        let mut options: Vec<String> = set.into_iter().collect();
+        options.sort();
+
+        self.bottom_pane.show_model_selector(&current, options);
+    }
+
+    /// Update the current model and reconfigure the running Codex session.
+    pub(crate) fn update_model_and_reconfigure(&mut self, model: String) {
+        // Update local config so UI reflects the new model.
+        let changed = self.config.model != model;
+        self.config.model = model.clone();
+
+        // Emit an event in the conversation log so the change is visible.
+        if changed {
+            self.add_to_history(HistoryCell::new_background_event(format!(
+                "Set model to {model}."
+            )));
+        }
+
+        // Reconfigure the agent session with the same provider and policies.
+        // Build the op from the config to avoid drift when fields are added.
+        let op = self
+            .config
+            .to_configure_session_op(None, self.config.user_instructions.clone());
+        self.submit_op(op);
+        self.request_redraw();
+    }
+
+    /// Open the execution-mode selection view in the bottom pane.
+    pub(crate) fn show_execution_selector(&mut self) {
+        let current_approval = self.config.approval_policy;
+        let current_sandbox = &self.config.sandbox_policy;
+        self.bottom_pane
+            .show_execution_selector(current_approval, current_sandbox);
+    }
+
+    /// Update both approval policy and sandbox, then reconfigure the running session.
+    pub(crate) fn update_execution_mode_and_reconfigure(
+        &mut self,
+        approval: AskForApproval,
+        sandbox: SandboxPolicy,
+    ) {
+        let approval_changed = self.config.approval_policy != approval;
+        let sandbox_changed = self.config.sandbox_policy != sandbox;
+        self.config.approval_policy = approval;
+        self.config.sandbox_policy = sandbox.clone();
+
+        if approval_changed || sandbox_changed {
+            let label = crate::command_utils::execution_mode_label(approval, &sandbox);
+            self.add_to_history(HistoryCell::new_background_event(format!(
+                "Set execution mode to {label}."
+            )));
+        }
+
+        let op = self
+            .config
+            .to_configure_session_op(None, self.config.user_instructions.clone());
+        self.submit_op(op);
+        self.request_redraw();
     }
 
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {

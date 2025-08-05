@@ -43,6 +43,10 @@ To run Codex non-interactively, run `codex exec PROMPT` (you can also pass the p
 
 Typing `@` triggers a fuzzy-filename search over the workspace root. Use up/down to select among the results and Tab or Enter to replace the `@` with the selected path. You can use Esc to cancel the search.
 
+### Slash commands and model selection
+
+Type `/` in the composer to open a command menu. Navigate with Up/Down and press Tab or Enter to apply a command. The list supports filtering by typing after the slash. Use `/model` to select or change the active model; after typing `/model ` (note the space), a model selector appears with fuzzy filtering and keyboard navigation. Press Enter or Tab to apply the selection.
+
 ### `--cd`/`-C` flag
 
 Sometimes it is not convenient to `cd` to the directory you want Codex to use as the "working root" before running Codex. Fortunately, `codex` supports a `--cd` option so you can specify whatever folder you want. You can confirm that Codex is honoring `--cd` by double-checking the **workdir** it reports in the TUI at the start of a new session.

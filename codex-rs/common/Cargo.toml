@@ -17,3 +17,8 @@ toml = { version = "0.9", optional = true }
 cli = ["clap", "serde", "toml"]
 elapsed = []
 sandbox_summary = []
+
+[dev-dependencies]
+clap = { version = "4", features = ["derive", "wrap_help"] }
+serde = { version = "1" }
+toml = { version = "0.9" }

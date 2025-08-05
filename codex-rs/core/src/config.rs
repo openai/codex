@@ -14,6 +14,7 @@ use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::built_in_model_providers;
 use crate::openai_model_info::get_model_info;
 use crate::protocol::AskForApproval;
+use crate::protocol::Op;
 use crate::protocol::SandboxPolicy;
 use dirs::home_dir;
 use serde::Deserialize;
@@ -184,6 +185,32 @@ impl Config {
 
         // Step 4: merge with the strongly-typed overrides.
         Self::load_from_base_config_with_overrides(cfg, overrides, codex_home)
+    }
+
+    /// Construct an Op::ConfigureSession from this Config.
+    ///
+    /// - `override_model`: when Some, use this model instead of `self.model`.
+    /// - `user_instructions`: pass-through instructions to embed in the session.
+    pub fn to_configure_session_op(
+        &self,
+        override_model: Option<String>,
+        user_instructions: Option<String>,
+    ) -> Op {
+        let model = override_model.unwrap_or_else(|| self.model.clone());
+        Op::ConfigureSession {
+            provider: self.model_provider.clone(),
+            model,
+            model_reasoning_effort: self.model_reasoning_effort,
+            model_reasoning_summary: self.model_reasoning_summary,
+            user_instructions,
+            base_instructions: self.base_instructions.clone(),
+            approval_policy: self.approval_policy,
+            sandbox_policy: self.sandbox_policy.clone(),
+            disable_response_storage: self.disable_response_storage,
+            notify: self.notify.clone(),
+            cwd: self.cwd.clone(),
+            resume_path: self.experimental_resume.clone(),
+        }
     }
 }
 

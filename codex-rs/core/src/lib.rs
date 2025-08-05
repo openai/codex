@@ -32,7 +32,7 @@ pub use model_provider_info::ModelProviderInfo;
 pub use model_provider_info::WireApi;
 pub use model_provider_info::built_in_model_providers;
 mod models;
-mod openai_model_info;
+pub mod openai_model_info;
 mod openai_tools;
 pub mod plan_tool;
 mod project_doc;

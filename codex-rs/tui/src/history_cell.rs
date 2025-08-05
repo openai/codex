@@ -152,6 +152,7 @@ impl HistoryCell {
         config: &Config,
         event: SessionConfiguredEvent,
         is_first_event: bool,
+        cli_flags: Option<&[String]>,
     ) -> Self {
         let SessionConfiguredEvent {
             model,
@@ -198,6 +199,12 @@ impl HistoryCell {
             }
             for (key, value) in entries {
                 lines.push(Line::from(vec![format!("{key}: ").bold(), value.into()]));
+            }
+            if let Some(flags) = cli_flags {
+                if !flags.is_empty() {
+                    let flags_str = flags.join(" ");
+                    lines.push(Line::from(vec!["cli flags: ".bold(), flags_str.into()]));
+                }
             }
             lines.push(Line::from(""));
             HistoryCell::WelcomeMessage {

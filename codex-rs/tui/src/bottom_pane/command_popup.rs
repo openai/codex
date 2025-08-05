@@ -1,30 +1,21 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Color;
-use ratatui::style::Style;
-use ratatui::style::Stylize;
-use ratatui::symbols::border::QUADRANT_LEFT_HALF;
-use ratatui::text::Line;
-use ratatui::text::Span;
-use ratatui::widgets::Cell;
-use ratatui::widgets::Row;
-use ratatui::widgets::Table;
-use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
 
 use crate::slash_command::SlashCommand;
 use crate::slash_command::built_in_slash_commands;
 
-const MAX_POPUP_ROWS: usize = 5;
-/// Ideally this is enough to show the longest command name.
-const FIRST_COLUMN_WIDTH: u16 = 20;
+use super::popup_consts::MAX_POPUP_ROWS;
+use super::selection_popup_common::GenericDisplayRow;
+use super::selection_popup_common::render_rows;
 
-use ratatui::style::Modifier;
+use super::scroll_state::ScrollState;
+use codex_common::fuzzy_match::fuzzy_match;
 
 pub(crate) struct CommandPopup {
     command_filter: String,
     all_commands: Vec<(&'static str, SlashCommand)>,
-    selected_idx: Option<usize>,
+    state: ScrollState,
 }
 
 impl CommandPopup {
@@ -32,7 +23,7 @@ impl CommandPopup {
         Self {
             command_filter: String::new(),
             all_commands: built_in_slash_commands(),
-            selected_idx: None,
+            state: ScrollState::new(),
         }
     }
 
@@ -62,129 +53,152 @@ impl CommandPopup {
 
         // Reset or clamp selected index based on new filtered list.
         let matches_len = self.filtered_commands().len();
-        self.selected_idx = match matches_len {
-            0 => None,
-            _ => Some(self.selected_idx.unwrap_or(0).min(matches_len - 1)),
-        };
+        self.state.clamp_selection(matches_len);
+        self.state
+            .ensure_visible(matches_len, MAX_POPUP_ROWS.min(matches_len));
     }
 
     /// Determine the preferred height of the popup. This is the number of
-    /// rows required to show **at most** `MAX_POPUP_ROWS` commands plus the
-    /// table/border overhead (one line at the top and one at the bottom).
+    /// rows required to show at most MAX_POPUP_ROWS commands.
     pub(crate) fn calculate_required_height(&self) -> u16 {
         self.filtered_commands().len().clamp(1, MAX_POPUP_ROWS) as u16
     }
 
-    /// Return the list of commands that match the current filter. Matching is
-    /// performed using a *prefix* comparison on the command name.
-    fn filtered_commands(&self) -> Vec<&SlashCommand> {
-        self.all_commands
-            .iter()
-            .filter_map(|(_name, cmd)| {
-                if self.command_filter.is_empty()
-                    || cmd
-                        .command()
-                        .starts_with(&self.command_filter.to_ascii_lowercase())
-                {
-                    Some(cmd)
-                } else {
-                    None
+    /// Compute fuzzy-filtered matches paired with optional highlight indices and score.
+    /// Sorted by ascending score, then by command name for stability.
+    fn filtered(&self) -> Vec<(&SlashCommand, Option<Vec<usize>>, i32)> {
+        let filter = self.command_filter.trim();
+        let mut out: Vec<(&SlashCommand, Option<Vec<usize>>, i32)> = Vec::new();
+        if filter.is_empty() {
+            for (_, cmd) in self.all_commands.iter() {
+                out.push((cmd, None, 0));
+            }
+        } else {
+            for (_, cmd) in self.all_commands.iter() {
+                if let Some((indices, score)) = fuzzy_match(cmd.command(), filter) {
+                    out.push((cmd, Some(indices), score));
                 }
-            })
-            .collect::<Vec<&SlashCommand>>()
+            }
+        }
+        out.sort_by(|a, b| a.2.cmp(&b.2).then_with(|| a.0.command().cmp(b.0.command())));
+        out
+    }
+
+    /// Backwards-compatible helper used by tests.
+    fn filtered_commands(&self) -> Vec<&SlashCommand> {
+        self.filtered().into_iter().map(|(c, _, _)| c).collect()
     }
 
     /// Move the selection cursor one step up.
     pub(crate) fn move_up(&mut self) {
-        if let Some(len) = self.filtered_commands().len().checked_sub(1) {
-            if len == usize::MAX {
-                return;
-            }
-        }
-
-        if let Some(idx) = self.selected_idx {
-            if idx > 0 {
-                self.selected_idx = Some(idx - 1);
-            }
-        } else if !self.filtered_commands().is_empty() {
-            self.selected_idx = Some(0);
-        }
+        let matches = self.filtered_commands();
+        let len = matches.len();
+        self.state.move_up_wrap(len);
+        self.state.ensure_visible(len, MAX_POPUP_ROWS.min(len));
     }
 
     /// Move the selection cursor one step down.
     pub(crate) fn move_down(&mut self) {
-        let matches_len = self.filtered_commands().len();
-        if matches_len == 0 {
-            self.selected_idx = None;
-            return;
-        }
-
-        match self.selected_idx {
-            Some(idx) if idx + 1 < matches_len => {
-                self.selected_idx = Some(idx + 1);
-            }
-            None => {
-                self.selected_idx = Some(0);
-            }
-            _ => {}
-        }
+        let matches = self.filtered_commands();
+        let matches_len = matches.len();
+        self.state.move_down_wrap(matches_len);
+        self.state
+            .ensure_visible(matches_len, MAX_POPUP_ROWS.min(matches_len));
     }
 
     /// Return currently selected command, if any.
     pub(crate) fn selected_command(&self) -> Option<&SlashCommand> {
         let matches = self.filtered_commands();
-        self.selected_idx.and_then(|idx| matches.get(idx).copied())
+        self.state
+            .selected_idx
+            .and_then(|idx| matches.get(idx).copied())
     }
 }
 
 impl WidgetRef for CommandPopup {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        let matches = self.filtered_commands();
-
-        let mut rows: Vec<Row> = Vec::new();
-        let visible_matches: Vec<&SlashCommand> =
-            matches.into_iter().take(MAX_POPUP_ROWS).collect();
-
-        if visible_matches.is_empty() {
-            rows.push(Row::new(vec![
-                Cell::from(""),
-                Cell::from("No matching commands").add_modifier(Modifier::ITALIC),
-            ]));
+        let matches = self.filtered();
+        let rows_all: Vec<GenericDisplayRow> = if matches.is_empty() {
+            Vec::new()
         } else {
-            let default_style = Style::default();
-            let command_style = Style::default().fg(Color::LightBlue);
-            for (idx, cmd) in visible_matches.iter().enumerate() {
-                rows.push(Row::new(vec![
-                    Cell::from(Line::from(vec![
-                        if Some(idx) == self.selected_idx {
-                            Span::styled(
-                                "›",
-                                Style::default().bg(Color::DarkGray).fg(Color::LightCyan),
-                            )
-                        } else {
-                            Span::styled(QUADRANT_LEFT_HALF, Style::default().fg(Color::DarkGray))
-                        },
-                        Span::styled(format!("/{}", cmd.command()), command_style),
-                    ])),
-                    Cell::from(cmd.description().to_string()).style(default_style),
-                ]));
+            matches
+                .into_iter()
+                .map(|(cmd, indices, _)| GenericDisplayRow {
+                    name: format!("/{}", cmd.command()),
+                    match_indices: indices.map(|v| {
+                        // Shift highlight indices by one to account for the leading '/'
+                        v.into_iter().map(|i| i + 1).collect()
+                    }),
+                    is_current: false,
+                    description: Some(cmd.description().to_string()),
+                })
+                .collect()
+        };
+        render_rows(area, buf, &rows_all, &self.state, MAX_POPUP_ROWS);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+    use ratatui::widgets::Widget;
+
+    #[test]
+    fn move_down_wraps_to_top() {
+        let mut popup = CommandPopup::new();
+        // Show all commands by simulating composer input starting with '/'.
+        popup.on_composer_text_change("/".to_string());
+        let len = popup.filtered_commands().len();
+        assert!(len > 0);
+
+        // Move to last item.
+        for _ in 0..len.saturating_sub(1) {
+            popup.move_down();
+        }
+        // Next move_down should wrap to index 0.
+        popup.move_down();
+        assert_eq!(popup.state.selected_idx, Some(0));
+    }
+
+    #[test]
+    fn move_up_wraps_to_bottom() {
+        let mut popup = CommandPopup::new();
+        popup.on_composer_text_change("/".to_string());
+        let len = popup.filtered_commands().len();
+        assert!(len > 0);
+
+        // Initial selection is 0; moving up should wrap to last.
+        popup.move_up();
+        assert_eq!(popup.state.selected_idx, Some(len - 1));
+    }
+
+    #[test]
+    fn respects_tiny_terminal_height_when_rendering() {
+        let mut popup = CommandPopup::new();
+        popup.on_composer_text_change("/".to_string());
+        assert!(popup.filtered_commands().len() >= 3);
+
+        let area = Rect::new(0, 0, 50, 2);
+        let mut buf = Buffer::empty(area);
+        popup.render(area, &mut buf);
+
+        let mut non_empty_rows = 0u16;
+        for y in 0..area.height {
+            let mut row_has_content = false;
+            for x in 0..area.width {
+                let c = buf[(x, y)].symbol();
+                if !c.trim().is_empty() {
+                    row_has_content = true;
+                    break;
+                }
+            }
+            if row_has_content {
+                non_empty_rows += 1;
             }
         }
 
-        use ratatui::layout::Constraint;
-
-        let table = Table::new(
-            rows,
-            [Constraint::Length(FIRST_COLUMN_WIDTH), Constraint::Min(10)],
-        )
-        .column_spacing(0);
-        // .block(
-        //     Block::default()
-        //         .borders(Borders::LEFT)
-        //         .border_type(BorderType::QuadrantOutside)
-        //         .border_style(Style::default().fg(Color::DarkGray)),
-        // );
-
-        table.render(area, buf);
+        assert_eq!(non_empty_rows, 2);
     }
 }

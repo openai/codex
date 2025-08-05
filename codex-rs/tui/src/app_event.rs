@@ -4,6 +4,8 @@ use crossterm::event::KeyEvent;
 use ratatui::text::Line;
 
 use crate::slash_command::SlashCommand;
+use codex_core::protocol::AskForApproval;
+use codex_core::protocol::SandboxPolicy;
 
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum AppEvent {
@@ -31,8 +33,12 @@ pub(crate) enum AppEvent {
     LatestLog(String),
 
     /// Dispatch a recognized slash command from the UI (composer) to the app
-    /// layer so it can be handled centrally.
-    DispatchCommand(SlashCommand),
+    /// layer so it can be handled centrally. Optional `args` contains the
+    /// left-trimmed raw argument string following the command, if any.
+    DispatchCommand {
+        cmd: SlashCommand,
+        args: Option<String>,
+    },
 
     /// Kick off an asynchronous file search for the given query (text after
     /// the `@`). Previous searches may be cancelled by the app layer so there
@@ -48,4 +54,19 @@ pub(crate) enum AppEvent {
     },
 
     InsertHistory(Vec<Line<'static>>),
+
+    /// User selected a model from the model-selection dropdown.
+    SelectModel(String),
+
+    /// Request the app to open the model selector (populate options and show popup).
+    OpenModelSelector,
+
+    /// User selected an execution mode (approval + sandbox) from the dropdown or via /approvals.
+    SelectExecutionMode {
+        approval: AskForApproval,
+        sandbox: SandboxPolicy,
+    },
+
+    /// Request the app to open the execution-mode selector (populate options and show popup).
+    OpenExecutionSelector,
 }
