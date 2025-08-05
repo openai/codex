@@ -560,6 +560,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn overlay_not_shown_above_approval_modal() {
         let (tx_raw, _rx) = channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
@@ -607,12 +608,17 @@ mod tests {
         pane.push_approval_request(exec_request());
 
         // Simulate pressing 'n' (deny) on the modal.
-        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
         pane.handle_key_event(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
 
         // After denial, since the task is still running, the status indicator
         // should be restored as the active view; the composer should NOT be visible.
-        assert!(pane.status_view_active, "status view should be active after denial");
+        assert!(
+            pane.status_view_active,
+            "status view should be active after denial"
+        );
         assert!(pane.active_view.is_some(), "active view should be present");
 
         // Render and ensure the top row includes the Working header instead of the composer.
@@ -625,7 +631,10 @@ mod tests {
         for x in 0..area.width {
             row0.push(buf[(x, 0)].symbol().chars().next().unwrap_or(' '));
         }
-        assert!(row0.contains("Working"), "expected Working header after denial: {row0:?}");
+        assert!(
+            row0.contains("Working"),
+            "expected Working header after denial: {row0:?}"
+        );
 
         // Drain the channel to avoid unused warnings.
         drop(rx);
@@ -645,11 +654,8 @@ mod tests {
         pane.set_task_running(true);
         pane.update_status_text("waiting for model".to_string());
 
-        // Simulate an approval modal which temporarily hides the status view.
-        pane.push_approval_request(exec_request());
-
-        // Re-enable a status line as would happen when a long-running command begins.
-        // This should present the status indicator even while modal logic may be active.
+        // As a long-running command begins (post-approval), ensure the status
+        // indicator is visible while we wait for the command to run.
         pane.update_status_text("running command".to_string());
 
         // Allow some frames so the animation thread ticks.
