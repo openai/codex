@@ -1958,7 +1958,7 @@ async fn handle_sandbox_error(
     }
 
     // similarly, if the command timed out, we can simply return this failure to the model
-    if error == SandboxErr::Timeout {
+    if matches!(error, SandboxErr::Timeout) {
         return ResponseInputItem::FunctionCallOutput {
             call_id,
             output: FunctionCallOutputPayload {
