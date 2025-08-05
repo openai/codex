@@ -55,13 +55,9 @@ impl Prompt {
     }
 
     pub(crate) fn get_formatted_user_instructions(&self) -> Option<String> {
-        if let Some(ui) = &self.user_instructions {
-            Some(format!(
-                "{USER_INSTRUCTIONS_START}{ui}{USER_INSTRUCTIONS_END}"
-            ))
-        } else {
-            None
-        }
+        self.user_instructions
+            .as_ref()
+            .map(|ui| format!("{USER_INSTRUCTIONS_START}{ui}{USER_INSTRUCTIONS_END}"))
     }
 }
 
