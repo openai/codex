@@ -101,8 +101,8 @@ pub async fn run_main(
             codex_linux_sandbox_exe,
             base_instructions: None,
             include_plan_tool: Some(true),
-            default_disable_response_storage: cli.oss.then_some(true),
-            default_show_raw_agent_reasoning: cli.oss.then_some(true),
+            disable_response_storage: cli.oss.then_some(true),
+            show_raw_agent_reasoning: cli.oss.then_some(true),
         };
         // Parse `-c` overrides from the CLI.
         let cli_kv_overrides = match cli.config_overrides.parse_overrides() {
