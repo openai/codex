@@ -573,7 +573,10 @@ mod tests {
         for x in 0..area.width {
             row0.push(buf[(x, 0)].symbol().chars().next().unwrap_or(' '));
         }
-        assert!(row0.contains("Working"), "expected Working header: {row0:?}");
+        assert!(
+            row0.contains("Working"),
+            "expected Working header: {row0:?}"
+        );
     }
 
     #[test]

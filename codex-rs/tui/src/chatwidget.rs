@@ -113,7 +113,8 @@ impl ChatWidget<'_> {
             StreamKind::Reasoning => RLine::from("thinking".magenta().italic()),
             StreamKind::Answer => RLine::from("codex".magenta().bold()),
         };
-        self.app_event_tx.send(AppEvent::InsertHistory(vec![header]));
+        self.app_event_tx
+            .send(AppEvent::InsertHistory(vec![header]));
         self.stream_header_emitted = true;
     }
     fn finalize_active_stream(&mut self) {
