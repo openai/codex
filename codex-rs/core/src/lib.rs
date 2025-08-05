@@ -31,6 +31,7 @@ mod model_provider_info;
 pub use model_provider_info::ModelProviderInfo;
 pub use model_provider_info::WireApi;
 pub use model_provider_info::built_in_model_providers;
+pub mod model_family;
 mod models;
 mod openai_model_info;
 mod openai_tools;
@@ -47,5 +48,4 @@ mod user_notification;
 pub mod util;
 
 pub use apply_patch::CODEX_APPLY_PATCH_ARG1;
-pub use client_common::model_supports_reasoning_summaries;
 pub use safety::get_platform_sandbox;

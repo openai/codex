@@ -3,7 +3,6 @@ use std::path::Path;
 use codex_common::summarize_sandbox_policy;
 use codex_core::WireApi;
 use codex_core::config::Config;
-use codex_core::model_supports_reasoning_summaries;
 use codex_core::protocol::Event;
 
 pub(crate) enum CodexStatus {
@@ -29,7 +28,7 @@ pub(crate) fn create_config_summary_entries(config: &Config) -> Vec<(&'static st
         ("sandbox", summarize_sandbox_policy(&config.sandbox_policy)),
     ];
     if config.model_provider.wire_api == WireApi::Responses
-        && model_supports_reasoning_summaries(config)
+        && config.model_family.supports_reasoning_summaries
     {
         entries.push((
             "reasoning effort",
