@@ -270,16 +270,32 @@ async fn process_chat_sse<S>(
             }
 
             // Forward any reasoning/thinking deltas if present.
-            if let Some(reasoning) = choice
-                .get("delta")
-                .and_then(|d| d.get("reasoning"))
-                .and_then(|c| c.as_str())
-            {
-                let _ = tx_event
-                    .send(Ok(ResponseEvent::ReasoningContentDelta(
-                        reasoning.to_string(),
-                    )))
-                    .await;
+            // Some providers stream `reasoning` as a plain string while others
+            // nest the text under an object (e.g. `{ "reasoning": { "text": "…" } }`).
+            if let Some(reasoning_val) = choice.get("delta").and_then(|d| d.get("reasoning")) {
+                let mut maybe_text = reasoning_val.as_str().map(|s| s.to_string());
+
+                if maybe_text.is_none() && reasoning_val.is_object() {
+                    if let Some(s) = reasoning_val
+                        .get("text")
+                        .and_then(|t| t.as_str())
+                        .filter(|s| !s.is_empty())
+                    {
+                        maybe_text = Some(s.to_string());
+                    } else if let Some(s) = reasoning_val
+                        .get("content")
+                        .and_then(|t| t.as_str())
+                        .filter(|s| !s.is_empty())
+                    {
+                        maybe_text = Some(s.to_string());
+                    }
+                }
+
+                if let Some(reasoning) = maybe_text {
+                    let _ = tx_event
+                        .send(Ok(ResponseEvent::ReasoningContentDelta(reasoning)))
+                        .await;
+                }
             }
 
             // Handle streaming function / tool calls.

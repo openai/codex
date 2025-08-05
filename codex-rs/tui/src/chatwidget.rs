@@ -317,6 +317,14 @@ impl ChatWidget<'_> {
             EventMsg::Error(ErrorEvent { message }) => {
                 self.add_to_history(HistoryCell::new_error_event(message.clone()));
                 self.bottom_pane.set_task_running(false);
+                self.bottom_pane.clear_live_ring();
+                self.live_builder = RowBuilder::new(self.live_builder.width());
+                self.current_stream = None;
+                self.stream_header_emitted = false;
+                self.answer_buffer.clear();
+                self.reasoning_buffer.clear();
+                self.content_buffer.clear();
+                self.request_redraw();
             }
             EventMsg::PlanUpdate(update) => {
                 // Commit plan updates directly to history (no status-line preview).
@@ -498,9 +506,15 @@ impl ChatWidget<'_> {
         if self.bottom_pane.is_task_running() {
             self.bottom_pane.clear_ctrl_c_quit_hint();
             self.submit_op(Op::Interrupt);
+            self.bottom_pane.set_task_running(false);
+            self.bottom_pane.clear_live_ring();
+            self.live_builder = RowBuilder::new(self.live_builder.width());
+            self.current_stream = None;
+            self.stream_header_emitted = false;
             self.answer_buffer.clear();
             self.reasoning_buffer.clear();
             self.content_buffer.clear();
+            self.request_redraw();
             CancellationEvent::Ignored
         } else if self.bottom_pane.ctrl_c_quit_hint_visible() {
             self.submit_op(Op::Shutdown);
@@ -539,6 +553,12 @@ impl ChatWidget<'_> {
 
 impl ChatWidget<'_> {
     fn begin_stream(&mut self, kind: StreamKind) {
+        if let Some(current) = self.current_stream {
+            if current != kind {
+                self.finalize_stream(current);
+            }
+        }
+
         if self.current_stream != Some(kind) {
             self.current_stream = Some(kind);
             self.stream_header_emitted = false;
