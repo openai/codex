@@ -387,6 +387,8 @@ pub enum EventMsg {
     /// Notification that a patch application has finished.
     PatchApplyEnd(PatchApplyEndEvent),
 
+    TurnDiff(TurnDiffEvent),
+
     /// Response to GetHistoryEntryRequest.
     GetHistoryEntryResponse(GetHistoryEntryResponseEvent),
 
@@ -523,6 +525,8 @@ pub struct ExecCommandEndEvent {
     pub stderr: String,
     /// The command's exit code.
     pub exit_code: i32,
+    /// The duration of the command execution.
+    pub duration: Duration,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -594,6 +598,11 @@ pub struct PatchApplyEndEvent {
     pub stderr: String,
     /// Whether the patch was applied successfully.
     pub success: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TurnDiffEvent {
+    pub unified_diff: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

@@ -30,7 +30,6 @@ use crate::config::Config;
 use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::error::CodexErr;
-use crate::error::EnvVarError;
 use crate::error::Result;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::model_provider_info::ModelProviderInfo;
@@ -122,24 +121,11 @@ impl ModelClient {
             return stream_from_fixture(path, self.provider.clone()).await;
         }
 
-        let auth = self.auth.as_ref().ok_or_else(|| {
-            CodexErr::EnvVar(EnvVarError {
-                var: "OPENAI_API_KEY".to_string(),
-                instructions: Some("Create an API key (https://platform.openai.com) and export it as an environment variable.".to_string()),
-            })
-        })?;
+        let auth = self.auth.clone();
 
-        let store = prompt.store && auth.mode != AuthMode::ChatGPT;
+        let auth_mode = auth.as_ref().map(|a| a.mode);
 
-        let base_url = match self.provider.base_url.clone() {
-            Some(url) => url,
-            None => match auth.mode {
-                AuthMode::ChatGPT => "https://chatgpt.com/backend-api/codex".to_string(),
-                AuthMode::ApiKey => "https://api.openai.com/v1".to_string(),
-            },
-        };
-
-        let token = auth.get_token().await?;
+        let store = prompt.store && auth_mode != Some(AuthMode::ChatGPT);
 
         let full_instructions = prompt.get_full_instructions(&self.config.model);
         let tools_json = create_tools_json_for_responses_api(
@@ -158,11 +144,11 @@ impl ModelClient {
         };
 
         let mut input_with_instructions = Vec::with_capacity(prompt.input.len() + 1);
-        if let Some(ui) = &prompt.user_instructions {
+        if let Some(ui) = prompt.get_formatted_user_instructions() {
             input_with_instructions.push(ResponseItem::Message {
                 id: None,
                 role: "user".to_string(),
-                content: vec![ContentItem::InputText { text: ui.clone() }],
+                content: vec![ContentItem::InputText { text: ui }],
             });
         }
         input_with_instructions.extend(prompt.input.clone());
@@ -180,34 +166,35 @@ impl ModelClient {
             include,
         };
 
-        trace!(
-            "POST to {}: {}",
-            self.provider.get_full_url(),
-            serde_json::to_string(&payload)?
-        );
-
         let mut attempt = 0;
         let max_retries = self.provider.request_max_retries();
+
+        trace!(
+            "POST to {}: {}",
+            self.provider.get_full_url(&auth),
+            serde_json::to_string(&payload)?
+        );
 
         loop {
             attempt += 1;
 
             let mut req_builder = self
-                .client
-                .post(format!("{base_url}/responses"))
+                .provider
+                .create_request_builder(&self.client, &auth)
+                .await?;
+
+            req_builder = req_builder
                 .header("OpenAI-Beta", "responses=experimental")
                 .header("session_id", self.session_id.to_string())
-                .bearer_auth(&token)
                 .header(reqwest::header::ACCEPT, "text/event-stream")
                 .json(&payload);
 
-            if auth.mode == AuthMode::ChatGPT {
-                if let Some(account_id) = auth.get_account_id().await {
-                    req_builder = req_builder.header("chatgpt-account-id", account_id);
-                }
+            if let Some(auth) = auth.as_ref()
+                && auth.mode == AuthMode::ChatGPT
+                && let Some(account_id) = auth.get_account_id().await
+            {
+                req_builder = req_builder.header("chatgpt-account-id", account_id);
             }
-
-            req_builder = self.provider.apply_http_headers(req_builder);
 
             let originator = self
                 .config

@@ -38,12 +38,14 @@ pub mod plan_tool;
 mod project_doc;
 pub mod protocol;
 mod rollout;
-mod safety;
+pub(crate) mod safety;
 pub mod seatbelt;
 pub mod shell;
 pub mod spawn;
+pub mod turn_diff_tracker;
 mod user_notification;
 pub mod util;
 
 pub use apply_patch::CODEX_APPLY_PATCH_ARG1;
 pub use client_common::model_supports_reasoning_summaries;
+pub use safety::get_platform_sandbox;

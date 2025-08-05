@@ -57,7 +57,7 @@ impl StatusIndicatorWidget {
             thread::spawn(move || {
                 let mut counter = 0usize;
                 while running_clone.load(Ordering::Relaxed) {
-                    std::thread::sleep(Duration::from_millis(200));
+                    std::thread::sleep(Duration::from_millis(100));
                     counter = counter.wrapping_add(1);
                     frame_idx_clone.store(counter, Ordering::Relaxed);
                     app_event_tx_clone.send(AppEvent::RequestRedraw);
@@ -98,46 +98,51 @@ impl WidgetRef for StatusIndicatorWidget {
             .borders(Borders::LEFT)
             .border_type(BorderType::QuadrantOutside)
             .border_style(widget_style.dim());
-        // Animated 3‑dot pattern inside brackets. The *active* dot is bold
-        // white, the others are dim.
-        const DOT_COUNT: usize = 3;
         let idx = self.frame_idx.load(std::sync::atomic::Ordering::Relaxed);
-        let phase = idx % (DOT_COUNT * 2 - 2);
-        let active = if phase < DOT_COUNT {
-            phase
-        } else {
-            (DOT_COUNT * 2 - 2) - phase
-        };
+        let header_text = "Working";
+        let header_chars: Vec<char> = header_text.chars().collect();
+
+        let padding = 4usize; // virtual padding around the word for smoother loop
+        let period = header_chars.len() + padding * 2;
+        let pos = idx % period;
+
+        let has_true_color = supports_color::on_cached(supports_color::Stream::Stdout)
+            .map(|level| level.has_16m)
+            .unwrap_or(false);
+
+        // Width of the bright band (in characters).
+        let band_half_width = 2.0;
 
         let mut header_spans: Vec<Span<'static>> = Vec::new();
+        for (i, ch) in header_chars.iter().enumerate() {
+            let i_pos = i as isize + padding as isize;
+            let pos = pos as isize;
+            let dist = (i_pos - pos).abs() as f32;
 
-        header_spans.push(Span::styled(
-            "Working ",
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        ));
+            let t = if dist <= band_half_width {
+                let x = std::f32::consts::PI * (dist / band_half_width);
+                0.5 * (1.0 + x.cos())
+            } else {
+                0.0
+            };
 
-        header_spans.push(Span::styled(
-            "[",
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        ));
-
-        for i in 0..DOT_COUNT {
-            let style = if i == active {
+            let brightness = 0.4 + 0.6 * t;
+            let level = (brightness * 255.0).clamp(0.0, 255.0) as u8;
+            let style = if has_true_color {
                 Style::default()
-                    .fg(Color::White)
+                    .fg(Color::Rgb(level, level, level))
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().dim()
+                // Bold makes dark gray and gray look the same, so don't use it
+                // when true color is not supported.
+                Style::default().fg(color_for_level(level))
             };
-            header_spans.push(Span::styled(".", style));
+
+            header_spans.push(Span::styled(ch.to_string(), style));
         }
 
         header_spans.push(Span::styled(
-            "] ",
+            " ",
             Style::default()
                 .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
@@ -187,5 +192,15 @@ impl WidgetRef for StatusIndicatorWidget {
             .block(block)
             .alignment(Alignment::Left);
         paragraph.render_ref(area, buf);
+    }
+}
+
+fn color_for_level(level: u8) -> Color {
+    if level < 128 {
+        Color::DarkGray
+    } else if level < 192 {
+        Color::Gray
+    } else {
+        Color::White
     }
 }

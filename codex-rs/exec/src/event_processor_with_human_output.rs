@@ -20,6 +20,7 @@ use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TokenUsage;
+use codex_core::protocol::TurnDiffEvent;
 use owo_colors::OwoColorize;
 use owo_colors::Style;
 use shlex::try_join;
@@ -106,7 +107,6 @@ impl EventProcessorWithHumanOutput {
 
 struct ExecCommandBegin {
     command: Vec<String>,
-    start_time: Instant,
 }
 
 struct PatchApplyBegin {
@@ -170,10 +170,9 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 // Ignore.
             }
             EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) => {
-                handle_last_message(
-                    last_agent_message.as_deref(),
-                    self.last_message_path.as_deref(),
-                );
+                if let Some(output_file) = self.last_message_path.as_deref() {
+                    handle_last_message(last_agent_message.as_deref(), output_file);
+                }
                 return CodexStatus::InitiateShutdown;
             }
             EventMsg::TokenCount(TokenUsage { total_tokens, .. }) => {
@@ -228,7 +227,6 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     call_id.clone(),
                     ExecCommandBegin {
                         command: command.clone(),
-                        start_time: Instant::now(),
                     },
                 );
                 ts_println!(
@@ -244,16 +242,14 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 call_id,
                 stdout,
                 stderr,
+                duration,
                 exit_code,
             }) => {
                 let exec_command = self.call_id_to_command.remove(&call_id);
-                let (duration, call) = if let Some(ExecCommandBegin {
-                    command,
-                    start_time,
-                }) = exec_command
+                let (duration, call) = if let Some(ExecCommandBegin { command, .. }) = exec_command
                 {
                     (
-                        format!(" in {}", format_elapsed(start_time)),
+                        format!(" in {}", format_duration(duration)),
                         format!("{}", escape_command(&command).style(self.bold)),
                     )
                 } else {
@@ -403,6 +399,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 stdout,
                 stderr,
                 success,
+                ..
             }) => {
                 let patch_begin = self.call_id_to_patch.remove(&call_id);
 
@@ -431,6 +428,10 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 for line in output.lines() {
                     println!("{}", line.style(self.dimmed));
                 }
+            }
+            EventMsg::TurnDiff(TurnDiffEvent { unified_diff }) => {
+                ts_println!(self, "{}", "turn diff:".style(self.magenta));
+                println!("{unified_diff}");
             }
             EventMsg::ExecApprovalRequest(_) => {
                 // Should we exit?
