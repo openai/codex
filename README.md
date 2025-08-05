@@ -189,11 +189,11 @@ they'll be committed to your working directory.
 
 ## Using Open Source Models
 
-Codex can run fully locally against an OpenAI‑compatible OSS host (like Ollama) using the `--oss` flag:
+Codex can run fully locally against an OpenAI-compatible OSS host (like Ollama) using the `--oss` flag:
 
 - Interactive UI:
   - codex --oss
-- Non‑interactive (programmatic) mode:
+- Non-interactive (programmatic) mode:
   - echo "Refactor utils" | codex exec --oss
 
 Model selection when using `--oss`:
@@ -212,7 +212,7 @@ Point Codex at your own OSS host:
   - or CODEX_OSS_PORT (when the host is localhost):
     - CODEX_OSS_PORT=11434 codex --oss
 
-Advanced: you can persist this in your config instead of environment variables by overriding the built‑in `oss` provider in `~/.codex/config.toml`:
+Advanced: you can persist this in your config instead of environment variables by overriding the built-in `oss` provider in `~/.codex/config.toml`:
 
 ```toml
 [model_providers.oss]
