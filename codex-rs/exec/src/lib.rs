@@ -22,6 +22,7 @@ use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::util::is_inside_git_repo;
+use codex_ollama::DEFAULT_OSS_MODEL;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
 use event_processor_with_json_output::EventProcessorWithJsonOutput;
 use tracing::debug;
@@ -35,7 +36,7 @@ use crate::event_processor::EventProcessor;
 pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
     let Cli {
         images,
-        model,
+        model: model_cli_arg,
         oss,
         config_profile,
         full_auto,
@@ -119,19 +120,18 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     // When using `--oss`, let the bootstrapper pick the model (defaulting to
     // gpt-oss:20b) and ensure it is present locally. Also, force the built‑in
     // `oss` model provider.
-    let model_provider_override = if oss {
-        Some(BUILT_IN_OSS_MODEL_PROVIDER_ID.to_owned())
+    let model = if let Some(model) = model_cli_arg {
+        Some(model)
+    } else if oss {
+        Some(DEFAULT_OSS_MODEL.to_owned())
     } else {
-        None
+        None // No model specified, will use the default.
     };
-    let model = if oss {
-        Some(
-            codex_ollama::ensure_oss_ready(model.clone())
-                .await
-                .map_err(|e| anyhow::anyhow!("OSS setup failed: {e}"))?,
-        )
+
+    let model_provider = if oss {
+        Some(BUILT_IN_OSS_MODEL_PROVIDER_ID.to_string())
     } else {
-        model
+        None // No specific model provider override.
     };
 
     // Load configuration and determine approval policy
@@ -143,7 +143,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         approval_policy: Some(AskForApproval::Never),
         sandbox_mode,
         cwd: cwd.map(|p| p.canonicalize().unwrap_or(p)),
-        model_provider: model_provider_override,
+        model_provider,
         codex_linux_sandbox_exe,
         base_instructions: None,
         include_plan_tool: None,
@@ -169,6 +169,12 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             last_message_file.clone(),
         ))
     };
+
+    if oss {
+        codex_ollama::ensure_oss_ready(&config)
+            .await
+            .map_err(|e| anyhow::anyhow!("OSS setup failed: {e}"))?;
+    }
 
     // Print the effective configuration and prompt so users can see what Codex
     // is using.
