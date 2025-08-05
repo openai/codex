@@ -61,6 +61,8 @@ use crate::models::ReasoningItemReasoningSummary;
 use crate::models::ResponseInputItem;
 use crate::models::ResponseItem;
 use crate::models::ShellToolCallParams;
+use crate::openai_tools::ToolsConfig;
+use crate::openai_tools::get_openai_tools;
 use crate::plan_tool::handle_update_plan;
 use crate::project_doc::get_user_instructions;
 use crate::protocol::AgentMessageDeltaEvent;
@@ -94,8 +96,6 @@ use crate::safety::SafetyCheck;
 use crate::safety::assess_command_safety;
 use crate::safety::assess_safety_for_untrusted_command;
 use crate::shell;
-use crate::tools::ToolsConfig;
-use crate::tools::get_codex_tools;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::user_notification::UserNotification;
 use crate::util::backoff;
@@ -1208,7 +1208,7 @@ async fn run_turn(
     sub_id: String,
     input: Vec<ResponseItem>,
 ) -> CodexResult<Vec<ProcessedResponseItem>> {
-    let tools = get_codex_tools(
+    let tools = get_openai_tools(
         &sess.tools_config,
         Some(sess.mcp_connection_manager.list_all_tools()),
     );

@@ -3,8 +3,8 @@ use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::error::Result;
 use crate::model_family::ModelFamily;
 use crate::models::ResponseItem;
+use crate::openai_tools::OpenAiTool;
 use crate::protocol::TokenUsage;
-use crate::tools::CodexTool;
 use codex_apply_patch::APPLY_PATCH_TOOL_INSTRUCTIONS;
 use futures::Stream;
 use serde::Serialize;
@@ -35,7 +35,7 @@ pub struct Prompt {
 
     /// Tools available to the model, including additional tools sourced from
     /// external MCP servers.
-    pub tools: Vec<CodexTool>,
+    pub tools: Vec<OpenAiTool>,
 
     /// Optional override for the built-in BASE_INSTRUCTIONS.
     pub base_instructions_override: Option<String>,
