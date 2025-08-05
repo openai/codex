@@ -461,34 +461,60 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn env_key_takes_precedence_over_default_auth() {
+async fn env_var_overrides_loaded_auth() {
     #![allow(clippy::unwrap_used)]
 
-    let env_var = "TEST_PROVIDER_API_KEY";
-    let env_value = "from-env";
-    std::env::set_var(env_var, env_value);
+    let existing_env_var_with_random_value = if cfg!(windows) { "USERNAME" } else { "USER" };
 
+    // Mock server
     let server = MockServer::start().await;
 
+    // First request – must NOT include `previous_response_id`.
     let first = ResponseTemplate::new(200)
         .insert_header("content-type", "text/event-stream")
         .set_body_raw(sse_completed("resp1"), "text/event-stream");
 
+    // Expect POST to /openai/responses with api-version query param
     Mock::given(method("POST"))
-        .and(path("/v1/responses"))
+        .and(path("/openai/responses"))
+        .and(query_param("api-version", "2025-04-01-preview"))
+        .and(header_regex("Custom-Header", "Value"))
         .and(header_regex(
             "Authorization",
-            format!("Bearer {env_value}").as_str(),
+            format!(
+                "Bearer {}",
+                std::env::var(existing_env_var_with_random_value).unwrap()
+            )
+            .as_str(),
         ))
         .respond_with(first)
         .expect(1)
         .mount(&server)
         .await;
 
-    let mut provider = built_in_model_providers()["openai"].clone();
-    provider.base_url = Some(format!("{}/v1", server.uri()));
-    provider.env_key = Some(env_var.to_string());
+    let provider = ModelProviderInfo {
+        name: "custom".to_string(),
+        base_url: Some(format!("{}/openai", server.uri())),
+        // Reuse the existing environment variable to avoid using unsafe code
+        env_key: Some(existing_env_var_with_random_value.to_string()),
+        query_params: Some(std::collections::HashMap::from([(
+            "api-version".to_string(),
+            "2025-04-01-preview".to_string(),
+        )])),
+        env_key_instructions: None,
+        wire_api: WireApi::Responses,
+        http_headers: Some(std::collections::HashMap::from([(
+            "Custom-Header".to_string(),
+            "Value".to_string(),
+        )])),
+        env_http_headers: None,
+        request_max_retries: None,
+        stream_max_retries: None,
+        stream_idle_timeout_ms: None,
+        requires_auth: false,
+    };
 
+    // Init session
     let codex_home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider = provider;
@@ -496,7 +522,7 @@ async fn env_key_takes_precedence_over_default_auth() {
     let ctrl_c = std::sync::Arc::new(tokio::sync::Notify::new());
     let CodexSpawnOk { codex, .. } = Codex::spawn(
         config,
-        Some(CodexAuth::from_api_key("default-auth".to_string())),
+        Some(auth_from_token("Default Access Token".to_string())),
         ctrl_c.clone(),
     )
     .await
@@ -512,8 +538,6 @@ async fn env_key_takes_precedence_over_default_auth() {
         .unwrap();
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
-
-    std::env::remove_var(env_var);
 }
 
 fn auth_from_token(id_token: String) -> CodexAuth {

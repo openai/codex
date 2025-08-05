@@ -221,14 +221,6 @@ impl ModelProviderInfo {
             .map(Duration::from_millis)
             .unwrap_or(Duration::from_millis(DEFAULT_STREAM_IDLE_TIMEOUT_MS))
     }
-
-    fn get_fallback_auth(&self) -> crate::error::Result<Option<CodexAuth>> {
-        let api_key = self.api_key()?;
-        if let Some(api_key) = api_key {
-            return Ok(Some(CodexAuth::from_api_key(api_key)));
-        }
-        Ok(None)
-    }
 }
 
 const DEFAULT_OLLAMA_PORT: u32 = 11434;
