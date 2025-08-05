@@ -17,6 +17,10 @@ use tokio::sync::mpsc;
 /// with this content.
 const BASE_INSTRUCTIONS: &str = include_str!("../prompt.md");
 
+/// wraps user instructions message in a tag for the model to parse more easily.
+const USER_INSTRUCTIONS_START: &str = "<user_instructions>\n\n";
+const USER_INSTRUCTIONS_END: &str = "\n\n</user_instructions>";
+
 /// API request payload for a single model turn.
 #[derive(Default, Debug, Clone)]
 pub struct Prompt {
@@ -48,6 +52,16 @@ impl Prompt {
             sections.push(APPLY_PATCH_TOOL_INSTRUCTIONS);
         }
         Cow::Owned(sections.join("\n"))
+    }
+
+    pub(crate) fn get_formatted_user_instructions(&self) -> Option<String> {
+        if let Some(ui) = &self.user_instructions {
+            Some(format!(
+                "{USER_INSTRUCTIONS_START}{ui}{USER_INSTRUCTIONS_END}"
+            ))
+        } else {
+            None
+        }
     }
 }
 

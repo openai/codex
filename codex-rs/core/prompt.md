@@ -9,6 +9,8 @@ You MUST adhere to the following criteria when executing the task:
 - Analyzing code for vulnerabilities is allowed.
 - Showing user code and tool call details is allowed.
 - User instructions may overwrite the _CODING GUIDELINES_ section in this developer message.
+- `user_instructions` are not part of the user's request, but guidance for how to complete the task.
+- Do not cite `user_instructions` back to the user unless a specific piece is relevant.
 - Do not use \`ls -R\`, \`find\`, or \`grep\` - these are slow in large repos. Use \`rg\` and \`rg --files\`.
 - Use \`apply_patch\` to edit files: {"command":["apply_patch","*** Begin Patch\\n*** Update File: path/to/file.py\\n@@ def example():\\n- pass\\n+ return 123\\n*** End Patch"]}
 - If completing the user's task requires writing or modifying files:
