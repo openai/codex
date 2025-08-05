@@ -16,7 +16,7 @@ pub(crate) struct ModelInfo {
 
 pub(crate) fn get_model_info(model_family: &ModelFamily) -> Option<ModelInfo> {
     match model_family.slug.as_str() {
-        // OSS models have a 128k shared token pool. 
+        // OSS models have a 128k shared token pool.
         // Arbitrarily splitting it: 3/4 input context, 1/4 output.
         // https://openai.com/index/gpt-oss-model-card/
         "gpt-oss-20b" => Some(ModelInfo {
