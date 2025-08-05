@@ -61,6 +61,10 @@ pub struct Config {
     /// users are only interested in the final agent responses.
     pub hide_agent_reasoning: bool,
 
+    /// When set to `true`, `AgentReasoningRawContentEvent` events will be shown in the UI/output.
+    /// Defaults to `false`.
+    pub show_raw_agent_reasoning: bool,
+
     /// Disable server-side response storage (sends the full conversation
     /// context with every request). Currently necessary for OpenAI customers
     /// who have opted into Zero Data Retention (ZDR).
@@ -325,6 +329,10 @@ pub struct ConfigToml {
     /// UI/output. Defaults to `false`.
     pub hide_agent_reasoning: Option<bool>,
 
+    /// When set to `true`, `AgentReasoningRawContentEvent` events will be shown in the UI/output.
+    /// Defaults to `false`.
+    pub show_raw_agent_reasoning: Option<bool>,
+
     pub model_reasoning_effort: Option<ReasoningEffort>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
 
@@ -531,6 +539,7 @@ impl Config {
             codex_linux_sandbox_exe,
 
             hide_agent_reasoning: cfg.hide_agent_reasoning.unwrap_or(false),
+            show_raw_agent_reasoning: cfg.show_raw_agent_reasoning.unwrap_or(false),
             model_reasoning_effort: config_profile
                 .model_reasoning_effort
                 .or(cfg.model_reasoning_effort)
@@ -901,6 +910,7 @@ disable_response_storage = true
                 tui: Tui::default(),
                 codex_linux_sandbox_exe: None,
                 hide_agent_reasoning: false,
+                show_raw_agent_reasoning: false,
                 model_reasoning_effort: ReasoningEffort::High,
                 model_reasoning_summary: ReasoningSummary::Detailed,
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
@@ -951,6 +961,7 @@ disable_response_storage = true
             tui: Tui::default(),
             codex_linux_sandbox_exe: None,
             hide_agent_reasoning: false,
+            show_raw_agent_reasoning: false,
             model_reasoning_effort: ReasoningEffort::default(),
             model_reasoning_summary: ReasoningSummary::default(),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
@@ -1016,6 +1027,7 @@ disable_response_storage = true
             tui: Tui::default(),
             codex_linux_sandbox_exe: None,
             hide_agent_reasoning: false,
+            show_raw_agent_reasoning: false,
             model_reasoning_effort: ReasoningEffort::default(),
             model_reasoning_summary: ReasoningSummary::default(),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
