@@ -123,7 +123,7 @@ impl Codex {
         let resume_path = config.experimental_resume.clone();
         info!("resume_path: {resume_path:?}");
         let (tx_sub, rx_sub) = async_channel::bounded(64);
-        let (tx_event, rx_event) = async_channel::bounded(1600);
+        let (tx_event, rx_event) = async_channel::unbounded();
 
         let user_instructions = get_user_instructions(&config).await;
 
@@ -701,7 +701,7 @@ async fn submission_loop(
                 cwd,
                 resume_path,
             } => {
-                info!(
+                debug!(
                     "Configuring session: model={model}; provider={provider:?}; resume={resume_path:?}"
                 );
                 if !cwd.is_absolute() {
@@ -1374,6 +1374,11 @@ async fn try_run_turn(
                 return Ok(output);
             }
             ResponseEvent::OutputTextDelta(delta) => {
+                {
+                    let mut st = sess.state.lock().unwrap();
+                    st.history.append_assistant_text(&delta);
+                }
+
                 let event = Event {
                     id: sub_id.to_string(),
                     msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }),
@@ -1921,7 +1926,8 @@ async fn handle_sandbox_error(
     // include additional metadata on the command to indicate whether non-zero
     // exit codes merit a retry.
 
-    // For now, we categorically ask the user to retry without sandbox.
+    // For now, we categorically ask the user to retry without sandbox and
+    // emit the raw error as a background event.
     sess.notify_background_event(&sub_id, format!("Execution failed: {error}"))
         .await;
 

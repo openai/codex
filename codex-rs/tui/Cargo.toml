@@ -11,6 +11,10 @@ path = "src/main.rs"
 name = "codex_tui"
 path = "src/lib.rs"
 
+[features]
+# Enable vt100-based tests (emulator) when running with `--features vt100-tests`.
+vt100-tests = []
+
 [lints]
 workspace = true
 
@@ -73,3 +77,4 @@ insta = "1.43.1"
 pretty_assertions = "1"
 rand = "0.8"
 chrono = { version = "0.4", features = ["serde"] }
+vt100 = "0.16.2"

@@ -260,6 +260,11 @@ async fn process_chat_sse<S>(
                 .and_then(|d| d.get("content"))
                 .and_then(|c| c.as_str())
             {
+                // Emit a delta so downstream consumers can stream text live.
+                let _ = tx_event
+                    .send(Ok(ResponseEvent::OutputTextDelta(content.to_string())))
+                    .await;
+
                 let item = ResponseItem::Message {
                     role: "assistant".to_string(),
                     content: vec![ContentItem::OutputText {
@@ -439,11 +444,14 @@ where
                     // will never appear in a Chat Completions stream.
                     continue;
                 }
-                Poll::Ready(Some(Ok(ResponseEvent::OutputTextDelta(_))))
-                | Poll::Ready(Some(Ok(ResponseEvent::ReasoningSummaryDelta(_)))) => {
-                    // Deltas are ignored here since aggregation waits for the
-                    // final OutputItemDone.
-                    continue;
+                Poll::Ready(Some(Ok(ResponseEvent::OutputTextDelta(delta)))) => {
+                    // Forward deltas unchanged so callers can stream text
+                    // live while still receiving a single aggregated
+                    // OutputItemDone at the end of the turn.
+                    return Poll::Ready(Some(Ok(ResponseEvent::OutputTextDelta(delta))));
+                }
+                Poll::Ready(Some(Ok(ResponseEvent::ReasoningSummaryDelta(delta)))) => {
+                    return Poll::Ready(Some(Ok(ResponseEvent::ReasoningSummaryDelta(delta))));
                 }
             }
         }
