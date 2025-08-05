@@ -56,6 +56,7 @@ use crate::mcp_tool_call::handle_mcp_tool_call;
 use crate::models::ContentItem;
 use crate::models::FunctionCallOutputPayload;
 use crate::models::LocalShellAction;
+use crate::models::ReasoningItemContent;
 use crate::models::ReasoningItemReasoningSummary;
 use crate::models::ResponseInputItem;
 use crate::models::ResponseItem;
@@ -66,6 +67,8 @@ use crate::protocol::AgentMessageDeltaEvent;
 use crate::protocol::AgentMessageEvent;
 use crate::protocol::AgentReasoningDeltaEvent;
 use crate::protocol::AgentReasoningEvent;
+use crate::protocol::AgentReasoningRawContentDeltaEvent;
+use crate::protocol::AgentReasoningRawContentEvent;
 use crate::protocol::ApplyPatchApprovalRequestEvent;
 use crate::protocol::AskForApproval;
 use crate::protocol::BackgroundEventEvent;
@@ -227,6 +230,7 @@ pub(crate) struct Session {
     state: Mutex<State>,
     codex_linux_sandbox_exe: Option<PathBuf>,
     user_shell: shell::Shell,
+    show_raw_agent_reasoning: bool,
 }
 
 impl Session {
@@ -822,6 +826,7 @@ async fn submission_loop(
                     codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
                     disable_response_storage,
                     user_shell: default_shell,
+                    show_raw_agent_reasoning: config.show_raw_agent_reasoning,
                 }));
 
                 // Patch restored state into the newly created session.
@@ -1132,6 +1137,7 @@ async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
                             ResponseItem::Reasoning {
                                 id,
                                 summary,
+                                content,
                                 encrypted_content,
                             },
                             None,
@@ -1139,6 +1145,7 @@ async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
                             items_to_record_in_conversation_history.push(ResponseItem::Reasoning {
                                 id: id.clone(),
                                 summary: summary.clone(),
+                                content: content.clone(),
                                 encrypted_content: encrypted_content.clone(),
                             });
                         }
@@ -1392,6 +1399,17 @@ async fn try_run_turn(
                 };
                 sess.tx_event.send(event).await.ok();
             }
+            ResponseEvent::ReasoningContentDelta(delta) => {
+                if sess.show_raw_agent_reasoning {
+                    let event = Event {
+                        id: sub_id.to_string(),
+                        msg: EventMsg::AgentReasoningRawContentDelta(
+                            AgentReasoningRawContentDeltaEvent { delta },
+                        ),
+                    };
+                    sess.tx_event.send(event).await.ok();
+                }
+            }
         }
     }
 }
@@ -1498,7 +1516,12 @@ async fn handle_response_item(
             }
             None
         }
-        ResponseItem::Reasoning { summary, .. } => {
+        ResponseItem::Reasoning {
+            id: _,
+            summary,
+            content,
+            encrypted_content: _,
+        } => {
             for item in summary {
                 let text = match item {
                     ReasoningItemReasoningSummary::SummaryText { text } => text,
@@ -1508,6 +1531,21 @@ async fn handle_response_item(
                     msg: EventMsg::AgentReasoning(AgentReasoningEvent { text }),
                 };
                 sess.tx_event.send(event).await.ok();
+            }
+            if sess.show_raw_agent_reasoning && content.is_some() {
+                let content = content.unwrap();
+                for item in content {
+                    let text = match item {
+                        ReasoningItemContent::ReasoningText { text } => text,
+                    };
+                    let event = Event {
+                        id: sub_id.to_string(),
+                        msg: EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent {
+                            text,
+                        }),
+                    };
+                    sess.tx_event.send(event).await.ok();
+                }
             }
             None
         }
