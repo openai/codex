@@ -37,6 +37,7 @@ use crate::apply_patch::convert_apply_patch_to_protocol;
 use crate::apply_patch::get_writable_roots;
 use crate::apply_patch::{self};
 use crate::client::ModelClient;
+use crate::client_common::EnvironmentContext;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::config::Config;
@@ -1224,6 +1225,11 @@ async fn run_turn(
         store: !sess.disable_response_storage,
         tools,
         base_instructions_override: sess.base_instructions.clone(),
+        environment_context: Some(EnvironmentContext {
+            cwd: sess.cwd.clone(),
+            approval_policy: sess.approval_policy,
+            sandbox_policy: sess.sandbox_policy.clone(),
+        }),
     };
 
     let mut retries = 0;
@@ -1449,6 +1455,7 @@ async fn run_compact_task(
         input: turn_input,
         user_instructions: None,
         store: !sess.disable_response_storage,
+        environment_context: None,
         tools: Vec::new(),
         base_instructions_override: Some(compact_instructions.clone()),
     };
