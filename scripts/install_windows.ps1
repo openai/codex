@@ -100,7 +100,7 @@ if ($respCli -match '^[Yy]' -or $respCli -eq '') {
         git config --global url."https://github.com/".insteadOf "git@github.com:" | Out-Null
         $tmp = Join-Path $env:TEMP "codex-cli-install"
         if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }
-        git clone --depth 1 --branch codex_windows_version https://github.com/damdam775/codex.git $tmp | Out-Null
+        git clone --depth 1 https://github.com/openai/codex.git $tmp | Out-Null
         npm install -g (Join-Path $tmp "codex-cli")
         Remove-Item $tmp -Recurse -Force
         $codexCmd = Get-Command codex -ErrorAction SilentlyContinue
