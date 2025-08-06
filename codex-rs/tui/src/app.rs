@@ -148,7 +148,12 @@ impl App<'_> {
                 AppState::Onboarding {
                     screen: OnboardingScreen::new(app_event_tx.clone(), config.codex_home.clone()),
                 },
-                None,
+                Some(ChatWidgetArgs {
+                    config: config.clone(),
+                    initial_prompt,
+                    initial_images,
+                    enhanced_keys_supported,
+                }),
             )
         } else if show_git_warning {
             (
