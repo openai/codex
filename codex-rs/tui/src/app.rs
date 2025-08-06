@@ -11,6 +11,7 @@ use codex_core::config::Config;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
+use codex_file_search::FileMatch;
 use color_eyre::eyre::Result;
 use crossterm::SynchronizedUpdate;
 use crossterm::event::KeyCode;
@@ -370,7 +371,15 @@ impl App<'_> {
                     }
                 },
                 AppEvent::StartFileSearch(query) => {
-                    self.file_search.on_user_query(query);
+                    if query.is_empty() {
+                        let matches = Self::quick_list_cwd(&self.config.cwd, 8);
+                        if let AppState::Chat { widget } = &mut self.app_state {
+                            widget.apply_file_search_result(query, matches);
+                        }
+                        self.app_event_tx.send(AppEvent::RequestRedraw);
+                    } else {
+                        self.file_search.on_user_query(query);
+                    }
                 }
                 AppEvent::FileSearchResult { query, matches } => {
                     if let AppState::Chat { widget } = &mut self.app_state {
@@ -497,5 +506,34 @@ impl App<'_> {
             AppState::Chat { widget } => widget.handle_codex_event(event),
             AppState::GitWarning { .. } => {}
         }
+    }
+
+    fn quick_list_cwd(dir: &PathBuf, limit: usize) -> Vec<FileMatch> {
+        let mut entries: Vec<String> = match std::fs::read_dir(dir) {
+            Ok(rd) => rd
+                .filter_map(|res| res.ok())
+                .filter_map(|e| {
+                    let name = match e.file_name().into_string() {
+                        Ok(s) => s,
+                        Err(_) => return None,
+                    };
+                    if name.starts_with('.') {
+                        return None;
+                    }
+                    Some(name)
+                })
+                .collect(),
+            Err(_) => Vec::new(),
+        };
+        entries.sort();
+        entries.truncate(limit);
+        entries
+            .into_iter()
+            .map(|path| FileMatch {
+                score: 0,
+                path,
+                indices: Some(Vec::new()),
+            })
+            .collect()
     }
 }
