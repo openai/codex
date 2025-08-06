@@ -52,7 +52,6 @@ use crate::exec::SandboxType;
 use crate::exec::StdoutStream;
 use crate::exec::process_exec_tool_call;
 use crate::exec_env::create_env;
-use crate::git_info::collect_git_info;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::mcp_tool_call::handle_mcp_tool_call;
 use crate::models::ContentItem;
@@ -1228,7 +1227,6 @@ async fn run_turn(
         base_instructions_override: sess.base_instructions.clone(),
         environment_context: Some(EnvironmentContext {
             cwd: sess.cwd.clone(),
-            git_info: collect_git_info(&sess.cwd).await,
             approval_policy: sess.approval_policy,
             sandbox_policy: sess.sandbox_policy.clone(),
         }),
