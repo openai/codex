@@ -110,6 +110,22 @@ fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Optio
 }
 
 impl ChatWidget<'_> {
+    fn interrupt_running_task(&mut self) {
+        if self.bottom_pane.is_task_running() {
+            self.active_history_cell = None;
+            self.bottom_pane.clear_ctrl_c_quit_hint();
+            self.submit_op(Op::Interrupt);
+            self.bottom_pane.set_task_running(false);
+            self.bottom_pane.clear_live_ring();
+            self.live_builder = RowBuilder::new(self.live_builder.width());
+            self.current_stream = None;
+            self.stream_header_emitted = false;
+            self.answer_buffer.clear();
+            self.reasoning_buffer.clear();
+            self.content_buffer.clear();
+            self.request_redraw();
+        }
+    }
     fn layout_areas(&self, area: Rect) -> [Rect; 2] {
         Layout::vertical([
             Constraint::Max(
@@ -569,18 +585,7 @@ impl ChatWidget<'_> {
             CancellationEvent::Ignored => {}
         }
         if self.bottom_pane.is_task_running() {
-            self.active_history_cell = None;
-            self.bottom_pane.clear_ctrl_c_quit_hint();
-            self.submit_op(Op::Interrupt);
-            self.bottom_pane.set_task_running(false);
-            self.bottom_pane.clear_live_ring();
-            self.live_builder = RowBuilder::new(self.live_builder.width());
-            self.current_stream = None;
-            self.stream_header_emitted = false;
-            self.answer_buffer.clear();
-            self.reasoning_buffer.clear();
-            self.content_buffer.clear();
-            self.request_redraw();
+            self.interrupt_running_task();
             CancellationEvent::Ignored
         } else if self.bottom_pane.ctrl_c_quit_hint_visible() {
             self.submit_op(Op::Shutdown);
@@ -589,6 +594,10 @@ impl ChatWidget<'_> {
             self.bottom_pane.show_ctrl_c_quit_hint();
             CancellationEvent::Ignored
         }
+    }
+
+    pub(crate) fn on_ctrl_z(&mut self) {
+        self.interrupt_running_task();
     }
 
     pub(crate) fn composer_is_empty(&self) -> bool {
