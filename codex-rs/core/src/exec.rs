@@ -49,6 +49,8 @@ pub struct ExecParams {
     pub cwd: PathBuf,
     pub timeout_ms: Option<u64>,
     pub env: HashMap<String, String>,
+    pub with_escalated_permissions: Option<bool>,
+    pub justification: Option<String>,
 }
 
 impl ExecParams {
