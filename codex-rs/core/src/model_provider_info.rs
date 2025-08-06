@@ -78,7 +78,7 @@ pub struct ModelProviderInfo {
 
     /// Whether this provider requires some form of standard authentication (API key, ChatGPT token).
     #[serde(default)]
-    pub requires_auth: bool,
+    pub requires_openai_auth: bool,
 }
 
 impl ModelProviderInfo {
@@ -86,9 +86,9 @@ impl ModelProviderInfo {
     /// reqwest Client applying:
     ///   • provider-specific headers (static + env based)
     ///   • Bearer auth header when an API key is available.
+    ///   • Auth token for OAuth.
     ///
-    /// When `require_api_key` is true and the provider declares an `env_key`
-    /// but the variable is missing/empty, returns an [`Err`] identical to the
+    /// If the provider declares an `env_key` but the variable is missing/empty, returns an [`Err`] identical to the
     /// one produced by [`ModelProviderInfo::api_key`].
     pub async fn create_request_builder<'a>(
         &'a self,
@@ -289,7 +289,7 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
                 request_max_retries: None,
                 stream_max_retries: None,
                 stream_idle_timeout_ms: None,
-                requires_auth: true,
+                requires_openai_auth: true,
             },
         ),
         (
@@ -306,7 +306,7 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
                 request_max_retries: None,
                 stream_max_retries: None,
                 stream_idle_timeout_ms: None,
-                requires_auth: false,
+                requires_openai_auth: false,
             },
         ),
     ]
@@ -339,7 +339,7 @@ base_url = "http://localhost:11434/v1"
             request_max_retries: None,
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
-            requires_auth: false,
+            requires_openai_auth: false,
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -368,7 +368,7 @@ query_params = { api-version = "2025-04-01-preview" }
             request_max_retries: None,
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
-            requires_auth: false,
+            requires_openai_auth: false,
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -400,7 +400,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
             request_max_retries: None,
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
-            requires_auth: false,
+            requires_openai_auth: false,
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();

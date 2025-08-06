@@ -637,7 +637,7 @@ mod tests {
             request_max_retries: Some(0),
             stream_max_retries: Some(0),
             stream_idle_timeout_ms: Some(1000),
-            requires_auth: false,
+            requires_openai_auth: false,
         };
 
         let events = collect_events(
@@ -697,7 +697,7 @@ mod tests {
             request_max_retries: Some(0),
             stream_max_retries: Some(0),
             stream_idle_timeout_ms: Some(1000),
-            requires_auth: false,
+            requires_openai_auth: false,
         };
 
         let events = collect_events(&[sse1.as_bytes()], provider).await;
@@ -800,7 +800,7 @@ mod tests {
                 request_max_retries: Some(0),
                 stream_max_retries: Some(0),
                 stream_idle_timeout_ms: Some(1000),
-                requires_auth: false,
+                requires_openai_auth: false,
             };
 
             let out = run_sse(evs, provider).await;
