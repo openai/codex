@@ -61,6 +61,8 @@ use crate::models::ReasoningItemReasoningSummary;
 use crate::models::ResponseInputItem;
 use crate::models::ResponseItem;
 use crate::models::ShellToolCallParams;
+use crate::openai_tools::ToolsConfig;
+use crate::openai_tools::get_openai_tools;
 use crate::plan_tool::handle_update_plan;
 use crate::project_doc::get_user_instructions;
 use crate::protocol::AgentMessageDeltaEvent;
@@ -216,6 +218,7 @@ pub(crate) struct Session {
     shell_environment_policy: ShellEnvironmentPolicy,
     pub(crate) writable_roots: Mutex<Vec<PathBuf>>,
     disable_response_storage: bool,
+    tools_config: ToolsConfig,
 
     /// Manager for external MCP servers/tools.
     mcp_connection_manager: McpConnectionManager,
@@ -810,6 +813,7 @@ async fn submission_loop(
                 let default_shell = shell::default_user_shell().await;
                 sess = Some(Arc::new(Session {
                     client,
+                    tools_config: ToolsConfig::new(&config.model_family, config.include_plan_tool),
                     tx_event: tx_event.clone(),
                     ctrl_c: Arc::clone(&ctrl_c),
                     user_instructions,
@@ -1204,12 +1208,16 @@ async fn run_turn(
     sub_id: String,
     input: Vec<ResponseItem>,
 ) -> CodexResult<Vec<ProcessedResponseItem>> {
-    let extra_tools = sess.mcp_connection_manager.list_all_tools();
+    let tools = get_openai_tools(
+        &sess.tools_config,
+        Some(sess.mcp_connection_manager.list_all_tools()),
+    );
+
     let prompt = Prompt {
         input,
         user_instructions: sess.user_instructions.clone(),
         store: !sess.disable_response_storage,
-        extra_tools,
+        tools,
         base_instructions_override: sess.base_instructions.clone(),
     };
 
@@ -1436,7 +1444,7 @@ async fn run_compact_task(
         input: turn_input,
         user_instructions: None,
         store: !sess.disable_response_storage,
-        extra_tools: HashMap::new(),
+        tools: Vec::new(),
         base_instructions_override: Some(compact_instructions.clone()),
     };
 
