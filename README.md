@@ -2,7 +2,7 @@
 <p align="center">Lightweight coding agent that runs in your terminal</p>
 <p align="center"><strong>Windows optimized version</strong></p>
 
-<p align="center"><code>git clone --depth 1 --branch codex_windows_version https://github.com/damdam775/codex.git</code></p>
+<p align="center"><code>git clone --depth 1 https://github.com/openai/codex.git</code></p>
 <p align="center"><code>cd codex/codex-cli && npm install && npm run build && npm install -g .</code></p>
 
 ![Codex demo GIF using: codex "explain this codebase to me"](./.github/demo.gif)
@@ -76,10 +76,10 @@ Help us improve by filing issues or submitting PRs (see the section below for ho
 
 This branch is optimized for Windows.
 
-Install this customized Windows build from GitHub:
+Install this Windows build from GitHub:
 
 ```shell
-git clone --depth 1 --branch codex_windows_version https://github.com/damdam775/codex.git
+git clone --depth 1 https://github.com/openai/codex.git
 npm install -g ./codex/codex-cli
 ```
 
@@ -265,7 +265,7 @@ Run Codex head-less in pipelines. Example GitHub Action step:
 ```yaml
 - name: Update changelog via Codex
   run: |
-    git clone --depth 1 --branch codex_windows_version https://github.com/damdam775/codex.git
+    git clone --depth 1 https://github.com/openai/codex.git
     npm install -g ./codex/codex-cli
     export OPENAI_API_KEY="${{ secrets.OPENAI_KEY }}"
     codex -a auto-edit --quiet "update CHANGELOG for next release"
@@ -306,7 +306,7 @@ Below are a few bite-size examples you can copy-paste. Replace the text in quote
 
 ```bash
 # Customized Windows build
-git clone --depth 1 --branch codex_windows_version https://github.com/damdam775/codex.git
+git clone --depth 1 https://github.com/openai/codex.git
 npm install -g ./codex/codex-cli
 # Official npm package
 # npm install -g @openai/codex
@@ -554,7 +554,7 @@ OpenAI rejected the request. Error details: Status: 400, Code: unsupported_param
 
 You may need to upgrade to a more recent build with:
 ```bash
-git clone --depth 1 --branch codex_windows_version https://github.com/damdam775/codex.git
+git clone --depth 1 https://github.com/openai/codex.git
 npm install -g ./codex/codex-cli
 ```
 

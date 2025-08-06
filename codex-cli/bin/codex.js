@@ -64,6 +64,18 @@ if (wantsNative) {
           break;
       }
       break;
+    case "win32":
+      switch (arch) {
+        case "x64":
+          targetTriple = "x86_64-pc-windows-msvc";
+          break;
+        case "arm64":
+          targetTriple = "aarch64-pc-windows-msvc";
+          break;
+        default:
+          break;
+      }
+      break;
     default:
       break;
   }
@@ -71,8 +83,12 @@ if (wantsNative) {
   if (!targetTriple) {
     throw new Error(`Unsupported platform: ${platform} (${arch})`);
   }
-
-  const binaryPath = path.join(__dirname, "..", "bin", `codex-${targetTriple}`);
+  const binaryPath = path.join(
+    __dirname,
+    "..",
+    "bin",
+    `codex-${targetTriple}${platform === "win32" ? ".exe" : ""}`,
+  );
   const result = spawnSync(binaryPath, process.argv.slice(2), {
     stdio: "inherit",
   });
