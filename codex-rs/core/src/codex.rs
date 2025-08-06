@@ -815,8 +815,8 @@ async fn submission_loop(
                     client,
                     tools_config: ToolsConfig::new(
                         &config.model_family,
-                        &approval_policy,
-                        &sandbox_policy,
+                        approval_policy,
+                        sandbox_policy.clone(),
                         config.include_plan_tool,
                     ),
                     tx_event: tx_event.clone(),

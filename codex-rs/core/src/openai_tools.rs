@@ -47,19 +47,20 @@ pub struct ToolsConfig {
 impl ToolsConfig {
     pub fn new(
         model_family: &ModelFamily,
-        approval_policy: &AskForApproval,
-        sandbox_policy: &SandboxPolicy,
+        approval_policy: AskForApproval,
+        sandbox_policy: SandboxPolicy,
         include_plan_tool: bool,
     ) -> Self {
-        let shell_type = if *approval_policy == AskForApproval::OnRequest {
-            ConfigShellToolType::ShellWithRequest {
-                sandbox_policy: sandbox_policy.clone(),
-            }
-        } else if model_family.uses_local_shell_tool {
+        let mut shell_type = if model_family.uses_local_shell_tool {
             ConfigShellToolType::LocalShell
         } else {
             ConfigShellToolType::DefaultShell
         };
+        if matches!(approval_policy, AskForApproval::OnRequest) {
+            shell_type = ConfigShellToolType::ShellWithRequest {
+                sandbox_policy: sandbox_policy.clone(),
+            }
+        }
 
         Self {
             shell_type,

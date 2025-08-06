@@ -153,6 +153,10 @@ approval_policy = "untrusted"
 # retry the command outside the sandbox.
 approval_policy = "on-failure"
 ```
+```toml
+# The model decides when to escalate
+approval_policy = "on-failure"
+```
 
 ```toml
 # User is never prompted: if the command fails, Codex will automatically try
