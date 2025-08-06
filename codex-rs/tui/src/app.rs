@@ -415,7 +415,7 @@ impl App<'_> {
         let size = terminal.size()?;
         let desired_height = match &self.app_state {
             AppState::Chat { widget } => widget.desired_height(size.width),
-            AppState::GitWarning { .. } => 10,
+            AppState::GitWarning { .. } => size.height,
         };
 
         let mut area = terminal.viewport_area;
