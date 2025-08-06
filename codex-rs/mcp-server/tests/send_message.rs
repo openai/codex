@@ -99,7 +99,7 @@ async fn test_send_message_success() {
         response
     );
     // wait for the server to hear the user message
-    sleep(Duration::from_secs(10));
+    sleep(Duration::from_secs(5));
 
     // Ensure the server and tempdir live until end of test
     drop(server);
