@@ -18,7 +18,6 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::colors::LIGHT_BLUE;
 use crate::colors::SUCCESS_GREEN;
-use crate::onboarding::onboarding_screen::KeyEventResult;
 use crate::onboarding::onboarding_screen::KeyboardHandler;
 use crate::onboarding::onboarding_screen::StepStateProvider;
 use crate::shimmer::FrameTicker;
@@ -34,6 +33,8 @@ pub(crate) enum SignInState {
     ChatGptContinueInBrowser(#[allow(dead_code)] ContinueInBrowserState),
     ChatGptSuccessMessage,
     ChatGptSuccess,
+    EnvVarMissing,
+    EnvVarFound,
 }
 
 #[derive(Debug)]
@@ -55,54 +56,45 @@ impl Drop for ContinueInBrowserState {
 }
 
 impl KeyboardHandler for AuthModeWidget {
-    fn handle_key_event(&mut self, key_event: KeyEvent) -> KeyEventResult {
+    fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event.code {
             KeyCode::Up | KeyCode::Char('k') => {
-                self.mode = AuthMode::ChatGPT;
-                KeyEventResult::None
+                self.highlighted_mode = AuthMode::ChatGPT;
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                self.mode = AuthMode::ApiKey;
-                KeyEventResult::None
+                self.highlighted_mode = AuthMode::ApiKey;
             }
             KeyCode::Char('1') => {
-                self.mode = AuthMode::ChatGPT;
                 self.start_chatgpt_login();
-                KeyEventResult::None
             }
-            KeyCode::Char('2') => {
-                self.mode = AuthMode::ApiKey;
-                self.verify_api_key()
-            }
-            KeyCode::Enter => match self.mode {
-                AuthMode::ChatGPT => match &self.sign_in_state {
-                    SignInState::PickMode => self.start_chatgpt_login(),
-                    SignInState::ChatGptContinueInBrowser(_) => KeyEventResult::None,
-                    SignInState::ChatGptSuccessMessage => KeyEventResult::Continue,
+            KeyCode::Char('2') => self.verify_api_key(),
+            KeyCode::Enter => match self.sign_in_state {
+                SignInState::PickMode => match self.highlighted_mode {
+                    AuthMode::ChatGPT => self.start_chatgpt_login(),
+                    AuthMode::ApiKey => self.verify_api_key(),
                 },
-                AuthMode::ApiKey => self.verify_api_key(),
+                SignInState::EnvVarMissing => self.sign_in_state = SignInState::PickMode,
+                SignInState::ChatGptSuccessMessage => {
+                    self.sign_in_state = SignInState::ChatGptSuccess
+                }
+                _ => {}
             },
             KeyCode::Esc => {
                 if matches!(self.sign_in_state, SignInState::ChatGptContinueInBrowser(_)) {
                     self.sign_in_state = SignInState::PickMode;
-                    self.event_tx.send(AppEvent::RequestRedraw);
-                    KeyEventResult::None
-                } else {
-                    KeyEventResult::Quit
                 }
             }
-            KeyCode::Char('q') => KeyEventResult::Quit,
-            _ => KeyEventResult::None,
+            _ => {}
         }
     }
 }
 
 #[derive(Debug)]
 pub(crate) struct AuthModeWidget {
-    pub mode: AuthMode,
+    pub event_tx: AppEventSender,
+    pub highlighted_mode: AuthMode,
     pub error: Option<String>,
     pub sign_in_state: SignInState,
-    pub event_tx: AppEventSender,
     pub codex_home: PathBuf,
 }
 
@@ -124,7 +116,7 @@ impl AuthModeWidget {
                                 text: &str,
                                 description: &str|
          -> Vec<Line<'static>> {
-            let is_selected = self.mode == selected_mode;
+            let is_selected = self.highlighted_mode == selected_mode;
             let caret = if is_selected { ">" } else { " " };
 
             let line1 = if is_selected {
@@ -233,7 +225,29 @@ impl AuthModeWidget {
             .render(area, buf);
     }
 
-    fn start_chatgpt_login(&mut self) -> KeyEventResult {
+    fn render_env_var_found(&self, area: Rect, buf: &mut Buffer) {
+        let lines =
+            vec![Line::from("✓ Using OPENAI_API_KEY").style(Style::default().fg(SUCCESS_GREEN))];
+
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .render(area, buf);
+    }
+
+    fn render_env_var_missing(&self, area: Rect, buf: &mut Buffer) {
+        let lines = vec![
+            Line::from("✘ OPENAI_API_KEY not found").style(Style::default().fg(Color::Red)),
+            Line::from(""),
+            Line::from("  Press Enter to return")
+                .style(Style::default().add_modifier(Modifier::DIM)),
+        ];
+
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .render(area, buf);
+    }
+
+    fn start_chatgpt_login(&mut self) {
         self.error = None;
         match codex_login::spawn_login_with_chatgpt(&self.codex_home) {
             Ok(child) => {
@@ -244,27 +258,23 @@ impl AuthModeWidget {
                         _frame_ticker: Some(FrameTicker::new(self.event_tx.clone())),
                     });
                 self.event_tx.send(AppEvent::RequestRedraw);
-                KeyEventResult::None
             }
             Err(e) => {
                 self.sign_in_state = SignInState::PickMode;
                 self.error = Some(e.to_string());
                 self.event_tx.send(AppEvent::RequestRedraw);
-                KeyEventResult::None
             }
         }
     }
 
     /// TODO: Read/write from the correct hierarchy config overrides + auth json + OPENAI_API_KEY.
-    fn verify_api_key(&mut self) -> KeyEventResult {
+    fn verify_api_key(&mut self) {
         if std::env::var("OPENAI_API_KEY").is_err() {
-            self.error =
-                Some("Set OPENAI_API_KEY in your environment. Learn more: https://platform.openai.com/docs/libraries".to_string());
-            self.event_tx.send(AppEvent::RequestRedraw);
-            KeyEventResult::None
+            self.sign_in_state = SignInState::EnvVarMissing;
         } else {
-            KeyEventResult::Continue
+            self.sign_in_state = SignInState::EnvVarFound;
         }
+        self.event_tx.send(AppEvent::RequestRedraw);
     }
 
     fn spawn_completion_poller(&self, child: codex_login::SpawnedLogin) {
@@ -317,9 +327,10 @@ impl StepStateProvider for AuthModeWidget {
     fn get_step_state(&self) -> StepState {
         match &self.sign_in_state {
             SignInState::PickMode
+            | SignInState::EnvVarMissing
             | SignInState::ChatGptContinueInBrowser(_)
             | SignInState::ChatGptSuccessMessage => StepState::InProgress,
-            SignInState::ChatGptSuccess => StepState::Complete,
+            SignInState::ChatGptSuccess | SignInState::EnvVarFound => StepState::Complete,
         }
     }
 }
@@ -338,6 +349,12 @@ impl WidgetRef for AuthModeWidget {
             }
             SignInState::ChatGptSuccess => {
                 self.render_chatgpt_success(area, buf);
+            }
+            SignInState::EnvVarMissing => {
+                self.render_env_var_missing(area, buf);
+            }
+            SignInState::EnvVarFound => {
+                self.render_env_var_found(area, buf);
             }
         }
     }

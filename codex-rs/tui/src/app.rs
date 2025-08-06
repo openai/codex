@@ -3,9 +3,6 @@ use crate::app_event_sender::AppEventSender;
 use crate::chatwidget::ChatWidget;
 use crate::file_search::FileSearchManager;
 use crate::get_git_diff::get_git_diff;
-use crate::git_warning_screen::GitWarningOutcome;
-use crate::git_warning_screen::GitWarningScreen;
-use crate::onboarding::onboarding_screen::KeyEventResult;
 use crate::onboarding::onboarding_screen::KeyboardHandler;
 use crate::onboarding::onboarding_screen::OnboardingScreen;
 use crate::onboarding::onboarding_screen::OnboardingScreenProps;
@@ -145,7 +142,9 @@ impl App<'_> {
             !skip_git_repo_check && !is_inside_git_repo(&config.cwd.to_path_buf());
         let onboarding_screen_props = if show_login_screen || show_git_warning {
             Some(OnboardingScreenProps {
-                event_tx,
+                event_tx: app_event_tx.clone(),
+                codex_home: config.codex_home.clone(),
+                cwd: config.cwd.clone(),
                 show_login_screen,
                 show_git_warning,
             })
@@ -246,20 +245,14 @@ impl App<'_> {
                             modifiers: crossterm::event::KeyModifiers::CONTROL,
                             kind: KeyEventKind::Press,
                             ..
-                        } => {
-                            match &mut self.app_state {
-                                AppState::Chat { widget } => {
-                                    widget.on_ctrl_c();
-                                }
-                                AppState::Onboarding { .. } => {
-                                    self.app_event_tx.send(AppEvent::ExitRequest);
-                                }
-                                AppState::GitWarning { .. } => {
-                                    // Allow exiting the app with Ctrl+C from the warning screen.
-                                    self.app_event_tx.send(AppEvent::ExitRequest);
-                                }
+                        } => match &mut self.app_state {
+                            AppState::Chat { widget } => {
+                                widget.on_ctrl_c();
                             }
-                        }
+                            AppState::Onboarding { .. } => {
+                                self.app_event_tx.send(AppEvent::ExitRequest);
+                            }
+                        },
                         KeyEvent {
                             code: KeyCode::Char('z'),
                             modifiers: crossterm::event::KeyModifiers::CONTROL,
@@ -290,9 +283,6 @@ impl App<'_> {
                                 AppState::Onboarding { .. } => {
                                     self.app_event_tx.send(AppEvent::ExitRequest);
                                 }
-                                AppState::GitWarning { .. } => {
-                                    self.app_event_tx.send(AppEvent::ExitRequest);
-                                }
                             }
                         }
                         KeyEvent {
@@ -318,12 +308,10 @@ impl App<'_> {
                 AppEvent::CodexOp(op) => match &mut self.app_state {
                     AppState::Chat { widget } => widget.submit_op(op),
                     AppState::Onboarding { .. } => {}
-                    AppState::GitWarning { .. } => {}
                 },
                 AppEvent::LatestLog(line) => match &mut self.app_state {
                     AppState::Chat { widget } => widget.update_latest_log(line),
                     AppState::Onboarding { .. } => {}
-                    AppState::GitWarning { .. } => {}
                 },
                 AppEvent::DispatchCommand(command) => match command {
                     SlashCommand::New => {
@@ -444,7 +432,6 @@ impl App<'_> {
         match &self.app_state {
             AppState::Chat { widget } => widget.token_usage().clone(),
             AppState::Onboarding { .. } => codex_core::protocol::TokenUsage::default(),
-            AppState::GitWarning { .. } => codex_core::protocol::TokenUsage::default(),
         }
     }
 
@@ -473,7 +460,6 @@ impl App<'_> {
         let desired_height = match &self.app_state {
             AppState::Chat { widget } => widget.desired_height(size.width),
             AppState::Onboarding { .. } => size.height,
-            AppState::GitWarning { .. } => size.height,
         };
 
         let mut area = terminal.viewport_area;
@@ -504,7 +490,6 @@ impl App<'_> {
                 frame.render_widget_ref(&**widget, frame.area())
             }
             AppState::Onboarding { screen } => frame.render_widget_ref(&*screen, frame.area()),
-            AppState::GitWarning { screen } => frame.render_widget_ref(&*screen, frame.area()),
         })?;
         Ok(())
     }
@@ -516,49 +501,11 @@ impl App<'_> {
             AppState::Chat { widget } => {
                 widget.handle_key_event(key_event);
             }
-            AppState::Onboarding { screen } => match screen.handle_key_event(key_event) {
-                KeyEventResult::Continue => {
-                    self.app_state = AppState::Chat {
-                        widget: Box::new(ChatWidget::new(
-                            self.config.clone(),
-                            self.app_event_tx.clone(),
-                            None,
-                            Vec::new(),
-                            self.enhanced_keys_supported,
-                        )),
-                    };
-                }
-                KeyEventResult::Quit => {
+            AppState::Onboarding { screen } => match key_event.code {
+                KeyCode::Char('q') => {
                     self.app_event_tx.send(AppEvent::ExitRequest);
                 }
-                KeyEventResult::None => {
-                    // do nothing
-                }
-            },
-            AppState::GitWarning { screen } => match screen.handle_key_event(key_event) {
-                GitWarningOutcome::Continue => {
-                    // User accepted – switch to chat view.
-                    let args = match self.chat_args.take() {
-                        Some(args) => args,
-                        None => panic!("ChatWidgetArgs already consumed"),
-                    };
-
-                    let widget = Box::new(ChatWidget::new(
-                        args.config,
-                        self.app_event_tx.clone(),
-                        args.initial_prompt,
-                        args.initial_images,
-                        args.enhanced_keys_supported,
-                    ));
-                    self.app_state = AppState::Chat { widget };
-                    self.app_event_tx.send(AppEvent::RequestRedraw);
-                }
-                GitWarningOutcome::Quit => {
-                    self.app_event_tx.send(AppEvent::ExitRequest);
-                }
-                GitWarningOutcome::None => {
-                    // do nothing
-                }
+                _ => screen.handle_key_event(key_event),
             },
         }
     }
@@ -567,7 +514,6 @@ impl App<'_> {
         match &mut self.app_state {
             AppState::Chat { widget } => widget.handle_paste(pasted),
             AppState::Onboarding { .. } => {}
-            AppState::GitWarning { .. } => {}
         }
     }
 
@@ -575,7 +521,6 @@ impl App<'_> {
         match &mut self.app_state {
             AppState::Chat { widget } => widget.handle_codex_event(event),
             AppState::Onboarding { .. } => {}
-            AppState::GitWarning { .. } => {}
         }
     }
 }

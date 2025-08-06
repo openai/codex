@@ -1,28 +1,28 @@
 use std::path::PathBuf;
 
+use codex_core::util::is_inside_git_repo;
 use crossterm::event::KeyCode;
+use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::prelude::Widget;
-use ratatui::style::Modifier;
-use ratatui::style::Style;
 use ratatui::text::Line;
-use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 
-use crate::app_event::AppEvent::RequestRedraw;
 use crate::app_event_sender::AppEventSender;
-use crate::onboarding::onboarding_screen::KeyEventResult;
 use crate::onboarding::onboarding_screen::KeyboardHandler;
+use crate::onboarding::onboarding_screen::StepStateProvider;
+
+use super::onboarding_screen::StepState;
 
 pub(crate) struct GitWarningWidget {
     pub event_tx: AppEventSender,
     pub cwd: PathBuf,
-    pub selection: Option<Selection>,
+    pub selection: Option<GitWarningSelection>,
 }
 
-pub(crate) enum Selection {
+pub(crate) enum GitWarningSelection {
     Confirmed,
     Cancelled,
 }
@@ -42,17 +42,29 @@ impl WidgetRef for &GitWarningWidget {
     }
 }
 
-impl KeyboardHandler for &GitWarningWidget {
-    fn handle_key_event(&mut self, key_event: crossterm::event::KeyEvent) -> KeyEventResult {
+impl KeyboardHandler for GitWarningWidget {
+    fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event.code {
             KeyCode::Esc => {
-                self.selection = Selection::Cancelled;
-                self.event_tx.send(RequestRedraw);
+                self.selection = Some(GitWarningSelection::Cancelled);
             }
             KeyCode::Enter => {
-                self.selection = 
+                self.selection = Some(GitWarningSelection::Cancelled);
             }
             _ => {}
+        }
+    }
+}
+
+impl StepStateProvider for GitWarningWidget {
+    fn get_step_state(&self) -> StepState {
+        let is_git_repo = is_inside_git_repo(&self.cwd);
+        match is_git_repo {
+            true => StepState::Hidden,
+            false => match self.selection {
+                Some(_) => StepState::Complete,
+                None => StepState::InProgress,
+            },
         }
     }
 }

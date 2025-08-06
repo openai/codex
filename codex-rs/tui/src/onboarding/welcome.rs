@@ -27,7 +27,7 @@ impl WidgetRef for &WelcomeWidget {
 }
 
 impl StepStateProvider for WelcomeWidget {
-    fn get_step_state() -> StepState {
+    fn get_step_state(&self) -> StepState {
         return StepState::Complete;
     }
 }

@@ -20,7 +20,7 @@ enum Step {
 }
 
 pub(crate) trait KeyboardHandler {
-    fn handle_key_event(&mut self, key_event: KeyEvent) -> KeyEventResult;
+    fn handle_key_event(&mut self, key_event: KeyEvent);
 }
 
 pub(crate) enum StepState {
@@ -65,14 +65,18 @@ impl OnboardingScreen {
         if show_login_screen {
             steps.push(Step::Auth(AuthModeWidget {
                 event_tx: event_tx.clone(),
-                mode: AuthMode::ChatGPT,
+                highlighted_mode: AuthMode::ChatGPT,
                 error: None,
                 sign_in_state: SignInState::PickMode,
                 codex_home,
             }))
         }
         if show_git_warning {
-            steps.push(Step::GitWarning(GitWarningWidget { cwd }))
+            steps.push(Step::GitWarning(GitWarningWidget {
+                event_tx: event_tx.clone(),
+                cwd,
+                selection: None,
+            }))
         }
         // TODO: add git warning.
         Self { event_tx, steps }
@@ -97,16 +101,26 @@ impl OnboardingScreen {
             KeyEventResult::None
         }
     }
+
+    fn current_steps(&mut self) -> Vec<&mut Step> {
+        self.steps
+            .iter_mut()
+            .take_while(|step| {
+                matches!(
+                    step.get_step_state(),
+                    StepState::Complete | StepState::InProgress
+                )
+            })
+            .collect::<Vec<_>>()
+    }
 }
 
 impl KeyboardHandler for OnboardingScreen {
-    fn handle_key_event(&mut self, key_event: KeyEvent) -> KeyEventResult {
-        if let Some(last_step) = self.steps.last_mut() {
-            self.event_tx.send(AppEvent::RequestRedraw);
-            last_step.handle_key_event(key_event)
-        } else {
-            KeyEventResult::None
+    fn handle_key_event(&mut self, key_event: KeyEvent) {
+        if let Some(active_step) = self.current_steps().into_iter().last() {
+            active_step.handle_key_event(key_event);
         }
+        self.event_tx.send(AppEvent::RequestRedraw);
     }
 }
 
@@ -166,11 +180,21 @@ impl WidgetRef for &OnboardingScreen {
 }
 
 impl KeyboardHandler for Step {
-    fn handle_key_event(&mut self, key_event: KeyEvent) -> KeyEventResult {
+    fn handle_key_event(&mut self, key_event: KeyEvent) {
         match self {
-            Step::Welcome(_) => KeyEventResult::None,
+            Step::Welcome(_) => (),
             Step::Auth(widget) => widget.handle_key_event(key_event),
             Step::GitWarning(widget) => widget.handle_key_event(key_event),
+        }
+    }
+}
+
+impl StepStateProvider for Step {
+    fn get_step_state(&self) -> StepState {
+        match self {
+            Step::Welcome(w) => w.get_step_state(),
+            Step::Auth(w) => w.get_step_state(),
+            Step::GitWarning(w) => w.get_step_state(),
         }
     }
 }
