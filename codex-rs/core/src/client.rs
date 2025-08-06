@@ -82,7 +82,7 @@ impl ModelClient {
                 // Create the raw streaming connection first.
                 let response_stream = stream_chat_completions(
                     prompt,
-                    &self.config.model,
+                    &self.config.model_family,
                     self.config.include_plan_tool,
                     &self.client,
                     &self.provider,
@@ -92,7 +92,11 @@ impl ModelClient {
                 // Wrap it with the aggregation adapter so callers see *only*
                 // the final assistant message per turn (matching the
                 // behaviour of the Responses API).
-                let mut aggregated = response_stream.aggregate();
+                let mut aggregated = if self.config.show_raw_agent_reasoning {
+                    crate::chat_completions::AggregatedChatStream::streaming_mode(response_stream)
+                } else {
+                    response_stream.aggregate()
+                };
 
                 // Bridge the aggregated stream back into a standard
                 // `ResponseStream` by forwarding events through a channel.
@@ -127,13 +131,17 @@ impl ModelClient {
 
         let store = prompt.store && auth_mode != Some(AuthMode::ChatGPT);
 
-        let full_instructions = prompt.get_full_instructions(&self.config.model);
+        let full_instructions = prompt.get_full_instructions(&self.config.model_family);
         let tools_json = create_tools_json_for_responses_api(
             prompt,
-            &self.config.model,
+            &self.config.model_family,
             self.config.include_plan_tool,
         )?;
-        let reasoning = create_reasoning_param_for_request(&self.config, self.effort, self.summary);
+        let reasoning = create_reasoning_param_for_request(
+            &self.config.model_family,
+            self.effort,
+            self.summary,
+        );
 
         // Request encrypted COT if we are not storing responses,
         // otherwise reasoning items will be referenced by ID
@@ -428,6 +436,14 @@ async fn process_sse<S>(
             "response.reasoning_summary_text.delta" => {
                 if let Some(delta) = event.delta {
                     let event = ResponseEvent::ReasoningSummaryDelta(delta);
+                    if tx_event.send(Ok(event)).await.is_err() {
+                        return;
+                    }
+                }
+            }
+            "response.reasoning_text.delta" => {
+                if let Some(delta) = event.delta {
+                    let event = ResponseEvent::ReasoningContentDelta(delta);
                     if tx_event.send(Ok(event)).await.is_err() {
                         return;
                     }

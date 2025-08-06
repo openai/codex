@@ -1,6 +1,7 @@
 use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::error::Result;
+use crate::model_family::ModelFamily;
 use crate::models::ResponseItem;
 use crate::protocol::TokenUsage;
 use codex_apply_patch::APPLY_PATCH_TOOL_INSTRUCTIONS;
@@ -42,13 +43,13 @@ pub struct Prompt {
 }
 
 impl Prompt {
-    pub(crate) fn get_full_instructions(&self, model: &str) -> Cow<'_, str> {
+    pub(crate) fn get_full_instructions(&self, model: &ModelFamily) -> Cow<'_, str> {
         let base = self
             .base_instructions_override
             .as_deref()
             .unwrap_or(BASE_INSTRUCTIONS);
         let mut sections: Vec<&str> = vec![base];
-        if model.starts_with("gpt-4.1") {
+        if model.needs_special_apply_patch_instructions {
             sections.push(APPLY_PATCH_TOOL_INSTRUCTIONS);
         }
         Cow::Owned(sections.join("\n"))
@@ -71,6 +72,7 @@ pub enum ResponseEvent {
     },
     OutputTextDelta(String),
     ReasoningSummaryDelta(String),
+    ReasoningContentDelta(String),
 }
 
 #[derive(Debug, Serialize)]
@@ -144,14 +146,12 @@ pub(crate) struct ResponsesApiRequest<'a> {
     pub(crate) include: Vec<String>,
 }
 
-use crate::config::Config;
-
 pub(crate) fn create_reasoning_param_for_request(
-    config: &Config,
+    model_family: &ModelFamily,
     effort: ReasoningEffortConfig,
     summary: ReasoningSummaryConfig,
 ) -> Option<Reasoning> {
-    if model_supports_reasoning_summaries(config) {
+    if model_family.supports_reasoning_summaries {
         let effort: Option<OpenAiReasoningEffort> = effort.into();
         let effort = effort?;
         Some(Reasoning {
@@ -161,27 +161,6 @@ pub(crate) fn create_reasoning_param_for_request(
     } else {
         None
     }
-}
-
-pub fn model_supports_reasoning_summaries(config: &Config) -> bool {
-    // Currently, we hardcode this rule to decide whether to enable reasoning.
-    // We expect reasoning to apply only to OpenAI models, but we do not want
-    // users to have to mess with their config to disable reasoning for models
-    // that do not support it, such as `gpt-4.1`.
-    //
-    // Though if a user is using Codex with non-OpenAI models that, say, happen
-    // to start with "o", then they can set `model_reasoning_effort = "none"` in
-    // config.toml to disable reasoning.
-    //
-    // Converseley, if a user has a non-OpenAI provider that supports reasoning,
-    // they can set the top-level `model_supports_reasoning_summaries = true`
-    // config option to enable reasoning.
-    if config.model_supports_reasoning_summaries {
-        return true;
-    }
-
-    let model = &config.model;
-    model.starts_with("o") || model.starts_with("codex")
 }
 
 pub(crate) struct ResponseStream {
@@ -198,6 +177,9 @@ impl Stream for ResponseStream {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used)]
+    use crate::model_family::find_family_for_model;
+
     use super::*;
 
     #[test]
@@ -207,7 +189,8 @@ mod tests {
             ..Default::default()
         };
         let expected = format!("{BASE_INSTRUCTIONS}\n{APPLY_PATCH_TOOL_INSTRUCTIONS}");
-        let full = prompt.get_full_instructions("gpt-4.1");
+        let model_family = find_family_for_model("gpt-4.1").expect("known model slug");
+        let full = prompt.get_full_instructions(&model_family);
         assert_eq!(full, expected);
     }
 }

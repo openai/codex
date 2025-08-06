@@ -1,3 +1,5 @@
+use crate::model_family::ModelFamily;
+
 /// Metadata about a model, particularly OpenAI models.
 /// We may want to consider including details like the pricing for
 /// input tokens, output tokens, etc., though users will need to be able to
@@ -14,8 +16,8 @@ pub(crate) struct ModelInfo {
 
 /// Note details such as what a model like gpt-4o is aliased to may be out of
 /// date.
-pub(crate) fn get_model_info(name: &str) -> Option<ModelInfo> {
-    match name {
+pub(crate) fn get_model_info(model_family: &ModelFamily) -> Option<ModelInfo> {
+    match model_family.slug.as_str() {
         // https://platform.openai.com/docs/models/o3
         "o3" => Some(ModelInfo {
             context_window: 200_000,
