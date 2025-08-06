@@ -36,6 +36,7 @@ pub(crate) struct CommandOutput {
     pub(crate) exit_code: i32,
     pub(crate) stdout: String,
     pub(crate) stderr: String,
+    #[allow(dead_code)]
     pub(crate) duration: Duration,
 }
 
