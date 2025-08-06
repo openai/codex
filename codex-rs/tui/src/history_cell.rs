@@ -96,7 +96,9 @@ pub(crate) enum HistoryCell {
     GitDiffOutput { view: TextBlock },
 
     /// Output from the `/status` command.
-    StatusOutput { view: TextBlock },
+    StatusOutput {
+        view: TextBlock
+    },
 
     /// Error event from the backend.
     ErrorEvent { view: TextBlock },
