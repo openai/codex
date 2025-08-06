@@ -330,6 +330,11 @@ impl App<'_> {
                             widget.add_diff_output(text);
                         }
                     }
+                    SlashCommand::Status => {
+                        if let AppState::Chat { widget } = &mut self.app_state {
+                            widget.add_status_output();
+                        }
+                    }
                     #[cfg(debug_assertions)]
                     SlashCommand::TestApproval => {
                         use std::collections::HashMap;

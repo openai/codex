@@ -12,6 +12,7 @@ use codex_core::protocol::AgentReasoningEvent;
 use codex_core::protocol::AgentReasoningRawContentDeltaEvent;
 use codex_core::protocol::AgentReasoningRawContentEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
+use codex_core::protocol::BackgroundEventEvent;
 use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
@@ -25,6 +26,7 @@ use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TokenUsage;
+use codex_core::protocol::TurnDiffEvent;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use ratatui::buffer::Buffer;
@@ -35,6 +37,7 @@ use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::mpsc::unbounded_channel;
+use tracing::info;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
@@ -521,13 +524,12 @@ impl ChatWidget<'_> {
             EventMsg::ShutdownComplete => {
                 self.app_event_tx.send(AppEvent::ExitRequest);
             }
-            EventMsg::BackgroundEvent(event) => {
-                let message = event.message;
-                self.add_to_history(HistoryCell::new_background_event(message.clone()));
-                self.update_latest_log(message);
+            EventMsg::TurnDiff(TurnDiffEvent { unified_diff }) => {
+                info!("TurnDiffEvent: {unified_diff}");
             }
-            // TODO: Think of how are we going to render these events.
-            EventMsg::PatchApplyEnd(_) | EventMsg::TurnDiff(_) => {}
+            EventMsg::BackgroundEvent(BackgroundEventEvent { message }) => {
+                info!("BackgroundEvent: {message}");
+            }
         }
     }
 
@@ -544,6 +546,13 @@ impl ChatWidget<'_> {
 
     pub(crate) fn add_diff_output(&mut self, diff_output: String) {
         self.add_to_history(HistoryCell::new_diff_output(diff_output.clone()));
+    }
+
+    pub(crate) fn add_status_output(&mut self) {
+        self.add_to_history(HistoryCell::new_status_output(
+            &self.config,
+            &self.token_usage,
+        ));
     }
 
     /// Forward file-search results to the bottom pane.
