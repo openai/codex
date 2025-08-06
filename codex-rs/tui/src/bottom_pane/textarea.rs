@@ -303,7 +303,6 @@ impl TextArea {
                 modifiers: KeyModifiers::ALT,
                 ..
             } => {
-                println!("ALT-Left");
                 self.set_cursor(self.beginning_of_previous_word());
             }
             KeyEvent {
@@ -311,7 +310,6 @@ impl TextArea {
                 modifiers: KeyModifiers::ALT,
                 ..
             } => {
-                println!("ALT-Right");
                 self.set_cursor(self.end_of_next_word());
             }
             KeyEvent {
@@ -351,7 +349,6 @@ impl TextArea {
             } => {
                 self.move_cursor_to_end_of_line(true);
             }
-            // Note: Ctrl+Left/Right word motions intentionally not handled for strict Emacs-style bindings.
             o => {
                 tracing::debug!("Unhandled key event in TextArea: {:?}", o);
             }
