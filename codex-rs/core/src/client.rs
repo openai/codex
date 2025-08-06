@@ -34,7 +34,6 @@ use crate::error::Result;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
-use crate::models::ContentItem;
 use crate::models::ResponseItem;
 use crate::openai_tools::create_tools_json_for_responses_api;
 use crate::protocol::TokenUsage;
@@ -83,7 +82,6 @@ impl ModelClient {
                 let response_stream = stream_chat_completions(
                     prompt,
                     &self.config.model_family,
-                    self.config.include_plan_tool,
                     &self.client,
                     &self.provider,
                 )
@@ -132,11 +130,7 @@ impl ModelClient {
         let store = prompt.store && auth_mode != Some(AuthMode::ChatGPT);
 
         let full_instructions = prompt.get_full_instructions(&self.config.model_family);
-        let tools_json = create_tools_json_for_responses_api(
-            prompt,
-            &self.config.model_family,
-            self.config.include_plan_tool,
-        )?;
+        let tools_json = create_tools_json_for_responses_api(&prompt.tools)?;
         let reasoning = create_reasoning_param_for_request(
             &self.config.model_family,
             self.effort,
@@ -151,15 +145,7 @@ impl ModelClient {
             vec![]
         };
 
-        let mut input_with_instructions = Vec::with_capacity(prompt.input.len() + 1);
-        if let Some(ui) = prompt.get_formatted_user_instructions() {
-            input_with_instructions.push(ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText { text: ui }],
-            });
-        }
-        input_with_instructions.extend(prompt.input.clone());
+        let input_with_instructions = prompt.get_formatted_input();
 
         let payload = ResponsesApiRequest {
             model: &self.config.model,

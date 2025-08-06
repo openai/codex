@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+#![allow(clippy::unwrap_used)]
 use std::path::PathBuf;
 
 use chrono::Utc;
@@ -30,6 +32,32 @@ use wiremock::matchers::query_param;
 /// Build minimal SSE stream with completed marker using the JSON fixture.
 fn sse_completed(id: &str) -> String {
     load_sse_fixture_with_id("tests/fixtures/completed_template.json", id)
+}
+
+fn assert_message_role(request_body: &serde_json::Value, role: &str) {
+    assert_eq!(request_body["role"].as_str().unwrap(), role);
+}
+
+fn assert_message_starts_with(request_body: &serde_json::Value, text: &str) {
+    let content = request_body["content"][0]["text"]
+        .as_str()
+        .expect("invalid message content");
+
+    assert!(
+        content.starts_with(text),
+        "expected message content '{content}' to start with '{text}'"
+    );
+}
+
+fn assert_message_ends_with(request_body: &serde_json::Value, text: &str) {
+    let content = request_body["content"][0]["text"]
+        .as_str()
+        .expect("invalid message content");
+
+    assert!(
+        content.ends_with(text),
+        "expected message content '{content}' to end with '{text}'"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -371,19 +399,12 @@ async fn includes_user_instructions_message_in_request() {
             .unwrap()
             .contains("be nice")
     );
-    assert_eq!(request_body["input"][0]["role"], "user");
-    assert!(
-        request_body["input"][0]["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .starts_with("<user_instructions>\n\nbe nice")
-    );
-    assert!(
-        request_body["input"][0]["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .ends_with("</user_instructions>")
-    );
+    assert_message_role(&request_body["input"][0], "user");
+    assert_message_starts_with(&request_body["input"][0], "<environment_context>\n\n");
+    assert_message_ends_with(&request_body["input"][0], "</environment_context>");
+    assert_message_role(&request_body["input"][1], "user");
+    assert_message_starts_with(&request_body["input"][1], "<user_instructions>\n\n");
+    assert_message_ends_with(&request_body["input"][1], "</user_instructions>");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

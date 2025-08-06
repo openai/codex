@@ -37,6 +37,7 @@ use crate::apply_patch::convert_apply_patch_to_protocol;
 use crate::apply_patch::get_writable_roots;
 use crate::apply_patch::{self};
 use crate::client::ModelClient;
+use crate::client_common::EnvironmentContext;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::config::Config;
@@ -61,6 +62,8 @@ use crate::models::ReasoningItemReasoningSummary;
 use crate::models::ResponseInputItem;
 use crate::models::ResponseItem;
 use crate::models::ShellToolCallParams;
+use crate::openai_tools::ToolsConfig;
+use crate::openai_tools::get_openai_tools;
 use crate::plan_tool::handle_update_plan;
 use crate::project_doc::get_user_instructions;
 use crate::protocol::AgentMessageDeltaEvent;
@@ -216,6 +219,7 @@ pub(crate) struct Session {
     shell_environment_policy: ShellEnvironmentPolicy,
     pub(crate) writable_roots: Mutex<Vec<PathBuf>>,
     disable_response_storage: bool,
+    tools_config: ToolsConfig,
 
     /// Manager for external MCP servers/tools.
     mcp_connection_manager: McpConnectionManager,
@@ -810,6 +814,12 @@ async fn submission_loop(
                 let default_shell = shell::default_user_shell().await;
                 sess = Some(Arc::new(Session {
                     client,
+                    tools_config: ToolsConfig::new(
+                        &config.model_family,
+                        approval_policy,
+                        sandbox_policy.clone(),
+                        config.include_plan_tool,
+                    ),
                     tx_event: tx_event.clone(),
                     ctrl_c: Arc::clone(&ctrl_c),
                     user_instructions,
@@ -1204,13 +1214,22 @@ async fn run_turn(
     sub_id: String,
     input: Vec<ResponseItem>,
 ) -> CodexResult<Vec<ProcessedResponseItem>> {
-    let extra_tools = sess.mcp_connection_manager.list_all_tools();
+    let tools = get_openai_tools(
+        &sess.tools_config,
+        Some(sess.mcp_connection_manager.list_all_tools()),
+    );
+
     let prompt = Prompt {
         input,
         user_instructions: sess.user_instructions.clone(),
         store: !sess.disable_response_storage,
-        extra_tools,
+        tools,
         base_instructions_override: sess.base_instructions.clone(),
+        environment_context: Some(EnvironmentContext {
+            cwd: sess.cwd.clone(),
+            approval_policy: sess.approval_policy,
+            sandbox_policy: sess.sandbox_policy.clone(),
+        }),
     };
 
     let mut retries = 0;
@@ -1436,7 +1455,8 @@ async fn run_compact_task(
         input: turn_input,
         user_instructions: None,
         store: !sess.disable_response_storage,
-        extra_tools: HashMap::new(),
+        environment_context: None,
+        tools: Vec::new(),
         base_instructions_override: Some(compact_instructions.clone()),
     };
 
@@ -1580,6 +1600,8 @@ async fn handle_response_item(
                 command: action.command,
                 workdir: action.working_directory,
                 timeout_ms: action.timeout_ms,
+                with_escalated_permissions: None,
+                justification: None,
             };
             let effective_call_id = match (call_id, id) {
                 (Some(call_id), _) => call_id,
@@ -1668,6 +1690,8 @@ fn to_exec_params(params: ShellToolCallParams, sess: &Session) -> ExecParams {
         cwd: sess.resolve_path(params.workdir.clone()),
         timeout_ms: params.timeout_ms,
         env: create_env(&sess.shell_environment_policy),
+        with_escalated_permissions: params.with_escalated_permissions,
+        justification: params.justification,
     }
 }
 
@@ -1768,13 +1792,19 @@ async fn handle_container_exec_with_params(
                 cwd: cwd.clone(),
                 timeout_ms: params.timeout_ms,
                 env: HashMap::new(),
+                with_escalated_permissions: params.with_escalated_permissions,
+                justification: params.justification.clone(),
             };
             let safety = if *user_explicitly_approved_this_action {
                 SafetyCheck::AutoApprove {
                     sandbox_type: SandboxType::None,
                 }
             } else {
-                assess_safety_for_untrusted_command(sess.approval_policy, &sess.sandbox_policy)
+                assess_safety_for_untrusted_command(
+                    sess.approval_policy,
+                    &sess.sandbox_policy,
+                    params.with_escalated_permissions.unwrap_or(false),
+                )
             };
             (
                 params,
@@ -1790,6 +1820,7 @@ async fn handle_container_exec_with_params(
                     sess.approval_policy,
                     &sess.sandbox_policy,
                     &state.approved_commands,
+                    params.with_escalated_permissions.unwrap_or(false),
                 )
             };
             let command_for_display = params.command.clone();
@@ -1806,7 +1837,7 @@ async fn handle_container_exec_with_params(
                     call_id.clone(),
                     params.command.clone(),
                     params.cwd.clone(),
-                    None,
+                    params.justification.clone(),
                 )
                 .await;
             match rx_approve.await.unwrap_or_default() {
@@ -1944,13 +1975,31 @@ async fn handle_sandbox_error(
     let cwd = exec_command_context.cwd.clone();
     let is_apply_patch = exec_command_context.apply_patch.is_some();
 
-    // Early out if the user never wants to be asked for approval; just return to the model immediately
-    if sess.approval_policy == AskForApproval::Never {
+    // Early out if either the user never wants to be asked for approval, or
+    // we're letting the model manage escalation requests. Otherwise, continue
+    match sess.approval_policy {
+        AskForApproval::Never | AskForApproval::OnRequest => {
+            return ResponseInputItem::FunctionCallOutput {
+                call_id,
+                output: FunctionCallOutputPayload {
+                    content: format!(
+                        "failed in sandbox {sandbox_type:?} with execution error: {error}"
+                    ),
+                    success: Some(false),
+                },
+            };
+        }
+        AskForApproval::UnlessTrusted | AskForApproval::OnFailure => (),
+    }
+
+    // similarly, if the command timed out, we can simply return this failure to the model
+    if matches!(error, SandboxErr::Timeout) {
         return ResponseInputItem::FunctionCallOutput {
             call_id,
             output: FunctionCallOutputPayload {
                 content: format!(
-                    "failed in sandbox {sandbox_type:?} with execution error: {error}"
+                    "command timed out after {} milliseconds",
+                    params.timeout_duration().as_millis()
                 ),
                 success: Some(false),
             },

@@ -729,6 +729,7 @@ dependencies = [
  "codex-arg0",
  "codex-common",
  "codex-core",
+ "codex-ollama",
  "owo-colors",
  "predicates",
  "serde_json",
@@ -839,6 +840,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-ollama"
+version = "0.0.0"
+dependencies = [
+ "async-stream",
+ "bytes",
+ "codex-core",
+ "futures",
+ "reqwest",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "toml 0.9.4",
+ "tracing",
+ "wiremock",
+]
+
+[[package]]
 name = "codex-tui"
 version = "0.0.0"
 dependencies = [
@@ -852,6 +870,7 @@ dependencies = [
  "codex-core",
  "codex-file-search",
  "codex-login",
+ "codex-ollama",
  "color-eyre",
  "crossterm",
  "image",

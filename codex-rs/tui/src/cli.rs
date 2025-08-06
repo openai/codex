@@ -17,6 +17,12 @@ pub struct Cli {
     #[arg(long, short = 'm')]
     pub model: Option<String>,
 
+    /// Convenience flag to select the local open source model provider.
+    /// Equivalent to -c model_provider=oss; verifies a local Ollama server is
+    /// running.
+    #[arg(long = "oss", default_value_t = false)]
+    pub oss: bool,
+
     /// Configuration profile from config.toml to specify default options.
     #[arg(long = "profile", short = 'p')]
     pub config_profile: Option<String>,

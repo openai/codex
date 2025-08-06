@@ -253,7 +253,8 @@ impl App<'_> {
                                     self.app_event_tx.send(AppEvent::ExitRequest);
                                 }
                                 AppState::GitWarning { .. } => {
-                                    // No-op.
+                                    // Allow exiting the app with Ctrl+C from the warning screen.
+                                    self.app_event_tx.send(AppEvent::ExitRequest);
                                 }
                             }
                         }
@@ -354,6 +355,11 @@ impl App<'_> {
                             widget.add_diff_output(text);
                         }
                     }
+                    SlashCommand::Status => {
+                        if let AppState::Chat { widget } = &mut self.app_state {
+                            widget.add_status_output();
+                        }
+                    }
                     #[cfg(debug_assertions)]
                     SlashCommand::TestApproval => {
                         use std::collections::HashMap;
@@ -448,7 +454,7 @@ impl App<'_> {
         let desired_height = match &self.app_state {
             AppState::Chat { widget } => widget.desired_height(size.width),
             AppState::Onboarding { .. } => size.height,
-            AppState::GitWarning { .. } => 10,
+            AppState::GitWarning { .. } => size.height,
         };
 
         let mut area = terminal.viewport_area;
