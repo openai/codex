@@ -10,15 +10,12 @@ use crate::app_event_sender::AppEventSender;
 use crate::onboarding::auth::AuthModeState;
 use crate::onboarding::auth::AuthModeWidget;
 use crate::onboarding::auth::SignInState;
-use crate::onboarding::security_notes::SecurityNotesState;
-use crate::onboarding::security_notes::SecurityNotesWidget;
 use crate::onboarding::welcome::WelcomeWidget;
 use std::path::PathBuf;
 
 enum Step {
     Welcome,
     Auth(AuthModeState),
-    SecurityNotes(SecurityNotesState),
 }
 
 pub(crate) trait KeyboardHandler {
@@ -56,7 +53,6 @@ impl OnboardingScreen {
             match result {
                 Ok(()) => {
                     state.sign_in_state = SignInState::ChatGptSuccess;
-                    self.steps.push(Step::SecurityNotes(SecurityNotesState {}));
                     self.event_tx.send(AppEvent::RequestRedraw);
                     KeyEventResult::None
                 }
@@ -144,7 +140,6 @@ impl KeyboardHandler for Step {
         match self {
             Step::Welcome => KeyEventResult::None,
             Step::Auth(state) => state.handle_key_event(key_event),
-            Step::SecurityNotes(state) => state.handle_key_event(key_event),
         }
     }
 }
@@ -159,10 +154,6 @@ impl WidgetRef for Step {
             Step::Auth(state) => {
                 let widget = AuthModeWidget { state };
                 widget.render_ref(area, buf);
-            }
-            Step::SecurityNotes(_) => {
-                let widget = SecurityNotesWidget;
-                (&widget).render_ref(area, buf);
             }
         }
     }

@@ -11,6 +11,7 @@ use ratatui::text::Span;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 
+#[derive(Debug)]
 pub(crate) struct FrameTicker {
     running: Arc<AtomicBool>,
 }
