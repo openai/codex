@@ -3,9 +3,8 @@ use crate::text_block::TextBlock;
 use crate::text_formatting::format_and_truncate_tool_result;
 use base64::Engine;
 use codex_ansi_escape::ansi_escape_line;
+use codex_common::create_config_summary_entries;
 use codex_common::elapsed::format_duration;
-use codex_common::summarize_sandbox_policy;
-use codex_core::WireApi;
 use codex_core::config::Config;
 use codex_core::plan_tool::PlanItemArg;
 use codex_core::plan_tool::StepStatus;
@@ -14,6 +13,7 @@ use codex_core::protocol::FileChange;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::SessionConfiguredEvent;
+use codex_core::protocol::TokenUsage;
 use image::DynamicImage;
 use image::ImageReader;
 use mcp_types::EmbeddedResourceResource;
@@ -114,6 +114,11 @@ pub(crate) enum HistoryCell {
         view: TextBlock,
     },
 
+    /// Output from the `/status` command.
+    StatusOutput {
+        view: TextBlock,
+    },
+
     /// Error event from the backend.
     ErrorEvent {
         view: TextBlock,
@@ -154,6 +159,7 @@ impl HistoryCell {
             | HistoryCell::UserPrompt { view }
             | HistoryCell::BackgroundEvent { view }
             | HistoryCell::GitDiffOutput { view }
+            | HistoryCell::StatusOutput { view }
             | HistoryCell::ErrorEvent { view }
             | HistoryCell::SessionInfo { view }
             | HistoryCell::CompletedExecCommand { view }
@@ -200,26 +206,7 @@ impl HistoryCell {
                 ]),
             ];
 
-            let mut entries = vec![
-                ("workdir", config.cwd.display().to_string()),
-                ("model", config.model.clone()),
-                ("provider", config.model_provider_id.clone()),
-                ("approval", config.approval_policy.to_string()),
-                ("sandbox", summarize_sandbox_policy(&config.sandbox_policy)),
-            ];
-            if config.model_provider.wire_api == WireApi::Responses
-                && config.model_family.supports_reasoning_summaries
-            {
-                entries.push((
-                    "reasoning effort",
-                    config.model_reasoning_effort.to_string(),
-                ));
-                entries.push((
-                    "reasoning summaries",
-                    config.model_reasoning_summary.to_string(),
-                ));
-            }
-            for (key, value) in entries {
+            for (key, value) in create_config_summary_entries(config) {
                 lines.push(Line::from(vec![format!("{key}: ").bold(), value.into()]));
             }
             lines.push(Line::from(""));
@@ -472,6 +459,49 @@ impl HistoryCell {
 
         lines.push(Line::from(""));
         HistoryCell::GitDiffOutput {
+            view: TextBlock::new(lines),
+        }
+    }
+
+    pub(crate) fn new_status_output(config: &Config, usage: &TokenUsage) -> Self {
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        lines.push(Line::from("/status".magenta()));
+
+        // Config
+        for (key, value) in create_config_summary_entries(config) {
+            lines.push(Line::from(vec![format!("{key}: ").bold(), value.into()]));
+        }
+
+        // Token usage
+        lines.push(Line::from(""));
+        lines.push(Line::from("token usage".bold()));
+        lines.push(Line::from(vec![
+            "  input: ".bold(),
+            usage.input_tokens.to_string().into(),
+        ]));
+        lines.push(Line::from(vec![
+            "  cached input: ".bold(),
+            usage.cached_input_tokens.unwrap_or(0).to_string().into(),
+        ]));
+        lines.push(Line::from(vec![
+            "  output: ".bold(),
+            usage.output_tokens.to_string().into(),
+        ]));
+        lines.push(Line::from(vec![
+            "  reasoning output: ".bold(),
+            usage
+                .reasoning_output_tokens
+                .unwrap_or(0)
+                .to_string()
+                .into(),
+        ]));
+        lines.push(Line::from(vec![
+            "  total: ".bold(),
+            usage.total_tokens.to_string().into(),
+        ]));
+
+        lines.push(Line::from(""));
+        HistoryCell::StatusOutput {
             view: TextBlock::new(lines),
         }
     }

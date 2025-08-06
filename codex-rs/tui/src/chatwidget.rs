@@ -522,6 +522,13 @@ impl ChatWidget<'_> {
         self.add_to_history(HistoryCell::new_diff_output(diff_output.clone()));
     }
 
+    pub(crate) fn add_status_output(&mut self) {
+        self.add_to_history(HistoryCell::new_status_output(
+            &self.config,
+            &self.token_usage,
+        ));
+    }
+
     /// Forward file-search results to the bottom pane.
     pub(crate) fn apply_file_search_result(&mut self, query: String, matches: Vec<FileMatch>) {
         self.bottom_pane.on_file_search_result(query, matches);
