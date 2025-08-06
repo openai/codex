@@ -233,7 +233,8 @@ impl App<'_> {
                                     widget.on_ctrl_c();
                                 }
                                 AppState::GitWarning { .. } => {
-                                    // No-op.
+                                    // Allow exiting the app with Ctrl+C from the warning screen.
+                                    self.app_event_tx.send(AppEvent::ExitRequest);
                                 }
                             }
                         }
