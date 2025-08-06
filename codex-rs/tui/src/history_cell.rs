@@ -97,7 +97,7 @@ pub(crate) enum HistoryCell {
 
     /// Output from the `/status` command.
     StatusOutput {
-        view: TextBlock
+        view: TextBlock,
     },
 
     /// Error event from the backend.
