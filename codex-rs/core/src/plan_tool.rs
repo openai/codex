@@ -39,10 +39,14 @@ pub struct UpdatePlanArgs {
 
 pub(crate) static PLAN_TOOL: LazyLock<OpenAiTool> = LazyLock::new(|| {
     let mut plan_item_props = BTreeMap::new();
-    plan_item_props.insert("step".to_string(), JsonSchema::String);
-    plan_item_props.insert("status".to_string(), JsonSchema::String);
+    plan_item_props.insert("step".to_string(), JsonSchema::String { description: None });
+    plan_item_props.insert(
+        "status".to_string(),
+        JsonSchema::String { description: None },
+    );
 
     let plan_items_schema = JsonSchema::Array {
+        description: Some("The list of steps".to_string()),
         items: Box::new(JsonSchema::Object {
             properties: plan_item_props,
             required: Some(vec!["step".to_string(), "status".to_string()]),
@@ -51,7 +55,10 @@ pub(crate) static PLAN_TOOL: LazyLock<OpenAiTool> = LazyLock::new(|| {
     };
 
     let mut properties = BTreeMap::new();
-    properties.insert("explanation".to_string(), JsonSchema::String);
+    properties.insert(
+        "explanation".to_string(),
+        JsonSchema::String { description: None },
+    );
     properties.insert("plan".to_string(), plan_items_schema);
 
     OpenAiTool::Function(ResponsesApiTool {
