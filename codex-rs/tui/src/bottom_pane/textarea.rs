@@ -206,7 +206,10 @@ impl TextArea {
         match event {
             KeyEvent {
                 code: KeyCode::Char(c),
-                modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT | KeyModifiers::ALT,
+                // Insert plain characters (and Shift-modified). Do NOT insert when ALT is held,
+                // because many terminals map Option/Meta combos to ALT+<char> (e.g. ESC f/ESC b)
+                // for word navigation. Those are handled explicitly below.
+                modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
                 ..
             } => self.insert_str(&c.to_string()),
             KeyEvent {
@@ -245,6 +248,23 @@ impl TextArea {
             } => {
                 self.delete_backward_word();
             }
+            // Meta-b -> move to beginning of previous word
+            // Meta-f -> move to end of next word
+            // Many terminals map Option (macOS) to Alt. Some send Alt|Shift, so match contains(ALT).
+            KeyEvent {
+                code: KeyCode::Char('b'),
+                modifiers: KeyModifiers::ALT,
+                ..
+            } => {
+                self.set_cursor(self.beginning_of_previous_word());
+            }
+            KeyEvent {
+                code: KeyCode::Char('f'),
+                modifiers: KeyModifiers::ALT,
+                ..
+            } => {
+                self.set_cursor(self.end_of_next_word());
+            }
             KeyEvent {
                 code: KeyCode::Char('u'),
                 modifiers: KeyModifiers::CONTROL,
@@ -274,6 +294,23 @@ impl TextArea {
                 ..
             } => {
                 self.move_cursor_right();
+            }
+            // Some terminals send Alt+Arrow for word-wise movement:
+            // Option/Left -> Alt+Left (previous word start)
+            // Option/Right -> Alt+Right (next word end)
+            KeyEvent {
+                code: KeyCode::Left,
+                modifiers: KeyModifiers::ALT,
+                ..
+            } => {
+                self.set_cursor(self.beginning_of_previous_word());
+            }
+            KeyEvent {
+                code: KeyCode::Right,
+                modifiers: KeyModifiers::ALT,
+                ..
+            } => {
+                self.set_cursor(self.end_of_next_word());
             }
             KeyEvent {
                 code: KeyCode::Up, ..
@@ -311,20 +348,6 @@ impl TextArea {
                 ..
             } => {
                 self.move_cursor_to_end_of_line(true);
-            }
-            KeyEvent {
-                code: KeyCode::Left,
-                modifiers: KeyModifiers::CONTROL | KeyModifiers::ALT,
-                ..
-            } => {
-                self.set_cursor(self.beginning_of_previous_word());
-            }
-            KeyEvent {
-                code: KeyCode::Right,
-                modifiers: KeyModifiers::CONTROL | KeyModifiers::ALT,
-                ..
-            } => {
-                self.set_cursor(self.end_of_next_word());
             }
             o => {
                 tracing::debug!("Unhandled key event in TextArea: {:?}", o);

@@ -216,8 +216,14 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                     res = codex.next_event() => match res {
                         Ok(event) => {
                             debug!("Received event: {event:?}");
+
+                            let is_shutdown_complete = matches!(event.msg, EventMsg::ShutdownComplete);
                             if let Err(e) = tx.send(event) {
                                 error!("Error sending event: {e:?}");
+                                break;
+                            }
+                            if is_shutdown_complete {
+                                info!("Received shutdown event, exiting event loop.");
                                 break;
                             }
                         },

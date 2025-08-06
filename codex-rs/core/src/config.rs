@@ -70,7 +70,7 @@ pub struct Config {
     /// who have opted into Zero Data Retention (ZDR).
     pub disable_response_storage: bool,
 
-    /// User-provided instructions from instructions.md.
+    /// User-provided instructions from AGENTS.md.
     pub user_instructions: Option<String>,
 
     /// Base instructions override.
@@ -575,7 +575,7 @@ impl Config {
             None => return None,
         };
 
-        p.push("instructions.md");
+        p.push("AGENTS.md");
         std::fs::read_to_string(&p).ok().and_then(|s| {
             let s = s.trim();
             if s.is_empty() {
@@ -842,7 +842,7 @@ disable_response_storage = true
             request_max_retries: Some(4),
             stream_max_retries: Some(10),
             stream_idle_timeout_ms: Some(300_000),
-            requires_auth: false,
+            requires_openai_auth: false,
         };
         let model_provider_map = {
             let mut model_provider_map = built_in_model_providers();

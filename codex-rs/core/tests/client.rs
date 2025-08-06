@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+#![allow(clippy::unwrap_used)]
 use std::path::PathBuf;
 
 use chrono::Utc;
@@ -30,6 +32,32 @@ use wiremock::matchers::query_param;
 /// Build minimal SSE stream with completed marker using the JSON fixture.
 fn sse_completed(id: &str) -> String {
     load_sse_fixture_with_id("tests/fixtures/completed_template.json", id)
+}
+
+fn assert_message_role(request_body: &serde_json::Value, role: &str) {
+    assert_eq!(request_body["role"].as_str().unwrap(), role);
+}
+
+fn assert_message_starts_with(request_body: &serde_json::Value, text: &str) {
+    let content = request_body["content"][0]["text"]
+        .as_str()
+        .expect("invalid message content");
+
+    assert!(
+        content.starts_with(text),
+        "expected message content '{content}' to start with '{text}'"
+    );
+}
+
+fn assert_message_ends_with(request_body: &serde_json::Value, text: &str) {
+    let content = request_body["content"][0]["text"]
+        .as_str()
+        .expect("invalid message content");
+
+    assert!(
+        content.ends_with(text),
+        "expected message content '{content}' to end with '{text}'"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -371,19 +399,12 @@ async fn includes_user_instructions_message_in_request() {
             .unwrap()
             .contains("be nice")
     );
-    assert_eq!(request_body["input"][0]["role"], "user");
-    assert!(
-        request_body["input"][0]["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .starts_with("<user_instructions>\n\nbe nice")
-    );
-    assert!(
-        request_body["input"][0]["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .ends_with("</user_instructions>")
-    );
+    assert_message_role(&request_body["input"][0], "user");
+    assert_message_starts_with(&request_body["input"][0], "<environment_context>\n\n");
+    assert_message_ends_with(&request_body["input"][0], "</environment_context>");
+    assert_message_role(&request_body["input"][1], "user");
+    assert_message_starts_with(&request_body["input"][1], "<user_instructions>\n\n");
+    assert_message_ends_with(&request_body["input"][1], "</user_instructions>");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -437,7 +458,7 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
         request_max_retries: None,
         stream_max_retries: None,
         stream_idle_timeout_ms: None,
-        requires_auth: false,
+        requires_openai_auth: false,
     };
 
     // Init session
@@ -447,6 +468,86 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
 
     let ctrl_c = std::sync::Arc::new(tokio::sync::Notify::new());
     let CodexSpawnOk { codex, .. } = Codex::spawn(config, None, ctrl_c.clone()).await.unwrap();
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: "hello".into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn env_var_overrides_loaded_auth() {
+    #![allow(clippy::unwrap_used)]
+
+    let existing_env_var_with_random_value = if cfg!(windows) { "USERNAME" } else { "USER" };
+
+    // Mock server
+    let server = MockServer::start().await;
+
+    // First request – must NOT include `previous_response_id`.
+    let first = ResponseTemplate::new(200)
+        .insert_header("content-type", "text/event-stream")
+        .set_body_raw(sse_completed("resp1"), "text/event-stream");
+
+    // Expect POST to /openai/responses with api-version query param
+    Mock::given(method("POST"))
+        .and(path("/openai/responses"))
+        .and(query_param("api-version", "2025-04-01-preview"))
+        .and(header_regex("Custom-Header", "Value"))
+        .and(header_regex(
+            "Authorization",
+            format!(
+                "Bearer {}",
+                std::env::var(existing_env_var_with_random_value).unwrap()
+            )
+            .as_str(),
+        ))
+        .respond_with(first)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let provider = ModelProviderInfo {
+        name: "custom".to_string(),
+        base_url: Some(format!("{}/openai", server.uri())),
+        // Reuse the existing environment variable to avoid using unsafe code
+        env_key: Some(existing_env_var_with_random_value.to_string()),
+        query_params: Some(std::collections::HashMap::from([(
+            "api-version".to_string(),
+            "2025-04-01-preview".to_string(),
+        )])),
+        env_key_instructions: None,
+        wire_api: WireApi::Responses,
+        http_headers: Some(std::collections::HashMap::from([(
+            "Custom-Header".to_string(),
+            "Value".to_string(),
+        )])),
+        env_http_headers: None,
+        request_max_retries: None,
+        stream_max_retries: None,
+        stream_idle_timeout_ms: None,
+        requires_openai_auth: false,
+    };
+
+    // Init session
+    let codex_home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&codex_home);
+    config.model_provider = provider;
+
+    let ctrl_c = std::sync::Arc::new(tokio::sync::Notify::new());
+    let CodexSpawnOk { codex, .. } = Codex::spawn(
+        config,
+        Some(auth_from_token("Default Access Token".to_string())),
+        ctrl_c.clone(),
+    )
+    .await
+    .unwrap();
 
     codex
         .submit(Op::UserInput {
