@@ -42,6 +42,15 @@ impl From<std::io::Error> for ApplyPatchError {
     }
 }
 
+impl From<&std::io::Error> for ApplyPatchError {
+    fn from(err: &std::io::Error) -> Self {
+        ApplyPatchError::IoError(IoError {
+            context: "I/O error".to_string(),
+            source: std::io::Error::new(err.kind(), err.to_string()),
+        })
+    }
+}
+
 #[derive(Debug, Error)]
 #[error("{context}: {source}")]
 pub struct IoError {
@@ -369,15 +378,15 @@ pub fn apply_hunks(
             Ok(())
         }
         Err(err) => {
-            writeln!(stderr, "{err:?}").map_err(ApplyPatchError::from)?;
             let msg = err.to_string();
+            writeln!(stderr, "{msg}").map_err(ApplyPatchError::from)?;
             if let Some(io) = err.downcast_ref::<std::io::Error>() {
+                Err(ApplyPatchError::from(io))
+            } else {
                 Err(ApplyPatchError::IoError(IoError {
                     context: msg,
-                    source: std::io::Error::new(io.kind(), io.to_string()),
+                    source: std::io::Error::other(err),
                 }))
-            } else {
-                Err(ApplyPatchError::ComputeReplacements(msg))
             }
         }
     }
