@@ -1,11 +1,10 @@
 <h1 align="center">OpenAI Codex CLI</h1>
-<p align="center">Lightweight coding agent that runs in your terminal</p>
 
 <p align="center"><code>npm i -g @openai/codex</code><br />or <code>brew install codex</code></p>
 
-This is the home of the **Codex CLI**, a coding agent from OpenAI that runs locally on your computer. If you are looking for the _cloud-based agent_ from OpenAI, **Codex Web**, see [chatgpt.com/codex](https://chatgpt.com/codex).
+<p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer. If you are looking for the <em>cloud-based agent</em> from OpenAI, <strong>Codex Web</strong>, see <a href="https://chatgpt.com/codex">chatgpt.com/codex</a>.</p>
 
-<!-- ![Codex demo GIF using: codex "explain this codebase to me"](./.github/demo.gif) -->
+![Codex CLI splash](./.github/codex-cli-splash.png)
 
 ---
 
@@ -67,6 +66,8 @@ Help us improve by filing issues or submitting PRs (see the section below for ho
 
 ## Quickstart
 
+### Installing and running Codex CLI
+
 Install globally with your preferred package manager:
 
 ```shell
@@ -75,9 +76,27 @@ npm install -g @openai/codex  # Alternatively: `brew install codex`
 
 Or go to the [latest GitHub Release](https://github.com/openai/codex/releases/latest) and download the appropriate binary for your platform.
 
-### OpenAI API Users
+Then simply run `codex` to get started!
 
-Next, set your OpenAI API key as an environment variable:
+```shell
+codex  
+```
+
+You'll be taken through an onboarding flow that will help you connect your ChatGPT account.
+
+### Connecting your ChatGPT account
+
+You have two options to connect your ChatGPT account.
+
+#### Option 1 — Sign in with ChatGPT (Recommended)
+
+If you have a paid OpenAI account, after you run `codex` you will be given an option sign in with ChatGPT. This leverages your plan and offers predictable monthly pricing — no API key needed.
+
+If you encounter problems with the login flow, please comment on <https://github.com/openai/codex/issues/1243>.
+
+#### Option 2 — Use an OpenAI API Key (Usage-based Billing)
+
+If you prefer a pay-as-you-go approach, you can authenticate with your OpenAI API key by setting it as an environment variable:
 
 ```shell
 export OPENAI_API_KEY="your-api-key-here"
@@ -85,24 +104,6 @@ export OPENAI_API_KEY="your-api-key-here"
 
 > [!NOTE]
 > This command sets the key only for your current terminal session. You can add the `export` line to your shell's configuration file (e.g., `~/.zshrc`), but we recommend setting it for the session.
-
-### OpenAI Plus/Pro Users
-
-If you have a paid OpenAI account, run the following to start the login process:
-
-```
-codex login
-```
-
-If you complete the process successfully, you should have a `~/.codex/auth.json` file that contains the credentials that Codex will use.
-
-To verify whether you are currently logged in, run:
-
-```
-codex login status
-```
-
-If you encounter problems with the login flow, please comment on <https://github.com/openai/codex/issues/1243>.
 
 <details>
 <summary><strong>Use <code>--profile</code> to use other models</strong></summary>
@@ -164,6 +165,8 @@ This way, you can specify one command-line argument (.e.g., `--profile o3`, `--p
 
 </details>
 <br />
+
+## Getting started
 
 Run interactively:
 
