@@ -11,7 +11,6 @@ use codex_core::plan_tool::StepStatus;
 use codex_core::plan_tool::UpdatePlanArgs;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::McpInvocation;
-use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::TokenUsage;
 use image::DynamicImage;
@@ -24,6 +23,9 @@ use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::text::Line as RtLine;
 use ratatui::text::Span as RtSpan;
+use ratatui::widgets::Paragraph;
+use ratatui::widgets::WidgetRef;
+use ratatui::widgets::Wrap;
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::PathBuf;
@@ -62,35 +64,23 @@ fn line_to_static(line: &Line) -> Line<'static> {
 /// scrollable list.
 pub(crate) enum HistoryCell {
     /// Welcome message.
-    WelcomeMessage {
-        view: TextBlock,
-    },
+    WelcomeMessage { view: TextBlock },
 
     /// Message from the user.
-    UserPrompt {
-        view: TextBlock,
-    },
+    UserPrompt { view: TextBlock },
 
     // AgentMessage and AgentReasoning variants were unused and have been removed.
     /// An exec tool call that has not finished yet.
-    ActiveExecCommand {
-        view: TextBlock,
-    },
+    ActiveExecCommand { view: TextBlock },
 
     /// Completed exec tool call.
-    CompletedExecCommand {
-        view: TextBlock,
-    },
+    CompletedExecCommand { view: TextBlock },
 
     /// An MCP tool call that has not finished yet.
-    ActiveMcpToolCall {
-        view: TextBlock,
-    },
+    ActiveMcpToolCall { view: TextBlock },
 
     /// Completed MCP tool call where we show the result serialized as JSON.
-    CompletedMcpToolCall {
-        view: TextBlock,
-    },
+    CompletedMcpToolCall { view: TextBlock },
 
     /// Completed MCP tool call where the result is an image.
     /// Admittedly, [mcp_types::CallToolResult] can have multiple content types,
@@ -100,51 +90,34 @@ pub(crate) enum HistoryCell {
     // resized version avoids doing the potentially expensive rescale twice
     // because the scroll-view first calls `height()` for layouting and then
     // `render_window()` for painting.
-    CompletedMcpToolCallWithImageOutput {
-        _image: DynamicImage,
-    },
+    CompletedMcpToolCallWithImageOutput { _image: DynamicImage },
 
     /// Background event.
-    BackgroundEvent {
-        view: TextBlock,
-    },
+    BackgroundEvent { view: TextBlock },
 
     /// Output from the `/diff` command.
-    GitDiffOutput {
-        view: TextBlock,
-    },
+    GitDiffOutput { view: TextBlock },
 
     /// Output from the `/status` command.
-    StatusOutput {
-        view: TextBlock,
-    },
+    StatusOutput { view: TextBlock },
 
     /// Error event from the backend.
-    ErrorEvent {
-        view: TextBlock,
-    },
+    ErrorEvent { view: TextBlock },
 
     /// Info describing the newly-initialized session.
-    SessionInfo {
-        view: TextBlock,
-    },
+    SessionInfo { view: TextBlock },
 
     /// A pending code patch that is awaiting user approval. Mirrors the
     /// behaviour of `ActiveExecCommand` so the user sees *what* patch the
     /// model wants to apply before being prompted to approve or deny it.
-    PendingPatch {
-        view: TextBlock,
-    },
-
-    PatchEventEnd {
-        view: TextBlock,
-    },
+    PendingPatch { view: TextBlock },
 
     /// A human‑friendly rendering of the model's current plan and step
     /// statuses provided via the `update_plan` tool.
-    PlanUpdate {
-        view: TextBlock,
-    },
+    PlanUpdate { view: TextBlock },
+
+    /// Result of applying a patch (success or failure) with optional output.
+    PatchApplyResult { view: TextBlock },
 }
 
 const TOOL_CALL_MAX_LINES: usize = 5;
@@ -165,8 +138,8 @@ impl HistoryCell {
             | HistoryCell::CompletedExecCommand { view }
             | HistoryCell::CompletedMcpToolCall { view }
             | HistoryCell::PendingPatch { view }
-            | HistoryCell::PatchEventEnd { view }
             | HistoryCell::PlanUpdate { view }
+            | HistoryCell::PatchApplyResult { view }
             | HistoryCell::ActiveExecCommand { view, .. }
             | HistoryCell::ActiveMcpToolCall { view, .. } => {
                 view.lines.iter().map(line_to_static).collect()
@@ -177,6 +150,15 @@ impl HistoryCell {
             ],
         }
     }
+
+    pub(crate) fn desired_height(&self, width: u16) -> u16 {
+        Paragraph::new(Text::from(self.plain_lines()))
+            .wrap(Wrap { trim: false })
+            .line_count(width)
+            .try_into()
+            .unwrap_or(0)
+    }
+
     pub(crate) fn new_session_info(
         config: &Config,
         event: SessionConfiguredEvent,
@@ -612,7 +594,10 @@ impl HistoryCell {
             PatchEventType::ApplyBegin {
                 auto_approved: false,
             } => {
-                let lines = vec![Line::from("patch applied".magenta().bold())];
+                let lines: Vec<Line<'static>> = vec![
+                    Line::from("applying patch".magenta().bold()),
+                    Line::from(""),
+                ];
                 return Self::PendingPatch {
                     view: TextBlock::new(lines),
                 };
@@ -661,26 +646,60 @@ impl HistoryCell {
         }
     }
 
-    pub(crate) fn new_patch_end_event(patch_apply_end_event: PatchApplyEndEvent) -> Self {
-        let PatchApplyEndEvent {
-            call_id: _,
-            stdout: _,
-            stderr,
-            success,
-        } = patch_apply_end_event;
+    pub(crate) fn new_patch_apply_end(stdout: String, stderr: String, success: bool) -> Self {
+        let mut lines: Vec<Line<'static>> = Vec::new();
 
-        let mut lines: Vec<Line<'static>> = if success {
-            vec![Line::from("patch applied successfully".italic())]
+        let status = if success {
+            RtSpan::styled("patch applied", Style::default().fg(Color::Green))
         } else {
-            let mut lines = vec![Line::from("patch failed".italic())];
-            lines.extend(stderr.lines().map(|l| Line::from(l.to_string())));
-            lines
+            RtSpan::styled(
+                "patch failed",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            )
         };
+        lines.push(RtLine::from(vec![
+            "patch".magenta().bold(),
+            " ".into(),
+            status,
+        ]));
+
+        let src = if success {
+            if stdout.trim().is_empty() {
+                &stderr
+            } else {
+                &stdout
+            }
+        } else if stderr.trim().is_empty() {
+            &stdout
+        } else {
+            &stderr
+        };
+
+        if !src.trim().is_empty() {
+            lines.push(Line::from(""));
+            let mut iter = src.lines();
+            for raw in iter.by_ref().take(TOOL_CALL_MAX_LINES) {
+                lines.push(ansi_escape_line(raw).dim());
+            }
+            let remaining = iter.count();
+            if remaining > 0 {
+                lines.push(Line::from(format!("... {remaining} additional lines")).dim());
+            }
+        }
+
         lines.push(Line::from(""));
 
-        HistoryCell::PatchEventEnd {
+        HistoryCell::PatchApplyResult {
             view: TextBlock::new(lines),
         }
+    }
+}
+
+impl WidgetRef for &HistoryCell {
+    fn render_ref(&self, area: Rect, buf: &mut Buffer) {
+        Paragraph::new(Text::from(self.plain_lines()))
+            .wrap(Wrap { trim: false })
+            .render(area, buf);
     }
 }
 

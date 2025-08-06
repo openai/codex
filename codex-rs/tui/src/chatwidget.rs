@@ -30,6 +30,8 @@ use codex_core::protocol::TurnDiffEvent;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use ratatui::buffer::Buffer;
+use ratatui::layout::Constraint;
+use ratatui::layout::Layout;
 use ratatui::layout::Rect;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
@@ -62,6 +64,7 @@ pub(crate) struct ChatWidget<'a> {
     app_event_tx: AppEventSender,
     codex_op_tx: UnboundedSender<Op>,
     bottom_pane: BottomPane<'a>,
+    active_history_cell: Option<HistoryCell>,
     config: Config,
     initial_user_message: Option<UserMessage>,
     token_usage: TokenUsage,
@@ -107,6 +110,17 @@ fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Optio
 }
 
 impl ChatWidget<'_> {
+    fn layout_areas(&self, area: Rect) -> [Rect; 2] {
+        Layout::vertical([
+            Constraint::Max(
+                self.active_history_cell
+                    .as_ref()
+                    .map_or(0, |c| c.desired_height(area.width)),
+            ),
+            Constraint::Min(self.bottom_pane.desired_height(area.width)),
+        ])
+        .areas(area)
+    }
     fn emit_stream_header(&mut self, kind: StreamKind) {
         use ratatui::text::Line as RLine;
         if self.stream_header_emitted {
@@ -178,6 +192,7 @@ impl ChatWidget<'_> {
                 has_input_focus: true,
                 enhanced_keys_supported,
             }),
+            active_history_cell: None,
             config,
             initial_user_message: create_initial_user_message(
                 initial_prompt.unwrap_or_default(),
@@ -197,6 +212,10 @@ impl ChatWidget<'_> {
 
     pub fn desired_height(&self, width: u16) -> u16 {
         self.bottom_pane.desired_height(width)
+            + self
+                .active_history_cell
+                .as_ref()
+                .map_or(0, |c| c.desired_height(width))
     }
 
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
@@ -425,9 +444,11 @@ impl ChatWidget<'_> {
                         cwd: cwd.clone(),
                     },
                 );
-                self.add_to_history(HistoryCell::new_active_exec_command(command));
+                self.active_history_cell = Some(HistoryCell::new_active_exec_command(command));
             }
-            EventMsg::ExecCommandOutputDelta(_) => {}
+            EventMsg::ExecCommandOutputDelta(_) => {
+                // TODO
+            }
             EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
                 call_id: _,
                 auto_approved,
@@ -438,8 +459,12 @@ impl ChatWidget<'_> {
                     changes,
                 ));
             }
-            EventMsg::PatchApplyEnd(patch_apply_end_event) => {
-                self.add_to_history(HistoryCell::new_patch_end_event(patch_apply_end_event));
+            EventMsg::PatchApplyEnd(event) => {
+                self.add_to_history(HistoryCell::new_patch_apply_end(
+                    event.stdout,
+                    event.stderr,
+                    event.success,
+                ));
             }
             EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                 call_id,
@@ -450,6 +475,7 @@ impl ChatWidget<'_> {
             }) => {
                 // Compute summary before moving stdout into the history cell.
                 let cmd = self.running_commands.remove(&call_id);
+                self.active_history_cell = None;
                 self.add_to_history(HistoryCell::new_completed_exec_command(
                     cmd.map(|cmd| cmd.command).unwrap_or_else(|| vec![call_id]),
                     CommandOutput {
@@ -543,6 +569,7 @@ impl ChatWidget<'_> {
             CancellationEvent::Ignored => {}
         }
         if self.bottom_pane.is_task_running() {
+            self.active_history_cell = None;
             self.bottom_pane.clear_ctrl_c_quit_hint();
             self.submit_op(Op::Interrupt);
             self.bottom_pane.set_task_running(false);
@@ -596,7 +623,8 @@ impl ChatWidget<'_> {
     }
 
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        self.bottom_pane.cursor_pos(area)
+        let [_, bottom_pane_area] = self.layout_areas(area);
+        self.bottom_pane.cursor_pos(bottom_pane_area)
     }
 }
 
@@ -700,10 +728,11 @@ impl ChatWidget<'_> {
 
 impl WidgetRef for &ChatWidget<'_> {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        // In the hybrid inline viewport mode we only draw the interactive
-        // bottom pane; history entries are injected directly into scrollback
-        // via `Terminal::insert_before`.
-        (&self.bottom_pane).render(area, buf);
+        let [active_cell_area, bottom_pane_area] = self.layout_areas(area);
+        (&self.bottom_pane).render(bottom_pane_area, buf);
+        if let Some(cell) = &self.active_history_cell {
+            cell.render_ref(active_cell_area, buf);
+        }
     }
 }
 
