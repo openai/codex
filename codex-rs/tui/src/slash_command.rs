@@ -28,9 +28,7 @@ impl SlashCommand {
             SlashCommand::New => "Start a new chat",
             SlashCommand::Compact => "Compact the chat history",
             SlashCommand::Quit => "Exit the application",
-            SlashCommand::Diff => {
-                "Show git diff of the working directory (including untracked files)"
-            }
+            SlashCommand::Diff => "Show git diff (including untracked files)",
             SlashCommand::Status => "Show current session configuration and token usage",
             #[cfg(debug_assertions)]
             SlashCommand::TestApproval => "Test approval request",
