@@ -1,4 +1,6 @@
+use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
+use crate::slash_command::SlashCommand;
 use crate::text_block::TextBlock;
 use crate::text_formatting::format_and_truncate_tool_result;
 use base64::Engine;
@@ -166,32 +168,35 @@ impl HistoryCell {
     ) -> Self {
         let SessionConfiguredEvent {
             model,
-            session_id,
+            session_id: _,
             history_log_id: _,
             history_entry_count: _,
         } = event;
         if is_first_event {
-            const VERSION: &str = env!("CARGO_PKG_VERSION");
+            let cwd_str = match relativize_to_home(&config.cwd) {
+                Some(rel) if !rel.as_os_str().is_empty() => format!("~/{}", rel.display()),
+                Some(_) => "~".to_string(),
+                None => config.cwd.display().to_string(),
+            };
 
-            let mut lines: Vec<Line<'static>> = vec![
+            let lines: Vec<Line<'static>> = vec![
                 Line::from(vec![
-                    "OpenAI ".into(),
-                    "Codex".bold(),
-                    format!(" v{VERSION}").into(),
-                    " (research preview)".dim(),
+                    Span::raw(">_ ").dim(),
+                    Span::styled(
+                        "You are using OpenAI Codex in",
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(format!(" {cwd_str}")).dim(),
                 ]),
-                Line::from(""),
-                Line::from(vec![
-                    "codex session".magenta().bold(),
-                    " ".into(),
-                    session_id.to_string().dim(),
-                ]),
+                Line::from("".dim()),
+                Line::from(" Try one of the following commands to get started:".dim()),
+                Line::from("".dim()),
+                Line::from(format!(" 1. /init - {}", SlashCommand::Init.description()).dim()),
+                Line::from(format!(" 2. /status - {}", SlashCommand::Status.description()).dim()),
+                Line::from(format!(" 3. /compact - {}", SlashCommand::Compact.description()).dim()),
+                Line::from(format!(" 4. /new - {}", SlashCommand::New.description()).dim()),
+                Line::from("".dim()),
             ];
-
-            for (key, value) in create_config_summary_entries(config) {
-                lines.push(Line::from(vec![format!("{key}: ").bold(), value.into()]));
-            }
-            lines.push(Line::from(""));
             HistoryCell::WelcomeMessage {
                 view: TextBlock::new(lines),
             }
