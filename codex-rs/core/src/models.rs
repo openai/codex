@@ -191,7 +191,9 @@ pub struct ShellToolCallParams {
     // The wire format uses `timeout`, which has ambiguous units, so we use
     // `timeout_ms` as the field name so it is clear in code.
     pub timeout_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub with_escalated_permissions: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub justification: Option<String>,
 }
 

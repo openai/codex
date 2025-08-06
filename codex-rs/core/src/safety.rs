@@ -303,7 +303,7 @@ mod tests {
 
     #[test]
     fn test_request_escalated_privileges_no_sandbox_fallback() {
-        let command = vec!["git commit".to_string()];
+        let command = vec!["git".to_string(), "commit".to_string()];
         let approval_policy = AskForApproval::OnRequest;
         let sandbox_policy = SandboxPolicy::ReadOnly;
         let approved: HashSet<Vec<String>> = HashSet::new();

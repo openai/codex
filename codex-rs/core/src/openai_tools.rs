@@ -198,7 +198,7 @@ The shell tool is used to execute shell commands.
             )
         }
         SandboxPolicy::DangerFullAccess => {
-            "Runs a shell command, and returns its output.".to_string()
+            "Runs a shell command and returns its output.".to_string()
         }
         SandboxPolicy::ReadOnly => {
             r#"
