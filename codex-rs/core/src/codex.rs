@@ -1957,6 +1957,20 @@ async fn handle_sandbox_error(
         };
     }
 
+    // similarly, if the command timed out, we can simply return this failure to the model
+    if matches!(error, SandboxErr::Timeout) {
+        return ResponseInputItem::FunctionCallOutput {
+            call_id,
+            output: FunctionCallOutputPayload {
+                content: format!(
+                    "command timed out after {} milliseconds",
+                    params.timeout_duration().as_millis()
+                ),
+                success: Some(false),
+            },
+        };
+    }
+
     // Note that when `error` is `SandboxErr::Denied`, it could be a false
     // positive. That is, it may have exited with a non-zero exit code, not
     // because the sandbox denied it, but because that is its expected behavior,
