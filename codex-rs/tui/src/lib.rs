@@ -13,7 +13,6 @@ use codex_login::load_auth;
 use codex_ollama::DEFAULT_OSS_MODEL;
 use log_layer::TuiLogLayer;
 use std::fs::OpenOptions;
-use std::io::Write;
 use std::path::PathBuf;
 use tracing::error;
 use tracing_appender::non_blocking;
@@ -27,6 +26,7 @@ mod bottom_pane;
 mod chatwidget;
 mod citation_regex;
 mod cli;
+mod colors;
 pub mod custom_terminal;
 mod exec_command;
 mod file_search;
@@ -37,6 +37,8 @@ pub mod insert_history;
 pub mod live_wrap;
 mod log_layer;
 mod markdown;
+pub mod onboarding;
+mod shimmer;
 mod slash_command;
 mod status_indicator_widget;
 mod text_block;
@@ -204,24 +206,6 @@ pub async fn run_main(
         eprintln!("");
     }
 
-    let show_login_screen = should_show_login_screen(&config);
-    if show_login_screen {
-        std::io::stdout()
-            .write_all(b"No API key detected.\nLogin with your ChatGPT account? [Yn] ")?;
-        std::io::stdout().flush()?;
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input)?;
-        let trimmed = input.trim();
-        if !(trimmed.is_empty() || trimmed.eq_ignore_ascii_case("y")) {
-            std::process::exit(1);
-        }
-        // Spawn a task to run the login command.
-        // Block until the login command is finished.
-        codex_login::login_with_chatgpt(&config.codex_home, false).await?;
-
-        std::io::stdout().write_all(b"Login successful.\n")?;
-    }
-
     // Determine whether we need to display the "not a git repo" warning
     // modal. The flag is shown when the current working directory is *not*
     // inside a Git repository **and** the user did *not* pass the
@@ -287,7 +271,7 @@ fn restore() {
 
 #[allow(clippy::unwrap_used)]
 fn should_show_login_screen(config: &Config) -> bool {
-    if config.model_provider.requires_auth {
+    if config.model_provider.requires_openai_auth {
         // Reading the OpenAI API key is an async operation because it may need
         // to refresh the token. Block on it.
         let codex_home = config.codex_home.clone();
