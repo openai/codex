@@ -12,6 +12,7 @@ use codex_core::protocol::AgentReasoningEvent;
 use codex_core::protocol::AgentReasoningRawContentDeltaEvent;
 use codex_core::protocol::AgentReasoningRawContentEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
+use codex_core::protocol::BackgroundEventEvent;
 use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
@@ -25,6 +26,7 @@ use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TokenUsage;
+use codex_core::protocol::TurnDiffEvent;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use ratatui::buffer::Buffer;
@@ -33,6 +35,7 @@ use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::mpsc::unbounded_channel;
+use tracing::info;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
@@ -435,6 +438,9 @@ impl ChatWidget<'_> {
                     changes,
                 ));
             }
+            EventMsg::PatchApplyEnd(patch_apply_end_event) => {
+                self.add_to_history(HistoryCell::new_patch_end_event(patch_apply_end_event));
+            }
             EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                 call_id,
                 exit_code,
@@ -492,13 +498,12 @@ impl ChatWidget<'_> {
             EventMsg::ShutdownComplete => {
                 self.app_event_tx.send(AppEvent::ExitRequest);
             }
-            EventMsg::BackgroundEvent(event) => {
-                let message = event.message;
-                self.add_to_history(HistoryCell::new_background_event(message.clone()));
-                self.update_latest_log(message);
+            EventMsg::TurnDiff(TurnDiffEvent { unified_diff }) => {
+                info!("TurnDiffEvent: {unified_diff}");
             }
-            // TODO: Think of how are we going to render these events.
-            EventMsg::PatchApplyEnd(_) | EventMsg::TurnDiff(_) => {}
+            EventMsg::BackgroundEvent(BackgroundEventEvent { message }) => {
+                info!("BackgroundEvent: {message}");
+            }
         }
     }
 
