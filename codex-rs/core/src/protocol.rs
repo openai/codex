@@ -159,7 +159,8 @@ pub enum AskForApproval {
 }
 
 /// Determines execution restrictions for model shell commands.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Display)]
+#[strum(serialize_all = "kebab-case")]
 #[serde(tag = "mode", rename_all = "kebab-case")]
 pub enum SandboxPolicy {
     /// No restrictions whatsoever. Use with caution.

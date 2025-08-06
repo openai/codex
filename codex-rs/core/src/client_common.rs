@@ -4,11 +4,15 @@ use crate::error::Result;
 use crate::model_family::ModelFamily;
 use crate::models::ResponseItem;
 use crate::openai_tools::OpenAiTool;
+use crate::protocol::AskForApproval;
+use crate::protocol::SandboxPolicy;
 use crate::protocol::TokenUsage;
 use codex_apply_patch::APPLY_PATCH_TOOL_INSTRUCTIONS;
 use futures::Stream;
 use serde::Serialize;
 use std::borrow::Cow;
+use std::fmt::Display;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::task::Context;
 use std::task::Poll;
@@ -18,9 +22,35 @@ use tokio::sync::mpsc;
 /// with this content.
 const BASE_INSTRUCTIONS: &str = include_str!("../prompt.md");
 
+/// wraps environment context message in a tag for the model to parse more easily.
+const ENVIRONMENT_CONTEXT_START: &str = "<environment_context>\n\n";
+const ENVIRONMENT_CONTEXT_END: &str = "\n\n</environment_context>";
+
 /// wraps user instructions message in a tag for the model to parse more easily.
 const USER_INSTRUCTIONS_START: &str = "<user_instructions>\n\n";
 const USER_INSTRUCTIONS_END: &str = "\n\n</user_instructions>";
+
+#[derive(Debug, Clone)]
+pub(crate) struct EnvironmentContext {
+    pub cwd: PathBuf,
+    pub is_git_repo: bool,
+    pub approval_policy: AskForApproval,
+    pub sandbox_policy: SandboxPolicy,
+}
+
+impl Display for EnvironmentContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(
+            f,
+            "Current working directory: {}",
+            self.cwd.to_string_lossy()
+        )?;
+        writeln!(f, "Is directory a git repo: {}", self.is_git_repo)?;
+        writeln!(f, "Approval policy: {}", self.approval_policy)?;
+        writeln!(f, "Sandbox policy: {}", self.sandbox_policy)?;
+        Ok(())
+    }
+}
 
 /// API request payload for a single model turn.
 #[derive(Default, Debug, Clone)]
@@ -32,6 +62,10 @@ pub struct Prompt {
     pub user_instructions: Option<String>,
     /// Whether to store response on server side (disable_response_storage = !store).
     pub store: bool,
+
+    /// A list of key-value pairs that will be added as a developer message
+    /// for the model to use
+    pub environment_context: Option<EnvironmentContext>,
 
     /// Tools available to the model, including additional tools sourced from
     /// external MCP servers.
@@ -58,6 +92,12 @@ impl Prompt {
         self.user_instructions
             .as_ref()
             .map(|ui| format!("{USER_INSTRUCTIONS_START}{ui}{USER_INSTRUCTIONS_END}"))
+    }
+
+    pub(crate) fn get_formatted_environment_context(&self) -> Option<String> {
+        self.environment_context
+            .as_ref()
+            .map(|ec| format!("{ENVIRONMENT_CONTEXT_START}{ec}{ENVIRONMENT_CONTEXT_END}"))
     }
 }
 
