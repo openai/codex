@@ -1,7 +1,6 @@
 use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::error::Result;
-use crate::git_info::GitInfo;
 use crate::model_family::ModelFamily;
 use crate::models::ContentItem;
 use crate::models::ResponseItem;
@@ -35,7 +34,6 @@ const USER_INSTRUCTIONS_END: &str = "\n\n</user_instructions>";
 #[derive(Debug, Clone)]
 pub(crate) struct EnvironmentContext {
     pub cwd: PathBuf,
-    pub git_info: Option<GitInfo>,
     pub approval_policy: AskForApproval,
     pub sandbox_policy: SandboxPolicy,
 }
@@ -47,7 +45,6 @@ impl Display for EnvironmentContext {
             "Current working directory: {}",
             self.cwd.to_string_lossy()
         )?;
-        writeln!(f, "Is directory a git repo: {}", self.git_info.is_some())?;
         writeln!(f, "Approval policy: {}", self.approval_policy)?;
         writeln!(f, "Sandbox policy: {}", self.sandbox_policy)?;
 
