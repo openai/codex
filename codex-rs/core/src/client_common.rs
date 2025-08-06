@@ -3,12 +3,12 @@ use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::error::Result;
 use crate::model_family::ModelFamily;
 use crate::models::ResponseItem;
+use crate::openai_tools::OpenAiTool;
 use crate::protocol::TokenUsage;
 use codex_apply_patch::APPLY_PATCH_TOOL_INSTRUCTIONS;
 use futures::Stream;
 use serde::Serialize;
 use std::borrow::Cow;
-use std::collections::HashMap;
 use std::pin::Pin;
 use std::task::Context;
 use std::task::Poll;
@@ -33,10 +33,9 @@ pub struct Prompt {
     /// Whether to store response on server side (disable_response_storage = !store).
     pub store: bool,
 
-    /// Additional tools sourced from external MCP servers. Note each key is
-    /// the "fully qualified" tool name (i.e., prefixed with the server name),
-    /// which should be reported to the model in place of Tool::name.
-    pub extra_tools: HashMap<String, mcp_types::Tool>,
+    /// Tools available to the model, including additional tools sourced from
+    /// external MCP servers.
+    pub tools: Vec<OpenAiTool>,
 
     /// Optional override for the built-in BASE_INSTRUCTIONS.
     pub base_instructions_override: Option<String>,
