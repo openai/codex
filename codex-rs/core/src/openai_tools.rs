@@ -34,6 +34,7 @@ pub(crate) enum OpenAiTool {
 #[derive(Debug, Clone)]
 pub enum ConfigShellToolType {
     DefaultShell,
+    ShellWithRequest { sandbox_policy: SandboxPolicy },
     LocalShell,
 }
 
@@ -47,10 +48,13 @@ impl ToolsConfig {
     pub fn new(
         model_family: &ModelFamily,
         approval_policy: &AskForApproval,
+        sandbox_policy: &SandboxPolicy,
         include_plan_tool: bool,
     ) -> Self {
         let shell_type = if *approval_policy == AskForApproval::OnRequest {
-            ConfigShellToolType::DefaultShell
+            ConfigShellToolType::ShellWithRequest {
+                sandbox_policy: sandbox_policy.clone(),
+            }
         } else if model_family.uses_local_shell_tool {
             ConfigShellToolType::LocalShell
         } else {
@@ -128,7 +132,7 @@ fn create_shell_tool() -> OpenAiTool {
     })
 }
 
-fn create_shell_tool_for_sandbox(sandbox_policy: SandboxPolicy) -> OpenAiTool {
+fn create_shell_tool_for_sandbox(sandbox_policy: &SandboxPolicy) -> OpenAiTool {
     let mut properties = BTreeMap::new();
     properties.insert(
         "command".to_string(),
@@ -150,7 +154,7 @@ fn create_shell_tool_for_sandbox(sandbox_policy: SandboxPolicy) -> OpenAiTool {
         },
     );
 
-    if sandbox_policy != SandboxPolicy::DangerFullAccess {
+    if matches!(sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }) {
         properties.insert(
         "with_escalated_permissions".to_string(),
         JsonSchema::Boolean {
@@ -311,9 +315,12 @@ pub(crate) fn get_openai_tools(
 ) -> Vec<OpenAiTool> {
     let mut tools: Vec<OpenAiTool> = Vec::new();
 
-    match config.shell_type {
+    match &config.shell_type {
         ConfigShellToolType::DefaultShell => {
             tools.push(create_shell_tool());
+        }
+        ConfigShellToolType::ShellWithRequest { sandbox_policy } => {
+            tools.push(create_shell_tool_for_sandbox(&sandbox_policy));
         }
         ConfigShellToolType::LocalShell => {
             tools.push(OpenAiTool::LocalShell {});
@@ -372,7 +379,12 @@ mod tests {
     fn test_get_openai_tools() {
         let model_family = find_family_for_model("codex-mini-latest")
             .expect("codex-mini-latest should be a valid model family");
-        let config = ToolsConfig::new(&model_family, AskForApproval::Never, true);
+        let config = ToolsConfig::new(
+            &model_family,
+            AskForApproval::Never,
+            SandboxPolicy::ReadOnly,
+            true,
+        );
         let tools = get_openai_tools(&config, Some(HashMap::new()));
 
         assert_eq_tool_names(&tools, &["local_shell", "update_plan"]);
@@ -381,7 +393,12 @@ mod tests {
     #[test]
     fn test_get_openai_tools_default_shell() {
         let model_family = find_family_for_model("o3").expect("o3 should be a valid model family");
-        let config = ToolsConfig::new(&model_family, AskForApproval::Never, true);
+        let config = ToolsConfig::new(
+            &model_family,
+            AskForApproval::Never,
+            SandboxPolicy::ReadOnly,
+            true,
+        );
         let tools = get_openai_tools(&config, Some(HashMap::new()));
 
         assert_eq_tool_names(&tools, &["shell", "update_plan"]);
@@ -390,7 +407,12 @@ mod tests {
     #[test]
     fn test_get_openai_tools_mcp_tools() {
         let model_family = find_family_for_model("o3").expect("o3 should be a valid model family");
-        let config = ToolsConfig::new(&model_family, AskForApproval::Never, false);
+        let config = ToolsConfig::new(
+            &model_family,
+            AskForApproval::Never,
+            SandboxPolicy::ReadOnly,
+            false,
+        );
         let tools = get_openai_tools(
             &config,
             Some(HashMap::from([(

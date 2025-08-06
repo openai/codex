@@ -191,6 +191,8 @@ pub struct ShellToolCallParams {
     // The wire format uses `timeout`, which has ambiguous units, so we use
     // `timeout_ms` as the field name so it is clear in code.
     pub timeout_ms: Option<u64>,
+    pub with_escalated_permissions: Option<bool>,
+    pub justification: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -302,6 +304,8 @@ mod tests {
                 command: vec!["ls".to_string(), "-l".to_string()],
                 workdir: Some("/tmp".to_string()),
                 timeout_ms: Some(1000),
+                with_escalated_permissions: None,
+                justification: None,
             },
             params
         );
