@@ -70,7 +70,7 @@ pub struct Config {
     /// who have opted into Zero Data Retention (ZDR).
     pub disable_response_storage: bool,
 
-    /// User-provided instructions from instructions.md.
+    /// User-provided instructions from AGENTS.md.
     pub user_instructions: Option<String>,
 
     /// Base instructions override.
@@ -385,8 +385,8 @@ pub struct ConfigOverrides {
     pub codex_linux_sandbox_exe: Option<PathBuf>,
     pub base_instructions: Option<String>,
     pub include_plan_tool: Option<bool>,
-    pub default_disable_response_storage: Option<bool>,
-    pub default_show_raw_agent_reasoning: Option<bool>,
+    pub disable_response_storage: Option<bool>,
+    pub show_raw_agent_reasoning: Option<bool>,
 }
 
 impl Config {
@@ -410,8 +410,8 @@ impl Config {
             codex_linux_sandbox_exe,
             base_instructions,
             include_plan_tool,
-            default_disable_response_storage,
-            default_show_raw_agent_reasoning,
+            disable_response_storage,
+            show_raw_agent_reasoning,
         } = overrides;
 
         let config_profile = match config_profile_key.as_ref().or(cfg.profile.as_ref()) {
@@ -529,7 +529,7 @@ impl Config {
             disable_response_storage: config_profile
                 .disable_response_storage
                 .or(cfg.disable_response_storage)
-                .or(default_disable_response_storage)
+                .or(disable_response_storage)
                 .unwrap_or(false),
             notify: cfg.notify,
             user_instructions,
@@ -546,7 +546,7 @@ impl Config {
             hide_agent_reasoning: cfg.hide_agent_reasoning.unwrap_or(false),
             show_raw_agent_reasoning: cfg
                 .show_raw_agent_reasoning
-                .or(default_show_raw_agent_reasoning)
+                .or(show_raw_agent_reasoning)
                 .unwrap_or(false),
             model_reasoning_effort: config_profile
                 .model_reasoning_effort
@@ -575,7 +575,7 @@ impl Config {
             None => return None,
         };
 
-        p.push("instructions.md");
+        p.push("AGENTS.md");
         std::fs::read_to_string(&p).ok().and_then(|s| {
             let s = s.trim();
             if s.is_empty() {

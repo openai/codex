@@ -3,9 +3,8 @@ use crate::text_block::TextBlock;
 use crate::text_formatting::format_and_truncate_tool_result;
 use base64::Engine;
 use codex_ansi_escape::ansi_escape_line;
+use codex_common::create_config_summary_entries;
 use codex_common::elapsed::format_duration;
-use codex_common::summarize_sandbox_policy;
-use codex_core::WireApi;
 use codex_core::config::Config;
 use codex_core::plan_tool::PlanItemArg;
 use codex_core::plan_tool::StepStatus;
@@ -13,6 +12,7 @@ use codex_core::plan_tool::UpdatePlanArgs;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::SessionConfiguredEvent;
+use codex_core::protocol::TokenUsage;
 use image::DynamicImage;
 use image::ImageReader;
 use mcp_types::EmbeddedResourceResource;
@@ -23,6 +23,9 @@ use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::text::Line as RtLine;
 use ratatui::text::Span as RtSpan;
+use ratatui::widgets::Paragraph;
+use ratatui::widgets::WidgetRef;
+use ratatui::widgets::Wrap;
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::PathBuf;
@@ -95,6 +98,9 @@ pub(crate) enum HistoryCell {
     /// Output from the `/diff` command.
     GitDiffOutput { view: TextBlock },
 
+    /// Output from the `/status` command.
+    StatusOutput { view: TextBlock },
+
     /// Error event from the backend.
     ErrorEvent { view: TextBlock },
 
@@ -109,6 +115,9 @@ pub(crate) enum HistoryCell {
     /// A human‑friendly rendering of the model's current plan and step
     /// statuses provided via the `update_plan` tool.
     PlanUpdate { view: TextBlock },
+
+    /// Result of applying a patch (success or failure) with optional output.
+    PatchApplyResult { view: TextBlock },
 }
 
 const TOOL_CALL_MAX_LINES: usize = 5;
@@ -123,12 +132,14 @@ impl HistoryCell {
             | HistoryCell::UserPrompt { view }
             | HistoryCell::BackgroundEvent { view }
             | HistoryCell::GitDiffOutput { view }
+            | HistoryCell::StatusOutput { view }
             | HistoryCell::ErrorEvent { view }
             | HistoryCell::SessionInfo { view }
             | HistoryCell::CompletedExecCommand { view }
             | HistoryCell::CompletedMcpToolCall { view }
             | HistoryCell::PendingPatch { view }
             | HistoryCell::PlanUpdate { view }
+            | HistoryCell::PatchApplyResult { view }
             | HistoryCell::ActiveExecCommand { view, .. }
             | HistoryCell::ActiveMcpToolCall { view, .. } => {
                 view.lines.iter().map(line_to_static).collect()
@@ -139,6 +150,15 @@ impl HistoryCell {
             ],
         }
     }
+
+    pub(crate) fn desired_height(&self, width: u16) -> u16 {
+        Paragraph::new(Text::from(self.plain_lines()))
+            .wrap(Wrap { trim: false })
+            .line_count(width)
+            .try_into()
+            .unwrap_or(0)
+    }
+
     pub(crate) fn new_session_info(
         config: &Config,
         event: SessionConfiguredEvent,
@@ -168,26 +188,7 @@ impl HistoryCell {
                 ]),
             ];
 
-            let mut entries = vec![
-                ("workdir", config.cwd.display().to_string()),
-                ("model", config.model.clone()),
-                ("provider", config.model_provider_id.clone()),
-                ("approval", config.approval_policy.to_string()),
-                ("sandbox", summarize_sandbox_policy(&config.sandbox_policy)),
-            ];
-            if config.model_provider.wire_api == WireApi::Responses
-                && config.model_family.supports_reasoning_summaries
-            {
-                entries.push((
-                    "reasoning effort",
-                    config.model_reasoning_effort.to_string(),
-                ));
-                entries.push((
-                    "reasoning summaries",
-                    config.model_reasoning_summary.to_string(),
-                ));
-            }
-            for (key, value) in entries {
+            for (key, value) in create_config_summary_entries(config) {
                 lines.push(Line::from(vec![format!("{key}: ").bold(), value.into()]));
             }
             lines.push(Line::from(""));
@@ -444,6 +445,49 @@ impl HistoryCell {
         }
     }
 
+    pub(crate) fn new_status_output(config: &Config, usage: &TokenUsage) -> Self {
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        lines.push(Line::from("/status".magenta()));
+
+        // Config
+        for (key, value) in create_config_summary_entries(config) {
+            lines.push(Line::from(vec![format!("{key}: ").bold(), value.into()]));
+        }
+
+        // Token usage
+        lines.push(Line::from(""));
+        lines.push(Line::from("token usage".bold()));
+        lines.push(Line::from(vec![
+            "  input: ".bold(),
+            usage.input_tokens.to_string().into(),
+        ]));
+        lines.push(Line::from(vec![
+            "  cached input: ".bold(),
+            usage.cached_input_tokens.unwrap_or(0).to_string().into(),
+        ]));
+        lines.push(Line::from(vec![
+            "  output: ".bold(),
+            usage.output_tokens.to_string().into(),
+        ]));
+        lines.push(Line::from(vec![
+            "  reasoning output: ".bold(),
+            usage
+                .reasoning_output_tokens
+                .unwrap_or(0)
+                .to_string()
+                .into(),
+        ]));
+        lines.push(Line::from(vec![
+            "  total: ".bold(),
+            usage.total_tokens.to_string().into(),
+        ]));
+
+        lines.push(Line::from(""));
+        HistoryCell::StatusOutput {
+            view: TextBlock::new(lines),
+        }
+    }
+
     pub(crate) fn new_error_event(message: String) -> Self {
         let lines: Vec<Line<'static>> = vec![
             vec!["ERROR: ".red().bold(), message.into()].into(),
@@ -550,7 +594,10 @@ impl HistoryCell {
             PatchEventType::ApplyBegin {
                 auto_approved: false,
             } => {
-                let lines = vec![Line::from("patch applied".magenta().bold())];
+                let lines: Vec<Line<'static>> = vec![
+                    Line::from("applying patch".magenta().bold()),
+                    Line::from(""),
+                ];
                 return Self::PendingPatch {
                     view: TextBlock::new(lines),
                 };
@@ -597,6 +644,62 @@ impl HistoryCell {
         HistoryCell::PendingPatch {
             view: TextBlock::new(lines),
         }
+    }
+
+    pub(crate) fn new_patch_apply_end(stdout: String, stderr: String, success: bool) -> Self {
+        let mut lines: Vec<Line<'static>> = Vec::new();
+
+        let status = if success {
+            RtSpan::styled("patch applied", Style::default().fg(Color::Green))
+        } else {
+            RtSpan::styled(
+                "patch failed",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            )
+        };
+        lines.push(RtLine::from(vec![
+            "patch".magenta().bold(),
+            " ".into(),
+            status,
+        ]));
+
+        let src = if success {
+            if stdout.trim().is_empty() {
+                &stderr
+            } else {
+                &stdout
+            }
+        } else if stderr.trim().is_empty() {
+            &stdout
+        } else {
+            &stderr
+        };
+
+        if !src.trim().is_empty() {
+            lines.push(Line::from(""));
+            let mut iter = src.lines();
+            for raw in iter.by_ref().take(TOOL_CALL_MAX_LINES) {
+                lines.push(ansi_escape_line(raw).dim());
+            }
+            let remaining = iter.count();
+            if remaining > 0 {
+                lines.push(Line::from(format!("... {remaining} additional lines")).dim());
+            }
+        }
+
+        lines.push(Line::from(""));
+
+        HistoryCell::PatchApplyResult {
+            view: TextBlock::new(lines),
+        }
+    }
+}
+
+impl WidgetRef for &HistoryCell {
+    fn render_ref(&self, area: Rect, buf: &mut Buffer) {
+        Paragraph::new(Text::from(self.plain_lines()))
+            .wrap(Wrap { trim: false })
+            .render(area, buf);
     }
 }
 

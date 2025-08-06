@@ -32,6 +32,7 @@ pub use model_provider_info::BUILT_IN_OSS_MODEL_PROVIDER_ID;
 pub use model_provider_info::ModelProviderInfo;
 pub use model_provider_info::WireApi;
 pub use model_provider_info::built_in_model_providers;
+pub use model_provider_info::create_oss_provider_with_base_url;
 pub mod model_family;
 mod models;
 mod openai_model_info;
@@ -47,6 +48,5 @@ pub mod spawn;
 pub mod turn_diff_tracker;
 mod user_notification;
 pub mod util;
-
 pub use apply_patch::CODEX_APPLY_PATCH_ARG1;
 pub use safety::get_platform_sandbox;
