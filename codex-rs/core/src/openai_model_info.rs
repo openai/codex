@@ -77,6 +77,11 @@ pub(crate) fn get_model_info(model_family: &ModelFamily) -> Option<ModelInfo> {
             max_output_tokens: 4_096,
         }),
 
+        "2025-08-06-model" => Some(ModelInfo {
+            context_window: 200_000,
+            max_output_tokens: 100_000,
+        }),
+
         _ => None,
     }
 }
