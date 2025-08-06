@@ -10,6 +10,7 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
+use ratatui::widgets::Wrap;
 
 use codex_login::AuthMode;
 
@@ -102,7 +103,7 @@ pub(crate) struct AuthModeWidget {
     pub codex_home: PathBuf,
 }
 
-impl<'a> AuthModeWidget {
+impl AuthModeWidget {
     fn render_pick_mode(&self, area: Rect, buf: &mut Buffer) {
         let mut lines: Vec<Line> = vec![
             Line::from(vec![
@@ -171,7 +172,9 @@ impl<'a> AuthModeWidget {
             )));
         }
 
-        Paragraph::new(lines).render(area, buf);
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .render(area, buf);
     }
 
     fn render_continue_in_browser(&self, area: Rect, buf: &mut Buffer) {
@@ -184,7 +187,9 @@ impl<'a> AuthModeWidget {
             Line::from("  Press Escape to cancel")
                 .style(Style::default().add_modifier(Modifier::DIM)),
         ];
-        Paragraph::new(lines).render(area, buf);
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .render(area, buf);
     }
 
     fn render_chatgpt_success(&self, area: Rect, buf: &mut Buffer) {
@@ -209,7 +214,9 @@ impl<'a> AuthModeWidget {
             Line::from("  Press Enter to continue").style(Style::default().fg(LIGHT_BLUE)),
         ];
 
-        Paragraph::new(lines).render(area, buf);
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .render(area, buf);
     }
 
     fn start_chatgpt_login(&mut self) -> KeyEventResult {
