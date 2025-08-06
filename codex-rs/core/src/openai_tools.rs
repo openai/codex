@@ -67,8 +67,12 @@ pub(crate) enum JsonSchema {
     },
     Object {
         properties: BTreeMap<String, JsonSchema>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         required: Option<Vec<String>>,
-        #[serde(rename = "additionalProperties")]
+        #[serde(
+            rename = "additionalProperties",
+            skip_serializing_if = "Option::is_none"
+        )]
         additional_properties: Option<bool>,
     },
 }
