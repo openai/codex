@@ -1,7 +1,9 @@
 use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::error::Result;
+use crate::git_info::GitInfo;
 use crate::model_family::ModelFamily;
+use crate::models::ContentItem;
 use crate::models::ResponseItem;
 use crate::openai_tools::OpenAiTool;
 use crate::protocol::AskForApproval;
@@ -33,7 +35,7 @@ const USER_INSTRUCTIONS_END: &str = "\n\n</user_instructions>";
 #[derive(Debug, Clone)]
 pub(crate) struct EnvironmentContext {
     pub cwd: PathBuf,
-    pub is_git_repo: bool,
+    pub git_info: Option<GitInfo>,
     pub approval_policy: AskForApproval,
     pub sandbox_policy: SandboxPolicy,
 }
@@ -45,9 +47,22 @@ impl Display for EnvironmentContext {
             "Current working directory: {}",
             self.cwd.to_string_lossy()
         )?;
-        writeln!(f, "Is directory a git repo: {}", self.is_git_repo)?;
+        writeln!(f, "Is directory a git repo: {}", self.git_info.is_some())?;
         writeln!(f, "Approval policy: {}", self.approval_policy)?;
         writeln!(f, "Sandbox policy: {}", self.sandbox_policy)?;
+
+        let network_access = match self.sandbox_policy.clone() {
+            SandboxPolicy::DangerFullAccess => "enabled",
+            SandboxPolicy::ReadOnly => "restricted",
+            SandboxPolicy::WorkspaceWrite { network_access, .. } => {
+                if network_access {
+                    "enabled"
+                } else {
+                    "restricted"
+                }
+            }
+        };
+        writeln!(f, "Network access: {network_access}")?;
         Ok(())
     }
 }
@@ -88,16 +103,36 @@ impl Prompt {
         Cow::Owned(sections.join("\n"))
     }
 
-    pub(crate) fn get_formatted_user_instructions(&self) -> Option<String> {
+    fn get_formatted_user_instructions(&self) -> Option<String> {
         self.user_instructions
             .as_ref()
             .map(|ui| format!("{USER_INSTRUCTIONS_START}{ui}{USER_INSTRUCTIONS_END}"))
     }
 
-    pub(crate) fn get_formatted_environment_context(&self) -> Option<String> {
+    fn get_formatted_environment_context(&self) -> Option<String> {
         self.environment_context
             .as_ref()
             .map(|ec| format!("{ENVIRONMENT_CONTEXT_START}{ec}{ENVIRONMENT_CONTEXT_END}"))
+    }
+
+    pub(crate) fn get_formatted_input(&self) -> Vec<ResponseItem> {
+        let mut input_with_instructions = Vec::with_capacity(self.input.len() + 2);
+        if let Some(ec) = self.get_formatted_environment_context() {
+            input_with_instructions.push(ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText { text: ec }],
+            });
+        }
+        if let Some(ui) = self.get_formatted_user_instructions() {
+            input_with_instructions.push(ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText { text: ui }],
+            });
+        }
+        input_with_instructions.extend(self.input.clone());
+        input_with_instructions
     }
 }
 
