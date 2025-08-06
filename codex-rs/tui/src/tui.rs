@@ -3,11 +3,14 @@ use std::io::Stdout;
 use std::io::stdout;
 
 use codex_core::config::Config;
+use crossterm::cursor::MoveTo;
 use crossterm::event::DisableBracketedPaste;
 use crossterm::event::EnableBracketedPaste;
 use crossterm::event::KeyboardEnhancementFlags;
 use crossterm::event::PopKeyboardEnhancementFlags;
 use crossterm::event::PushKeyboardEnhancementFlags;
+use crossterm::terminal::Clear;
+use crossterm::terminal::ClearType;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::disable_raw_mode;
@@ -35,6 +38,12 @@ pub fn init(_config: &Config) -> Result<Tui> {
         )
     )?;
     set_panic_hook();
+
+    // Ensure the UI starts at the top of the terminal by clearing the
+    // current screen and moving the cursor to (0, 0) before creating the
+    // Terminal. This makes the initial welcome message render at the very top
+    // of the viewport, while keeping the normal scrollback history intact.
+    execute!(stdout(), Clear(ClearType::All), MoveTo(0, 0))?;
 
     let backend = CrosstermBackend::new(stdout());
     let tui = Terminal::with_options(backend)?;
