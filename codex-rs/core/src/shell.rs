@@ -1,13 +1,13 @@
-use shlex;
-
+#[cfg(target_os = "macos")]
 #[derive(Debug, PartialEq, Eq)]
-pub struct ZshShell {
+pub(crate) struct ZshShell {
     shell_path: String,
     zshrc_path: String,
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum Shell {
+pub(crate) enum Shell {
+    #[cfg(target_os = "macos")]
     Zsh(ZshShell),
     Unknown,
 }
@@ -15,6 +15,7 @@ pub enum Shell {
 impl Shell {
     pub fn format_default_shell_invocation(&self, command: Vec<String>) -> Option<Vec<String>> {
         match self {
+            #[cfg(target_os = "macos")]
             Shell::Zsh(zsh) => {
                 if !std::path::Path::new(&zsh.zshrc_path).exists() {
                     return None;

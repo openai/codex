@@ -1,5 +1,4 @@
 use unicode_width::UnicodeWidthChar;
-use unicode_width::UnicodeWidthStr;
 
 /// A single visual row produced by RowBuilder.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -10,7 +9,9 @@ pub struct Row {
 }
 
 impl Row {
+    #[cfg(test)]
     pub fn width(&self) -> usize {
+        use unicode_width::UnicodeWidthStr;
         self.text.width()
     }
 }
@@ -39,6 +40,7 @@ impl RowBuilder {
         self.target_width
     }
 
+    #[cfg(test)]
     pub fn set_width(&mut self, width: usize) {
         self.target_width = width.max(1);
         // Rewrap everything we have (simple approach for Step 1).
@@ -87,6 +89,7 @@ impl RowBuilder {
     }
 
     /// Return a snapshot of produced rows (non-draining).
+    #[cfg(test)]
     pub fn rows(&self) -> &[Row] {
         &self.rows
     }
