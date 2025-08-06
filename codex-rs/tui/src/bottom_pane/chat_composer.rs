@@ -1049,18 +1049,6 @@ mod tests {
     }
 
     #[test]
-    fn slash_init_is_ignored_while_task_is_running() {
-        // This test captures the desired behavior: when an active task is
-        // running, invoking "/init" should do nothing (no DispatchCommand,
-        // no submission). The guard will likely live in the App layer where
-        // SlashCommand::Init is handled, based on BottomPane::is_task_running().
-        //
-        // Implementation note: wiring App::run with a headless backend is
-        // required to drive this end-to-end. For now, we keep this test as a
-        // pending specification.
-        assert!(true);
-    }
-    #[test]
     fn test_multiple_pastes_submission() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
