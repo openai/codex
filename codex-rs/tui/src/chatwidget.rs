@@ -568,12 +568,6 @@ impl ChatWidget<'_> {
         }
     }
 
-    /// Returns true if a task is currently running (used to guard actions that
-    /// should not execute while the agent is busy).
-    pub(crate) fn is_task_running(&self) -> bool {
-        self.bottom_pane.is_task_running()
-    }
-
     /// Programmatically submit a user text message as if typed in the
     /// composer. The text will be added to conversation history and sent to
     /// the agent.

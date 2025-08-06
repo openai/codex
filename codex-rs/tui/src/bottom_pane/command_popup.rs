@@ -193,10 +193,6 @@ impl WidgetRef for CommandPopup {
 mod tests {
     use super::*;
 
-    // TDD: These tests describe the desired behavior for a new built-in
-    // slash command "/init". They are marked ignored until the feature is
-    // implemented.
-
     #[test]
     fn filter_includes_init_when_typing_prefix() {
         let mut popup = CommandPopup::new();
