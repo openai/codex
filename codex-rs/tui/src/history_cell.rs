@@ -64,35 +64,23 @@ fn line_to_static(line: &Line) -> Line<'static> {
 /// scrollable list.
 pub(crate) enum HistoryCell {
     /// Welcome message.
-    WelcomeMessage {
-        view: TextBlock,
-    },
+    WelcomeMessage { view: TextBlock },
 
     /// Message from the user.
-    UserPrompt {
-        view: TextBlock,
-    },
+    UserPrompt { view: TextBlock },
 
     // AgentMessage and AgentReasoning variants were unused and have been removed.
     /// An exec tool call that has not finished yet.
-    ActiveExecCommand {
-        view: TextBlock,
-    },
+    ActiveExecCommand { view: TextBlock },
 
     /// Completed exec tool call.
-    CompletedExecCommand {
-        view: TextBlock,
-    },
+    CompletedExecCommand { view: TextBlock },
 
     /// An MCP tool call that has not finished yet.
-    ActiveMcpToolCall {
-        view: TextBlock,
-    },
+    ActiveMcpToolCall { view: TextBlock },
 
     /// Completed MCP tool call where we show the result serialized as JSON.
-    CompletedMcpToolCall {
-        view: TextBlock,
-    },
+    CompletedMcpToolCall { view: TextBlock },
 
     /// Completed MCP tool call where the result is an image.
     /// Admittedly, [mcp_types::CallToolResult] can have multiple content types,
@@ -102,56 +90,34 @@ pub(crate) enum HistoryCell {
     // resized version avoids doing the potentially expensive rescale twice
     // because the scroll-view first calls `height()` for layouting and then
     // `render_window()` for painting.
-    CompletedMcpToolCallWithImageOutput {
-        _image: DynamicImage,
-    },
+    CompletedMcpToolCallWithImageOutput { _image: DynamicImage },
 
     /// Background event.
-    BackgroundEvent {
-        view: TextBlock,
-    },
+    BackgroundEvent { view: TextBlock },
 
     /// Output from the `/diff` command.
-    GitDiffOutput {
-        view: TextBlock,
-    },
+    GitDiffOutput { view: TextBlock },
 
     /// Output from the `/status` command.
-    StatusOutput {
-        view: TextBlock,
-    },
+    StatusOutput { view: TextBlock },
 
     /// Error event from the backend.
-    ErrorEvent {
-        view: TextBlock,
-    },
+    ErrorEvent { view: TextBlock },
 
     /// Info describing the newly-initialized session.
-    SessionInfo {
-        view: TextBlock,
-    },
+    SessionInfo { view: TextBlock },
 
     /// A pending code patch that is awaiting user approval. Mirrors the
     /// behaviour of `ActiveExecCommand` so the user sees *what* patch the
     /// model wants to apply before being prompted to approve or deny it.
-    PendingPatch {
-        view: TextBlock,
-    },
-
-    PatchEventEnd {
-        view: TextBlock,
-    },
+    PendingPatch { view: TextBlock },
 
     /// A human‑friendly rendering of the model's current plan and step
     /// statuses provided via the `update_plan` tool.
-    PlanUpdate {
-        view: TextBlock,
-    },
+    PlanUpdate { view: TextBlock },
 
     /// Result of applying a patch (success or failure) with optional output.
-    PatchApplyResult {
-        view: TextBlock,
-    },
+    PatchApplyResult { view: TextBlock },
 }
 
 const TOOL_CALL_MAX_LINES: usize = 5;
@@ -172,7 +138,6 @@ impl HistoryCell {
             | HistoryCell::CompletedExecCommand { view }
             | HistoryCell::CompletedMcpToolCall { view }
             | HistoryCell::PendingPatch { view }
-            | HistoryCell::PatchEventEnd { view }
             | HistoryCell::PlanUpdate { view }
             | HistoryCell::PatchApplyResult { view }
             | HistoryCell::ActiveExecCommand { view, .. }
@@ -629,9 +594,10 @@ impl HistoryCell {
             PatchEventType::ApplyBegin {
                 auto_approved: false,
             } => {
-                let mut lines: Vec<Line<'static>> = Vec::new();
-                lines.push(Line::from("applying patch".magenta().bold()));
-                lines.push(Line::from(""));
+                let lines: Vec<Line<'static>> = vec![
+                    Line::from("applying patch".magenta().bold()),
+                    Line::from(""),
+                ];
                 return Self::PendingPatch {
                     view: TextBlock::new(lines),
                 };
