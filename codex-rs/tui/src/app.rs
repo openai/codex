@@ -303,7 +303,7 @@ impl App<'_> {
                     SlashCommand::Init => {
                         // Guard: do not run if a task is active.
                         if let AppState::Chat { widget } = &mut self.app_state {
-                            const INIT_PROMPT: &str = include_str!("../../../INIT.md");
+                            const INIT_PROMPT: &str = include_str!("../prompt_for_init_command.md");
                             widget.submit_text_message(INIT_PROMPT.to_string());
                         }
                     }
