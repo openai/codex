@@ -6,6 +6,8 @@ use std::collections::HashMap;
 
 use crate::model_family::ModelFamily;
 use crate::plan_tool::PLAN_TOOL;
+use crate::protocol::AskForApproval;
+use crate::protocol::SandboxPolicy;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct ResponsesApiTool {
@@ -42,8 +44,14 @@ pub struct ToolsConfig {
 }
 
 impl ToolsConfig {
-    pub fn new(model_family: &ModelFamily, include_plan_tool: bool) -> Self {
-        let shell_type = if model_family.uses_local_shell_tool {
+    pub fn new(
+        model_family: &ModelFamily,
+        approval_policy: &AskForApproval,
+        include_plan_tool: bool,
+    ) -> Self {
+        let shell_type = if *approval_policy == AskForApproval::OnRequest {
+            ConfigShellToolType::DefaultShell
+        } else if model_family.uses_local_shell_tool {
             ConfigShellToolType::LocalShell
         } else {
             ConfigShellToolType::DefaultShell
@@ -60,10 +68,23 @@ impl ToolsConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub(crate) enum JsonSchema {
-    String,
-    Number,
+    Boolean {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+    },
+    String {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+    },
+    Number {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+    },
     Array {
         items: Box<JsonSchema>,
+
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
     },
     Object {
         properties: BTreeMap<String, JsonSchema>,
@@ -77,20 +98,126 @@ pub(crate) enum JsonSchema {
     },
 }
 
-pub(crate) fn create_shell_tool() -> OpenAiTool {
+fn create_shell_tool() -> OpenAiTool {
     let mut properties = BTreeMap::new();
     properties.insert(
         "command".to_string(),
         JsonSchema::Array {
-            items: Box::new(JsonSchema::String),
+            items: Box::new(JsonSchema::String { description: None }),
+            description: None,
         },
     );
-    properties.insert("workdir".to_string(), JsonSchema::String);
-    properties.insert("timeout".to_string(), JsonSchema::Number);
+    properties.insert(
+        "workdir".to_string(),
+        JsonSchema::String { description: None },
+    );
+    properties.insert(
+        "timeout".to_string(),
+        JsonSchema::Number { description: None },
+    );
 
     OpenAiTool::Function(ResponsesApiTool {
         name: "shell".to_string(),
         description: "Runs a shell command and returns its output".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["command".to_string()]),
+            additional_properties: Some(false),
+        },
+    })
+}
+
+fn create_shell_tool_for_sandbox(sandbox_policy: SandboxPolicy) -> OpenAiTool {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "command".to_string(),
+        JsonSchema::Array {
+            items: Box::new(JsonSchema::String { description: None }),
+            description: Some("The command to execute".to_string()),
+        },
+    );
+    properties.insert(
+        "workdir".to_string(),
+        JsonSchema::String {
+            description: Some("The working directory to execute the command in".to_string()),
+        },
+    );
+    properties.insert(
+        "timeout".to_string(),
+        JsonSchema::Number {
+            description: Some("The timeout for the command in milliseconds".to_string()),
+        },
+    );
+
+    if sandbox_policy != SandboxPolicy::DangerFullAccess {
+        properties.insert(
+        "with_escalated_permissions".to_string(),
+        JsonSchema::Boolean {
+            description: Some("Whether to request escalated permissions. Set to true if command needs to be run without sandbox restrictions".to_string()),
+        },
+    );
+        properties.insert(
+        "justification".to_string(),
+        JsonSchema::String {
+            description: Some("Only set if ask_for_escalated_permissions is true. 1-sentence explanation of why we want to run this command.".to_string()),
+        },
+    );
+    }
+
+    let description = match sandbox_policy {
+        SandboxPolicy::WorkspaceWrite {
+            network_access,
+            ..
+        } => {
+            format!(
+                r#"
+The shell tool is used to execute shell commands.
+- When invoking the shell tool, your call will be running in a landlock sandbox, and some shell commands will require escalated privileges:
+  - Types of actions that require escalated privileges:
+    - Reading files outside the current directory
+    - Writing files outside the current directory, and protected folders like .git or .env{}
+  - Examples of commands that require escalated privileges:
+    - git commit
+    - npm install or pnpm install
+    - cargo build
+    - cargo test
+- When invoking a command that will require escalated privileges:
+  - Provide the with_escalated_permissions parameter with the boolean value true
+  - Include a short, 1 sentence explanation for why we need to run with_escalated_permissions in the justification parameter."#,
+                if !network_access {
+                    "\n  - Commands that require network access\n"
+                } else {
+                    ""
+                }
+            )
+        }
+        SandboxPolicy::DangerFullAccess => {
+            "Runs a shell command, and returns its output.".to_string()
+        }
+        SandboxPolicy::ReadOnly => {
+            r#"
+The shell tool is used to execute shell commands.
+- When invoking the shell tool, your call will be running in a landlock sandbox, and some shell commands (including apply_patch) will require escalated permissions:
+  - Types of actions that require escalated privileges:
+    - Reading files outside the current directory
+    - Writing files
+    - Applying patches
+  - Examples of commands that require escalated privileges:
+    - apply_patch
+    - git commit
+    - npm install or pnpm install
+    - cargo build
+    - cargo test
+- When invoking a command that will require escalated privileges:
+  - Provide the with_escalated_permissions parameter with the boolean value true
+  - Include a short, 1 sentence explanation for why we need to run with_escalated_permissions in the justification parameter"#.to_string()
+        }
+    };
+
+    OpenAiTool::Function(ResponsesApiTool {
+        name: "shell".to_string(),
+        description,
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -245,7 +372,7 @@ mod tests {
     fn test_get_openai_tools() {
         let model_family = find_family_for_model("codex-mini-latest")
             .expect("codex-mini-latest should be a valid model family");
-        let config = ToolsConfig::new(&model_family, true);
+        let config = ToolsConfig::new(&model_family, AskForApproval::Never, true);
         let tools = get_openai_tools(&config, Some(HashMap::new()));
 
         assert_eq_tool_names(&tools, &["local_shell", "update_plan"]);
@@ -254,7 +381,7 @@ mod tests {
     #[test]
     fn test_get_openai_tools_default_shell() {
         let model_family = find_family_for_model("o3").expect("o3 should be a valid model family");
-        let config = ToolsConfig::new(&model_family, true);
+        let config = ToolsConfig::new(&model_family, AskForApproval::Never, true);
         let tools = get_openai_tools(&config, Some(HashMap::new()));
 
         assert_eq_tool_names(&tools, &["shell", "update_plan"]);
@@ -263,7 +390,7 @@ mod tests {
     #[test]
     fn test_get_openai_tools_mcp_tools() {
         let model_family = find_family_for_model("o3").expect("o3 should be a valid model family");
-        let config = ToolsConfig::new(&model_family, false);
+        let config = ToolsConfig::new(&model_family, AskForApproval::Never, false);
         let tools = get_openai_tools(
             &config,
             Some(HashMap::from([(
