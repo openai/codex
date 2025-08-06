@@ -38,6 +38,7 @@ use ratatui::widgets::WidgetRef;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::mpsc::unbounded_channel;
 use tracing::info;
+use tracing::warn;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
@@ -279,6 +280,7 @@ impl ChatWidget<'_> {
 
     pub(crate) fn handle_codex_event(&mut self, event: Event) {
         let Event { id, msg } = event;
+        warn!("Event: {msg:?}");
         match msg {
             EventMsg::SessionConfigured(event) => {
                 self.bottom_pane
