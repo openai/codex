@@ -233,7 +233,8 @@ impl App<'_> {
                                     widget.on_ctrl_c();
                                 }
                                 AppState::GitWarning { .. } => {
-                                    // No-op.
+                                    // Allow exiting the app with Ctrl+C from the warning screen.
+                                    self.app_event_tx.send(AppEvent::ExitRequest);
                                 }
                             }
                         }
@@ -461,7 +462,7 @@ Commit & Pull Request Guidelines
         let size = terminal.size()?;
         let desired_height = match &self.app_state {
             AppState::Chat { widget } => widget.desired_height(size.width),
-            AppState::GitWarning { .. } => 10,
+            AppState::GitWarning { .. } => size.height,
         };
 
         let mut area = terminal.viewport_area;
