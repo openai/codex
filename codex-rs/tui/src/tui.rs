@@ -39,10 +39,7 @@ pub fn init(_config: &Config) -> Result<Tui> {
     )?;
     set_panic_hook();
 
-    // Ensure the UI starts at the top of the terminal by clearing the
-    // current screen and moving the cursor to (0, 0) before creating the
-    // Terminal. This makes the initial welcome message render at the very top
-    // of the viewport, while keeping the normal scrollback history intact.
+    // Clear screen and move cursor to top-left before drawing UI
     execute!(stdout(), Clear(ClearType::All), MoveTo(0, 0))?;
 
     let backend = CrosstermBackend::new(stdout());
