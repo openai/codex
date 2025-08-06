@@ -1969,19 +1969,20 @@ async fn handle_sandbox_error(
     let is_apply_patch = exec_command_context.apply_patch.is_some();
 
     // Early out if either the user never wants to be asked for approval, or
-    // we're letting the model manage escalation requests.
-    if sess.approval_policy == AskForApproval::Never
-        || sess.approval_policy == AskForApproval::OnRequest
-    {
-        return ResponseInputItem::FunctionCallOutput {
-            call_id,
-            output: FunctionCallOutputPayload {
-                content: format!(
-                    "failed in sandbox {sandbox_type:?} with execution error: {error}"
-                ),
-                success: Some(false),
-            },
-        };
+    // we're letting the model manage escalation requests. Otherwise, continue
+    match sess.approval_policy {
+        AskForApproval::Never | AskForApproval::OnRequest => {
+            return ResponseInputItem::FunctionCallOutput {
+                call_id,
+                output: FunctionCallOutputPayload {
+                    content: format!(
+                        "failed in sandbox {sandbox_type:?} with execution error: {error}"
+                    ),
+                    success: Some(false),
+                },
+            };
+        }
+        AskForApproval::UnlessTrusted | AskForApproval::OnFailure => (),
     }
 
     // similarly, if the command timed out, we can simply return this failure to the model
