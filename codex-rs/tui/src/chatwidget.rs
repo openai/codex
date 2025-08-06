@@ -492,11 +492,13 @@ impl ChatWidget<'_> {
             EventMsg::ShutdownComplete => {
                 self.app_event_tx.send(AppEvent::ExitRequest);
             }
-            event => {
-                let text = format!("{event:?}");
-                self.add_to_history(HistoryCell::new_background_event(text.clone()));
-                self.update_latest_log(text);
+            EventMsg::BackgroundEvent(event) => {
+                let message = event.message;
+                self.add_to_history(HistoryCell::new_background_event(message.clone()));
+                self.update_latest_log(message);
             }
+            // TODO: Think of how are we going to render these events.
+            EventMsg::PatchApplyEnd(_) | EventMsg::TurnDiff(_) => {}
         }
     }
 
