@@ -36,8 +36,6 @@ pub(crate) struct CommandOutput {
     pub(crate) exit_code: i32,
     pub(crate) stdout: String,
     pub(crate) stderr: String,
-    #[allow(dead_code)]
-    pub(crate) duration: Duration,
 }
 
 pub(crate) enum PatchEventType {
@@ -246,7 +244,6 @@ impl HistoryCell {
             exit_code,
             stdout,
             stderr,
-            duration: _,
         } = output;
 
         let mut lines: Vec<Line<'static>> = Vec::new();
@@ -259,16 +256,14 @@ impl HistoryCell {
         let src = if exit_code == 0 { stdout } else { stderr };
 
         let mut lines_iter = src.lines();
-        let mut is_first = true;
-        for raw in lines_iter.by_ref().take(TOOL_CALL_MAX_LINES) {
+        for (idx, raw) in lines_iter.by_ref().take(TOOL_CALL_MAX_LINES).enumerate() {
             let mut line = ansi_escape_line(raw);
-            let prefix = if is_first { "  ⎿ " } else { "    " };
+            let prefix = if idx == 0 { "  ⎿ " } else { "    " };
             line.spans.insert(0, prefix.into());
             line.spans.iter_mut().for_each(|span| {
                 span.style = span.style.add_modifier(Modifier::DIM);
             });
             lines.push(line);
-            is_first = false;
         }
         let remaining = lines_iter.count();
         if remaining > 0 {
