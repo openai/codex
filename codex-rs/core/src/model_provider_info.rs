@@ -9,7 +9,6 @@ use codex_login::AuthMode;
 use codex_login::CodexAuth;
 use serde::Deserialize;
 use serde::Serialize;
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::env::VarError;
 use std::time::Duration;
@@ -79,7 +78,7 @@ pub struct ModelProviderInfo {
 
     /// Whether this provider requires some form of standard authentication (API key, ChatGPT token).
     #[serde(default)]
-    pub requires_auth: bool,
+    pub requires_openai_auth: bool,
 }
 
 impl ModelProviderInfo {
@@ -87,26 +86,32 @@ impl ModelProviderInfo {
     /// reqwest Client applying:
     ///   • provider-specific headers (static + env based)
     ///   • Bearer auth header when an API key is available.
+    ///   • Auth token for OAuth.
     ///
-    /// When `require_api_key` is true and the provider declares an `env_key`
-    /// but the variable is missing/empty, returns an [`Err`] identical to the
+    /// If the provider declares an `env_key` but the variable is missing/empty, returns an [`Err`] identical to the
     /// one produced by [`ModelProviderInfo::api_key`].
     pub async fn create_request_builder<'a>(
         &'a self,
         client: &'a reqwest::Client,
         auth: &Option<CodexAuth>,
     ) -> crate::error::Result<reqwest::RequestBuilder> {
-        let auth: Cow<'_, Option<CodexAuth>> = if auth.is_some() {
-            Cow::Borrowed(auth)
-        } else {
-            Cow::Owned(self.get_fallback_auth()?)
+        let effective_auth = match self.api_key() {
+            Ok(Some(key)) => Some(CodexAuth::from_api_key(key)),
+            Ok(None) => auth.clone(),
+            Err(err) => {
+                if auth.is_some() {
+                    auth.clone()
+                } else {
+                    return Err(err);
+                }
+            }
         };
 
-        let url = self.get_full_url(&auth);
+        let url = self.get_full_url(&effective_auth);
 
         let mut builder = client.post(url);
 
-        if let Some(auth) = auth.as_ref() {
+        if let Some(auth) = effective_auth.as_ref() {
             builder = builder.bearer_auth(auth.get_token().await?);
         }
 
@@ -216,14 +221,6 @@ impl ModelProviderInfo {
             .map(Duration::from_millis)
             .unwrap_or(Duration::from_millis(DEFAULT_STREAM_IDLE_TIMEOUT_MS))
     }
-
-    fn get_fallback_auth(&self) -> crate::error::Result<Option<CodexAuth>> {
-        let api_key = self.api_key()?;
-        if let Some(api_key) = api_key {
-            return Ok(Some(CodexAuth::from_api_key(api_key)));
-        }
-        Ok(None)
-    }
 }
 
 const DEFAULT_OLLAMA_PORT: u32 = 11434;
@@ -275,7 +272,7 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
                 request_max_retries: None,
                 stream_max_retries: None,
                 stream_idle_timeout_ms: None,
-                requires_auth: true,
+                requires_openai_auth: true,
             },
         ),
         (BUILT_IN_OSS_MODEL_PROVIDER_ID, create_oss_provider()),
@@ -319,7 +316,7 @@ pub fn create_oss_provider_with_base_url(base_url: &str) -> ModelProviderInfo {
         request_max_retries: None,
         stream_max_retries: None,
         stream_idle_timeout_ms: None,
-        requires_auth: false,
+        requires_openai_auth: false,
     }
 }
 
@@ -347,7 +344,7 @@ base_url = "http://localhost:11434/v1"
             request_max_retries: None,
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
-            requires_auth: false,
+            requires_openai_auth: false,
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -376,7 +373,7 @@ query_params = { api-version = "2025-04-01-preview" }
             request_max_retries: None,
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
-            requires_auth: false,
+            requires_openai_auth: false,
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -408,7 +405,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
             request_max_retries: None,
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
-            requires_auth: false,
+            requires_openai_auth: false,
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
