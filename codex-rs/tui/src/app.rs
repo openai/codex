@@ -311,7 +311,7 @@ Your goal is to produce a clear, concise, and well-structured document with desc
 Follow the outline below, but adapt as needed — add sections if relevant, and omit those that do not apply to this project.
 
 Document Requirements
-
+* Title the document "Repsitory Guidelines".
 * Use Markdown headings (#, ##, etc.) for structure.
 * Keep the document concise. 200-400 words is optimal.
 * Keep explanations short, direct, and specific to this repository.
@@ -321,26 +321,21 @@ Document Requirements
 Recommended Sections
 
 Project Structure & Module Organization
-
-* Include a summary directory tree describing where the source code, tests, and assets are located.
+* Outline the project structure, including where the source code, tests, and assets are located.
 
 Build, Test, and Development Commands
-
 * List key commands for building, testing, and running locally (e.g., npm test, make build).
 * Briefly explain what each command does.
 
 Coding Style & Naming Conventions
-
 * Specify indentation rules, language-specific style preferences, and naming patterns.
 * Include any formatting or linting tools used.
 
 Testing Guidelines
-
 * Identify testing frameworks and coverage requirements.
 * State test naming conventions and how to run tests.
 
 Commit & Pull Request Guidelines
-
 * Summarize commit message conventions found in the project’s Git history.
 * Outline pull request requirements (descriptions, linked issues, screenshots, etc.).
 
