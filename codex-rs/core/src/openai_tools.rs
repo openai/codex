@@ -320,7 +320,7 @@ pub(crate) fn get_openai_tools(
             tools.push(create_shell_tool());
         }
         ConfigShellToolType::ShellWithRequest { sandbox_policy } => {
-            tools.push(create_shell_tool_for_sandbox(&sandbox_policy));
+            tools.push(create_shell_tool_for_sandbox(sandbox_policy));
         }
         ConfigShellToolType::LocalShell => {
             tools.push(OpenAiTool::LocalShell {});
@@ -459,14 +459,26 @@ mod tests {
                 name: "test_server/do_something_cool".to_string(),
                 parameters: JsonSchema::Object {
                     properties: BTreeMap::from([
-                        ("string_argument".to_string(), JsonSchema::String),
-                        ("number_argument".to_string(), JsonSchema::Number),
+                        (
+                            "string_argument".to_string(),
+                            JsonSchema::String { description: None }
+                        ),
+                        (
+                            "number_argument".to_string(),
+                            JsonSchema::Number { description: None }
+                        ),
                         (
                             "object_argument".to_string(),
                             JsonSchema::Object {
                                 properties: BTreeMap::from([
-                                    ("string_property".to_string(), JsonSchema::String),
-                                    ("number_property".to_string(), JsonSchema::Number),
+                                    (
+                                        "string_property".to_string(),
+                                        JsonSchema::String { description: None }
+                                    ),
+                                    (
+                                        "number_property".to_string(),
+                                        JsonSchema::Number { description: None }
+                                    ),
                                 ]),
                                 required: Some(vec![
                                     "string_property".to_string(),
