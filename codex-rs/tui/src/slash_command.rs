@@ -13,6 +13,7 @@ pub enum SlashCommand {
     // DO NOT ALPHA-SORT! Enum order is presentation order in the popup, so
     // more frequently used commands should be listed first.
     New,
+    Init,
     Compact,
     Diff,
     Status,
@@ -26,6 +27,7 @@ impl SlashCommand {
     pub fn description(self) -> &'static str {
         match self {
             SlashCommand::New => "Start a new chat",
+            SlashCommand::Init => "Create an AGENTS.md file with instructions for Codex.",
             SlashCommand::Compact => "Compact the chat history",
             SlashCommand::Quit => "Exit the application",
             SlashCommand::Diff => "Show git diff (including untracked files)",
