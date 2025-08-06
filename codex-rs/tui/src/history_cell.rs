@@ -245,7 +245,7 @@ impl HistoryCell {
             exit_code,
             stdout,
             stderr,
-            duration,
+            duration: _,
         } = output;
 
         let mut lines: Vec<Line<'static>> = Vec::new();
