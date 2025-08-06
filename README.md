@@ -3,7 +3,7 @@
 
 <p align="center"><code>npm i -g @openai/codex</code><br />or <code>brew install codex</code></p>
 
-This is the home of the **Codex CLI**, which is a coding agent from OpenAI that runs locally on your computer. If you are looking for the _cloud-based agent_ from OpenAI, **Codex [Web]**, see <https://chatgpt.com/codex>.
+This is the home of the **Codex CLI**, a coding agent from OpenAI that runs locally on your computer. If you are looking for the _cloud-based agent_ from OpenAI, **Codex Web**, see [chatgpt.com/codex](https://chatgpt.com/codex).
 
 <!-- ![Codex demo GIF using: codex "explain this codebase to me"](./.github/demo.gif) -->
 
