@@ -83,7 +83,6 @@ impl ModelClient {
                 let response_stream = stream_chat_completions(
                     prompt,
                     &self.config.model_family,
-                    self.config.include_plan_tool,
                     &self.client,
                     &self.provider,
                 )
@@ -132,11 +131,7 @@ impl ModelClient {
         let store = prompt.store && auth_mode != Some(AuthMode::ChatGPT);
 
         let full_instructions = prompt.get_full_instructions(&self.config.model_family);
-        let tools_json = create_tools_json_for_responses_api(
-            prompt,
-            &self.config.model_family,
-            self.config.include_plan_tool,
-        )?;
+        let tools_json = create_tools_json_for_responses_api(&prompt.tools)?;
         let reasoning = create_reasoning_param_for_request(
             &self.config.model_family,
             self.effort,

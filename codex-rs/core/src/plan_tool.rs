@@ -45,8 +45,8 @@ pub(crate) static PLAN_TOOL: LazyLock<OpenAiTool> = LazyLock::new(|| {
     let plan_items_schema = JsonSchema::Array {
         items: Box::new(JsonSchema::Object {
             properties: plan_item_props,
-            required: &["step", "status"],
-            additional_properties: false,
+            required: Some(vec!["step".to_string(), "status".to_string()]),
+            additional_properties: Some(false),
         }),
     };
 
@@ -55,7 +55,7 @@ pub(crate) static PLAN_TOOL: LazyLock<OpenAiTool> = LazyLock::new(|| {
     properties.insert("plan".to_string(), plan_items_schema);
 
     OpenAiTool::Function(ResponsesApiTool {
-        name: "update_plan",
+        name: "update_plan".to_string(),
         description: r#"Use the update_plan tool to keep the user updated on the current plan for the task.
 After understanding the user's task, call the update_plan tool with an initial plan. An example of a plan:
 1. Explore the codebase to find relevant files (status: in_progress)
@@ -66,12 +66,12 @@ Until all the steps are finished, there should always be exactly one in_progress
 Call the update_plan tool whenever you finish a step, marking the completed step as `completed` and marking the next step as `in_progress`.
 Before running a command, consider whether or not you have completed the previous step, and make sure to mark it as completed before moving on to the next step.
 Sometimes, you may need to change plans in the middle of a task: call `update_plan` with the updated plan and make sure to provide an `explanation` of the rationale when doing so.
-When all steps are completed, call update_plan one last time with all steps marked as `completed`."#,
+When all steps are completed, call update_plan one last time with all steps marked as `completed`."#.to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
-            required: &["plan"],
-            additional_properties: false,
+            required: Some(vec!["plan".to_string()]),
+            additional_properties: Some(false),
         },
     })
 });

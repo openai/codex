@@ -32,7 +32,6 @@ use crate::util::backoff;
 pub(crate) async fn stream_chat_completions(
     prompt: &Prompt,
     model_family: &ModelFamily,
-    include_plan_tool: bool,
     client: &reqwest::Client,
     provider: &ModelProviderInfo,
 ) -> Result<ResponseStream> {
@@ -112,8 +111,7 @@ pub(crate) async fn stream_chat_completions(
         }
     }
 
-    let tools_json =
-        create_tools_json_for_chat_completions_api(prompt, model_family, include_plan_tool)?;
+    let tools_json = create_tools_json_for_chat_completions_api(&prompt.tools)?;
     let payload = json!({
         "model": model_family.slug,
         "messages": messages,
