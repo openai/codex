@@ -112,6 +112,9 @@ pub(crate) enum HistoryCell {
     /// A human‑friendly rendering of the model's current plan and step
     /// statuses provided via the `update_plan` tool.
     PlanUpdate { view: TextBlock },
+
+    /// Result of applying a patch (success or failure) with optional output.
+    PatchApplyResult { view: TextBlock },
 }
 
 const TOOL_CALL_MAX_LINES: usize = 5;
@@ -132,6 +135,7 @@ impl HistoryCell {
             | HistoryCell::CompletedMcpToolCall { view }
             | HistoryCell::PendingPatch { view }
             | HistoryCell::PlanUpdate { view }
+            | HistoryCell::PatchApplyResult { view }
             | HistoryCell::ActiveExecCommand { view, .. }
             | HistoryCell::ActiveMcpToolCall { view, .. } => {
                 view.lines.iter().map(line_to_static).collect()
@@ -562,7 +566,9 @@ impl HistoryCell {
             PatchEventType::ApplyBegin {
                 auto_approved: false,
             } => {
-                let lines = vec![Line::from("patch applied".magenta().bold())];
+                let mut lines: Vec<Line<'static>> = Vec::new();
+                lines.push(Line::from("applying patch".magenta().bold()));
+                lines.push(Line::from(""));
                 return Self::PendingPatch {
                     view: TextBlock::new(lines),
                 };
@@ -607,6 +613,54 @@ impl HistoryCell {
         lines.push(Line::from(""));
 
         HistoryCell::PendingPatch {
+            view: TextBlock::new(lines),
+        }
+    }
+
+    pub(crate) fn new_patch_apply_end(stdout: String, stderr: String, success: bool) -> Self {
+        let mut lines: Vec<Line<'static>> = Vec::new();
+
+        let status = if success {
+            RtSpan::styled("patch applied", Style::default().fg(Color::Green))
+        } else {
+            RtSpan::styled(
+                "patch failed",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            )
+        };
+        lines.push(RtLine::from(vec![
+            "patch".magenta().bold(),
+            " ".into(),
+            status,
+        ]));
+
+        let src = if success {
+            if stdout.trim().is_empty() {
+                &stderr
+            } else {
+                &stdout
+            }
+        } else if stderr.trim().is_empty() {
+            &stdout
+        } else {
+            &stderr
+        };
+
+        if !src.trim().is_empty() {
+            lines.push(Line::from(""));
+            let mut iter = src.lines();
+            for raw in iter.by_ref().take(TOOL_CALL_MAX_LINES) {
+                lines.push(ansi_escape_line(raw).dim());
+            }
+            let remaining = iter.count();
+            if remaining > 0 {
+                lines.push(Line::from(format!("... {remaining} additional lines")).dim());
+            }
+        }
+
+        lines.push(Line::from(""));
+
+        HistoryCell::PatchApplyResult {
             view: TextBlock::new(lines),
         }
     }

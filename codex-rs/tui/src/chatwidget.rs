@@ -107,6 +107,17 @@ fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Optio
 }
 
 impl ChatWidget<'_> {
+    fn layout_areas(&self, area: Rect) -> [Rect; 2] {
+        Layout::vertical([
+            Constraint::Max(
+                self.active_history_cell
+                    .as_ref()
+                    .map_or(0, |c| c.desired_height(area.width)),
+            ),
+            Constraint::Min(self.bottom_pane.desired_height(area.width)),
+        ])
+        .areas(area)
+    }
     fn emit_stream_header(&mut self, kind: StreamKind) {
         use ratatui::text::Line as RLine;
         if self.stream_header_emitted {
@@ -445,6 +456,13 @@ impl ChatWidget<'_> {
                     changes,
                 ));
             }
+            EventMsg::PatchApplyEnd(event) => {
+                self.add_to_history(HistoryCell::new_patch_apply_end(
+                    event.stdout,
+                    event.stderr,
+                    event.success,
+                ));
+            }
             EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                 call_id,
                 exit_code,
@@ -584,15 +602,7 @@ impl ChatWidget<'_> {
     }
 
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        let [_, bottom_pane_area] = Layout::vertical([
-            Constraint::Max(
-                self.active_history_cell
-                    .as_ref()
-                    .map_or(0, |c| c.desired_height(area.width)),
-            ),
-            Constraint::Min(self.bottom_pane.desired_height(area.width)),
-        ])
-        .areas(area);
+        let [_, bottom_pane_area] = self.layout_areas(area);
         self.bottom_pane.cursor_pos(bottom_pane_area)
     }
 }
@@ -697,15 +707,7 @@ impl ChatWidget<'_> {
 
 impl WidgetRef for &ChatWidget<'_> {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        let [active_cell_area, bottom_pane_area] = Layout::vertical([
-            Constraint::Max(
-                self.active_history_cell
-                    .as_ref()
-                    .map_or(0, |c| c.desired_height(area.width)),
-            ),
-            Constraint::Min(self.bottom_pane.desired_height(area.width)),
-        ])
-        .areas(area);
+        let [active_cell_area, bottom_pane_area] = self.layout_areas(area);
         (&self.bottom_pane).render(bottom_pane_area, buf);
         if let Some(cell) = &self.active_history_cell {
             cell.render_ref(active_cell_area, buf);
