@@ -16,6 +16,7 @@ pub enum SlashCommand {
     Init,
     Compact,
     Diff,
+    Status,
     Quit,
     #[cfg(debug_assertions)]
     TestApproval,
@@ -25,13 +26,12 @@ impl SlashCommand {
     /// User-visible description shown in the popup.
     pub fn description(self) -> &'static str {
         match self {
-            SlashCommand::New => "Start a new chat.",
+            SlashCommand::New => "Start a new chat",
             SlashCommand::Init => "Create an AGENTS.md file with instructions for Codex.",
-            SlashCommand::Compact => "Compact the chat history.",
-            SlashCommand::Quit => "Exit the application.",
-            SlashCommand::Diff => {
-                "Show git diff of the working directory (including untracked files)"
-            }
+            SlashCommand::Compact => "Compact the chat history",
+            SlashCommand::Quit => "Exit the application",
+            SlashCommand::Diff => "Show git diff (including untracked files)",
+            SlashCommand::Status => "Show current session configuration and token usage",
             #[cfg(debug_assertions)]
             SlashCommand::TestApproval => "Test approval request",
         }
