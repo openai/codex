@@ -132,7 +132,7 @@ impl ModelClient {
         {
             return Err(CodexErr::UnexpectedStatus(
                 StatusCode::BAD_REQUEST,
-                "2025-08-06-model is only supported with ChatGPT auth".to_string(),
+                "2025-08-06-model is only supported with ChatGPT auth, run `codex login status` to check your auth status and `codex login` to login with ChatGPT".to_string(),
             ));
         }
 
