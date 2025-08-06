@@ -813,7 +813,12 @@ async fn submission_loop(
                 let default_shell = shell::default_user_shell().await;
                 sess = Some(Arc::new(Session {
                     client,
-                    tools_config: ToolsConfig::new(&config.model_family, config.include_plan_tool),
+                    tools_config: ToolsConfig::new(
+                        &config.model_family,
+                        approval_policy,
+                        sandbox_policy.clone(),
+                        config.include_plan_tool,
+                    ),
                     tx_event: tx_event.clone(),
                     ctrl_c: Arc::clone(&ctrl_c),
                     user_instructions,
@@ -1588,6 +1593,8 @@ async fn handle_response_item(
                 command: action.command,
                 workdir: action.working_directory,
                 timeout_ms: action.timeout_ms,
+                with_escalated_permissions: None,
+                justification: None,
             };
             let effective_call_id = match (call_id, id) {
                 (Some(call_id), _) => call_id,
@@ -1676,6 +1683,8 @@ fn to_exec_params(params: ShellToolCallParams, sess: &Session) -> ExecParams {
         cwd: sess.resolve_path(params.workdir.clone()),
         timeout_ms: params.timeout_ms,
         env: create_env(&sess.shell_environment_policy),
+        with_escalated_permissions: params.with_escalated_permissions,
+        justification: params.justification,
     }
 }
 
@@ -1776,13 +1785,19 @@ async fn handle_container_exec_with_params(
                 cwd: cwd.clone(),
                 timeout_ms: params.timeout_ms,
                 env: HashMap::new(),
+                with_escalated_permissions: params.with_escalated_permissions,
+                justification: params.justification.clone(),
             };
             let safety = if *user_explicitly_approved_this_action {
                 SafetyCheck::AutoApprove {
                     sandbox_type: SandboxType::None,
                 }
             } else {
-                assess_safety_for_untrusted_command(sess.approval_policy, &sess.sandbox_policy)
+                assess_safety_for_untrusted_command(
+                    sess.approval_policy,
+                    &sess.sandbox_policy,
+                    params.with_escalated_permissions.unwrap_or(false),
+                )
             };
             (
                 params,
@@ -1798,6 +1813,7 @@ async fn handle_container_exec_with_params(
                     sess.approval_policy,
                     &sess.sandbox_policy,
                     &state.approved_commands,
+                    params.with_escalated_permissions.unwrap_or(false),
                 )
             };
             let command_for_display = params.command.clone();
@@ -1814,7 +1830,7 @@ async fn handle_container_exec_with_params(
                     call_id.clone(),
                     params.command.clone(),
                     params.cwd.clone(),
-                    None,
+                    params.justification.clone(),
                 )
                 .await;
             match rx_approve.await.unwrap_or_default() {
@@ -1952,17 +1968,21 @@ async fn handle_sandbox_error(
     let cwd = exec_command_context.cwd.clone();
     let is_apply_patch = exec_command_context.apply_patch.is_some();
 
-    // Early out if the user never wants to be asked for approval; just return to the model immediately
-    if sess.approval_policy == AskForApproval::Never {
-        return ResponseInputItem::FunctionCallOutput {
-            call_id,
-            output: FunctionCallOutputPayload {
-                content: format!(
-                    "failed in sandbox {sandbox_type:?} with execution error: {error}"
-                ),
-                success: Some(false),
-            },
-        };
+    // Early out if either the user never wants to be asked for approval, or
+    // we're letting the model manage escalation requests. Otherwise, continue
+    match sess.approval_policy {
+        AskForApproval::Never | AskForApproval::OnRequest => {
+            return ResponseInputItem::FunctionCallOutput {
+                call_id,
+                output: FunctionCallOutputPayload {
+                    content: format!(
+                        "failed in sandbox {sandbox_type:?} with execution error: {error}"
+                    ),
+                    success: Some(false),
+                },
+            };
+        }
+        AskForApproval::UnlessTrusted | AskForApproval::OnFailure => (),
     }
 
     // similarly, if the command timed out, we can simply return this failure to the model
