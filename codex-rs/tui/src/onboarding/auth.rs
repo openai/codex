@@ -50,8 +50,51 @@ impl Drop for ContinueInBrowserState {
     }
 }
 
+impl KeyboardHandler for AuthModeWidget {
+    fn handle_key_event(&mut self, key_event: KeyEvent) -> KeyEventResult {
+        match key_event.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.mode = AuthMode::ChatGPT;
+                KeyEventResult::None
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.mode = AuthMode::ApiKey;
+                KeyEventResult::None
+            }
+            KeyCode::Char('1') => {
+                self.mode = AuthMode::ChatGPT;
+                self.start_chatgpt_login();
+                KeyEventResult::None
+            }
+            KeyCode::Char('2') => {
+                self.mode = AuthMode::ApiKey;
+                self.verify_api_key()
+            }
+            KeyCode::Enter => match self.mode {
+                AuthMode::ChatGPT => match &self.sign_in_state {
+                    SignInState::PickMode => self.start_chatgpt_login(),
+                    SignInState::ChatGptContinueInBrowser(_) => KeyEventResult::None,
+                    SignInState::ChatGptSuccess => KeyEventResult::Continue,
+                },
+                AuthMode::ApiKey => self.verify_api_key(),
+            },
+            KeyCode::Esc => {
+                if matches!(self.sign_in_state, SignInState::ChatGptContinueInBrowser(_)) {
+                    self.sign_in_state = SignInState::PickMode;
+                    self.event_tx.send(AppEvent::RequestRedraw);
+                    KeyEventResult::None
+                } else {
+                    KeyEventResult::Quit
+                }
+            }
+            KeyCode::Char('q') => KeyEventResult::Quit,
+            _ => KeyEventResult::None,
+        }
+    }
+}
+
 #[derive(Debug)]
-pub(crate) struct AuthModeState {
+pub(crate) struct AuthModeWidget {
     pub mode: AuthMode,
     pub error: Option<String>,
     pub sign_in_state: SignInState,
@@ -59,7 +102,116 @@ pub(crate) struct AuthModeState {
     pub codex_home: PathBuf,
 }
 
-impl AuthModeState {
+impl<'a> AuthModeWidget {
+    fn render_pick_mode(&self, area: Rect, buf: &mut Buffer) {
+        let mut lines: Vec<Line> = vec![
+            Line::from(vec![
+                Span::raw("> "),
+                Span::styled(
+                    "Sign in with your ChatGPT account?",
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+            ]),
+            Line::from(""),
+        ];
+
+        let create_mode_item = |idx: usize,
+                                selected_mode: AuthMode,
+                                text: &str,
+                                description: &str|
+         -> Vec<Line<'static>> {
+            let is_selected = self.mode == selected_mode;
+            let caret = if is_selected { ">" } else { " " };
+
+            let line1 = if is_selected {
+                Line::from(vec![
+                    Span::styled(
+                        format!("{} {}. ", caret, idx + 1),
+                        Style::default().fg(LIGHT_BLUE).add_modifier(Modifier::DIM),
+                    ),
+                    Span::styled(text.to_owned(), Style::default().fg(LIGHT_BLUE)),
+                ])
+            } else {
+                Line::from(format!("  {}. {text}", idx + 1))
+            };
+
+            let line2 = if is_selected {
+                Line::from(format!("     {description}"))
+                    .style(Style::default().fg(LIGHT_BLUE).add_modifier(Modifier::DIM))
+            } else {
+                Line::from(format!("     {description}"))
+                    .style(Style::default().add_modifier(Modifier::DIM))
+            };
+
+            vec![line1, line2]
+        };
+
+        lines.extend(create_mode_item(
+            0,
+            AuthMode::ChatGPT,
+            "Sign in with ChatGPT or create a new account",
+            "Leverages your plan, starting at $20 a month for Plus",
+        ));
+        lines.extend(create_mode_item(
+            1,
+            AuthMode::ApiKey,
+            "Provide your own API key",
+            "Pay only for what you use",
+        ));
+        lines.push(Line::from(""));
+        lines.push(
+            Line::from("Press Enter to continue")
+                .style(Style::default().add_modifier(Modifier::DIM)),
+        );
+        if let Some(err) = &self.error {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                err.as_str(),
+                Style::default().fg(Color::Red),
+            )));
+        }
+
+        Paragraph::new(lines).render(area, buf);
+    }
+
+    fn render_continue_in_browser(&self, area: Rect, buf: &mut Buffer) {
+        let idx = self.current_frame();
+        let mut spans = vec![Span::from("> ")];
+        spans.extend(shimmer_spans("Finish signing in via your browser", idx));
+        let lines = vec![
+            Line::from(spans),
+            Line::from(""),
+            Line::from("  Press Escape to cancel")
+                .style(Style::default().add_modifier(Modifier::DIM)),
+        ];
+        Paragraph::new(lines).render(area, buf);
+    }
+
+    fn render_chatgpt_success(&self, area: Rect, buf: &mut Buffer) {
+        let lines = vec![
+            Line::from("✓ Signed in with your ChatGPT account")
+                .style(Style::default().fg(SUCCESS_GREEN)),
+            Line::from(""),
+            Line::from("> Before you start:"),
+            Line::from(""),
+            Line::from("  Codex can make mistakes"),
+            Line::from("  Check important info")
+                .style(Style::default().add_modifier(Modifier::DIM)),
+            Line::from(""),
+            Line::from("  Due to prompt injection risks, only use it with code you trust"),
+            Line::from("  For more details see https://github.com/openai/codex")
+                .style(Style::default().add_modifier(Modifier::DIM)),
+            Line::from(""),
+            Line::from("  Powered by your ChatGPT account"),
+            Line::from("  Uses your plan's rate limits and training data preferences")
+                .style(Style::default().add_modifier(Modifier::DIM)),
+            Line::from(""),
+            Line::from("  Press Enter to continue").style(Style::default().fg(LIGHT_BLUE)),
+        ];
+
+        Paragraph::new(lines).render(area, buf);
+    }
+
     fn start_chatgpt_login(&mut self) -> KeyEventResult {
         self.error = None;
         match codex_login::spawn_login_with_chatgpt(&self.codex_home) {
@@ -140,168 +292,9 @@ impl AuthModeState {
     }
 }
 
-impl KeyboardHandler for AuthModeState {
-    fn handle_key_event(&mut self, key_event: KeyEvent) -> KeyEventResult {
-        match key_event.code {
-            KeyCode::Up | KeyCode::Char('k') => {
-                self.mode = AuthMode::ChatGPT;
-                KeyEventResult::None
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                self.mode = AuthMode::ApiKey;
-                KeyEventResult::None
-            }
-            KeyCode::Char('1') => {
-                self.mode = AuthMode::ChatGPT;
-                self.start_chatgpt_login();
-                KeyEventResult::None
-            }
-            KeyCode::Char('2') => {
-                self.mode = AuthMode::ApiKey;
-                self.verify_api_key()
-            }
-            KeyCode::Enter => match self.mode {
-                AuthMode::ChatGPT => match &self.sign_in_state {
-                    SignInState::PickMode => self.start_chatgpt_login(),
-                    SignInState::ChatGptContinueInBrowser(_) => KeyEventResult::None,
-                    SignInState::ChatGptSuccess => KeyEventResult::Continue,
-                },
-                AuthMode::ApiKey => self.verify_api_key(),
-            },
-            KeyCode::Esc => {
-                if matches!(self.sign_in_state, SignInState::ChatGptContinueInBrowser(_)) {
-                    self.sign_in_state = SignInState::PickMode;
-                    self.event_tx.send(AppEvent::RequestRedraw);
-                    KeyEventResult::None
-                } else {
-                    KeyEventResult::Quit
-                }
-            }
-            KeyCode::Char('q') => KeyEventResult::Quit,
-            _ => KeyEventResult::None,
-        }
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct AuthModeWidget<'a> {
-    pub state: &'a AuthModeState,
-}
-
-impl<'a> AuthModeWidget<'a> {
-    fn render_pick_mode(&self, area: Rect, buf: &mut Buffer) {
-        let mut lines: Vec<Line> = vec![
-            Line::from(vec![
-                Span::raw("> "),
-                Span::styled(
-                    "Sign in with your ChatGPT account?",
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
-            ]),
-            Line::from(""),
-        ];
-
-        let create_mode_item = |idx: usize,
-                                selected_mode: AuthMode,
-                                text: &str,
-                                description: &str|
-         -> Vec<Line<'static>> {
-            let is_selected = self.state.mode == selected_mode;
-            let caret = if is_selected { ">" } else { " " };
-
-            let line1 = if is_selected {
-                Line::from(vec![
-                    Span::styled(
-                        format!("{} {}. ", caret, idx + 1),
-                        Style::default().fg(LIGHT_BLUE).add_modifier(Modifier::DIM),
-                    ),
-                    Span::styled(text.to_owned(), Style::default().fg(LIGHT_BLUE)),
-                ])
-            } else {
-                Line::from(format!("  {}. {text}", idx + 1))
-            };
-
-            let line2 = if is_selected {
-                Line::from(format!("     {description}"))
-                    .style(Style::default().fg(LIGHT_BLUE).add_modifier(Modifier::DIM))
-            } else {
-                Line::from(format!("     {description}"))
-                    .style(Style::default().add_modifier(Modifier::DIM))
-            };
-
-            vec![line1, line2]
-        };
-
-        lines.extend(create_mode_item(
-            0,
-            AuthMode::ChatGPT,
-            "Sign in with ChatGPT or create a new account",
-            "Leverages your plan, starting at $20 a month for Plus",
-        ));
-        lines.extend(create_mode_item(
-            1,
-            AuthMode::ApiKey,
-            "Provide your own API key",
-            "Pay only for what you use",
-        ));
-        lines.push(Line::from(""));
-        lines.push(
-            Line::from("Press Enter to continue")
-                .style(Style::default().add_modifier(Modifier::DIM)),
-        );
-        if let Some(err) = &self.state.error {
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                err.as_str(),
-                Style::default().fg(Color::Red),
-            )));
-        }
-
-        Paragraph::new(lines).render(area, buf);
-    }
-
-    fn render_continue_in_browser(&self, area: Rect, buf: &mut Buffer) {
-        let idx = self.state.current_frame();
-        let mut spans = vec![Span::from("> ")];
-        spans.extend(shimmer_spans("Finish signing in via your browser", idx));
-        let lines = vec![
-            Line::from(spans),
-            Line::from(""),
-            Line::from("  Press Escape to cancel")
-                .style(Style::default().add_modifier(Modifier::DIM)),
-        ];
-        Paragraph::new(lines).render(area, buf);
-    }
-
-    fn render_chatgpt_success(&self, area: Rect, buf: &mut Buffer) {
-        let lines = vec![
-            Line::from("✓ Signed in with your ChatGPT account")
-                .style(Style::default().fg(SUCCESS_GREEN)),
-            Line::from(""),
-            Line::from("> Before you start:"),
-            Line::from(""),
-            Line::from("  Codex can make mistakes"),
-            Line::from("  Check important info")
-                .style(Style::default().add_modifier(Modifier::DIM)),
-            Line::from(""),
-            Line::from("  Due to prompt injection risks, only use it with code you trust"),
-            Line::from("  For more details see https://github.com/openai/codex")
-                .style(Style::default().add_modifier(Modifier::DIM)),
-            Line::from(""),
-            Line::from("  Powered by your ChatGPT account"),
-            Line::from("  Uses your plan's rate limits and training data preferences")
-                .style(Style::default().add_modifier(Modifier::DIM)),
-            Line::from(""),
-            Line::from("  Press Enter to continue").style(Style::default().fg(LIGHT_BLUE)),
-        ];
-
-        Paragraph::new(lines).render(area, buf);
-    }
-}
-
-impl WidgetRef for AuthModeWidget<'_> {
+impl WidgetRef for AuthModeWidget {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        match self.state.sign_in_state {
+        match self.sign_in_state {
             SignInState::PickMode => {
                 self.render_pick_mode(area, buf);
             }

@@ -7,15 +7,14 @@ use codex_login::AuthMode;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
-use crate::onboarding::auth::AuthModeState;
 use crate::onboarding::auth::AuthModeWidget;
 use crate::onboarding::auth::SignInState;
 use crate::onboarding::welcome::WelcomeWidget;
 use std::path::PathBuf;
 
 enum Step {
-    Welcome,
-    Auth(AuthModeState),
+    Welcome(WelcomeWidget),
+    Auth(AuthModeWidget),
 }
 
 pub(crate) trait KeyboardHandler {
@@ -35,13 +34,13 @@ pub(crate) struct OnboardingScreen {
 
 impl OnboardingScreen {
     pub(crate) fn new(event_tx: AppEventSender, codex_home: PathBuf) -> Self {
-        let steps = vec![
-            Step::Welcome,
-            Step::Auth(AuthModeState {
+        let steps: Vec<Step> = vec![
+            Step::Welcome(WelcomeWidget {}),
+            Step::Auth(AuthModeWidget {
+                event_tx: event_tx.clone(),
                 mode: AuthMode::ChatGPT,
                 error: None,
                 sign_in_state: SignInState::PickMode,
-                event_tx: event_tx.clone(),
                 codex_home,
             }),
         ];
@@ -138,8 +137,8 @@ impl WidgetRef for &OnboardingScreen {
 impl KeyboardHandler for Step {
     fn handle_key_event(&mut self, key_event: KeyEvent) -> KeyEventResult {
         match self {
-            Step::Welcome => KeyEventResult::None,
-            Step::Auth(state) => state.handle_key_event(key_event),
+            Step::Welcome(_) => KeyEventResult::None,
+            Step::Auth(widget) => widget.handle_key_event(key_event),
         }
     }
 }
@@ -147,12 +146,10 @@ impl KeyboardHandler for Step {
 impl WidgetRef for Step {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         match self {
-            Step::Welcome => {
-                let widget = WelcomeWidget {};
-                (&widget).render_ref(area, buf);
+            Step::Welcome(widget) => {
+                widget.render_ref(area, buf);
             }
-            Step::Auth(state) => {
-                let widget = AuthModeWidget { state };
+            Step::Auth(widget) => {
                 widget.render_ref(area, buf);
             }
         }
