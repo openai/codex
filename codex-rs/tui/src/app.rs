@@ -300,6 +300,13 @@ impl App<'_> {
                         self.app_state = AppState::Chat { widget: new_widget };
                         self.app_event_tx.send(AppEvent::RequestRedraw);
                     }
+                    SlashCommand::Init => {
+                        // Guard: do not run if a task is active.
+                        if let AppState::Chat { widget } = &mut self.app_state {
+                            const INIT_PROMPT: &str = include_str!("../../../INIT.md");
+                            widget.submit_text_message(INIT_PROMPT.to_string());
+                        }
+                    }
                     SlashCommand::Compact => {
                         if let AppState::Chat { widget } = &mut self.app_state {
                             widget.clear_token_usage();

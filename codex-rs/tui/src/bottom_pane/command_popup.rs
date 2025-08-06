@@ -188,3 +188,38 @@ impl WidgetRef for CommandPopup {
         table.render(area, buf);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn filter_includes_init_when_typing_prefix() {
+        let mut popup = CommandPopup::new();
+        // Simulate the composer line starting with '/in' so the popup filters
+        // matching commands by prefix.
+        popup.on_composer_text_change("/in".to_string());
+
+        // Access the filtered list via the selected command and ensure that
+        // one of the matches is the new "init" command.
+        let matches = popup.filtered_commands();
+        assert!(
+            matches.iter().any(|cmd| cmd.command() == "init"),
+            "expected '/init' to appear among filtered commands"
+        );
+    }
+
+    #[test]
+    fn selecting_init_by_exact_match() {
+        let mut popup = CommandPopup::new();
+        popup.on_composer_text_change("/init".to_string());
+
+        // When an exact match exists, the selected command should be that
+        // command by default.
+        let selected = popup.selected_command();
+        match selected {
+            Some(cmd) => assert_eq!(cmd.command(), "init"),
+            None => panic!("expected a selected command for exact match"),
+        }
+    }
+}
