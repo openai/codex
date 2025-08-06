@@ -7,6 +7,10 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::WidgetRef;
 
+use crate::onboarding::onboarding_screen::StepStateProvider;
+
+use super::onboarding_screen::StepState;
+
 pub(crate) struct WelcomeWidget {}
 
 impl WidgetRef for &WelcomeWidget {
@@ -19,5 +23,11 @@ impl WidgetRef for &WelcomeWidget {
             ),
         ]);
         line.render(area, buf);
+    }
+}
+
+impl StepStateProvider for WelcomeWidget {
+    fn get_step_state() -> StepState {
+        return StepState::Complete;
     }
 }

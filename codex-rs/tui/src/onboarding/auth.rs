@@ -20,15 +20,19 @@ use crate::colors::LIGHT_BLUE;
 use crate::colors::SUCCESS_GREEN;
 use crate::onboarding::onboarding_screen::KeyEventResult;
 use crate::onboarding::onboarding_screen::KeyboardHandler;
+use crate::onboarding::onboarding_screen::StepStateProvider;
 use crate::shimmer::FrameTicker;
 use crate::shimmer::shimmer_spans;
 use std::path::PathBuf;
+
+use super::onboarding_screen::StepState;
 // no additional imports
 
 #[derive(Debug)]
 pub(crate) enum SignInState {
     PickMode,
     ChatGptContinueInBrowser(#[allow(dead_code)] ContinueInBrowserState),
+    ChatGptSuccessMessage,
     ChatGptSuccess,
 }
 
@@ -38,7 +42,6 @@ pub(crate) struct ContinueInBrowserState {
     _login_child: Option<codex_login::SpawnedLogin>,
     _frame_ticker: Option<FrameTicker>,
 }
-
 impl Drop for ContinueInBrowserState {
     fn drop(&mut self) {
         if let Some(child) = &self._login_child {
@@ -75,7 +78,7 @@ impl KeyboardHandler for AuthModeWidget {
                 AuthMode::ChatGPT => match &self.sign_in_state {
                     SignInState::PickMode => self.start_chatgpt_login(),
                     SignInState::ChatGptContinueInBrowser(_) => KeyEventResult::None,
-                    SignInState::ChatGptSuccess => KeyEventResult::Continue,
+                    SignInState::ChatGptSuccessMessage => KeyEventResult::Continue,
                 },
                 AuthMode::ApiKey => self.verify_api_key(),
             },
@@ -192,7 +195,7 @@ impl AuthModeWidget {
             .render(area, buf);
     }
 
-    fn render_chatgpt_success(&self, area: Rect, buf: &mut Buffer) {
+    fn render_chatgpt_success_message(&self, area: Rect, buf: &mut Buffer) {
         let lines = vec![
             Line::from("✓ Signed in with your ChatGPT account")
                 .style(Style::default().fg(SUCCESS_GREEN)),
@@ -212,6 +215,17 @@ impl AuthModeWidget {
                 .style(Style::default().add_modifier(Modifier::DIM)),
             Line::from(""),
             Line::from("  Press Enter to continue").style(Style::default().fg(LIGHT_BLUE)),
+        ];
+
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .render(area, buf);
+    }
+
+    fn render_chatgpt_success(&self, area: Rect, buf: &mut Buffer) {
+        let lines = vec![
+            Line::from("✓ Signed in with your ChatGPT account")
+                .style(Style::default().fg(SUCCESS_GREEN)),
         ];
 
         Paragraph::new(lines)
@@ -299,6 +313,17 @@ impl AuthModeWidget {
     }
 }
 
+impl StepStateProvider for AuthModeWidget {
+    fn get_step_state(&self) -> StepState {
+        match &self.sign_in_state {
+            SignInState::PickMode
+            | SignInState::ChatGptContinueInBrowser(_)
+            | SignInState::ChatGptSuccessMessage => StepState::InProgress,
+            SignInState::ChatGptSuccess => StepState::Complete,
+        }
+    }
+}
+
 impl WidgetRef for AuthModeWidget {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         match self.sign_in_state {
@@ -307,6 +332,9 @@ impl WidgetRef for AuthModeWidget {
             }
             SignInState::ChatGptContinueInBrowser(_) => {
                 self.render_continue_in_browser(area, buf);
+            }
+            SignInState::ChatGptSuccessMessage => {
+                self.render_chatgpt_success_message(area, buf);
             }
             SignInState::ChatGptSuccess => {
                 self.render_chatgpt_success(area, buf);

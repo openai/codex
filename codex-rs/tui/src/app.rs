@@ -8,6 +8,7 @@ use crate::git_warning_screen::GitWarningScreen;
 use crate::onboarding::onboarding_screen::KeyEventResult;
 use crate::onboarding::onboarding_screen::KeyboardHandler;
 use crate::onboarding::onboarding_screen::OnboardingScreen;
+use crate::onboarding::onboarding_screen::OnboardingScreenProps;
 use crate::should_show_login_screen;
 use crate::slash_command::SlashCommand;
 use crate::tui;
@@ -15,6 +16,7 @@ use codex_core::config::Config;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
+use codex_core::util::is_inside_git_repo;
 use color_eyre::eyre::Result;
 use crossterm::SynchronizedUpdate;
 use crossterm::event::KeyCode;
@@ -47,10 +49,6 @@ enum AppState<'a> {
         /// Boxed to avoid a large enum variant and reduce the overall size of
         /// `AppState`.
         widget: Box<ChatWidget<'a>>,
-    },
-    /// The start-up warning that recommends running codex inside a Git repo.
-    GitWarning {
-        screen: GitWarningScreen,
     },
 }
 
@@ -90,7 +88,7 @@ impl App<'_> {
     pub(crate) fn new(
         config: Config,
         initial_prompt: Option<String>,
-        show_git_warning: bool,
+        skip_git_repo_check: bool,
         initial_images: Vec<std::path::PathBuf>,
     ) -> Self {
         let (app_event_tx, app_event_rx) = channel();
@@ -143,22 +141,21 @@ impl App<'_> {
         }
 
         let show_login_screen = should_show_login_screen(&config);
-        let (app_state, chat_args) = if show_login_screen {
+        let show_git_warning =
+            !skip_git_repo_check && !is_inside_git_repo(&config.cwd.to_path_buf());
+        let onboarding_screen_props = if show_login_screen || show_git_warning {
+            Some(OnboardingScreenProps {
+                event_tx,
+                show_login_screen,
+                show_git_warning,
+            })
+        } else {
+            None
+        };
+        let (app_state, chat_args) = if let Some(props) = onboarding_screen_props {
             (
                 AppState::Onboarding {
-                    screen: OnboardingScreen::new(app_event_tx.clone(), config.codex_home.clone()),
-                },
-                Some(ChatWidgetArgs {
-                    config: config.clone(),
-                    initial_prompt,
-                    initial_images,
-                    enhanced_keys_supported,
-                }),
-            )
-        } else if show_git_warning {
-            (
-                AppState::GitWarning {
-                    screen: GitWarningScreen::new(),
+                    screen: OnboardingScreen::new(props),
                 },
                 Some(ChatWidgetArgs {
                     config: config.clone(),

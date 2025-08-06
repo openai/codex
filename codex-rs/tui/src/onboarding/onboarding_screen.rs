@@ -9,16 +9,28 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::onboarding::auth::AuthModeWidget;
 use crate::onboarding::auth::SignInState;
+use crate::onboarding::git_warning::GitWarningWidget;
 use crate::onboarding::welcome::WelcomeWidget;
 use std::path::PathBuf;
 
 enum Step {
     Welcome(WelcomeWidget),
     Auth(AuthModeWidget),
+    GitWarning(GitWarningWidget),
 }
 
 pub(crate) trait KeyboardHandler {
     fn handle_key_event(&mut self, key_event: KeyEvent) -> KeyEventResult;
+}
+
+pub(crate) enum StepState {
+    Hidden,
+    InProgress,
+    Complete,
+}
+
+pub(crate) trait StepStateProvider {
+    fn get_step_state(&self) -> StepState;
 }
 
 pub(crate) enum KeyEventResult {
@@ -32,18 +44,37 @@ pub(crate) struct OnboardingScreen {
     steps: Vec<Step>,
 }
 
+pub(crate) struct OnboardingScreenProps {
+    pub event_tx: AppEventSender,
+    pub codex_home: PathBuf,
+    pub cwd: PathBuf,
+    pub show_login_screen: bool,
+    pub show_git_warning: bool,
+}
+
 impl OnboardingScreen {
-    pub(crate) fn new(event_tx: AppEventSender, codex_home: PathBuf) -> Self {
-        let steps: Vec<Step> = vec![
-            Step::Welcome(WelcomeWidget {}),
-            Step::Auth(AuthModeWidget {
+    pub(crate) fn new(props: OnboardingScreenProps) -> Self {
+        let OnboardingScreenProps {
+            event_tx,
+            codex_home,
+            cwd,
+            show_login_screen,
+            show_git_warning,
+        } = props;
+        let mut steps: Vec<Step> = vec![Step::Welcome(WelcomeWidget {})];
+        if show_login_screen {
+            steps.push(Step::Auth(AuthModeWidget {
                 event_tx: event_tx.clone(),
                 mode: AuthMode::ChatGPT,
                 error: None,
                 sign_in_state: SignInState::PickMode,
                 codex_home,
-            }),
-        ];
+            }))
+        }
+        if show_git_warning {
+            steps.push(Step::GitWarning(GitWarningWidget { cwd }))
+        }
+        // TODO: add git warning.
         Self { event_tx, steps }
     }
 
@@ -51,7 +82,7 @@ impl OnboardingScreen {
         if let Some(Step::Auth(state)) = self.steps.last_mut() {
             match result {
                 Ok(()) => {
-                    state.sign_in_state = SignInState::ChatGptSuccess;
+                    state.sign_in_state = SignInState::ChatGptSuccessMessage;
                     self.event_tx.send(AppEvent::RequestRedraw);
                     KeyEventResult::None
                 }
@@ -139,6 +170,7 @@ impl KeyboardHandler for Step {
         match self {
             Step::Welcome(_) => KeyEventResult::None,
             Step::Auth(widget) => widget.handle_key_event(key_event),
+            Step::GitWarning(widget) => widget.handle_key_event(key_event),
         }
     }
 }
@@ -150,6 +182,9 @@ impl WidgetRef for Step {
                 widget.render_ref(area, buf);
             }
             Step::Auth(widget) => {
+                widget.render_ref(area, buf);
+            }
+            Step::GitWarning(widget) => {
                 widget.render_ref(area, buf);
             }
         }
