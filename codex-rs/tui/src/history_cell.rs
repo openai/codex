@@ -263,7 +263,10 @@ impl HistoryCell {
             let mut line = ansi_escape_line(raw);
             let prefix = if is_first { "  ⎿ " } else { "    " };
             line.spans.insert(0, prefix.into());
-            lines.push(line.dim());
+            line.spans.iter_mut().for_each(|span| {
+                span.style = span.style.add_modifier(Modifier::DIM);
+            });
+            lines.push(line);
             is_first = false;
         }
         let remaining = lines_iter.count();
@@ -271,7 +274,10 @@ impl HistoryCell {
             let mut more = Line::from(format!("... +{remaining} lines"));
             // Continuation/ellipsis is treated as a subsequent line for prefixing
             more.spans.insert(0, "    ".into());
-            lines.push(more.dim());
+            more.spans.iter_mut().for_each(|span| {
+                span.style = span.style.add_modifier(Modifier::DIM);
+            });
+            lines.push(more);
         }
         lines.push(Line::from(""));
 
