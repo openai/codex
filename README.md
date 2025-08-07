@@ -105,8 +105,65 @@ export OPENAI_API_KEY="your-api-key-here"
 > [!NOTE]
 > This command sets the key only for your current terminal session. You can add the `export` line to your shell's configuration file (e.g., `~/.zshrc`), but we recommend setting it for the session.
 
+Run interactively:
+
+```shell
+codex
+```
+
+Or, run with a prompt as input (and optionally in `Full Auto` mode):
+
+```shell
+codex "explain this codebase to me"
+```
+
+```shell
+codex --full-auto "create the fanciest todo-list app"
+```
+
+That's it - Codex will scaffold a file, run it inside a sandbox, install any
+missing dependencies, and show you the live result. Approve the changes and
+they'll be committed to your working directory.
+
+
+
+
+## Using Open Source Models
+
+Codex can run fully locally against an OpenAI-compatible OSS host (like Ollama) using the `--oss` flag:
+
+- Interactive UI:
+  - codex --oss
+- Non-interactive (programmatic) mode:
+  - echo "Refactor utils" | codex exec --oss
+
+Model selection when using `--oss`:
+
+- If you omit `-m/--model`, Codex defaults to -m gpt-oss:20b and will verify it exists locally (downloading if needed).
+- To pick a different size, pass one of:
+  - -m "gpt-oss:20b"
+  - -m "gpt-oss:120b"
+
+Point Codex at your own OSS host:
+
+- By default, `--oss` talks to http://localhost:11434/v1.
+- To use a different host, set one of these environment variables before running Codex:
+  - CODEX_OSS_BASE_URL, for example:
+    - CODEX_OSS_BASE_URL="http://my-ollama.example.com:11434/v1" codex --oss -m gpt-oss:20b
+  - or CODEX_OSS_PORT (when the host is localhost):
+    - CODEX_OSS_PORT=11434 codex --oss
+
+Advanced: you can persist this in your config instead of environment variables by overriding the built-in `oss` provider in `~/.codex/config.toml`:
+
+```toml
+[model_providers.oss]
+name = "Open Source"
+base_url = "http://my-ollama.example.com:11434/v1"
+```
+
+---
 <details>
-<summary><strong>Use <code>--profile</code> to use other models</strong></summary>
+<summary><strong>Use <code>--profile</code> to configure model providers</strong></summary>
 
 Codex also allows you to use other providers that support the OpenAI Chat Completions (or Responses) API.
 
@@ -166,62 +223,7 @@ This way, you can specify one command-line argument (.e.g., `--profile o3`, `--p
 </details>
 <br />
 
-Run interactively:
 
-```shell
-codex
-```
-
-Or, run with a prompt as input (and optionally in `Full Auto` mode):
-
-```shell
-codex "explain this codebase to me"
-```
-
-```shell
-codex --full-auto "create the fanciest todo-list app"
-```
-
-That's it - Codex will scaffold a file, run it inside a sandbox, install any
-missing dependencies, and show you the live result. Approve the changes and
-they'll be committed to your working directory.
-
----
-
-## Using Open Source Models
-
-Codex can run fully locally against an OpenAI-compatible OSS host (like Ollama) using the `--oss` flag:
-
-- Interactive UI:
-  - codex --oss
-- Non-interactive (programmatic) mode:
-  - echo "Refactor utils" | codex exec --oss
-
-Model selection when using `--oss`:
-
-- If you omit `-m/--model`, Codex defaults to -m gpt-oss:20b and will verify it exists locally (downloading if needed).
-- To pick a different size, pass one of:
-  - -m "gpt-oss:20b"
-  - -m "gpt-oss:120b"
-
-Point Codex at your own OSS host:
-
-- By default, `--oss` talks to http://localhost:11434/v1.
-- To use a different host, set one of these environment variables before running Codex:
-  - CODEX_OSS_BASE_URL, for example:
-    - CODEX_OSS_BASE_URL="http://my-ollama.example.com:11434/v1" codex --oss -m gpt-oss:20b
-  - or CODEX_OSS_PORT (when the host is localhost):
-    - CODEX_OSS_PORT=11434 codex --oss
-
-Advanced: you can persist this in your config instead of environment variables by overriding the built-in `oss` provider in `~/.codex/config.toml`:
-
-```toml
-[model_providers.oss]
-name = "Open Source"
-base_url = "http://my-ollama.example.com:11434/v1"
-```
-
----
 
 ## Why Codex?
 
