@@ -259,6 +259,10 @@ impl BottomPane<'_> {
         self.ctrl_c_quit_hint
     }
 
+    pub(crate) fn set_auto_compact_enabled(&mut self, enabled: bool) {
+        self.composer.set_auto_compact_enabled(enabled);
+    }
+
     pub fn set_task_running(&mut self, running: bool) {
         self.is_task_running = running;
 
