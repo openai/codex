@@ -570,10 +570,10 @@ impl Config {
         // profile, or config.toml.
         let mut approval_policy = approval_policy
             .or(config_profile.approval_policy)
-            .or(cfg.approval_policy.clone());
+            .or(cfg.approval_policy);
         // TODO: Add sandbox_mode to the config profile? Doesn't
         // appear to exist right now
-        let mut sandbox_mode = sandbox_mode.or(cfg.sandbox_mode.clone());
+        let mut sandbox_mode = sandbox_mode.or(cfg.sandbox_mode);
         let mut projects = cfg.projects.clone().unwrap_or_default();
 
         // Second: Default to "trusted" if the user has configured approval policy
@@ -1015,7 +1015,12 @@ disable_response_storage = true
                 base_instructions: None,
                 include_plan_tool: false,
                 internal_originator: None,
-                projects: HashMap::new(),
+                projects: HashMap::from([(
+                    fixture.cwd().to_string_lossy().to_string(),
+                    ProjectConfig {
+                        trusted: Some(true),
+                    },
+                )]),
             },
             o3_profile_config
         );
@@ -1067,7 +1072,12 @@ disable_response_storage = true
             base_instructions: None,
             include_plan_tool: false,
             internal_originator: None,
-            projects: HashMap::new(),
+            projects: HashMap::from([(
+                fixture.cwd().to_string_lossy().to_string(),
+                ProjectConfig {
+                    trusted: Some(true),
+                },
+            )]),
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -1134,7 +1144,12 @@ disable_response_storage = true
             base_instructions: None,
             include_plan_tool: false,
             internal_originator: None,
-            projects: HashMap::new(),
+            projects: HashMap::from([(
+                fixture.cwd().to_string_lossy().to_string(),
+                ProjectConfig {
+                    trusted: Some(true),
+                },
+            )]),
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);
