@@ -478,7 +478,7 @@ impl ChatWidget<'_> {
             EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                 call_id,
                 exit_code,
-                duration,
+                duration: _,
                 stdout,
                 stderr,
             }) => {
@@ -491,7 +491,6 @@ impl ChatWidget<'_> {
                         exit_code,
                         stdout,
                         stderr,
-                        duration,
                     },
                 ));
             }
