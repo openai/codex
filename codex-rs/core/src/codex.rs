@@ -1905,7 +1905,9 @@ async fn handle_container_exec_with_params(
     )
     .await;
 
-    match output_result {
+    let is_apply_patch = exec_command_context.apply_patch.is_some();
+
+    let (final_output, response_item) = match output_result {
         Ok(output) => {
             let ExecToolCallOutput {
                 exit_code,
@@ -1914,15 +1916,6 @@ async fn handle_container_exec_with_params(
                 duration,
             } = &output;
 
-            sess.on_exec_command_end(
-                turn_diff_tracker,
-                &sub_id,
-                &call_id,
-                &output,
-                exec_command_context.apply_patch.is_some(),
-            )
-            .await;
-
             let is_success = *exit_code == 0;
             let content = format_exec_output(
                 if is_success { stdout } else { stderr },
@@ -1930,80 +1923,109 @@ async fn handle_container_exec_with_params(
                 *duration,
             );
 
-            ResponseInputItem::FunctionCallOutput {
-                call_id,
-                output: FunctionCallOutputPayload {
-                    content,
-                    success: Some(is_success),
+            (
+                output,
+                ResponseInputItem::FunctionCallOutput {
+                    call_id: call_id.clone(),
+                    output: FunctionCallOutputPayload {
+                        content,
+                        success: Some(is_success),
+                    },
                 },
-            }
+            )
         }
         Err(CodexErr::Sandbox(error)) => {
-            handle_sandbox_error(
-                turn_diff_tracker,
-                params,
-                exec_command_context,
-                error,
-                sandbox_type,
-                sess,
-            )
-            .await
+            handle_sandbox_error(params, &exec_command_context, error, sandbox_type, sess).await
         }
         Err(e) => {
-            // Handle non-sandbox errors
-            ResponseInputItem::FunctionCallOutput {
-                call_id,
-                output: FunctionCallOutputPayload {
-                    content: format!("execution error: {e}"),
-                    success: None,
+            let err_output = ExecToolCallOutput {
+                exit_code: -1,
+                stdout: String::new(),
+                stderr: format!("{e}"),
+                duration: Duration::default(),
+            };
+
+            (
+                err_output,
+                ResponseInputItem::FunctionCallOutput {
+                    call_id: call_id.clone(),
+                    output: FunctionCallOutputPayload {
+                        content: format!("execution error: {e}"),
+                        success: None,
+                    },
                 },
-            }
+            )
         }
-    }
+    };
+
+    sess.on_exec_command_end(
+        turn_diff_tracker,
+        &sub_id,
+        &call_id,
+        &final_output,
+        is_apply_patch,
+    )
+    .await;
+
+    response_item
 }
 
 async fn handle_sandbox_error(
-    turn_diff_tracker: &mut TurnDiffTracker,
     params: ExecParams,
-    exec_command_context: ExecCommandContext,
+    exec_command_context: &ExecCommandContext,
     error: SandboxErr,
     sandbox_type: SandboxType,
     sess: &Session,
-) -> ResponseInputItem {
+) -> (ExecToolCallOutput, ResponseInputItem) {
     let call_id = exec_command_context.call_id.clone();
     let sub_id = exec_command_context.sub_id.clone();
     let cwd = exec_command_context.cwd.clone();
-    let is_apply_patch = exec_command_context.apply_patch.is_some();
+
+    let mut err_output = ExecToolCallOutput {
+        exit_code: -1,
+        stdout: String::new(),
+        stderr: format!("{error}"),
+        duration: Duration::default(),
+    };
 
     // Early out if either the user never wants to be asked for approval, or
     // we're letting the model manage escalation requests. Otherwise, continue
     match sess.approval_policy {
         AskForApproval::Never | AskForApproval::OnRequest => {
-            return ResponseInputItem::FunctionCallOutput {
-                call_id,
-                output: FunctionCallOutputPayload {
-                    content: format!(
-                        "failed in sandbox {sandbox_type:?} with execution error: {error}"
-                    ),
-                    success: Some(false),
+            let content =
+                format!("failed in sandbox {sandbox_type:?} with execution error: {error}");
+            err_output.stderr = content.clone();
+            return (
+                err_output,
+                ResponseInputItem::FunctionCallOutput {
+                    call_id,
+                    output: FunctionCallOutputPayload {
+                        content,
+                        success: Some(false),
+                    },
                 },
-            };
+            );
         }
         AskForApproval::UnlessTrusted | AskForApproval::OnFailure => (),
     }
 
     // similarly, if the command timed out, we can simply return this failure to the model
     if matches!(error, SandboxErr::Timeout) {
-        return ResponseInputItem::FunctionCallOutput {
-            call_id,
-            output: FunctionCallOutputPayload {
-                content: format!(
-                    "command timed out after {} milliseconds",
-                    params.timeout_duration().as_millis()
-                ),
-                success: Some(false),
+        let content = format!(
+            "command timed out after {} milliseconds",
+            params.timeout_duration().as_millis()
+        );
+        err_output.stderr = content.clone();
+        return (
+            err_output,
+            ResponseInputItem::FunctionCallOutput {
+                call_id,
+                output: FunctionCallOutputPayload {
+                    content,
+                    success: Some(false),
+                },
             },
-        };
+        );
     }
 
     // Note that when `error` is `SandboxErr::Denied`, it could be a false
@@ -2039,9 +2061,6 @@ async fn handle_sandbox_error(
             sess.notify_background_event(&sub_id, "retrying command without sandbox")
                 .await;
 
-            sess.on_exec_command_begin(turn_diff_tracker, exec_command_context)
-                .await;
-
             // This is an escalated retry; the policy will not be
             // examined and the sandbox has been set to `None`.
             let retry_output_result = process_exec_tool_call(
@@ -2067,15 +2086,6 @@ async fn handle_sandbox_error(
                         duration,
                     } = &retry_output;
 
-                    sess.on_exec_command_end(
-                        turn_diff_tracker,
-                        &sub_id,
-                        &call_id,
-                        &retry_output,
-                        is_apply_patch,
-                    )
-                    .await;
-
                     let is_success = *exit_code == 0;
                     let content = format_exec_output(
                         if is_success { stdout } else { stderr },
@@ -2083,35 +2093,52 @@ async fn handle_sandbox_error(
                         *duration,
                     );
 
-                    ResponseInputItem::FunctionCallOutput {
-                        call_id,
-                        output: FunctionCallOutputPayload {
-                            content,
-                            success: Some(is_success),
+                    (
+                        retry_output,
+                        ResponseInputItem::FunctionCallOutput {
+                            call_id: call_id.clone(),
+                            output: FunctionCallOutputPayload {
+                                content,
+                                success: Some(is_success),
+                            },
                         },
-                    }
+                    )
                 }
                 Err(e) => {
-                    // Handle retry failure
-                    ResponseInputItem::FunctionCallOutput {
-                        call_id,
-                        output: FunctionCallOutputPayload {
-                            content: format!("retry failed: {e}"),
-                            success: None,
+                    let err_output = ExecToolCallOutput {
+                        exit_code: -1,
+                        stdout: String::new(),
+                        stderr: format!("{e}"),
+                        duration: Duration::default(),
+                    };
+
+                    (
+                        err_output,
+                        ResponseInputItem::FunctionCallOutput {
+                            call_id: call_id.clone(),
+                            output: FunctionCallOutputPayload {
+                                content: format!("retry failed: {e}"),
+                                success: None,
+                            },
                         },
-                    }
+                    )
                 }
             }
         }
         ReviewDecision::Denied | ReviewDecision::Abort => {
             // Fall through to original failure handling.
-            ResponseInputItem::FunctionCallOutput {
-                call_id,
-                output: FunctionCallOutputPayload {
-                    content: "exec command rejected by user".to_string(),
-                    success: None,
+            let content = "exec command rejected by user".to_string();
+            err_output.stderr = content.clone();
+            (
+                err_output,
+                ResponseInputItem::FunctionCallOutput {
+                    call_id,
+                    output: FunctionCallOutputPayload {
+                        content,
+                        success: None,
+                    },
                 },
-            }
+            )
         }
     }
 }

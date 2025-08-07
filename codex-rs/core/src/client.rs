@@ -192,11 +192,12 @@ impl ModelClient {
                 .header(reqwest::header::ACCEPT, "text/event-stream")
                 .json(&payload);
 
-            if let Some(auth) = auth.as_ref()
-                && auth.mode == AuthMode::ChatGPT
-                && let Some(account_id) = auth.get_account_id().await
-            {
-                req_builder = req_builder.header("chatgpt-account-id", account_id);
+            if let Some(auth) = auth.as_ref() {
+                if auth.mode == AuthMode::ChatGPT {
+                    if let Some(account_id) = auth.get_account_id().await {
+                        req_builder = req_builder.header("chatgpt-account-id", account_id);
+                    }
+                }
             }
 
             let originator = self
