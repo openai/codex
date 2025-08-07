@@ -384,7 +384,7 @@ pub struct ConfigToml {
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ProjectConfig {
-    pub trust_level: String,
+    pub trust_level: Option<String>,
 }
 
 impl ConfigToml {
@@ -418,7 +418,7 @@ impl ConfigToml {
 
         projects
             .get(&resolved_cwd.to_string_lossy().to_string())
-            .map(|p| p.trust_level == "trusted")
+            .map(|p| p.trust_level.clone().unwrap_or("".to_string()) == "trusted")
             .unwrap_or(false)
     }
 }
