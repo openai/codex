@@ -717,7 +717,9 @@ impl ChatWidget<'_> {
             if !newly_completed.is_empty() {
                 streamer.enqueue(newly_completed);
                 let step = streamer.step(self.live_max_rows as usize);
+                let just_committed = step.history.clone();
                 let mut hist: Vec<ratatui::text::Line<'static>> = Vec::new();
+                let mut header_added_this_step = false;
                 if !self.stream_header_emitted {
                     use ratatui::style::Stylize;
                     match self.current_stream {
@@ -730,13 +732,47 @@ impl ChatWidget<'_> {
                         None => {}
                     }
                     self.stream_header_emitted = true;
+                    header_added_this_step = true;
                 }
-                hist.extend(step.history);
+                hist.extend(just_committed.clone());
                 if !hist.is_empty() {
                     self.app_event_tx.send(AppEvent::InsertHistory(hist));
                 }
+                // Avoid showing the header or any just-committed lines in the live overlay this frame.
+                let mut live = step.live;
+                if header_added_this_step {
+                    let drop_text = match self.current_stream {
+                        Some(StreamKind::Reasoning) => "thinking",
+                        Some(StreamKind::Answer) => "codex",
+                        None => "",
+                    };
+                    live.retain(|l| {
+                        let s: String = l
+                            .spans
+                            .iter()
+                            .map(|sp| sp.content.clone())
+                            .collect::<Vec<_>>()
+                            .join("");
+                        s != drop_text
+                    });
+                }
+                if !just_committed.is_empty() {
+                    let committed: Vec<String> = just_committed
+                        .iter()
+                        .map(|l| l.spans.iter().map(|sp| sp.content.clone()).collect::<String>())
+                        .collect();
+                    live.retain(|l| {
+                        let s: String = l
+                            .spans
+                            .iter()
+                            .map(|sp| sp.content.clone())
+                            .collect::<Vec<_>>()
+                            .join("");
+                        !committed.iter().any(|c| c == &s)
+                    });
+                }
                 self.bottom_pane
-                    .set_live_ring_rows(self.live_max_rows, step.live);
+                    .set_live_ring_rows(self.live_max_rows, live);
             }
         }
     }
