@@ -174,7 +174,6 @@ impl TrustDirectoryWidget {
             };
         }
 
-        // TODO: update the config
         self.selection = Some(TrustDirectorySelection::Trust);
     }
 
