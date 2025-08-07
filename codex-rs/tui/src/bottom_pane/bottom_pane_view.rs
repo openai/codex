@@ -1,4 +1,5 @@
 use crate::user_approval_widget::ApprovalRequest;
+use codex_core::protocol::TokenUsage;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -36,6 +37,11 @@ pub(crate) trait BottomPaneView<'a> {
 
     /// Update the status indicator text.
     fn update_status_text(&mut self, _text: String) -> ConditionalUpdate {
+        ConditionalUpdate::NoRedraw
+    }
+
+    /// Update the token usage shown alongside the status indicator.
+    fn update_token_usage(&mut self, _token_usage: TokenUsage) -> ConditionalUpdate {
         ConditionalUpdate::NoRedraw
     }
 

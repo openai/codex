@@ -7,6 +7,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::Duration;
+use std::time::Instant;
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -21,6 +22,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use codex_core::protocol::TokenUsage;
 
 // We render the live text using markdown so it visually matches the history
 // cells. Before rendering we strip any ANSI escape sequences to avoid writing
@@ -42,6 +44,8 @@ pub(crate) struct StatusIndicatorWidget {
 
     frame_idx: Arc<AtomicUsize>,
     running: Arc<AtomicBool>,
+    start_time: Instant,
+    token_count: u64,
     // Keep one sender alive to prevent the channel from closing while the
     // animation thread is still running. The field itself is currently not
     // accessed anywhere, therefore the leading underscore silences the
@@ -78,6 +82,8 @@ impl StatusIndicatorWidget {
             reveal_len_at_base: 0,
             frame_idx,
             running,
+            start_time: Instant::now(),
+            token_count: 0,
 
             _app_event_tx: app_event_tx,
         }
@@ -115,6 +121,11 @@ impl StatusIndicatorWidget {
         self.last_target_len = new_len;
         self.base_frame = current_frame;
         self.reveal_len_at_base = shown_now.min(new_len);
+    }
+
+    /// Update the token usage displayed alongside the status indicator.
+    pub(crate) fn set_token_usage(&mut self, usage: TokenUsage) {
+        self.token_count = usage.total_tokens;
     }
 
     /// Reset the animation and start revealing `text` from the beginning.
@@ -220,6 +231,17 @@ impl WidgetRef for StatusIndicatorWidget {
             Style::default()
                 .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
+        ));
+
+        // Dimmed timer and token usage text.
+        let elapsed = self.start_time.elapsed().as_secs();
+        let extra = format!(
+            "({}s • {} tokens • Ctrl z to interrupt)",
+            elapsed, self.token_count
+        );
+        spans.push(Span::styled(
+            extra,
+            Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
         ));
 
         // Truncate spans to fit the width.
