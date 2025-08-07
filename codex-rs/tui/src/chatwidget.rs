@@ -402,7 +402,6 @@ impl ChatWidget<'_> {
                         .map(|r| format!("\n{r}"))
                         .unwrap_or_default()
                 );
-                self.add_to_history(HistoryCell::new_background_event(text));
 
                 let request = ApprovalRequest::Exec {
                     id,
