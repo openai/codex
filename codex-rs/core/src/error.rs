@@ -9,7 +9,7 @@ pub type Result<T> = std::result::Result<T, CodexErr>;
 #[derive(Error, Debug)]
 pub enum SandboxErr {
     /// Error from sandbox execution
-    #[error("{2}")]
+    #[error("sandbox denied exec error, exit code: {0}, stdout: {1}, stderr: {2}")]
     Denied(i32, String, String),
 
     /// Error from linux seccomp filter setup
@@ -102,6 +102,9 @@ pub enum CodexErr {
 
     #[error("{0}")]
     EnvVar(EnvVarError),
+
+    #[error("{0}")]
+    GenericError(String),
 }
 
 #[derive(Debug)]

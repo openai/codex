@@ -145,9 +145,7 @@ pub async fn process_exec_tool_call(
             let exit_code = raw_output.exit_status.code().unwrap_or(-1);
 
             if exit_code != 0 && is_likely_sandbox_denied(sandbox_type, exit_code) {
-                return Err(CodexErr::Sandbox(SandboxErr::Denied(
-                    exit_code, stdout, stderr,
-                )));
+                return Err(CodexErr::GenericError(stderr));
             }
 
             Ok(ExecToolCallOutput {
