@@ -96,11 +96,14 @@ After you run `codex` you'll be taken through an onboarding flow that will help 
 
 #### Option 1 — Sign in with ChatGPT (Recommended)
 
-If you have a paid OpenAI account, after you run `codex` you will be given an option sign in with ChatGPT. This gives you access to our latest models, including gpt-5, at no extra cost to your plan and offers predictable monthly pricing — no API key needed.
+Just run `codex` and select Sign in with ChatGPT. You'll need a Plus, Pro, or Team ChatGPT account, and will get access to our latest models at no extra cost to your plan. (Enterprise coming soon.)
+
+> Important: If you've used the Codex CLI before, you'll need to follow these steps to migrate from usage-based billing with your API key:
+> 1. Update the CLI with `codex update` and ensure `codex --version` is greater than 0.13.
+> 2. Ensure that there is no `OPENAI_API_KEY` environment variable set. (Check that `env | grep 'OPENAI_API_KEY'` returns empty.)
+> 3. Run `codex login` again.
 
 If you encounter problems with the login flow, please comment on [this issue](https://github.com/openai/codex/issues/1243).
-
-> Important: If you’ve previously used Codex CLI with an `OPENAI_API_KEY` environment variable, the CLI will prefer API key mode. To sign in with ChatGPT, remove or disable the variable first
 
 #### Option 2 — Use an OpenAI API Key (Usage-based Billing)
 
@@ -147,13 +150,13 @@ Below are a few bite-size examples you can copy-paste. Replace the text in quote
   <img src="./.github/codex-cli-permissions.png" alt="Codex CLI permissions" width="50%" />
   </p>
 
-When you first log in, Codex will ask **how much freedom you want to give it in the current folder**. It will give you two main choices:
+When you first log in, Codex will ask how much you want it to work in its workspace:
 
 #### **1. Work without asking for approval (aka "full-auto" mode) — fastest, least interruptions**
 > Codex can run commands and write files without asking first.
 
 - **Best for**: git controlled repos, rapid prototyping, or disposable environments.  
-- **What happens**: Commands run in a **restricted sandbox** — no internet access, and file writes are limited to your workspace (or whatever you’ve set via `--cd`).  
+- **What happens**: Commands run in a **restricted sandbox** — no internet access, and file writes are limited to your workspace.  
 - **Safety net**: If something fails because of sandbox restrictions, Codex will pause and ask if it should retry with fewer limits.
 
 #### **2. Ask to approve edits and commands (aka "approval" mode) — balance of speed and safety**
