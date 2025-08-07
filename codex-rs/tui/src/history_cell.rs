@@ -15,6 +15,7 @@ use codex_core::protocol::FileChange;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::TokenUsage;
+use codex_login::get_auth_file;
 use codex_login::try_read_auth_json;
 use image::DynamicImage;
 use image::ImageReader;
@@ -467,7 +468,8 @@ impl HistoryCell {
         lines.push(Line::from(""));
 
         // Auth
-        if let Ok(auth) = try_read_auth_json(&config.codex_home.join("auth.json")) {
+        let auth_file = get_auth_file(&config.codex_home);
+        if let Ok(auth) = try_read_auth_json(&auth_file) {
             if auth.tokens.as_ref().is_some() {
                 lines.push(Line::from("signed in with chatgpt".bold()));
 
@@ -482,8 +484,9 @@ impl HistoryCell {
                             lines.push(Line::from("  using api key"));
                         }
                         _ => {
-                            let plan_text =
-                                info.chatgpt_plan_type.unwrap_or_else(|| "Unknown".to_string());
+                            let plan_text = info
+                                .chatgpt_plan_type
+                                .unwrap_or_else(|| "Unknown".to_string());
                             lines.push(Line::from(vec!["  plan: ".bold(), plan_text.into()]));
                         }
                     }

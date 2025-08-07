@@ -186,7 +186,7 @@ pub fn load_auth(codex_home: &Path, include_env_var: bool) -> std::io::Result<Op
     }))
 }
 
-fn get_auth_file(codex_home: &Path) -> PathBuf {
+pub fn get_auth_file(codex_home: &Path) -> PathBuf {
     codex_home.join("auth.json")
 }
 
