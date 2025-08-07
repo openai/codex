@@ -470,30 +470,33 @@ impl HistoryCell {
         // Auth
         if let Ok(auth) = try_read_auth_json(&config.codex_home.join("auth.json")) {
             if auth.tokens.as_ref().is_some() {
-            lines.push(Line::from("signed in with chatgpt".bold()));
+                lines.push(Line::from("signed in with chatgpt".bold()));
 
-            if let Some(tokens) = auth.tokens.as_ref() {
-                let td = TokenData { id_token: tokens.id_token.clone(), ..Default::default() };
-                if let Ok(info) = td.id_token_info() {
-                    if let Some(email) = info.email {
-                        lines.push(Line::from(vec!["  login: ".bold(), email.into()]));
-                    }
-
-                    match auth.openai_api_key.as_deref() {
-                        Some(key) if !key.is_empty() => {
-                            lines.push(Line::from("  using api key"));
+                if let Some(tokens) = auth.tokens.as_ref() {
+                    let td = TokenData {
+                        id_token: tokens.id_token.clone(),
+                        ..Default::default()
+                    };
+                    if let Ok(info) = td.id_token_info() {
+                        if let Some(email) = info.email {
+                            lines.push(Line::from(vec!["  login: ".bold(), email.into()]));
                         }
-                        _ => {
-                            let plan_text = info
-                                .chatgpt_plan_type
-                                .unwrap_or_else(|| "Unknown".to_string());
-                            lines.push(Line::from(vec!["  plan: ".bold(), plan_text.into()]));
+
+                        match auth.openai_api_key.as_deref() {
+                            Some(key) if !key.is_empty() => {
+                                lines.push(Line::from("  using api key"));
+                            }
+                            _ => {
+                                let plan_text = info
+                                    .chatgpt_plan_type
+                                    .unwrap_or_else(|| "Unknown".to_string());
+                                lines.push(Line::from(vec!["  plan: ".bold(), plan_text.into()]));
+                            }
                         }
                     }
                 }
-            }
 
-            lines.push(Line::from(""));
+                lines.push(Line::from(""));
             }
         }
 

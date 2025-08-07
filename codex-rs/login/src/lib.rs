@@ -1,7 +1,6 @@
 use chrono::DateTime;
 
 use base64::Engine;
-use thiserror::Error;
 use chrono::Utc;
 use serde::Deserialize;
 use serde::Serialize;
@@ -19,6 +18,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
+use thiserror::Error;
 use tokio::process::Command;
 
 const SOURCE_FOR_PYTHON_SERVER: &str = include_str!("./login_with_chatgpt.py");
@@ -439,8 +439,7 @@ impl TokenData {
             _ => return Err(IdTokenInfoError::InvalidFormat),
         };
 
-        let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(payload_b64)?;
+        let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload_b64)?;
 
         #[derive(Deserialize)]
         struct AuthClaims {
