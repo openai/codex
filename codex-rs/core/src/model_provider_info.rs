@@ -96,7 +96,7 @@ impl ModelProviderInfo {
         auth: &Option<CodexAuth>,
     ) -> crate::error::Result<reqwest::RequestBuilder> {
         let effective_auth = match self.api_key() {
-            Ok(Some(key)) => Some(CodexAuth::from_api_key(key)),
+            Ok(Some(key)) => Some(CodexAuth::from_api_key(&key)),
             Ok(None) => auth.clone(),
             Err(err) => {
                 if auth.is_some() {
