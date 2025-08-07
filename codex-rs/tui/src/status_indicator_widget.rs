@@ -7,6 +7,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::Duration;
+use std::time::Instant;
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -42,6 +43,7 @@ pub(crate) struct StatusIndicatorWidget {
 
     frame_idx: Arc<AtomicUsize>,
     running: Arc<AtomicBool>,
+    start_time: Instant,
     // Keep one sender alive to prevent the channel from closing while the
     // animation thread is still running. The field itself is currently not
     // accessed anywhere, therefore the leading underscore silences the
@@ -78,6 +80,7 @@ impl StatusIndicatorWidget {
             reveal_len_at_base: 0,
             frame_idx,
             running,
+            start_time: Instant::now(),
 
             _app_event_tx: app_event_tx,
         }
@@ -167,11 +170,13 @@ impl WidgetRef for StatusIndicatorWidget {
             return;
         }
 
-        // Build animated gradient header for the word "Working".
         let idx = self.frame_idx.load(std::sync::atomic::Ordering::Relaxed);
-        let header_text = "Working";
-        let header_chars: Vec<char> = header_text.chars().collect();
-        let padding = 4usize; // virtual padding around the word for smoother loop
+        let elapsed = self.start_time.elapsed().as_secs();
+        let shown_now = self.current_shown_len(idx);
+        let status_prefix: String = self.text.chars().take(shown_now).collect();
+        let animated_text = "Working";
+        let header_chars: Vec<char> = animated_text.chars().collect();
+        let padding = 4usize; // virtual padding around the animated segment for smoother loop
         let period = header_chars.len() + padding * 2;
         let pos = idx % period;
         let has_true_color = supports_color::on_cached(supports_color::Stream::Stdout)
@@ -179,7 +184,7 @@ impl WidgetRef for StatusIndicatorWidget {
             .unwrap_or(false);
         let band_half_width = 2.0; // width of the bright band in characters
 
-        let mut header_spans: Vec<Span<'static>> = Vec::new();
+        let mut animated_spans: Vec<Span<'static>> = Vec::new();
         for (i, ch) in header_chars.iter().enumerate() {
             let i_pos = i as isize + padding as isize;
             let pos = pos as isize;
@@ -199,28 +204,49 @@ impl WidgetRef for StatusIndicatorWidget {
                     .fg(Color::Rgb(level, level, level))
                     .add_modifier(Modifier::BOLD)
             } else {
-                // Bold makes dark gray and gray look the same, so don't use it when true color is not supported.
                 Style::default().fg(color_for_level(level))
             };
 
-            header_spans.push(Span::styled(ch.to_string(), style));
+            animated_spans.push(Span::styled(ch.to_string(), style));
         }
 
         // Plain rendering: no borders or padding so the live cell is visually indistinguishable from terminal scrollback.
         let inner_width = area.width as usize;
 
-        // Compose a single status line like: "▌ Working [•] waiting for model"
+        // Compose a single status line like: "▌ Working (Xs • Ctrl c to interrupt) <logs>"
         let mut spans: Vec<Span<'static>> = Vec::new();
         spans.push(Span::styled("▌ ", Style::default().fg(Color::Cyan)));
-        // Gradient header
-        spans.extend(header_spans);
-        // Space after header
+        // Animated header after the left bar
+        spans.extend(animated_spans);
+        // Space between header and bracket block
+        spans.push(Span::raw(" "));
+        // Non-animated, dim bracket content, with only "Ctrl c" bold
+        let bracket_prefix = format!("({elapsed}s • ");
         spans.push(Span::styled(
-            " ",
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
+            bracket_prefix,
+            Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
         ));
+        spans.push(Span::styled(
+            "Ctrl c",
+            Style::default()
+                .fg(Color::Gray)
+                .add_modifier(Modifier::DIM | Modifier::BOLD),
+        ));
+        spans.push(Span::styled(
+            " to interrupt)",
+            Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
+        ));
+        // Add a space and then the log text (not animated by the gradient)
+        if !status_prefix.is_empty() {
+            spans.push(Span::styled(
+                " ",
+                Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
+            ));
+            spans.push(Span::styled(
+                status_prefix,
+                Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
+            ));
+        }
 
         // Truncate spans to fit the width.
         let mut acc: Vec<Span<'static>> = Vec::new();
