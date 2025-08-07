@@ -40,6 +40,12 @@ pub(crate) struct CommandOutput {
     pub(crate) stderr: String,
 }
 
+struct FileSummary {
+    display_path: String,
+    added: usize,
+    removed: usize,
+}
+
 pub(crate) enum PatchEventType {
     ApprovalRequest,
     ApplyBegin { auto_approved: bool },
@@ -599,12 +605,12 @@ impl HistoryCell {
             PatchEventType::ApprovalRequest => "proposed patch",
             PatchEventType::ApplyBegin {
                 auto_approved: true,
-            } => "applying patch",
+            } => "✏️ Applying patch",
             PatchEventType::ApplyBegin {
                 auto_approved: false,
             } => {
                 let lines: Vec<Line<'static>> = vec![
-                    Line::from("applying patch".magenta().bold()),
+                    Line::from("✏️ Applying patch".magenta().bold()),
                     Line::from(""),
                 ];
                 return Self::PendingPatch {
@@ -613,39 +619,12 @@ impl HistoryCell {
             }
         };
 
-        let summary_lines = create_diff_summary(changes);
+        let summary_lines = create_diff_summary(title, changes);
 
         let mut lines: Vec<Line<'static>> = Vec::new();
 
-        // Header similar to the command formatter so patches are visually
-        // distinct while still fitting the overall colour scheme.
-        lines.push(Line::from(title.magenta().bold()));
-
         for line in summary_lines {
-            if line.starts_with('+') {
-                lines.push(line.green().into());
-            } else if line.starts_with('-') {
-                lines.push(line.red().into());
-            } else if let Some(space_idx) = line.find(' ') {
-                let kind_owned = line[..space_idx].to_string();
-                let rest_owned = line[space_idx + 1..].to_string();
-
-                let style_for = |fg: Color| Style::default().fg(fg).add_modifier(Modifier::BOLD);
-
-                let styled_kind = match kind_owned.as_str() {
-                    "A" => RtSpan::styled(kind_owned.clone(), style_for(Color::Green)),
-                    "D" => RtSpan::styled(kind_owned.clone(), style_for(Color::Red)),
-                    "M" => RtSpan::styled(kind_owned.clone(), style_for(Color::Yellow)),
-                    "R" | "C" => RtSpan::styled(kind_owned.clone(), style_for(Color::Cyan)),
-                    _ => RtSpan::raw(kind_owned.clone()),
-                };
-
-                let styled_line =
-                    RtLine::from(vec![styled_kind, RtSpan::raw(" "), RtSpan::raw(rest_owned)]);
-                lines.push(styled_line);
-            } else {
-                lines.push(Line::from(line));
-            }
+            lines.push(line);
         }
 
         lines.push(Line::from(""));
@@ -655,44 +634,23 @@ impl HistoryCell {
         }
     }
 
-    pub(crate) fn new_patch_apply_end(stdout: String, stderr: String, success: bool) -> Self {
+    pub(crate) fn new_patch_apply_failure(stderr: String) -> Self {
         let mut lines: Vec<Line<'static>> = Vec::new();
 
-        let status = if success {
-            RtSpan::styled("patch applied", Style::default().fg(Color::Green))
-        } else {
-            RtSpan::styled(
-                "patch failed",
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-            )
-        };
-        lines.push(RtLine::from(vec![
-            "patch".magenta().bold(),
-            " ".into(),
-            status,
-        ]));
+        // Failure title
+        lines.push(Line::from("✘ Failed to apply patch".magenta().bold()));
 
-        let src = if success {
-            if stdout.trim().is_empty() {
-                &stderr
-            } else {
-                &stdout
-            }
-        } else if stderr.trim().is_empty() {
-            &stdout
-        } else {
-            &stderr
-        };
-
-        if !src.trim().is_empty() {
-            lines.push(Line::from(""));
-            let mut iter = src.lines();
-            for raw in iter.by_ref().take(TOOL_CALL_MAX_LINES) {
-                lines.push(ansi_escape_line(raw).dim());
+        if !stderr.trim().is_empty() {
+            let mut iter = stderr.lines();
+            for (i, raw) in iter.by_ref().take(TOOL_CALL_MAX_LINES).enumerate() {
+                let prefix = if i == 0 { "  ⎿ " } else { "    " };
+                let s = format!("{prefix}{raw}");
+                lines.push(ansi_escape_line(&s).dim());
             }
             let remaining = iter.count();
             if remaining > 0 {
-                lines.push(Line::from(format!("... {remaining} additional lines")).dim());
+                lines.push(Line::from(""));
+                lines.push(Line::from(format!("... +{remaining} lines")).dim());
             }
         }
 
@@ -712,36 +670,138 @@ impl WidgetRef for &HistoryCell {
     }
 }
 
-fn create_diff_summary(changes: HashMap<PathBuf, FileChange>) -> Vec<String> {
-    // Build a concise, human‑readable summary list similar to the
-    // `git status` short format so the user can reason about the
-    // patch without scrolling.
-    let mut summaries: Vec<String> = Vec::new();
+fn create_diff_summary(title: &str, changes: HashMap<PathBuf, FileChange>) -> Vec<RtLine<'static>> {
+    let mut files: Vec<FileSummary> = Vec::new();
+
+    // Count additions/deletions from a unified diff body
+    let count_from_unified = |diff: &str| -> (usize, usize) {
+        if let Ok(patch) = diffy::Patch::from_str(diff) {
+            let mut adds = 0usize;
+            let mut dels = 0usize;
+            for hunk in patch.hunks() {
+                for line in hunk.lines() {
+                    match line {
+                        diffy::Line::Insert(_) => adds += 1,
+                        diffy::Line::Delete(_) => dels += 1,
+                        _ => {}
+                    }
+                }
+            }
+            (adds, dels)
+        } else {
+            let mut adds = 0usize;
+            let mut dels = 0usize;
+            for l in diff.lines() {
+                if l.starts_with("+++") || l.starts_with("---") || l.starts_with("@@") {
+                    continue;
+                }
+                match l.as_bytes().first() {
+                    Some(b'+') => adds += 1,
+                    Some(b'-') => dels += 1,
+                    _ => {}
+                }
+            }
+            (adds, dels)
+        }
+    };
+
     for (path, change) in &changes {
         use codex_core::protocol::FileChange::*;
         match change {
             Add { content } => {
                 let added = content.lines().count();
-                summaries.push(format!("A {} (+{added})", path.display()));
+                files.push(FileSummary {
+                    display_path: path.display().to_string(),
+                    added,
+                    removed: 0,
+                });
             }
             Delete => {
-                summaries.push(format!("D {}", path.display()));
+                let removed = std::fs::read_to_string(path)
+                    .ok()
+                    .map(|s| s.lines().count())
+                    .unwrap_or(0);
+                files.push(FileSummary {
+                    display_path: path.display().to_string(),
+                    added: 0,
+                    removed,
+                });
             }
             Update {
                 unified_diff,
                 move_path,
             } => {
-                if let Some(new_path) = move_path {
-                    summaries.push(format!("R {} → {}", path.display(), new_path.display(),));
+                let (added, removed) = count_from_unified(unified_diff);
+                let display_path = if let Some(new_path) = move_path {
+                    format!("{} → {}", path.display(), new_path.display())
                 } else {
-                    summaries.push(format!("M {}", path.display(),));
-                }
-                summaries.extend(unified_diff.lines().map(|s| s.to_string()));
+                    path.display().to_string()
+                };
+                files.push(FileSummary {
+                    display_path,
+                    added,
+                    removed,
+                });
             }
         }
     }
 
-    summaries
+    let file_count = files.len();
+    let total_added: usize = files.iter().map(|f| f.added).sum();
+    let total_removed: usize = files.iter().map(|f| f.removed).sum();
+    let noun = if file_count == 1 { "file" } else { "files" };
+
+    let mut out: Vec<RtLine<'static>> = Vec::new();
+
+    // Header
+    let mut header_spans: Vec<RtSpan<'static>> = Vec::new();
+    header_spans.push(RtSpan::styled(
+        title.to_owned(),
+        Style::default()
+            .fg(Color::Magenta)
+            .add_modifier(Modifier::BOLD),
+    ));
+    header_spans.push(RtSpan::raw(" to "));
+    header_spans.push(RtSpan::raw(format!("{file_count} {noun} ")));
+    header_spans.push(RtSpan::raw("("));
+    header_spans.push(RtSpan::styled(
+        format!("+{total_added}"),
+        Style::default().fg(Color::Green),
+    ));
+    header_spans.push(RtSpan::raw(" "));
+    header_spans.push(RtSpan::styled(
+        format!("-{total_removed}"),
+        Style::default().fg(Color::Red),
+    ));
+    header_spans.push(RtSpan::raw(")"));
+    out.push(RtLine::from(header_spans));
+
+    // Dimmed per-file lines with prefix
+    for (idx, f) in files.iter().enumerate() {
+        let mut spans: Vec<RtSpan<'static>> = Vec::new();
+        spans.push(RtSpan::raw(f.display_path.clone()));
+        spans.push(RtSpan::raw(" ("));
+        spans.push(RtSpan::styled(
+            format!("+{}", f.added),
+            Style::default().fg(Color::Green),
+        ));
+        spans.push(RtSpan::raw(" "));
+        spans.push(RtSpan::styled(
+            format!("-{}", f.removed),
+            Style::default().fg(Color::Red),
+        ));
+        spans.push(RtSpan::raw(")"));
+
+        let mut line = RtLine::from(spans);
+        let prefix = if idx == 0 { "  ⎿ " } else { "    " };
+        line.spans.insert(0, prefix.into());
+        line.spans.iter_mut().for_each(|span| {
+            span.style = span.style.add_modifier(Modifier::DIM);
+        });
+        out.push(line);
+    }
+
+    out
 }
 
 fn format_mcp_invocation<'a>(invocation: McpInvocation) -> Line<'a> {
