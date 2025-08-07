@@ -13,7 +13,6 @@ use codex_core::config::Config;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
-use codex_core::util::is_inside_git_repo;
 use color_eyre::eyre::Result;
 use crossterm::SynchronizedUpdate;
 use crossterm::event::KeyCode;
@@ -71,7 +70,7 @@ pub(crate) struct App<'a> {
 /// deferred until after the Git warning screen is dismissed.
 #[derive(Clone, Debug)]
 pub(crate) struct ChatWidgetArgs {
-    config: Config,
+    pub(crate) config: Config,
     initial_prompt: Option<String>,
     initial_images: Vec<PathBuf>,
     enhanced_keys_supported: bool,
@@ -81,8 +80,8 @@ impl App<'_> {
     pub(crate) fn new(
         config: Config,
         initial_prompt: Option<String>,
-        skip_git_repo_check: bool,
         initial_images: Vec<std::path::PathBuf>,
+        show_trust_screen: bool,
     ) -> Self {
         let (app_event_tx, app_event_rx) = channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
@@ -134,9 +133,7 @@ impl App<'_> {
         }
 
         let show_login_screen = should_show_login_screen(&config);
-        let show_git_warning =
-            !skip_git_repo_check && !is_inside_git_repo(&config.cwd.to_path_buf());
-        let app_state = if show_login_screen || show_git_warning {
+        let app_state = if show_login_screen || show_trust_screen {
             let chat_widget_args = ChatWidgetArgs {
                 config: config.clone(),
                 initial_prompt,
@@ -149,7 +146,7 @@ impl App<'_> {
                     codex_home: config.codex_home.clone(),
                     cwd: config.cwd.clone(),
                     show_login_screen,
-                    show_git_warning,
+                    show_trust_screen,
                     chat_widget_args,
                 }),
             }

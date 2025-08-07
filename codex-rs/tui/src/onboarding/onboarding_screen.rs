@@ -1,3 +1,4 @@
+use codex_core::util::is_inside_git_repo;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -11,16 +12,18 @@ use crate::app_event_sender::AppEventSender;
 use crate::onboarding::auth::AuthModeWidget;
 use crate::onboarding::auth::SignInState;
 use crate::onboarding::continue_to_chat::ContinueToChatWidget;
-use crate::onboarding::git_warning::GitWarningSelection;
-use crate::onboarding::git_warning::GitWarningWidget;
+use crate::onboarding::trust_directory::TrustDirectorySelection;
+use crate::onboarding::trust_directory::TrustDirectoryWidget;
 use crate::onboarding::welcome::WelcomeWidget;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::Mutex;
 
 #[allow(clippy::large_enum_variant)]
 enum Step {
     Welcome(WelcomeWidget),
     Auth(AuthModeWidget),
-    GitWarning(GitWarningWidget),
+    TrustDirectory(TrustDirectoryWidget),
     ContinueToChat(ContinueToChatWidget),
 }
 
@@ -49,7 +52,7 @@ pub(crate) struct OnboardingScreenArgs {
     pub codex_home: PathBuf,
     pub cwd: PathBuf,
     pub show_login_screen: bool,
-    pub show_git_warning: bool,
+    pub show_trust_screen: bool,
 }
 
 impl OnboardingScreen {
@@ -60,7 +63,7 @@ impl OnboardingScreen {
             codex_home,
             cwd,
             show_login_screen,
-            show_git_warning,
+            show_trust_screen,
         } = args;
         let mut steps: Vec<Step> = vec![Step::Welcome(WelcomeWidget {
             is_logged_in: !show_login_screen,
@@ -71,20 +74,33 @@ impl OnboardingScreen {
                 highlighted_mode: AuthMode::ChatGPT,
                 error: None,
                 sign_in_state: SignInState::PickMode,
-                codex_home,
+                codex_home: codex_home.clone(),
             }))
         }
-        if show_git_warning {
-            steps.push(Step::GitWarning(GitWarningWidget {
-                event_tx: event_tx.clone(),
+        let is_git_repo = is_inside_git_repo(&cwd);
+        let highlighted = if is_git_repo {
+            TrustDirectorySelection::Trust
+        } else {
+            // Default to not trusting the directory if it's not a git repo.
+            TrustDirectorySelection::DontTrust
+        };
+        // Share ChatWidgetArgs between steps so changes in the TrustDirectory step
+        // are reflected when continuing to chat.
+        let shared_chat_args = Arc::new(Mutex::new(chat_widget_args));
+        if show_trust_screen {
+            steps.push(Step::TrustDirectory(TrustDirectoryWidget {
                 cwd,
+                codex_home,
+                is_git_repo,
                 selection: None,
-                highlighted: GitWarningSelection::Continue,
+                highlighted,
+                error: None,
+                chat_widget_args: shared_chat_args.clone(),
             }))
         }
         steps.push(Step::ContinueToChat(ContinueToChatWidget {
             event_tx: event_tx.clone(),
-            chat_widget_args,
+            chat_widget_args: shared_chat_args,
         }));
         // TODO: add git warning.
         Self { event_tx, steps }
@@ -215,7 +231,7 @@ impl KeyboardHandler for Step {
         match self {
             Step::Welcome(_) | Step::ContinueToChat(_) => (),
             Step::Auth(widget) => widget.handle_key_event(key_event),
-            Step::GitWarning(widget) => widget.handle_key_event(key_event),
+            Step::TrustDirectory(widget) => widget.handle_key_event(key_event),
         }
     }
 }
@@ -225,7 +241,7 @@ impl StepStateProvider for Step {
         match self {
             Step::Welcome(w) => w.get_step_state(),
             Step::Auth(w) => w.get_step_state(),
-            Step::GitWarning(w) => w.get_step_state(),
+            Step::TrustDirectory(w) => w.get_step_state(),
             Step::ContinueToChat(w) => w.get_step_state(),
         }
     }
@@ -240,7 +256,7 @@ impl WidgetRef for Step {
             Step::Auth(widget) => {
                 widget.render_ref(area, buf);
             }
-            Step::GitWarning(widget) => {
+            Step::TrustDirectory(widget) => {
                 widget.render_ref(area, buf);
             }
             Step::ContinueToChat(widget) => {
