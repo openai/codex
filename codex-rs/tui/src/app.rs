@@ -137,6 +137,7 @@ impl App<'_> {
         let show_login_screen = should_show_login_screen(&config);
         let show_git_warning =
             !skip_git_repo_check && !is_inside_git_repo(&config.cwd.to_path_buf());
+        let has_trusted_cwd = config.is_cwd_trusted();
         let app_state = if show_login_screen || show_git_warning {
             let chat_widget_args = ChatWidgetArgs {
                 config: config.clone(),

@@ -154,6 +154,9 @@ pub struct Config {
 
     /// The value for the `originator` header included with Responses API requests.
     pub internal_originator: Option<String>,
+
+    /// project-specific settings
+    pub projects: HashMap<String, ProjectConfig>,
 }
 
 impl Config {
@@ -189,6 +192,13 @@ impl Config {
 
         // Step 4: merge with the strongly-typed overrides.
         Self::load_from_base_config_with_overrides(cfg, overrides, codex_home)
+    }
+
+    pub fn is_cwd_trusted(&self) -> bool {
+        self.projects
+            .get(&self.cwd.to_string_lossy().to_string())
+            .map(|p| p.trusted.unwrap_or(false))
+            .unwrap_or(false)
     }
 }
 
@@ -382,7 +392,7 @@ pub struct ConfigToml {
     pub projects: Option<HashMap<String, ProjectConfig>>,
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ProjectConfig {
     pub trusted: Option<bool>,
 }
@@ -606,6 +616,8 @@ impl Config {
             experimental_resume,
             include_plan_tool: include_plan_tool.unwrap_or(false),
             internal_originator: cfg.internal_originator,
+            // We only accept this data from config.toml right now.
+            projects: cfg.projects.unwrap_or_default(),
         };
         Ok(config)
     }
@@ -970,6 +982,7 @@ disable_response_storage = true
                 base_instructions: None,
                 include_plan_tool: false,
                 internal_originator: None,
+                projects: HashMap::new(),
             },
             o3_profile_config
         );
@@ -1021,6 +1034,7 @@ disable_response_storage = true
             base_instructions: None,
             include_plan_tool: false,
             internal_originator: None,
+            projects: HashMap::new(),
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -1087,6 +1101,7 @@ disable_response_storage = true
             base_instructions: None,
             include_plan_tool: false,
             internal_originator: None,
+            projects: HashMap::new(),
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);
