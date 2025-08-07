@@ -51,6 +51,8 @@ export OPENAI_API_KEY="your-api-key-here"
 > [!NOTE]
 > This command sets the key only for your current terminal session. You can add the `export` line to your shell's configuration file (e.g., `~/.zshrc`), but we recommend setting it for the session.
 
+Codex also supports open-source models and custom providers. For information on how to configure these options using the `--oss` flag or a custom provider setup, see [docs/config.md](./docs/config.md).
+
 ### Running `codex`
 
 After authentication, you can run Codex interactively:
@@ -73,13 +75,11 @@ missing dependencies, and show you the live result. Approve the changes (or run 
 
 
 
-## System requirements
+## System Requirements
 
-| Requirement                 | Details                                                         |
-| --------------------------- | --------------------------------------------------------------- |
-| Operating systems           | macOS 12+, Ubuntu 20.04+/Debian 10+, or Windows 11 **via WSL2** |
-| Git (optional, recommended) | 2.23+ for built-in PR helpers                                   |
-| RAM                         | 4-GB minimum (8-GB recommended)                                 |
+- Operating systems: macOS 12+, Ubuntu 20.04+/Debian 10+, Windows 11 (WSL2)
+- Git (optional, recommended): 2.23+ for built-in PR helpers
+- RAM: 4 GB minimum (8 GB recommended)
 
 ---
 

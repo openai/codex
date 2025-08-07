@@ -1,17 +1,17 @@
-## Contributing
+# Contributing
 
 This project is under active development and the code will likely change pretty significantly. We'll update this message once that's complete!
 
 More broadly we welcome contributions - whether you are opening your very first pull request or you're a seasoned maintainer. At the same time we care about reliability and long-term maintainability, so the bar for merging code is intentionally **high**. The guidelines below spell out what "high-quality" means in practice and should make the whole process transparent and friendly.
 
 
-### Development workflow
+## Development workflow
 
 - Create a _topic branch_ from `main` - e.g. `feat/interactive-prompt`.
 - Keep your changes focused. Multiple unrelated fixes should be opened as separate PRs.
 - Following the [development setup](#development-workflow) instructions above, ensure your change is free of lint warnings and test failures.
 
-### Writing high-impact code changes
+## Writing high-impact code changes
 
 1. **Start with an issue.** Open a new one or comment on an existing discussion so we can agree on the solution before code is written.
 2. **Add or update tests.** Every new feature or bug-fix should come with test coverage that fails before your change and passes afterwards. 100% coverage is not required, but aim for meaningful assertions.
@@ -89,7 +89,7 @@ All contributors **must** accept the CLA. The process is lightweight:
 
 No special Git commands, email attachments, or commit footers required.
 
-#### Quick fixes
+## Quick fixes
 
 | Scenario          | Command                                          |
 | ----------------- | ------------------------------------------------ |
@@ -97,7 +97,7 @@ No special Git commands, email attachments, or commit footers required.
 
 The **DCO check** blocks merges until every commit in the PR carries the footer (with squash this is just the one).
 
-### Releasing `codex`
+## Releasing `codex`
 
 _For admins only._
 
