@@ -47,7 +47,7 @@ pub async fn run_login_with_api_key(
 pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
     let config = load_config_or_exit(cli_config_overrides);
 
-    match load_auth(&config.codex_home, true) {
+    match load_auth(&config.codex_home) {
         Ok(Some(auth)) => match auth.mode {
             AuthMode::ApiKey => {
                 if let Some(api_key) = auth.api_key.as_deref() {
