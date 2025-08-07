@@ -27,3 +27,5 @@ pub use sandbox_summary::summarize_sandbox_policy;
 mod config_summary;
 
 pub use config_summary::create_config_summary_entries;
+// Shared fuzzy matcher (used by TUI selection popups and other UI filtering)
+pub mod fuzzy_match;

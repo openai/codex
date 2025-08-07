@@ -44,6 +44,7 @@ pub struct Cli {
     /// EXTREMELY DANGEROUS. Intended solely for running in environments that are externally sandboxed.
     #[arg(
         long = "dangerously-bypass-approvals-and-sandbox",
+        alias = "yolo",
         default_value_t = false,
         conflicts_with_all = ["approval_policy", "full_auto"]
     )]
