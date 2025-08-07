@@ -12,7 +12,7 @@ use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::config_types::SandboxMode;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
-use codex_login::load_auth;
+use codex_login::CodexAuth;
 use codex_ollama::DEFAULT_OSS_MODEL;
 use log_layer::TuiLogLayer;
 use std::fs::OpenOptions;
@@ -304,7 +304,7 @@ fn should_show_login_screen(config: &Config) -> bool {
         // Reading the OpenAI API key is an async operation because it may need
         // to refresh the token. Block on it.
         let codex_home = config.codex_home.clone();
-        match load_auth(&codex_home) {
+        match CodexAuth::from_codex_home(&codex_home) {
             Ok(Some(_)) => false,
             Ok(None) => true,
             Err(err) => {
