@@ -3,7 +3,7 @@
 
 <p align="center"><code>npm i -g @openai/codex</code><br />or <code>brew install codex</code></p>
 
-This is the home of the **Codex CLI**, which is a coding agent from OpenAI that runs locally on your computer. If you are looking for the _cloud-based agent_ from OpenAI, **Codex [Web]**, see <https://chatgpt.com/codex>.
+This is the home of the **Codex CLI**, OpenAI's coding agent that runs locally on your computer. If you are looking for the _cloud-based agent_ from OpenAI, **Codex [Web]**, see <https://chatgpt.com/codex>.
 
 <!-- ![Codex demo GIF using: codex "explain this codebase to me"](./.github/demo.gif) -->
 
@@ -54,16 +54,10 @@ This is the home of the **Codex CLI**, which is a coding agent from OpenAI that 
 
 ---
 
-## Experimental technology disclaimer
+> [!WARNING]
+> Experimental technology disclaimer
 
-Codex CLI is an experimental project under active development. It is not yet stable, may contain bugs, incomplete features, or undergo breaking changes. We're building it in the open with the community and welcome:
-
-- Bug reports
-- Feature requests
-- Pull requests
-- Good vibes
-
-Help us improve by filing issues or submitting PRs (see the section below for how to contribute)!
+> Codex CLI is an experimental project under active development. We're building it in the open with the community; Help us improve by filing issues or submitting PRs (see [contributing.md](./contributing.md) for how to contribute)!
 
 ## Quickstart
 
@@ -77,7 +71,7 @@ Or go to the [latest GitHub Release](https://github.com/openai/codex/releases/la
 
 ### ChatGPT Plus/Pro Users
 
-If you have a paid ChatGPT account, run the following to start the login process:
+If you have a ChatGPT Plus or Pro account, login with:
 
 ```
 codex login
@@ -105,7 +99,7 @@ export OPENAI_API_KEY="your-api-key-here"
 > [!NOTE]
 > This command sets the key only for your current terminal session. You can add the `export` line to your shell's configuration file (e.g., `~/.zshrc`), but we recommend setting it for the session.
 
-Run interactively:
+**Run interactively:**
 
 ```shell
 codex
@@ -126,9 +120,7 @@ missing dependencies, and show you the live result. Approve the changes and
 they'll be committed to your working directory.
 
 
-
-
-## Using Open Source Models
+### Using Open Source Models
 
 Codex can run fully locally against an OpenAI-compatible OSS host (like Ollama) using the `--oss` flag:
 
@@ -509,12 +501,6 @@ We're excited to launch a **$1 million initiative** supporting open source proje
 **Interested? [Apply here](https://openai.com/form/codex-open-source-fund/).**
 
 ---
-
-## Contributing
-
-This project is under active development and the code will likely change pretty significantly. We'll update this message once that's complete!
-
-More broadly we welcome contributions - whether you are opening your very first pull request or you're a seasoned maintainer. At the same time we care about reliability and long-term maintainability, so the bar for merging code is intentionally **high**. The guidelines below spell out what "high-quality" means in practice and should make the whole process transparent and friendly.
 
 ### Development workflow
 
