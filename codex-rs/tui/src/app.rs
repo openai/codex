@@ -5,7 +5,7 @@ use crate::file_search::FileSearchManager;
 use crate::get_git_diff::get_git_diff;
 use crate::onboarding::onboarding_screen::KeyboardHandler;
 use crate::onboarding::onboarding_screen::OnboardingScreen;
-use crate::onboarding::onboarding_screen::OnboardingScreenProps;
+use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
 use crate::should_show_login_screen;
 use crate::slash_command::SlashCommand;
 use crate::tui;
@@ -64,17 +64,13 @@ pub(crate) struct App<'a> {
 
     pending_history_lines: Vec<Line<'static>>,
 
-    /// Stored parameters needed to instantiate the ChatWidget later, e.g.,
-    /// after dismissing the Git-repo warning.
-    chat_args: Option<ChatWidgetArgs>,
-
     enhanced_keys_supported: bool,
 }
 
 /// Aggregate parameters needed to create a `ChatWidget`, as creation may be
 /// deferred until after the Git warning screen is dismissed.
 #[derive(Clone)]
-struct ChatWidgetArgs {
+pub(crate) struct ChatWidgetArgs {
     config: Config,
     initial_prompt: Option<String>,
     initial_images: Vec<PathBuf>,
@@ -140,29 +136,23 @@ impl App<'_> {
         let show_login_screen = should_show_login_screen(&config);
         let show_git_warning =
             !skip_git_repo_check && !is_inside_git_repo(&config.cwd.to_path_buf());
-        let onboarding_screen_props = if show_login_screen || show_git_warning {
-            Some(OnboardingScreenProps {
-                event_tx: app_event_tx.clone(),
-                codex_home: config.codex_home.clone(),
-                cwd: config.cwd.clone(),
-                show_login_screen,
-                show_git_warning,
-            })
-        } else {
-            None
-        };
-        let (app_state, chat_args) = if let Some(props) = onboarding_screen_props {
-            (
-                AppState::Onboarding {
-                    screen: OnboardingScreen::new(props),
-                },
-                Some(ChatWidgetArgs {
-                    config: config.clone(),
-                    initial_prompt,
-                    initial_images,
-                    enhanced_keys_supported,
+        let app_state = if show_login_screen || show_git_warning {
+            let chat_widget_args = ChatWidgetArgs {
+                config: config.clone(),
+                initial_prompt,
+                initial_images,
+                enhanced_keys_supported,
+            };
+            AppState::Onboarding {
+                screen: OnboardingScreen::new(OnboardingScreenArgs {
+                    event_tx: app_event_tx.clone(),
+                    codex_home: config.codex_home.clone(),
+                    cwd: config.cwd.clone(),
+                    show_login_screen,
+                    show_git_warning,
+                    chat_widget_args,
                 }),
-            )
+            }
         } else {
             let chat_widget = ChatWidget::new(
                 config.clone(),
@@ -171,12 +161,9 @@ impl App<'_> {
                 initial_images,
                 enhanced_keys_supported,
             );
-            (
-                AppState::Chat {
-                    widget: Box::new(chat_widget),
-                },
-                None,
-            )
+            AppState::Chat {
+                widget: Box::new(chat_widget),
+            }
         };
 
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
@@ -188,7 +175,6 @@ impl App<'_> {
             config,
             file_search,
             pending_redraw,
-            chat_args,
             enhanced_keys_supported,
         }
     }
@@ -315,6 +301,7 @@ impl App<'_> {
                 },
                 AppEvent::DispatchCommand(command) => match command {
                     SlashCommand::New => {
+                        // User accepted – switch to chat view.
                         let new_widget = Box::new(ChatWidget::new(
                             self.config.clone(),
                             self.app_event_tx.clone(),
@@ -409,8 +396,7 @@ impl App<'_> {
                 },
                 AppEvent::OnboardingAuthComplete(result) => {
                     if let AppState::Onboarding { screen } = &mut self.app_state {
-                        // Let the onboarding screen handle success/failure and emit follow-up events.
-                        let _ = screen.on_auth_complete(result);
+                        screen.on_auth_complete(result);
                     }
                 }
                 AppEvent::StartFileSearch(query) => {
