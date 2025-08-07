@@ -1,8 +1,5 @@
-#![allow(clippy::expect_used)]
-#![allow(clippy::unwrap_used)]
-use std::path::PathBuf;
+#![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use chrono::Utc;
 use codex_core::Codex;
 use codex_core::CodexSpawnOk;
 use codex_core::ModelProviderInfo;
@@ -13,10 +10,7 @@ use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
-use codex_login::AuthDotJson;
-use codex_login::AuthMode;
 use codex_login::CodexAuth;
-use codex_login::TokenData;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::wait_for_event;
@@ -556,19 +550,5 @@ async fn env_var_overrides_loaded_auth() {
 }
 
 fn create_dummy_codex_auth() -> CodexAuth {
-    CodexAuth::new(
-        None,
-        AuthMode::ChatGPT,
-        PathBuf::new(),
-        Some(AuthDotJson {
-            openai_api_key: None,
-            tokens: Some(TokenData {
-                id_token: Default::default(),
-                access_token: "Access Token".to_string(),
-                refresh_token: "test".to_string(),
-                account_id: Some("account_id".to_string()),
-            }),
-            last_refresh: Some(Utc::now()),
-        }),
-    )
+    CodexAuth::create_dummy_chatgpt_auth_for_testing()
 }
