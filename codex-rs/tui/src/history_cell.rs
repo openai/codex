@@ -254,7 +254,7 @@ impl HistoryCell {
         let mut lines: Vec<Line<'static>> = Vec::new();
         let command_escaped = strip_bash_lc_and_escape(&command);
         lines.push(Line::from(vec![
-            "⚡Ran command ".magenta(),
+            "⚡ Ran command ".magenta(),
             command_escaped.into(),
         ]));
 
