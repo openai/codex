@@ -47,7 +47,6 @@ struct ErrorResponse {
 
 #[derive(Debug, Deserialize)]
 struct Error {
-    message: String,
     code: String,
 }
 
