@@ -148,12 +148,20 @@ Determines when the user should be prompted to approve whether Codex can execute
 approval_policy = "untrusted"
 ```
 
+If you want to be notified whenever a command fails, use "on-failure":
 ```toml
 # If the command fails when run in the sandbox, Codex asks for permission to
 # retry the command outside the sandbox.
 approval_policy = "on-failure"
 ```
 
+If you want the model to run until it decides that it needs to ask you for escalated permissions, use "on-request":
+```toml
+# The model decides when to escalate
+approval_policy = "on-request"
+```
+
+Alternatively, you can have the model run until it is done, and never ask to run a command with escalated permissions:
 ```toml
 # User is never prompted: if the command fails, Codex will automatically try
 # something out. Note the `exec` subcommand always uses this mode.

@@ -4,6 +4,7 @@ use chrono::Utc;
 use serde::Deserialize;
 use serde::Serialize;
 use std::env;
+use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::Read;
 use std::io::Write;
@@ -11,6 +12,7 @@ use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Child;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -183,6 +185,59 @@ fn get_auth_file(codex_home: &Path) -> PathBuf {
     codex_home.join("auth.json")
 }
 
+/// Represents a running login subprocess. The child can be killed by holding
+/// the mutex and calling `kill()`.
+#[derive(Debug, Clone)]
+pub struct SpawnedLogin {
+    pub child: Arc<Mutex<Child>>,
+    pub stdout: Arc<Mutex<Vec<u8>>>,
+    pub stderr: Arc<Mutex<Vec<u8>>>,
+}
+
+/// Spawn the ChatGPT login Python server as a child process and return a handle to its process.
+pub fn spawn_login_with_chatgpt(codex_home: &Path) -> std::io::Result<SpawnedLogin> {
+    let mut cmd = std::process::Command::new("python3");
+    cmd.arg("-c")
+        .arg(SOURCE_FOR_PYTHON_SERVER)
+        .env("CODEX_HOME", codex_home)
+        .env("CODEX_CLIENT_ID", CLIENT_ID)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = cmd.spawn()?;
+
+    let stdout_buf = Arc::new(Mutex::new(Vec::new()));
+    let stderr_buf = Arc::new(Mutex::new(Vec::new()));
+
+    if let Some(mut out) = child.stdout.take() {
+        let buf = stdout_buf.clone();
+        std::thread::spawn(move || {
+            let mut tmp = Vec::new();
+            let _ = std::io::copy(&mut out, &mut tmp);
+            if let Ok(mut b) = buf.lock() {
+                b.extend_from_slice(&tmp);
+            }
+        });
+    }
+    if let Some(mut err) = child.stderr.take() {
+        let buf = stderr_buf.clone();
+        std::thread::spawn(move || {
+            let mut tmp = Vec::new();
+            let _ = std::io::copy(&mut err, &mut tmp);
+            if let Ok(mut b) = buf.lock() {
+                b.extend_from_slice(&tmp);
+            }
+        });
+    }
+
+    Ok(SpawnedLogin {
+        child: Arc::new(Mutex::new(child)),
+        stdout: stdout_buf,
+        stderr: stderr_buf,
+    })
+}
+
 /// Run `python3 -c {{SOURCE_FOR_PYTHON_SERVER}}` with the CODEX_HOME
 /// environment variable set to the provided `codex_home` path. If the
 /// subprocess exits 0, read the OPENAI_API_KEY property out of
@@ -234,7 +289,7 @@ pub fn login_with_api_key(codex_home: &Path, api_key: &str) -> std::io::Result<(
 /// Attempt to read and refresh the `auth.json` file in the given `CODEX_HOME` directory.
 /// Returns the full AuthDotJson structure after refreshing if necessary.
 pub fn try_read_auth_json(auth_file: &Path) -> std::io::Result<AuthDotJson> {
-    let mut file = std::fs::File::open(auth_file)?;
+    let mut file = File::open(auth_file)?;
     let mut contents = String::new();
     file.read_to_string(&mut contents)?;
     let auth_dot_json: AuthDotJson = serde_json::from_str(&contents)?;

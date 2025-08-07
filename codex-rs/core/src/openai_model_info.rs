@@ -14,10 +14,19 @@ pub(crate) struct ModelInfo {
     pub(crate) max_output_tokens: u64,
 }
 
-/// Note details such as what a model like gpt-4o is aliased to may be out of
-/// date.
 pub(crate) fn get_model_info(model_family: &ModelFamily) -> Option<ModelInfo> {
     match model_family.slug.as_str() {
+        // OSS models have a 128k shared token pool.
+        // Arbitrarily splitting it: 3/4 input context, 1/4 output.
+        // https://openai.com/index/gpt-oss-model-card/
+        "gpt-oss-20b" => Some(ModelInfo {
+            context_window: 96_000,
+            max_output_tokens: 32_000,
+        }),
+        "gpt-oss-120b" => Some(ModelInfo {
+            context_window: 96_000,
+            max_output_tokens: 32_000,
+        }),
         // https://platform.openai.com/docs/models/o3
         "o3" => Some(ModelInfo {
             context_window: 200_000,
@@ -66,6 +75,11 @@ pub(crate) fn get_model_info(model_family: &ModelFamily) -> Option<ModelInfo> {
         "gpt-3.5-turbo" => Some(ModelInfo {
             context_window: 16_385,
             max_output_tokens: 4_096,
+        }),
+
+        "2025-08-06-model" => Some(ModelInfo {
+            context_window: 200_000,
+            max_output_tokens: 100_000,
         }),
 
         _ => None,

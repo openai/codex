@@ -453,6 +453,8 @@ impl ChatComposer {
         new_text.push_str(&text[end_idx..]);
 
         self.textarea.set_text(&new_text);
+        let new_cursor = start_idx.saturating_add(path.len()).saturating_add(1);
+        self.textarea.set_cursor(new_cursor);
     }
 
     /// Handle key event when no popup is visible.
@@ -729,6 +731,7 @@ impl WidgetRef for &ChatComposer {
 
 #[cfg(test)]
 mod tests {
+    use crate::app_event::AppEvent;
     use crate::bottom_pane::AppEventSender;
     use crate::bottom_pane::ChatComposer;
     use crate::bottom_pane::InputResult;
@@ -1001,6 +1004,49 @@ mod tests {
                 .unwrap_or_else(|e| panic!("Failed to draw {name} composer: {e}"));
 
             assert_snapshot!(name, terminal.backend());
+        }
+    }
+
+    #[test]
+    fn slash_init_dispatches_command_and_does_not_submit_literal_text() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+        use std::sync::mpsc::TryRecvError;
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(true, sender, false);
+
+        // Type the slash command.
+        for ch in [
+            '/', 'i', 'n', 'i', 't', // "/init"
+        ] {
+            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+
+        // Press Enter to dispatch the selected command.
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        // When a slash command is dispatched, the composer should not submit
+        // literal text and should clear its textarea.
+        match result {
+            InputResult::None => {}
+            InputResult::Submitted(text) => {
+                panic!("expected command dispatch, but composer submitted literal text: {text}")
+            }
+        }
+        assert!(composer.textarea.is_empty(), "composer should be cleared");
+
+        // Verify a DispatchCommand event for the "init" command was sent.
+        match rx.try_recv() {
+            Ok(AppEvent::DispatchCommand(cmd)) => {
+                assert_eq!(cmd.command(), "init");
+            }
+            Ok(_other) => panic!("unexpected app event"),
+            Err(TryRecvError::Empty) => panic!("expected a DispatchCommand event for '/init'"),
+            Err(TryRecvError::Disconnected) => panic!("app event channel disconnected"),
         }
     }
 

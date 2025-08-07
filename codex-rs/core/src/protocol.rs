@@ -150,13 +150,17 @@ pub enum AskForApproval {
     /// the user to approve execution without a sandbox.
     OnFailure,
 
+    /// The model decides when to ask the user for approval.
+    OnRequest,
+
     /// Never ask the user to approve commands. Failures are immediately returned
     /// to the model, and never escalated to the user for approval.
     Never,
 }
 
 /// Determines execution restrictions for model shell commands.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Display)]
+#[strum(serialize_all = "kebab-case")]
 #[serde(tag = "mode", rename_all = "kebab-case")]
 pub enum SandboxPolicy {
     /// No restrictions whatsoever. Use with caution.
@@ -423,6 +427,12 @@ pub struct TokenUsage {
     pub output_tokens: u64,
     pub reasoning_output_tokens: Option<u64>,
     pub total_tokens: u64,
+}
+
+impl TokenUsage {
+    pub fn is_zero(&self) -> bool {
+        self.total_tokens == 0
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

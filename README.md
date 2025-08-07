@@ -18,7 +18,7 @@ This is the home of the **Codex CLI**, which is a coding agent from OpenAI that 
 - [Quickstart](#quickstart)
   - [OpenAI API Users](#openai-api-users)
   - [OpenAI Plus/Pro Users](#openai-pluspro-users)
-  - [Using OpenAI Open Source Models](#using-open-source-models)
+- [Using Open Source Models](#using-open-source-models)
 - [Why Codex?](#why-codex)
 - [Security model & permissions](#security-model--permissions)
   - [Platform sandboxing details](#platform-sandboxing-details)
