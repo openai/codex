@@ -279,7 +279,12 @@ mod tests {
         append_markdown_with_opener_and_cwd(src, &mut out, UriBasedFileOpener::None, cwd);
         let rendered: Vec<String> = out
             .iter()
-            .map(|l| l.spans.iter().map(|s| s.content.clone()).collect::<String>())
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.clone())
+                    .collect::<String>()
+            })
             .collect();
         assert_eq!(
             rendered,
@@ -299,11 +304,16 @@ mod tests {
         append_markdown_with_opener_and_cwd(src, &mut out, UriBasedFileOpener::VsCode, cwd);
         let rendered: Vec<String> = out
             .iter()
-            .map(|l| l.spans.iter().map(|s| s.content.clone()).collect::<String>())
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.clone())
+                    .collect::<String>()
+            })
             .collect();
         // Expect first and last lines rewritten, middle line unchanged.
         assert!(rendered[0].contains("vscode://file"));
         assert_eq!(rendered[1], "Inside 【F:/x.rs†L2】");
-        assert!(rendered.last().unwrap().contains("vscode://file"));
+        assert!(matches!(rendered.last(), Some(s) if s.contains("vscode://file")));
     }
 }
