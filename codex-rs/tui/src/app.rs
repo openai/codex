@@ -69,7 +69,7 @@ pub(crate) struct App<'a> {
 
 /// Aggregate parameters needed to create a `ChatWidget`, as creation may be
 /// deferred until after the Git warning screen is dismissed.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct ChatWidgetArgs {
     config: Config,
     initial_prompt: Option<String>,
@@ -397,6 +397,22 @@ impl App<'_> {
                 AppEvent::OnboardingAuthComplete(result) => {
                     if let AppState::Onboarding { screen } = &mut self.app_state {
                         screen.on_auth_complete(result);
+                    }
+                }
+                AppEvent::OnboardingComplete(ChatWidgetArgs {
+                    config,
+                    enhanced_keys_supported,
+                    initial_images,
+                    initial_prompt,
+                }) => {
+                    self.app_state = AppState::Chat {
+                        widget: Box::new(ChatWidget::new(
+                            config,
+                            app_event_tx.clone(),
+                            initial_prompt,
+                            initial_images,
+                            enhanced_keys_supported,
+                        )),
                     }
                 }
                 AppEvent::StartFileSearch(query) => {

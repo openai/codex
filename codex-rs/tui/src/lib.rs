@@ -30,7 +30,6 @@ pub mod custom_terminal;
 mod exec_command;
 mod file_search;
 mod get_git_diff;
-mod git_warning_screen;
 mod history_cell;
 pub mod insert_history;
 pub mod live_wrap;

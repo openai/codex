@@ -10,14 +10,18 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::onboarding::auth::AuthModeWidget;
 use crate::onboarding::auth::SignInState;
+use crate::onboarding::continue_to_chat::ContinueToChatWidget;
+use crate::onboarding::git_warning::GitWarningSelection;
 use crate::onboarding::git_warning::GitWarningWidget;
 use crate::onboarding::welcome::WelcomeWidget;
 use std::path::PathBuf;
 
+#[allow(clippy::large_enum_variant)]
 enum Step {
     Welcome(WelcomeWidget),
     Auth(AuthModeWidget),
     GitWarning(GitWarningWidget),
+    ContinueToChat(ContinueToChatWidget),
 }
 
 pub(crate) trait KeyboardHandler {
@@ -58,7 +62,9 @@ impl OnboardingScreen {
             show_login_screen,
             show_git_warning,
         } = args;
-        let mut steps: Vec<Step> = vec![Step::Welcome(WelcomeWidget {})];
+        let mut steps: Vec<Step> = vec![Step::Welcome(WelcomeWidget {
+            is_logged_in: !show_login_screen,
+        })];
         if show_login_screen {
             steps.push(Step::Auth(AuthModeWidget {
                 event_tx: event_tx.clone(),
@@ -73,14 +79,20 @@ impl OnboardingScreen {
                 event_tx: event_tx.clone(),
                 cwd,
                 selection: None,
+                highlighted: GitWarningSelection::Continue,
             }))
         }
+        steps.push(Step::ContinueToChat(ContinueToChatWidget {
+            event_tx: event_tx.clone(),
+            chat_widget_args,
+        }));
         // TODO: add git warning.
         Self { event_tx, steps }
     }
 
     pub(crate) fn on_auth_complete(&mut self, result: Result<(), String>) {
-        if let Some(Step::Auth(state)) = self.steps.last_mut() {
+        let current_step = self.current_step_mut();
+        if let Some(Step::Auth(state)) = current_step {
             match result {
                 Ok(()) => {
                     state.sign_in_state = SignInState::ChatGptSuccessMessage;
@@ -96,27 +108,39 @@ impl OnboardingScreen {
     }
 
     fn current_steps_mut(&mut self) -> Vec<&mut Step> {
-        self.steps
-            .iter_mut()
-            .take_while(|step| {
-                matches!(
-                    step.get_step_state(),
-                    StepState::Complete | StepState::InProgress
-                )
-            })
-            .collect::<Vec<_>>()
+        let mut out: Vec<&mut Step> = Vec::new();
+        for step in self.steps.iter_mut() {
+            match step.get_step_state() {
+                StepState::Hidden => continue,
+                StepState::Complete => out.push(step),
+                StepState::InProgress => {
+                    out.push(step);
+                    break;
+                }
+            }
+        }
+        out
     }
 
     fn current_steps(&self) -> Vec<&Step> {
+        let mut out: Vec<&Step> = Vec::new();
+        for step in self.steps.iter() {
+            match step.get_step_state() {
+                StepState::Hidden => continue,
+                StepState::Complete => out.push(step),
+                StepState::InProgress => {
+                    out.push(step);
+                    break;
+                }
+            }
+        }
+        out
+    }
+
+    fn current_step_mut(&mut self) -> Option<&mut Step> {
         self.steps
-            .iter()
-            .take_while(|step| {
-                matches!(
-                    step.get_step_state(),
-                    StepState::Complete | StepState::InProgress
-                )
-            })
-            .collect::<Vec<_>>()
+            .iter_mut()
+            .find(|step| matches!(step.get_step_state(), StepState::InProgress))
     }
 }
 
@@ -189,7 +213,7 @@ impl WidgetRef for &OnboardingScreen {
 impl KeyboardHandler for Step {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         match self {
-            Step::Welcome(_) => (),
+            Step::Welcome(_) | Step::ContinueToChat(_) => (),
             Step::Auth(widget) => widget.handle_key_event(key_event),
             Step::GitWarning(widget) => widget.handle_key_event(key_event),
         }
@@ -202,6 +226,7 @@ impl StepStateProvider for Step {
             Step::Welcome(w) => w.get_step_state(),
             Step::Auth(w) => w.get_step_state(),
             Step::GitWarning(w) => w.get_step_state(),
+            Step::ContinueToChat(w) => w.get_step_state(),
         }
     }
 }
@@ -216,6 +241,9 @@ impl WidgetRef for Step {
                 widget.render_ref(area, buf);
             }
             Step::GitWarning(widget) => {
+                widget.render_ref(area, buf);
+            }
+            Step::ContinueToChat(widget) => {
                 widget.render_ref(area, buf);
             }
         }
