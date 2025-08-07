@@ -213,21 +213,21 @@ impl WidgetRef for StatusIndicatorWidget {
         // Plain rendering: no borders or padding so the live cell is visually indistinguishable from terminal scrollback.
         let inner_width = area.width as usize;
 
-        // Compose a single status line like: "▌ Working (Xs • Ctrl z to interrupt) <logs>"
+        // Compose a single status line like: "▌ Working (Xs • Ctrl c to interrupt) <logs>"
         let mut spans: Vec<Span<'static>> = Vec::new();
         spans.push(Span::styled("▌ ", Style::default().fg(Color::Cyan)));
         // Animated header after the left bar
         spans.extend(animated_spans);
         // Space between header and bracket block
         spans.push(Span::raw(" "));
-        // Non-animated, dim bracket content, with only "Ctrl z" bold
+        // Non-animated, dim bracket content, with only "Ctrl c" bold
         let bracket_prefix = format!("({elapsed}s • ");
         spans.push(Span::styled(
             bracket_prefix,
             Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
         ));
         spans.push(Span::styled(
-            "Ctrl z",
+            "Ctrl c",
             Style::default()
                 .fg(Color::Gray)
                 .add_modifier(Modifier::DIM | Modifier::BOLD),

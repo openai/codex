@@ -46,6 +46,7 @@ use crate::conversation_history::ConversationHistory;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::error::SandboxErr;
+use crate::error::get_error_message_ui;
 use crate::exec::ExecParams;
 use crate::exec::ExecToolCallOutput;
 use crate::exec::SandboxType;
@@ -467,6 +468,57 @@ impl Session {
                 let _ = self.tx_event.send(event).await;
             }
         }
+    }
+    /// Runs the exec tool call and emits events for the begin and end of the
+    /// command even on error.
+    ///
+    /// Returns the output of the exec tool call.
+    async fn run_exec_with_events<'a>(
+        &self,
+        turn_diff_tracker: &mut TurnDiffTracker,
+        begin_ctx: ExecCommandContext,
+        exec_args: ExecInvokeArgs<'a>,
+    ) -> crate::error::Result<ExecToolCallOutput> {
+        let is_apply_patch = begin_ctx.apply_patch.is_some();
+        let sub_id = begin_ctx.sub_id.clone();
+        let call_id = begin_ctx.call_id.clone();
+
+        self.on_exec_command_begin(turn_diff_tracker, begin_ctx.clone())
+            .await;
+
+        let result = process_exec_tool_call(
+            exec_args.params,
+            exec_args.sandbox_type,
+            exec_args.ctrl_c,
+            exec_args.sandbox_policy,
+            exec_args.codex_linux_sandbox_exe,
+            exec_args.stdout_stream,
+        )
+        .await;
+
+        let output_stderr;
+        let borrowed: &ExecToolCallOutput = match &result {
+            Ok(output) => output,
+            Err(e) => {
+                output_stderr = ExecToolCallOutput {
+                    exit_code: -1,
+                    stdout: String::new(),
+                    stderr: get_error_message_ui(e),
+                    duration: Duration::default(),
+                };
+                &output_stderr
+            }
+        };
+        self.on_exec_command_end(
+            turn_diff_tracker,
+            &sub_id,
+            &call_id,
+            borrowed,
+            is_apply_patch,
+        )
+        .await;
+
+        result
     }
 
     /// Helper that emits a BackgroundEvent with the given message. This keeps
@@ -1717,6 +1769,15 @@ fn parse_container_exec_arguments(
     }
 }
 
+pub struct ExecInvokeArgs<'a> {
+    pub params: ExecParams,
+    pub sandbox_type: SandboxType,
+    pub ctrl_c: Arc<Notify>,
+    pub sandbox_policy: &'a SandboxPolicy,
+    pub codex_linux_sandbox_exe: &'a Option<PathBuf>,
+    pub stdout_stream: Option<StdoutStream>,
+}
+
 fn maybe_run_with_user_profile(params: ExecParams, sess: &Session) -> ExecParams {
     if sess.shell_environment_policy.use_profile {
         let command = sess
@@ -1887,23 +1948,26 @@ async fn handle_container_exec_with_params(
             },
         ),
     };
-    sess.on_exec_command_begin(turn_diff_tracker, exec_command_context.clone())
-        .await;
 
     let params = maybe_run_with_user_profile(params, sess);
-    let output_result = process_exec_tool_call(
-        params.clone(),
-        sandbox_type,
-        sess.ctrl_c.clone(),
-        &sess.sandbox_policy,
-        &sess.codex_linux_sandbox_exe,
-        Some(StdoutStream {
-            sub_id: sub_id.clone(),
-            call_id: call_id.clone(),
-            tx_event: sess.tx_event.clone(),
-        }),
-    )
-    .await;
+    let output_result = sess
+        .run_exec_with_events(
+            turn_diff_tracker,
+            exec_command_context.clone(),
+            ExecInvokeArgs {
+                params: params.clone(),
+                sandbox_type,
+                ctrl_c: sess.ctrl_c.clone(),
+                sandbox_policy: &sess.sandbox_policy,
+                codex_linux_sandbox_exe: &sess.codex_linux_sandbox_exe,
+                stdout_stream: Some(StdoutStream {
+                    sub_id: sub_id.clone(),
+                    call_id: call_id.clone(),
+                    tx_event: sess.tx_event.clone(),
+                }),
+            },
+        )
+        .await;
 
     match output_result {
         Ok(output) => {
@@ -1914,24 +1978,14 @@ async fn handle_container_exec_with_params(
                 duration,
             } = &output;
 
-            sess.on_exec_command_end(
-                turn_diff_tracker,
-                &sub_id,
-                &call_id,
-                &output,
-                exec_command_context.apply_patch.is_some(),
-            )
-            .await;
-
             let is_success = *exit_code == 0;
             let content = format_exec_output(
                 if is_success { stdout } else { stderr },
                 *exit_code,
                 *duration,
             );
-
             ResponseInputItem::FunctionCallOutput {
-                call_id,
+                call_id: call_id.clone(),
                 output: FunctionCallOutputPayload {
                     content,
                     success: Some(is_success),
@@ -1949,16 +2003,13 @@ async fn handle_container_exec_with_params(
             )
             .await
         }
-        Err(e) => {
-            // Handle non-sandbox errors
-            ResponseInputItem::FunctionCallOutput {
-                call_id,
-                output: FunctionCallOutputPayload {
-                    content: format!("execution error: {e}"),
-                    success: None,
-                },
-            }
-        }
+        Err(e) => ResponseInputItem::FunctionCallOutput {
+            call_id: call_id.clone(),
+            output: FunctionCallOutputPayload {
+                content: format!("execution error: {e}"),
+                success: None,
+            },
+        },
     }
 }
 
@@ -1973,7 +2024,6 @@ async fn handle_sandbox_error(
     let call_id = exec_command_context.call_id.clone();
     let sub_id = exec_command_context.sub_id.clone();
     let cwd = exec_command_context.cwd.clone();
-    let is_apply_patch = exec_command_context.apply_patch.is_some();
 
     // Early out if either the user never wants to be asked for approval, or
     // we're letting the model manage escalation requests. Otherwise, continue
@@ -2039,24 +2089,26 @@ async fn handle_sandbox_error(
             sess.notify_background_event(&sub_id, "retrying command without sandbox")
                 .await;
 
-            sess.on_exec_command_begin(turn_diff_tracker, exec_command_context)
-                .await;
-
             // This is an escalated retry; the policy will not be
             // examined and the sandbox has been set to `None`.
-            let retry_output_result = process_exec_tool_call(
-                params,
-                SandboxType::None,
-                sess.ctrl_c.clone(),
-                &sess.sandbox_policy,
-                &sess.codex_linux_sandbox_exe,
-                Some(StdoutStream {
-                    sub_id: sub_id.clone(),
-                    call_id: call_id.clone(),
-                    tx_event: sess.tx_event.clone(),
-                }),
-            )
-            .await;
+            let retry_output_result = sess
+                .run_exec_with_events(
+                    turn_diff_tracker,
+                    exec_command_context.clone(),
+                    ExecInvokeArgs {
+                        params,
+                        sandbox_type: SandboxType::None,
+                        ctrl_c: sess.ctrl_c.clone(),
+                        sandbox_policy: &sess.sandbox_policy,
+                        codex_linux_sandbox_exe: &sess.codex_linux_sandbox_exe,
+                        stdout_stream: Some(StdoutStream {
+                            sub_id: sub_id.clone(),
+                            call_id: call_id.clone(),
+                            tx_event: sess.tx_event.clone(),
+                        }),
+                    },
+                )
+                .await;
 
             match retry_output_result {
                 Ok(retry_output) => {
@@ -2067,15 +2119,6 @@ async fn handle_sandbox_error(
                         duration,
                     } = &retry_output;
 
-                    sess.on_exec_command_end(
-                        turn_diff_tracker,
-                        &sub_id,
-                        &call_id,
-                        &retry_output,
-                        is_apply_patch,
-                    )
-                    .await;
-
                     let is_success = *exit_code == 0;
                     let content = format_exec_output(
                         if is_success { stdout } else { stderr },
@@ -2084,23 +2127,20 @@ async fn handle_sandbox_error(
                     );
 
                     ResponseInputItem::FunctionCallOutput {
-                        call_id,
+                        call_id: call_id.clone(),
                         output: FunctionCallOutputPayload {
                             content,
                             success: Some(is_success),
                         },
                     }
                 }
-                Err(e) => {
-                    // Handle retry failure
-                    ResponseInputItem::FunctionCallOutput {
-                        call_id,
-                        output: FunctionCallOutputPayload {
-                            content: format!("retry failed: {e}"),
-                            success: None,
-                        },
-                    }
-                }
+                Err(e) => ResponseInputItem::FunctionCallOutput {
+                    call_id: call_id.clone(),
+                    output: FunctionCallOutputPayload {
+                        content: format!("retry failed: {e}"),
+                        success: None,
+                    },
+                },
             }
         }
         ReviewDecision::Denied | ReviewDecision::Abort => {

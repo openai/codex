@@ -132,3 +132,10 @@ impl CodexErr {
         (self as &dyn std::any::Any).downcast_ref::<T>()
     }
 }
+
+pub fn get_error_message_ui(e: &CodexErr) -> String {
+    match e {
+        CodexErr::Sandbox(SandboxErr::Denied(_, _, stderr)) => stderr.to_string(),
+        _ => e.to_string(),
+    }
+}
