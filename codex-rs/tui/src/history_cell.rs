@@ -435,7 +435,8 @@ impl HistoryCell {
             view: TextBlock::new(lines),
         }
     }
-
+    // allow dead code for now. maybe we'll use it again.
+    #[allow(dead_code)]
     pub(crate) fn new_background_event(message: String) -> Self {
         let mut lines: Vec<Line<'static>> = Vec::new();
         lines.push(Line::from("event".dim()));
