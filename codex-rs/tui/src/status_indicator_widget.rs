@@ -209,13 +209,13 @@ impl WidgetRef for StatusIndicatorWidget {
         // Plain rendering: no borders or padding so the live cell is visually indistinguishable from terminal scrollback.
         let inner_width = area.width as usize;
 
-        // Compose a single status line like: "▌ · Working waiting for model"
         let mut spans: Vec<Span<'static>> = Vec::new();
         spans.push(Span::styled("▌ ", Style::default().fg(Color::Cyan)));
 
         // Simple dim spinner to the left of the header.
         let spinner_frames = ['·', '•', '●', '•'];
-        let spinner_ch = spinner_frames[idx % spinner_frames.len()];
+        const SPINNER_SLOWDOWN: usize = 2;
+        let spinner_ch = spinner_frames[(idx / SPINNER_SLOWDOWN) % spinner_frames.len()];
         spans.push(Span::styled(
             spinner_ch.to_string(),
             Style::default().fg(Color::DarkGray),
