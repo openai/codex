@@ -1772,7 +1772,7 @@ fn parse_container_exec_arguments(
 pub struct ExecInvokeArgs<'a> {
     pub params: ExecParams,
     pub sandbox_type: SandboxType,
-    pub ctrl_c: std::sync::Arc<Notify>,
+    pub ctrl_c: Arc<Notify>,
     pub sandbox_policy: &'a SandboxPolicy,
     pub codex_linux_sandbox_exe: &'a Option<PathBuf>,
     pub stdout_stream: Option<StdoutStream>,
