@@ -55,17 +55,6 @@
 
 ---
 
-## Experimental technology disclaimer
-
-Codex CLI is an experimental project under active development. It is not yet stable, may contain bugs, incomplete features, or undergo breaking changes. We're building it in the open with the community and welcome:
-
-- Bug reports
-- Feature requests
-- Pull requests
-- Good vibes
-
-Help us improve by filing issues or submitting PRs (see the section below for how to contribute)!
-
 ## Quickstart
 
 ### Installing and running Codex CLI
@@ -107,20 +96,174 @@ After you run `codex` you'll be taken through an onboarding flow that will help 
 
 #### Option 1 — Sign in with ChatGPT (Recommended)
 
-If you have a paid OpenAI account, after you run `codex` you will be given an option sign in with ChatGPT. This leverages your plan and offers predictable monthly pricing — no API key needed.
+If you have a paid OpenAI account, after you run `codex` you will be given an option sign in with ChatGPT. This gives you access to our latest models, including gpt-5, at no extra cost to your plan and offers predictable monthly pricing — no API key needed.
 
 If you encounter problems with the login flow, please comment on [this issue](https://github.com/openai/codex/issues/1243).
 
+> Important: If you’ve previously used Codex CLI with an `OPENAI_API_KEY` environment variable, the CLI will prefer API key mode. To sign in with ChatGPT, remove or disable the variable first
+
 #### Option 2 — Use an OpenAI API Key (Usage-based Billing)
 
-If you prefer a pay-as-you-go approach, you can authenticate with your OpenAI API key by setting it as an environment variable:
+If you prefer a pay-as-you-go approach, you can still authenticate with your OpenAI API key by setting it as an environment variable:
 
 ```shell
 export OPENAI_API_KEY="your-api-key-here"
 ```
 
-> [!NOTE]
-> This command sets the key only for your current terminal session. You can add the `export` line to your shell's configuration file (e.g., `~/.zshrc`), but we recommend setting it for the session.
+> Note: This command sets the key only for your current terminal session. You can add the `export` line to your shell's configuration file (e.g., `~/.zshrc`), but we recommend setting it for the session.
+
+## Why Codex CLI?
+
+Codex CLI is built for developers who already **live in the terminal** and want
+ChatGPT-level reasoning **plus** the power to actually run code, manipulate
+files, and iterate - all under version control. In short, it's _chat-driven
+development_ that understands and executes your repo.
+
+- **Zero setup** - sign in with ChatGPT or bring your OpenAI API key and it just works!
+- **Full auto-approval, while safe + secure** by running network-disabled and directory-sandboxed
+- **Multimodal** - pass in screenshots or diagrams to implement features ✨
+
+And it's **fully open-source** so you can see and contribute to how it develops!
+
+## Getting started
+
+### Example prompts
+
+Below are a few bite-size examples you can copy-paste. Replace the text in quotes with your own task. See the [prompting guide](https://github.com/openai/codex/blob/main/codex-cli/examples/prompting_guide.md) for more tips and usage patterns.
+
+| ✨  | What you type                                                                   | What happens                                                               |
+| --- | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| 1   | `codex "Refactor the Dashboard component to React Hooks"`                       | Codex rewrites the class component, runs `npm test`, and shows the diff.   |
+| 2   | `codex "Generate SQL migrations for adding a users table"`                      | Infers your ORM, creates migration files, and runs them in a sandboxed DB. |
+| 3   | `codex "Write unit tests for utils/date.ts"`                                    | Generates tests, executes them, and iterates until they pass.              |
+| 4   | `codex "Bulk-rename *.jpeg -> *.jpg with git mv"`                               | Safely renames files and updates imports/usages.                           |
+| 5   | `codex "Explain what this regex does: ^(?=.*[A-Z]).{8,}$"`                      | Outputs a step-by-step human explanation.                                  |
+| 6   | `codex "Carefully review this repo, and propose 3 high impact well-scoped PRs"` | Suggests impactful PRs in the current codebase.                            |
+| 7   | `codex "Look for vulnerabilities and create a security review report"`          | Finds and explains security bugs.                                          |
+
+## Setting permissions
+
+<p align="center">
+  <img src="./.github/codex-cli-permissions.png" alt="Codex CLI permissions" width="50%" />
+  </p>
+
+When you first log in, Codex will ask **how much freedom you want to give it in the current folder**. It will give you two main choices:
+
+#### **1. Work without asking for approval (aka "full-auto" mode) — fastest, least interruptions**
+> Codex can run commands and write files without asking first.
+
+- **Best for**: git controlled repos, rapid prototyping, or disposable environments.  
+- **What happens**: Commands run in a **restricted sandbox** — no internet access, and file writes are limited to your workspace (or whatever you’ve set via `--cd`).  
+- **Safety net**: If something fails because of sandbox restrictions, Codex will pause and ask if it should retry with fewer limits.
+
+#### **2. Ask to approve edits and commands (aka "approval" mode) — balance of speed and safety**
+> Codex asks before running commands or editing files.
+
+- **Best for**: non-git controlled repos, production code, or when you want to review every change.  
+- **What happens**: Reads (like `ls` or `cat`) run automatically; anything that can change files or state requires your OK.  
+- **Execution**: Approved commands run **outside** the sandbox for full compatibility.
+
+---
+
+### What's happening under the hood
+
+Codex permissions are a combination of two controls that are fully configurable:
+
+1. **Approval policy** — when to ask for confirmation  
+   (`approval_policy` in config)
+2. **Sandbox mode** — where/how commands are allowed to run  
+   (`sandbox_mode` in config)
+
+The “presets” above translate to:
+
+| Mode            | Equivalent flags                                              |
+| ---------------- | ------------------------------------------------------------- |
+| full-auto        | `--ask-for-approval on-failure` + `--sandbox workspace-write` |
+| approval | `--ask-for-approval untrusted` + `--sandbox read-only`        |
+
+#### Can I run without ANY approvals?
+
+Yes. In **yolo mode**, Codex has the same access as your user account — full disk and network access, no sandboxing, and no approval prompts. This should only be used in isolated or disposable environments.
+
+**Enable with either:**
+
+```bash
+codex --ask-for-approval never --sandbox danger-full-access
+```
+
+or
+
+```bash
+codex --yolo
+```
+
+> **Warning:** This disables all safety mechanisms. Commands can modify or delete any file your account can access and make unrestricted network requests.  
+
+#### Examples of different configurations
+
+```bash
+# approval mode: ask on untrusted, read-only sandbox
+codex
+
+# full-auto mode: write to workspace, only ask if something fails
+codex --full-auto
+
+# Quiet read-only exploration: no prompts, no writes
+codex --ask-for-approval never --sandbox read-only
+
+# Writable workspace but stay offline
+codex --ask-for-approval on-failure --sandbox workspace-write
+```
+
+#### Fine-tuning in `config.toml`
+
+```toml
+# approval mode
+approval_policy = "untrusted"
+sandbox_mode    = "read-only"
+
+# full-auto mode
+approval_policy = "on-failure"
+sandbox_mode    = "workspace-write"
+
+# Optional: allow network in workspace-write mode
+[sandbox_workspace_write]
+network_access = true
+```
+
+You can also save presets as **profiles**:
+
+```toml
+[profiles.full_auto]
+approval_policy = "on-failure"
+sandbox_mode    = "workspace-write"
+
+[profiles.readonly_quiet]
+approval_policy = "never"
+sandbox_mode    = "read-only"
+```
+
+## Running with a prompt as input
+
+You can also run Codex CLI with a prompt as input (and optionally in `full-auto` or `yolo` mode - see [permissions](#setting-permissions) below):
+
+```shell
+codex "explain this codebase to me"
+```
+
+```shell
+codex --full-auto "create the fanciest todo-list app"
+```
+
+```shell
+codex --yolo "vvibe code me a todo app but it refuses to add boring tasks"
+```
+
+That's it - Codex will scaffold a file, run it inside a sandbox, install any
+missing dependencies, and show you the live result. Approve the changes and
+they'll be committed to your working directory.
+
+## Using Open Source Models
 
 <details>
 <summary><strong>Use <code>--profile</code> to use other models</strong></summary>
@@ -181,161 +324,6 @@ model = "mistral"
 This way, you can specify one command-line argument (.e.g., `--profile o3`, `--profile mistral`) to override multiple settings together.
 
 </details>
-<br />
-
-## Why Codex CLI?
-
-Codex CLI is built for developers who already **live in the terminal** and want
-ChatGPT-level reasoning **plus** the power to actually run code, manipulate
-files, and iterate - all under version control. In short, it's _chat-driven
-development_ that understands and executes your repo.
-
-- **Zero setup** - sign in with ChatGPT or bring your OpenAI API key and it just works!
-- **Full auto-approval, while safe + secure** by running network-disabled and directory-sandboxed
-- **Multimodal** - pass in screenshots or diagrams to implement features ✨
-
-And it's **fully open-source** so you can see and contribute to how it develops!
-
-## Getting started
-
-### Example prompts
-
-Below are a few bite-size examples you can copy-paste. Replace the text in quotes with your own task. See the [prompting guide](https://github.com/openai/codex/blob/main/codex-cli/examples/prompting_guide.md) for more tips and usage patterns.
-
-| ✨  | What you type                                                                   | What happens                                                               |
-| --- | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| 1   | `codex "Refactor the Dashboard component to React Hooks"`                       | Codex rewrites the class component, runs `npm test`, and shows the diff.   |
-| 2   | `codex "Generate SQL migrations for adding a users table"`                      | Infers your ORM, creates migration files, and runs them in a sandboxed DB. |
-| 3   | `codex "Write unit tests for utils/date.ts"`                                    | Generates tests, executes them, and iterates until they pass.              |
-| 4   | `codex "Bulk-rename *.jpeg -> *.jpg with git mv"`                               | Safely renames files and updates imports/usages.                           |
-| 5   | `codex "Explain what this regex does: ^(?=.*[A-Z]).{8,}$"`                      | Outputs a step-by-step human explanation.                                  |
-| 6   | `codex "Carefully review this repo, and propose 3 high impact well-scoped PRs"` | Suggests impactful PRs in the current codebase.                            |
-| 7   | `codex "Look for vulnerabilities and create a security review report"`          | Finds and explains security bugs.                                          |
-
-## Setting permissions
-
-When you first log in, Codex will ask **how much freedom you want to give it in this folder**. 
-
-<p align="center">
-  <img src="./.github/codex-cli-permissions.png" alt="Codex CLI permissions" width="50%" />
-  </p>
-
-You have two main choices:
-
-#### **1. Work without asking for approval (aka full auto mode) — fastest, least interruptions**
-> Codex can run commands and write files without asking first.
-
-- **Best for**: git controlled repos, rapid prototyping, or disposable environments.  
-- **What happens**: Commands run in a **restricted sandbox** — no internet access, and file writes are limited to your workspace (or whatever you’ve set via `--cd`).  
-- **Safety net**: If something fails because of sandbox restrictions, Codex will pause and ask if it should retry with fewer limits.
-- If you are in a git controlled folder Depending on whether you are in 
-
-#### **2. Ask to approve edits and commands (aka approval mode) — balance of speed and safety**
-> Codex asks before running commands or editing files.
-
-- **Best for**: non-git controlled repos, production code, or when you want to review every change.  
-- **What happens**: Reads (like `ls` or `cat`) run automatically; anything that can change files or state requires your OK.  
-- **Execution**: Approved commands run **outside** the sandbox for full compatibility.
-
----
-
-### What's happening under the hood
-
-Codex permissions are a combination of two controls:
-
-1. **Approval policy** — when to ask for confirmation  
-   (`approval_policy` in config)
-2. **Sandbox mode** — where/how commands are allowed to run  
-   (`sandbox_mode` in config)
-
-The “presets” above translate to:
-
-| Mode            | Equivalent flags                                              |
-| ---------------- | ------------------------------------------------------------- |
-| Full Auto        | `--ask-for-approval on-failure` + `--sandbox workspace-write` |
-| Approvals | `--ask-for-approval untrusted` + `--sandbox read-only`        |
-
-Here’s a more concise, factual rewrite:
-
-#### Can I run without ANY approvals?
-
-Yes. In **No-limits mode**, Codex has the same access as your user account — full disk and network access, no sandboxing, and no approval prompts. This should only be used in isolated or disposable environments.
-
-**Enable with either:**
-
-```bash
-codex --dangerously-bypass-approvals-and-sandbox
-```
-
-or
-
-```bash
-codex --ask-for-approval never --sandbox danger-full-access
-```
-
-**Warning:** This disables all safety mechanisms. Commands can modify or delete any file your account can access and make unrestricted network requests.  
-
-#### Examples
-
-```bash
-# Default safeguards: ask on untrusted, read-only sandbox
-codex
-
-# Full Auto: write to workspace, only ask if something fails
-codex --full-auto
-
-# Quiet read-only exploration: no prompts, no writes
-codex --ask-for-approval never --sandbox read-only
-
-# Writable workspace but stay offline
-codex --ask-for-approval on-failure --sandbox workspace-write
-```
-
-#### Fine-tuning in `config.toml`
-
-```toml
-# Default (Approvals mode)
-approval_policy = "untrusted"
-sandbox_mode    = "read-only"
-
-# Full Auto
-approval_policy = "on-failure"
-sandbox_mode    = "workspace-write"
-
-# Optional: allow network in workspace-write mode
-[sandbox_workspace_write]
-network_access = true
-```
-
-You can also save presets as **profiles**:
-
-```toml
-[profiles.full_auto]
-approval_policy = "on-failure"
-sandbox_mode    = "workspace-write"
-
-[profiles.readonly_quiet]
-approval_policy = "never"
-sandbox_mode    = "read-only"
-```
-
-## Running with a prompt as input
-
-You can also run Codex CLI with a prompt as input (and optionally in `Full Auto` mode - see [permissions](#setting-permissions) below):
-
-```shell
-codex "explain this codebase to me"
-```
-
-```shell
-codex --full-auto "create the fanciest todo-list app"
-```
-
-That's it - Codex will scaffold a file, run it inside a sandbox, install any
-missing dependencies, and show you the live result. Approve the changes and
-they'll be committed to your working directory.
-
-## Using Open Source Models
 
 Codex can run fully locally against an OpenAI-compatible OSS host (like Ollama) using the `--oss` flag:
 
@@ -378,6 +366,19 @@ The mechanism Codex uses to implement the sandbox policy depends on your OS:
 - **Linux** uses a combination of Landlock/seccomp APIs to enforce the `sandbox` configuration.
 
 Note that when running Linux in a containerized environment such as Docker, sandboxing may not work if the host/container configuration does not support the necessary Landlock/seccomp APIs. In such cases, we recommend configuring your Docker container so that it provides the sandbox guarantees you are looking for and then running `codex` with `--sandbox danger-full-access` (or, more simply, the `--dangerously-bypass-approvals-and-sandbox` flag) within your container.
+
+---
+
+## Experimental technology disclaimer
+
+Codex CLI is an experimental project under active development. It is not yet stable, may contain bugs, incomplete features, or undergo breaking changes. We're building it in the open with the community and welcome:
+
+- Bug reports
+- Feature requests
+- Pull requests
+- Good vibes
+
+Help us improve by filing issues or submitting PRs (see the section below for how to contribute)!
 
 ---
 
