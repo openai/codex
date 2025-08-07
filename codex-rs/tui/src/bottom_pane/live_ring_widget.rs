@@ -43,3 +43,10 @@ impl WidgetRef for LiveRingWidget {
         para.render_ref(area, buf);
     }
 }
+
+#[cfg(test)]
+impl LiveRingWidget {
+    pub fn test_rows(&self) -> Vec<Line<'static>> {
+        self.rows.clone()
+    }
+}

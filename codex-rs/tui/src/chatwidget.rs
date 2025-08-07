@@ -630,6 +630,16 @@ impl ChatWidget<'_> {
     }
 }
 
+#[cfg(test)]
+impl ChatWidget<'_> {
+    pub fn test_live_ring_rows(&self) -> Vec<ratatui::text::Line<'static>> {
+        self.bottom_pane.test_live_ring_rows()
+    }
+    pub fn test_set_live_max_rows(&mut self, n: u16) {
+        self.live_max_rows = n;
+    }
+}
+
 impl ChatWidget<'_> {
     fn begin_stream(&mut self, kind: StreamKind) {
         if let Some(current) = self.current_stream {

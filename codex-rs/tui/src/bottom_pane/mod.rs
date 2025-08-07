@@ -364,6 +364,16 @@ impl BottomPane<'_> {
     // Removed restart_live_status_with_text – no longer used by the current streaming UI.
 }
 
+#[cfg(test)]
+impl BottomPane<'_> {
+    pub fn test_live_ring_rows(&self) -> Vec<Line<'static>> {
+        match &self.live_ring {
+            Some(r) => r.test_rows(),
+            None => Vec::new(),
+        }
+    }
+}
+
 impl WidgetRef for &BottomPane<'_> {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let mut y_offset = 0u16;

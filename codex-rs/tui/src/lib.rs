@@ -54,6 +54,8 @@ use color_eyre::owo_colors::OwoColorize;
 
 pub use cli::Cli;
 
+// (tests access modules directly within the crate)
+
 pub async fn run_main(
     cli: Cli,
     codex_linux_sandbox_exe: Option<PathBuf>,
