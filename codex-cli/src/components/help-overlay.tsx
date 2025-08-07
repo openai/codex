@@ -96,7 +96,7 @@ export default function HelpOverlay({
       </Box>
 
       <Box paddingX={1}>
-        <Text dimColor>esc or q to close</Text>
+        <Text dimColor>Esc or q to close</Text>
       </Box>
     </Box>
   );

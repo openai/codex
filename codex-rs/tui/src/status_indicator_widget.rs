@@ -227,7 +227,7 @@ impl WidgetRef for StatusIndicatorWidget {
             Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
         ));
         spans.push(Span::styled(
-            "Ctrl c",
+            "Ctrl C",
             Style::default()
                 .fg(Color::Gray)
                 .add_modifier(Modifier::DIM | Modifier::BOLD),

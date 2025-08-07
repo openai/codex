@@ -194,12 +194,14 @@ impl HistoryCell {
                     Span::raw(format!(" {cwd_str}")).dim(),
                 ]),
                 Line::from("".dim()),
-                Line::from(" Try one of the following commands to get started:".dim()),
+                Line::from(
+                    " Describe a task to get started or try one of the following commands:".dim(),
+                ),
                 Line::from("".dim()),
-                Line::from(format!(" 1. /init - {}", SlashCommand::Init.description()).dim()),
-                Line::from(format!(" 2. /status - {}", SlashCommand::Status.description()).dim()),
-                Line::from(format!(" 3. /compact - {}", SlashCommand::Compact.description()).dim()),
-                Line::from(format!(" 4. /new - {}", SlashCommand::New.description()).dim()),
+                Line::from(format!(" /init - {}", SlashCommand::Init.description()).dim()),
+                Line::from(format!(" /status - {}", SlashCommand::Status.description()).dim()),
+                Line::from(format!(" /compact - {}", SlashCommand::Compact.description()).dim()),
+                Line::from(format!(" /new - {}", SlashCommand::New.description()).dim()),
                 Line::from("".dim()),
             ];
             HistoryCell::WelcomeMessage {
@@ -534,7 +536,7 @@ impl HistoryCell {
         let mut header: Vec<Span> = Vec::new();
         header.push(Span::raw("📋"));
         header.push(Span::styled(
-            "Updated",
+            " Updated",
             Style::default().add_modifier(Modifier::BOLD).magenta(),
         ));
         header.push(Span::raw(" to do list ["));
