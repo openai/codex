@@ -4,7 +4,7 @@ use crate::config_types::McpServerConfig;
 use crate::config_types::ReasoningEffort;
 use crate::config_types::ReasoningSummary;
 use crate::config_types::SandboxMode;
-use crate::config_types::SandboxWorkplaceWrite;
+use crate::config_types::SandboxWorkspaceWrite;
 use crate::config_types::ShellEnvironmentPolicy;
 use crate::config_types::ShellEnvironmentPolicyToml;
 use crate::config_types::Tui;
@@ -282,7 +282,7 @@ pub struct ConfigToml {
     pub sandbox_mode: Option<SandboxMode>,
 
     /// Sandbox configuration to apply if `sandbox` is `WorkspaceWrite`.
-    pub sandbox_workspace_write: Option<SandboxWorkplaceWrite>,
+    pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
 
     /// Disable server-side response storage (sends the full conversation
     /// context with every request). Currently necessary for OpenAI customers
@@ -361,7 +361,7 @@ impl ConfigToml {
         match resolved_sandbox_mode {
             SandboxMode::ReadOnly => SandboxPolicy::new_read_only_policy(),
             SandboxMode::WorkspaceWrite => match self.sandbox_workspace_write.as_ref() {
-                Some(SandboxWorkplaceWrite {
+                Some(SandboxWorkspaceWrite {
                     writable_roots,
                     network_access,
                     exclude_tmpdir_env_var,
