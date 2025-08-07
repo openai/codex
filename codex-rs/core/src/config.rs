@@ -479,7 +479,9 @@ impl Config {
             None => ConfigProfile::default(),
         };
 
-        let sandbox_policy = cfg.derive_sandbox_policy(sandbox_mode);
+        // we need a clone here because we have a bit of a circular dependency later on.
+        // we should untangle this soon.
+        let cloned_config_for_sandbox_policy = cfg.clone();
 
         let mut model_providers = built_in_model_providers();
         // Merge user-defined providers into the built-in list.
@@ -563,6 +565,41 @@ impl Config {
             Self::get_base_instructions(experimental_instructions_path, &resolved_cwd)?;
         let base_instructions = base_instructions.or(file_base_instructions);
 
+        // Let's begin.
+        // First: load approval_policy and sandbox_mode from overrides, config
+        // profile, or config.toml.
+        let mut approval_policy = approval_policy
+            .or(config_profile.approval_policy)
+            .or(cfg.approval_policy.clone());
+        // TODO: Add sandbox_mode to the config profile? Doesn't
+        // appear to exist right now
+        let mut sandbox_mode = sandbox_mode.or(cfg.sandbox_mode.clone());
+        let mut projects = cfg.projects.clone().unwrap_or_default();
+
+        // Second: Default to "trusted" if the user has configured approval policy
+        // or sandbox mode, regardless of projects config. If you've modified the
+        // config.toml, we'll respect your decision.
+        //
+        // This is a bit of a hack, but it allows us to skip tui onboarding
+        // for now.
+        if approval_policy.is_some() || sandbox_mode.is_some() {
+            projects.insert(
+                resolved_cwd.to_string_lossy().to_string(),
+                ProjectConfig {
+                    trusted: Some(true),
+                },
+            );
+        } else if let Some(project) = projects.get(&resolved_cwd.to_string_lossy().to_string()) {
+            // Third: If we have a project config, and it's trusted, set the approval policy and sandbox mode
+            if project.trusted.unwrap_or(false) {
+                approval_policy = Some(AskForApproval::OnRequest);
+                sandbox_mode = Some(SandboxMode::WorkspaceWrite);
+            }
+        }
+        // Finally: set defaults if none of the above conditions are met.
+        let approval_policy = approval_policy.unwrap_or_else(AskForApproval::default);
+        let sandbox_policy = cloned_config_for_sandbox_policy.derive_sandbox_policy(sandbox_mode);
+
         let config = Self {
             model,
             model_family,
@@ -571,10 +608,7 @@ impl Config {
             model_provider_id,
             model_provider,
             cwd: resolved_cwd,
-            approval_policy: approval_policy
-                .or(config_profile.approval_policy)
-                .or(cfg.approval_policy)
-                .unwrap_or_else(AskForApproval::default),
+            approval_policy,
             sandbox_policy,
             shell_environment_policy,
             disable_response_storage: config_profile
@@ -616,8 +650,7 @@ impl Config {
             experimental_resume,
             include_plan_tool: include_plan_tool.unwrap_or(false),
             internal_originator: cfg.internal_originator,
-            // We only accept this data from config.toml right now.
-            projects: cfg.projects.unwrap_or_default(),
+            projects,
         };
         Ok(config)
     }

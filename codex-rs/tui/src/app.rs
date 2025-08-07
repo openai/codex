@@ -30,6 +30,7 @@ use std::sync::mpsc::Receiver;
 use std::sync::mpsc::channel;
 use std::thread;
 use std::time::Duration;
+use tracing::trace;
 
 /// Time window for debouncing redraw requests.
 const REDRAW_DEBOUNCE: Duration = Duration::from_millis(10);
@@ -133,7 +134,9 @@ impl App<'_> {
 
         let show_login_screen = should_show_login_screen(&config);
         let is_cwd_trusted = config.is_cwd_trusted();
-        tracing::error!("is_cwd_trusted: {is_cwd_trusted}");
+        trace!(
+            "onboarding: show_login_screen: {show_login_screen}, is_cwd_trusted: {is_cwd_trusted}"
+        );
         let app_state = if show_login_screen || !is_cwd_trusted {
             let chat_widget_args = ChatWidgetArgs {
                 config: config.clone(),
