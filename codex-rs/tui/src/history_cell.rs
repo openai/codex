@@ -543,7 +543,9 @@ impl HistoryCell {
 
                 match auth.openai_api_key.as_deref() {
                     Some(key) if !key.is_empty() => {
-                        lines.push(Line::from("  • Using API key"));
+                        lines.push(Line::from(
+                            "  • Using API key. Run codex login to use ChatGPT plan",
+                        ));
                     }
                     _ => {
                         let plan_text = info
