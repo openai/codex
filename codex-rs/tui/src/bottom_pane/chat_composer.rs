@@ -45,7 +45,8 @@ pub enum InputResult {
 }
 
 struct TokenUsageInfo {
-    token_usage: TokenUsage,
+    total_token_usage: TokenUsage,
+    last_token_usage: TokenUsage,
     model_context_window: Option<u64>,
 }
 
@@ -129,11 +130,13 @@ impl ChatComposer {
     /// context when the composer is empty.
     pub(crate) fn set_token_usage(
         &mut self,
-        token_usage: TokenUsage,
+        total_token_usage: TokenUsage,
+        last_token_usage: TokenUsage,
         model_context_window: Option<u64>,
     ) {
         self.token_usage_info = Some(TokenUsageInfo {
-            token_usage,
+            total_token_usage,
+            last_token_usage,
             model_context_window,
         });
     }
@@ -694,16 +697,18 @@ impl WidgetRef for &ChatComposer {
 
                 // Append token/context usage info to the footer hints when available.
                 if let Some(token_usage_info) = &self.token_usage_info {
-                    let token_usage = &token_usage_info.token_usage;
+                    let token_usage = &token_usage_info.total_token_usage;
                     hint.push(Span::from("   "));
                     hint.push(
                         Span::from(format!("{} tokens used", token_usage.total_tokens))
                             .style(Style::default().add_modifier(Modifier::DIM)),
                     );
+                    let last_token_usage = &token_usage_info.last_token_usage;
                     if let Some(context_window) = token_usage_info.model_context_window {
                         let percent_remaining: u8 = if context_window > 0 {
                             let percent = 100.0
-                                - (token_usage.total_tokens as f32 / context_window as f32 * 100.0);
+                                - (last_token_usage.total_tokens as f32 / context_window as f32
+                                    * 100.0);
                             percent.clamp(0.0, 100.0) as u8
                         } else {
                             100
