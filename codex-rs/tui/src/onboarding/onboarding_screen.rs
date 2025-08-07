@@ -5,26 +5,37 @@ use ratatui::widgets::WidgetRef;
 
 use codex_login::AuthMode;
 
+use crate::app::ChatWidgetArgs;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::onboarding::auth::AuthModeWidget;
 use crate::onboarding::auth::SignInState;
+use crate::onboarding::continue_to_chat::ContinueToChatWidget;
+use crate::onboarding::git_warning::GitWarningSelection;
+use crate::onboarding::git_warning::GitWarningWidget;
 use crate::onboarding::welcome::WelcomeWidget;
 use std::path::PathBuf;
 
+#[allow(clippy::large_enum_variant)]
 enum Step {
     Welcome(WelcomeWidget),
     Auth(AuthModeWidget),
+    GitWarning(GitWarningWidget),
+    ContinueToChat(ContinueToChatWidget),
 }
 
 pub(crate) trait KeyboardHandler {
-    fn handle_key_event(&mut self, key_event: KeyEvent) -> KeyEventResult;
+    fn handle_key_event(&mut self, key_event: KeyEvent);
 }
 
-pub(crate) enum KeyEventResult {
-    Continue,
-    Quit,
-    None,
+pub(crate) enum StepState {
+    Hidden,
+    InProgress,
+    Complete,
+}
+
+pub(crate) trait StepStateProvider {
+    fn get_step_state(&self) -> StepState;
 }
 
 pub(crate) struct OnboardingScreen {
@@ -32,50 +43,113 @@ pub(crate) struct OnboardingScreen {
     steps: Vec<Step>,
 }
 
+pub(crate) struct OnboardingScreenArgs {
+    pub event_tx: AppEventSender,
+    pub chat_widget_args: ChatWidgetArgs,
+    pub codex_home: PathBuf,
+    pub cwd: PathBuf,
+    pub show_login_screen: bool,
+    pub show_git_warning: bool,
+}
+
 impl OnboardingScreen {
-    pub(crate) fn new(event_tx: AppEventSender, codex_home: PathBuf) -> Self {
-        let steps: Vec<Step> = vec![
-            Step::Welcome(WelcomeWidget {}),
-            Step::Auth(AuthModeWidget {
+    pub(crate) fn new(args: OnboardingScreenArgs) -> Self {
+        let OnboardingScreenArgs {
+            event_tx,
+            chat_widget_args,
+            codex_home,
+            cwd,
+            show_login_screen,
+            show_git_warning,
+        } = args;
+        let mut steps: Vec<Step> = vec![Step::Welcome(WelcomeWidget {
+            is_logged_in: !show_login_screen,
+        })];
+        if show_login_screen {
+            steps.push(Step::Auth(AuthModeWidget {
                 event_tx: event_tx.clone(),
-                mode: AuthMode::ChatGPT,
+                highlighted_mode: AuthMode::ChatGPT,
                 error: None,
                 sign_in_state: SignInState::PickMode,
                 codex_home,
-            }),
-        ];
+            }))
+        }
+        if show_git_warning {
+            steps.push(Step::GitWarning(GitWarningWidget {
+                event_tx: event_tx.clone(),
+                cwd,
+                selection: None,
+                highlighted: GitWarningSelection::Continue,
+            }))
+        }
+        steps.push(Step::ContinueToChat(ContinueToChatWidget {
+            event_tx: event_tx.clone(),
+            chat_widget_args,
+        }));
+        // TODO: add git warning.
         Self { event_tx, steps }
     }
 
-    pub(crate) fn on_auth_complete(&mut self, result: Result<(), String>) -> KeyEventResult {
-        if let Some(Step::Auth(state)) = self.steps.last_mut() {
+    pub(crate) fn on_auth_complete(&mut self, result: Result<(), String>) {
+        let current_step = self.current_step_mut();
+        if let Some(Step::Auth(state)) = current_step {
             match result {
                 Ok(()) => {
-                    state.sign_in_state = SignInState::ChatGptSuccess;
+                    state.sign_in_state = SignInState::ChatGptSuccessMessage;
                     self.event_tx.send(AppEvent::RequestRedraw);
-                    KeyEventResult::None
                 }
                 Err(e) => {
                     state.sign_in_state = SignInState::PickMode;
                     state.error = Some(e);
                     self.event_tx.send(AppEvent::RequestRedraw);
-                    KeyEventResult::None
                 }
             }
-        } else {
-            KeyEventResult::None
         }
+    }
+
+    fn current_steps_mut(&mut self) -> Vec<&mut Step> {
+        let mut out: Vec<&mut Step> = Vec::new();
+        for step in self.steps.iter_mut() {
+            match step.get_step_state() {
+                StepState::Hidden => continue,
+                StepState::Complete => out.push(step),
+                StepState::InProgress => {
+                    out.push(step);
+                    break;
+                }
+            }
+        }
+        out
+    }
+
+    fn current_steps(&self) -> Vec<&Step> {
+        let mut out: Vec<&Step> = Vec::new();
+        for step in self.steps.iter() {
+            match step.get_step_state() {
+                StepState::Hidden => continue,
+                StepState::Complete => out.push(step),
+                StepState::InProgress => {
+                    out.push(step);
+                    break;
+                }
+            }
+        }
+        out
+    }
+
+    fn current_step_mut(&mut self) -> Option<&mut Step> {
+        self.steps
+            .iter_mut()
+            .find(|step| matches!(step.get_step_state(), StepState::InProgress))
     }
 }
 
 impl KeyboardHandler for OnboardingScreen {
-    fn handle_key_event(&mut self, key_event: KeyEvent) -> KeyEventResult {
-        if let Some(last_step) = self.steps.last_mut() {
-            self.event_tx.send(AppEvent::RequestRedraw);
-            last_step.handle_key_event(key_event)
-        } else {
-            KeyEventResult::None
+    fn handle_key_event(&mut self, key_event: KeyEvent) {
+        if let Some(active_step) = self.current_steps_mut().into_iter().last() {
+            active_step.handle_key_event(key_event);
         }
+        self.event_tx.send(AppEvent::RequestRedraw);
     }
 }
 
@@ -109,8 +183,10 @@ impl WidgetRef for &OnboardingScreen {
         }
 
         let mut i = 0usize;
-        while i < self.steps.len() && y < bottom {
-            let step = &self.steps[i];
+        let current_steps = self.current_steps();
+
+        while i < current_steps.len() && y < bottom {
+            let step = &current_steps[i];
             let max_h = bottom.saturating_sub(y);
             if max_h == 0 || width == 0 {
                 break;
@@ -135,10 +211,22 @@ impl WidgetRef for &OnboardingScreen {
 }
 
 impl KeyboardHandler for Step {
-    fn handle_key_event(&mut self, key_event: KeyEvent) -> KeyEventResult {
+    fn handle_key_event(&mut self, key_event: KeyEvent) {
         match self {
-            Step::Welcome(_) => KeyEventResult::None,
+            Step::Welcome(_) | Step::ContinueToChat(_) => (),
             Step::Auth(widget) => widget.handle_key_event(key_event),
+            Step::GitWarning(widget) => widget.handle_key_event(key_event),
+        }
+    }
+}
+
+impl StepStateProvider for Step {
+    fn get_step_state(&self) -> StepState {
+        match self {
+            Step::Welcome(w) => w.get_step_state(),
+            Step::Auth(w) => w.get_step_state(),
+            Step::GitWarning(w) => w.get_step_state(),
+            Step::ContinueToChat(w) => w.get_step_state(),
         }
     }
 }
@@ -150,6 +238,12 @@ impl WidgetRef for Step {
                 widget.render_ref(area, buf);
             }
             Step::Auth(widget) => {
+                widget.render_ref(area, buf);
+            }
+            Step::GitWarning(widget) => {
+                widget.render_ref(area, buf);
+            }
+            Step::ContinueToChat(widget) => {
                 widget.render_ref(area, buf);
             }
         }
