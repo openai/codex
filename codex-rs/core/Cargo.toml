@@ -36,6 +36,7 @@ sha1 = "0.10.6"
 shlex = "1.3.0"
 similar = "2.7.0"
 strum_macros = "0.27.2"
+tempfile = "3"
 thiserror = "2.0.12"
 time = { version = "0.3", features = ["formatting", "local-offset", "macros"] }
 tokio = { version = "1", features = [
@@ -47,6 +48,7 @@ tokio = { version = "1", features = [
 ] }
 tokio-util = "0.7.14"
 toml = "0.9.4"
+toml_edit = "0.23.3"
 tracing = { version = "0.1.41", features = ["log"] }
 tree-sitter = "0.25.8"
 tree-sitter-bash = "0.25.0"
