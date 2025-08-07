@@ -6,7 +6,7 @@
 | `codex "..."`      | Initial prompt for interactive TUI | `codex "fix lint errors"`       |
 | `codex exec "..."` | Non-interactive "automation mode"  | `codex exec "explain utils.ts"` |
 
-Key flags: `--model/-m`, `--ask-for-approval/-a`.
+Key flags: `--model/-m`, `--ask-for-approval/-a`, `--profile <name>`, `--config key=value`.
 
 ---
 
@@ -45,6 +45,18 @@ tail -F ~/.codex/log/codex-tui.log
 By comparison, the non-interactive mode (`codex exec`) defaults to `RUST_LOG=error`, but messages are printed inline, so there is no need to monitor a separate file.
 
 See the Rust documentation on [`RUST_LOG`](https://docs.rs/env_logger/latest/env_logger/#enabling-logging) for more information on the configuration options.
+
+---
+
+## Pinning Codex with DotSlash
+
+- Each GitHub release includes a DotSlash file named `codex`. With the DotSlash CLI installed, you can commit that file to your repo and run `./codex` to fetch and execute the correct binary for your platform.
+- Why: ensures every contributor and CI uses the same Codex version without manual installs.
+- Steps:
+  - Download the `codex` DotSlash file from the release and add it to your repo.
+  - Ensure the DotSlash CLI is installed on developer machines and CI.
+  - Run `./codex ...` anywhere in the repo; DotSlash will download/cache the correct binary.
+- Learn more: https://dotslash-cli.com/
 
 ---
 

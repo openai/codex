@@ -1,9 +1,8 @@
 # Configuration overview
 
-Codex reads TOML config from ~/.codex/config.toml; see ../codex-rs/config.md for
- the full reference.
-CLI flags override config (including --config key=value and --profile <name>); o
-therwise values fall back to the file and then built‑in defaults.
+Codex reads TOML config from `~/.codex/config.toml`; see [../codex-rs/config.md](../codex-rs/config.md) for the full reference. 
+
+CLI flags override config (including `--config key=value` and `--profile <name>`); otherwise values fall back to the file.
 
 ## Using Open Source Models
 
@@ -104,7 +103,7 @@ This way, you can specify one command-line argument (.e.g., `--profile o3`, `--p
 Codex lets you decide _how much autonomy_ you want to grant the agent. The following options can be configured independently:
 
 - [`approval_policy`](../codex-rs/config.md#approval_policy) determines when you should be prompted to approve whether Codex can execute a command
-- [`sandbox`](../codex-rs/config.md#sandbox) determines the _sandbox policy_ that Codex uses to execute untrusted commands
+- [`sandbox`](../codex-rs/config.md#sandbox_mode) determines the _sandbox policy_ that Codex uses to execute untrusted commands
 
 By default, Codex runs with `--ask-for-approval untrusted` and `--sandbox read-only`, which means that:
 

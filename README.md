@@ -9,9 +9,8 @@ This is the home of the **Codex CLI**, OpenAI's coding agent that runs locally o
 
 ---
 
-> [!WARNING]
-> Experimental technology disclaimer
-> Codex CLI is an experimental project under active development. We're building it in the open with the community; Help us improve by filing issues or submitting PRs (see [contributing](./docs/contributing.md) for how to contribute)!
+> ⚠️ Experimental
+> Codex CLI is under active development. We welcome issues and PRs — see [contributing](./docs/contributing.md).
 
 ## Quickstart
 
@@ -90,43 +89,7 @@ they'll be committed to your working directory.
 
 
 
-## Installation
 
-<details open>
-<summary><strong>Install Codex CLI using your preferred package manager.</strong></summary>
-
-From `brew` (recommended, downloads only the binary for your platform):
-
-```bash
-brew install codex
-```
-
-From `npm` (generally more readily available, but downloads binaries for all supported platforms):
-
-```bash
-npm i -g @openai/codex
-```
-
-Or go to the [latest GitHub Release](https://github.com/openai/codex/releases/latest) and download the appropriate binary for your platform.
-
-Admittedly, each GitHub Release contains many executables, but in practice, you likely want one of these:
-
-- macOS
-  - Apple Silicon/arm64: `codex-aarch64-apple-darwin.tar.gz`
-  - x86_64 (older Mac hardware): `codex-x86_64-apple-darwin.tar.gz`
-- Linux
-  - x86_64: `codex-x86_64-unknown-linux-musl.tar.gz`
-  - arm64: `codex-aarch64-unknown-linux-musl.tar.gz`
-
-Each archive contains a single entry with the platform baked into the name (e.g., `codex-x86_64-unknown-linux-musl`), so you likely want to rename it to `codex` after extracting it.
-
-### DotSlash
-
-The GitHub Release also contains a [DotSlash](https://dotslash-cli.com/) file for the Codex CLI named `codex`. Using a DotSlash file makes it possible to make a lightweight commit to source control to ensure all contributors use the same version of an executable, regardless of what platform they use for development.
-
-</details>
-
----
 
 ## Configuration
 
@@ -175,7 +138,7 @@ Not directly. It requires [Windows Subsystem for Linux (WSL2)](https://learn.mic
 
 ---
 
-## Codex open source fund
+## Codex Open Source Fund
 
 We're excited to launch a **$1 million initiative** supporting open source projects that use Codex CLI and other OpenAI models.
 
@@ -186,7 +149,7 @@ We're excited to launch a **$1 million initiative** supporting open source proje
 
 ---
 
-## Security & responsible AI
+## Security & Responsible AI
 
 Have you discovered a vulnerability or have concerns about model output? Please e-mail **security@openai.com** and we will respond promptly.
 
