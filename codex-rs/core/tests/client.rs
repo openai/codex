@@ -561,7 +561,7 @@ async fn env_var_overrides_loaded_auth() {
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 }
 
-fn auth_from_token(id_token: String) -> CodexAuth {
+fn auth_from_token(_id_token: String) -> CodexAuth {
     CodexAuth::new(
         None,
         AuthMode::ChatGPT,
@@ -569,7 +569,7 @@ fn auth_from_token(id_token: String) -> CodexAuth {
         Some(AuthDotJson {
             openai_api_key: None,
             tokens: Some(TokenData {
-                id_token,
+                id_token: Default::default(),
                 access_token: "Access Token".to_string(),
                 refresh_token: "test".to_string(),
                 account_id: Some("account_id".to_string()),
