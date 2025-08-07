@@ -22,7 +22,6 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
-use codex_core::protocol::TokenUsage;
 
 // We render the live text using markdown so it visually matches the history
 // cells. Before rendering we strip any ANSI escape sequences to avoid writing

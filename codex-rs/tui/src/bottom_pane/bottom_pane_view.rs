@@ -1,5 +1,4 @@
 use crate::user_approval_widget::ApprovalRequest;
-use codex_core::protocol::TokenUsage;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;

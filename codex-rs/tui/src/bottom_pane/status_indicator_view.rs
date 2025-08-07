@@ -3,7 +3,6 @@ use ratatui::widgets::WidgetRef;
 
 use crate::app_event_sender::AppEventSender;
 use crate::status_indicator_widget::StatusIndicatorWidget;
-use codex_core::protocol::TokenUsage;
 
 use super::BottomPaneView;
 use super::bottom_pane_view::ConditionalUpdate;
