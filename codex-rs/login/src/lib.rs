@@ -508,12 +508,13 @@ mod tests {
     }
 
     #[test]
-    fn logout_removes_auth_file() {
-        let dir = tempdir().unwrap();
-        login_with_api_key(dir.path(), "sk-test-key").unwrap();
+    fn logout_removes_auth_file() -> Result<(), std::io::Error> {
+        let dir = tempdir()?;
+        login_with_api_key(dir.path(), "sk-test-key")?;
         assert!(dir.path().join("auth.json").exists());
-        let removed = logout(dir.path()).unwrap();
+        let removed = logout(dir.path())?;
         assert!(removed);
         assert!(!dir.path().join("auth.json").exists());
+        Ok(())
     }
 }
