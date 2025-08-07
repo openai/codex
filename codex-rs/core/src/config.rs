@@ -154,9 +154,6 @@ pub struct Config {
 
     /// The value for the `originator` header included with Responses API requests.
     pub internal_originator: Option<String>,
-
-    /// project-specific settings
-    pub projects: HashMap<String, ProjectConfig>,
 }
 
 impl Config {
@@ -192,13 +189,6 @@ impl Config {
 
         // Step 4: merge with the strongly-typed overrides.
         Self::load_from_base_config_with_overrides(cfg, overrides, codex_home)
-    }
-
-    pub fn is_cwd_trusted(&self) -> bool {
-        self.projects
-            .get(&self.cwd.to_string_lossy().to_string())
-            .map(|p| p.trusted.unwrap_or(false))
-            .unwrap_or(false)
     }
 }
 
@@ -421,6 +411,15 @@ impl ConfigToml {
             },
             SandboxMode::DangerFullAccess => SandboxPolicy::DangerFullAccess,
         }
+    }
+
+    fn is_cwd_trusted(&self, resolved_cwd: &PathBuf) -> bool {
+        let projects = self.projects.clone().unwrap_or(HashMap::new());
+
+        projects
+            .get(&resolved_cwd.to_string_lossy().to_string())
+            .map(|p| p.trusted.unwrap_or(false))
+            .unwrap_or(false)
     }
 }
 
@@ -650,7 +649,6 @@ impl Config {
             experimental_resume,
             include_plan_tool: include_plan_tool.unwrap_or(false),
             internal_originator: cfg.internal_originator,
-            projects,
         };
         Ok(config)
     }
@@ -744,6 +742,28 @@ pub fn find_codex_home() -> std::io::Result<PathBuf> {
     })?;
     p.push(".codex");
     Ok(p)
+}
+
+fn resolve_cwd(cwd: Option<&Path>) -> std::io::Result<PathBuf> {
+    use std::env;
+
+    match cwd {
+        None => {
+            tracing::info!("cwd not set, using current dir");
+            match env::current_dir() {
+                Ok(p) => Ok(p),
+                Err(e) => Err(e),
+            }
+        }
+        Some(p) if p.is_absolute() => Ok(p.to_path_buf()),
+        Some(p) => {
+            // Resolve relative path against the current working directory.
+            tracing::info!("cwd is relative, resolving against current dir");
+            let mut current = env::current_dir()?;
+            current.push(p);
+            Ok(current)
+        }
+    }
 }
 
 /// Returns the path to the folder where Codex logs are stored. Does not verify
@@ -1015,12 +1035,6 @@ disable_response_storage = true
                 base_instructions: None,
                 include_plan_tool: false,
                 internal_originator: None,
-                projects: HashMap::from([(
-                    fixture.cwd().to_string_lossy().to_string(),
-                    ProjectConfig {
-                        trusted: Some(true),
-                    },
-                )]),
             },
             o3_profile_config
         );
@@ -1072,12 +1086,6 @@ disable_response_storage = true
             base_instructions: None,
             include_plan_tool: false,
             internal_originator: None,
-            projects: HashMap::from([(
-                fixture.cwd().to_string_lossy().to_string(),
-                ProjectConfig {
-                    trusted: Some(true),
-                },
-            )]),
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -1144,12 +1152,6 @@ disable_response_storage = true
             base_instructions: None,
             include_plan_tool: false,
             internal_originator: None,
-            projects: HashMap::from([(
-                fixture.cwd().to_string_lossy().to_string(),
-                ProjectConfig {
-                    trusted: Some(true),
-                },
-            )]),
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);
