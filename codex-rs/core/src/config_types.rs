@@ -93,7 +93,7 @@ pub enum SandboxMode {
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
-pub struct SandboxWorkplaceWrite {
+pub struct SandboxWorkspaceWrite {
     #[serde(default)]
     pub writable_roots: Vec<PathBuf>,
     #[serde(default)]
