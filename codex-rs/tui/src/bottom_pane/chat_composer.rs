@@ -35,7 +35,7 @@ const BASE_PLACEHOLDER_TEXT: &str = "...";
 /// placeholder in the UI.
 const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
 /// Background color used for the chat composer area.
-const COMPOSER_BG_COLOR: Color = Color::Rgb(20, 20, 20);
+const COMPOSER_BG_COLOR: Color = Color::Black;
 
 /// Result returned when the user interacts with the text area.
 pub enum InputResult {
@@ -634,10 +634,6 @@ impl ChatComposer {
 
 impl WidgetRef for &ChatComposer {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        // Fill the entire composer area with a slightly different background
-        // to distinguish it from the surrounding UI.
-        buf.set_style(area, Style::default().bg(COMPOSER_BG_COLOR));
-
         let popup_height = match &self.active_popup {
             ActivePopup::Command(popup) => popup.calculate_required_height(),
             ActivePopup::File(popup) => popup.calculate_required_height(),
@@ -698,6 +694,10 @@ impl WidgetRef for &ChatComposer {
         let mut textarea_rect = textarea_rect;
         textarea_rect.width = textarea_rect.width.saturating_sub(1);
         textarea_rect.x += 1;
+
+        // Fill only the textarea content region with a subtle background so it
+        // doesn't affect the hint line or popups and remains behind the text.
+        buf.set_style(textarea_rect, Style::default().bg(COMPOSER_BG_COLOR));
         let mut state = self.textarea_state.borrow_mut();
         StatefulWidgetRef::render_ref(&(&self.textarea), textarea_rect, buf, &mut state);
         if self.textarea.text().is_empty() {
