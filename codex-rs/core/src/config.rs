@@ -195,6 +195,24 @@ impl Config {
     }
 }
 
+pub fn load_config_as_toml_with_cli_overrides(
+    codex_home: &Path,
+    cli_overrides: Vec<(String, TomlValue)>,
+) -> std::io::Result<ConfigToml> {
+    let mut root_value = load_config_as_toml(codex_home)?;
+
+    for (path, value) in cli_overrides.into_iter() {
+        apply_toml_override(&mut root_value, &path, value);
+    }
+
+    let cfg: ConfigToml = root_value.try_into().map_err(|e| {
+        tracing::error!("Failed to deserialize overridden config: {e}");
+        std::io::Error::new(std::io::ErrorKind::InvalidData, e)
+    })?;
+
+    Ok(cfg)
+}
+
 /// Read `CODEX_HOME/config.toml` and return it as a generic TOML value. Returns
 /// an empty TOML table when the file does not exist.
 pub fn load_config_as_toml(codex_home: &Path) -> std::io::Result<TomlValue> {
@@ -425,6 +443,27 @@ impl ConfigToml {
             .get(&resolved_cwd.to_string_lossy().to_string())
             .map(|p| p.trust_level.clone().unwrap_or("".to_string()) == "trusted")
             .unwrap_or(false)
+    }
+
+    pub fn get_config_profile(
+        &self,
+        override_profile: Option<String>,
+    ) -> Result<ConfigProfile, std::io::Error> {
+        let profile = override_profile.or_else(|| self.profile.clone());
+
+        match profile {
+            Some(key) => {
+                if let Some(profile) = self.profiles.get(key.as_str()) {
+                    return Ok(profile.clone());
+                }
+
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("config profile `{key}` not found"),
+                ))
+            }
+            None => Ok(ConfigProfile::default()),
+        }
     }
 }
 

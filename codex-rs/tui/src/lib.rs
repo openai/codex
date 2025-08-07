@@ -8,7 +8,7 @@ use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
 use codex_core::config::find_codex_home;
-use codex_core::config::load_config_as_toml;
+use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::config::resolve_cwd;
 use codex_core::config_types::SandboxMode;
 use codex_core::protocol::AskForApproval;
@@ -97,34 +97,35 @@ pub async fn run_main(
     // canonicalize the cwd
     let cwd = cli.cwd.clone().map(|p| p.canonicalize().unwrap_or(p));
 
+    let overrides = ConfigOverrides {
+        model,
+        approval_policy,
+        sandbox_mode,
+        cwd: cwd.clone(),
+        model_provider: model_provider_override,
+        config_profile: cli.config_profile.clone(),
+        codex_linux_sandbox_exe,
+        base_instructions: None,
+        include_plan_tool: Some(true),
+        disable_response_storage: cli.oss.then_some(true),
+        show_raw_agent_reasoning: cli.oss.then_some(true),
+    };
+
+    // Parse `-c` overrides from the CLI.
+    let cli_kv_overrides = match cli.config_overrides.parse_overrides() {
+        Ok(v) => v,
+        #[allow(clippy::print_stderr)]
+        Err(e) => {
+            eprintln!("Error parsing -c overrides: {e}");
+            std::process::exit(1);
+        }
+    };
+
     let mut config = {
         // Load configuration and support CLI overrides.
-        let overrides = ConfigOverrides {
-            model,
-            approval_policy,
-            sandbox_mode,
-            cwd: cwd.clone(),
-            model_provider: model_provider_override,
-            config_profile: cli.config_profile.clone(),
-            codex_linux_sandbox_exe,
-            base_instructions: None,
-            include_plan_tool: Some(true),
-            disable_response_storage: cli.oss.then_some(true),
-            show_raw_agent_reasoning: cli.oss.then_some(true),
-        };
-
-        // Parse `-c` overrides from the CLI.
-        let cli_kv_overrides = match cli.config_overrides.parse_overrides() {
-            Ok(v) => v,
-            #[allow(clippy::print_stderr)]
-            Err(e) => {
-                eprintln!("Error parsing -c overrides: {e}");
-                std::process::exit(1);
-            }
-        };
 
         #[allow(clippy::print_stderr)]
-        match Config::load_with_cli_overrides(cli_kv_overrides, overrides) {
+        match Config::load_with_cli_overrides(cli_kv_overrides.clone(), overrides) {
             Ok(config) => config,
             Err(err) => {
                 eprintln!("Error loading configuration: {err}");
@@ -144,26 +145,21 @@ pub async fn run_main(
             }
         };
 
-        let root_value = match load_config_as_toml(&codex_home) {
+        match load_config_as_toml_with_cli_overrides(&codex_home, cli_kv_overrides) {
             Ok(config_toml) => config_toml,
             Err(err) => {
                 eprintln!("Error loading config.toml: {err}");
                 std::process::exit(1);
             }
-        };
-
-        let config_toml: ConfigToml = root_value.try_into().map_err(|e| {
-            eprintln!("Failed to deserialize overridden config: {e}");
-            std::io::Error::new(std::io::ErrorKind::InvalidData, e)
-        })?;
-
-        config_toml
+        }
     };
-    let should_show_trust_screen = should_show_trust_screen(
+
+    let should_show_trust_screen = determine_repo_trust_state(
         &mut config,
         &config_toml,
         approval_policy,
         sandbox_mode,
+        cli.config_profile.clone(),
         cwd,
     )?;
 
@@ -323,19 +319,28 @@ fn should_show_login_screen(config: &Config) -> bool {
     }
 }
 
-fn should_show_trust_screen(
+/// Determine if user has configured a sandbox / approval policy,
+/// or if the current cwd project is trusted, and updates the config
+/// accordingly.
+fn determine_repo_trust_state(
     config: &mut Config,
     config_toml: &ConfigToml,
     approval_policy_overide: Option<AskForApproval>,
     sandbox_mode_override: Option<SandboxMode>,
+    config_profile_override: Option<String>,
     cwd: Option<PathBuf>,
 ) -> std::io::Result<bool> {
     let cwd = cwd.map(|p| p.canonicalize().unwrap_or(p));
     let resolved_cwd = resolve_cwd(cwd)?;
+    let config_profile = config_toml.get_config_profile(config_profile_override)?;
 
     if approval_policy_overide.is_some() || sandbox_mode_override.is_some() {
         // if the user has overridden either approval policy or sandbox mode,
         // skip the trust flow
+        Ok(false)
+    } else if config_profile.approval_policy.is_some() {
+        // if the user has specified settings in a config profile, skip the trust flow
+        // todo: profile sandbox mode?
         Ok(false)
     } else if config_toml.approval_policy.is_some() || config_toml.sandbox_mode.is_some() {
         // if the user has specified either approval policy or sandbox mode in config.toml
