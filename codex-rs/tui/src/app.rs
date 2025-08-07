@@ -360,6 +360,11 @@ impl App<'_> {
                             widget.add_status_output();
                         }
                     }
+                    SlashCommand::Prompts => {
+                        if let AppState::Chat { widget } = &mut self.app_state {
+                            widget.add_prompts_output();
+                        }
+                    }
                     #[cfg(debug_assertions)]
                     SlashCommand::TestApproval => {
                         use std::collections::HashMap;
