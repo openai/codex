@@ -469,7 +469,10 @@ impl Session {
             }
         }
     }
-
+    /// Runs the exec tool call and emits events for the begin and end of the
+    /// command even on error.
+    ///
+    /// Returns the output of the exec tool call.
     async fn run_exec_with_events<'a>(
         &self,
         turn_diff_tracker: &mut TurnDiffTracker,
@@ -1767,12 +1770,12 @@ fn parse_container_exec_arguments(
 }
 
 pub struct ExecInvokeArgs<'a> {
-    pub params: crate::exec::ExecParams,
-    pub sandbox_type: crate::exec::SandboxType,
-    pub ctrl_c: std::sync::Arc<tokio::sync::Notify>,
-    pub sandbox_policy: &'a crate::protocol::SandboxPolicy,
-    pub codex_linux_sandbox_exe: &'a Option<std::path::PathBuf>,
-    pub stdout_stream: Option<crate::exec::StdoutStream>,
+    pub params: ExecParams,
+    pub sandbox_type: SandboxType,
+    pub ctrl_c: std::sync::Arc<Notify>,
+    pub sandbox_policy: &'a SandboxPolicy,
+    pub codex_linux_sandbox_exe: &'a Option<PathBuf>,
+    pub stdout_stream: Option<StdoutStream>,
 }
 
 fn maybe_run_with_user_profile(params: ExecParams, sess: &Session) -> ExecParams {
