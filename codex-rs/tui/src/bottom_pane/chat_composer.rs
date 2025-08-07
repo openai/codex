@@ -34,6 +34,8 @@ const BASE_PLACEHOLDER_TEXT: &str = "...";
 /// If the pasted content exceeds this number of characters, replace it with a
 /// placeholder in the UI.
 const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
+/// Background color used for the chat composer area.
+const COMPOSER_BG_COLOR: Color = Color::Rgb(20, 20, 20);
 
 /// Result returned when the user interacts with the text area.
 pub enum InputResult {
@@ -632,6 +634,10 @@ impl ChatComposer {
 
 impl WidgetRef for &ChatComposer {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
+        // Fill the entire composer area with a slightly different background
+        // to distinguish it from the surrounding UI.
+        buf.set_style(area, Style::default().bg(COMPOSER_BG_COLOR));
+
         let popup_height = match &self.active_popup {
             ActivePopup::Command(popup) => popup.calculate_required_height(),
             ActivePopup::File(popup) => popup.calculate_required_height(),
