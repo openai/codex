@@ -448,6 +448,28 @@ impl TokenUsage {
     pub fn is_zero(&self) -> bool {
         self.total_tokens == 0
     }
+
+    pub fn cached_input(&self) -> u64 {
+        self.cached_input_tokens.unwrap_or(0)
+    }
+
+    pub fn non_cached_input(&self) -> u64 {
+        self.input_tokens.saturating_sub(self.cached_input())
+    }
+
+    /// Primary count for display as a single absolute value: non-cached input + output.
+    pub fn blended_total(&self) -> u64 {
+        self.non_cached_input() + self.output_tokens
+    }
+
+    /// For estimating what % of the model's context window is used, we need to account
+    /// for reasoning output tokens from prior turns being dropped from the context window.
+    /// We approximate this here by subtracting reasoning output tokens from the total.
+    /// This will be off for the current turn and pending function calls.
+    pub fn tokens_in_context_window(&self) -> u64 {
+        self.total_tokens
+            .saturating_sub(self.reasoning_output_tokens.unwrap_or(0))
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -463,17 +485,20 @@ impl From<TokenUsage> for FinalOutput {
 
 impl fmt::Display for FinalOutput {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let u = &self.token_usage;
+        let token_usage = &self.token_usage;
         write!(
             f,
             "Token usage: total={} input={}{} output={}{}",
-            u.total_tokens,
-            u.input_tokens,
-            u.cached_input_tokens
-                .map(|c| format!(" (cached {c})"))
-                .unwrap_or_default(),
-            u.output_tokens,
-            u.reasoning_output_tokens
+            token_usage.blended_total(),
+            token_usage.non_cached_input(),
+            if token_usage.cached_input() > 0 {
+                format!(" (+ {} cached)", token_usage.cached_input())
+            } else {
+                String::new()
+            },
+            token_usage.output_tokens,
+            token_usage
+                .reasoning_output_tokens
                 .map(|r| format!(" (reasoning {r})"))
                 .unwrap_or_default()
         )
