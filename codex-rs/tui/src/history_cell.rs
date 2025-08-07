@@ -205,6 +205,7 @@ impl HistoryCell {
                 Line::from(format!(" /init - {}", SlashCommand::Init.description()).dim()),
                 Line::from(format!(" /status - {}", SlashCommand::Status.description()).dim()),
                 Line::from(format!(" /diff - {}", SlashCommand::Diff.description()).dim()),
+                Line::from(format!(" /prompts - {}", SlashCommand::Prompts.description()).dim()),
                 Line::from("".dim()),
             ];
             HistoryCell::WelcomeMessage {
