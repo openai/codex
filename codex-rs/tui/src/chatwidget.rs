@@ -46,13 +46,13 @@ use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
 use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::InputResult;
-use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell::CommandOutput;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::PatchEventType;
 use crate::markdown_stream::MarkdownNewlineCollector;
 use crate::markdown_stream::RenderedLineStreamer;
 use crate::user_approval_widget::ApprovalRequest;
+use crate::exec_command::strip_bash_lc_and_escape;
 use codex_file_search::FileMatch;
 
 struct RunningCommand {
@@ -68,7 +68,8 @@ pub(crate) struct ChatWidget<'a> {
     active_history_cell: Option<HistoryCell>,
     config: Config,
     initial_user_message: Option<UserMessage>,
-    token_usage: TokenUsage,
+    total_token_usage: TokenUsage,
+    last_token_usage: TokenUsage,
     // Newline-gated markdown streaming state
     reasoning_collector: MarkdownNewlineCollector,
     answer_collector: MarkdownNewlineCollector,
@@ -294,7 +295,8 @@ impl ChatWidget<'_> {
                 initial_prompt.unwrap_or_default(),
                 initial_images,
             ),
-            token_usage: TokenUsage::default(),
+            total_token_usage: TokenUsage::default(),
+            last_token_usage: TokenUsage::default(),
             reasoning_collector: MarkdownNewlineCollector::new(),
             answer_collector: MarkdownNewlineCollector::new(),
             reasoning_streamer: RenderedLineStreamer::new(),
@@ -455,9 +457,13 @@ impl ChatWidget<'_> {
                 }
             }
             EventMsg::TokenCount(token_usage) => {
-                self.token_usage = add_token_usage(&self.token_usage, &token_usage);
-                self.bottom_pane
-                    .set_token_usage(self.token_usage.clone(), self.config.model_context_window);
+                self.total_token_usage = add_token_usage(&self.total_token_usage, &token_usage);
+                self.last_token_usage = token_usage;
+                self.bottom_pane.set_token_usage(
+                    self.total_token_usage.clone(),
+                    self.last_token_usage.clone(),
+                    self.config.model_context_window,
+                );
             }
             EventMsg::Error(ErrorEvent { message }) => {
                 self.add_to_history(HistoryCell::new_error_event(message.clone()));
@@ -592,8 +598,12 @@ impl ChatWidget<'_> {
     pub(crate) fn add_status_output(&mut self) {
         self.add_to_history(HistoryCell::new_status_output(
             &self.config,
-            &self.token_usage,
+            &self.total_token_usage,
         ));
+    }
+
+    pub(crate) fn add_prompts_output(&mut self) {
+        self.add_to_history(HistoryCell::new_prompts_output());
     }
 
     /// Forward file-search results to the bottom pane.
@@ -647,13 +657,16 @@ impl ChatWidget<'_> {
     }
 
     pub(crate) fn token_usage(&self) -> &TokenUsage {
-        &self.token_usage
+        &self.total_token_usage
     }
 
     pub(crate) fn clear_token_usage(&mut self) {
-        self.token_usage = TokenUsage::default();
-        self.bottom_pane
-            .set_token_usage(self.token_usage.clone(), self.config.model_context_window);
+        self.total_token_usage = TokenUsage::default();
+        self.bottom_pane.set_token_usage(
+            self.total_token_usage.clone(),
+            self.last_token_usage.clone(),
+            self.config.model_context_window,
+        );
     }
 
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {

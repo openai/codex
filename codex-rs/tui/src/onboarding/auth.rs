@@ -104,7 +104,14 @@ impl AuthModeWidget {
             Line::from(vec![
                 Span::raw("> "),
                 Span::styled(
-                    "Sign in with your ChatGPT account?",
+                    "Sign in with ChatGPT to use Codex as part of your paid plan",
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+            ]),
+            Line::from(vec![
+                Span::raw("  "),
+                Span::styled(
+                    "or connect an API key for usage-based billing",
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
             ]),
@@ -145,18 +152,18 @@ impl AuthModeWidget {
         lines.extend(create_mode_item(
             0,
             AuthMode::ChatGPT,
-            "Sign in with ChatGPT or create a new account",
-            "Leverages your plan, starting at $20 a month for Plus",
+            "Sign in with ChatGPT",
+            "Usage included with Plus, Pro, and Team plans",
         ));
         lines.extend(create_mode_item(
             1,
             AuthMode::ApiKey,
             "Provide your own API key",
-            "Pay only for what you use",
+            "Pay for what you use",
         ));
         lines.push(Line::from(""));
         lines.push(
-            Line::from("Press Enter to continue")
+            Line::from("  Press Enter to continue")
                 .style(Style::default().add_modifier(Modifier::DIM)),
         );
         if let Some(err) = &self.error {
@@ -179,8 +186,7 @@ impl AuthModeWidget {
         let lines = vec![
             Line::from(spans),
             Line::from(""),
-            Line::from("  Press Escape to cancel")
-                .style(Style::default().add_modifier(Modifier::DIM)),
+            Line::from("  Press Esc to cancel").style(Style::default().add_modifier(Modifier::DIM)),
         ];
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
@@ -194,17 +200,30 @@ impl AuthModeWidget {
             Line::from(""),
             Line::from("> Before you start:"),
             Line::from(""),
-            Line::from("  Codex can make mistakes"),
-            Line::from("  Check important info")
-                .style(Style::default().add_modifier(Modifier::DIM)),
+            Line::from("  Decide how much autonomy you want to grant Codex"),
+            Line::from(vec![
+                Span::raw("  For more details see the "),
+                Span::styled(
+                    "\u{1b}]8;;https://github.com/openai/codex\u{7}Codex docs\u{1b}]8;;\u{7}",
+                    Style::default().add_modifier(Modifier::UNDERLINED),
+                ),
+            ])
+            .style(Style::default().add_modifier(Modifier::DIM)),
             Line::from(""),
-            Line::from("  Due to prompt injection risks, only use it with code you trust"),
-            Line::from("  For more details see https://github.com/openai/codex")
+            Line::from("  Codex can make mistakes")
+                .style(Style::default().fg(Color::White)),
+            Line::from("  Review the code it writes and commands it runs")
                 .style(Style::default().add_modifier(Modifier::DIM)),
             Line::from(""),
             Line::from("  Powered by your ChatGPT account"),
-            Line::from("  Uses your plan's rate limits and training data preferences")
-                .style(Style::default().add_modifier(Modifier::DIM)),
+            Line::from(vec![
+                Span::raw("  Uses your plan's rate limits and "),
+                Span::styled(
+                    "\u{1b}]8;;https://chatgpt.com/#settings\u{7}training data preferences\u{1b}]8;;\u{7}",
+                    Style::default().add_modifier(Modifier::UNDERLINED),
+                ),
+            ])
+            .style(Style::default().add_modifier(Modifier::DIM)),
             Line::from(""),
             Line::from("  Press Enter to continue").style(Style::default().fg(LIGHT_BLUE)),
         ];
@@ -236,7 +255,10 @@ impl AuthModeWidget {
 
     fn render_env_var_missing(&self, area: Rect, buf: &mut Buffer) {
         let lines = vec![
-            Line::from("✘ OPENAI_API_KEY not found").style(Style::default().fg(Color::Red)),
+            Line::from(
+                "  To use Codex with the OpenAI API, set OPENAI_API_KEY in your environment",
+            )
+            .style(Style::default().fg(Color::Blue)),
             Line::from(""),
             Line::from("  Press Enter to return")
                 .style(Style::default().add_modifier(Modifier::DIM)),

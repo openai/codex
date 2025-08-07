@@ -40,6 +40,16 @@ use crate::protocol::TokenUsage;
 use crate::util::backoff;
 use std::sync::Arc;
 
+#[derive(Debug, Deserialize)]
+struct ErrorResponse {
+    error: Error,
+}
+
+#[derive(Debug, Deserialize)]
+struct Error {
+    r#type: String,
+}
+
 #[derive(Clone)]
 pub struct ModelClient {
     config: Arc<Config>,
@@ -126,15 +136,6 @@ impl ModelClient {
         let auth = self.auth.clone();
 
         let auth_mode = auth.as_ref().map(|a| a.mode);
-
-        if self.config.model_family.family == "2025-08-06-model"
-            && auth_mode != Some(AuthMode::ChatGPT)
-        {
-            return Err(CodexErr::UnexpectedStatus(
-                StatusCode::BAD_REQUEST,
-                "2025-08-06-model is only supported with ChatGPT auth, run `codex login status` to check your auth status and `codex login` to login with ChatGPT".to_string(),
-            ));
-        }
 
         let store = prompt.store && auth_mode != Some(AuthMode::ChatGPT);
 
@@ -234,6 +235,14 @@ impl ModelClient {
                 }
                 Ok(res) => {
                     let status = res.status();
+
+                    // Pull out Retry‑After header if present.
+                    let retry_after_secs = res
+                        .headers()
+                        .get(reqwest::header::RETRY_AFTER)
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(|s| s.parse::<u64>().ok());
+
                     // The OpenAI Responses endpoint returns structured JSON bodies even for 4xx/5xx
                     // errors. When we bubble early with only the HTTP status the caller sees an opaque
                     // "unexpected status 400 Bad Request" which makes debugging nearly impossible.
@@ -247,16 +256,23 @@ impl ModelClient {
                         return Err(CodexErr::UnexpectedStatus(status, body));
                     }
 
+                    if status == StatusCode::TOO_MANY_REQUESTS {
+                        let body = res.json::<ErrorResponse>().await.ok();
+                        if let Some(ErrorResponse {
+                            error: Error { r#type, .. },
+                        }) = body
+                        {
+                            if r#type == "usage_limit_reached" {
+                                return Err(CodexErr::UsageLimitReached);
+                            } else if r#type == "usage_not_included" {
+                                return Err(CodexErr::UsageNotIncluded);
+                            }
+                        }
+                    }
+
                     if attempt > max_retries {
                         return Err(CodexErr::RetryLimit(status));
                     }
-
-                    // Pull out Retry‑After header if present.
-                    let retry_after_secs = res
-                        .headers()
-                        .get(reqwest::header::RETRY_AFTER)
-                        .and_then(|v| v.to_str().ok())
-                        .and_then(|s| s.parse::<u64>().ok());
 
                     let delay = retry_after_secs
                         .map(|s| Duration::from_millis(s * 1_000))

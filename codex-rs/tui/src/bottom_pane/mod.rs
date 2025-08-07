@@ -290,11 +290,12 @@ impl BottomPane<'_> {
     /// is forwarded directly to the underlying `ChatComposer`.
     pub(crate) fn set_token_usage(
         &mut self,
-        token_usage: TokenUsage,
+        total_token_usage: TokenUsage,
+        last_token_usage: TokenUsage,
         model_context_window: Option<u64>,
     ) {
         self.composer
-            .set_token_usage(token_usage, model_context_window);
+            .set_token_usage(total_token_usage, last_token_usage, model_context_window);
         self.request_redraw();
     }
 

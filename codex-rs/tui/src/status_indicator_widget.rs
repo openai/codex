@@ -213,9 +213,20 @@ impl WidgetRef for StatusIndicatorWidget {
         // Plain rendering: no borders or padding so the live cell is visually indistinguishable from terminal scrollback.
         let inner_width = area.width as usize;
 
-        // Compose a single status line like: "▌ Working (Xs • Ctrl c to interrupt) <logs>"
         let mut spans: Vec<Span<'static>> = Vec::new();
         spans.push(Span::styled("▌ ", Style::default().fg(Color::Cyan)));
+
+        // Simple dim spinner to the left of the header.
+        let spinner_frames = ['·', '•', '●', '•'];
+        const SPINNER_SLOWDOWN: usize = 2;
+        let spinner_ch = spinner_frames[(idx / SPINNER_SLOWDOWN) % spinner_frames.len()];
+        spans.push(Span::styled(
+            spinner_ch.to_string(),
+            Style::default().fg(Color::DarkGray),
+        ));
+        spans.push(Span::raw(" "));
+
+        // Space after header
         // Animated header after the left bar
         spans.extend(animated_spans);
         // Space between header and bracket block
@@ -227,7 +238,7 @@ impl WidgetRef for StatusIndicatorWidget {
             Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
         ));
         spans.push(Span::styled(
-            "Ctrl c",
+            "Ctrl C",
             Style::default()
                 .fg(Color::Gray)
                 .add_modifier(Modifier::DIM | Modifier::BOLD),
@@ -323,5 +334,24 @@ mod tests {
             row.push(buf[(x, 0)].symbol().chars().next().unwrap_or(' '));
         }
         assert!(row.contains("Working"), "expected Working header: {row:?}");
+    }
+
+    #[test]
+    fn spinner_is_rendered() {
+        let (tx_raw, _rx) = channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut w = StatusIndicatorWidget::new(tx);
+        w.restart_with_text("Hello".to_string());
+        std::thread::sleep(std::time::Duration::from_millis(120));
+
+        let area = ratatui::layout::Rect::new(0, 0, 30, 1);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        w.render_ref(area, &mut buf);
+
+        let ch = buf[(2, 0)].symbol().chars().next().unwrap_or(' ');
+        assert!(
+            matches!(ch, '·' | '•' | '●'),
+            "expected spinner char at col 2: {ch:?}"
+        );
     }
 }

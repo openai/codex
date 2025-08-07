@@ -31,12 +31,10 @@ use crate::bottom_pane::textarea::TextAreaState;
 use codex_file_search::FileMatch;
 use std::cell::RefCell;
 
-const BASE_PLACEHOLDER_TEXT: &str = "...";
+const BASE_PLACEHOLDER_TEXT: &str = "Ask Codex to do anything";
 /// If the pasted content exceeds this number of characters, replace it with a
 /// placeholder in the UI.
 const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
-/// Background color used for the chat composer area.
-const COMPOSER_BG_COLOR: Color = Color::Black;
 
 /// Result returned when the user interacts with the text area.
 pub enum InputResult {
@@ -45,7 +43,8 @@ pub enum InputResult {
 }
 
 struct TokenUsageInfo {
-    token_usage: TokenUsage,
+    total_token_usage: TokenUsage,
+    last_token_usage: TokenUsage,
     model_context_window: Option<u64>,
 }
 
@@ -129,11 +128,13 @@ impl ChatComposer {
     /// context when the composer is empty.
     pub(crate) fn set_token_usage(
         &mut self,
-        token_usage: TokenUsage,
+        total_token_usage: TokenUsage,
+        last_token_usage: TokenUsage,
         model_context_window: Option<u64>,
     ) {
         self.token_usage_info = Some(TokenUsageInfo {
-            token_usage,
+            total_token_usage,
+            last_token_usage,
             model_context_window,
         });
     }
@@ -694,16 +695,18 @@ impl WidgetRef for &ChatComposer {
 
                 // Append token/context usage info to the footer hints when available.
                 if let Some(token_usage_info) = &self.token_usage_info {
-                    let token_usage = &token_usage_info.token_usage;
+                    let token_usage = &token_usage_info.total_token_usage;
                     hint.push(Span::from("   "));
                     hint.push(
                         Span::from(format!("{} tokens used", token_usage.total_tokens))
                             .style(Style::default().add_modifier(Modifier::DIM)),
                     );
+                    let last_token_usage = &token_usage_info.last_token_usage;
                     if let Some(context_window) = token_usage_info.model_context_window {
                         let percent_remaining: u8 = if context_window > 0 {
                             let percent = 100.0
-                                - (token_usage.total_tokens as f32 / context_window as f32 * 100.0);
+                                - (last_token_usage.total_tokens as f32 / context_window as f32
+                                    * 100.0);
                             percent.clamp(0.0, 100.0) as u8
                         } else {
                             100
@@ -738,9 +741,6 @@ impl WidgetRef for &ChatComposer {
         textarea_rect.width = textarea_rect.width.saturating_sub(1);
         textarea_rect.x += 1;
 
-        // Fill only the textarea content region with a subtle background so it
-        // doesn't affect the hint line or popups and remains behind the text.
-        buf.set_style(textarea_rect, Style::default().bg(COMPOSER_BG_COLOR));
         let mut state = self.textarea_state.borrow_mut();
         StatefulWidgetRef::render_ref(&(&self.textarea), textarea_rect, buf, &mut state);
         if self.textarea.text().is_empty() {
