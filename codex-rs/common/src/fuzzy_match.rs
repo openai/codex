@@ -52,6 +52,9 @@ pub fn fuzzy_match(haystack: &str, needle: &str) -> Option<(Vec<usize>, i32)> {
             .position(|&oi| oi == target_orig)
             .unwrap_or(0)
     };
+    // last defaults to first for single-hit; score = extra span between first/last hit 
+    // minus needle len (≥0).
+    // Strongly reward prefix matches by subtracting 100 when the first hit is at index 0.
     let last_lower_pos = last_lower_pos.unwrap_or(first_lower_pos);
     let window =
         (last_lower_pos as i32 - first_lower_pos as i32 + 1) - (lowered_needle.len() as i32);

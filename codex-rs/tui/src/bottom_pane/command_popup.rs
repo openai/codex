@@ -82,7 +82,6 @@ impl CommandPopup {
         out
     }
 
-    /// Backwards-compatible helper used by tests.
     fn filtered_commands(&self) -> Vec<&SlashCommand> {
         self.filtered().into_iter().map(|(c, _, _)| c).collect()
     }
