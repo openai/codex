@@ -5,6 +5,7 @@ use std::sync::Arc;
 use codex_core::codex_wrapper::CodexConversation;
 use codex_core::codex_wrapper::init_codex;
 use codex_core::config::Config;
+use codex_core::config::set_project_trusted;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
@@ -160,6 +161,8 @@ impl ChatWidget<'_> {
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
         enhanced_keys_supported: bool,
+        // technically false and None are equivalent right now, but that may change in the future.
+        set_trusted: Option<bool>,
     ) -> Self {
         let (codex_op_tx, mut codex_op_rx) = unbounded_channel::<Op>();
 
@@ -167,6 +170,16 @@ impl ChatWidget<'_> {
         // Create the Codex asynchronously so the UI loads as quickly as possible.
         let config_for_agent_loop = config.clone();
         tokio::spawn(async move {
+            if set_trusted.unwrap_or(false) {
+                if let Err(e) = set_project_trusted(
+                    config_for_agent_loop.codex_home.as_path(),
+                    &config_for_agent_loop.cwd,
+                    true,
+                ) {
+                    tracing::error!("failed to set project trusted: {e}");
+                }
+            }
+
             let CodexConversation {
                 codex,
                 session_configured,

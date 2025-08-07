@@ -75,6 +75,7 @@ pub(crate) struct ChatWidgetArgs {
     initial_prompt: Option<String>,
     initial_images: Vec<PathBuf>,
     enhanced_keys_supported: bool,
+    pub(crate) trusted: Option<bool>,
 }
 
 impl App<'_> {
@@ -142,6 +143,7 @@ impl App<'_> {
                 initial_prompt,
                 initial_images,
                 enhanced_keys_supported,
+                trusted: None,
             };
             AppState::Onboarding {
                 screen: OnboardingScreen::new(OnboardingScreenArgs {
@@ -160,6 +162,7 @@ impl App<'_> {
                 initial_prompt,
                 initial_images,
                 enhanced_keys_supported,
+                None,
             );
             AppState::Chat {
                 widget: Box::new(chat_widget),
@@ -308,6 +311,7 @@ impl App<'_> {
                             None,
                             Vec::new(),
                             self.enhanced_keys_supported,
+                            None,
                         ));
                         self.app_state = AppState::Chat { widget: new_widget };
                         self.app_event_tx.send(AppEvent::RequestRedraw);
@@ -410,7 +414,9 @@ impl App<'_> {
                     enhanced_keys_supported,
                     initial_images,
                     initial_prompt,
+                    trusted,
                 }) => {
+                    tracing::info!("OnboardingComplete");
                     self.app_state = AppState::Chat {
                         widget: Box::new(ChatWidget::new(
                             config,
@@ -418,6 +424,7 @@ impl App<'_> {
                             initial_prompt,
                             initial_images,
                             enhanced_keys_supported,
+                            trusted,
                         )),
                     }
                 }

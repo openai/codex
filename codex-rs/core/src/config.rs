@@ -23,6 +23,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use toml::Value as TomlValue;
+use toml_edit::DocumentMut;
 
 /// Maximum number of bytes of the documentation that will be embedded. Larger
 /// files are *silently truncated* to this size so we do not take up too much of
@@ -214,6 +215,33 @@ fn load_config_as_toml(codex_home: &Path) -> std::io::Result<TomlValue> {
     }
 }
 
+/// Patch `CODEX_HOME/config.toml` project state.
+/// Use with caution.
+pub fn set_project_trusted(
+    codex_home: &Path,
+    project_path: &Path,
+    trusted: bool,
+) -> anyhow::Result<()> {
+    let config_path = codex_home.join("config.toml");
+
+    // Parse existing config if present; otherwise start a new document.
+    let mut doc = match std::fs::read_to_string(&config_path) {
+        Ok(s) => s.parse::<DocumentMut>()?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => DocumentMut::new(),
+        Err(e) => return Err(e.into()),
+    };
+
+    let project_key = project_path.to_string_lossy().to_string();
+    doc["projects"][project_key.as_str()]["trusted"] = toml_edit::value(trusted);
+
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(config_path, doc.to_string())?;
+
+    Ok(())
+}
+
 /// Apply a single dotted-path override onto a TOML value.
 fn apply_toml_override(root: &mut TomlValue, path: &str, value: TomlValue) {
     use toml::value::Table;
@@ -350,6 +378,13 @@ pub struct ConfigToml {
 
     /// The value for the `originator` header included with Responses API requests.
     pub internal_originator: Option<String>,
+
+    pub projects: Option<HashMap<String, ProjectConfig>>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct ProjectConfig {
+    pub trusted: Option<bool>,
 }
 
 impl ConfigToml {

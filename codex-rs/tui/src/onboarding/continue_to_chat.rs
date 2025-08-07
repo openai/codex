@@ -24,7 +24,8 @@ impl StepStateProvider for ContinueToChatWidget {
 
 impl WidgetRef for &ContinueToChatWidget {
     fn render_ref(&self, _area: Rect, _buf: &mut Buffer) {
-        self.event_tx
-            .send(AppEvent::OnboardingComplete(self.chat_widget_args.clone()));
+        let mut args = self.chat_widget_args.clone();
+        args.trusted = Some(true);
+        self.event_tx.send(AppEvent::OnboardingComplete(args));
     }
 }
