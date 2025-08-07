@@ -468,16 +468,12 @@ impl HistoryCell {
         lines.push(Line::from(""));
 
         // Auth
-        if let Ok(auth) = try_read_auth_json(&config.codex_home.join("auth.json"))
-            && auth.tokens.is_some()
-        {
+        if let Ok(auth) = try_read_auth_json(&config.codex_home.join("auth.json")) {
+            if auth.tokens.as_ref().is_some() {
             lines.push(Line::from("signed in with chatgpt".bold()));
 
-            if let Some(TokenData { id_token, .. }) = auth.tokens.clone() {
-                let td = TokenData {
-                    id_token,
-                    ..Default::default()
-                };
+            if let Some(tokens) = auth.tokens.as_ref() {
+                let td = TokenData { id_token: tokens.id_token.clone(), ..Default::default() };
                 if let Ok(info) = td.id_token_info() {
                     if let Some(email) = info.email {
                         lines.push(Line::from(vec!["  login: ".bold(), email.into()]));
@@ -498,6 +494,7 @@ impl HistoryCell {
             }
 
             lines.push(Line::from(""));
+            }
         }
 
         // Token usage

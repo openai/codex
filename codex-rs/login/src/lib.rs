@@ -1,6 +1,7 @@
 use chrono::DateTime;
 
 use base64::Engine;
+use thiserror::Error;
 use chrono::Utc;
 use serde::Deserialize;
 use serde::Serialize;
@@ -415,9 +416,19 @@ pub struct IdTokenInfo {
     pub chatgpt_plan_type: Option<String>,
 }
 
+#[derive(Debug, Error)]
+pub enum IdTokenInfoError {
+    #[error("invalid ID token format")]
+    InvalidFormat,
+    #[error(transparent)]
+    Base64(#[from] base64::DecodeError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+}
+
 impl TokenData {
     /// Parse `self.id_token` as a JWT and return a flat struct with commonly-used fields.
-    pub fn id_token_info(&self) -> std::io::Result<IdTokenInfo> {
+    pub fn id_token_info(&self) -> Result<IdTokenInfo, IdTokenInfoError> {
         // JWT format: header.payload.signature
         let mut parts = self.id_token.split('.');
         let (_header_b64, payload_b64, _sig_b64) = match (parts.next(), parts.next(), parts.next())
@@ -425,12 +436,11 @@ impl TokenData {
             (Some(h), Some(p), Some(s)) if !h.is_empty() && !p.is_empty() && !s.is_empty() => {
                 (h, p, s)
             }
-            _ => return Err(std::io::Error::other("Invalid ID token format")),
+            _ => return Err(IdTokenInfoError::InvalidFormat),
         };
 
         let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(payload_b64)
-            .map_err(std::io::Error::other)?;
+            .decode(payload_b64)?;
 
         #[derive(Deserialize)]
         struct AuthClaims {
@@ -446,8 +456,7 @@ impl TokenData {
             auth: Option<AuthClaims>,
         }
 
-        let claims: IdClaims =
-            serde_json::from_slice(&payload_bytes).map_err(std::io::Error::other)?;
+        let claims: IdClaims = serde_json::from_slice(&payload_bytes)?;
 
         Ok(IdTokenInfo {
             email: claims.email,
