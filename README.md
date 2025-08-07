@@ -83,7 +83,7 @@ If you have a paid ChatGPT account, run the following to start the login process
 codex login
 ```
 
-If you complete the process successfully, you should have a `~/.codex/auth.json` file that contains the credentials that Codex will use.
+This should create a `~/.codex/auth.json` file that contains the credentials that Codex will use.
 
 To verify whether you are currently logged in, run:
 
@@ -161,7 +161,6 @@ name = "Open Source"
 base_url = "http://my-ollama.example.com:11434/v1"
 ```
 
----
 <details>
 <summary><strong>Use <code>--profile</code> to configure model providers</strong></summary>
 
@@ -222,6 +221,8 @@ This way, you can specify one command-line argument (.e.g., `--profile o3`, `--p
 
 </details>
 <br />
+
+---
 
 ## Why Codex?
 
