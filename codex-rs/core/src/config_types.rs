@@ -109,10 +109,10 @@ pub struct SandboxWorkspaceWrite {
 pub enum ShellEnvironmentPolicyInherit {
     /// "Core" environment variables for the platform. On UNIX, this would
     /// include HOME, LOGNAME, PATH, SHELL, and USER, among others.
-    #[default]
     Core,
 
     /// Inherits the full environment from the parent process.
+    #[default]
     All,
 
     /// Do not inherit any environment variables from the parent process.
@@ -171,7 +171,8 @@ pub struct ShellEnvironmentPolicy {
 
 impl From<ShellEnvironmentPolicyToml> for ShellEnvironmentPolicy {
     fn from(toml: ShellEnvironmentPolicyToml) -> Self {
-        let inherit = toml.inherit.unwrap_or(ShellEnvironmentPolicyInherit::Core);
+        // Default to inheriting the full environment when not specified.
+        let inherit = toml.inherit.unwrap_or(ShellEnvironmentPolicyInherit::All);
         let ignore_default_excludes = toml.ignore_default_excludes.unwrap_or(false);
         let exclude = toml
             .exclude
