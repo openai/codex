@@ -180,7 +180,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     // is using.
     event_processor.print_config_summary(&config, &prompt);
 
-    if !skip_git_repo_check && !is_inside_git_repo(&config) {
+    if !skip_git_repo_check && !is_inside_git_repo(&config.cwd.to_path_buf()) {
         eprintln!("Not inside a Git repo and --skip-git-repo-check was not specified.");
         std::process::exit(1);
     }

@@ -3,6 +3,7 @@ use codex_file_search::FileMatch;
 use crossterm::event::KeyEvent;
 use ratatui::text::Line;
 
+use crate::app::ChatWidgetArgs;
 use crate::slash_command::SlashCommand;
 
 #[allow(clippy::large_enum_variant)]
@@ -51,4 +52,5 @@ pub(crate) enum AppEvent {
 
     /// Onboarding: result of login_with_chatgpt.
     OnboardingAuthComplete(Result<(), String>),
+    OnboardingComplete(ChatWidgetArgs),
 }

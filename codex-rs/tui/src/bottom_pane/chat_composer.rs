@@ -453,6 +453,8 @@ impl ChatComposer {
         new_text.push_str(&text[end_idx..]);
 
         self.textarea.set_text(&new_text);
+        let new_cursor = start_idx.saturating_add(path.len()).saturating_add(1);
+        self.textarea.set_cursor(new_cursor);
     }
 
     /// Handle key event when no popup is visible.
