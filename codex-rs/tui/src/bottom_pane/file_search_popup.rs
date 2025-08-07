@@ -65,6 +65,16 @@ impl FileSearchPopup {
         }
     }
 
+    /// Put the popup into an "idle" state used for an empty query (just "@").
+    /// Shows a hint instead of matches until the user types more characters.
+    pub(crate) fn set_empty_prompt(&mut self) {
+        self.display_query.clear();
+        self.pending_query.clear();
+        self.waiting = false;
+        self.matches.clear();
+        self.selected_idx = None;
+    }
+
     /// Replace matches when a `FileSearchResult` arrives.
     /// Replace matches. Only applied when `query` matches `pending_query`.
     pub(crate) fn set_matches(&mut self, query: &str, matches: Vec<FileMatch>) {
@@ -124,14 +134,16 @@ impl WidgetRef for &FileSearchPopup {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         // Prepare rows.
         let rows: Vec<Row> = if self.matches.is_empty() {
-            vec![Row::new(vec![
-                Cell::from(if self.waiting {
-                    "(searching …)"
-                } else {
-                    "no matches"
-                })
-                .style(Style::new().add_modifier(Modifier::ITALIC | Modifier::DIM)),
-            ])]
+            let msg = if self.pending_query.is_empty() {
+                "type to search for files"
+            } else if self.waiting {
+                "(searching …)"
+            } else {
+                "no matches"
+            };
+            vec![Row::new(vec![Cell::from(msg).style(
+                Style::new().add_modifier(Modifier::ITALIC | Modifier::DIM),
+            )])]
         } else {
             self.matches
                 .iter()

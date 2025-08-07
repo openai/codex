@@ -333,8 +333,7 @@ impl ChatComposer {
     /// - A token is delimited by ASCII whitespace (space, tab, newline).
     /// - If the token under the cursor starts with `@`, that token is
     ///   returned without the leading `@`. This includes the case where the
-    ///   token is just "@" (empty query), which is used to trigger the
-    ///   file list popup immediately after typing '@'.
+    ///   token is just "@" (empty query), which is used to trigger a UI hint
     fn current_at_token(textarea: &TextArea) -> Option<String> {
         let cursor_offset = textarea.cursor();
         let text = textarea.text();
@@ -615,22 +614,26 @@ impl ChatComposer {
             return;
         }
 
-        let should_send_search = match &self.current_file_query {
-            Some(prev) if prev == &query && query.is_empty() => false,
-            _ => true,
-        };
-        if should_send_search {
+        if !query.is_empty() {
             self.app_event_tx
                 .send(AppEvent::StartFileSearch(query.clone()));
         }
 
         match &mut self.active_popup {
             ActivePopup::File(popup) => {
-                popup.set_query(&query);
+                if query.is_empty() {
+                    popup.set_empty_prompt();
+                } else {
+                    popup.set_query(&query);
+                }
             }
             _ => {
                 let mut popup = FileSearchPopup::new();
-                popup.set_query(&query);
+                if query.is_empty() {
+                    popup.set_empty_prompt();
+                } else {
+                    popup.set_query(&query);
+                }
                 self.active_popup = ActivePopup::File(popup);
             }
         }

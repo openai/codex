@@ -430,13 +430,7 @@ impl App<'_> {
                     }
                 }
                 AppEvent::StartFileSearch(query) => {
-                    if query.is_empty() {
-                        let matches = Self::quick_list_cwd(&self.config.cwd, 8);
-                        if let AppState::Chat { widget } = &mut self.app_state {
-                            widget.apply_file_search_result(query, matches);
-                        }
-                        self.app_event_tx.send(AppEvent::RequestRedraw);
-                    } else {
+                    if !query.is_empty() {
                         self.file_search.on_user_query(query);
                     }
                 }
