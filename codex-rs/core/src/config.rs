@@ -29,6 +29,9 @@ use toml::Value as TomlValue;
 /// the context window.
 pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 
+/// Candidate filenames for user-provided instructions stored in CODEX_HOME.
+pub(crate) const USER_INSTRUCTIONS_CANDIDATE_FILENAMES: &[&str] = &["AGENTS.md"];
+
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
@@ -576,13 +579,9 @@ impl Config {
     }
 
     fn load_instructions(codex_dir: Option<&Path>) -> Option<String> {
-        let mut p = match codex_dir {
-            Some(p) => p.to_path_buf(),
-            None => return None,
-        };
-
-        p.push("AGENTS.md");
-        std::fs::read_to_string(&p).ok().and_then(|s| {
+        let dir = codex_dir?;
+        let path = find_user_instructions_path(dir)?;
+        std::fs::read_to_string(&path).ok().and_then(|s| {
             let s = s.trim();
             if s.is_empty() {
                 None
@@ -672,6 +671,20 @@ pub fn log_dir(cfg: &Config) -> std::io::Result<PathBuf> {
     let mut p = cfg.codex_home.clone();
     p.push("log");
     Ok(p)
+}
+
+/// Returns the path to the first non-empty user instructions file inside the
+/// provided CODEX_HOME directory, if any.
+pub(crate) fn find_user_instructions_path(codex_dir: &Path) -> Option<PathBuf> {
+    for name in USER_INSTRUCTIONS_CANDIDATE_FILENAMES {
+        let candidate = codex_dir.join(name);
+        if let Ok(s) = std::fs::read_to_string(&candidate) {
+            if !s.trim().is_empty() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]

@@ -11,6 +11,7 @@ use codex_core::config::Config;
 use codex_core::plan_tool::PlanItemArg;
 use codex_core::plan_tool::StepStatus;
 use codex_core::plan_tool::UpdatePlanArgs;
+use codex_core::project_doc::collect_instructions_info_sync;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::SandboxPolicy;
@@ -511,6 +512,31 @@ impl HistoryCell {
             None => config.cwd.display().to_string(),
         };
         lines.push(Line::from(vec!["  • Path: ".into(), cwd_str.into()]));
+
+        // If instructions are configured, show the source paths at the top.
+        let info = collect_instructions_info_sync(config);
+        if info.user_instructions_path.is_some() || info.project_instructions_path.is_some() {
+            let render_path = |p: &std::path::PathBuf| -> String {
+                match relativize_to_home(p) {
+                    Some(rel) if !rel.as_os_str().is_empty() => format!("~/{}", rel.display()),
+                    _ => p.display().to_string(),
+                }
+            };
+            let mut parts: Vec<String> = Vec::new();
+            if let Some(p) = info.user_instructions_path.as_ref() {
+                parts.push(render_path(p));
+            }
+            if let Some(p) = info.project_instructions_path.as_ref() {
+                parts.push(render_path(p));
+            }
+            let joined = if parts.len() == 2 {
+                format!("{} + {}", parts[0], parts[1])
+            } else {
+                parts.join("")
+            };
+            lines.push(Line::from(vec!["  • AGENTS.md: ".into(), joined.into()]));
+        }
+
         // Approval mode (as-is)
         lines.push(Line::from(vec![
             "  • Approval Mode: ".into(),
