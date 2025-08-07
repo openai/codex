@@ -134,6 +134,11 @@ mod tests {
 
     #[test]
     fn create_seatbelt_args_with_read_only_git_subpath() {
+        if cfg!(target_os = "windows") {
+            // /tmp does not exist on Windows, so skip this test.
+            return;
+        }
+
         // Create a temporary workspace with two writable roots: one containing
         // a top-level .git directory and one without it.
         let tmp = TempDir::new().expect("tempdir");
@@ -144,19 +149,21 @@ mod tests {
             root_with_git_git_canon,
             root_without_git_canon,
         } = populate_tmpdir(tmp.path());
+        let cwd = tmp.path().join("cwd");
 
         // Build a policy that only includes the two test roots as writable and
-        // does not automatically include defaults like cwd or TMPDIR.
+        // does not automatically include defaults TMPDIR or /tmp.
         let policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![root_with_git.clone(), root_without_git.clone()],
             network_access: false,
-            include_default_writable_roots: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
         };
 
         let args = create_seatbelt_command_args(
             vec!["/bin/echo".to_string(), "hello".to_string()],
             &policy,
-            tmp.path(),
+            &cwd,
         );
 
         // Build the expected policy text using a raw string for readability.
@@ -169,12 +176,12 @@ mod tests {
 ; allow read-only file operations
 (allow file-read*)
 (allow file-write*
-(require-all (subpath (param "WRITABLE_ROOT_0")) (require-not (subpath (param "WRITABLE_ROOT_0_RO_0"))) ) (subpath (param "WRITABLE_ROOT_1"))
+(require-all (subpath (param "WRITABLE_ROOT_0")) (require-not (subpath (param "WRITABLE_ROOT_0_RO_0"))) ) (subpath (param "WRITABLE_ROOT_1")) (subpath (param "WRITABLE_ROOT_2"))
 )
 "#,
         );
 
-        let expected_args = vec![
+        let mut expected_args = vec![
             "-p".to_string(),
             expected_policy,
             format!(
@@ -189,16 +196,25 @@ mod tests {
                 "-DWRITABLE_ROOT_1={}",
                 root_without_git_canon.to_string_lossy()
             ),
+            format!("-DWRITABLE_ROOT_2={}", cwd.to_string_lossy()),
+        ];
+
+        expected_args.extend(vec![
             "--".to_string(),
             "/bin/echo".to_string(),
             "hello".to_string(),
-        ];
+        ]);
 
-        assert_eq!(args, expected_args);
+        assert_eq!(expected_args, args);
     }
 
     #[test]
     fn create_seatbelt_args_for_cwd_as_git_repo() {
+        if cfg!(target_os = "windows") {
+            // /tmp does not exist on Windows, so skip this test.
+            return;
+        }
+
         // Create a temporary workspace with two writable roots: one containing
         // a top-level .git directory and one without it.
         let tmp = TempDir::new().expect("tempdir");
@@ -215,7 +231,8 @@ mod tests {
         let policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
             network_access: false,
-            include_default_writable_roots: true,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false,
         };
 
         let args = create_seatbelt_command_args(
@@ -224,17 +241,14 @@ mod tests {
             root_with_git.as_path(),
         );
 
-        let tmpdir_env_var = if cfg!(target_os = "macos") {
-            std::env::var("TMPDIR")
-                .ok()
-                .map(PathBuf::from)
-                .and_then(|p| p.canonicalize().ok())
-                .map(|p| p.to_string_lossy().to_string())
-        } else {
-            None
-        };
+        let tmpdir_env_var = std::env::var("TMPDIR")
+            .ok()
+            .map(PathBuf::from)
+            .and_then(|p| p.canonicalize().ok())
+            .map(|p| p.to_string_lossy().to_string());
+
         let tempdir_policy_entry = if tmpdir_env_var.is_some() {
-            " (subpath (param \"WRITABLE_ROOT_1\"))"
+            r#" (subpath (param "WRITABLE_ROOT_2"))"#
         } else {
             ""
         };
@@ -249,7 +263,7 @@ mod tests {
 ; allow read-only file operations
 (allow file-read*)
 (allow file-write*
-(require-all (subpath (param "WRITABLE_ROOT_0")) (require-not (subpath (param "WRITABLE_ROOT_0_RO_0"))) ){tempdir_policy_entry}
+(require-all (subpath (param "WRITABLE_ROOT_0")) (require-not (subpath (param "WRITABLE_ROOT_0_RO_0"))) ) (subpath (param "WRITABLE_ROOT_1")){tempdir_policy_entry}
 )
 "#,
         );
@@ -265,10 +279,17 @@ mod tests {
                 "-DWRITABLE_ROOT_0_RO_0={}",
                 root_with_git_git_canon.to_string_lossy()
             ),
+            format!(
+                "-DWRITABLE_ROOT_1={}",
+                PathBuf::from("/tmp")
+                    .canonicalize()
+                    .expect("canonicalize /tmp")
+                    .to_string_lossy()
+            ),
         ];
 
         if let Some(p) = tmpdir_env_var {
-            expected_args.push(format!("-DWRITABLE_ROOT_1={p}"));
+            expected_args.push(format!("-DWRITABLE_ROOT_2={p}"));
         }
 
         expected_args.extend(vec![
@@ -277,7 +298,7 @@ mod tests {
             "hello".to_string(),
         ]);
 
-        assert_eq!(args, expected_args);
+        assert_eq!(expected_args, args);
     }
 
     struct PopulatedTmp {

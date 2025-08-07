@@ -93,11 +93,15 @@ pub enum SandboxMode {
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
-pub struct SandboxWorkplaceWrite {
+pub struct SandboxWorkspaceWrite {
     #[serde(default)]
     pub writable_roots: Vec<PathBuf>,
     #[serde(default)]
     pub network_access: bool,
+    #[serde(default)]
+    pub exclude_tmpdir_env_var: bool,
+    #[serde(default)]
+    pub exclude_slash_tmp: bool,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]

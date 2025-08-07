@@ -4,7 +4,7 @@ use crate::config_types::McpServerConfig;
 use crate::config_types::ReasoningEffort;
 use crate::config_types::ReasoningSummary;
 use crate::config_types::SandboxMode;
-use crate::config_types::SandboxWorkplaceWrite;
+use crate::config_types::SandboxWorkspaceWrite;
 use crate::config_types::ShellEnvironmentPolicy;
 use crate::config_types::ShellEnvironmentPolicyToml;
 use crate::config_types::Tui;
@@ -282,7 +282,7 @@ pub struct ConfigToml {
     pub sandbox_mode: Option<SandboxMode>,
 
     /// Sandbox configuration to apply if `sandbox` is `WorkspaceWrite`.
-    pub sandbox_workspace_write: Option<SandboxWorkplaceWrite>,
+    pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
 
     /// Disable server-side response storage (sends the full conversation
     /// context with every request). Currently necessary for OpenAI customers
@@ -361,10 +361,16 @@ impl ConfigToml {
         match resolved_sandbox_mode {
             SandboxMode::ReadOnly => SandboxPolicy::new_read_only_policy(),
             SandboxMode::WorkspaceWrite => match self.sandbox_workspace_write.as_ref() {
-                Some(s) => SandboxPolicy::WorkspaceWrite {
-                    writable_roots: s.writable_roots.clone(),
-                    network_access: s.network_access,
-                    include_default_writable_roots: true,
+                Some(SandboxWorkspaceWrite {
+                    writable_roots,
+                    network_access,
+                    exclude_tmpdir_env_var,
+                    exclude_slash_tmp,
+                }) => SandboxPolicy::WorkspaceWrite {
+                    writable_roots: writable_roots.clone(),
+                    network_access: *network_access,
+                    exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
+                    exclude_slash_tmp: *exclude_slash_tmp,
                 },
                 None => SandboxPolicy::new_workspace_write_policy(),
             },
@@ -745,8 +751,10 @@ sandbox_mode = "workspace-write"
 
 [sandbox_workspace_write]
 writable_roots = [
-    "/tmp",
+    "/my/workspace",
 ]
+exclude_tmpdir_env_var = true
+exclude_slash_tmp = true
 "#;
 
         let sandbox_workspace_write_cfg = toml::from_str::<ConfigToml>(sandbox_workspace_write)
@@ -754,9 +762,10 @@ writable_roots = [
         let sandbox_mode_override = None;
         assert_eq!(
             SandboxPolicy::WorkspaceWrite {
-                writable_roots: vec![PathBuf::from("/tmp")],
+                writable_roots: vec![PathBuf::from("/my/workspace")],
                 network_access: false,
-                include_default_writable_roots: true,
+                exclude_tmpdir_env_var: true,
+                exclude_slash_tmp: true,
             },
             sandbox_workspace_write_cfg.derive_sandbox_policy(sandbox_mode_override)
         );

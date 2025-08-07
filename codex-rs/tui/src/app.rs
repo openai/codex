@@ -328,6 +328,12 @@ impl App<'_> {
                     SlashCommand::Quit => {
                         break;
                     }
+                    SlashCommand::Logout => {
+                        if let Err(e) = codex_login::logout(&self.config.codex_home) {
+                            tracing::error!("failed to logout: {e}");
+                        }
+                        break;
+                    }
                     SlashCommand::Diff => {
                         let (is_git_repo, diff_text) = match get_git_diff() {
                             Ok(v) => v,
@@ -416,7 +422,9 @@ impl App<'_> {
                     }
                 }
                 AppEvent::StartFileSearch(query) => {
-                    self.file_search.on_user_query(query);
+                    if !query.is_empty() {
+                        self.file_search.on_user_query(query);
+                    }
                 }
                 AppEvent::FileSearchResult { query, matches } => {
                     if let AppState::Chat { widget } = &mut self.app_state {

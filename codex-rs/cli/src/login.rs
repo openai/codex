@@ -8,6 +8,7 @@ use codex_login::OPENAI_API_KEY_ENV_VAR;
 use codex_login::load_auth;
 use codex_login::login_with_api_key;
 use codex_login::login_with_chatgpt;
+use codex_login::logout;
 
 pub async fn run_login_with_chatgpt(cli_config_overrides: CliConfigOverrides) -> ! {
     let config = load_config_or_exit(cli_config_overrides);
@@ -75,6 +76,25 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
         }
         Err(e) => {
             eprintln!("Error checking login status: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+pub async fn run_logout(cli_config_overrides: CliConfigOverrides) -> ! {
+    let config = load_config_or_exit(cli_config_overrides);
+
+    match logout(&config.codex_home) {
+        Ok(true) => {
+            eprintln!("Successfully logged out");
+            std::process::exit(0);
+        }
+        Ok(false) => {
+            eprintln!("Not logged in");
+            std::process::exit(0);
+        }
+        Err(e) => {
+            eprintln!("Error logging out: {e}");
             std::process::exit(1);
         }
     }

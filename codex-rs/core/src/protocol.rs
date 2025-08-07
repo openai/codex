@@ -185,11 +185,16 @@ pub enum SandboxPolicy {
         #[serde(default)]
         network_access: bool,
 
-        /// When set to `true`, will include defaults like the current working
-        /// directory and TMPDIR (on macOS). When `false`, only `writable_roots`
-        /// are used. (Mainly used for testing.)
-        #[serde(default = "default_true")]
-        include_default_writable_roots: bool,
+        /// When set to `true`, will NOT include the per-user `TMPDIR`
+        /// environment variable among the default writable roots. Defaults to
+        /// `false`.
+        #[serde(default)]
+        exclude_tmpdir_env_var: bool,
+
+        /// When set to `true`, will NOT include the `/tmp` among the default
+        /// writable roots on UNIX. Defaults to `false`.
+        #[serde(default)]
+        exclude_slash_tmp: bool,
     },
 }
 
@@ -201,10 +206,6 @@ pub enum SandboxPolicy {
 pub struct WritableRoot {
     pub root: PathBuf,
     pub read_only_subpaths: Vec<PathBuf>,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 impl FromStr for SandboxPolicy {
@@ -228,7 +229,8 @@ impl SandboxPolicy {
         SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
             network_access: false,
-            include_default_writable_roots: true,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false,
         }
     }
 
@@ -263,25 +265,38 @@ impl SandboxPolicy {
             SandboxPolicy::ReadOnly => Vec::new(),
             SandboxPolicy::WorkspaceWrite {
                 writable_roots,
-                include_default_writable_roots,
-                ..
+                exclude_tmpdir_env_var,
+                exclude_slash_tmp,
+                network_access: _,
             } => {
                 // Start from explicitly configured writable roots.
                 let mut roots: Vec<PathBuf> = writable_roots.clone();
 
-                // Optionally include defaults (cwd and TMPDIR on macOS).
-                if *include_default_writable_roots {
-                    roots.push(cwd.to_path_buf());
+                // Always include defaults: cwd, /tmp (if present on Unix), and
+                // on macOS, the per-user TMPDIR unless explicitly excluded.
+                roots.push(cwd.to_path_buf());
 
-                    // Also include the per-user tmp dir on macOS.
-                    // Note this is added dynamically rather than storing it in
-                    // `writable_roots` because `writable_roots` contains only static
-                    // values deserialized from the config file.
-                    if cfg!(target_os = "macos") {
-                        if let Some(tmpdir) = std::env::var_os("TMPDIR") {
-                            roots.push(PathBuf::from(tmpdir));
-                        }
+                // Include /tmp on Unix unless explicitly excluded.
+                if cfg!(unix) && !exclude_slash_tmp {
+                    let slash_tmp = PathBuf::from("/tmp");
+                    if slash_tmp.is_dir() {
+                        roots.push(slash_tmp);
                     }
+                }
+
+                // Include $TMPDIR unless explicitly excluded. On macOS, TMPDIR
+                // is per-user, so writes to TMPDIR should not be readable by
+                // other users on the system.
+                //
+                // By comparison, TMPDIR is not guaranteed to be defined on
+                // Linux or Windows, but supporting it here gives users a way to
+                // provide the model with their own temporary directory without
+                // having to hardcode it in the config.
+                if !exclude_tmpdir_env_var
+                    && let Some(tmpdir) = std::env::var_os("TMPDIR")
+                    && !tmpdir.is_empty()
+                {
+                    roots.push(PathBuf::from(tmpdir));
                 }
 
                 // For each root, compute subpaths that should remain read-only.
@@ -433,6 +448,28 @@ impl TokenUsage {
     pub fn is_zero(&self) -> bool {
         self.total_tokens == 0
     }
+
+    pub fn cached_input(&self) -> u64 {
+        self.cached_input_tokens.unwrap_or(0)
+    }
+
+    pub fn non_cached_input(&self) -> u64 {
+        self.input_tokens.saturating_sub(self.cached_input())
+    }
+
+    /// Primary count for display as a single absolute value: non-cached input + output.
+    pub fn blended_total(&self) -> u64 {
+        self.non_cached_input() + self.output_tokens
+    }
+
+    /// For estimating what % of the model's context window is used, we need to account
+    /// for reasoning output tokens from prior turns being dropped from the context window.
+    /// We approximate this here by subtracting reasoning output tokens from the total.
+    /// This will be off for the current turn and pending function calls.
+    pub fn tokens_in_context_window(&self) -> u64 {
+        self.total_tokens
+            .saturating_sub(self.reasoning_output_tokens.unwrap_or(0))
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -448,17 +485,20 @@ impl From<TokenUsage> for FinalOutput {
 
 impl fmt::Display for FinalOutput {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let u = &self.token_usage;
+        let token_usage = &self.token_usage;
         write!(
             f,
             "Token usage: total={} input={}{} output={}{}",
-            u.total_tokens,
-            u.input_tokens,
-            u.cached_input_tokens
-                .map(|c| format!(" (cached {c})"))
-                .unwrap_or_default(),
-            u.output_tokens,
-            u.reasoning_output_tokens
+            token_usage.blended_total(),
+            token_usage.non_cached_input(),
+            if token_usage.cached_input() > 0 {
+                format!(" (+ {} cached)", token_usage.cached_input())
+            } else {
+                String::new()
+            },
+            token_usage.output_tokens,
+            token_usage
+                .reasoning_output_tokens
                 .map(|r| format!(" (reasoning {r})"))
                 .unwrap_or_default()
         )
