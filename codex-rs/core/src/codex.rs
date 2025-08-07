@@ -485,14 +485,15 @@ impl Session {
         let sub_id = begin_ctx.sub_id.clone();
         let call_id = begin_ctx.call_id.clone();
 
-        self.on_exec_command_begin(turn_diff_tracker, begin_ctx.clone()).await;
+        self.on_exec_command_begin(turn_diff_tracker, begin_ctx.clone())
+            .await;
 
         let result = process_exec_tool_call(
             exec_args.params,
             exec_args.sandbox_type,
             exec_args.ctrl_c,
-            &exec_args.sandbox_policy,
-            &exec_args.codex_linux_sandbox_exe,
+            exec_args.sandbox_policy,
+            exec_args.codex_linux_sandbox_exe,
             exec_args.stdout_stream,
         )
         .await;
@@ -500,15 +501,14 @@ impl Session {
         // Emit end event regardless of success; on error, construct a minimal output.
         match &result {
             Ok(output) => {
-                self
-                    .on_exec_command_end(
-                        turn_diff_tracker,
-                        &sub_id,
-                        &call_id,
-                        output,
-                        is_apply_patch,
-                    )
-                    .await;
+                self.on_exec_command_end(
+                    turn_diff_tracker,
+                    &sub_id,
+                    &call_id,
+                    output,
+                    is_apply_patch,
+                )
+                .await;
             }
             Err(e) => {
                 let err_output = ExecToolCallOutput {
@@ -517,15 +517,14 @@ impl Session {
                     stderr: format!("{e}"),
                     duration: Duration::default(),
                 };
-                self
-                    .on_exec_command_end(
-                        turn_diff_tracker,
-                        &sub_id,
-                        &call_id,
-                        &err_output,
-                        is_apply_patch,
-                    )
-                    .await;
+                self.on_exec_command_end(
+                    turn_diff_tracker,
+                    &sub_id,
+                    &call_id,
+                    &err_output,
+                    is_apply_patch,
+                )
+                .await;
             }
         }
 
@@ -1981,7 +1980,7 @@ async fn handle_container_exec_with_params(
         )
         .await;
 
-    let response_item = match output_result {
+    match output_result {
         Ok(output) => {
             let ExecToolCallOutput {
                 exit_code,
@@ -2006,23 +2005,28 @@ async fn handle_container_exec_with_params(
         }
         Err(CodexErr::Sandbox(error)) => {
             // Delegate to sandbox-specific error handler.
-            handle_sandbox_error(params, &exec_command_context, error, sandbox_type, sess).await
+            handle_sandbox_error(
+                turn_diff_tracker,
+                params,
+                &exec_command_context,
+                error,
+                sandbox_type,
+                sess,
+            )
+            .await
         }
-        Err(e) => {
-            ResponseInputItem::FunctionCallOutput {
-                call_id: call_id.clone(),
-                output: FunctionCallOutputPayload {
-                    content: format!("execution error: {e}"),
-                    success: None,
-                },
-            }
-        }
-    };
-
-    response_item
+        Err(e) => ResponseInputItem::FunctionCallOutput {
+            call_id: call_id.clone(),
+            output: FunctionCallOutputPayload {
+                content: format!("execution error: {e}"),
+                success: None,
+            },
+        },
+    }
 }
 
 async fn handle_sandbox_error(
+    turn_diff_tracker: &mut TurnDiffTracker,
     params: ExecParams,
     exec_command_context: &ExecCommandContext,
     error: SandboxErr,
@@ -2102,7 +2106,7 @@ async fn handle_sandbox_error(
             let retry_output_result = sess
                 .run_exec_with_events(
                     // This shares the same call id; events will reflect the retry, too.
-                    &mut TurnDiffTracker::default(),
+                    turn_diff_tracker,
                     exec_command_context.clone(),
                     ExecInvokeArgs {
                         params,
@@ -2143,15 +2147,13 @@ async fn handle_sandbox_error(
                         },
                     }
                 }
-                Err(e) => {
-                    ResponseInputItem::FunctionCallOutput {
-                        call_id: call_id.clone(),
-                        output: FunctionCallOutputPayload {
-                            content: format!("retry failed: {e}"),
-                            success: None,
-                        },
-                    }
-                }
+                Err(e) => ResponseInputItem::FunctionCallOutput {
+                    call_id: call_id.clone(),
+                    output: FunctionCallOutputPayload {
+                        content: format!("retry failed: {e}"),
+                        success: None,
+                    },
+                },
             }
         }
         ReviewDecision::Denied | ReviewDecision::Abort => {
