@@ -58,17 +58,7 @@ use codex_core::protocol::{
             "unexpected history before newline"
         );
 
-        // Live ring should show thinking header immediately.
-        let live = w.test_live_ring_rows();
-        let live_text: String = live
-            .iter()
-            .flat_map(|l| l.spans.iter())
-            .map(|s| s.content.clone())
-            .collect();
-        assert!(
-            live_text.contains("thinking"),
-            "expected thinking header in live ring"
-        );
+        // No live overlay anymore; nothing visible until commit.
 
         // Push a newline which should cause commit of the first logical line.
         w.handle_codex_event(Event {
@@ -249,14 +239,7 @@ mod widget_stream_extra {
         let committed: Vec<_> = rendered.into_iter().filter(|s| s.starts_with('l')).collect();
         assert_eq!(committed.len(), 3, "expected 3 committed lines in first batch");
 
-        // Live ring should include the newest 3 committed plus one queued head (l4).
-        let live = w.test_live_ring_rows();
-        let live_texts: Vec<String> = live
-            .iter()
-            .map(|l| l.spans.iter().map(|s| s.content.clone()).collect::<String>())
-            .collect();
-        assert!(live_texts.iter().any(|s| s.contains("l4")), "expected queue head l4 in live ring: {live_texts:?}");
-        assert!(live_texts.iter().all(|s| !s.contains("l5")), "l5 should not be visible in live ring yet: {live_texts:?}");
+        // No live overlay anymore; only committed lines appear in history.
 
         // Finalize: drain the remaining lines.
         w.handle_codex_event(Event {

@@ -199,27 +199,21 @@ fn unwrap_markdown_language_fence_if_enabled(s: String) -> String {
 
 pub(crate) struct StepResult {
     pub history: Vec<Line<'static>>, // lines to insert into history this step
-    pub live: Vec<Line<'static>>,    // newest K rows to show in the live ring
 }
 
 /// Streams already-rendered rows into history while computing the newest K
 /// rows to show in a live overlay.
 pub(crate) struct RenderedLineStreamer {
     queue: VecDeque<Line<'static>>,
-    tail: Vec<Line<'static>>, // last K lines that reached history
 }
 
 impl RenderedLineStreamer {
     pub fn new() -> Self {
-        Self {
-            queue: VecDeque::new(),
-            tail: Vec::new(),
-        }
+        Self { queue: VecDeque::new() }
     }
 
     pub fn clear(&mut self) {
         self.queue.clear();
-        self.tail.clear();
     }
 
     pub fn enqueue(&mut self, lines: Vec<Line<'static>>) {
@@ -228,7 +222,7 @@ impl RenderedLineStreamer {
         }
     }
 
-    pub fn step(&mut self, live_max_rows: usize) -> StepResult {
+    pub fn step(&mut self, _live_max_rows: usize) -> StepResult {
         let mut history = Vec::new();
         // Move at least 1, up to a small burst, to feel responsive without flooding.
         let burst = 3usize.min(self.queue.len().max(1));
@@ -238,50 +232,15 @@ impl RenderedLineStreamer {
             }
         }
 
-        // Update tail with newly committed history and cap to K.
-        if !history.is_empty() {
-            self.tail.extend(history.iter().cloned());
-            if self.tail.len() > live_max_rows {
-                let drop = self.tail.len() - live_max_rows;
-                self.tail.drain(0..drop);
-            }
-        }
-
-        // Live rows are tail + queue head, capped to K, newest at the end.
-        let mut live = self.tail.clone();
-        if live.len() < live_max_rows {
-            let need = live_max_rows - live.len();
-            for l in self.queue.iter().take(need) {
-                live.push(l.clone());
-            }
-        }
-        if live.len() > live_max_rows {
-            let drop = live.len() - live_max_rows;
-            live.drain(0..drop);
-        }
-
-        StepResult { history, live }
+        StepResult { history }
     }
 
-    pub fn drain_all(&mut self, live_max_rows: usize) -> StepResult {
+    pub fn drain_all(&mut self, _live_max_rows: usize) -> StepResult {
         let mut history = Vec::new();
         while let Some(l) = self.queue.pop_front() {
             history.push(l);
         }
-        if !history.is_empty() {
-            self.tail.extend(history.iter().cloned());
-            if self.tail.len() > live_max_rows {
-                let drop = self.tail.len() - live_max_rows;
-                self.tail.drain(0..drop);
-            }
-        }
-        // Live shows the last K history rows.
-        let live = if self.tail.len() > live_max_rows {
-            self.tail[self.tail.len() - live_max_rows..].to_vec()
-        } else {
-            self.tail.clone()
-        };
-        StepResult { history, live }
+        StepResult { history }
     }
 
     pub fn is_idle(&self) -> bool {

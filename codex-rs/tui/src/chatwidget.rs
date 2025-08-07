@@ -214,7 +214,6 @@ impl ChatWidget<'_> {
             self.bottom_pane.clear_ctrl_c_quit_hint();
             self.submit_op(Op::Interrupt);
             self.bottom_pane.set_task_running(false);
-            self.bottom_pane.clear_live_ring();
             self.reasoning_collector.clear();
             self.answer_collector.clear();
             self.reasoning_streamer.clear();
@@ -452,7 +451,6 @@ impl ChatWidget<'_> {
                     self.task_complete_pending = true;
                 } else {
                     self.bottom_pane.set_task_running(false);
-                    self.bottom_pane.clear_live_ring();
                     self.request_redraw();
                 }
             }
@@ -468,7 +466,6 @@ impl ChatWidget<'_> {
             EventMsg::Error(ErrorEvent { message }) => {
                 self.add_to_history(HistoryCell::new_error_event(message.clone()));
                 self.bottom_pane.set_task_running(false);
-                self.bottom_pane.clear_live_ring();
                 self.reasoning_collector.clear();
                 self.answer_collector.clear();
                 self.reasoning_streamer.clear();
@@ -677,11 +674,6 @@ impl ChatWidget<'_> {
 
 #[cfg(test)]
 impl ChatWidget<'_> {
-    /// Test-only accessor: allows tests to read the live overlay rows without
-    /// exposing this API in production.
-    pub fn test_live_ring_rows(&self) -> Vec<ratatui::text::Line<'static>> {
-        self.bottom_pane.test_live_ring_rows()
-    }
     /// Test-only control to tune the maximum rows shown in the live overlay.
     /// Useful for verifying queue-head behavior without changing production defaults.
     pub fn test_set_live_max_rows(&mut self, n: u16) {
@@ -703,13 +695,7 @@ impl ChatWidget<'_> {
             // Ensure the waiting status is visible (composer replaced).
             self.bottom_pane
                 .update_status_text("waiting for model".to_string());
-            // Show thinking header immediately in the live overlay for reasoning.
-            if kind == StreamKind::Reasoning {
-                use ratatui::style::Stylize;
-                let header = ratatui::text::Line::from("thinking".magenta().italic());
-                self.bottom_pane
-                    .set_live_ring_rows(self.live_max_rows, vec![header]);
-            }
+            // No live ring overlay; headers will be inserted with the first commit.
         }
     }
 
@@ -731,7 +717,6 @@ impl ChatWidget<'_> {
                 let step = streamer.step(self.live_max_rows as usize);
                 let just_committed = step.history.clone();
                 let mut hist: Vec<ratatui::text::Line<'static>> = Vec::new();
-                let mut header_added_this_step = false;
                 if !self.stream_header_emitted {
                     use ratatui::style::Stylize;
                     match self.current_stream {
@@ -744,52 +729,12 @@ impl ChatWidget<'_> {
                         None => {}
                     }
                     self.stream_header_emitted = true;
-                    header_added_this_step = true;
                 }
                 hist.extend(just_committed.clone());
                 if !hist.is_empty() {
                     self.app_event_tx.send(AppEvent::InsertHistory(hist));
                 }
-                // Avoid showing the header or any just-committed lines in the live overlay this frame.
-                let mut live = step.live;
-                if header_added_this_step {
-                    let drop_text = match self.current_stream {
-                        Some(StreamKind::Reasoning) => "thinking",
-                        Some(StreamKind::Answer) => "codex",
-                        None => "",
-                    };
-                    live.retain(|l| {
-                        let s: String = l
-                            .spans
-                            .iter()
-                            .map(|sp| sp.content.clone())
-                            .collect::<Vec<_>>()
-                            .join("");
-                        s != drop_text
-                    });
-                }
-                if !just_committed.is_empty() {
-                    let committed: Vec<String> = just_committed
-                        .iter()
-                        .map(|l| {
-                            l.spans
-                                .iter()
-                                .map(|sp| sp.content.clone())
-                                .collect::<String>()
-                        })
-                        .collect();
-                    live.retain(|l| {
-                        let s: String = l
-                            .spans
-                            .iter()
-                            .map(|sp| sp.content.clone())
-                            .collect::<Vec<_>>()
-                            .join("");
-                        !committed.iter().any(|c| c == &s)
-                    });
-                }
-                self.bottom_pane
-                    .set_live_ring_rows(self.live_max_rows, live);
+                // Live overlay removed; nothing else to render for this frame.
             }
         }
     }
@@ -828,8 +773,7 @@ impl ChatWidget<'_> {
             self.app_event_tx.send(AppEvent::InsertHistory(lines));
         }
 
-        // Clear the live overlay and reset state for the next stream.
-        self.bottom_pane.clear_live_ring();
+        // Reset state for the next stream.
         self.current_stream = None;
         self.stream_header_emitted = false;
         if self.task_complete_pending {
@@ -905,9 +849,7 @@ mod chatwidget_helper_tests {
         let cfg = test_config();
         let mut w = ChatWidget::new(cfg, tx, None, Vec::new(), false);
 
-        // Adjust the live ring capacity and access rows (initially empty).
+        // Adjust the live ring capacity (no-op for rendering) and ensure no panic.
         w.test_set_live_max_rows(4);
-        let rows = w.test_live_ring_rows();
-        assert!(rows.is_empty());
     }
 }
