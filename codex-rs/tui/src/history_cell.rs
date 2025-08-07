@@ -504,10 +504,8 @@ impl HistoryCell {
     }
 
     pub(crate) fn new_error_event(message: String) -> Self {
-        let lines: Vec<Line<'static>> = vec![
-            vec!["ERROR: ".red().bold(), message.into()].into(),
-            "".into(),
-        ];
+        let lines: Vec<Line<'static>> =
+            vec![vec!["🖐 ".red().bold(), message.into()].into(), "".into()];
         HistoryCell::ErrorEvent {
             view: TextBlock::new(lines),
         }
