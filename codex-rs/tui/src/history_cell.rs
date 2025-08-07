@@ -13,6 +13,7 @@ use codex_core::plan_tool::StepStatus;
 use codex_core::plan_tool::UpdatePlanArgs;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::McpInvocation;
+use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::TokenUsage;
 use codex_login::get_auth_file;
@@ -133,6 +134,27 @@ pub(crate) enum HistoryCell {
 }
 
 const TOOL_CALL_MAX_LINES: usize = 3;
+
+fn title_case(s: &str) -> String {
+    if s.is_empty() {
+        return String::new();
+    }
+    let mut chars = s.chars();
+    let first = match chars.next() {
+        Some(c) => c,
+        None => return String::new(),
+    };
+    let rest: String = chars.as_str().to_ascii_lowercase();
+    first.to_uppercase().collect::<String>() + &rest
+}
+
+fn pretty_provider_name(id: &str) -> String {
+    if id.eq_ignore_ascii_case("openai") {
+        "OpenAI".to_string()
+    } else {
+        title_case(id)
+    }
+}
 
 impl HistoryCell {
     /// Return a cloned, plain representation of the cell's lines suitable for
@@ -471,35 +493,65 @@ impl HistoryCell {
         let mut lines: Vec<Line<'static>> = Vec::new();
         lines.push(Line::from("/status".magenta()));
 
-        // Config
-        for (key, value) in create_config_summary_entries(config) {
-            lines.push(Line::from(vec![format!("{key}: ").bold(), value.into()]));
-        }
+        let config_entries = create_config_summary_entries(config);
+        let lookup = |k: &str| -> String {
+            config_entries
+                .iter()
+                .find(|(key, _)| *key == k)
+                .map(|(_, v)| v.clone())
+                .unwrap_or_default()
+        };
+
+        // 📂 Workspace
+        lines.push(Line::from(vec!["📂 ".into(), "Workspace".bold()]));
+        // Path (home-relative, e.g., ~/code/project)
+        let cwd_str = match relativize_to_home(&config.cwd) {
+            Some(rel) if !rel.as_os_str().is_empty() => format!("~/{}", rel.display()),
+            Some(_) => "~".to_string(),
+            None => config.cwd.display().to_string(),
+        };
+        lines.push(Line::from(vec!["  • Path: ".into(), cwd_str.into()]));
+        // Approval mode (as-is)
+        lines.push(Line::from(vec![
+            "  • Approval Mode: ".into(),
+            lookup("approval").into(),
+        ]));
+        // Sandbox (simplified name only)
+        let sandbox_name = match &config.sandbox_policy {
+            SandboxPolicy::DangerFullAccess => "danger-full-access",
+            SandboxPolicy::ReadOnly => "read-only",
+            SandboxPolicy::WorkspaceWrite { .. } => "workspace-write",
+        };
+        lines.push(Line::from(vec![
+            "  • Sandbox: ".into(),
+            sandbox_name.into(),
+        ]));
 
         lines.push(Line::from(""));
 
-        // Auth
+        // 👤 Account (only if ChatGPT tokens exist), shown under the first block
         let auth_file = get_auth_file(&config.codex_home);
         if let Ok(auth) = try_read_auth_json(&auth_file) {
-            if auth.tokens.as_ref().is_some() {
-                lines.push(Line::from("signed in with chatgpt".bold()));
+            if let Some(tokens) = auth.tokens.clone() {
+                lines.push(Line::from(vec!["👤 ".into(), "Account".bold()]));
+                lines.push(Line::from("  • Signed in with ChatGPT"));
 
-                if let Some(tokens) = auth.tokens.as_ref() {
-                    let info = tokens.id_token.clone();
-                    if let Some(email) = info.email {
-                        lines.push(Line::from(vec!["  login: ".bold(), email.into()]));
+                let info = tokens.id_token;
+                if let Some(email) = info.email {
+                    lines.push(Line::from(vec!["  • Login: ".into(), email.into()]));
+                }
+
+                match auth.openai_api_key.as_deref() {
+                    Some(key) if !key.is_empty() => {
+                        lines.push(Line::from("  • Using API key"));
                     }
-
-                    match auth.openai_api_key.as_deref() {
-                        Some(key) if !key.is_empty() => {
-                            lines.push(Line::from("  using api key"));
-                        }
-                        _ => {
-                            let plan_text = info
-                                .chatgpt_plan_type
-                                .unwrap_or_else(|| "Unknown".to_string());
-                            lines.push(Line::from(vec!["  plan: ".bold(), plan_text.into()]));
-                        }
+                    _ => {
+                        let plan_text = info
+                            .chatgpt_plan_type
+                            .as_deref()
+                            .map(title_case)
+                            .unwrap_or_else(|| "Unknown".to_string());
+                        lines.push(Line::from(vec!["  • Plan: ".into(), plan_text.into()]));
                     }
                 }
 
@@ -507,20 +559,56 @@ impl HistoryCell {
             }
         }
 
-        // Token usage
-        lines.push(Line::from("token usage".bold()));
+        // 🧠 Model
+        lines.push(Line::from(vec!["🧠 ".into(), "Model".bold()]));
         lines.push(Line::from(vec![
-            "  input: ".bold(),
-            usage.non_cached_input().to_string().into(),
-            " ".into(),
-            format!("(+ {} cached)", usage.cached_input()).into(),
+            "  • Name: ".into(),
+            config.model.clone().into(),
         ]));
+        let provider_disp = pretty_provider_name(&config.model_provider_id);
         lines.push(Line::from(vec![
-            "  output: ".bold(),
+            "  • Provider: ".into(),
+            provider_disp.into(),
+        ]));
+        // Only show Reasoning fields if present in config summary
+        let reff = lookup("reasoning effort");
+        if !reff.is_empty() {
+            lines.push(Line::from(vec![
+                "  • Reasoning Effort: ".into(),
+                title_case(&reff).into(),
+            ]));
+        }
+        let rsum = lookup("reasoning summaries");
+        if !rsum.is_empty() {
+            lines.push(Line::from(vec![
+                "  • Reasoning Summaries: ".into(),
+                title_case(&rsum).into(),
+            ]));
+        }
+
+        lines.push(Line::from(""));
+
+        // 📊 Token Usage
+        lines.push(Line::from(vec!["📊 ".into(), "Token Usage".bold()]));
+        // Input: <input> [+ <cached> cached]
+        let mut input_line_spans: Vec<Span<'static>> = vec![
+            "  • Input: ".into(),
+            usage.non_cached_input().to_string().into(),
+        ];
+        if let Some(cached) = usage.cached_input_tokens {
+            if cached > 0 {
+                input_line_spans.push(format!(" (+ {cached} cached)").into());
+            }
+        }
+        lines.push(Line::from(input_line_spans));
+        // Output: <output>
+        lines.push(Line::from(vec![
+            "  • Output: ".into(),
             usage.output_tokens.to_string().into(),
         ]));
+        // Total: <total>
         lines.push(Line::from(vec![
-            "  total: ".bold(),
+            "  • Total: ".into(),
             usage.blended_total().to_string().into(),
         ]));
 
