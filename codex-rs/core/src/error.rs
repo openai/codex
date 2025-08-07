@@ -68,6 +68,11 @@ pub enum CodexErr {
     #[error("Usage not included with the plan")]
     UsageNotIncluded,
 
+    #[error(
+        "We’re currently experiencing high demand, which may cause temporary errors. We’re adding capacity in East and West Europe to restore normal service."
+    )]
+    InternalServerError,
+
     /// Retry limit exceeded.
     #[error("exceeded retry limit, last status: {0}")]
     RetryLimit(StatusCode),
