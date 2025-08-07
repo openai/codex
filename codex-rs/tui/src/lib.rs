@@ -132,7 +132,8 @@ pub async fn run_main(
         }
     };
 
-    // we also load config.toml here, to determine project state.
+    // we load config.toml here to determine project state.
+    #[allow(clippy::print_stderr)]
     let config_toml = {
         let codex_home = match find_codex_home() {
             Ok(codex_home) => codex_home,
@@ -151,7 +152,7 @@ pub async fn run_main(
         };
 
         let config_toml: ConfigToml = root_value.try_into().map_err(|e| {
-            tracing::error!("Failed to deserialize overridden config: {e}");
+            eprintln!("Failed to deserialize overridden config: {e}");
             std::io::Error::new(std::io::ErrorKind::InvalidData, e)
         })?;
 

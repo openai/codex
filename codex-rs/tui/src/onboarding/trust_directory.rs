@@ -158,9 +158,9 @@ impl StepStateProvider for TrustDirectoryWidget {
 
 impl TrustDirectoryWidget {
     fn handle_trust(&mut self) {
-        if let Err(e) = set_project_trusted(&self.codex_home, &self.cwd, true) {
-            self.error = Some("Failed to set project trusted".to_string());
+        if let Err(e) = set_project_trusted(&self.codex_home, &self.cwd) {
             tracing::error!("Failed to set project trusted: {e:?}");
+            self.error = Some("Failed to set project trusted".to_string());
         }
 
         // Update the in-memory chat config for this session to a more permissive

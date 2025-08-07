@@ -22,6 +22,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
+use tempfile::NamedTempFile;
 use toml::Value as TomlValue;
 use toml_edit::DocumentMut;
 
@@ -29,6 +30,8 @@ use toml_edit::DocumentMut;
 /// files are *silently truncated* to this size so we do not take up too much of
 /// the context window.
 pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
+
+const CONFIG_TOML_FILE: &str = "config.toml";
 
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
@@ -195,7 +198,7 @@ impl Config {
 /// Read `CODEX_HOME/config.toml` and return it as a generic TOML value. Returns
 /// an empty TOML table when the file does not exist.
 pub fn load_config_as_toml(codex_home: &Path) -> std::io::Result<TomlValue> {
-    let config_path = codex_home.join("config.toml");
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
     match std::fs::read_to_string(&config_path) {
         Ok(contents) => match toml::from_str::<TomlValue>(&contents) {
             Ok(val) => Ok(val),
@@ -217,27 +220,29 @@ pub fn load_config_as_toml(codex_home: &Path) -> std::io::Result<TomlValue> {
 
 /// Patch `CODEX_HOME/config.toml` project state.
 /// Use with caution.
-pub fn set_project_trusted(
-    codex_home: &Path,
-    project_path: &Path,
-    trusted: bool,
-) -> anyhow::Result<()> {
-    let config_path = codex_home.join("config.toml");
-
+pub fn set_project_trusted(codex_home: &Path, project_path: &Path) -> anyhow::Result<()> {
     // Parse existing config if present; otherwise start a new document.
-    let mut doc = match std::fs::read_to_string(&config_path) {
+    let mut doc = match std::fs::read_to_string(codex_home) {
         Ok(s) => s.parse::<DocumentMut>()?,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => DocumentMut::new(),
         Err(e) => return Err(e.into()),
     };
 
+    // Mark the project as trusted. toml_edit is very good at handling
+    // mising properties
     let project_key = project_path.to_string_lossy().to_string();
-    doc["projects"][project_key.as_str()]["trusted"] = toml_edit::value(trusted);
+    doc["projects"][project_key.as_str()]["trust_level"] = toml_edit::value("trusted");
 
-    if let Some(parent) = config_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(config_path, doc.to_string())?;
+    // ensure codex_home exists
+    std::fs::create_dir_all(codex_home)?;
+
+    // create a tmp_file
+    let tmp_file = NamedTempFile::new_in(codex_home)?;
+    std::fs::write(&tmp_file.path(), doc.to_string())?;
+
+    // atomically move the tmp file into config.toml
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    tmp_file.persist(config_path)?;
 
     Ok(())
 }
@@ -414,7 +419,7 @@ impl ConfigToml {
     }
 
     pub fn is_cwd_trusted(&self, resolved_cwd: &PathBuf) -> bool {
-        let projects = self.projects.clone().unwrap_or(HashMap::new());
+        let projects = self.projects.clone().unwrap_or_default();
 
         projects
             .get(&resolved_cwd.to_string_lossy().to_string())
