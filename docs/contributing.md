@@ -18,6 +18,37 @@ More broadly we welcome contributions - whether you are opening your very first 
 3. **Document behaviour.** If your change affects user-facing behaviour, update the README, inline help (`codex --help`), or relevant example projects.
 4. **Keep commits atomic.** Each commit should compile and the tests should pass. This makes reviews and potential rollbacks easier.
 
+<details>
+<summary><strong>Build from source</strong></summary>
+
+```bash
+# Clone the repository and navigate to the root of the Cargo workspace.
+git clone https://github.com/openai/codex.git
+cd codex/codex-rs
+
+# Install the Rust toolchain, if necessary.
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+source "$HOME/.cargo/env"
+rustup component add rustfmt
+rustup component add clippy
+
+# Build Codex.
+cargo build
+
+# Launch the TUI with a sample prompt.
+cargo run --bin codex -- "explain this codebase to me"
+
+# After making changes, ensure the code is clean.
+cargo fmt -- --config imports_granularity=Item
+cargo clippy --tests
+
+# Run the tests.
+cargo test
+```
+
+</details>
+
+
 ### Opening a pull request
 
 - Fill in the PR template (or include similar information) - **What? Why? How?**
