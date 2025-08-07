@@ -230,7 +230,7 @@ pub fn set_project_trusted(codex_home: &Path, project_path: &Path) -> anyhow::Re
     };
 
     // Mark the project as trusted. toml_edit is very good at handling
-    // mising properties
+    // missing properties
     let project_key = project_path.to_string_lossy().to_string();
     doc["projects"][project_key.as_str()]["trust_level"] = toml_edit::value("trusted");
 
