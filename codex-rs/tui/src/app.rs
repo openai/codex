@@ -82,6 +82,7 @@ impl App<'_> {
         config: Config,
         initial_prompt: Option<String>,
         initial_images: Vec<std::path::PathBuf>,
+        show_trust_screen: bool,
     ) -> Self {
         let (app_event_tx, app_event_rx) = channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
@@ -133,11 +134,10 @@ impl App<'_> {
         }
 
         let show_login_screen = should_show_login_screen(&config);
-        let is_cwd_trusted = config.is_cwd_trusted();
         trace!(
-            "onboarding: show_login_screen: {show_login_screen}, is_cwd_trusted: {is_cwd_trusted}"
+            "onboarding: show_login_screen: {show_login_screen}, show_trust_screen: {show_trust_screen}"
         );
-        let app_state = if show_login_screen || !is_cwd_trusted {
+        let app_state = if show_login_screen || show_trust_screen {
             let chat_widget_args = ChatWidgetArgs {
                 config: config.clone(),
                 initial_prompt,
@@ -150,7 +150,7 @@ impl App<'_> {
                     codex_home: config.codex_home.clone(),
                     cwd: config.cwd.clone(),
                     show_login_screen,
-                    is_cwd_trusted,
+                    show_trust_screen,
                     chat_widget_args,
                 }),
             }

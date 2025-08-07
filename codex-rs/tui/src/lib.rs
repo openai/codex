@@ -94,12 +94,15 @@ pub async fn run_main(
         None
     };
 
+    // canonicalize the cwd
+    let cwd = cli.cwd.clone().map(|p| p.canonicalize().unwrap_or(p));
+
     // Load configuration and support CLI overrides.
     let overrides = ConfigOverrides {
         model,
         approval_policy,
         sandbox_mode,
-        cwd: cli.cwd.clone().map(|p| p.canonicalize().unwrap_or(p)),
+        cwd,
         model_provider: model_provider_override,
         config_profile: cli.config_profile.clone(),
         codex_linux_sandbox_exe,
@@ -130,9 +133,6 @@ pub async fn run_main(
     };
 
     // we also load config.toml here, to determine project state.
-    let cwd = cli.cwd.clone().map(|p| p.canonicalize().unwrap_or(p));
-    let is_cwd_trusted = resolve_cwd(cwd.as_ref())?;
-
     let config_toml = {
         let codex_home = match find_codex_home() {
             Ok(codex_home) => codex_home,
@@ -232,12 +232,13 @@ pub async fn run_main(
         eprintln!("");
     }
 
-    run_ratatui_app(cli, config, log_rx).map_err(|err| std::io::Error::other(err.to_string()))
+    run_ratatui_app(cli, config, should_show_trust_screen, log_rx).map_err(|err| std::io::Error::other(err.to_string()))
 }
 
 fn run_ratatui_app(
     cli: Cli,
     config: Config,
+    should_show_trust_screen: bool,
     mut log_rx: tokio::sync::mpsc::UnboundedReceiver<String>,
 ) -> color_eyre::Result<codex_core::protocol::TokenUsage> {
     color_eyre::install()?;
@@ -255,7 +256,7 @@ fn run_ratatui_app(
     terminal.clear()?;
 
     let Cli { prompt, images, .. } = cli;
-    let mut app = App::new(config.clone(), prompt, images);
+    let mut app = App::new(config.clone(), prompt, images, should_show_trust_screen);
 
     // Bridge log receiver into the AppEvent channel so latest log lines update the UI.
     {
@@ -312,7 +313,7 @@ fn should_show_trust_screen(
     cwd: Option<PathBuf>,
 ) -> std::io::Result<bool> {
     let cwd = cwd.map(|p| p.canonicalize().unwrap_or(p));
-    let resolved_cwd = resolve_cwd(cwd.as_ref())?;
+    let resolved_cwd = resolve_cwd(cwd)?;
     let projects = config_toml.projects.or_else(|| -> HashMap::new());
 
     if config_overrides.approval_policy.is_some() || config_overrides.sandbox_mode.is_some() {
@@ -323,10 +324,9 @@ fn should_show_trust_screen(
         // if the user has specified either approval policy or sandbox mode in config.toml
         // skip the trust flow
         Ok(false)
-    } else if let Some(project) = projects.get(&resolved_cwd.to_string_lossy().to_string()) {
-        // if config.toml has a project for the current cwd, use the trust value
-        // from the project
-        Ok(project.trusted.unwrap_or(false))
+    } else if config_toml.is_cwd_trusted(&resolved_cwd) {
+        // if the current cwd project is trusted, skip the trust screen
+        Ok(false)
     } else {
         // if none of the above conditions are met, show the trust screen
         Ok(true)

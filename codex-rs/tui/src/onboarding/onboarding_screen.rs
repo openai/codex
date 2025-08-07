@@ -52,7 +52,7 @@ pub(crate) struct OnboardingScreenArgs {
     pub codex_home: PathBuf,
     pub cwd: PathBuf,
     pub show_login_screen: bool,
-    pub is_cwd_trusted: bool,
+    pub show_trust_screen: bool,
 }
 
 impl OnboardingScreen {
@@ -63,7 +63,7 @@ impl OnboardingScreen {
             codex_home,
             cwd,
             show_login_screen,
-            is_cwd_trusted,
+            show_trust_screen,
         } = args;
         let mut steps: Vec<Step> = vec![Step::Welcome(WelcomeWidget {
             is_logged_in: !show_login_screen,
@@ -87,7 +87,7 @@ impl OnboardingScreen {
         // Share ChatWidgetArgs between steps so changes in the TrustDirectory step
         // are reflected when continuing to chat.
         let shared_chat_args = Arc::new(Mutex::new(chat_widget_args));
-        if !is_cwd_trusted {
+        if show_trust_screen {
             steps.push(Step::TrustDirectory(TrustDirectoryWidget {
                 cwd,
                 codex_home,
