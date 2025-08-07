@@ -8,7 +8,6 @@ use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config_types::SandboxMode;
 use codex_core::protocol::AskForApproval;
-use codex_core::util::is_inside_git_repo;
 use codex_login::load_auth;
 use codex_ollama::DEFAULT_OSS_MODEL;
 use log_layer::TuiLogLayer;
@@ -31,7 +30,6 @@ pub mod custom_terminal;
 mod exec_command;
 mod file_search;
 mod get_git_diff;
-mod git_warning_screen;
 mod history_cell;
 pub mod insert_history;
 pub mod live_wrap;
@@ -206,20 +204,12 @@ pub async fn run_main(
         eprintln!("");
     }
 
-    // Determine whether we need to display the "not a git repo" warning
-    // modal. The flag is shown when the current working directory is *not*
-    // inside a Git repository **and** the user did *not* pass the
-    // `--allow-no-git-exec` flag.
-    let show_git_warning = !cli.skip_git_repo_check && !is_inside_git_repo(&config);
-
-    run_ratatui_app(cli, config, show_git_warning, log_rx)
-        .map_err(|err| std::io::Error::other(err.to_string()))
+    run_ratatui_app(cli, config, log_rx).map_err(|err| std::io::Error::other(err.to_string()))
 }
 
 fn run_ratatui_app(
     cli: Cli,
     config: Config,
-    show_git_warning: bool,
     mut log_rx: tokio::sync::mpsc::UnboundedReceiver<String>,
 ) -> color_eyre::Result<codex_core::protocol::TokenUsage> {
     color_eyre::install()?;
@@ -237,7 +227,7 @@ fn run_ratatui_app(
     terminal.clear()?;
 
     let Cli { prompt, images, .. } = cli;
-    let mut app = App::new(config.clone(), prompt, show_git_warning, images);
+    let mut app = App::new(config.clone(), prompt, cli.skip_git_repo_check, images);
 
     // Bridge log receiver into the AppEvent channel so latest log lines update the UI.
     {
