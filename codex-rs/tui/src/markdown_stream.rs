@@ -47,13 +47,26 @@ impl MarkdownNewlineCollector {
         }
         if !self.buffer.ends_with('\n') {
             complete_line_count = complete_line_count.saturating_sub(1);
+            // If we're inside an unclosed fenced code block, also drop the
+            // last rendered line to avoid committing a partial code line.
+            if is_inside_unclosed_fence(&source) {
+                complete_line_count = complete_line_count.saturating_sub(1);
+            }
         }
 
         if self.committed_line_count >= complete_line_count {
             return Vec::new();
         }
 
-        let out = rendered[self.committed_line_count..complete_line_count].to_vec();
+        let out_slice = &rendered[self.committed_line_count..complete_line_count];
+        // Strong correctness: while a fenced code block is open (no closing fence yet),
+        // do not emit any new lines from inside it. Wait until the fence closes to emit
+        // the entire block together. This avoids stray backticks and misformatted content.
+        if is_inside_unclosed_fence(&source) {
+            return Vec::new();
+        }
+
+        let out = out_slice.to_vec();
         self.committed_line_count = complete_line_count;
         out
     }
@@ -115,14 +128,22 @@ fn strip_empty_fenced_code_blocks(s: &str) -> String {
     let mut i = 0usize;
     while i < lines.len() {
         let line = lines[i];
-        if line.starts_with("```") {
+        let trimmed_start = line.trim_start();
+        let fence_token = if trimmed_start.starts_with("```") {
+            "```"
+        } else if trimmed_start.starts_with("~~~") {
+            "~~~"
+        } else {
+            ""
+        };
+        if !fence_token.is_empty() {
             // Find a matching closing fence on its own line.
             let mut j = i + 1;
             let mut has_content = false;
             let mut found_close = false;
             while j < lines.len() {
                 let l = lines[j];
-                if l.trim() == "```" {
+                if l.trim() == fence_token {
                     found_close = true;
                     break;
                 }
@@ -132,8 +153,10 @@ fn strip_empty_fenced_code_blocks(s: &str) -> String {
                 j += 1;
             }
             if found_close && !has_content {
-                // Drop i..=j and insert a single blank separator line.
-                out.push('\n');
+                // Drop i..=j and insert at most a single blank separator line.
+                if !out.ends_with('\n') {
+                    out.push('\n');
+                }
                 i = j + 1;
                 continue;
             }
@@ -148,6 +171,30 @@ fn strip_empty_fenced_code_blocks(s: &str) -> String {
         }
     }
     out
+}
+
+fn is_inside_unclosed_fence(s: &str) -> bool {
+    let mut open = false;
+    for line in s.lines() {
+        let t = line.trim_start();
+        if t.starts_with("```") || t.starts_with("~~~") {
+            if !open {
+                open = true;
+            } else {
+                // closing fence on same pattern toggles off
+                open = false;
+            }
+        }
+    }
+    open
+}
+
+fn line_plain_text(l: &Line<'_>) -> String {
+    l.spans
+        .iter()
+        .map(|s| s.content.clone())
+        .collect::<Vec<_>>()
+        .join("")
 }
 
 #[cfg(test)]
@@ -447,9 +494,9 @@ mod tests {
     fn utf8_boundary_safety_and_wide_chars() {
         let cfg = test_config();
 
-        // Emoji (wide), CJK, and combining mark sequences
-        let input = "🙂🙂🙂\n汉字漢字\nA0̄\n"; // A + combining macron
-        let deltas = vec!["🙂", "🙂", "🙂\n汉", "字漢", "字\nA", "\u{0304}", "\n"];
+        // Emoji (wide), CJK, control char, digit + combining macron sequences
+        let input = "🙂🙂🙂\n汉字漢字\nA\u{0003}0\u{0304}\n";
+        let deltas = vec!["🙂", "🙂", "🙂\n汉", "字漢", "字\nA", "\u{0003}", "0", "\u{0304}", "\n"];
 
         let streamed = simulate_stream_markdown_for_tests(&deltas, true, &cfg);
         let streamed_str = lines_to_plain_strings(&streamed);
