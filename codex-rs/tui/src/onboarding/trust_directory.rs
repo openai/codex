@@ -159,13 +159,13 @@ impl StepStateProvider for TrustDirectoryWidget {
 impl TrustDirectoryWidget {
     fn handle_trust(&mut self) {
         if let Err(e) = set_project_trusted(&self.codex_home, &self.cwd, true) {
-            self.error = Some(format!("Failed to set project trusted: {e}"));
+            tracing::error!("Failed to set project trusted: {e:?}");
         }
 
         // Update the in-memory chat config for this session to a more permissive
         // policy suitable for a trusted workspace.
         if let Ok(mut args) = self.chat_widget_args.lock() {
-            args.config.approval_policy = AskForApproval::OnFailure;
+            args.config.approval_policy = AskForApproval::OnRequest;
             args.config.sandbox_policy = SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![self.cwd.clone()],
                 network_access: false,
