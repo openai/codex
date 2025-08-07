@@ -15,10 +15,13 @@ use codex_core::protocol::{
 
     fn test_config() -> Config {
         let overrides = ConfigOverrides {
-            cwd: Some(std::env::current_dir().unwrap()),
+            cwd: std::env::current_dir().ok(),
             ..Default::default()
         };
-        Config::load_with_cli_overrides(vec![], overrides).expect("load test config")
+        match Config::load_with_cli_overrides(vec![], overrides) {
+            Ok(c) => c,
+            Err(e) => panic!("load test config: {e}"),
+        }
     }
 
     fn recv_insert_history(
@@ -75,7 +78,10 @@ use codex_core::protocol::{
             }),
         });
 
-        let lines = recv_insert_history(&rx, 200).expect("expected history after newline");
+        let lines = match recv_insert_history(&rx, 200) {
+            Some(v) => v,
+            None => panic!("expected history after newline"),
+        };
         let rendered: Vec<String> = lines
             .iter()
             .map(|l| {
@@ -105,7 +111,10 @@ use codex_core::protocol::{
             }),
         });
 
-        let lines2 = recv_insert_history(&rx, 200).expect("expected history after finalize");
+        let lines2 = match recv_insert_history(&rx, 200) {
+            Some(v) => v,
+            None => panic!("expected history after finalize"),
+        };
         let rendered2: Vec<String> = lines2
             .iter()
             .map(|l| {
@@ -169,7 +178,10 @@ mod widget_stream_extra {
             id: "a".into(),
             msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta: "\n".into() }),
         });
-        let commit1 = super::recv_insert_history(&rx, 200).expect("history after code line newline");
+        let commit1 = match super::recv_insert_history(&rx, 200) {
+            Some(v) => v,
+            None => panic!("history after code line newline"),
+        };
 
         // Close fence slowly then newline.
         w.handle_codex_event(Event {
@@ -188,7 +200,10 @@ mod widget_stream_extra {
             id: "a".into(),
             msg: EventMsg::AgentMessage(AgentMessageEvent { message: String::new() }),
         });
-        let commit2 = super::recv_insert_history(&rx, 200).expect("history after finalize");
+        let commit2 = match super::recv_insert_history(&rx, 200) {
+            Some(v) => v,
+            None => panic!("history after finalize"),
+        };
 
         let texts1: Vec<String> = commit1
             .iter()
@@ -222,7 +237,10 @@ mod widget_stream_extra {
         });
 
         // First batch commit: expect header + 3 lines.
-        let lines = super::recv_insert_history(&rx, 200).expect("history after batch");
+        let lines = match super::recv_insert_history(&rx, 200) {
+            Some(v) => v,
+            None => panic!("history after batch"),
+        };
         let rendered: Vec<String> = lines
             .iter()
             .map(|l| l.spans.iter().map(|s| s.content.clone()).collect::<String>())
@@ -245,7 +263,10 @@ mod widget_stream_extra {
             id: "b".into(),
             msg: EventMsg::AgentMessage(AgentMessageEvent { message: String::new() }),
         });
-        let lines2 = super::recv_insert_history(&rx, 200).expect("history after finalize");
+        let lines2 = match super::recv_insert_history(&rx, 200) {
+            Some(v) => v,
+            None => panic!("history after finalize"),
+        };
         let rendered2: Vec<String> = lines2
             .iter()
             .map(|l| l.spans.iter().map(|s| s.content.clone()).collect::<String>())
@@ -267,24 +288,36 @@ mod widget_stream_extra {
             id: "ra".into(),
             msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta: "think1\n".into() }),
         });
-        let r_commit = super::recv_insert_history(&rx, 200).expect("reasoning history");
+        let r_commit = match super::recv_insert_history(&rx, 200) {
+            Some(v) => v,
+            None => panic!("reasoning history"),
+        };
         w.handle_codex_event(Event {
             id: "ra".into(),
             msg: EventMsg::AgentReasoning(AgentReasoningEvent { text: String::new() }),
         });
-        let r_final = super::recv_insert_history(&rx, 200).expect("reasoning finalize");
+        let r_final = match super::recv_insert_history(&rx, 200) {
+            Some(v) => v,
+            None => panic!("reasoning finalize"),
+        };
 
         // Answer: one completed line then finalize.
         w.handle_codex_event(Event {
             id: "ra".into(),
             msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta: "ans1\n".into() }),
         });
-        let a_commit = super::recv_insert_history(&rx, 200).expect("answer history");
+        let a_commit = match super::recv_insert_history(&rx, 200) {
+            Some(v) => v,
+            None => panic!("answer history"),
+        };
         w.handle_codex_event(Event {
             id: "ra".into(),
             msg: EventMsg::AgentMessage(AgentMessageEvent { message: String::new() }),
         });
-        let a_final = super::recv_insert_history(&rx, 200).expect("answer finalize");
+        let a_final = match super::recv_insert_history(&rx, 200) {
+            Some(v) => v,
+            None => panic!("answer finalize"),
+        };
 
         let to_texts = |lines: &Vec<ratatui::text::Line<'static>>| -> Vec<String> {
             lines
@@ -296,8 +329,14 @@ mod widget_stream_extra {
         let a_all = [to_texts(&a_commit), to_texts(&a_final)].concat();
 
         // Expect headers present and in order: reasoning first, then answer.
-        let r_header_idx = r_all.iter().position(|s| s.contains("thinking")).expect("missing reasoning header");
-        let a_header_idx = a_all.iter().position(|s| s.contains("codex")).expect("missing answer header");
+        let r_header_idx = match r_all.iter().position(|s| s.contains("thinking")) {
+            Some(i) => i,
+            None => panic!("missing reasoning header"),
+        };
+        let a_header_idx = match a_all.iter().position(|s| s.contains("codex")) {
+            Some(i) => i,
+            None => panic!("missing answer header"),
+        };
         assert!(r_all.iter().any(|s| s == "think1"), "missing reasoning content: {:?}", r_all);
         assert!(a_all.iter().any(|s| s == "ans1"), "missing answer content: {:?}", a_all);
         // Implicitly, reasoning events happened before answer events if we got here without timeouts.
@@ -305,4 +344,3 @@ mod widget_stream_extra {
         assert_eq!(a_header_idx, 0, "answer header should be first in its batch");
     }
 }
-

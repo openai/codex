@@ -485,7 +485,7 @@ async fn process_sse<S>(
                 // Currently, we ignore this event, but we handle it
                 // separately to skip the logging message in the `other` case.
             }
-            | "response.reasoning_summary_text.done" => {
+            "response.reasoning_summary_text.done" => {
                 // Ensure the reasoning summary ends with a blank line so it
                 // does not get concatenated with the next output. Emit two
                 // newlines as a final delta to create a visible separator.

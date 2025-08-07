@@ -36,9 +36,20 @@ fn stream_commit_trickle_no_duplication() {
 
     let combined = [out1, out2].concat();
     let s = String::from_utf8_lossy(&combined);
-    assert_eq!(s.matches("one").count(), 1, "history line duplicated: {s:?}");
-    assert_eq!(s.matches("two").count(), 1, "history line duplicated: {s:?}");
-    assert!(!s.contains("three"), "live-only content leaked into history: {s:?}");
+    assert_eq!(
+        s.matches("one").count(),
+        1,
+        "history line duplicated: {s:?}"
+    );
+    assert_eq!(
+        s.matches("two").count(),
+        1,
+        "history line duplicated: {s:?}"
+    );
+    assert!(
+        !s.contains("three"),
+        "live-only content leaked into history: {s:?}"
+    );
 }
 
 #[test]
@@ -64,4 +75,3 @@ fn live_ring_rows_not_inserted_into_history() {
         "uncommitted live-ring content should not be inserted into history: {s:?}"
     );
 }
-

@@ -1,5 +1,6 @@
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
+use crate::insert_history::word_wrap_lines;
 use crate::slash_command::SlashCommand;
 use crate::text_block::TextBlock;
 use crate::text_formatting::format_and_truncate_tool_result;
@@ -27,8 +28,6 @@ use ratatui::text::Line as RtLine;
 use ratatui::text::Span as RtSpan;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
-use ratatui::widgets::Wrap;
-use crate::insert_history::word_wrap_lines;
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::PathBuf;

@@ -369,6 +369,7 @@ impl BottomPane<'_> {
 
 #[cfg(test)]
 impl BottomPane<'_> {
+    #[allow(dead_code)]
     pub fn test_live_ring_rows(&self) -> Vec<Line<'static>> {
         match &self.live_ring {
             Some(r) => r.test_rows(),
@@ -533,7 +534,7 @@ mod tests {
         for row in 0..area.height {
             let mut s = String::new();
             for col in 0..area.width {
-                let cell = buf.get(col, row);
+                let cell = &buf[(col, row)];
                 let ch = cell.symbol().chars().next().unwrap_or(' ');
                 s.push(ch);
             }

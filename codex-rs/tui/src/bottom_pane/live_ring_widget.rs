@@ -3,7 +3,6 @@ use ratatui::layout::Rect;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
-use ratatui::widgets::Wrap;
 
 use crate::insert_history::word_wrap_lines;
 
@@ -53,6 +52,7 @@ impl WidgetRef for LiveRingWidget {
 
 #[cfg(test)]
 impl LiveRingWidget {
+    #[allow(dead_code)]
     pub fn test_rows(&self) -> Vec<Line<'static>> {
         self.rows.clone()
     }
@@ -73,13 +73,13 @@ mod tests {
 
         let area = ratatui::layout::Rect::new(0, 0, 40, 6);
         let mut buf = ratatui::buffer::Buffer::empty(area);
-        (&ring).render_ref(area, &mut buf);
+        ring.render_ref(area, &mut buf);
 
         let mut lines: Vec<String> = Vec::new();
         for row in 0..area.height {
             let mut s = String::new();
             for col in 0..area.width {
-                let cell = buf.get(col, row);
+                let cell = &buf[(col, row)];
                 let ch = cell.symbol().chars().next().unwrap_or(' ');
                 s.push(ch);
             }

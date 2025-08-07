@@ -1,4 +1,5 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -49,7 +50,8 @@ use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell::CommandOutput;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::PatchEventType;
-use crate::markdown_stream::{MarkdownNewlineCollector, RenderedLineStreamer};
+use crate::markdown_stream::MarkdownNewlineCollector;
+use crate::markdown_stream::RenderedLineStreamer;
 use crate::user_approval_widget::ApprovalRequest;
 use codex_file_search::FileMatch;
 
@@ -160,11 +162,7 @@ impl ChatWidget<'_> {
         self.request_redraw();
     }
 
-    fn handle_apply_patch_approval_now(
-        &mut self,
-        id: String,
-        ev: ApplyPatchApprovalRequestEvent,
-    ) {
+    fn handle_apply_patch_approval_now(&mut self, id: String, ev: ApplyPatchApprovalRequestEvent) {
         self.add_to_history(HistoryCell::new_patch_event(
             PatchEventType::ApprovalRequest,
             ev.changes.clone(),
@@ -202,8 +200,7 @@ impl ChatWidget<'_> {
             80,
             ev.invocation,
             ev.duration,
-            ev
-                .result
+            ev.result
                 .as_ref()
                 .map(|r| r.is_error.unwrap_or(false))
                 .unwrap_or(false),
@@ -237,11 +234,7 @@ impl ChatWidget<'_> {
         ])
         .areas(area)
     }
-    fn finalize_active_stream(&mut self) {
-        if let Some(kind) = self.current_stream {
-            self.finalize_stream(kind);
-        }
-    }
+
     pub(crate) fn new(
         config: Config,
         app_event_tx: AppEventSender,
@@ -500,7 +493,8 @@ impl ChatWidget<'_> {
             }
             EventMsg::ExecCommandBegin(ev) => {
                 if self.is_write_cycle_active() {
-                    self.interrupt_queue.push_back(QueuedInterrupt::ExecBegin(ev));
+                    self.interrupt_queue
+                        .push_back(QueuedInterrupt::ExecBegin(ev));
                 } else {
                     self.handle_exec_begin_now(ev);
                 }
@@ -544,7 +538,8 @@ impl ChatWidget<'_> {
             }
             EventMsg::McpToolCallBegin(ev) => {
                 if self.is_write_cycle_active() {
-                    self.interrupt_queue.push_back(QueuedInterrupt::McpBegin(ev));
+                    self.interrupt_queue
+                        .push_back(QueuedInterrupt::McpBegin(ev));
                 } else {
                     self.handle_mcp_begin_now(ev);
                 }
@@ -669,9 +664,11 @@ impl ChatWidget<'_> {
 
 #[cfg(test)]
 impl ChatWidget<'_> {
+    #[allow(dead_code)]
     pub fn test_live_ring_rows(&self) -> Vec<ratatui::text::Line<'static>> {
         self.bottom_pane.test_live_ring_rows()
     }
+    #[allow(dead_code)]
     pub fn test_set_live_max_rows(&mut self, n: u16) {
         self.live_max_rows = n;
     }
@@ -704,7 +701,9 @@ impl ChatWidget<'_> {
     fn stream_push_and_maybe_commit(&mut self, delta: &str) {
         // Newline-gated: only consider committing when a newline is present.
         let (collector, streamer) = match self.current_stream {
-            Some(StreamKind::Reasoning) => (&mut self.reasoning_collector, &mut self.reasoning_streamer),
+            Some(StreamKind::Reasoning) => {
+                (&mut self.reasoning_collector, &mut self.reasoning_streamer)
+            }
             Some(StreamKind::Answer) => (&mut self.answer_collector, &mut self.answer_streamer),
             None => return,
         };
@@ -757,7 +756,12 @@ impl ChatWidget<'_> {
                 if !just_committed.is_empty() {
                     let committed: Vec<String> = just_committed
                         .iter()
-                        .map(|l| l.spans.iter().map(|sp| sp.content.clone()).collect::<String>())
+                        .map(|l| {
+                            l.spans
+                                .iter()
+                                .map(|sp| sp.content.clone())
+                                .collect::<String>()
+                        })
                         .collect();
                     live.retain(|l| {
                         let s: String = l

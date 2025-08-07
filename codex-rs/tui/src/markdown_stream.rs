@@ -96,24 +96,13 @@ impl MarkdownNewlineCollector {
         self.clear();
         out
     }
-
-    /// Returns the currently rendered, incomplete last line if any.
-    pub fn current_partial_line(&self, config: &Config) -> Option<Line<'static>> {
-        if self.buffer.ends_with('\n') {
-            return None;
-        }
-        let mut rendered: Vec<Line<'static>> = Vec::new();
-        markdown::append_markdown(&self.buffer, &mut rendered, config);
-        rendered.into_iter().last()
-    }
 }
 
 fn is_effectively_empty(line: &Line<'_>) -> bool {
     if line.spans.is_empty() {
         return true;
     }
-    line
-        .spans
+    line.spans
         .iter()
         .all(|s| s.content.is_empty() || s.content.chars().all(|c| c == ' '))
 }
@@ -189,14 +178,6 @@ fn is_inside_unclosed_fence(s: &str) -> bool {
     open
 }
 
-fn line_plain_text(l: &Line<'_>) -> String {
-    l.spans
-        .iter()
-        .map(|s| s.content.clone())
-        .collect::<Vec<_>>()
-        .join("")
-}
-
 #[cfg(test)]
 fn unwrap_markdown_language_fence_if_enabled(s: String) -> String {
     // In tests, keep content exactly as provided to simplify assertions.
@@ -218,7 +199,7 @@ fn unwrap_markdown_language_fence_if_enabled(s: String) -> String {
 
 pub(crate) struct StepResult {
     pub history: Vec<Line<'static>>, // lines to insert into history this step
-    pub live: Vec<Line<'static>>,     // newest K rows to show in the live ring
+    pub live: Vec<Line<'static>>,    // newest K rows to show in the live ring
 }
 
 /// Streams already-rendered rows into history while computing the newest K
@@ -336,10 +317,13 @@ mod tests {
 
     fn test_config() -> Config {
         let overrides = ConfigOverrides {
-            cwd: Some(std::env::current_dir().unwrap()),
+            cwd: std::env::current_dir().ok(),
             ..Default::default()
         };
-        Config::load_with_cli_overrides(vec![], overrides).expect("load test config")
+        match Config::load_with_cli_overrides(vec![], overrides) {
+            Ok(c) => c,
+            Err(e) => panic!("load test config: {e}"),
+        }
     }
 
     #[test]
@@ -374,17 +358,39 @@ mod tests {
         let out1 = c.commit_complete_lines(&cfg);
         let s1: Vec<String> = out1
             .iter()
-            .map(|l| l.spans.iter().map(|s| s.content.clone()).collect::<Vec<_>>().join(""))
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.clone())
+                    .collect::<Vec<_>>()
+                    .join("")
+            })
             .collect();
-        assert_eq!(out1.len(), 1, "first commit should contain only the paragraph line, got {}: {:?}", out1.len(), s1);
+        assert_eq!(
+            out1.len(),
+            1,
+            "first commit should contain only the paragraph line, got {}: {:?}",
+            out1.len(),
+            s1
+        );
 
         c.push_delta("## Heading\n");
         let out2 = c.commit_complete_lines(&cfg);
         let s2: Vec<String> = out2
             .iter()
-            .map(|l| l.spans.iter().map(|s| s.content.clone()).collect::<Vec<_>>().join(""))
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.clone())
+                    .collect::<Vec<_>>()
+                    .join("")
+            })
             .collect();
-        assert_eq!(s2, vec!["", "## Heading"], "expected a blank separator then the heading line");
+        assert_eq!(
+            s2,
+            vec!["", "## Heading"],
+            "expected a blank separator then the heading line"
+        );
 
         let line_to_string = |l: &ratatui::text::Line<'_>| -> String {
             l.spans
@@ -415,27 +421,57 @@ mod tests {
         let out1 = c.commit_complete_lines(&cfg);
         let s1: Vec<String> = out1
             .iter()
-            .map(|l| l.spans.iter().map(|s| s.content.clone()).collect::<Vec<_>>().join(""))
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.clone())
+                    .collect::<Vec<_>>()
+                    .join("")
+            })
             .collect();
-        assert_eq!(s1, vec!["Sounds good!", ""], "expected paragraph followed by blank separator before heading chunk");
+        assert_eq!(
+            s1,
+            vec!["Sounds good!", ""],
+            "expected paragraph followed by blank separator before heading chunk"
+        );
 
         // Now finish the heading line with the trailing newline.
         c.push_delta("\n");
         let out2 = c.commit_complete_lines(&cfg);
         let s2: Vec<String> = out2
             .iter()
-            .map(|l| l.spans.iter().map(|s| s.content.clone()).collect::<Vec<_>>().join(""))
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.clone())
+                    .collect::<Vec<_>>()
+                    .join("")
+            })
             .collect();
-        assert_eq!(s2, vec!["## Adding Bird subcommand"], "expected the heading line only on the final commit");
+        assert_eq!(
+            s2,
+            vec!["## Adding Bird subcommand"],
+            "expected the heading line only on the final commit"
+        );
 
         // Sanity check raw markdown rendering for a simple line does not produce spurious extras.
         let mut rendered: Vec<ratatui::text::Line<'static>> = Vec::new();
         crate::markdown::append_markdown("Hello.\n", &mut rendered, &cfg);
         let rendered_strings: Vec<String> = rendered
             .iter()
-            .map(|l| l.spans.iter().map(|s| s.content.clone()).collect::<Vec<_>>().join(""))
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.clone())
+                    .collect::<Vec<_>>()
+                    .join("")
+            })
             .collect();
-        assert_eq!(rendered_strings, vec!["Hello."], "unexpected markdown lines: {:?}", rendered_strings);
+        assert_eq!(
+            rendered_strings,
+            vec!["Hello."],
+            "unexpected markdown lines: {rendered_strings:?}"
+        );
 
         let line_to_string = |l: &ratatui::text::Line<'_>| -> String {
             l.spans
@@ -453,13 +489,13 @@ mod tests {
     fn lines_to_plain_strings(lines: &[ratatui::text::Line<'_>]) -> Vec<String> {
         lines
             .iter()
-            .map(|l| l
-                .spans
-                .iter()
-                .map(|s| s.content.clone())
-                .collect::<Vec<_>>()
-                .join("")
-            )
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.clone())
+                    .collect::<Vec<_>>()
+                    .join("")
+            })
             .collect()
     }
 
@@ -476,7 +512,10 @@ mod tests {
         crate::markdown::append_markdown("- a\n- b\n- c\n", &mut rendered_all, &cfg);
         let rendered_all_str = lines_to_plain_strings(&rendered_all);
 
-        assert_eq!(streamed_str, rendered_all_str, "list streaming should equal full render without duplication");
+        assert_eq!(
+            streamed_str, rendered_all_str,
+            "list streaming should equal full render without duplication"
+        );
 
         // Fenced code case: stream in small chunks
         let deltas2 = vec!["```", "\nco", "de 1\ncode 2\n", "```\n"];
@@ -487,7 +526,10 @@ mod tests {
         crate::markdown::append_markdown("```\ncode 1\ncode 2\n```\n", &mut rendered_all2, &cfg);
         let rendered_all2_str = lines_to_plain_strings(&rendered_all2);
 
-        assert_eq!(streamed2_str, rendered_all2_str, "fence streaming should equal full render without duplication");
+        assert_eq!(
+            streamed2_str, rendered_all2_str,
+            "fence streaming should equal full render without duplication"
+        );
     }
 
     #[test]
@@ -496,7 +538,17 @@ mod tests {
 
         // Emoji (wide), CJK, control char, digit + combining macron sequences
         let input = "🙂🙂🙂\n汉字漢字\nA\u{0003}0\u{0304}\n";
-        let deltas = vec!["🙂", "🙂", "🙂\n汉", "字漢", "字\nA", "\u{0003}", "0", "\u{0304}", "\n"];
+        let deltas = vec![
+            "🙂",
+            "🙂",
+            "🙂\n汉",
+            "字漢",
+            "字\nA",
+            "\u{0003}",
+            "0",
+            "\u{0304}",
+            "\n",
+        ];
 
         let streamed = simulate_stream_markdown_for_tests(&deltas, true, &cfg);
         let streamed_str = lines_to_plain_strings(&streamed);
@@ -505,7 +557,10 @@ mod tests {
         crate::markdown::append_markdown(input, &mut rendered_all, &cfg);
         let rendered_all_str = lines_to_plain_strings(&rendered_all);
 
-        assert_eq!(streamed_str, rendered_all_str, "utf8/wide-char streaming should equal full render without duplication or truncation");
+        assert_eq!(
+            streamed_str, rendered_all_str,
+            "utf8/wide-char streaming should equal full render without duplication or truncation"
+        );
     }
 
     #[test]
@@ -518,7 +573,11 @@ mod tests {
         c.push_delta("```markdown\nHello\n```\n");
         let out = c.finalize_and_drain(&cfg);
         let out_str = lines_to_plain_strings(&out);
-        assert_eq!(out_str, vec!["Hello"], "in release, content inside ```markdown should be unwrapped");
+        assert_eq!(
+            out_str,
+            vec!["Hello"],
+            "in release, content inside ```markdown should be unwrapped"
+        );
     }
 
     #[test]
@@ -530,8 +589,14 @@ mod tests {
         let deltas = vec!["```markdown", "\nHe", "llo\n", "```", "\n"]; // commits on 2nd, 3rd, 5th
         let streamed = simulate_stream_markdown_for_tests(&deltas, true, &cfg);
         let texts = lines_to_plain_strings(&streamed);
-        assert!(texts.iter().any(|s| s == "Hello"), "expected Hello committed once: {texts:?}");
-        assert!(texts.iter().all(|s| !s.contains("```")), "no backticks should appear: {texts:?}");
+        assert!(
+            texts.iter().any(|s| s == "Hello"),
+            "expected Hello committed once: {texts:?}"
+        );
+        assert!(
+            texts.iter().all(|s| !s.contains("```")),
+            "no backticks should appear: {texts:?}"
+        );
     }
 
     #[test]
@@ -542,9 +607,15 @@ mod tests {
         let deltas = vec!["```bash\n```\n", "## Heading\n"]; // empty block and close in same commit
         let streamed = simulate_stream_markdown_for_tests(&deltas, true, &cfg);
         let texts = lines_to_plain_strings(&streamed);
-        assert!(texts.iter().all(|s| !s.contains("```")), "no fence markers expected: {texts:?}");
+        assert!(
+            texts.iter().all(|s| !s.contains("```")),
+            "no fence markers expected: {texts:?}"
+        );
         // Expect the heading and no fence markers. A blank separator may or may not be rendered at start.
-        assert!(texts.iter().any(|s| s == "## Heading"), "expected heading line: {texts:?}");
+        assert!(
+            texts.iter().any(|s| s == "## Heading"),
+            "expected heading line: {texts:?}"
+        );
     }
 
     #[test]
@@ -553,9 +624,17 @@ mod tests {
         let deltas = vec!["Para.\n", "```\n```\n", "## Title\n"]; // empty fence block in one commit
         let streamed = simulate_stream_markdown_for_tests(&deltas, true, &cfg);
         let texts = lines_to_plain_strings(&streamed);
-        let para_idx = texts.iter().position(|s| s == "Para.").expect("para present");
-        let head_idx = texts.iter().position(|s| s == "## Title").expect("heading present");
-        assert!(head_idx > para_idx + 0, "heading should not merge with paragraph: {texts:?}");
+        let para_idx = match texts.iter().position(|s| s == "Para.") {
+            Some(i) => i,
+            None => panic!("para present"),
+        };
+        let head_idx = match texts.iter().position(|s| s == "## Title") {
+            Some(i) => i,
+            None => panic!("heading present"),
+        };
+        assert!(
+            head_idx > para_idx,
+            "heading should not merge with paragraph: {texts:?}"
+        );
     }
 }
-

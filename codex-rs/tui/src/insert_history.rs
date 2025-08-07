@@ -109,19 +109,6 @@ pub fn insert_history_lines_to_writer<B, W>(
     }
 }
 
-fn wrapped_line_count(lines: &[Line], width: u16) -> u16 {
-    let mut count = 0;
-    for line in lines {
-        count += line_height(line, width);
-    }
-    count
-}
-
-fn line_height(line: &Line, width: u16) -> u16 {
-    let wrapped = word_wrap_line(line, width.max(1) as usize);
-    wrapped.len() as u16
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SetScrollRegion(pub std::ops::Range<u16>);
 
@@ -312,7 +299,11 @@ fn word_wrap_line(line: &Line, width: usize) -> Vec<Line<'static>> {
     for piece in wrapped {
         let piece_str: &str = &piece;
         if piece_str.is_empty() {
-            out.push(Line { style: line.style, alignment: line.alignment, spans: Vec::new() });
+            out.push(Line {
+                style: line.style,
+                alignment: line.alignment,
+                spans: Vec::new(),
+            });
             continue;
         }
         // Find the next occurrence of piece_str at or after start_cursor.
@@ -341,7 +332,10 @@ fn to_owned_line(l: &Line<'_>) -> Line<'static> {
         spans: l
             .spans
             .iter()
-            .map(|s| Span { style: s.style, content: std::borrow::Cow::Owned(s.content.to_string()) })
+            .map(|s| Span {
+                style: s.style,
+                content: std::borrow::Cow::Owned(s.content.to_string()),
+            })
             .collect(),
     }
 }
@@ -354,8 +348,12 @@ fn slice_line_spans(
 ) -> Line<'static> {
     let mut acc: Vec<Span<'static>> = Vec::new();
     for (i, (s, e, style)) in span_bounds.iter().enumerate() {
-        if *e <= start_byte { continue; }
-        if *s >= end_byte { break; }
+        if *e <= start_byte {
+            continue;
+        }
+        if *s >= end_byte {
+            break;
+        }
         let seg_start = start_byte.max(*s);
         let seg_end = end_byte.min(*e);
         if seg_end > seg_start {
@@ -363,11 +361,20 @@ fn slice_line_spans(
             let local_end = seg_end - *s;
             let content = original.spans[i].content.as_ref();
             let slice = &content[local_start..local_end];
-            acc.push(Span { style: *style, content: std::borrow::Cow::Owned(slice.to_string()) });
+            acc.push(Span {
+                style: *style,
+                content: std::borrow::Cow::Owned(slice.to_string()),
+            });
         }
-        if *e >= end_byte { break; }
+        if *e >= end_byte {
+            break;
+        }
     }
-    Line { style: original.style, alignment: original.alignment, spans: acc }
+    Line {
+        style: original.style,
+        alignment: original.alignment,
+        spans: acc,
+    }
 }
 
 #[cfg(test)]
@@ -406,9 +413,9 @@ mod tests {
     #[test]
     fn line_height_counts_double_width_emoji() {
         let line = Line::from("😀😀😀"); // each emoji ~ width 2
-        assert_eq!(line_height(&line, 4), 2);
-        assert_eq!(line_height(&line, 2), 3);
-        assert_eq!(line_height(&line, 6), 1);
+        assert_eq!(word_wrap_line(&line, 4).len(), 2);
+        assert_eq!(word_wrap_line(&line, 2).len(), 3);
+        assert_eq!(word_wrap_line(&line, 6).len(), 1);
     }
 
     #[test]
@@ -419,11 +426,21 @@ mod tests {
         let wrapped = word_wrap_lines(&[line], 40);
         let joined: String = wrapped
             .iter()
-            .map(|l| l.spans.iter().map(|s| s.content.clone()).collect::<String>())
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.clone())
+                    .collect::<String>()
+            })
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(!joined.contains("bo\nth"), "word 'both' should not be split across lines:\n{joined}");
-        assert!(!joined.contains("Willowm\nere"), "should not split inside words:\n{joined}");
+        assert!(
+            !joined.contains("bo\nth"),
+            "word 'both' should not be split across lines:\n{joined}"
+        );
+        assert!(
+            !joined.contains("Willowm\nere"),
+            "should not split inside words:\n{joined}"
+        );
     }
 }
-
