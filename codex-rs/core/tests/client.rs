@@ -290,13 +290,10 @@ async fn chatgpt_auth_sends_correct_request() {
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider = model_provider;
     let ctrl_c = std::sync::Arc::new(tokio::sync::Notify::new());
-    let CodexSpawnOk { codex, .. } = Codex::spawn(
-        config,
-        Some(auth_from_token("Access Token".to_string())),
-        ctrl_c.clone(),
-    )
-    .await
-    .unwrap();
+    let CodexSpawnOk { codex, .. } =
+        Codex::spawn(config, Some(create_dummy_codex_auth()), ctrl_c.clone())
+            .await
+            .unwrap();
 
     codex
         .submit(Op::UserInput {
@@ -541,13 +538,10 @@ async fn env_var_overrides_loaded_auth() {
     config.model_provider = provider;
 
     let ctrl_c = std::sync::Arc::new(tokio::sync::Notify::new());
-    let CodexSpawnOk { codex, .. } = Codex::spawn(
-        config,
-        Some(auth_from_token("Default Access Token".to_string())),
-        ctrl_c.clone(),
-    )
-    .await
-    .unwrap();
+    let CodexSpawnOk { codex, .. } =
+        Codex::spawn(config, Some(create_dummy_codex_auth()), ctrl_c.clone())
+            .await
+            .unwrap();
 
     codex
         .submit(Op::UserInput {
@@ -561,7 +555,7 @@ async fn env_var_overrides_loaded_auth() {
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 }
 
-fn auth_from_token(id_token: String) -> CodexAuth {
+fn create_dummy_codex_auth() -> CodexAuth {
     CodexAuth::new(
         None,
         AuthMode::ChatGPT,
@@ -569,7 +563,7 @@ fn auth_from_token(id_token: String) -> CodexAuth {
         Some(AuthDotJson {
             openai_api_key: None,
             tokens: Some(TokenData {
-                id_token,
+                id_token: Default::default(),
                 access_token: "Access Token".to_string(),
                 refresh_token: "test".to_string(),
                 account_id: Some("account_id".to_string()),

@@ -15,6 +15,8 @@ use codex_core::protocol::FileChange;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::TokenUsage;
+use codex_login::get_auth_file;
+use codex_login::try_read_auth_json;
 use image::DynamicImage;
 use image::ImageReader;
 use mcp_types::EmbeddedResourceResource;
@@ -259,7 +261,7 @@ impl HistoryCell {
         let mut lines: Vec<Line<'static>> = Vec::new();
         let command_escaped = strip_bash_lc_and_escape(&command);
         lines.push(Line::from(vec![
-            "⚡Ran command ".magenta(),
+            "⚡ Ran command ".magenta(),
             command_escaped.into(),
         ]));
 
@@ -432,7 +434,8 @@ impl HistoryCell {
             view: TextBlock::new(lines),
         }
     }
-
+    // allow dead code for now. maybe we'll use it again.
+    #[allow(dead_code)]
     pub(crate) fn new_background_event(message: String) -> Self {
         let mut lines: Vec<Line<'static>> = Vec::new();
         lines.push(Line::from("event".dim()));
@@ -468,32 +471,52 @@ impl HistoryCell {
             lines.push(Line::from(vec![format!("{key}: ").bold(), value.into()]));
         }
 
-        // Token usage
         lines.push(Line::from(""));
+
+        // Auth
+        let auth_file = get_auth_file(&config.codex_home);
+        if let Ok(auth) = try_read_auth_json(&auth_file) {
+            if auth.tokens.as_ref().is_some() {
+                lines.push(Line::from("signed in with chatgpt".bold()));
+
+                if let Some(tokens) = auth.tokens.as_ref() {
+                    let info = tokens.id_token.clone();
+                    if let Some(email) = info.email {
+                        lines.push(Line::from(vec!["  login: ".bold(), email.into()]));
+                    }
+
+                    match auth.openai_api_key.as_deref() {
+                        Some(key) if !key.is_empty() => {
+                            lines.push(Line::from("  using api key"));
+                        }
+                        _ => {
+                            let plan_text = info
+                                .chatgpt_plan_type
+                                .unwrap_or_else(|| "Unknown".to_string());
+                            lines.push(Line::from(vec!["  plan: ".bold(), plan_text.into()]));
+                        }
+                    }
+                }
+
+                lines.push(Line::from(""));
+            }
+        }
+
+        // Token usage
         lines.push(Line::from("token usage".bold()));
         lines.push(Line::from(vec![
             "  input: ".bold(),
-            usage.input_tokens.to_string().into(),
-        ]));
-        lines.push(Line::from(vec![
-            "  cached input: ".bold(),
-            usage.cached_input_tokens.unwrap_or(0).to_string().into(),
+            usage.non_cached_input().to_string().into(),
+            " ".into(),
+            format!("(+ {} cached)", usage.cached_input()).into(),
         ]));
         lines.push(Line::from(vec![
             "  output: ".bold(),
             usage.output_tokens.to_string().into(),
         ]));
         lines.push(Line::from(vec![
-            "  reasoning output: ".bold(),
-            usage
-                .reasoning_output_tokens
-                .unwrap_or(0)
-                .to_string()
-                .into(),
-        ]));
-        lines.push(Line::from(vec![
             "  total: ".bold(),
-            usage.total_tokens.to_string().into(),
+            usage.blended_total().to_string().into(),
         ]));
 
         lines.push(Line::from(""));
