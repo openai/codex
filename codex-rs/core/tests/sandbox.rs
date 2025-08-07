@@ -62,7 +62,8 @@ impl TestScenario {
 }
 
 /// If the user has added a workspace root that is not a Git repo root, then
-/// the user has to acknowledge that they are taking on some risk because Git
+/// the user has to specify `--skip-git-repo-check` or go through some
+/// interstitial that indicates they are taking on some risk because Git
 /// cannot be used to backup their work before the agent begins.
 ///
 /// Because the user has agreed to this risk, we do not try find all .git

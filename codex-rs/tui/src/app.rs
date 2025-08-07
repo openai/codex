@@ -30,7 +30,6 @@ use std::sync::mpsc::Receiver;
 use std::sync::mpsc::channel;
 use std::thread;
 use std::time::Duration;
-use tracing::trace;
 
 /// Time window for debouncing redraw requests.
 const REDRAW_DEBOUNCE: Duration = Duration::from_millis(10);
@@ -134,9 +133,6 @@ impl App<'_> {
         }
 
         let show_login_screen = should_show_login_screen(&config);
-        trace!(
-            "onboarding: show_login_screen: {show_login_screen}, show_trust_screen: {show_trust_screen}"
-        );
         let app_state = if show_login_screen || show_trust_screen {
             let chat_widget_args = ChatWidgetArgs {
                 config: config.clone(),
@@ -412,7 +408,6 @@ impl App<'_> {
                     initial_images,
                     initial_prompt,
                 }) => {
-                    tracing::info!("OnboardingComplete");
                     self.app_state = AppState::Chat {
                         widget: Box::new(ChatWidget::new(
                             config,

@@ -21,6 +21,7 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::TaskCompleteEvent;
+use codex_core::util::is_inside_git_repo;
 use codex_ollama::DEFAULT_OSS_MODEL;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
 use event_processor_with_json_output::EventProcessorWithJsonOutput;
@@ -41,6 +42,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         full_auto,
         dangerously_bypass_approvals_and_sandbox,
         cwd,
+        skip_git_repo_check,
         color,
         last_message_file,
         json: json_mode,
@@ -177,6 +179,11 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     // Print the effective configuration and prompt so users can see what Codex
     // is using.
     event_processor.print_config_summary(&config, &prompt);
+
+    if !skip_git_repo_check && !is_inside_git_repo(&config.cwd.to_path_buf()) {
+        eprintln!("Not inside a trusted directory and --skip-git-repo-check was not specified.");
+        std::process::exit(1);
+    }
 
     let CodexConversation {
         codex: codex_wrapper,
