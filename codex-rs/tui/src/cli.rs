@@ -40,6 +40,10 @@ pub struct Cli {
     #[arg(long = "full-auto", default_value_t = false)]
     pub full_auto: bool,
 
+    /// Automatically run /compact when the remaining model context is 0%.
+    #[arg(long = "auto-compact", default_value_t = false)]
+    pub auto_compact: bool,
+
     /// Skip all confirmation prompts and execute commands without sandboxing.
     /// EXTREMELY DANGEROUS. Intended solely for running in environments that are externally sandboxed.
     #[arg(

@@ -74,6 +74,7 @@ pub(crate) struct App<'a> {
     chat_args: Option<ChatWidgetArgs>,
 
     enhanced_keys_supported: bool,
+    auto_compact: bool,
 }
 
 /// Aggregate parameters needed to create a `ChatWidget`, as creation may be
@@ -84,6 +85,7 @@ struct ChatWidgetArgs {
     initial_prompt: Option<String>,
     initial_images: Vec<PathBuf>,
     enhanced_keys_supported: bool,
+    auto_compact: bool,
 }
 
 impl App<'_> {
@@ -92,6 +94,7 @@ impl App<'_> {
         initial_prompt: Option<String>,
         show_git_warning: bool,
         initial_images: Vec<std::path::PathBuf>,
+        auto_compact: bool,
     ) -> Self {
         let (app_event_tx, app_event_rx) = channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
@@ -153,6 +156,7 @@ impl App<'_> {
                     initial_prompt,
                     initial_images,
                     enhanced_keys_supported,
+                    auto_compact,
                 }),
             )
         } else if show_git_warning {
@@ -165,6 +169,7 @@ impl App<'_> {
                     initial_prompt,
                     initial_images,
                     enhanced_keys_supported,
+                    auto_compact,
                 }),
             )
         } else {
@@ -174,6 +179,7 @@ impl App<'_> {
                 initial_prompt,
                 initial_images,
                 enhanced_keys_supported,
+                auto_compact,
             );
             (
                 AppState::Chat {
@@ -194,6 +200,7 @@ impl App<'_> {
             pending_redraw,
             chat_args,
             enhanced_keys_supported,
+            auto_compact,
         }
     }
 
@@ -336,6 +343,7 @@ impl App<'_> {
                             None,
                             Vec::new(),
                             self.enhanced_keys_supported,
+                            self.auto_compact,
                         ));
                         self.app_state = AppState::Chat { widget: new_widget };
                         self.app_event_tx.send(AppEvent::RequestRedraw);
@@ -528,6 +536,7 @@ impl App<'_> {
                             None,
                             Vec::new(),
                             self.enhanced_keys_supported,
+                            self.auto_compact,
                         )),
                     };
                 }
@@ -552,6 +561,7 @@ impl App<'_> {
                         args.initial_prompt,
                         args.initial_images,
                         args.enhanced_keys_supported,
+                        args.auto_compact,
                     ));
                     self.app_state = AppState::Chat { widget };
                     self.app_event_tx.send(AppEvent::RequestRedraw);

@@ -59,6 +59,7 @@ pub(crate) struct ChatComposer {
     pending_pastes: Vec<(String, String)>,
     token_usage_info: Option<TokenUsageInfo>,
     has_focus: bool,
+    auto_compact_enabled: bool,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -89,6 +90,7 @@ impl ChatComposer {
             pending_pastes: Vec::new(),
             token_usage_info: None,
             has_focus: has_input_focus,
+            auto_compact_enabled: false,
         }
     }
 
@@ -192,6 +194,10 @@ impl ChatComposer {
     pub fn set_ctrl_c_quit_hint(&mut self, show: bool, has_focus: bool) {
         self.ctrl_c_quit_hint = show;
         self.set_has_focus(has_focus);
+    }
+
+    pub(crate) fn set_auto_compact_enabled(&mut self, enabled: bool) {
+        self.auto_compact_enabled = enabled;
     }
 
     /// Handle a key event coming from the main UI.
@@ -710,10 +716,12 @@ impl WidgetRef for &ChatComposer {
                             // percentage.
                             100
                         };
-                        // When https://github.com/openai/codex/issues/1257 is resolved,
-                        // check if `percent_remaining < 25`, and if so, recommend
-                        // /compact.
-                        format!("{BASE_PLACEHOLDER_TEXT} — {percent_remaining}% context left")
+                        let mut s =
+                            format!("{BASE_PLACEHOLDER_TEXT} — {percent_remaining}% context left");
+                        if self.auto_compact_enabled && percent_remaining == 0 {
+                            s.push_str(" (will auto-compact)");
+                        }
+                        s
                     }
                     (total_tokens, None) => {
                         format!("{BASE_PLACEHOLDER_TEXT} — {total_tokens} tokens used")
@@ -722,8 +730,21 @@ impl WidgetRef for &ChatComposer {
             } else {
                 BASE_PLACEHOLDER_TEXT.to_string()
             };
+            // Style turns red when context remaining is below 20%.
+            let mut style = Style::default().dim();
+            if let Some(token_usage_info) = &self.token_usage_info {
+                if let Some(context_window) = token_usage_info.model_context_window {
+                    if context_window > 0 {
+                        let total = token_usage_info.token_usage.total_tokens as f32;
+                        let percent_remaining = 100.0 - (total / context_window as f32 * 100.0);
+                        if percent_remaining < 20.0 {
+                            style = Style::default().fg(Color::Red);
+                        }
+                    }
+                }
+            }
             Line::from(placeholder)
-                .style(Style::default().dim())
+                .style(style)
                 .render_ref(textarea_rect.inner(Margin::new(1, 0)), buf);
         }
     }
@@ -737,6 +758,10 @@ mod tests {
     use crate::bottom_pane::InputResult;
     use crate::bottom_pane::chat_composer::LARGE_PASTE_CHAR_THRESHOLD;
     use crate::bottom_pane::textarea::TextArea;
+    use codex_core::protocol::TokenUsage;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+    use ratatui::style::Color;
 
     #[test]
     fn test_current_at_token_basic_cases() {
@@ -1231,6 +1256,89 @@ mod tests {
                 (false, 0), // After deleting from middle
                 (false, 0), // After deleting from end
             ]
+        );
+    }
+
+    #[test]
+    fn placeholder_appends_auto_compact_when_zero_remaining() {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(true, sender, false);
+        composer.set_auto_compact_enabled(true);
+
+        // Set token usage so that percent remaining is 0% (total == context window)
+        let usage = TokenUsage {
+            input_tokens: 0,
+            cached_input_tokens: None,
+            output_tokens: 0,
+            reasoning_output_tokens: None,
+            total_tokens: 100,
+        };
+        composer.set_token_usage(usage, Some(100));
+
+        // Render and capture the line containing the placeholder
+        let area = Rect::new(0, 0, 80, 3);
+        let mut buf = Buffer::empty(area);
+        (&composer).render_ref(area, &mut buf);
+
+        let mut found = false;
+        for y in 0..area.height {
+            let mut row = String::new();
+            for x in 0..area.width {
+                row.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
+            }
+            if row.contains("0% context left (will auto-compact)") {
+                found = true;
+                break;
+            }
+        }
+        assert!(
+            found,
+            "expected placeholder to include auto-compact note when 0% left"
+        );
+    }
+
+    #[test]
+    fn placeholder_turns_red_below_20_percent_remaining() {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(true, sender, false);
+
+        // Set token usage so that percent remaining is 15% (total 85 / 100)
+        let usage = TokenUsage {
+            input_tokens: 0,
+            cached_input_tokens: None,
+            output_tokens: 0,
+            reasoning_output_tokens: None,
+            total_tokens: 85,
+        };
+        composer.set_token_usage(usage, Some(100));
+
+        let area = Rect::new(0, 0, 80, 3);
+        let mut buf = Buffer::empty(area);
+        (&composer).render_ref(area, &mut buf);
+
+        // Find the row and x position containing the placeholder text
+        let mut red_found = false;
+        for y in 0..area.height {
+            // Build row string to search for the placeholder
+            let mut row = String::new();
+            for x in 0..area.width {
+                row.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
+            }
+            if let Some(pos) = row.find("% context left") {
+                // Inspect a character within the placeholder and check its color
+                let x = pos.saturating_sub(3) as u16; // should land on digits of percentage
+                let style = buf[(x, y)].style();
+                if style.fg == Some(Color::Red) {
+                    red_found = true;
+                    break;
+                }
+            }
+        }
+        assert!(
+            red_found,
+            "expected placeholder to render in red below 20% remaining"
         );
     }
 }
