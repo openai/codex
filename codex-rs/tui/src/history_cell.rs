@@ -125,8 +125,6 @@ pub(crate) enum HistoryCell {
 
 const TOOL_CALL_MAX_LINES: usize = 3;
 
-// title_case helper removed to keep plan output unchanged from source
-
 impl HistoryCell {
     /// Return a cloned, plain representation of the cell's lines suitable for
     /// one‑shot insertion into the terminal scrollback. Image cells are
@@ -469,6 +467,7 @@ impl HistoryCell {
 
         lines.push(Line::from(""));
 
+        // Auth
         if let Ok(auth) = try_read_auth_json(&config.codex_home.join("auth.json"))
             && auth.tokens.is_some()
         {
@@ -501,7 +500,7 @@ impl HistoryCell {
             lines.push(Line::from(""));
         }
 
-        // token usage
+        // Token usage
         lines.push(Line::from("token usage".bold()));
         lines.push(Line::from(vec![
             "  input: ".bold(),
