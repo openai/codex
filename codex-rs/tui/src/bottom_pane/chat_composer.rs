@@ -8,6 +8,7 @@ use ratatui::layout::Layout;
 use ratatui::layout::Margin;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
+use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::style::Styled;
 use ratatui::style::Stylize;
@@ -666,7 +667,7 @@ impl WidgetRef for &ChatComposer {
             ActivePopup::None => {
                 let bottom_line_rect = popup_rect;
                 let key_hint_style = Style::default().fg(Color::Cyan);
-                let hint = if self.ctrl_c_quit_hint {
+                let mut hint = if self.ctrl_c_quit_hint {
                     vec![
                         Span::from(" "),
                         "Ctrl+C again".set_style(key_hint_style),
@@ -688,6 +689,31 @@ impl WidgetRef for &ChatComposer {
                         Span::from(" quit"),
                     ]
                 };
+
+                // Append token/context usage info to the footer hints when available.
+                if let Some(token_usage_info) = &self.token_usage_info {
+                    let token_usage = &token_usage_info.token_usage;
+                    hint.push(Span::from("   "));
+                    hint.push(
+                        Span::from(format!("{} tokens used", token_usage.total_tokens))
+                            .style(Style::default().add_modifier(Modifier::DIM)),
+                    );
+                    if let Some(context_window) = token_usage_info.model_context_window {
+                        let percent_remaining: u8 = if context_window > 0 {
+                            let percent = 100.0
+                                - (token_usage.total_tokens as f32 / context_window as f32 * 100.0);
+                            percent.clamp(0.0, 100.0) as u8
+                        } else {
+                            100
+                        };
+                        hint.push(Span::from("   "));
+                        hint.push(
+                            Span::from(format!("{percent_remaining}% context left"))
+                                .style(Style::default().add_modifier(Modifier::DIM)),
+                        );
+                    }
+                }
+
                 Line::from(hint)
                     .style(Style::default().dim())
                     .render_ref(bottom_line_rect, buf);
@@ -712,34 +738,7 @@ impl WidgetRef for &ChatComposer {
         let mut state = self.textarea_state.borrow_mut();
         StatefulWidgetRef::render_ref(&(&self.textarea), textarea_rect, buf, &mut state);
         if self.textarea.text().is_empty() {
-            let placeholder = if let Some(token_usage_info) = &self.token_usage_info {
-                let token_usage = &token_usage_info.token_usage;
-                let model_context_window = token_usage_info.model_context_window;
-                match (token_usage.total_tokens, model_context_window) {
-                    (total_tokens, Some(context_window)) => {
-                        let percent_remaining: u8 = if context_window > 0 {
-                            // Calculate the percentage of context left.
-                            let percent =
-                                100.0 - (total_tokens as f32 / context_window as f32 * 100.0);
-                            percent.clamp(0.0, 100.0) as u8
-                        } else {
-                            // If we don't have a context window, we cannot compute the
-                            // percentage.
-                            100
-                        };
-                        // When https://github.com/openai/codex/issues/1257 is resolved,
-                        // check if `percent_remaining < 25`, and if so, recommend
-                        // /compact.
-                        format!("{BASE_PLACEHOLDER_TEXT} — {percent_remaining}% context left")
-                    }
-                    (total_tokens, None) => {
-                        format!("{BASE_PLACEHOLDER_TEXT} — {total_tokens} tokens used")
-                    }
-                }
-            } else {
-                BASE_PLACEHOLDER_TEXT.to_string()
-            };
-            Line::from(placeholder)
+            Line::from(BASE_PLACEHOLDER_TEXT)
                 .style(Style::default().dim())
                 .render_ref(textarea_rect.inner(Margin::new(1, 0)), buf);
         }
