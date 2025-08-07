@@ -44,6 +44,7 @@ pub struct Cli {
     /// EXTREMELY DANGEROUS. Intended solely for running in environments that are externally sandboxed.
     #[arg(
         long = "dangerously-bypass-approvals-and-sandbox",
+        alias = "yolo",
         default_value_t = false,
         conflicts_with_all = ["approval_policy", "full_auto"]
     )]
@@ -52,10 +53,6 @@ pub struct Cli {
     /// Tell the agent to use the specified directory as its working root.
     #[clap(long = "cd", short = 'C', value_name = "DIR")]
     pub cwd: Option<PathBuf>,
-
-    /// Allow running Codex outside a Git repository.
-    #[arg(long = "skip-git-repo-check", default_value_t = false)]
-    pub skip_git_repo_check: bool,
 
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,

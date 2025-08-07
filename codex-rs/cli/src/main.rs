@@ -10,6 +10,7 @@ use codex_cli::SeatbeltCommand;
 use codex_cli::login::run_login_status;
 use codex_cli::login::run_login_with_api_key;
 use codex_cli::login::run_login_with_chatgpt;
+use codex_cli::login::run_logout;
 use codex_cli::proto;
 use codex_common::CliConfigOverrides;
 use codex_exec::Cli as ExecCli;
@@ -47,6 +48,9 @@ enum Subcommand {
 
     /// Manage login.
     Login(LoginCommand),
+
+    /// Remove stored authentication credentials.
+    Logout(LogoutCommand),
 
     /// Experimental: run Codex as an MCP server.
     Mcp,
@@ -106,6 +110,12 @@ enum LoginSubcommand {
     Status,
 }
 
+#[derive(Debug, Parser)]
+struct LogoutCommand {
+    #[clap(skip)]
+    config_overrides: CliConfigOverrides,
+}
+
 fn main() -> anyhow::Result<()> {
     arg0_dispatch_or_else(|codex_linux_sandbox_exe| async move {
         cli_main(codex_linux_sandbox_exe).await?;
@@ -121,7 +131,9 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             let mut tui_cli = cli.interactive;
             prepend_config_flags(&mut tui_cli.config_overrides, cli.config_overrides);
             let usage = codex_tui::run_main(tui_cli, codex_linux_sandbox_exe).await?;
-            println!("{}", codex_core::protocol::FinalOutput::from(usage));
+            if !usage.is_zero() {
+                println!("{}", codex_core::protocol::FinalOutput::from(usage));
+            }
         }
         Some(Subcommand::Exec(mut exec_cli)) => {
             prepend_config_flags(&mut exec_cli.config_overrides, cli.config_overrides);
@@ -144,6 +156,10 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                     }
                 }
             }
+        }
+        Some(Subcommand::Logout(mut logout_cli)) => {
+            prepend_config_flags(&mut logout_cli.config_overrides, cli.config_overrides);
+            run_logout(logout_cli.config_overrides).await;
         }
         Some(Subcommand::Proto(mut proto_cli)) => {
             prepend_config_flags(&mut proto_cli.config_overrides, cli.config_overrides);

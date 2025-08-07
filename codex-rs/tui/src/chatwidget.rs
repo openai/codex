@@ -45,7 +45,6 @@ use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
 use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::InputResult;
-use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell::CommandOutput;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::PatchEventType;
@@ -67,7 +66,8 @@ pub(crate) struct ChatWidget<'a> {
     active_history_cell: Option<HistoryCell>,
     config: Config,
     initial_user_message: Option<UserMessage>,
-    token_usage: TokenUsage,
+    total_token_usage: TokenUsage,
+    last_token_usage: TokenUsage,
     reasoning_buffer: String,
     content_buffer: String,
     // Buffer for streaming assistant answer text; we do not surface partial
@@ -110,6 +110,22 @@ fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Optio
 }
 
 impl ChatWidget<'_> {
+    fn interrupt_running_task(&mut self) {
+        if self.bottom_pane.is_task_running() {
+            self.active_history_cell = None;
+            self.bottom_pane.clear_ctrl_c_quit_hint();
+            self.submit_op(Op::Interrupt);
+            self.bottom_pane.set_task_running(false);
+            self.bottom_pane.clear_live_ring();
+            self.live_builder = RowBuilder::new(self.live_builder.width());
+            self.current_stream = None;
+            self.stream_header_emitted = false;
+            self.answer_buffer.clear();
+            self.reasoning_buffer.clear();
+            self.content_buffer.clear();
+            self.request_redraw();
+        }
+    }
     fn layout_areas(&self, area: Rect) -> [Rect; 2] {
         Layout::vertical([
             Constraint::Max(
@@ -198,7 +214,8 @@ impl ChatWidget<'_> {
                 initial_prompt.unwrap_or_default(),
                 initial_images,
             ),
-            token_usage: TokenUsage::default(),
+            total_token_usage: TokenUsage::default(),
+            last_token_usage: TokenUsage::default(),
             reasoning_buffer: String::new(),
             content_buffer: String::new(),
             answer_buffer: String::new(),
@@ -361,9 +378,13 @@ impl ChatWidget<'_> {
                 self.request_redraw();
             }
             EventMsg::TokenCount(token_usage) => {
-                self.token_usage = add_token_usage(&self.token_usage, &token_usage);
-                self.bottom_pane
-                    .set_token_usage(self.token_usage.clone(), self.config.model_context_window);
+                self.total_token_usage = add_token_usage(&self.total_token_usage, &token_usage);
+                self.last_token_usage = token_usage;
+                self.bottom_pane.set_token_usage(
+                    self.total_token_usage.clone(),
+                    self.last_token_usage.clone(),
+                    self.config.model_context_window,
+                );
             }
             EventMsg::Error(ErrorEvent { message }) => {
                 self.add_to_history(HistoryCell::new_error_event(message.clone()));
@@ -388,17 +409,6 @@ impl ChatWidget<'_> {
                 reason,
             }) => {
                 self.finalize_active_stream();
-                // Log a background summary immediately so the history is chronological.
-                let cmdline = strip_bash_lc_and_escape(&command);
-                let text = format!(
-                    "command requires approval:\n$ {cmdline}{reason}",
-                    reason = reason
-                        .as_ref()
-                        .map(|r| format!("\n{r}"))
-                        .unwrap_or_default()
-                );
-                self.add_to_history(HistoryCell::new_background_event(text));
-
                 let request = ApprovalRequest::Exec {
                     id,
                     command,
@@ -471,16 +481,14 @@ impl ChatWidget<'_> {
                 ));
             }
             EventMsg::PatchApplyEnd(event) => {
-                self.add_to_history(HistoryCell::new_patch_apply_end(
-                    event.stdout,
-                    event.stderr,
-                    event.success,
-                ));
+                if !event.success {
+                    self.add_to_history(HistoryCell::new_patch_apply_failure(event.stderr));
+                }
             }
             EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                 call_id,
                 exit_code,
-                duration,
+                duration: _,
                 stdout,
                 stderr,
             }) => {
@@ -493,7 +501,6 @@ impl ChatWidget<'_> {
                         exit_code,
                         stdout,
                         stderr,
-                        duration,
                     },
                 ));
             }
@@ -562,8 +569,12 @@ impl ChatWidget<'_> {
     pub(crate) fn add_status_output(&mut self) {
         self.add_to_history(HistoryCell::new_status_output(
             &self.config,
-            &self.token_usage,
+            &self.total_token_usage,
         ));
+    }
+
+    pub(crate) fn add_prompts_output(&mut self) {
+        self.add_to_history(HistoryCell::new_prompts_output());
     }
 
     /// Forward file-search results to the bottom pane.
@@ -580,18 +591,7 @@ impl ChatWidget<'_> {
             CancellationEvent::Ignored => {}
         }
         if self.bottom_pane.is_task_running() {
-            self.active_history_cell = None;
-            self.bottom_pane.clear_ctrl_c_quit_hint();
-            self.submit_op(Op::Interrupt);
-            self.bottom_pane.set_task_running(false);
-            self.bottom_pane.clear_live_ring();
-            self.live_builder = RowBuilder::new(self.live_builder.width());
-            self.current_stream = None;
-            self.stream_header_emitted = false;
-            self.answer_buffer.clear();
-            self.reasoning_buffer.clear();
-            self.content_buffer.clear();
-            self.request_redraw();
+            self.interrupt_running_task();
             CancellationEvent::Ignored
         } else if self.bottom_pane.ctrl_c_quit_hint_visible() {
             self.submit_op(Op::Shutdown);
@@ -600,6 +600,10 @@ impl ChatWidget<'_> {
             self.bottom_pane.show_ctrl_c_quit_hint();
             CancellationEvent::Ignored
         }
+    }
+
+    pub(crate) fn on_ctrl_z(&mut self) {
+        self.interrupt_running_task();
     }
 
     pub(crate) fn composer_is_empty(&self) -> bool {
@@ -624,13 +628,16 @@ impl ChatWidget<'_> {
     }
 
     pub(crate) fn token_usage(&self) -> &TokenUsage {
-        &self.token_usage
+        &self.total_token_usage
     }
 
     pub(crate) fn clear_token_usage(&mut self) {
-        self.token_usage = TokenUsage::default();
-        self.bottom_pane
-            .set_token_usage(self.token_usage.clone(), self.config.model_context_window);
+        self.total_token_usage = TokenUsage::default();
+        self.bottom_pane.set_token_usage(
+            self.total_token_usage.clone(),
+            self.last_token_usage.clone(),
+            self.config.model_context_window,
+        );
     }
 
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {

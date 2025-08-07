@@ -1,4 +1,6 @@
+use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
+use crate::slash_command::SlashCommand;
 use crate::text_block::TextBlock;
 use crate::text_formatting::format_and_truncate_tool_result;
 use base64::Engine;
@@ -11,8 +13,11 @@ use codex_core::plan_tool::StepStatus;
 use codex_core::plan_tool::UpdatePlanArgs;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::McpInvocation;
+use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::TokenUsage;
+use codex_login::get_auth_file;
+use codex_login::try_read_auth_json;
 use image::DynamicImage;
 use image::ImageReader;
 use mcp_types::EmbeddedResourceResource;
@@ -36,7 +41,12 @@ pub(crate) struct CommandOutput {
     pub(crate) exit_code: i32,
     pub(crate) stdout: String,
     pub(crate) stderr: String,
-    pub(crate) duration: Duration,
+}
+
+struct FileSummary {
+    display_path: String,
+    added: usize,
+    removed: usize,
 }
 
 pub(crate) enum PatchEventType {
@@ -101,6 +111,9 @@ pub(crate) enum HistoryCell {
     /// Output from the `/status` command.
     StatusOutput { view: TextBlock },
 
+    /// Output from the `/prompts` command.
+    PromptsOutput { view: TextBlock },
+
     /// Error event from the backend.
     ErrorEvent { view: TextBlock },
 
@@ -120,7 +133,28 @@ pub(crate) enum HistoryCell {
     PatchApplyResult { view: TextBlock },
 }
 
-const TOOL_CALL_MAX_LINES: usize = 5;
+const TOOL_CALL_MAX_LINES: usize = 3;
+
+fn title_case(s: &str) -> String {
+    if s.is_empty() {
+        return String::new();
+    }
+    let mut chars = s.chars();
+    let first = match chars.next() {
+        Some(c) => c,
+        None => return String::new(),
+    };
+    let rest: String = chars.as_str().to_ascii_lowercase();
+    first.to_uppercase().collect::<String>() + &rest
+}
+
+fn pretty_provider_name(id: &str) -> String {
+    if id.eq_ignore_ascii_case("openai") {
+        "OpenAI".to_string()
+    } else {
+        title_case(id)
+    }
+}
 
 impl HistoryCell {
     /// Return a cloned, plain representation of the cell's lines suitable for
@@ -133,6 +167,7 @@ impl HistoryCell {
             | HistoryCell::BackgroundEvent { view }
             | HistoryCell::GitDiffOutput { view }
             | HistoryCell::StatusOutput { view }
+            | HistoryCell::PromptsOutput { view }
             | HistoryCell::ErrorEvent { view }
             | HistoryCell::SessionInfo { view }
             | HistoryCell::CompletedExecCommand { view }
@@ -166,32 +201,35 @@ impl HistoryCell {
     ) -> Self {
         let SessionConfiguredEvent {
             model,
-            session_id,
+            session_id: _,
             history_log_id: _,
             history_entry_count: _,
         } = event;
         if is_first_event {
-            const VERSION: &str = env!("CARGO_PKG_VERSION");
+            let cwd_str = match relativize_to_home(&config.cwd) {
+                Some(rel) if !rel.as_os_str().is_empty() => format!("~/{}", rel.display()),
+                Some(_) => "~".to_string(),
+                None => config.cwd.display().to_string(),
+            };
 
-            let mut lines: Vec<Line<'static>> = vec![
+            let lines: Vec<Line<'static>> = vec![
                 Line::from(vec![
-                    "OpenAI ".into(),
-                    "Codex".bold(),
-                    format!(" v{VERSION}").into(),
-                    " (research preview)".dim(),
+                    Span::raw(">_ ").dim(),
+                    Span::styled(
+                        "You are using OpenAI Codex in",
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(format!(" {cwd_str}")).dim(),
                 ]),
-                Line::from(""),
-                Line::from(vec![
-                    "codex session".magenta().bold(),
-                    " ".into(),
-                    session_id.to_string().dim(),
-                ]),
+                Line::from("".dim()),
+                Line::from(" To get started, describe a task or try one of these commands:".dim()),
+                Line::from("".dim()),
+                Line::from(format!(" /init - {}", SlashCommand::Init.description()).dim()),
+                Line::from(format!(" /status - {}", SlashCommand::Status.description()).dim()),
+                Line::from(format!(" /diff - {}", SlashCommand::Diff.description()).dim()),
+                Line::from(format!(" /prompts - {}", SlashCommand::Prompts.description()).dim()),
+                Line::from("".dim()),
             ];
-
-            for (key, value) in create_config_summary_entries(config) {
-                lines.push(Line::from(vec![format!("{key}: ").bold(), value.into()]));
-            }
-            lines.push(Line::from(""));
             HistoryCell::WelcomeMessage {
                 view: TextBlock::new(lines),
             }
@@ -227,8 +265,11 @@ impl HistoryCell {
         let command_escaped = strip_bash_lc_and_escape(&command);
 
         let lines: Vec<Line<'static>> = vec![
-            Line::from(vec!["command".magenta(), " running...".dim()]),
-            Line::from(format!("$ {command_escaped}")),
+            Line::from(vec![
+                "▌ ".cyan(),
+                "Running command ".magenta(),
+                command_escaped.into(),
+            ]),
             Line::from(""),
         ];
 
@@ -242,34 +283,36 @@ impl HistoryCell {
             exit_code,
             stdout,
             stderr,
-            duration,
         } = output;
 
         let mut lines: Vec<Line<'static>> = Vec::new();
-
-        // Title depends on whether we have output yet.
-        let title_line = Line::from(vec![
-            "command".magenta(),
-            format!(
-                " (code: {}, duration: {})",
-                exit_code,
-                format_duration(duration)
-            )
-            .dim(),
-        ]);
-        lines.push(title_line);
+        let command_escaped = strip_bash_lc_and_escape(&command);
+        lines.push(Line::from(vec![
+            "⚡ Ran command ".magenta(),
+            command_escaped.into(),
+        ]));
 
         let src = if exit_code == 0 { stdout } else { stderr };
 
-        let cmdline = strip_bash_lc_and_escape(&command);
-        lines.push(Line::from(format!("$ {cmdline}")));
         let mut lines_iter = src.lines();
-        for raw in lines_iter.by_ref().take(TOOL_CALL_MAX_LINES) {
-            lines.push(ansi_escape_line(raw).dim());
+        for (idx, raw) in lines_iter.by_ref().take(TOOL_CALL_MAX_LINES).enumerate() {
+            let mut line = ansi_escape_line(raw);
+            let prefix = if idx == 0 { "  ⎿ " } else { "    " };
+            line.spans.insert(0, prefix.into());
+            line.spans.iter_mut().for_each(|span| {
+                span.style = span.style.add_modifier(Modifier::DIM);
+            });
+            lines.push(line);
         }
         let remaining = lines_iter.count();
         if remaining > 0 {
-            lines.push(Line::from(format!("... {remaining} additional lines")).dim());
+            let mut more = Line::from(format!("... +{remaining} lines"));
+            // Continuation/ellipsis is treated as a subsequent line for prefixing
+            more.spans.insert(0, "    ".into());
+            more.spans.iter_mut().for_each(|span| {
+                span.style = span.style.add_modifier(Modifier::DIM);
+            });
+            lines.push(more);
         }
         lines.push(Line::from(""));
 
@@ -418,7 +461,8 @@ impl HistoryCell {
             view: TextBlock::new(lines),
         }
     }
-
+    // allow dead code for now. maybe we'll use it again.
+    #[allow(dead_code)]
     pub(crate) fn new_background_event(message: String) -> Self {
         let mut lines: Vec<Line<'static>> = Vec::new();
         lines.push(Line::from("event".dim()));
@@ -449,37 +493,125 @@ impl HistoryCell {
         let mut lines: Vec<Line<'static>> = Vec::new();
         lines.push(Line::from("/status".magenta()));
 
-        // Config
-        for (key, value) in create_config_summary_entries(config) {
-            lines.push(Line::from(vec![format!("{key}: ").bold(), value.into()]));
+        let config_entries = create_config_summary_entries(config);
+        let lookup = |k: &str| -> String {
+            config_entries
+                .iter()
+                .find(|(key, _)| *key == k)
+                .map(|(_, v)| v.clone())
+                .unwrap_or_default()
+        };
+
+        // 📂 Workspace
+        lines.push(Line::from(vec!["📂 ".into(), "Workspace".bold()]));
+        // Path (home-relative, e.g., ~/code/project)
+        let cwd_str = match relativize_to_home(&config.cwd) {
+            Some(rel) if !rel.as_os_str().is_empty() => format!("~/{}", rel.display()),
+            Some(_) => "~".to_string(),
+            None => config.cwd.display().to_string(),
+        };
+        lines.push(Line::from(vec!["  • Path: ".into(), cwd_str.into()]));
+        // Approval mode (as-is)
+        lines.push(Line::from(vec![
+            "  • Approval Mode: ".into(),
+            lookup("approval").into(),
+        ]));
+        // Sandbox (simplified name only)
+        let sandbox_name = match &config.sandbox_policy {
+            SandboxPolicy::DangerFullAccess => "danger-full-access",
+            SandboxPolicy::ReadOnly => "read-only",
+            SandboxPolicy::WorkspaceWrite { .. } => "workspace-write",
+        };
+        lines.push(Line::from(vec![
+            "  • Sandbox: ".into(),
+            sandbox_name.into(),
+        ]));
+
+        lines.push(Line::from(""));
+
+        // 👤 Account (only if ChatGPT tokens exist), shown under the first block
+        let auth_file = get_auth_file(&config.codex_home);
+        if let Ok(auth) = try_read_auth_json(&auth_file) {
+            if let Some(tokens) = auth.tokens.clone() {
+                lines.push(Line::from(vec!["👤 ".into(), "Account".bold()]));
+                lines.push(Line::from("  • Signed in with ChatGPT"));
+
+                let info = tokens.id_token;
+                if let Some(email) = info.email {
+                    lines.push(Line::from(vec!["  • Login: ".into(), email.into()]));
+                }
+
+                match auth.openai_api_key.as_deref() {
+                    Some(key) if !key.is_empty() => {
+                        lines.push(Line::from(
+                            "  • Using API key. Run codex login to use ChatGPT plan",
+                        ));
+                    }
+                    _ => {
+                        let plan_text = info
+                            .chatgpt_plan_type
+                            .as_deref()
+                            .map(title_case)
+                            .unwrap_or_else(|| "Unknown".to_string());
+                        lines.push(Line::from(vec!["  • Plan: ".into(), plan_text.into()]));
+                    }
+                }
+
+                lines.push(Line::from(""));
+            }
         }
 
-        // Token usage
+        // 🧠 Model
+        lines.push(Line::from(vec!["🧠 ".into(), "Model".bold()]));
+        lines.push(Line::from(vec![
+            "  • Name: ".into(),
+            config.model.clone().into(),
+        ]));
+        let provider_disp = pretty_provider_name(&config.model_provider_id);
+        lines.push(Line::from(vec![
+            "  • Provider: ".into(),
+            provider_disp.into(),
+        ]));
+        // Only show Reasoning fields if present in config summary
+        let reff = lookup("reasoning effort");
+        if !reff.is_empty() {
+            lines.push(Line::from(vec![
+                "  • Reasoning Effort: ".into(),
+                title_case(&reff).into(),
+            ]));
+        }
+        let rsum = lookup("reasoning summaries");
+        if !rsum.is_empty() {
+            lines.push(Line::from(vec![
+                "  • Reasoning Summaries: ".into(),
+                title_case(&rsum).into(),
+            ]));
+        }
+
         lines.push(Line::from(""));
-        lines.push(Line::from("token usage".bold()));
+
+        // 📊 Token Usage
+        lines.push(Line::from(vec!["📊 ".into(), "Token Usage".bold()]));
+        // Input: <input> [+ <cached> cached]
+        let mut input_line_spans: Vec<Span<'static>> = vec![
+            "  • Input: ".into(),
+            usage.non_cached_input().to_string().into(),
+        ];
+        if let Some(cached) = usage.cached_input_tokens {
+            if cached > 0 {
+                input_line_spans.push(format!(" (+ {cached} cached)").into());
+            }
+        }
+        lines.push(Line::from(input_line_spans));
+        // Output: <output>
         lines.push(Line::from(vec![
-            "  input: ".bold(),
-            usage.input_tokens.to_string().into(),
-        ]));
-        lines.push(Line::from(vec![
-            "  cached input: ".bold(),
-            usage.cached_input_tokens.unwrap_or(0).to_string().into(),
-        ]));
-        lines.push(Line::from(vec![
-            "  output: ".bold(),
+            "  • Output: ".into(),
             usage.output_tokens.to_string().into(),
         ]));
+        // Total: <total>
         lines.push(Line::from(vec![
-            "  reasoning output: ".bold(),
-            usage
-                .reasoning_output_tokens
-                .unwrap_or(0)
-                .to_string()
-                .into(),
-        ]));
-        lines.push(Line::from(vec![
-            "  total: ".bold(),
-            usage.total_tokens.to_string().into(),
+            "  • Total: ".into(),
+            usage.blended_total().to_string().into(),
         ]));
 
         lines.push(Line::from(""));
@@ -488,58 +620,73 @@ impl HistoryCell {
         }
     }
 
-    pub(crate) fn new_error_event(message: String) -> Self {
+    pub(crate) fn new_prompts_output() -> Self {
         let lines: Vec<Line<'static>> = vec![
-            vec!["ERROR: ".red().bold(), message.into()].into(),
-            "".into(),
+            Line::from("/prompts".magenta()),
+            Line::from(""),
+            Line::from(" 1. Explain this codebase"),
+            Line::from(" 2. Summarize recent commits"),
+            Line::from(" 3. Implement {feature}"),
+            Line::from(" 4. Find and fix a bug in @filename"),
+            Line::from(" 5. Write tests for @filename"),
+            Line::from(" 6. Improve documentation in @filename"),
+            Line::from(""),
         ];
+        HistoryCell::PromptsOutput {
+            view: TextBlock::new(lines),
+        }
+    }
+
+    pub(crate) fn new_error_event(message: String) -> Self {
+        let lines: Vec<Line<'static>> =
+            vec![vec!["🖐 ".red().bold(), message.into()].into(), "".into()];
         HistoryCell::ErrorEvent {
             view: TextBlock::new(lines),
         }
     }
 
-    /// Render a user‑friendly plan update with colourful status icons and a
-    /// simple progress indicator so users can follow along.
+    /// Render a user‑friendly plan update styled like a checkbox todo list.
     pub(crate) fn new_plan_update(update: UpdatePlanArgs) -> Self {
         let UpdatePlanArgs { explanation, plan } = update;
 
         let mut lines: Vec<Line<'static>> = Vec::new();
+        // Header with progress summary
+        let total = plan.len();
+        let completed = plan
+            .iter()
+            .filter(|p| matches!(p.status, StepStatus::Completed))
+            .count();
 
-        // Title
-        lines.push(Line::from("plan".magenta().bold()));
+        let width: usize = 10;
+        let filled = if total > 0 {
+            (completed * width + total / 2) / total
+        } else {
+            0
+        };
+        let empty = width.saturating_sub(filled);
 
-        if !plan.is_empty() {
-            // Progress bar – show completed/total with a visual bar
-            let total = plan.len();
-            let completed = plan
-                .iter()
-                .filter(|p| matches!(p.status, StepStatus::Completed))
-                .count();
-            let width: usize = 20;
-            let filled = (completed * width + total / 2) / total;
-            let empty = width.saturating_sub(filled);
-            let mut bar_spans: Vec<Span> = Vec::new();
-            if filled > 0 {
-                bar_spans.push(Span::styled(
-                    "█".repeat(filled),
-                    Style::default().fg(Color::Green),
-                ));
-            }
-            if empty > 0 {
-                bar_spans.push(Span::styled(
-                    "░".repeat(empty),
-                    Style::default().fg(Color::Gray),
-                ));
-            }
-            let progress_prefix = Span::raw("progress [");
-            let progress_suffix = Span::raw("] ");
-            let fraction = Span::raw(format!("{completed}/{total}"));
-            let mut progress_line_spans = vec![progress_prefix];
-            progress_line_spans.extend(bar_spans);
-            progress_line_spans.push(progress_suffix);
-            progress_line_spans.push(fraction);
-            lines.push(Line::from(progress_line_spans));
+        let mut header: Vec<Span> = Vec::new();
+        header.push(Span::raw("📋"));
+        header.push(Span::styled(
+            " Updated",
+            Style::default().add_modifier(Modifier::BOLD).magenta(),
+        ));
+        header.push(Span::raw(" to do list ["));
+        if filled > 0 {
+            header.push(Span::styled(
+                "█".repeat(filled),
+                Style::default().fg(Color::Green),
+            ));
         }
+        if empty > 0 {
+            header.push(Span::styled(
+                "░".repeat(empty),
+                Style::default().fg(Color::Gray),
+            ));
+        }
+        header.push(Span::raw("] "));
+        header.push(Span::raw(format!("{completed}/{total}")));
+        lines.push(Line::from(header));
 
         // Optional explanation/note from the model
         if let Some(expl) = explanation.and_then(|s| {
@@ -552,22 +699,48 @@ impl HistoryCell {
             }
         }
 
-        // Steps (1‑based numbering) with fun, readable status icons
+        // Steps styled as checkbox items
         if plan.is_empty() {
             lines.push(Line::from("(no steps provided)".gray().italic()));
         } else {
             for (idx, PlanItemArg { step, status }) in plan.into_iter().enumerate() {
-                let num = idx + 1;
-                let icon_span: Span = match status {
-                    StepStatus::Completed => Span::from("✓").fg(Color::Green),
-                    StepStatus::InProgress => Span::from("▶").fg(Color::Yellow).bold(),
-                    StepStatus::Pending => Span::from("○").fg(Color::Gray),
+                let (box_span, text_span) = match status {
+                    StepStatus::Completed => (
+                        Span::styled("✔", Style::default().fg(Color::Green)),
+                        Span::styled(
+                            step,
+                            Style::default()
+                                .fg(Color::Gray)
+                                .add_modifier(Modifier::CROSSED_OUT | Modifier::DIM),
+                        ),
+                    ),
+                    StepStatus::InProgress => (
+                        Span::raw("□"),
+                        Span::styled(
+                            step,
+                            Style::default()
+                                .fg(Color::Blue)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                    ),
+                    StepStatus::Pending => (
+                        Span::raw("□"),
+                        Span::styled(
+                            step,
+                            Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
+                        ),
+                    ),
+                };
+                let prefix = if idx == 0 {
+                    Span::raw("  ⎿ ")
+                } else {
+                    Span::raw("    ")
                 };
                 lines.push(Line::from(vec![
-                    format!("{num:>2}. [").into(),
-                    icon_span,
-                    "] ".into(),
-                    step.into(),
+                    prefix,
+                    box_span,
+                    Span::raw(" "),
+                    text_span,
                 ]));
             }
         }
@@ -590,12 +763,12 @@ impl HistoryCell {
             PatchEventType::ApprovalRequest => "proposed patch",
             PatchEventType::ApplyBegin {
                 auto_approved: true,
-            } => "applying patch",
+            } => "✏️ Applying patch",
             PatchEventType::ApplyBegin {
                 auto_approved: false,
             } => {
                 let lines: Vec<Line<'static>> = vec![
-                    Line::from("applying patch".magenta().bold()),
+                    Line::from("✏️ Applying patch".magenta().bold()),
                     Line::from(""),
                 ];
                 return Self::PendingPatch {
@@ -604,39 +777,12 @@ impl HistoryCell {
             }
         };
 
-        let summary_lines = create_diff_summary(changes);
+        let summary_lines = create_diff_summary(title, changes);
 
         let mut lines: Vec<Line<'static>> = Vec::new();
 
-        // Header similar to the command formatter so patches are visually
-        // distinct while still fitting the overall colour scheme.
-        lines.push(Line::from(title.magenta().bold()));
-
         for line in summary_lines {
-            if line.starts_with('+') {
-                lines.push(line.green().into());
-            } else if line.starts_with('-') {
-                lines.push(line.red().into());
-            } else if let Some(space_idx) = line.find(' ') {
-                let kind_owned = line[..space_idx].to_string();
-                let rest_owned = line[space_idx + 1..].to_string();
-
-                let style_for = |fg: Color| Style::default().fg(fg).add_modifier(Modifier::BOLD);
-
-                let styled_kind = match kind_owned.as_str() {
-                    "A" => RtSpan::styled(kind_owned.clone(), style_for(Color::Green)),
-                    "D" => RtSpan::styled(kind_owned.clone(), style_for(Color::Red)),
-                    "M" => RtSpan::styled(kind_owned.clone(), style_for(Color::Yellow)),
-                    "R" | "C" => RtSpan::styled(kind_owned.clone(), style_for(Color::Cyan)),
-                    _ => RtSpan::raw(kind_owned.clone()),
-                };
-
-                let styled_line =
-                    RtLine::from(vec![styled_kind, RtSpan::raw(" "), RtSpan::raw(rest_owned)]);
-                lines.push(styled_line);
-            } else {
-                lines.push(Line::from(line));
-            }
+            lines.push(line);
         }
 
         lines.push(Line::from(""));
@@ -646,44 +792,23 @@ impl HistoryCell {
         }
     }
 
-    pub(crate) fn new_patch_apply_end(stdout: String, stderr: String, success: bool) -> Self {
+    pub(crate) fn new_patch_apply_failure(stderr: String) -> Self {
         let mut lines: Vec<Line<'static>> = Vec::new();
 
-        let status = if success {
-            RtSpan::styled("patch applied", Style::default().fg(Color::Green))
-        } else {
-            RtSpan::styled(
-                "patch failed",
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-            )
-        };
-        lines.push(RtLine::from(vec![
-            "patch".magenta().bold(),
-            " ".into(),
-            status,
-        ]));
+        // Failure title
+        lines.push(Line::from("✘ Failed to apply patch".magenta().bold()));
 
-        let src = if success {
-            if stdout.trim().is_empty() {
-                &stderr
-            } else {
-                &stdout
-            }
-        } else if stderr.trim().is_empty() {
-            &stdout
-        } else {
-            &stderr
-        };
-
-        if !src.trim().is_empty() {
-            lines.push(Line::from(""));
-            let mut iter = src.lines();
-            for raw in iter.by_ref().take(TOOL_CALL_MAX_LINES) {
-                lines.push(ansi_escape_line(raw).dim());
+        if !stderr.trim().is_empty() {
+            let mut iter = stderr.lines();
+            for (i, raw) in iter.by_ref().take(TOOL_CALL_MAX_LINES).enumerate() {
+                let prefix = if i == 0 { "  ⎿ " } else { "    " };
+                let s = format!("{prefix}{raw}");
+                lines.push(ansi_escape_line(&s).dim());
             }
             let remaining = iter.count();
             if remaining > 0 {
-                lines.push(Line::from(format!("... {remaining} additional lines")).dim());
+                lines.push(Line::from(""));
+                lines.push(Line::from(format!("... +{remaining} lines")).dim());
             }
         }
 
@@ -703,36 +828,138 @@ impl WidgetRef for &HistoryCell {
     }
 }
 
-fn create_diff_summary(changes: HashMap<PathBuf, FileChange>) -> Vec<String> {
-    // Build a concise, human‑readable summary list similar to the
-    // `git status` short format so the user can reason about the
-    // patch without scrolling.
-    let mut summaries: Vec<String> = Vec::new();
+fn create_diff_summary(title: &str, changes: HashMap<PathBuf, FileChange>) -> Vec<RtLine<'static>> {
+    let mut files: Vec<FileSummary> = Vec::new();
+
+    // Count additions/deletions from a unified diff body
+    let count_from_unified = |diff: &str| -> (usize, usize) {
+        if let Ok(patch) = diffy::Patch::from_str(diff) {
+            let mut adds = 0usize;
+            let mut dels = 0usize;
+            for hunk in patch.hunks() {
+                for line in hunk.lines() {
+                    match line {
+                        diffy::Line::Insert(_) => adds += 1,
+                        diffy::Line::Delete(_) => dels += 1,
+                        _ => {}
+                    }
+                }
+            }
+            (adds, dels)
+        } else {
+            let mut adds = 0usize;
+            let mut dels = 0usize;
+            for l in diff.lines() {
+                if l.starts_with("+++") || l.starts_with("---") || l.starts_with("@@") {
+                    continue;
+                }
+                match l.as_bytes().first() {
+                    Some(b'+') => adds += 1,
+                    Some(b'-') => dels += 1,
+                    _ => {}
+                }
+            }
+            (adds, dels)
+        }
+    };
+
     for (path, change) in &changes {
         use codex_core::protocol::FileChange::*;
         match change {
             Add { content } => {
                 let added = content.lines().count();
-                summaries.push(format!("A {} (+{added})", path.display()));
+                files.push(FileSummary {
+                    display_path: path.display().to_string(),
+                    added,
+                    removed: 0,
+                });
             }
             Delete => {
-                summaries.push(format!("D {}", path.display()));
+                let removed = std::fs::read_to_string(path)
+                    .ok()
+                    .map(|s| s.lines().count())
+                    .unwrap_or(0);
+                files.push(FileSummary {
+                    display_path: path.display().to_string(),
+                    added: 0,
+                    removed,
+                });
             }
             Update {
                 unified_diff,
                 move_path,
             } => {
-                if let Some(new_path) = move_path {
-                    summaries.push(format!("R {} → {}", path.display(), new_path.display(),));
+                let (added, removed) = count_from_unified(unified_diff);
+                let display_path = if let Some(new_path) = move_path {
+                    format!("{} → {}", path.display(), new_path.display())
                 } else {
-                    summaries.push(format!("M {}", path.display(),));
-                }
-                summaries.extend(unified_diff.lines().map(|s| s.to_string()));
+                    path.display().to_string()
+                };
+                files.push(FileSummary {
+                    display_path,
+                    added,
+                    removed,
+                });
             }
         }
     }
 
-    summaries
+    let file_count = files.len();
+    let total_added: usize = files.iter().map(|f| f.added).sum();
+    let total_removed: usize = files.iter().map(|f| f.removed).sum();
+    let noun = if file_count == 1 { "file" } else { "files" };
+
+    let mut out: Vec<RtLine<'static>> = Vec::new();
+
+    // Header
+    let mut header_spans: Vec<RtSpan<'static>> = Vec::new();
+    header_spans.push(RtSpan::styled(
+        title.to_owned(),
+        Style::default()
+            .fg(Color::Magenta)
+            .add_modifier(Modifier::BOLD),
+    ));
+    header_spans.push(RtSpan::raw(" to "));
+    header_spans.push(RtSpan::raw(format!("{file_count} {noun} ")));
+    header_spans.push(RtSpan::raw("("));
+    header_spans.push(RtSpan::styled(
+        format!("+{total_added}"),
+        Style::default().fg(Color::Green),
+    ));
+    header_spans.push(RtSpan::raw(" "));
+    header_spans.push(RtSpan::styled(
+        format!("-{total_removed}"),
+        Style::default().fg(Color::Red),
+    ));
+    header_spans.push(RtSpan::raw(")"));
+    out.push(RtLine::from(header_spans));
+
+    // Dimmed per-file lines with prefix
+    for (idx, f) in files.iter().enumerate() {
+        let mut spans: Vec<RtSpan<'static>> = Vec::new();
+        spans.push(RtSpan::raw(f.display_path.clone()));
+        spans.push(RtSpan::raw(" ("));
+        spans.push(RtSpan::styled(
+            format!("+{}", f.added),
+            Style::default().fg(Color::Green),
+        ));
+        spans.push(RtSpan::raw(" "));
+        spans.push(RtSpan::styled(
+            format!("-{}", f.removed),
+            Style::default().fg(Color::Red),
+        ));
+        spans.push(RtSpan::raw(")"));
+
+        let mut line = RtLine::from(spans);
+        let prefix = if idx == 0 { "  ⎿ " } else { "    " };
+        line.spans.insert(0, prefix.into());
+        line.spans.iter_mut().for_each(|span| {
+            span.style = span.style.add_modifier(Modifier::DIM);
+        });
+        out.push(line);
+    }
+
+    out
 }
 
 fn format_mcp_invocation<'a>(invocation: McpInvocation) -> Line<'a> {

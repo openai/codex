@@ -3,8 +3,10 @@ use crate::app_event_sender::AppEventSender;
 use crate::chatwidget::ChatWidget;
 use crate::file_search::FileSearchManager;
 use crate::get_git_diff::get_git_diff;
-use crate::git_warning_screen::GitWarningOutcome;
-use crate::git_warning_screen::GitWarningScreen;
+use crate::onboarding::onboarding_screen::KeyboardHandler;
+use crate::onboarding::onboarding_screen::OnboardingScreen;
+use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
+use crate::should_show_login_screen;
 use crate::slash_command::SlashCommand;
 use crate::tui;
 use codex_core::config::Config;
@@ -35,14 +37,15 @@ const REDRAW_DEBOUNCE: Duration = Duration::from_millis(10);
 /// Top-level application state: which full-screen view is currently active.
 #[allow(clippy::large_enum_variant)]
 enum AppState<'a> {
+    Onboarding {
+        screen: OnboardingScreen,
+    },
     /// The main chat UI is visible.
     Chat {
         /// Boxed to avoid a large enum variant and reduce the overall size of
         /// `AppState`.
         widget: Box<ChatWidget<'a>>,
     },
-    /// The start-up warning that recommends running codex inside a Git repo.
-    GitWarning { screen: GitWarningScreen },
 }
 
 pub(crate) struct App<'a> {
@@ -60,18 +63,14 @@ pub(crate) struct App<'a> {
 
     pending_history_lines: Vec<Line<'static>>,
 
-    /// Stored parameters needed to instantiate the ChatWidget later, e.g.,
-    /// after dismissing the Git-repo warning.
-    chat_args: Option<ChatWidgetArgs>,
-
     enhanced_keys_supported: bool,
 }
 
 /// Aggregate parameters needed to create a `ChatWidget`, as creation may be
 /// deferred until after the Git warning screen is dismissed.
-#[derive(Clone)]
-struct ChatWidgetArgs {
-    config: Config,
+#[derive(Clone, Debug)]
+pub(crate) struct ChatWidgetArgs {
+    pub(crate) config: Config,
     initial_prompt: Option<String>,
     initial_images: Vec<PathBuf>,
     enhanced_keys_supported: bool,
@@ -81,8 +80,8 @@ impl App<'_> {
     pub(crate) fn new(
         config: Config,
         initial_prompt: Option<String>,
-        show_git_warning: bool,
         initial_images: Vec<std::path::PathBuf>,
+        show_trust_screen: bool,
     ) -> Self {
         let (app_event_tx, app_event_rx) = channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
@@ -133,18 +132,24 @@ impl App<'_> {
             });
         }
 
-        let (app_state, chat_args) = if show_git_warning {
-            (
-                AppState::GitWarning {
-                    screen: GitWarningScreen::new(),
-                },
-                Some(ChatWidgetArgs {
-                    config: config.clone(),
-                    initial_prompt,
-                    initial_images,
-                    enhanced_keys_supported,
+        let show_login_screen = should_show_login_screen(&config);
+        let app_state = if show_login_screen || show_trust_screen {
+            let chat_widget_args = ChatWidgetArgs {
+                config: config.clone(),
+                initial_prompt,
+                initial_images,
+                enhanced_keys_supported,
+            };
+            AppState::Onboarding {
+                screen: OnboardingScreen::new(OnboardingScreenArgs {
+                    event_tx: app_event_tx.clone(),
+                    codex_home: config.codex_home.clone(),
+                    cwd: config.cwd.clone(),
+                    show_login_screen,
+                    show_trust_screen,
+                    chat_widget_args,
                 }),
-            )
+            }
         } else {
             let chat_widget = ChatWidget::new(
                 config.clone(),
@@ -153,12 +158,9 @@ impl App<'_> {
                 initial_images,
                 enhanced_keys_supported,
             );
-            (
-                AppState::Chat {
-                    widget: Box::new(chat_widget),
-                },
-                None,
-            )
+            AppState::Chat {
+                widget: Box::new(chat_widget),
+            }
         };
 
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
@@ -170,7 +172,6 @@ impl App<'_> {
             config,
             file_search,
             pending_redraw,
-            chat_args,
             enhanced_keys_supported,
         }
     }
@@ -227,15 +228,22 @@ impl App<'_> {
                             modifiers: crossterm::event::KeyModifiers::CONTROL,
                             kind: KeyEventKind::Press,
                             ..
+                        } => match &mut self.app_state {
+                            AppState::Chat { widget } => {
+                                widget.on_ctrl_c();
+                            }
+                            AppState::Onboarding { .. } => {
+                                self.app_event_tx.send(AppEvent::ExitRequest);
+                            }
+                        },
+                        KeyEvent {
+                            code: KeyCode::Char('z'),
+                            modifiers: crossterm::event::KeyModifiers::CONTROL,
+                            kind: KeyEventKind::Press,
+                            ..
                         } => {
-                            match &mut self.app_state {
-                                AppState::Chat { widget } => {
-                                    widget.on_ctrl_c();
-                                }
-                                AppState::GitWarning { .. } => {
-                                    // Allow exiting the app with Ctrl+C from the warning screen.
-                                    self.app_event_tx.send(AppEvent::ExitRequest);
-                                }
+                            if let AppState::Chat { widget } = &mut self.app_state {
+                                widget.on_ctrl_z();
                             }
                         }
                         KeyEvent {
@@ -255,7 +263,7 @@ impl App<'_> {
                                         self.dispatch_key_event(key_event);
                                     }
                                 }
-                                AppState::GitWarning { .. } => {
+                                AppState::Onboarding { .. } => {
                                     self.app_event_tx.send(AppEvent::ExitRequest);
                                 }
                             }
@@ -282,14 +290,15 @@ impl App<'_> {
                 }
                 AppEvent::CodexOp(op) => match &mut self.app_state {
                     AppState::Chat { widget } => widget.submit_op(op),
-                    AppState::GitWarning { .. } => {}
+                    AppState::Onboarding { .. } => {}
                 },
                 AppEvent::LatestLog(line) => match &mut self.app_state {
                     AppState::Chat { widget } => widget.update_latest_log(line),
-                    AppState::GitWarning { .. } => {}
+                    AppState::Onboarding { .. } => {}
                 },
                 AppEvent::DispatchCommand(command) => match command {
                     SlashCommand::New => {
+                        // User accepted – switch to chat view.
                         let new_widget = Box::new(ChatWidget::new(
                             self.config.clone(),
                             self.app_event_tx.clone(),
@@ -316,6 +325,12 @@ impl App<'_> {
                     SlashCommand::Quit => {
                         break;
                     }
+                    SlashCommand::Logout => {
+                        if let Err(e) = codex_login::logout(&self.config.codex_home) {
+                            tracing::error!("failed to logout: {e}");
+                        }
+                        break;
+                    }
                     SlashCommand::Diff => {
                         let (is_git_repo, diff_text) = match get_git_diff() {
                             Ok(v) => v,
@@ -340,6 +355,11 @@ impl App<'_> {
                     SlashCommand::Status => {
                         if let AppState::Chat { widget } = &mut self.app_state {
                             widget.add_status_output();
+                        }
+                    }
+                    SlashCommand::Prompts => {
+                        if let AppState::Chat { widget } = &mut self.app_state {
+                            widget.add_prompts_output();
                         }
                     }
                     #[cfg(debug_assertions)]
@@ -382,8 +402,31 @@ impl App<'_> {
                         }));
                     }
                 },
+                AppEvent::OnboardingAuthComplete(result) => {
+                    if let AppState::Onboarding { screen } = &mut self.app_state {
+                        screen.on_auth_complete(result);
+                    }
+                }
+                AppEvent::OnboardingComplete(ChatWidgetArgs {
+                    config,
+                    enhanced_keys_supported,
+                    initial_images,
+                    initial_prompt,
+                }) => {
+                    self.app_state = AppState::Chat {
+                        widget: Box::new(ChatWidget::new(
+                            config,
+                            app_event_tx.clone(),
+                            initial_prompt,
+                            initial_images,
+                            enhanced_keys_supported,
+                        )),
+                    }
+                }
                 AppEvent::StartFileSearch(query) => {
-                    self.file_search.on_user_query(query);
+                    if !query.is_empty() {
+                        self.file_search.on_user_query(query);
+                    }
                 }
                 AppEvent::FileSearchResult { query, matches } => {
                     if let AppState::Chat { widget } = &mut self.app_state {
@@ -400,7 +443,7 @@ impl App<'_> {
     pub(crate) fn token_usage(&self) -> codex_core::protocol::TokenUsage {
         match &self.app_state {
             AppState::Chat { widget } => widget.token_usage().clone(),
-            AppState::GitWarning { .. } => codex_core::protocol::TokenUsage::default(),
+            AppState::Onboarding { .. } => codex_core::protocol::TokenUsage::default(),
         }
     }
 
@@ -428,7 +471,7 @@ impl App<'_> {
         let size = terminal.size()?;
         let desired_height = match &self.app_state {
             AppState::Chat { widget } => widget.desired_height(size.width),
-            AppState::GitWarning { .. } => size.height,
+            AppState::Onboarding { .. } => size.height,
         };
 
         let mut area = terminal.viewport_area;
@@ -458,7 +501,7 @@ impl App<'_> {
                 }
                 frame.render_widget_ref(&**widget, frame.area())
             }
-            AppState::GitWarning { screen } => frame.render_widget_ref(&*screen, frame.area()),
+            AppState::Onboarding { screen } => frame.render_widget_ref(&*screen, frame.area()),
         })?;
         Ok(())
     }
@@ -470,30 +513,11 @@ impl App<'_> {
             AppState::Chat { widget } => {
                 widget.handle_key_event(key_event);
             }
-            AppState::GitWarning { screen } => match screen.handle_key_event(key_event) {
-                GitWarningOutcome::Continue => {
-                    // User accepted – switch to chat view.
-                    let args = match self.chat_args.take() {
-                        Some(args) => args,
-                        None => panic!("ChatWidgetArgs already consumed"),
-                    };
-
-                    let widget = Box::new(ChatWidget::new(
-                        args.config,
-                        self.app_event_tx.clone(),
-                        args.initial_prompt,
-                        args.initial_images,
-                        args.enhanced_keys_supported,
-                    ));
-                    self.app_state = AppState::Chat { widget };
-                    self.app_event_tx.send(AppEvent::RequestRedraw);
-                }
-                GitWarningOutcome::Quit => {
+            AppState::Onboarding { screen } => match key_event.code {
+                KeyCode::Char('q') => {
                     self.app_event_tx.send(AppEvent::ExitRequest);
                 }
-                GitWarningOutcome::None => {
-                    // do nothing
-                }
+                _ => screen.handle_key_event(key_event),
             },
         }
     }
@@ -501,14 +525,14 @@ impl App<'_> {
     fn dispatch_paste_event(&mut self, pasted: String) {
         match &mut self.app_state {
             AppState::Chat { widget } => widget.handle_paste(pasted),
-            AppState::GitWarning { .. } => {}
+            AppState::Onboarding { .. } => {}
         }
     }
 
     fn dispatch_codex_event(&mut self, event: Event) {
         match &mut self.app_state {
             AppState::Chat { widget } => widget.handle_codex_event(event),
-            AppState::GitWarning { .. } => {}
+            AppState::Onboarding { .. } => {}
         }
     }
 }

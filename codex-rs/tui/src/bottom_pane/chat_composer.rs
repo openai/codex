@@ -8,6 +8,7 @@ use ratatui::layout::Layout;
 use ratatui::layout::Margin;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
+use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::style::Styled;
 use ratatui::style::Stylize;
@@ -30,7 +31,7 @@ use crate::bottom_pane::textarea::TextAreaState;
 use codex_file_search::FileMatch;
 use std::cell::RefCell;
 
-const BASE_PLACEHOLDER_TEXT: &str = "...";
+const BASE_PLACEHOLDER_TEXT: &str = "Ask Codex to do anything";
 /// If the pasted content exceeds this number of characters, replace it with a
 /// placeholder in the UI.
 const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
@@ -42,7 +43,8 @@ pub enum InputResult {
 }
 
 struct TokenUsageInfo {
-    token_usage: TokenUsage,
+    total_token_usage: TokenUsage,
+    last_token_usage: TokenUsage,
     model_context_window: Option<u64>,
 }
 
@@ -126,11 +128,13 @@ impl ChatComposer {
     /// context when the composer is empty.
     pub(crate) fn set_token_usage(
         &mut self,
-        token_usage: TokenUsage,
+        total_token_usage: TokenUsage,
+        last_token_usage: TokenUsage,
         model_context_window: Option<u64>,
     ) {
         self.token_usage_info = Some(TokenUsageInfo {
-            token_usage,
+            total_token_usage,
+            last_token_usage,
             model_context_window,
         });
     }
@@ -331,8 +335,9 @@ impl ChatComposer {
     /// - The cursor may be anywhere *inside* the token (including on the
     ///   leading `@`). It does **not** need to be at the end of the line.
     /// - A token is delimited by ASCII whitespace (space, tab, newline).
-    /// - If the token under the cursor starts with `@` and contains at least
-    ///   one additional character, that token (without `@`) is returned.
+    /// - If the token under the cursor starts with `@`, that token is
+    ///   returned without the leading `@`. This includes the case where the
+    ///   token is just "@" (empty query), which is used to trigger a UI hint
     fn current_at_token(textarea: &TextArea) -> Option<String> {
         let cursor_offset = textarea.cursor();
         let text = textarea.text();
@@ -403,14 +408,20 @@ impl ChatComposer {
         };
 
         let left_at = token_left
-            .filter(|t| t.starts_with('@') && t.len() > 1)
+            .filter(|t| t.starts_with('@'))
             .map(|t| t[1..].to_string());
         let right_at = token_right
-            .filter(|t| t.starts_with('@') && t.len() > 1)
+            .filter(|t| t.starts_with('@'))
             .map(|t| t[1..].to_string());
 
         if at_whitespace {
-            return right_at.or(left_at);
+            if right_at.is_some() {
+                return right_at;
+            }
+            if token_left.is_some_and(|t| t == "@") {
+                return None;
+            }
+            return left_at;
         }
         if after_cursor.starts_with('@') {
             return right_at.or(left_at);
@@ -453,6 +464,8 @@ impl ChatComposer {
         new_text.push_str(&text[end_idx..]);
 
         self.textarea.set_text(&new_text);
+        let new_cursor = start_idx.saturating_add(path.len()).saturating_add(1);
+        self.textarea.set_cursor(new_cursor);
     }
 
     /// Handle key event when no popup is visible.
@@ -605,16 +618,26 @@ impl ChatComposer {
             return;
         }
 
-        self.app_event_tx
-            .send(AppEvent::StartFileSearch(query.clone()));
+        if !query.is_empty() {
+            self.app_event_tx
+                .send(AppEvent::StartFileSearch(query.clone()));
+        }
 
         match &mut self.active_popup {
             ActivePopup::File(popup) => {
-                popup.set_query(&query);
+                if query.is_empty() {
+                    popup.set_empty_prompt();
+                } else {
+                    popup.set_query(&query);
+                }
             }
             _ => {
                 let mut popup = FileSearchPopup::new();
-                popup.set_query(&query);
+                if query.is_empty() {
+                    popup.set_empty_prompt();
+                } else {
+                    popup.set_query(&query);
+                }
                 self.active_popup = ActivePopup::File(popup);
             }
         }
@@ -647,7 +670,7 @@ impl WidgetRef for &ChatComposer {
             ActivePopup::None => {
                 let bottom_line_rect = popup_rect;
                 let key_hint_style = Style::default().fg(Color::Cyan);
-                let hint = if self.ctrl_c_quit_hint {
+                let mut hint = if self.ctrl_c_quit_hint {
                     vec![
                         Span::from(" "),
                         "Ctrl+C again".set_style(key_hint_style),
@@ -669,6 +692,33 @@ impl WidgetRef for &ChatComposer {
                         Span::from(" quit"),
                     ]
                 };
+
+                // Append token/context usage info to the footer hints when available.
+                if let Some(token_usage_info) = &self.token_usage_info {
+                    let token_usage = &token_usage_info.total_token_usage;
+                    hint.push(Span::from("   "));
+                    hint.push(
+                        Span::from(format!("{} tokens used", token_usage.total_tokens))
+                            .style(Style::default().add_modifier(Modifier::DIM)),
+                    );
+                    let last_token_usage = &token_usage_info.last_token_usage;
+                    if let Some(context_window) = token_usage_info.model_context_window {
+                        let percent_remaining: u8 = if context_window > 0 {
+                            let percent = 100.0
+                                - (last_token_usage.total_tokens as f32 / context_window as f32
+                                    * 100.0);
+                            percent.clamp(0.0, 100.0) as u8
+                        } else {
+                            100
+                        };
+                        hint.push(Span::from("   "));
+                        hint.push(
+                            Span::from(format!("{percent_remaining}% context left"))
+                                .style(Style::default().add_modifier(Modifier::DIM)),
+                        );
+                    }
+                }
+
                 Line::from(hint)
                     .style(Style::default().dim())
                     .render_ref(bottom_line_rect, buf);
@@ -690,37 +740,11 @@ impl WidgetRef for &ChatComposer {
         let mut textarea_rect = textarea_rect;
         textarea_rect.width = textarea_rect.width.saturating_sub(1);
         textarea_rect.x += 1;
+
         let mut state = self.textarea_state.borrow_mut();
         StatefulWidgetRef::render_ref(&(&self.textarea), textarea_rect, buf, &mut state);
         if self.textarea.text().is_empty() {
-            let placeholder = if let Some(token_usage_info) = &self.token_usage_info {
-                let token_usage = &token_usage_info.token_usage;
-                let model_context_window = token_usage_info.model_context_window;
-                match (token_usage.total_tokens, model_context_window) {
-                    (total_tokens, Some(context_window)) => {
-                        let percent_remaining: u8 = if context_window > 0 {
-                            // Calculate the percentage of context left.
-                            let percent =
-                                100.0 - (total_tokens as f32 / context_window as f32 * 100.0);
-                            percent.clamp(0.0, 100.0) as u8
-                        } else {
-                            // If we don't have a context window, we cannot compute the
-                            // percentage.
-                            100
-                        };
-                        // When https://github.com/openai/codex/issues/1257 is resolved,
-                        // check if `percent_remaining < 25`, and if so, recommend
-                        // /compact.
-                        format!("{BASE_PLACEHOLDER_TEXT} — {percent_remaining}% context left")
-                    }
-                    (total_tokens, None) => {
-                        format!("{BASE_PLACEHOLDER_TEXT} — {total_tokens} tokens used")
-                    }
-                }
-            } else {
-                BASE_PLACEHOLDER_TEXT.to_string()
-            };
-            Line::from(placeholder)
+            Line::from(BASE_PLACEHOLDER_TEXT)
                 .style(Style::default().dim())
                 .render_ref(textarea_rect.inner(Margin::new(1, 0)), buf);
         }
@@ -771,7 +795,12 @@ mod tests {
             ("@👍", 2, Some("👍".to_string()), "Emoji token"),
             // Invalid cases (should return None)
             ("hello", 2, None, "No @ symbol"),
-            ("@", 1, None, "Only @ symbol"),
+            (
+                "@",
+                1,
+                Some("".to_string()),
+                "Only @ symbol triggers empty query",
+            ),
             ("@ hello", 2, None, "@ followed by space"),
             ("test @ world", 6, None, "@ with spaces around"),
         ];
@@ -805,7 +834,7 @@ mod tests {
                 "Second token",
             ),
             // Edge cases
-            ("@", 0, None, "Only @ symbol"),
+            ("@", 0, Some("".to_string()), "Only @ symbol"),
             ("@a", 2, Some("a".to_string()), "Single character after @"),
             ("", 0, None, "Empty input"),
         ];

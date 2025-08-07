@@ -40,6 +40,16 @@ use crate::protocol::TokenUsage;
 use crate::util::backoff;
 use std::sync::Arc;
 
+#[derive(Debug, Deserialize)]
+struct ErrorResponse {
+    error: Error,
+}
+
+#[derive(Debug, Deserialize)]
+struct Error {
+    r#type: String,
+}
+
 #[derive(Clone)]
 pub struct ModelClient {
     config: Arc<Config>,
@@ -225,6 +235,14 @@ impl ModelClient {
                 }
                 Ok(res) => {
                     let status = res.status();
+
+                    // Pull out Retry‑After header if present.
+                    let retry_after_secs = res
+                        .headers()
+                        .get(reqwest::header::RETRY_AFTER)
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(|s| s.parse::<u64>().ok());
+
                     // The OpenAI Responses endpoint returns structured JSON bodies even for 4xx/5xx
                     // errors. When we bubble early with only the HTTP status the caller sees an opaque
                     // "unexpected status 400 Bad Request" which makes debugging nearly impossible.
@@ -238,16 +256,27 @@ impl ModelClient {
                         return Err(CodexErr::UnexpectedStatus(status, body));
                     }
 
-                    if attempt > max_retries {
-                        return Err(CodexErr::RetryLimit(status));
+                    if status == StatusCode::TOO_MANY_REQUESTS {
+                        let body = res.json::<ErrorResponse>().await.ok();
+                        if let Some(ErrorResponse {
+                            error: Error { r#type, .. },
+                        }) = body
+                        {
+                            if r#type == "usage_limit_reached" {
+                                return Err(CodexErr::UsageLimitReached);
+                            } else if r#type == "usage_not_included" {
+                                return Err(CodexErr::UsageNotIncluded);
+                            }
+                        }
                     }
 
-                    // Pull out Retry‑After header if present.
-                    let retry_after_secs = res
-                        .headers()
-                        .get(reqwest::header::RETRY_AFTER)
-                        .and_then(|v| v.to_str().ok())
-                        .and_then(|s| s.parse::<u64>().ok());
+                    if attempt > max_retries {
+                        if status == StatusCode::INTERNAL_SERVER_ERROR {
+                            return Err(CodexErr::InternalServerError);
+                        }
+
+                        return Err(CodexErr::RetryLimit(status));
+                    }
 
                     let delay = retry_after_secs
                         .map(|s| Duration::from_millis(s * 1_000))
@@ -623,7 +652,7 @@ mod tests {
             request_max_retries: Some(0),
             stream_max_retries: Some(0),
             stream_idle_timeout_ms: Some(1000),
-            requires_auth: false,
+            requires_openai_auth: false,
         };
 
         let events = collect_events(
@@ -683,7 +712,7 @@ mod tests {
             request_max_retries: Some(0),
             stream_max_retries: Some(0),
             stream_idle_timeout_ms: Some(1000),
-            requires_auth: false,
+            requires_openai_auth: false,
         };
 
         let events = collect_events(&[sse1.as_bytes()], provider).await;
@@ -786,7 +815,7 @@ mod tests {
                 request_max_retries: Some(0),
                 stream_max_retries: Some(0),
                 stream_idle_timeout_ms: Some(1000),
-                requires_auth: false,
+                requires_openai_auth: false,
             };
 
             let out = run_sse(evs, provider).await;

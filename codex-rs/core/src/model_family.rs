@@ -89,6 +89,11 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
         simple_model_family!(slug, "gpt-oss")
     } else if slug.starts_with("gpt-3.5") {
         simple_model_family!(slug, "gpt-3.5")
+    } else if slug.starts_with("gpt-5") {
+        model_family!(
+            slug, "gpt-5",
+            supports_reasoning_summaries: true,
+        )
     } else {
         None
     }

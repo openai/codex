@@ -26,7 +26,7 @@ pub struct CodexConversation {
 /// that callers can surface the information to the UI.
 pub async fn init_codex(config: Config) -> anyhow::Result<CodexConversation> {
     let ctrl_c = notify_on_sigint();
-    let auth = load_auth(&config.codex_home, true)?;
+    let auth = load_auth(&config.codex_home)?;
     let CodexSpawnOk {
         codex,
         init_id,

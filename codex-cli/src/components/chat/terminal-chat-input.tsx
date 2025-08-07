@@ -854,7 +854,7 @@ export default function TerminalChatInput({
           />
         ) : (
           <Text dimColor>
-            ctrl+c to exit | "/" to see commands | enter to send
+            Ctrl+C to exit | "/" to see commands | Enter to send
             {contextLeftPercent > 25 && (
               <>
                 {" — "}

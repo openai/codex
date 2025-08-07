@@ -62,6 +62,17 @@ pub enum CodexErr {
     #[error("unexpected status {0}: {1}")]
     UnexpectedStatus(StatusCode, String),
 
+    #[error("Usage limit has been reached")]
+    UsageLimitReached,
+
+    #[error("Usage not included with the plan")]
+    UsageNotIncluded,
+
+    #[error(
+        "We’re currently experiencing high demand, which may cause temporary errors. We’re adding capacity in East and West Europe to restore normal service."
+    )]
+    InternalServerError,
+
     /// Retry limit exceeded.
     #[error("exceeded retry limit, last status: {0}")]
     RetryLimit(StatusCode),
@@ -130,5 +141,12 @@ impl CodexErr {
     /// `anyhow::Error::downcast_ref` but works directly on our concrete enum.
     pub fn downcast_ref<T: std::any::Any>(&self) -> Option<&T> {
         (self as &dyn std::any::Any).downcast_ref::<T>()
+    }
+}
+
+pub fn get_error_message_ui(e: &CodexErr) -> String {
+    match e {
+        CodexErr::Sandbox(SandboxErr::Denied(_, _, stderr)) => stderr.to_string(),
+        _ => e.to_string(),
     }
 }
