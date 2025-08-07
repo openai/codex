@@ -1,3 +1,7 @@
+# Usage
+
+Use Codex in two ways: interactively with `codex` (TUI) or non‑interactively with `codex exec` for automation and CI. This page covers core commands and flags, CI usage, logging, pinning with DotSlash, and some recipes and ideas.
+
 ## CLI reference
 
 | Command            | Purpose                            | Example                         |
@@ -6,17 +10,12 @@
 | `codex "..."`      | Initial prompt for interactive TUI | `codex "fix lint errors"`       |
 | `codex exec "..."` | Non-interactive "automation mode"  | `codex exec "explain utils.ts"` |
 
-Key flags: `--model/-m`, `--ask-for-approval/-a`, `--profile <name>`, `--config key=value`.
+Key flags:
 
----
-
-## Memory & project docs
-
-You can give Codex extra instructions and guidance using `AGENTS.md` files. Codex looks for `AGENTS.md` files in the following places, and merges them top-down:
-
-1. `~/.codex/AGENTS.md` - personal global guidance
-2. `AGENTS.md` at repo root - shared project notes
-3. `AGENTS.md` in the current working directory - sub-folder/feature specifics
+- `--model/-m`
+- `--ask-for-approval/-a`
+- `--profile <name>`
+- `--config key=value`
 
 ---
 
@@ -45,6 +44,16 @@ tail -F ~/.codex/log/codex-tui.log
 By comparison, the non-interactive mode (`codex exec`) defaults to `RUST_LOG=error`, but messages are printed inline, so there is no need to monitor a separate file.
 
 See the Rust documentation on [`RUST_LOG`](https://docs.rs/env_logger/latest/env_logger/#enabling-logging) for more information on the configuration options.
+
+---
+
+## Memory & project docs
+
+You can give Codex extra instructions and guidance using `AGENTS.md` files. Codex looks for `AGENTS.md` files in the following places, and merges them top-down:
+
+1. `~/.codex/AGENTS.md` - personal global guidance
+2. `AGENTS.md` at repo root - shared project notes
+3. `AGENTS.md` in the current working directory - sub-folder/feature specifics
 
 ---
 
