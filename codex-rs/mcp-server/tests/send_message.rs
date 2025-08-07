@@ -22,7 +22,6 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 async fn test_send_message_success() {
     // Spin up a mock completions server that immediately ends the Codex turn.
     // Two Codex turns hit the mock model (session start + send-user-message). Provide two SSE responses.
-    panic!("test_send_message_success");
     let responses = vec![
         create_final_assistant_message_sse_response("Done").expect("build mock assistant message"),
         create_final_assistant_message_sse_response("Done").expect("build mock assistant message"),
