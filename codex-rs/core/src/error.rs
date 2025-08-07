@@ -102,9 +102,6 @@ pub enum CodexErr {
 
     #[error("{0}")]
     EnvVar(EnvVarError),
-
-    #[error("{0}")]
-    GenericError(String),
 }
 
 #[derive(Debug)]
@@ -133,5 +130,12 @@ impl CodexErr {
     /// `anyhow::Error::downcast_ref` but works directly on our concrete enum.
     pub fn downcast_ref<T: std::any::Any>(&self) -> Option<&T> {
         (self as &dyn std::any::Any).downcast_ref::<T>()
+    }
+}
+
+pub fn get_error_message_ui(e: &CodexErr) -> String {
+    match e {
+        CodexErr::Sandbox(SandboxErr::Denied(_, _, stderr)) => stderr.to_string(),
+        _ => e.to_string(),
     }
 }

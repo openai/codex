@@ -46,6 +46,7 @@ use crate::conversation_history::ConversationHistory;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::error::SandboxErr;
+use crate::error::get_error_message_ui;
 use crate::exec::ExecParams;
 use crate::exec::ExecToolCallOutput;
 use crate::exec::SandboxType;
@@ -492,34 +493,27 @@ impl Session {
         )
         .await;
 
-        match &result {
-            Ok(output) => {
-                self.on_exec_command_end(
-                    turn_diff_tracker,
-                    &sub_id,
-                    &call_id,
-                    output,
-                    is_apply_patch,
-                )
-                .await;
-            }
+        let output_stderr;
+        let borrowed: &ExecToolCallOutput = match &result {
+            Ok(output) => output,
             Err(e) => {
-                let err_output = ExecToolCallOutput {
+                output_stderr = ExecToolCallOutput {
                     exit_code: -1,
                     stdout: String::new(),
-                    stderr: format!("{e}"),
+                    stderr: get_error_message_ui(e),
                     duration: Duration::default(),
                 };
-                self.on_exec_command_end(
-                    turn_diff_tracker,
-                    &sub_id,
-                    &call_id,
-                    &err_output,
-                    is_apply_patch,
-                )
-                .await;
+                &output_stderr
             }
-        }
+        };
+        self.on_exec_command_end(
+            turn_diff_tracker,
+            &sub_id,
+            &call_id,
+            borrowed,
+            is_apply_patch,
+        )
+        .await;
 
         result
     }
