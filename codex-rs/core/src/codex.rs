@@ -469,12 +469,6 @@ impl Session {
         }
     }
 
-    /// Thin helper that wraps `process_exec_tool_call` to emit
-    /// Exec/Patch begin and end events around the actual execution.
-    ///
-    /// This does not interpret the result; the caller should still
-    /// `match` on the returned `Result` and perform error/sandbox
-    /// handling as needed.
     async fn run_exec_with_events<'a>(
         &self,
         turn_diff_tracker: &mut TurnDiffTracker,
@@ -498,7 +492,6 @@ impl Session {
         )
         .await;
 
-        // Emit end event regardless of success; on error, construct a minimal output.
         match &result {
             Ok(output) => {
                 self.on_exec_command_end(
@@ -1779,7 +1772,6 @@ fn parse_container_exec_arguments(
     }
 }
 
-// Arguments to invoke `process_exec_tool_call`.
 pub struct ExecInvokeArgs<'a> {
     pub params: crate::exec::ExecParams,
     pub sandbox_type: crate::exec::SandboxType,
@@ -2004,7 +1996,6 @@ async fn handle_container_exec_with_params(
             }
         }
         Err(CodexErr::Sandbox(error)) => {
-            // Delegate to sandbox-specific error handler.
             handle_sandbox_error(
                 turn_diff_tracker,
                 params,
@@ -2105,7 +2096,6 @@ async fn handle_sandbox_error(
             // examined and the sandbox has been set to `None`.
             let retry_output_result = sess
                 .run_exec_with_events(
-                    // This shares the same call id; events will reflect the retry, too.
                     turn_diff_tracker,
                     exec_command_context.clone(),
                     ExecInvokeArgs {
