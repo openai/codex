@@ -188,14 +188,17 @@ mod tests {
         };
         assert_eq!(
             err.to_string(),
-            "Usage limit reached for Plus plan, upgrade to Pro to continue using Codex (https://openai.com/chatgpt/pricing)"
+            "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing), or wait for limits to reset (every 5h and every week)"
         );
     }
 
     #[test]
     fn usage_limit_reached_error_formats_default_when_none() {
         let err = UsageLimitReachedError { plan_type: None };
-        assert_eq!(err.to_string(), "Usage limit reached");
+        assert_eq!(
+            err.to_string(),
+            "You've hit usage your usage limit. Limits reset every 5h and every week"
+        );
     }
 
     #[test]
@@ -203,6 +206,9 @@ mod tests {
         let err = UsageLimitReachedError {
             plan_type: Some("pro".to_string()),
         };
-        assert_eq!(err.to_string(), "Usage limit reached");
+        assert_eq!(
+            err.to_string(),
+            "You've hit usage your usage limit. Limits reset every 5h and every week"
+        );
     }
 }
