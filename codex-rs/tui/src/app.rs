@@ -15,7 +15,6 @@ use codex_core::config::Config;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
-use codex_file_search::FileMatch;
 use color_eyre::eyre::Result;
 use crossterm::SynchronizedUpdate;
 use crossterm::event::KeyCode;
@@ -583,34 +582,5 @@ impl App<'_> {
             AppState::Onboarding { .. } => {}
             AppState::GitWarning { .. } => {}
         }
-    }
-
-    fn quick_list_cwd(dir: &PathBuf, limit: usize) -> Vec<FileMatch> {
-        let mut entries: Vec<String> = match std::fs::read_dir(dir) {
-            Ok(rd) => rd
-                .filter_map(|res| res.ok())
-                .filter_map(|e| {
-                    let name = match e.file_name().into_string() {
-                        Ok(s) => s,
-                        Err(_) => return None,
-                    };
-                    if name.starts_with('.') {
-                        return None;
-                    }
-                    Some(name)
-                })
-                .collect(),
-            Err(_) => Vec::new(),
-        };
-        entries.sort();
-        entries.truncate(limit);
-        entries
-            .into_iter()
-            .map(|path| FileMatch {
-                score: 0,
-                path,
-                indices: Some(Vec::new()),
-            })
-            .collect()
     }
 }
