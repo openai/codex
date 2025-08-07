@@ -66,7 +66,8 @@ pub(crate) struct ChatWidget<'a> {
     active_history_cell: Option<HistoryCell>,
     config: Config,
     initial_user_message: Option<UserMessage>,
-    token_usage: TokenUsage,
+    total_token_usage: TokenUsage,
+    last_token_usage: TokenUsage,
     reasoning_buffer: String,
     content_buffer: String,
     // Buffer for streaming assistant answer text; we do not surface partial
@@ -213,7 +214,8 @@ impl ChatWidget<'_> {
                 initial_prompt.unwrap_or_default(),
                 initial_images,
             ),
-            token_usage: TokenUsage::default(),
+            total_token_usage: TokenUsage::default(),
+            last_token_usage: TokenUsage::default(),
             reasoning_buffer: String::new(),
             content_buffer: String::new(),
             answer_buffer: String::new(),
@@ -365,9 +367,13 @@ impl ChatWidget<'_> {
                 self.request_redraw();
             }
             EventMsg::TokenCount(token_usage) => {
-                self.token_usage = add_token_usage(&self.token_usage, &token_usage);
-                self.bottom_pane
-                    .set_token_usage(self.token_usage.clone(), self.config.model_context_window);
+                self.total_token_usage = add_token_usage(&self.total_token_usage, &token_usage);
+                self.last_token_usage = token_usage;
+                self.bottom_pane.set_token_usage(
+                    self.total_token_usage.clone(),
+                    self.last_token_usage.clone(),
+                    self.config.model_context_window,
+                );
             }
             EventMsg::Error(ErrorEvent { message }) => {
                 self.add_to_history(HistoryCell::new_error_event(message.clone()));
@@ -552,7 +558,7 @@ impl ChatWidget<'_> {
     pub(crate) fn add_status_output(&mut self) {
         self.add_to_history(HistoryCell::new_status_output(
             &self.config,
-            &self.token_usage,
+            &self.total_token_usage,
         ));
     }
 
@@ -611,13 +617,16 @@ impl ChatWidget<'_> {
     }
 
     pub(crate) fn token_usage(&self) -> &TokenUsage {
-        &self.token_usage
+        &self.total_token_usage
     }
 
     pub(crate) fn clear_token_usage(&mut self) {
-        self.token_usage = TokenUsage::default();
-        self.bottom_pane
-            .set_token_usage(self.token_usage.clone(), self.config.model_context_window);
+        self.total_token_usage = TokenUsage::default();
+        self.bottom_pane.set_token_usage(
+            self.total_token_usage.clone(),
+            self.last_token_usage.clone(),
+            self.config.model_context_window,
+        );
     }
 
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
