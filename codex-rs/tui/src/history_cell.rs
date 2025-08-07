@@ -218,12 +218,11 @@ impl HistoryCell {
                     Span::raw(format!(" {cwd_str}")).dim(),
                 ]),
                 Line::from("".dim()),
-                Line::from(" Try one of the following commands to get started:".dim()),
+                Line::from(" To get started, describe a task or try one of these commands:".dim()),
                 Line::from("".dim()),
-                Line::from(format!(" 1. /init - {}", SlashCommand::Init.description()).dim()),
-                Line::from(format!(" 2. /status - {}", SlashCommand::Status.description()).dim()),
-                Line::from(format!(" 3. /compact - {}", SlashCommand::Compact.description()).dim()),
-                Line::from(format!(" 4. /new - {}", SlashCommand::New.description()).dim()),
+                Line::from(format!(" /init - {}", SlashCommand::Init.description()).dim()),
+                Line::from(format!(" /status - {}", SlashCommand::Status.description()).dim()),
+                Line::from(format!(" /diff - {}", SlashCommand::Diff.description()).dim()),
                 Line::from("".dim()),
             ];
             HistoryCell::WelcomeMessage {
@@ -284,7 +283,7 @@ impl HistoryCell {
         let mut lines: Vec<Line<'static>> = Vec::new();
         let command_escaped = strip_bash_lc_and_escape(&command);
         lines.push(Line::from(vec![
-            "⚡Ran command ".magenta(),
+            "⚡ Ran command ".magenta(),
             command_escaped.into(),
         ]));
 
@@ -457,7 +456,8 @@ impl HistoryCell {
             view: TextBlock::new(lines),
         }
     }
-
+    // allow dead code for now. maybe we'll use it again.
+    #[allow(dead_code)]
     pub(crate) fn new_background_event(message: String) -> Self {
         let mut lines: Vec<Line<'static>> = Vec::new();
         lines.push(Line::from("event".dim()));
@@ -644,7 +644,7 @@ impl HistoryCell {
         let mut header: Vec<Span> = Vec::new();
         header.push(Span::raw("📋"));
         header.push(Span::styled(
-            "Updated",
+            " Updated",
             Style::default().add_modifier(Modifier::BOLD).magenta(),
         ));
         header.push(Span::raw(" to do list ["));

@@ -27,15 +27,15 @@ impl SlashCommand {
     /// User-visible description shown in the popup.
     pub fn description(self) -> &'static str {
         match self {
-            SlashCommand::New => "Start a new chat",
-            SlashCommand::Init => "Create an AGENTS.md file with instructions for Codex",
-            SlashCommand::Compact => "Compact the chat history",
-            SlashCommand::Quit => "Exit the application",
-            SlashCommand::Diff => "Show git diff (including untracked files)",
-            SlashCommand::Status => "Show current session configuration and token usage",
-            SlashCommand::Logout => "Log out of Codex",
+            SlashCommand::New => "start a new chat during a conversation",
+            SlashCommand::Init => "create an AGENTS.md file with instructions for Codex",
+            SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
+            SlashCommand::Quit => "exit Codex",
+            SlashCommand::Diff => "show git diff (including untracked files)",
+            SlashCommand::Status => "show current session configuration and token usage",
+            SlashCommand::Logout => "log out of Codex",
             #[cfg(debug_assertions)]
-            SlashCommand::TestApproval => "Test approval request",
+            SlashCommand::TestApproval => "test approval request",
         }
     }
 
