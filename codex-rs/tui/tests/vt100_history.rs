@@ -182,6 +182,38 @@ fn hist_006_cursor_restoration() {
 }
 
 #[test]
+fn hist_007_word_wrap_no_mid_word_split() {
+    // Screen of 40x10; viewport is the last row
+    let area = Rect::new(0, 9, 40, 1);
+    let mut scenario = TestScenario::new(40, 10, area);
+
+    let sample = "Years passed, and Willowmere thrived in peace and friendship. Mira’s herb garden flourished with both ordinary and enchanted plants, and travelers spoke of the kindness of the woman who tended them.";
+    let buf = scenario.run_insert(vec![Line::from(sample)]);
+    let rows = scenario.screen_rows_from_bytes(&buf);
+    let joined = rows.join("\n");
+    assert!(
+        !joined.contains("bo\nth"),
+        "word 'both' should not be split across lines:\n{joined}"
+    );
+}
+
+#[test]
+fn hist_008_em_dash_and_space_word_wrap() {
+    // Repro from report: ensure we break before "inside", not mid-word.
+    let area = Rect::new(0, 9, 40, 1);
+    let mut scenario = TestScenario::new(40, 10, area);
+
+    let sample = "Mara found an old key on the shore. Curious, she opened a tarnished box half-buried in sand—and inside lay a single, glowing seed.";
+    let buf = scenario.run_insert(vec![Line::from(sample)]);
+    let rows = scenario.screen_rows_from_bytes(&buf);
+    let joined = rows.join("\n");
+    assert!(
+        !joined.contains("insi\nde"),
+        "word 'inside' should not be split across lines:\n{joined}"
+    );
+}
+
+#[test]
 fn hist_005_pre_scroll_region_down() {
     // Viewport not at bottom: y=3 (0-based), height=1
     let area = Rect::new(0, 3, 20, 1);

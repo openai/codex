@@ -510,6 +510,40 @@ mod tests {
     }
 
     #[test]
+    fn live_ring_word_wrap_no_mid_word_split_integration() {
+        let (tx_raw, _rx) = channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+        });
+
+        let sample = "Mara found an old key on the shore. Curious, she opened a tarnished box half-buried in sand—and inside lay a single, glowing seed.";
+        pane.set_live_ring_rows(10, vec![Line::from(sample)]);
+
+        let area = Rect::new(0, 0, 40, 6);
+        let mut buf = Buffer::empty(area);
+        (&pane).render_ref(area, &mut buf);
+
+        let mut lines: Vec<String> = Vec::new();
+        for row in 0..area.height {
+            let mut s = String::new();
+            for col in 0..area.width {
+                let cell = buf.get(col, row);
+                let ch = cell.symbol().chars().next().unwrap_or(' ');
+                s.push(ch);
+            }
+            lines.push(s.trim_end().to_string());
+        }
+        let joined = lines.join("\n");
+        assert!(
+            !joined.contains("insi\nde"),
+            "word 'inside' should not be split in live ring:\n{joined}"
+        );
+    }
+
+    #[test]
     fn status_indicator_visible_with_live_ring() {
         let (tx_raw, _rx) = channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);

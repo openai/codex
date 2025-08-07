@@ -28,6 +28,7 @@ use ratatui::text::Span as RtSpan;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
+use crate::insert_history::word_wrap_lines;
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::PathBuf;
@@ -153,11 +154,8 @@ impl HistoryCell {
     }
 
     pub(crate) fn desired_height(&self, width: u16) -> u16 {
-        Paragraph::new(Text::from(self.plain_lines()))
-            .wrap(Wrap { trim: false })
-            .line_count(width)
-            .try_into()
-            .unwrap_or(0)
+        let wrapped = word_wrap_lines(&self.plain_lines(), width);
+        wrapped.len() as u16
     }
 
     pub(crate) fn new_session_info(
@@ -706,9 +704,8 @@ impl HistoryCell {
 
 impl WidgetRef for &HistoryCell {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        Paragraph::new(Text::from(self.plain_lines()))
-            .wrap(Wrap { trim: false })
-            .render(area, buf);
+        let wrapped = word_wrap_lines(&self.plain_lines(), area.width);
+        Paragraph::new(Text::from(wrapped)).render(area, buf);
     }
 }
 
