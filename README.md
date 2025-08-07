@@ -75,6 +75,20 @@ auto-approve commands.
 
 ---
 
+## Usage
+
+Run `codex` to open the interactive TUI, or pass a prompt inline, e.g. `codex "explain this repo"`. For automation/CI, use `codex exec "update CHANGELOG for next release"`.
+
+Examples:
+
+```bash
+codex "Refactor the Dashboard component to React Hooks"
+codex "Write unit tests for utils/date.ts"
+codex "Explain what this regex does: ^(?=.*[A-Z]).{8,}$"
+```
+
+By default Codex asks before running commands and executes them in a read‑only sandbox; use `--full-auto` to allow commands and workspace writes (network remains disabled). See `docs/usage.md` for examples and advanced options.
+
 
 
 ## System Requirements
@@ -85,9 +99,6 @@ auto-approve commands.
 
 ---
 
-
-
----
 
 ## Configuration
 
