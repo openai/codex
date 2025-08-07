@@ -369,12 +369,38 @@ impl BottomPane<'_> {
 
 #[cfg(test)]
 impl BottomPane<'_> {
-    #[allow(dead_code)]
+    /// Test-only accessor: lets tests read the current live ring rows from the
+    /// BottomPane without exposing this surface in production code.
     pub fn test_live_ring_rows(&self) -> Vec<Line<'static>> {
         match &self.live_ring {
             Some(r) => r.test_rows(),
             None => Vec::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod live_ring_helper_tests {
+    use super::*;
+    use std::sync::mpsc::channel;
+
+    #[test]
+    fn test_helper_live_ring_rows_exposes_rows() {
+        let (tx_raw, _rx) = channel::<crate::app_event::AppEvent>();
+        let tx = crate::app_event_sender::AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+        });
+
+        pane.set_live_ring_rows(3, vec![Line::from("x"), Line::from("y")]);
+        let rows = pane.test_live_ring_rows();
+        let texts: Vec<String> = rows
+            .into_iter()
+            .map(|l| l.spans.into_iter().map(|s| s.content.into_owned()).collect::<String>())
+            .collect();
+        assert_eq!(texts, vec!["x", "y"]);
     }
 }
 

@@ -52,7 +52,9 @@ impl WidgetRef for LiveRingWidget {
 
 #[cfg(test)]
 impl LiveRingWidget {
-    #[allow(dead_code)]
+    /// Test-only accessor: used by black-box tests to inspect the widget's
+    /// current rows without having to render and parse a buffer. This keeps
+    /// production code minimal while enabling targeted assertions in tests.
     pub fn test_rows(&self) -> Vec<Line<'static>> {
         self.rows.clone()
     }
@@ -90,5 +92,20 @@ mod tests {
             !joined.contains("bo\nth"),
             "word 'both' should not be split in live ring:\n{joined}"
         );
+    }
+
+    #[test]
+    fn test_rows_exposes_current_rows_for_tests() {
+        let mut ring = LiveRingWidget::new();
+        let rows = vec![Line::from("a"), Line::from("b")];
+        ring.set_rows(rows.clone());
+        assert_eq!(ring.test_rows().len(), rows.len());
+        let joined = ring
+            .test_rows()
+            .into_iter()
+            .map(|l| l.spans.into_iter().map(|s| s.content.into_owned()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join(",");
+        assert_eq!(joined, "a,b");
     }
 }

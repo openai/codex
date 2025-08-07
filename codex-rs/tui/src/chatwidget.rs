@@ -664,15 +664,18 @@ impl ChatWidget<'_> {
 
 #[cfg(test)]
 impl ChatWidget<'_> {
-    #[allow(dead_code)]
+    /// Test-only accessor: allows tests to read the live overlay rows without
+    /// exposing this API in production.
     pub fn test_live_ring_rows(&self) -> Vec<ratatui::text::Line<'static>> {
         self.bottom_pane.test_live_ring_rows()
     }
-    #[allow(dead_code)]
+    /// Test-only control to tune the maximum rows shown in the live overlay.
+    /// Useful for verifying queue-head behavior without changing production defaults.
     pub fn test_set_live_max_rows(&mut self, n: u16) {
         self.live_max_rows = n;
     }
 }
+
 
 impl ChatWidget<'_> {
     fn begin_stream(&mut self, kind: StreamKind) {
@@ -861,5 +864,38 @@ fn add_token_usage(current_usage: &TokenUsage, new_usage: &TokenUsage) -> TokenU
         output_tokens: current_usage.output_tokens + new_usage.output_tokens,
         reasoning_output_tokens,
         total_tokens: current_usage.total_tokens + new_usage.total_tokens,
+    }
+}
+
+#[cfg(test)]
+mod chatwidget_helper_tests {
+    use super::*;
+    use crate::app_event::AppEvent;
+    use crate::app_event_sender::AppEventSender;
+    use codex_core::config::ConfigOverrides;
+    use std::sync::mpsc::channel;
+
+    fn test_config() -> Config {
+        let overrides = ConfigOverrides {
+            cwd: std::env::current_dir().ok(),
+            ..Default::default()
+        };
+        match Config::load_with_cli_overrides(vec![], overrides) {
+            Ok(c) => c,
+            Err(e) => panic!("load test config: {e}"),
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn helpers_are_available_and_do_not_panic() {
+        let (tx_raw, _rx) = channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let cfg = test_config();
+        let mut w = ChatWidget::new(cfg, tx, None, Vec::new(), false);
+
+        // Adjust the live ring capacity and access rows (initially empty).
+        w.test_set_live_max_rows(4);
+        let rows = w.test_live_ring_rows();
+        assert!(rows.is_empty());
     }
 }
