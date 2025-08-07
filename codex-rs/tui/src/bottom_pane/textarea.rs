@@ -300,14 +300,14 @@ impl TextArea {
             // Option/Right -> Alt+Right (next word end)
             KeyEvent {
                 code: KeyCode::Left,
-                modifiers: KeyModifiers::ALT,
+                modifiers: KeyModifiers::ALT | KeyModifiers::CONTROL,
                 ..
             } => {
                 self.set_cursor(self.beginning_of_previous_word());
             }
             KeyEvent {
                 code: KeyCode::Right,
-                modifiers: KeyModifiers::ALT,
+                modifiers: KeyModifiers::ALT | KeyModifiers::CONTROL,
                 ..
             } => {
                 self.set_cursor(self.end_of_next_word());
