@@ -6,6 +6,7 @@ use serde::Serialize;
 use std::env;
 use std::fs::File;
 use std::fs::OpenOptions;
+use std::fs::remove_file;
 use std::io::Read;
 use std::io::Write;
 #[cfg(unix)]
@@ -183,6 +184,17 @@ pub fn load_auth(codex_home: &Path, include_env_var: bool) -> std::io::Result<Op
 
 fn get_auth_file(codex_home: &Path) -> PathBuf {
     codex_home.join("auth.json")
+}
+
+/// Delete the auth.json file inside `codex_home` if it exists. Returns `Ok(true)`
+/// if a file was removed, `Ok(false)` if no auth file was present.
+pub fn logout(codex_home: &Path) -> std::io::Result<bool> {
+    let auth_file = get_auth_file(codex_home);
+    match remove_file(&auth_file) {
+        Ok(_) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err),
+    }
 }
 
 /// Represents a running login subprocess. The child can be killed by holding
@@ -493,5 +505,16 @@ mod tests {
         assert_eq!(auth.api_key, Some("sk-test-key".to_string()));
 
         assert!(auth.get_token_data().await.is_err());
+    }
+
+    #[test]
+    fn logout_removes_auth_file() -> Result<(), std::io::Error> {
+        let dir = tempdir()?;
+        login_with_api_key(dir.path(), "sk-test-key")?;
+        assert!(dir.path().join("auth.json").exists());
+        let removed = logout(dir.path())?;
+        assert!(removed);
+        assert!(!dir.path().join("auth.json").exists());
+        Ok(())
     }
 }
