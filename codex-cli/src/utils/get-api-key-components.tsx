@@ -68,7 +68,7 @@ export function WaitingForAuth(): JSX.Element {
       <Spinner type="ball" />
       <Text>
         {" "}
-        Waiting for authentication… <Text dimColor>ctrl + c to quit</Text>
+        Waiting for authentication… <Text dimColor>Ctrl + C to quit</Text>
       </Text>
     </Box>
   );
