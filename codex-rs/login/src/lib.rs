@@ -399,7 +399,9 @@ pub struct AuthDotJson {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::token_data::IdTokenInfo;
     use base64::Engine;
+    use pretty_assertions::assert_eq;
     use tempfile::tempdir;
 
     #[test]
@@ -427,7 +429,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[expect(clippy::unwrap_used)]
+    #[expect(clippy::expect_used, clippy::unwrap_used)]
     async fn loads_token_data_from_auth_json() {
         let dir = tempdir().unwrap();
         let auth_file = dir.path().join("auth.json");
@@ -441,7 +443,16 @@ mod tests {
             alg: "none",
             typ: "JWT",
         };
-        let payload = serde_json::json!({});
+        let payload = serde_json::json!({
+            "email": "user@example.com",
+            "email_verified": true,
+            "https://api.openai.com/auth": {
+                "chatgpt_account_id": "bc3618e3-489d-4d49-9362-1561dc53ba53",
+                "chatgpt_plan_type": "pro",
+                "chatgpt_user_id": "user-12345",
+                "user_id": "user-12345",
+            }
+        });
         let b64 = |b: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b);
         let header_b64 = b64(&serde_json::to_vec(&header).unwrap());
         let payload_b64 = b64(&serde_json::to_vec(&payload).unwrap());
@@ -454,28 +465,50 @@ mod tests {
         {{
             "OPENAI_API_KEY": null,
             "tokens": {{
-                "id_token": "{}",
+                "id_token": "{fake_jwt}",
                 "access_token": "test-access-token",
                 "refresh_token": "test-refresh-token"
             }},
-            "last_refresh": "{}"
+            "last_refresh": "2025-08-06T20:41:36.232376Z"
         }}
         "#,
-                fake_jwt,
-                Utc::now().to_rfc3339()
             ),
         )
         .unwrap();
 
-        let auth = load_auth(dir.path(), false).unwrap().unwrap();
-        assert_eq!(auth.mode, AuthMode::ChatGPT);
-        assert_eq!(auth.api_key, None);
-        let td = auth.get_token_data().await.unwrap();
-        assert_eq!(td.access_token, "test-access-token".to_string());
-        assert_eq!(td.refresh_token, "test-refresh-token".to_string());
-        assert!(td.id_token.email.is_none());
-        assert!(td.id_token.chatgpt_plan_type.is_none());
-        assert_eq!(td.account_id, None);
+        let CodexAuth {
+            api_key,
+            mode,
+            auth_dot_json,
+            auth_file,
+        } = load_auth(dir.path(), false).unwrap().unwrap();
+        assert_eq!(None, api_key);
+        assert_eq!(AuthMode::ChatGPT, mode);
+        assert_eq!(dir.path().join("auth.json"), auth_file);
+
+        let guard = auth_dot_json.lock().unwrap();
+        let auth_dot_json = guard.as_ref().expect("AuthDotJson should exist");
+
+        assert_eq!(
+            &AuthDotJson {
+                openai_api_key: None,
+                tokens: Some(TokenData {
+                    id_token: IdTokenInfo {
+                        email: Some("user@example.com".to_string()),
+                        chatgpt_plan_type: Some("pro".to_string()),
+                    },
+                    access_token: "test-access-token".to_string(),
+                    refresh_token: "test-refresh-token".to_string(),
+                    account_id: None,
+                }),
+                last_refresh: Some(
+                    DateTime::parse_from_rfc3339("2025-08-06T20:41:36.232376Z")
+                        .unwrap()
+                        .with_timezone(&Utc)
+                ),
+            },
+            auth_dot_json
+        )
     }
 
     #[test]
