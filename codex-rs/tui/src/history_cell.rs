@@ -262,7 +262,7 @@ impl HistoryCell {
         let mut lines: Vec<Line<'static>> = Vec::new();
         let command_escaped = strip_bash_lc_and_escape(&command);
         lines.push(Line::from(vec![
-            "⚡Ran command ".magenta(),
+            "⚡ Ran command ".magenta(),
             command_escaped.into(),
         ]));
 
@@ -556,7 +556,7 @@ impl HistoryCell {
         let mut header: Vec<Span> = Vec::new();
         header.push(Span::raw("📋"));
         header.push(Span::styled(
-            "Updated",
+            " Updated",
             Style::default().add_modifier(Modifier::BOLD).magenta(),
         ));
         header.push(Span::raw(" to do list ["));
