@@ -37,6 +37,7 @@ pub mod insert_history;
 pub mod live_wrap;
 mod log_layer;
 mod markdown;
+mod markdown_stream;
 pub mod onboarding;
 mod shimmer;
 mod slash_command;

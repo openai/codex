@@ -49,10 +49,9 @@ use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell::CommandOutput;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::PatchEventType;
-use crate::live_wrap::RowBuilder;
+use crate::markdown_stream::{MarkdownNewlineCollector, RenderedLineStreamer};
 use crate::user_approval_widget::ApprovalRequest;
 use codex_file_search::FileMatch;
-use ratatui::style::Stylize;
 
 struct RunningCommand {
     command: Vec<String>,
@@ -68,17 +67,16 @@ pub(crate) struct ChatWidget<'a> {
     config: Config,
     initial_user_message: Option<UserMessage>,
     token_usage: TokenUsage,
-    reasoning_buffer: String,
-    content_buffer: String,
-    // Buffer for streaming assistant answer text; we do not surface partial
-    // We wait for the final AgentMessage event and then emit the full text
-    // at once into scrollback so the history contains a single message.
-    answer_buffer: String,
+    // Newline-gated markdown streaming state
+    reasoning_collector: MarkdownNewlineCollector,
+    answer_collector: MarkdownNewlineCollector,
+    reasoning_streamer: RenderedLineStreamer,
+    answer_streamer: RenderedLineStreamer,
     running_commands: HashMap<String, RunningCommand>,
-    live_builder: RowBuilder,
     current_stream: Option<StreamKind>,
     stream_header_emitted: bool,
     live_max_rows: u16,
+    task_complete_pending: bool,
 }
 
 struct UserMessage {
@@ -117,12 +115,12 @@ impl ChatWidget<'_> {
             self.submit_op(Op::Interrupt);
             self.bottom_pane.set_task_running(false);
             self.bottom_pane.clear_live_ring();
-            self.live_builder = RowBuilder::new(self.live_builder.width());
+            self.reasoning_collector.clear();
+            self.answer_collector.clear();
+            self.reasoning_streamer.clear();
+            self.answer_streamer.clear();
             self.current_stream = None;
             self.stream_header_emitted = false;
-            self.answer_buffer.clear();
-            self.reasoning_buffer.clear();
-            self.content_buffer.clear();
             self.request_redraw();
         }
     }
@@ -136,19 +134,6 @@ impl ChatWidget<'_> {
             Constraint::Min(self.bottom_pane.desired_height(area.width)),
         ])
         .areas(area)
-    }
-    fn emit_stream_header(&mut self, kind: StreamKind) {
-        use ratatui::text::Line as RLine;
-        if self.stream_header_emitted {
-            return;
-        }
-        let header = match kind {
-            StreamKind::Reasoning => RLine::from("thinking".magenta().italic()),
-            StreamKind::Answer => RLine::from("codex".magenta().bold()),
-        };
-        self.app_event_tx
-            .send(AppEvent::InsertHistory(vec![header]));
-        self.stream_header_emitted = true;
     }
     fn finalize_active_stream(&mut self) {
         if let Some(kind) = self.current_stream {
@@ -215,14 +200,15 @@ impl ChatWidget<'_> {
                 initial_images,
             ),
             token_usage: TokenUsage::default(),
-            reasoning_buffer: String::new(),
-            content_buffer: String::new(),
-            answer_buffer: String::new(),
+            reasoning_collector: MarkdownNewlineCollector::new(),
+            answer_collector: MarkdownNewlineCollector::new(),
+            reasoning_streamer: RenderedLineStreamer::new(),
+            answer_streamer: RenderedLineStreamer::new(),
             running_commands: HashMap::new(),
-            live_builder: RowBuilder::new(80),
             current_stream: None,
             stream_header_emitted: false,
             live_max_rows: 3,
+            task_complete_pending: false,
         }
     }
 
@@ -319,7 +305,6 @@ impl ChatWidget<'_> {
             }
             EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
                 self.begin_stream(StreamKind::Answer);
-                self.answer_buffer.push_str(&delta);
                 self.stream_push_and_maybe_commit(&delta);
                 self.request_redraw();
             }
@@ -327,7 +312,6 @@ impl ChatWidget<'_> {
                 // Stream CoT into the live pane; keep input visible and commit
                 // overflow rows incrementally to scrollback.
                 self.begin_stream(StreamKind::Reasoning);
-                self.reasoning_buffer.push_str(&delta);
                 self.stream_push_and_maybe_commit(&delta);
                 self.request_redraw();
             }
@@ -341,7 +325,6 @@ impl ChatWidget<'_> {
             }) => {
                 // Treat raw reasoning content the same as summarized reasoning for UI flow.
                 self.begin_stream(StreamKind::Reasoning);
-                self.reasoning_buffer.push_str(&delta);
                 self.stream_push_and_maybe_commit(&delta);
                 self.request_redraw();
             }
@@ -361,9 +344,19 @@ impl ChatWidget<'_> {
             EventMsg::TaskComplete(TaskCompleteEvent {
                 last_agent_message: _,
             }) => {
-                self.bottom_pane.set_task_running(false);
-                self.bottom_pane.clear_live_ring();
-                self.request_redraw();
+                // Defer clearing status/live ring until streaming fully completes.
+                let streaming_active = match self.current_stream {
+                    Some(StreamKind::Reasoning) => !self.reasoning_streamer.is_idle(),
+                    Some(StreamKind::Answer) => !self.answer_streamer.is_idle(),
+                    None => false,
+                };
+                if streaming_active {
+                    self.task_complete_pending = true;
+                } else {
+                    self.bottom_pane.set_task_running(false);
+                    self.bottom_pane.clear_live_ring();
+                    self.request_redraw();
+                }
             }
             EventMsg::TokenCount(token_usage) => {
                 self.token_usage = add_token_usage(&self.token_usage, &token_usage);
@@ -374,12 +367,12 @@ impl ChatWidget<'_> {
                 self.add_to_history(HistoryCell::new_error_event(message.clone()));
                 self.bottom_pane.set_task_running(false);
                 self.bottom_pane.clear_live_ring();
-                self.live_builder = RowBuilder::new(self.live_builder.width());
+                self.reasoning_collector.clear();
+                self.answer_collector.clear();
+                self.reasoning_streamer.clear();
+                self.answer_streamer.clear();
                 self.current_stream = None;
                 self.stream_header_emitted = false;
-                self.answer_buffer.clear();
-                self.reasoning_buffer.clear();
-                self.content_buffer.clear();
                 self.request_redraw();
             }
             EventMsg::PlanUpdate(update) => {
@@ -648,51 +641,55 @@ impl ChatWidget<'_> {
         if self.current_stream != Some(kind) {
             self.current_stream = Some(kind);
             self.stream_header_emitted = false;
-            // Clear any previous live content; we're starting a new stream.
-            self.live_builder = RowBuilder::new(self.live_builder.width());
             // Ensure the waiting status is visible (composer replaced).
             self.bottom_pane
                 .update_status_text("waiting for model".to_string());
-            self.emit_stream_header(kind);
+            // Show thinking header immediately in the live overlay for reasoning.
+            if kind == StreamKind::Reasoning {
+                use ratatui::style::Stylize;
+                let header = ratatui::text::Line::from("thinking".magenta().italic());
+                self.bottom_pane
+                    .set_live_ring_rows(self.live_max_rows, vec![header]);
+            }
         }
     }
 
     fn stream_push_and_maybe_commit(&mut self, delta: &str) {
-        self.live_builder.push_fragment(delta);
+        // Newline-gated: only consider committing when a newline is present.
+        let (collector, streamer) = match self.current_stream {
+            Some(StreamKind::Reasoning) => (&mut self.reasoning_collector, &mut self.reasoning_streamer),
+            Some(StreamKind::Answer) => (&mut self.answer_collector, &mut self.answer_streamer),
+            None => return,
+        };
 
-        // Commit overflow rows (small batches) while keeping the last N rows visible.
-        let drained = self
-            .live_builder
-            .drain_commit_ready(self.live_max_rows as usize);
-        if !drained.is_empty() {
-            let mut lines: Vec<ratatui::text::Line<'static>> = Vec::new();
-            if !self.stream_header_emitted {
-                match self.current_stream {
-                    Some(StreamKind::Reasoning) => {
-                        lines.push(ratatui::text::Line::from("thinking".magenta().italic()));
+        collector.push_delta(delta);
+        if delta.contains('\n') {
+            let newly_completed = collector.commit_complete_lines(&self.config);
+            if !newly_completed.is_empty() {
+                streamer.enqueue(newly_completed);
+                let step = streamer.step(self.live_max_rows as usize);
+                let mut hist: Vec<ratatui::text::Line<'static>> = Vec::new();
+                if !self.stream_header_emitted {
+                    use ratatui::style::Stylize;
+                    match self.current_stream {
+                        Some(StreamKind::Reasoning) => {
+                            hist.push(ratatui::text::Line::from("thinking".magenta().italic()));
+                        }
+                        Some(StreamKind::Answer) => {
+                            hist.push(ratatui::text::Line::from("codex".magenta().bold()));
+                        }
+                        None => {}
                     }
-                    Some(StreamKind::Answer) => {
-                        lines.push(ratatui::text::Line::from("codex".magenta().bold()));
-                    }
-                    None => {}
+                    self.stream_header_emitted = true;
                 }
-                self.stream_header_emitted = true;
+                hist.extend(step.history);
+                if !hist.is_empty() {
+                    self.app_event_tx.send(AppEvent::InsertHistory(hist));
+                }
+                self.bottom_pane
+                    .set_live_ring_rows(self.live_max_rows, step.live);
             }
-            for r in drained {
-                lines.push(ratatui::text::Line::from(r.text));
-            }
-            self.app_event_tx.send(AppEvent::InsertHistory(lines));
         }
-
-        // Update the live ring overlay lines (text-only, newest at bottom).
-        let rows = self
-            .live_builder
-            .display_rows()
-            .into_iter()
-            .map(|r| ratatui::text::Line::from(r.text))
-            .collect::<Vec<_>>();
-        self.bottom_pane
-            .set_live_ring_rows(self.live_max_rows, rows);
     }
 
     fn finalize_stream(&mut self, kind: StreamKind) {
@@ -700,15 +697,20 @@ impl ChatWidget<'_> {
             // Nothing to do; either already finalized or not the active stream.
             return;
         }
-        // Flush any partial line as a full row, then drain all remaining rows.
-        self.live_builder.end_line();
-        let remaining = self.live_builder.drain_rows();
-        // TODO: Re-add markdown rendering for assistant answers and reasoning.
-        // When finalizing, pass the accumulated text through `markdown::append_markdown`
-        // to build styled `Line<'static>` entries instead of raw plain text lines.
-        if !remaining.is_empty() || !self.stream_header_emitted {
+        let (collector, streamer) = match kind {
+            StreamKind::Reasoning => (&mut self.reasoning_collector, &mut self.reasoning_streamer),
+            StreamKind::Answer => (&mut self.answer_collector, &mut self.answer_streamer),
+        };
+
+        let remaining = collector.finalize_and_drain(&self.config);
+        if !remaining.is_empty() {
+            streamer.enqueue(remaining);
+        }
+        let step = streamer.drain_all(self.live_max_rows as usize);
+        if !step.history.is_empty() || !self.stream_header_emitted {
             let mut lines: Vec<ratatui::text::Line<'static>> = Vec::new();
             if !self.stream_header_emitted {
+                use ratatui::style::Stylize;
                 match kind {
                     StreamKind::Reasoning => {
                         lines.push(ratatui::text::Line::from("thinking".magenta().italic()));
@@ -719,19 +721,19 @@ impl ChatWidget<'_> {
                 }
                 self.stream_header_emitted = true;
             }
-            for r in remaining {
-                lines.push(ratatui::text::Line::from(r.text));
-            }
-            // Close the block with a blank line for readability.
+            lines.extend(step.history);
             lines.push(ratatui::text::Line::from(""));
             self.app_event_tx.send(AppEvent::InsertHistory(lines));
         }
 
         // Clear the live overlay and reset state for the next stream.
-        self.live_builder = RowBuilder::new(self.live_builder.width());
         self.bottom_pane.clear_live_ring();
         self.current_stream = None;
         self.stream_header_emitted = false;
+        if self.task_complete_pending {
+            self.bottom_pane.set_task_running(false);
+            self.task_complete_pending = false;
+        }
     }
 }
 
