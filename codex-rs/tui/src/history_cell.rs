@@ -110,6 +110,9 @@ pub(crate) enum HistoryCell {
     /// Output from the `/status` command.
     StatusOutput { view: TextBlock },
 
+    /// Output from the `/prompts` command.
+    PromptsOutput { view: TextBlock },
+
     /// Error event from the backend.
     ErrorEvent { view: TextBlock },
 
@@ -142,6 +145,7 @@ impl HistoryCell {
             | HistoryCell::BackgroundEvent { view }
             | HistoryCell::GitDiffOutput { view }
             | HistoryCell::StatusOutput { view }
+            | HistoryCell::PromptsOutput { view }
             | HistoryCell::ErrorEvent { view }
             | HistoryCell::SessionInfo { view }
             | HistoryCell::CompletedExecCommand { view }
@@ -201,6 +205,7 @@ impl HistoryCell {
                 Line::from(format!(" /init - {}", SlashCommand::Init.description()).dim()),
                 Line::from(format!(" /status - {}", SlashCommand::Status.description()).dim()),
                 Line::from(format!(" /diff - {}", SlashCommand::Diff.description()).dim()),
+                Line::from(format!(" /prompts - {}", SlashCommand::Prompts.description()).dim()),
                 Line::from("".dim()),
             ];
             HistoryCell::WelcomeMessage {
@@ -521,6 +526,23 @@ impl HistoryCell {
 
         lines.push(Line::from(""));
         HistoryCell::StatusOutput {
+            view: TextBlock::new(lines),
+        }
+    }
+
+    pub(crate) fn new_prompts_output() -> Self {
+        let lines: Vec<Line<'static>> = vec![
+            Line::from("/prompts".magenta()),
+            Line::from(""),
+            Line::from(" 1. Explain this codebase"),
+            Line::from(" 2. Summarize recent commits"),
+            Line::from(" 3. Implement {feature}"),
+            Line::from(" 4. Find and fix a bug in @filename"),
+            Line::from(" 5. Write tests for @filename"),
+            Line::from(" 6. Improve documentation in @filename"),
+            Line::from(""),
+        ];
+        HistoryCell::PromptsOutput {
             view: TextBlock::new(lines),
         }
     }
