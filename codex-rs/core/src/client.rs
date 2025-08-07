@@ -271,6 +271,10 @@ impl ModelClient {
                     }
 
                     if attempt > max_retries {
+                        if status == StatusCode::INTERNAL_SERVER_ERROR {
+                            return Err(CodexErr::InternalServerError);
+                        }
+
                         return Err(CodexErr::RetryLimit(status));
                     }
 
