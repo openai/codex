@@ -1,5 +1,6 @@
 use chrono::DateTime;
 
+use base64::Engine;
 use chrono::Utc;
 use serde::Deserialize;
 use serde::Serialize;
@@ -404,6 +405,57 @@ pub struct TokenData {
     pub account_id: Option<String>,
 }
 
+/// Flat subset of useful claims in id_token from auth.json.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdTokenInfo {
+    pub email: Option<String>,
+    /// The ChatGPT subscription plan type
+    /// (e.g., "free", "plus", "pro", "business", "enterprise", "edu").
+    /// (Note: ae has not verified that those are the exact values.)
+    pub chatgpt_plan_type: Option<String>,
+}
+
+impl TokenData {
+    /// Parse `self.id_token` as a JWT and return a flat struct with commonly-used fields.
+    pub fn id_token_info(&self) -> std::io::Result<IdTokenInfo> {
+        // JWT format: header.payload.signature
+        let mut parts = self.id_token.split('.');
+        let (_header_b64, payload_b64, _sig_b64) = match (parts.next(), parts.next(), parts.next())
+        {
+            (Some(h), Some(p), Some(s)) if !h.is_empty() && !p.is_empty() && !s.is_empty() => {
+                (h, p, s)
+            }
+            _ => return Err(std::io::Error::other("Invalid ID token format")),
+        };
+
+        let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(payload_b64)
+            .map_err(std::io::Error::other)?;
+
+        #[derive(Deserialize)]
+        struct AuthClaims {
+            #[serde(default)]
+            chatgpt_plan_type: Option<String>,
+        }
+
+        #[derive(Deserialize)]
+        struct IdClaims {
+            #[serde(default)]
+            email: Option<String>,
+            #[serde(rename = "https://api.openai.com/auth", default)]
+            auth: Option<AuthClaims>,
+        }
+
+        let claims: IdClaims =
+            serde_json::from_slice(&payload_bytes).map_err(std::io::Error::other)?;
+
+        Ok(IdTokenInfo {
+            email: claims.email,
+            chatgpt_plan_type: claims.auth.and_then(|a| a.chatgpt_plan_type),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -469,6 +521,74 @@ mod tests {
                 account_id: None,
             }
         );
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used)]
+    #[expect(clippy::expect_used)]
+    fn id_token_info_parses_email_and_plan() {
+        // Build a fake JWT with a URL-safe base64 payload containing email and plan.
+        #[derive(Serialize)]
+        struct Header {
+            alg: &'static str,
+            typ: &'static str,
+        }
+        let header = Header {
+            alg: "none",
+            typ: "JWT",
+        };
+        let payload = serde_json::json!({
+            "email": "user@example.com",
+            "https://api.openai.com/auth": {
+                "chatgpt_plan_type": "pro"
+            }
+        });
+
+        fn b64url_no_pad(bytes: &[u8]) -> String {
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+        }
+
+        let header_b64 = b64url_no_pad(&serde_json::to_vec(&header).unwrap());
+        let payload_b64 = b64url_no_pad(&serde_json::to_vec(&payload).unwrap());
+        let signature_b64 = b64url_no_pad(b"sig");
+        let fake_jwt = format!("{header_b64}.{payload_b64}.{signature_b64}");
+
+        let td = TokenData {
+            id_token: fake_jwt,
+            access_token: String::from("at"),
+            refresh_token: String::from("rt"),
+            account_id: None,
+        };
+
+        let info = td.id_token_info().expect("should parse");
+        assert_eq!(info.email.as_deref(), Some("user@example.com"));
+        assert_eq!(info.chatgpt_plan_type.as_deref(), Some("pro"));
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used)]
+    #[expect(clippy::expect_used)]
+    fn id_token_info_handles_missing_fields() {
+        // Payload without email or plan should yield None values.
+        let header = serde_json::json!({"alg": "none", "typ": "JWT"});
+        let payload = serde_json::json!({"sub": "123"});
+        let header_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(&header).unwrap());
+        let payload_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(&payload).unwrap());
+        let signature_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b"sig");
+        let jwt = format!("{header_b64}.{payload_b64}.{signature_b64}");
+
+        let td = TokenData {
+            id_token: jwt,
+            access_token: String::from("at"),
+            refresh_token: String::from("rt"),
+            account_id: None,
+        };
+
+        let info = td.id_token_info().expect("should parse");
+        assert!(info.email.is_none());
+        assert!(info.chatgpt_plan_type.is_none());
     }
 
     #[tokio::test]

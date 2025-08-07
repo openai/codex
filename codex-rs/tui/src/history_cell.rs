@@ -15,6 +15,8 @@ use codex_core::protocol::FileChange;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::TokenUsage;
+use codex_login::TokenData;
+use codex_login::try_read_auth_json;
 use image::DynamicImage;
 use image::ImageReader;
 use mcp_types::EmbeddedResourceResource;
@@ -122,6 +124,8 @@ pub(crate) enum HistoryCell {
 }
 
 const TOOL_CALL_MAX_LINES: usize = 3;
+
+// title_case helper removed to keep plan output unchanged from source
 
 impl HistoryCell {
     /// Return a cloned, plain representation of the cell's lines suitable for
@@ -463,8 +467,41 @@ impl HistoryCell {
             lines.push(Line::from(vec![format!("{key}: ").bold(), value.into()]));
         }
 
-        // Token usage
         lines.push(Line::from(""));
+
+        if let Ok(auth) = try_read_auth_json(&config.codex_home.join("auth.json"))
+            && auth.tokens.is_some()
+        {
+            lines.push(Line::from("signed in with chatgpt".bold()));
+
+            if let Some(TokenData { id_token, .. }) = auth.tokens.clone() {
+                let td = TokenData {
+                    id_token,
+                    ..Default::default()
+                };
+                if let Ok(info) = td.id_token_info() {
+                    if let Some(email) = info.email {
+                        lines.push(Line::from(vec!["  login: ".bold(), email.into()]));
+                    }
+
+                    match auth.openai_api_key.as_deref() {
+                        Some(key) if !key.is_empty() => {
+                            lines.push(Line::from("  using api key"));
+                        }
+                        _ => {
+                            let plan_text = info
+                                .chatgpt_plan_type
+                                .unwrap_or_else(|| "Unknown".to_string());
+                            lines.push(Line::from(vec!["  plan: ".bold(), plan_text.into()]));
+                        }
+                    }
+                }
+            }
+
+            lines.push(Line::from(""));
+        }
+
+        // token usage
         lines.push(Line::from("token usage".bold()));
         lines.push(Line::from(vec![
             "  input: ".bold(),
