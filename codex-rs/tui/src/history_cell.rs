@@ -638,7 +638,7 @@ impl HistoryCell {
         let mut lines: Vec<Line<'static>> = Vec::new();
 
         // Failure title
-        lines.push(Line::from("❌Failed to apply patch".magenta().bold()));
+        lines.push(Line::from("✘ Failed to apply patch".magenta().bold()));
 
         if !stderr.trim().is_empty() {
             let mut iter = stderr.lines();
