@@ -103,7 +103,12 @@ mod tests {
         let joined = ring
             .test_rows()
             .into_iter()
-            .map(|l| l.spans.into_iter().map(|s| s.content.into_owned()).collect::<String>())
+            .map(|l| {
+                l.spans
+                    .into_iter()
+                    .map(|s| s.content.into_owned())
+                    .collect::<String>()
+            })
             .collect::<Vec<_>>()
             .join(",");
         assert_eq!(joined, "a,b");

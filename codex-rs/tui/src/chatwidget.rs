@@ -676,7 +676,6 @@ impl ChatWidget<'_> {
     }
 }
 
-
 impl ChatWidget<'_> {
     fn begin_stream(&mut self, kind: StreamKind) {
         if let Some(current) = self.current_stream {

@@ -398,7 +398,12 @@ mod live_ring_helper_tests {
         let rows = pane.test_live_ring_rows();
         let texts: Vec<String> = rows
             .into_iter()
-            .map(|l| l.spans.into_iter().map(|s| s.content.into_owned()).collect::<String>())
+            .map(|l| {
+                l.spans
+                    .into_iter()
+                    .map(|s| s.content.into_owned())
+                    .collect::<String>()
+            })
             .collect();
         assert_eq!(texts, vec!["x", "y"]);
     }

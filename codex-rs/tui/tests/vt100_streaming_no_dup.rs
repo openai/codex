@@ -7,7 +7,7 @@ use ratatui::text::Line;
 fn term(viewport: Rect) -> codex_tui::custom_terminal::Terminal<TestBackend> {
     let backend = TestBackend::new(20, 6);
     let mut term = codex_tui::custom_terminal::Terminal::with_options(backend)
-        .expect("failed to construct terminal");
+        .unwrap_or_else(|e| panic!("failed to construct terminal: {e}"));
     term.set_viewport_area(viewport);
     term
 }
