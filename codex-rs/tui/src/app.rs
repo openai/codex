@@ -5,6 +5,10 @@ use crate::file_search::FileSearchManager;
 use crate::get_git_diff::get_git_diff;
 use crate::git_warning_screen::GitWarningOutcome;
 use crate::git_warning_screen::GitWarningScreen;
+use crate::onboarding::onboarding_screen::KeyEventResult;
+use crate::onboarding::onboarding_screen::KeyboardHandler;
+use crate::onboarding::onboarding_screen::OnboardingScreen;
+use crate::should_show_login_screen;
 use crate::slash_command::SlashCommand;
 use crate::tui;
 use codex_core::config::Config;
@@ -35,6 +39,9 @@ const REDRAW_DEBOUNCE: Duration = Duration::from_millis(10);
 /// Top-level application state: which full-screen view is currently active.
 #[allow(clippy::large_enum_variant)]
 enum AppState<'a> {
+    Onboarding {
+        screen: OnboardingScreen,
+    },
     /// The main chat UI is visible.
     Chat {
         /// Boxed to avoid a large enum variant and reduce the overall size of
@@ -42,7 +49,9 @@ enum AppState<'a> {
         widget: Box<ChatWidget<'a>>,
     },
     /// The start-up warning that recommends running codex inside a Git repo.
-    GitWarning { screen: GitWarningScreen },
+    GitWarning {
+        screen: GitWarningScreen,
+    },
 }
 
 pub(crate) struct App<'a> {
@@ -133,7 +142,20 @@ impl App<'_> {
             });
         }
 
-        let (app_state, chat_args) = if show_git_warning {
+        let show_login_screen = should_show_login_screen(&config);
+        let (app_state, chat_args) = if show_login_screen {
+            (
+                AppState::Onboarding {
+                    screen: OnboardingScreen::new(app_event_tx.clone(), config.codex_home.clone()),
+                },
+                Some(ChatWidgetArgs {
+                    config: config.clone(),
+                    initial_prompt,
+                    initial_images,
+                    enhanced_keys_supported,
+                }),
+            )
+        } else if show_git_warning {
             (
                 AppState::GitWarning {
                     screen: GitWarningScreen::new(),
@@ -232,10 +254,23 @@ impl App<'_> {
                                 AppState::Chat { widget } => {
                                     widget.on_ctrl_c();
                                 }
+                                AppState::Onboarding { .. } => {
+                                    self.app_event_tx.send(AppEvent::ExitRequest);
+                                }
                                 AppState::GitWarning { .. } => {
                                     // Allow exiting the app with Ctrl+C from the warning screen.
                                     self.app_event_tx.send(AppEvent::ExitRequest);
                                 }
+                            }
+                        }
+                        KeyEvent {
+                            code: KeyCode::Char('z'),
+                            modifiers: crossterm::event::KeyModifiers::CONTROL,
+                            kind: KeyEventKind::Press,
+                            ..
+                        } => {
+                            if let AppState::Chat { widget } = &mut self.app_state {
+                                widget.on_ctrl_z();
                             }
                         }
                         KeyEvent {
@@ -254,6 +289,9 @@ impl App<'_> {
                                         // prematurely.
                                         self.dispatch_key_event(key_event);
                                     }
+                                }
+                                AppState::Onboarding { .. } => {
+                                    self.app_event_tx.send(AppEvent::ExitRequest);
                                 }
                                 AppState::GitWarning { .. } => {
                                     self.app_event_tx.send(AppEvent::ExitRequest);
@@ -282,10 +320,12 @@ impl App<'_> {
                 }
                 AppEvent::CodexOp(op) => match &mut self.app_state {
                     AppState::Chat { widget } => widget.submit_op(op),
+                    AppState::Onboarding { .. } => {}
                     AppState::GitWarning { .. } => {}
                 },
                 AppEvent::LatestLog(line) => match &mut self.app_state {
                     AppState::Chat { widget } => widget.update_latest_log(line),
+                    AppState::Onboarding { .. } => {}
                     AppState::GitWarning { .. } => {}
                 },
                 AppEvent::DispatchCommand(command) => match command {
@@ -382,6 +422,12 @@ impl App<'_> {
                         }));
                     }
                 },
+                AppEvent::OnboardingAuthComplete(result) => {
+                    if let AppState::Onboarding { screen } = &mut self.app_state {
+                        // Let the onboarding screen handle success/failure and emit follow-up events.
+                        let _ = screen.on_auth_complete(result);
+                    }
+                }
                 AppEvent::StartFileSearch(query) => {
                     self.file_search.on_user_query(query);
                 }
@@ -400,6 +446,7 @@ impl App<'_> {
     pub(crate) fn token_usage(&self) -> codex_core::protocol::TokenUsage {
         match &self.app_state {
             AppState::Chat { widget } => widget.token_usage().clone(),
+            AppState::Onboarding { .. } => codex_core::protocol::TokenUsage::default(),
             AppState::GitWarning { .. } => codex_core::protocol::TokenUsage::default(),
         }
     }
@@ -428,6 +475,7 @@ impl App<'_> {
         let size = terminal.size()?;
         let desired_height = match &self.app_state {
             AppState::Chat { widget } => widget.desired_height(size.width),
+            AppState::Onboarding { .. } => size.height,
             AppState::GitWarning { .. } => size.height,
         };
 
@@ -458,6 +506,7 @@ impl App<'_> {
                 }
                 frame.render_widget_ref(&**widget, frame.area())
             }
+            AppState::Onboarding { screen } => frame.render_widget_ref(&*screen, frame.area()),
             AppState::GitWarning { screen } => frame.render_widget_ref(&*screen, frame.area()),
         })?;
         Ok(())
@@ -470,6 +519,25 @@ impl App<'_> {
             AppState::Chat { widget } => {
                 widget.handle_key_event(key_event);
             }
+            AppState::Onboarding { screen } => match screen.handle_key_event(key_event) {
+                KeyEventResult::Continue => {
+                    self.app_state = AppState::Chat {
+                        widget: Box::new(ChatWidget::new(
+                            self.config.clone(),
+                            self.app_event_tx.clone(),
+                            None,
+                            Vec::new(),
+                            self.enhanced_keys_supported,
+                        )),
+                    };
+                }
+                KeyEventResult::Quit => {
+                    self.app_event_tx.send(AppEvent::ExitRequest);
+                }
+                KeyEventResult::None => {
+                    // do nothing
+                }
+            },
             AppState::GitWarning { screen } => match screen.handle_key_event(key_event) {
                 GitWarningOutcome::Continue => {
                     // User accepted – switch to chat view.
@@ -501,6 +569,7 @@ impl App<'_> {
     fn dispatch_paste_event(&mut self, pasted: String) {
         match &mut self.app_state {
             AppState::Chat { widget } => widget.handle_paste(pasted),
+            AppState::Onboarding { .. } => {}
             AppState::GitWarning { .. } => {}
         }
     }
@@ -508,6 +577,7 @@ impl App<'_> {
     fn dispatch_codex_event(&mut self, event: Event) {
         match &mut self.app_state {
             AppState::Chat { widget } => widget.handle_codex_event(event),
+            AppState::Onboarding { .. } => {}
             AppState::GitWarning { .. } => {}
         }
     }

@@ -42,6 +42,15 @@ impl From<std::io::Error> for ApplyPatchError {
     }
 }
 
+impl From<&std::io::Error> for ApplyPatchError {
+    fn from(err: &std::io::Error) -> Self {
+        ApplyPatchError::IoError(IoError {
+            context: "I/O error".to_string(),
+            source: std::io::Error::new(err.kind(), err.to_string()),
+        })
+    }
+}
+
 #[derive(Debug, Error)]
 #[error("{context}: {source}")]
 pub struct IoError {
@@ -366,13 +375,21 @@ pub fn apply_hunks(
     match apply_hunks_to_files(hunks) {
         Ok(affected) => {
             print_summary(&affected, stdout).map_err(ApplyPatchError::from)?;
+            Ok(())
         }
         Err(err) => {
-            writeln!(stderr, "{err:?}").map_err(ApplyPatchError::from)?;
+            let msg = err.to_string();
+            writeln!(stderr, "{msg}").map_err(ApplyPatchError::from)?;
+            if let Some(io) = err.downcast_ref::<std::io::Error>() {
+                Err(ApplyPatchError::from(io))
+            } else {
+                Err(ApplyPatchError::IoError(IoError {
+                    context: msg,
+                    source: std::io::Error::other(err),
+                }))
+            }
         }
     }
-
-    Ok(())
 }
 
 /// Applies each parsed patch hunk to the filesystem.
@@ -1237,5 +1254,25 @@ g
                 cwd: session_dir.path().to_path_buf(),
             })
         );
+    }
+
+    #[test]
+    fn test_apply_patch_fails_on_write_error() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("readonly.txt");
+        fs::write(&path, "before\n").unwrap();
+        let mut perms = fs::metadata(&path).unwrap().permissions();
+        perms.set_readonly(true);
+        fs::set_permissions(&path, perms).unwrap();
+
+        let patch = wrap_patch(&format!(
+            "*** Update File: {}\n@@\n-before\n+after\n*** End Patch",
+            path.display()
+        ));
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let result = apply_patch(&patch, &mut stdout, &mut stderr);
+        assert!(result.is_err());
     }
 }

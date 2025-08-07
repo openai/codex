@@ -429,6 +429,12 @@ pub struct TokenUsage {
     pub total_tokens: u64,
 }
 
+impl TokenUsage {
+    pub fn is_zero(&self) -> bool {
+        self.total_tokens == 0
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct FinalOutput {
     pub token_usage: TokenUsage,

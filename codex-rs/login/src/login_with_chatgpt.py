@@ -110,7 +110,7 @@ def main() -> None:
                 eprint(f"Failed to open browser: {e}")
 
         eprint(
-            f"If your browser did not open, navigate to this URL to authenticate:\n\n{auth_url}"
+            f". If your browser did not open, navigate to this URL to authenticate: \n\n{auth_url}"
         )
 
         # Run the server in the main thread until `shutdown()` is called by the
