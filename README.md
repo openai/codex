@@ -9,7 +9,8 @@ This is the home of the **Codex CLI**, OpenAI's coding agent that runs locally o
 
 ---
 
-> ⚠️ Experimental
+> ⚠️ **Experimental**
+>
 > Codex CLI is under active development. We welcome issues and PRs — see [contributing](./docs/contributing.md).
 
 ## Quickstart
@@ -30,15 +31,13 @@ If you have a ChatGPT Plus or Pro account, login with:
 codex login
 ```
 
-This should create a `~/.codex/auth.json` file that contains the credentials that Codex will use.
-
-To verify whether you are currently logged in, run:
+To verify whether you are currently logged in:
 
 ```
 codex login status
 ```
 
-If you encounter problems with the login flow, please comment on <https://github.com/openai/codex/issues/1243>.
+This should create a `~/.codex/auth.json` file that contains the credentials that Codex will use. If you encounter problems with the login flow, please comment on <https://github.com/openai/codex/issues/1243>.
 
 
 ### OpenAI API Users
@@ -52,25 +51,22 @@ export OPENAI_API_KEY="your-api-key-here"
 > [!NOTE]
 > This command sets the key only for your current terminal session. You can add the `export` line to your shell's configuration file (e.g., `~/.zshrc`), but we recommend setting it for the session.
 
-**Run**
+### Running `codex`
+
+After authentication, you can run Codex interactively:
 
 ```shell
 codex
 ```
 
-Or, run with a prompt as input (and optionally in `Full Auto` mode):
+Or, run with a prompt as input:
 
 ```shell
 codex "explain this codebase to me"
 ```
 
-```shell
-codex --full-auto "create the fanciest todo-list app"
-```
-
 That's it - Codex will scaffold a file, run it inside a sandbox, install any
-missing dependencies, and show you the live result. Approve the changes and
-they'll be committed to your working directory.
+missing dependencies, and show you the live result. Approve the changes (or run with `--full-auto`) and they'll be committed to your working directory.
 
 
 ---
