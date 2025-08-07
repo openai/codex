@@ -38,7 +38,6 @@ pub(crate) struct CommandOutput {
     pub(crate) exit_code: i32,
     pub(crate) stdout: String,
     pub(crate) stderr: String,
-    pub(crate) duration: Duration,
 }
 
 pub(crate) enum PatchEventType {
@@ -122,7 +121,7 @@ pub(crate) enum HistoryCell {
     PatchApplyResult { view: TextBlock },
 }
 
-const TOOL_CALL_MAX_LINES: usize = 5;
+const TOOL_CALL_MAX_LINES: usize = 3;
 
 impl HistoryCell {
     /// Return a cloned, plain representation of the cell's lines suitable for
@@ -232,8 +231,11 @@ impl HistoryCell {
         let command_escaped = strip_bash_lc_and_escape(&command);
 
         let lines: Vec<Line<'static>> = vec![
-            Line::from(vec!["command".magenta(), " running...".dim()]),
-            Line::from(format!("$ {command_escaped}")),
+            Line::from(vec![
+                "▌ ".cyan(),
+                "Running command ".magenta(),
+                command_escaped.into(),
+            ]),
             Line::from(""),
         ];
 
@@ -247,34 +249,36 @@ impl HistoryCell {
             exit_code,
             stdout,
             stderr,
-            duration,
         } = output;
 
         let mut lines: Vec<Line<'static>> = Vec::new();
-
-        // Title depends on whether we have output yet.
-        let title_line = Line::from(vec![
-            "command".magenta(),
-            format!(
-                " (code: {}, duration: {})",
-                exit_code,
-                format_duration(duration)
-            )
-            .dim(),
-        ]);
-        lines.push(title_line);
+        let command_escaped = strip_bash_lc_and_escape(&command);
+        lines.push(Line::from(vec![
+            "⚡Ran command ".magenta(),
+            command_escaped.into(),
+        ]));
 
         let src = if exit_code == 0 { stdout } else { stderr };
 
-        let cmdline = strip_bash_lc_and_escape(&command);
-        lines.push(Line::from(format!("$ {cmdline}")));
         let mut lines_iter = src.lines();
-        for raw in lines_iter.by_ref().take(TOOL_CALL_MAX_LINES) {
-            lines.push(ansi_escape_line(raw).dim());
+        for (idx, raw) in lines_iter.by_ref().take(TOOL_CALL_MAX_LINES).enumerate() {
+            let mut line = ansi_escape_line(raw);
+            let prefix = if idx == 0 { "  ⎿ " } else { "    " };
+            line.spans.insert(0, prefix.into());
+            line.spans.iter_mut().for_each(|span| {
+                span.style = span.style.add_modifier(Modifier::DIM);
+            });
+            lines.push(line);
         }
         let remaining = lines_iter.count();
         if remaining > 0 {
-            lines.push(Line::from(format!("... {remaining} additional lines")).dim());
+            let mut more = Line::from(format!("... +{remaining} lines"));
+            // Continuation/ellipsis is treated as a subsequent line for prefixing
+            more.spans.insert(0, "    ".into());
+            more.spans.iter_mut().for_each(|span| {
+                span.style = span.style.add_modifier(Modifier::DIM);
+            });
+            lines.push(more);
         }
         lines.push(Line::from(""));
 

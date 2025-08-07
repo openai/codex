@@ -4,7 +4,7 @@ use crate::app_event::AppEvent;
 
 #[derive(Clone, Debug)]
 pub(crate) struct AppEventSender {
-    app_event_tx: Sender<AppEvent>,
+    pub app_event_tx: Sender<AppEvent>,
 }
 
 impl AppEventSender {
