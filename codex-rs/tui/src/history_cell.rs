@@ -646,7 +646,7 @@ impl HistoryCell {
             let remaining = iter.count();
             if remaining > 0 {
                 lines.push(Line::from(""));
-                lines.push(Line::from(format!("… +{remaining} lines")).dim());
+                lines.push(Line::from(format!("... +{remaining} lines")).dim());
             }
         }
 
@@ -671,19 +671,34 @@ fn create_diff_summary(title: &str, changes: HashMap<PathBuf, FileChange>) -> Ve
 
     // Count additions/deletions from a unified diff body
     let count_from_unified = |diff: &str| -> (usize, usize) {
-        let mut adds = 0usize;
-        let mut dels = 0usize;
-        for l in diff.lines() {
-            if l.starts_with("+++") || l.starts_with("---") || l.starts_with("@@") {
-                continue;
+        if let Ok(patch) = diffy::Patch::from_str(diff) {
+            let mut adds = 0usize;
+            let mut dels = 0usize;
+            for hunk in patch.hunks() {
+                for line in hunk.lines() {
+                    match line {
+                        diffy::Line::Insert(_) => adds += 1,
+                        diffy::Line::Delete(_) => dels += 1,
+                        _ => {}
+                    }
+                }
             }
-            match l.as_bytes().first() {
-                Some(b'+') => adds += 1,
-                Some(b'-') => dels += 1,
-                _ => {}
+            (adds, dels)
+        } else {
+            let mut adds = 0usize;
+            let mut dels = 0usize;
+            for l in diff.lines() {
+                if l.starts_with("+++") || l.starts_with("---") || l.starts_with("@@") {
+                    continue;
+                }
+                match l.as_bytes().first() {
+                    Some(b'+') => adds += 1,
+                    Some(b'-') => dels += 1,
+                    _ => {}
+                }
             }
+            (adds, dels)
         }
-        (adds, dels)
     };
 
     for (path, change) in &changes {
