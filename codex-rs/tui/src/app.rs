@@ -328,6 +328,12 @@ impl App<'_> {
                     SlashCommand::Quit => {
                         break;
                     }
+                    SlashCommand::Logout => {
+                        if let Err(e) = codex_login::logout(&self.config.codex_home) {
+                            tracing::error!("failed to logout: {e}");
+                        }
+                        break;
+                    }
                     SlashCommand::Diff => {
                         let (is_git_repo, diff_text) = match get_git_diff() {
                             Ok(v) => v,
