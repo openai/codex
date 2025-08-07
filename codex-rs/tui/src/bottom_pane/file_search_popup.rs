@@ -137,7 +137,7 @@ impl WidgetRef for &FileSearchPopup {
             let msg = if self.pending_query.is_empty() {
                 "type to search for files"
             } else if self.waiting {
-                "(searching …)"
+                "(searching…)"
             } else {
                 "no matches"
             };
