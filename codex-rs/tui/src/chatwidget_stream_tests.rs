@@ -326,4 +326,67 @@ mod widget_stream_extra {
         assert_eq!(r_header_idx, 0, "reasoning header should be first in its batch");
         assert_eq!(a_header_idx, 0, "answer header should be first in its batch");
     }
+
+    #[test]
+    fn header_not_repeated_across_pauses() {
+        let (tx_raw, rx) = channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let config = test_config();
+        let mut w = ChatWidget::new(config.clone(), tx.clone(), None, Vec::new(), false);
+
+        // Begin reasoning, enqueue first line, start animation.
+        w.handle_codex_event(Event {
+            id: "r1".into(),
+            msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta: "first\n".into() }),
+        });
+        // Simulate one animation tick: should emit header + first.
+        w.on_commit_tick();
+        let lines1 = super::recv_insert_history(&rx, 200).expect("history after first tick");
+        let texts1: Vec<String> = lines1
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.clone()).collect::<String>())
+            .collect();
+        assert!(texts1.iter().any(|s| s.contains("thinking")), "missing header on first tick: {texts1:?}");
+        assert!(texts1.iter().any(|s| s == "first"), "missing first line: {texts1:?}");
+
+        // Stop ticks naturally by draining queue (second tick consumes nothing).
+        w.on_commit_tick();
+        let _ = super::recv_insert_history(&rx, 100);
+
+        // Later, enqueue another completed line; header must NOT repeat.
+        w.handle_codex_event(Event {
+            id: "r1".into(),
+            msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta: "second\n".into() }),
+        });
+        w.on_commit_tick();
+        let lines2 = super::recv_insert_history(&rx, 200).expect("history after second tick");
+        let texts2: Vec<String> = lines2
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.clone()).collect::<String>())
+            .collect();
+        let header_count2 = texts2.iter().filter(|s| s.contains("thinking")).count();
+        assert_eq!(header_count2, 0, "header should not repeat after pause: {texts2:?}");
+        assert!(texts2.iter().any(|s| s == "second"), "missing second line: {texts2:?}");
+
+        // Finalize; trailing blank should be added; no extra header.
+        w.handle_codex_event(Event {
+            id: "r1".into(),
+            msg: EventMsg::AgentReasoning(AgentReasoningEvent { text: String::new() }),
+        });
+        // Drain remaining with ticks.
+        w.on_commit_tick();
+        let lines3 = super::recv_insert_history(&rx, 200).expect("history after finalize tick");
+        let texts3: Vec<String> = lines3
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.clone()).collect::<String>())
+            .collect();
+        let header_total = texts1
+            .into_iter()
+            .chain(texts2.into_iter())
+            .chain(texts3.iter().cloned())
+            .filter(|s| s.contains("thinking"))
+            .count();
+        assert_eq!(header_total, 1, "header should appear exactly once across pauses and finalize");
+        assert!(texts3.last().is_some_and(|s| s.is_empty()), "expected trailing blank line");
+    }
 }

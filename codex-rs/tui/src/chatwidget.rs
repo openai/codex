@@ -80,6 +80,7 @@ pub(crate) struct ChatWidget<'a> {
     stream_header_emitted: bool,
     live_max_rows: u16,
     task_complete_pending: bool,
+    finishing_after_drain: bool,
     // Queue of interruptive UI events deferred during an active write cycle
     interrupt_queue: VecDeque<QueuedInterrupt>,
 }
@@ -122,6 +123,60 @@ fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Optio
 }
 
 impl ChatWidget<'_> {
+    /// Periodic tick to commit at most one queued line to history with a small delay,
+    /// animating the output.
+    pub(crate) fn on_commit_tick(&mut self) {
+        // Choose the active streamer
+        let (streamer, kind_opt) = match self.current_stream {
+            Some(StreamKind::Reasoning) => (&mut self.reasoning_streamer, Some(StreamKind::Reasoning)),
+            Some(StreamKind::Answer) => (&mut self.answer_streamer, Some(StreamKind::Answer)),
+            None => {
+                // No active stream. Nothing to animate.
+                return;
+            }
+        };
+
+        // Prepare header if needed
+        let mut lines: Vec<ratatui::text::Line<'static>> = Vec::new();
+        if !self.stream_header_emitted {
+            use ratatui::style::Stylize;
+            match kind_opt {
+                Some(StreamKind::Reasoning) => {
+                    lines.push(ratatui::text::Line::from("thinking".magenta().italic()));
+                }
+                Some(StreamKind::Answer) => {
+                    lines.push(ratatui::text::Line::from("codex".magenta().bold()));
+                }
+                None => {}
+            }
+            self.stream_header_emitted = true;
+        }
+
+        let step = streamer.step(self.live_max_rows as usize);
+        if !step.history.is_empty() || !lines.is_empty() {
+            lines.extend(step.history);
+            self.app_event_tx.send(AppEvent::InsertHistory(lines));
+        }
+
+        // If streamer is now idle and there is no more active stream data, finalize state.
+        let is_idle = streamer.is_idle();
+        if is_idle {
+            // Stop animation ticks between bursts.
+            self.app_event_tx.send(AppEvent::StopCommitAnimation);
+            if self.finishing_after_drain {
+                // Final cleanup once fully drained at end-of-stream.
+                self.current_stream = None;
+                self.stream_header_emitted = false;
+                self.finishing_after_drain = false;
+                if self.task_complete_pending {
+                    self.bottom_pane.set_task_running(false);
+                    self.task_complete_pending = false;
+                }
+                // After the write cycle completes, release any queued interrupts.
+                self.flush_interrupt_queue();
+            }
+        }
+    }
     fn is_write_cycle_active(&self) -> bool {
         self.current_stream.is_some()
     }
@@ -305,6 +360,7 @@ impl ChatWidget<'_> {
             stream_header_emitted: false,
             live_max_rows: 3,
             task_complete_pending: false,
+            finishing_after_drain: false,
             interrupt_queue: VecDeque::new(),
         }
     }
@@ -685,7 +741,37 @@ impl ChatWidget<'_> {
     fn begin_stream(&mut self, kind: StreamKind) {
         if let Some(current) = self.current_stream {
             if current != kind {
-                self.finalize_stream(current);
+                // Synchronously flush the previous stream to keep ordering sane.
+                let (collector, streamer) = match current {
+                    StreamKind::Reasoning => (&mut self.reasoning_collector, &mut self.reasoning_streamer),
+                    StreamKind::Answer => (&mut self.answer_collector, &mut self.answer_streamer),
+                };
+                let remaining = collector.finalize_and_drain(&self.config);
+                if !remaining.is_empty() {
+                    streamer.enqueue(remaining);
+                }
+                let step = streamer.drain_all(self.live_max_rows as usize);
+                if !step.history.is_empty() || !self.stream_header_emitted {
+                    let mut lines: Vec<ratatui::text::Line<'static>> = Vec::new();
+                    if !self.stream_header_emitted {
+                        use ratatui::style::Stylize;
+                        match current {
+                            StreamKind::Reasoning => {
+                                lines.push(ratatui::text::Line::from("thinking".magenta().italic()));
+                            }
+                            StreamKind::Answer => {
+                                lines.push(ratatui::text::Line::from("codex".magenta().bold()));
+                            }
+                        }
+                        self.stream_header_emitted = true;
+                    }
+                    lines.extend(step.history);
+                    lines.push(ratatui::text::Line::from(""));
+                    self.app_event_tx.send(AppEvent::InsertHistory(lines));
+                }
+                // Reset for new stream
+                self.current_stream = None;
+                self.stream_header_emitted = false;
             }
         }
 
@@ -714,27 +800,8 @@ impl ChatWidget<'_> {
             let newly_completed = collector.commit_complete_lines(&self.config);
             if !newly_completed.is_empty() {
                 streamer.enqueue(newly_completed);
-                let step = streamer.step(self.live_max_rows as usize);
-                let just_committed = step.history.clone();
-                let mut hist: Vec<ratatui::text::Line<'static>> = Vec::new();
-                if !self.stream_header_emitted {
-                    use ratatui::style::Stylize;
-                    match self.current_stream {
-                        Some(StreamKind::Reasoning) => {
-                            hist.push(ratatui::text::Line::from("thinking".magenta().italic()));
-                        }
-                        Some(StreamKind::Answer) => {
-                            hist.push(ratatui::text::Line::from("codex".magenta().bold()));
-                        }
-                        None => {}
-                    }
-                    self.stream_header_emitted = true;
-                }
-                hist.extend(just_committed.clone());
-                if !hist.is_empty() {
-                    self.app_event_tx.send(AppEvent::InsertHistory(hist));
-                }
-                // Live overlay removed; nothing else to render for this frame.
+                // Start or continue commit animation.
+                self.app_event_tx.send(AppEvent::StartCommitAnimation);
             }
         }
     }
@@ -753,35 +820,12 @@ impl ChatWidget<'_> {
         if !remaining.is_empty() {
             streamer.enqueue(remaining);
         }
-        let step = streamer.drain_all(self.live_max_rows as usize);
-        if !step.history.is_empty() || !self.stream_header_emitted {
-            let mut lines: Vec<ratatui::text::Line<'static>> = Vec::new();
-            if !self.stream_header_emitted {
-                use ratatui::style::Stylize;
-                match kind {
-                    StreamKind::Reasoning => {
-                        lines.push(ratatui::text::Line::from("thinking".magenta().italic()));
-                    }
-                    StreamKind::Answer => {
-                        lines.push(ratatui::text::Line::from("codex".magenta().bold()));
-                    }
-                }
-                self.stream_header_emitted = true;
-            }
-            lines.extend(step.history);
-            lines.push(ratatui::text::Line::from(""));
-            self.app_event_tx.send(AppEvent::InsertHistory(lines));
-        }
-
-        // Reset state for the next stream.
-        self.current_stream = None;
-        self.stream_header_emitted = false;
-        if self.task_complete_pending {
-            self.bottom_pane.set_task_running(false);
-            self.task_complete_pending = false;
-        }
-        // After the write cycle completes, release any queued interrupts.
-        self.flush_interrupt_queue();
+        // Trailing blank spacer
+        streamer.enqueue(vec![ratatui::text::Line::from("")]);
+        // Mark that we should clear state after draining.
+        self.finishing_after_drain = true;
+        // Start animation to drain remaining lines. Final cleanup will occur when drained.
+        self.app_event_tx.send(AppEvent::StartCommitAnimation);
     }
 }
 

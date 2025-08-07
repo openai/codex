@@ -224,8 +224,8 @@ impl RenderedLineStreamer {
 
     pub fn step(&mut self, _live_max_rows: usize) -> StepResult {
         let mut history = Vec::new();
-        // Move at least 1, up to a small burst, to feel responsive without flooding.
-        let burst = 3usize.min(self.queue.len().max(1));
+        // Move exactly one per tick to animate gradual insertion.
+        let burst = 1usize.min(self.queue.len().max(1));
         for _ in 0..burst {
             if let Some(l) = self.queue.pop_front() {
                 history.push(l);

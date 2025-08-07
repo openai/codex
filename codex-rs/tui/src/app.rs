@@ -64,6 +64,9 @@ pub(crate) struct App<'a> {
     pending_history_lines: Vec<Line<'static>>,
 
     enhanced_keys_supported: bool,
+
+    /// Controls the animation thread that sends CommitTick events.
+    commit_anim_running: Arc<AtomicBool>,
 }
 
 /// Aggregate parameters needed to create a `ChatWidget`, as creation may be
@@ -173,6 +176,7 @@ impl App<'_> {
             file_search,
             pending_redraw,
             enhanced_keys_supported,
+            commit_anim_running: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -220,6 +224,31 @@ impl App<'_> {
                 }
                 AppEvent::Redraw => {
                     std::io::stdout().sync_update(|_| self.draw_next_frame(terminal))??;
+                }
+                AppEvent::StartCommitAnimation => {
+                    // Start a thread if not already running
+                    if self
+                        .commit_anim_running
+                        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                        .is_ok()
+                    {
+                        let tx = self.app_event_tx.clone();
+                        let running = self.commit_anim_running.clone();
+                        thread::spawn(move || {
+                            while running.load(Ordering::Relaxed) {
+                                thread::sleep(Duration::from_millis(50));
+                                tx.send(AppEvent::CommitTick);
+                            }
+                        });
+                    }
+                }
+                AppEvent::StopCommitAnimation => {
+                    self.commit_anim_running.store(false, Ordering::Relaxed);
+                }
+                AppEvent::CommitTick => {
+                    if let AppState::Chat { widget } = &mut self.app_state {
+                        widget.on_commit_tick();
+                    }
                 }
                 AppEvent::KeyEvent(key_event) => {
                     match key_event {
