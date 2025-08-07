@@ -636,7 +636,7 @@ impl AgentTask {
             let event = Event {
                 id: self.sub_id,
                 msg: EventMsg::Error(ErrorEvent {
-                    message: "Turn interrupted".to_string(),
+                    message: " Turn interrupted".to_string(),
                 }),
             };
             let tx_event = self.sess.tx_event.clone();
