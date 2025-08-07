@@ -226,8 +226,6 @@ impl WidgetRef for StatusIndicatorWidget {
         ));
         spans.push(Span::raw(" "));
 
-        // Gradient header
-        spans.extend(header_spans);
         // Space after header
         // Animated header after the left bar
         spans.extend(animated_spans);

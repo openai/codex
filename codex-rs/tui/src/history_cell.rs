@@ -534,7 +534,7 @@ impl HistoryCell {
         let mut header: Vec<Span> = Vec::new();
         header.push(Span::raw("📋"));
         header.push(Span::styled(
-            "Updated",
+            " Updated",
             Style::default().add_modifier(Modifier::BOLD).magenta(),
         ));
         header.push(Span::raw(" to do list ["));
