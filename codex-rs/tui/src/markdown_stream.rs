@@ -33,15 +33,21 @@ impl MarkdownNewlineCollector {
     /// since the last commit. When the buffer does not end with a newline, the
     /// final rendered line is considered incomplete and is not emitted.
     pub fn commit_complete_lines(&mut self, config: &Config) -> Vec<Line<'static>> {
-        let mut rendered: Vec<Line<'static>> = Vec::new();
-        markdown::append_markdown(&self.buffer, &mut rendered, config);
+        // In non-test builds, unwrap an outer ```markdown fence during commit as well,
+        // so fence markers never appear in streamed history.
+        let source = unwrap_markdown_language_fence_if_enabled(self.buffer.clone());
+        let source = strip_empty_fenced_code_blocks(&source);
 
-        let ends_with_nl = self.buffer.ends_with('\n');
-        let complete_line_count = if ends_with_nl {
-            rendered.len()
-        } else {
-            rendered.len().saturating_sub(1)
-        };
+        let mut rendered: Vec<Line<'static>> = Vec::new();
+        markdown::append_markdown(&source, &mut rendered, config);
+
+        let mut complete_line_count = rendered.len();
+        if complete_line_count > 0 && is_effectively_empty(&rendered[complete_line_count - 1]) {
+            complete_line_count -= 1;
+        }
+        if !self.buffer.ends_with('\n') {
+            complete_line_count = complete_line_count.saturating_sub(1);
+        }
 
         if self.committed_line_count >= complete_line_count {
             return Vec::new();
@@ -62,6 +68,7 @@ impl MarkdownNewlineCollector {
             source.push('\n');
         }
         let source = unwrap_markdown_language_fence_if_enabled(source);
+        let source = strip_empty_fenced_code_blocks(&source);
 
         let mut rendered: Vec<Line<'static>> = Vec::new();
         markdown::append_markdown(&source, &mut rendered, config);
@@ -86,6 +93,61 @@ impl MarkdownNewlineCollector {
         markdown::append_markdown(&self.buffer, &mut rendered, config);
         rendered.into_iter().last()
     }
+}
+
+fn is_effectively_empty(line: &Line<'_>) -> bool {
+    if line.spans.is_empty() {
+        return true;
+    }
+    line
+        .spans
+        .iter()
+        .all(|s| s.content.is_empty() || s.content.chars().all(|c| c == ' '))
+}
+
+/// Remove fenced code blocks that contain no content (whitespace-only) to avoid
+/// streaming empty code blocks like ```lang\n``` or ```\n```.
+fn strip_empty_fenced_code_blocks(s: &str) -> String {
+    // Only remove complete fenced blocks that contain no non-whitespace content.
+    // Leave all other content unchanged to avoid affecting partial streams.
+    let lines: Vec<&str> = s.lines().collect();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0usize;
+    while i < lines.len() {
+        let line = lines[i];
+        if line.starts_with("```") {
+            // Find a matching closing fence on its own line.
+            let mut j = i + 1;
+            let mut has_content = false;
+            let mut found_close = false;
+            while j < lines.len() {
+                let l = lines[j];
+                if l.trim() == "```" {
+                    found_close = true;
+                    break;
+                }
+                if !l.trim().is_empty() {
+                    has_content = true;
+                }
+                j += 1;
+            }
+            if found_close && !has_content {
+                // Drop i..=j and insert a single blank separator line.
+                out.push('\n');
+                i = j + 1;
+                continue;
+            }
+            // Not an empty fenced block; emit as-is.
+            out.push_str(line);
+            out.push('\n');
+            i += 1;
+        } else {
+            out.push_str(line);
+            out.push('\n');
+            i += 1;
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -252,6 +314,201 @@ mod tests {
         c.push_delta("Line without newline");
         let out = c.finalize_and_drain(&cfg);
         assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn heading_starts_on_new_line_when_following_paragraph() {
+        let cfg = test_config();
+
+        // Stream a paragraph line, then a heading on the next line.
+        // Expect two distinct rendered lines: "Hello." and "Heading".
+        let mut c = MarkdownNewlineCollector::new();
+        c.push_delta("Hello.\n");
+        let out1 = c.commit_complete_lines(&cfg);
+        let s1: Vec<String> = out1
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.clone()).collect::<Vec<_>>().join(""))
+            .collect();
+        assert_eq!(out1.len(), 1, "first commit should contain only the paragraph line, got {}: {:?}", out1.len(), s1);
+
+        c.push_delta("## Heading\n");
+        let out2 = c.commit_complete_lines(&cfg);
+        let s2: Vec<String> = out2
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.clone()).collect::<Vec<_>>().join(""))
+            .collect();
+        assert_eq!(s2, vec!["", "## Heading"], "expected a blank separator then the heading line");
+
+        let line_to_string = |l: &ratatui::text::Line<'_>| -> String {
+            l.spans
+                .iter()
+                .map(|s| s.content.clone())
+                .collect::<Vec<_>>()
+                .join("")
+        };
+
+        assert_eq!(line_to_string(&out1[0]), "Hello.");
+        assert_eq!(line_to_string(&out2[1]), "## Heading");
+    }
+
+    #[test]
+    fn heading_not_inlined_when_split_across_chunks() {
+        let cfg = test_config();
+
+        // Paragraph without trailing newline, then a chunk that starts with the newline
+        // and the heading text, then a final newline. The collector should first commit
+        // only the paragraph line, and later commit the heading as its own line.
+        let mut c = MarkdownNewlineCollector::new();
+        c.push_delta("Sounds good!");
+        // No commit yet
+        assert!(c.commit_complete_lines(&cfg).is_empty());
+
+        // Introduce the newline that completes the paragraph and the start of the heading.
+        c.push_delta("\n## Adding Bird subcommand");
+        let out1 = c.commit_complete_lines(&cfg);
+        let s1: Vec<String> = out1
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.clone()).collect::<Vec<_>>().join(""))
+            .collect();
+        assert_eq!(s1, vec!["Sounds good!", ""], "expected paragraph followed by blank separator before heading chunk");
+
+        // Now finish the heading line with the trailing newline.
+        c.push_delta("\n");
+        let out2 = c.commit_complete_lines(&cfg);
+        let s2: Vec<String> = out2
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.clone()).collect::<Vec<_>>().join(""))
+            .collect();
+        assert_eq!(s2, vec!["## Adding Bird subcommand"], "expected the heading line only on the final commit");
+
+        // Sanity check raw markdown rendering for a simple line does not produce spurious extras.
+        let mut rendered: Vec<ratatui::text::Line<'static>> = Vec::new();
+        crate::markdown::append_markdown("Hello.\n", &mut rendered, &cfg);
+        let rendered_strings: Vec<String> = rendered
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.clone()).collect::<Vec<_>>().join(""))
+            .collect();
+        assert_eq!(rendered_strings, vec!["Hello."], "unexpected markdown lines: {:?}", rendered_strings);
+
+        let line_to_string = |l: &ratatui::text::Line<'_>| -> String {
+            l.spans
+                .iter()
+                .map(|s| s.content.clone())
+                .collect::<Vec<_>>()
+                .join("")
+        };
+
+        assert_eq!(line_to_string(&out1[0]), "Sounds good!");
+        assert_eq!(line_to_string(&out1[1]), "");
+        assert_eq!(line_to_string(&out2[0]), "## Adding Bird subcommand");
+    }
+
+    fn lines_to_plain_strings(lines: &[ratatui::text::Line<'_>]) -> Vec<String> {
+        lines
+            .iter()
+            .map(|l| l
+                .spans
+                .iter()
+                .map(|s| s.content.clone())
+                .collect::<Vec<_>>()
+                .join("")
+            )
+            .collect()
+    }
+
+    #[test]
+    fn lists_and_fences_commit_without_duplication() {
+        let cfg = test_config();
+
+        // List case
+        let deltas = vec!["- a\n- ", "b\n- c\n"];
+        let streamed = simulate_stream_markdown_for_tests(&deltas, true, &cfg);
+        let streamed_str = lines_to_plain_strings(&streamed);
+
+        let mut rendered_all: Vec<ratatui::text::Line<'static>> = Vec::new();
+        crate::markdown::append_markdown("- a\n- b\n- c\n", &mut rendered_all, &cfg);
+        let rendered_all_str = lines_to_plain_strings(&rendered_all);
+
+        assert_eq!(streamed_str, rendered_all_str, "list streaming should equal full render without duplication");
+
+        // Fenced code case: stream in small chunks
+        let deltas2 = vec!["```", "\nco", "de 1\ncode 2\n", "```\n"];
+        let streamed2 = simulate_stream_markdown_for_tests(&deltas2, true, &cfg);
+        let streamed2_str = lines_to_plain_strings(&streamed2);
+
+        let mut rendered_all2: Vec<ratatui::text::Line<'static>> = Vec::new();
+        crate::markdown::append_markdown("```\ncode 1\ncode 2\n```\n", &mut rendered_all2, &cfg);
+        let rendered_all2_str = lines_to_plain_strings(&rendered_all2);
+
+        assert_eq!(streamed2_str, rendered_all2_str, "fence streaming should equal full render without duplication");
+    }
+
+    #[test]
+    fn utf8_boundary_safety_and_wide_chars() {
+        let cfg = test_config();
+
+        // Emoji (wide), CJK, and combining mark sequences
+        let input = "🙂🙂🙂\n汉字漢字\nA0̄\n"; // A + combining macron
+        let deltas = vec!["🙂", "🙂", "🙂\n汉", "字漢", "字\nA", "\u{0304}", "\n"];
+
+        let streamed = simulate_stream_markdown_for_tests(&deltas, true, &cfg);
+        let streamed_str = lines_to_plain_strings(&streamed);
+
+        let mut rendered_all: Vec<ratatui::text::Line<'static>> = Vec::new();
+        crate::markdown::append_markdown(input, &mut rendered_all, &cfg);
+        let rendered_all_str = lines_to_plain_strings(&rendered_all);
+
+        assert_eq!(streamed_str, rendered_all_str, "utf8/wide-char streaming should equal full render without duplication or truncation");
+    }
+
+    #[test]
+    #[ignore]
+    fn finalize_unwraps_markdown_language_fence_in_non_test_builds() {
+        // Document the desired behavior: in non-test builds, finalize should unwrap
+        // an outer ```markdown fence. This test is ignored under cfg(test).
+        let cfg = test_config();
+        let mut c = MarkdownNewlineCollector::new();
+        c.push_delta("```markdown\nHello\n```\n");
+        let out = c.finalize_and_drain(&cfg);
+        let out_str = lines_to_plain_strings(&out);
+        assert_eq!(out_str, vec!["Hello"], "in release, content inside ```markdown should be unwrapped");
+    }
+
+    #[test]
+    #[ignore]
+    fn unwraps_outer_markdown_on_commit_no_stray_backticks() {
+        let cfg = test_config();
+        // Stream with outer ```markdown wrapper in pieces; ensure that when a newline commits,
+        // we don't leak backticks or the fence line into history.
+        let deltas = vec!["```markdown", "\nHe", "llo\n", "```", "\n"]; // commits on 2nd, 3rd, 5th
+        let streamed = simulate_stream_markdown_for_tests(&deltas, true, &cfg);
+        let texts = lines_to_plain_strings(&streamed);
+        assert!(texts.iter().any(|s| s == "Hello"), "expected Hello committed once: {texts:?}");
+        assert!(texts.iter().all(|s| !s.contains("```")), "no backticks should appear: {texts:?}");
+    }
+
+    #[test]
+    fn empty_fenced_block_is_dropped_and_separator_preserved_before_heading() {
+        let cfg = test_config();
+        // An empty fenced code block followed by a heading should not render the fence,
+        // but should preserve a blank separator line so the heading starts on a new line.
+        let deltas = vec!["```bash\n```\n", "## Heading\n"]; // empty block and close in same commit
+        let streamed = simulate_stream_markdown_for_tests(&deltas, true, &cfg);
+        let texts = lines_to_plain_strings(&streamed);
+        assert!(texts.iter().all(|s| !s.contains("```")), "no fence markers expected: {texts:?}");
+        // Expect the heading and no fence markers. A blank separator may or may not be rendered at start.
+        assert!(texts.iter().any(|s| s == "## Heading"), "expected heading line: {texts:?}");
+    }
+
+    #[test]
+    fn paragraph_then_empty_fence_then_heading_keeps_heading_on_new_line() {
+        let cfg = test_config();
+        let deltas = vec!["Para.\n", "```\n```\n", "## Title\n"]; // empty fence block in one commit
+        let streamed = simulate_stream_markdown_for_tests(&deltas, true, &cfg);
+        let texts = lines_to_plain_strings(&streamed);
+        let para_idx = texts.iter().position(|s| s == "Para.").expect("para present");
+        let head_idx = texts.iter().position(|s| s == "## Title").expect("heading present");
+        assert!(head_idx > para_idx + 0, "heading should not merge with paragraph: {texts:?}");
     }
 }
 

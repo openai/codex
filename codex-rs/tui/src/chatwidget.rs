@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -77,6 +77,8 @@ pub(crate) struct ChatWidget<'a> {
     stream_header_emitted: bool,
     live_max_rows: u16,
     task_complete_pending: bool,
+    // Queue of interruptive UI events deferred during an active write cycle
+    interrupt_queue: VecDeque<QueuedInterrupt>,
 }
 
 struct UserMessage {
@@ -88,6 +90,15 @@ struct UserMessage {
 enum StreamKind {
     Answer,
     Reasoning,
+}
+
+#[derive(Debug)]
+enum QueuedInterrupt {
+    ExecApproval(String, ExecApprovalRequestEvent),
+    ApplyPatchApproval(String, ApplyPatchApprovalRequestEvent),
+    ExecBegin(ExecCommandBeginEvent),
+    McpBegin(McpToolCallBeginEvent),
+    McpEnd(McpToolCallEndEvent),
 }
 
 impl From<String> for UserMessage {
@@ -108,6 +119,97 @@ fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Optio
 }
 
 impl ChatWidget<'_> {
+    fn is_write_cycle_active(&self) -> bool {
+        self.current_stream.is_some()
+    }
+
+    fn flush_interrupt_queue(&mut self) {
+        while let Some(q) = self.interrupt_queue.pop_front() {
+            match q {
+                QueuedInterrupt::ExecApproval(id, ev) => self.handle_exec_approval_now(id, ev),
+                QueuedInterrupt::ApplyPatchApproval(id, ev) => {
+                    self.handle_apply_patch_approval_now(id, ev)
+                }
+                QueuedInterrupt::ExecBegin(ev) => self.handle_exec_begin_now(ev),
+                QueuedInterrupt::McpBegin(ev) => self.handle_mcp_begin_now(ev),
+                QueuedInterrupt::McpEnd(ev) => self.handle_mcp_end_now(ev),
+            }
+        }
+    }
+
+    fn handle_exec_approval_now(&mut self, id: String, ev: ExecApprovalRequestEvent) {
+        // Log a background summary immediately so the history is chronological.
+        let cmdline = strip_bash_lc_and_escape(&ev.command);
+        let text = format!(
+            "command requires approval:\n$ {cmdline}{reason}",
+            reason = ev
+                .reason
+                .as_ref()
+                .map(|r| format!("\n{r}"))
+                .unwrap_or_default()
+        );
+        self.add_to_history(HistoryCell::new_background_event(text));
+
+        let request = ApprovalRequest::Exec {
+            id,
+            command: ev.command,
+            cwd: ev.cwd,
+            reason: ev.reason,
+        };
+        self.bottom_pane.push_approval_request(request);
+        self.request_redraw();
+    }
+
+    fn handle_apply_patch_approval_now(
+        &mut self,
+        id: String,
+        ev: ApplyPatchApprovalRequestEvent,
+    ) {
+        self.add_to_history(HistoryCell::new_patch_event(
+            PatchEventType::ApprovalRequest,
+            ev.changes.clone(),
+        ));
+
+        let request = ApprovalRequest::ApplyPatch {
+            id,
+            reason: ev.reason,
+            grant_root: ev.grant_root,
+        };
+        self.bottom_pane.push_approval_request(request);
+        self.request_redraw();
+    }
+
+    fn handle_exec_begin_now(&mut self, ev: ExecCommandBeginEvent) {
+        // Ensure the status indicator is visible while the command runs.
+        self.bottom_pane
+            .update_status_text("running command".to_string());
+        self.running_commands.insert(
+            ev.call_id.clone(),
+            RunningCommand {
+                command: ev.command.clone(),
+                cwd: ev.cwd.clone(),
+            },
+        );
+        self.active_history_cell = Some(HistoryCell::new_active_exec_command(ev.command));
+    }
+
+    fn handle_mcp_begin_now(&mut self, ev: McpToolCallBeginEvent) {
+        self.add_to_history(HistoryCell::new_active_mcp_tool_call(ev.invocation));
+    }
+
+    fn handle_mcp_end_now(&mut self, ev: McpToolCallEndEvent) {
+        self.add_to_history(HistoryCell::new_completed_mcp_tool_call(
+            80,
+            ev.invocation,
+            ev.duration,
+            ev
+                .result
+                .as_ref()
+                .map(|r| r.is_error.unwrap_or(false))
+                .unwrap_or(false),
+            ev.result,
+        ));
+    }
     fn interrupt_running_task(&mut self) {
         if self.bottom_pane.is_task_running() {
             self.active_history_cell = None;
@@ -209,6 +311,7 @@ impl ChatWidget<'_> {
             stream_header_emitted: false,
             live_max_rows: 3,
             task_complete_pending: false,
+            interrupt_queue: VecDeque::new(),
         }
     }
 
@@ -379,81 +482,28 @@ impl ChatWidget<'_> {
                 // Commit plan updates directly to history (no status-line preview).
                 self.add_to_history(HistoryCell::new_plan_update(update));
             }
-            EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
-                call_id: _,
-                command,
-                cwd,
-                reason,
-            }) => {
-                self.finalize_active_stream();
-                // Log a background summary immediately so the history is chronological.
-                let cmdline = strip_bash_lc_and_escape(&command);
-                let text = format!(
-                    "command requires approval:\n$ {cmdline}{reason}",
-                    reason = reason
-                        .as_ref()
-                        .map(|r| format!("\n{r}"))
-                        .unwrap_or_default()
-                );
-                self.add_to_history(HistoryCell::new_background_event(text));
-
-                let request = ApprovalRequest::Exec {
-                    id,
-                    command,
-                    cwd,
-                    reason,
-                };
-                self.bottom_pane.push_approval_request(request);
-                self.request_redraw();
+            EventMsg::ExecApprovalRequest(ev) => {
+                if self.is_write_cycle_active() {
+                    self.interrupt_queue
+                        .push_back(QueuedInterrupt::ExecApproval(id, ev));
+                } else {
+                    self.handle_exec_approval_now(id, ev);
+                }
             }
-            EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
-                call_id: _,
-                changes,
-                reason,
-                grant_root,
-            }) => {
-                self.finalize_active_stream();
-                // ------------------------------------------------------------------
-                // Before we even prompt the user for approval we surface the patch
-                // summary in the main conversation so that the dialog appears in a
-                // sensible chronological order:
-                //   (1) codex → proposes patch (HistoryCell::PendingPatch)
-                //   (2) UI → asks for approval (BottomPane)
-                // This mirrors how command execution is shown (command begins →
-                // approval dialog) and avoids surprising the user with a modal
-                // prompt before they have seen *what* is being requested.
-                // ------------------------------------------------------------------
-                self.add_to_history(HistoryCell::new_patch_event(
-                    PatchEventType::ApprovalRequest,
-                    changes,
-                ));
-
-                // Now surface the approval request in the BottomPane as before.
-                let request = ApprovalRequest::ApplyPatch {
-                    id,
-                    reason,
-                    grant_root,
-                };
-                self.bottom_pane.push_approval_request(request);
-                self.request_redraw();
+            EventMsg::ApplyPatchApprovalRequest(ev) => {
+                if self.is_write_cycle_active() {
+                    self.interrupt_queue
+                        .push_back(QueuedInterrupt::ApplyPatchApproval(id, ev));
+                } else {
+                    self.handle_apply_patch_approval_now(id, ev);
+                }
             }
-            EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
-                call_id,
-                command,
-                cwd,
-            }) => {
-                self.finalize_active_stream();
-                // Ensure the status indicator is visible while the command runs.
-                self.bottom_pane
-                    .update_status_text("running command".to_string());
-                self.running_commands.insert(
-                    call_id,
-                    RunningCommand {
-                        command: command.clone(),
-                        cwd: cwd.clone(),
-                    },
-                );
-                self.active_history_cell = Some(HistoryCell::new_active_exec_command(command));
+            EventMsg::ExecCommandBegin(ev) => {
+                if self.is_write_cycle_active() {
+                    self.interrupt_queue.push_back(QueuedInterrupt::ExecBegin(ev));
+                } else {
+                    self.handle_exec_begin_now(ev);
+                }
             }
             EventMsg::ExecCommandOutputDelta(_) => {
                 // TODO
@@ -494,29 +544,19 @@ impl ChatWidget<'_> {
                     },
                 ));
             }
-            EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
-                call_id: _,
-                invocation,
-            }) => {
-                self.finalize_active_stream();
-                self.add_to_history(HistoryCell::new_active_mcp_tool_call(invocation));
+            EventMsg::McpToolCallBegin(ev) => {
+                if self.is_write_cycle_active() {
+                    self.interrupt_queue.push_back(QueuedInterrupt::McpBegin(ev));
+                } else {
+                    self.handle_mcp_begin_now(ev);
+                }
             }
-            EventMsg::McpToolCallEnd(McpToolCallEndEvent {
-                call_id: _,
-                duration,
-                invocation,
-                result,
-            }) => {
-                self.add_to_history(HistoryCell::new_completed_mcp_tool_call(
-                    80,
-                    invocation,
-                    duration,
-                    result
-                        .as_ref()
-                        .map(|r| r.is_error.unwrap_or(false))
-                        .unwrap_or(false),
-                    result,
-                ));
+            EventMsg::McpToolCallEnd(ev) => {
+                if self.is_write_cycle_active() {
+                    self.interrupt_queue.push_back(QueuedInterrupt::McpEnd(ev));
+                } else {
+                    self.handle_mcp_end_now(ev);
+                }
             }
             EventMsg::GetHistoryEntryResponse(event) => {
                 let codex_core::protocol::GetHistoryEntryResponseEvent {
@@ -743,6 +783,8 @@ impl ChatWidget<'_> {
             self.bottom_pane.set_task_running(false);
             self.task_complete_pending = false;
         }
+        // After the write cycle completes, release any queued interrupts.
+        self.flush_interrupt_queue();
     }
 }
 

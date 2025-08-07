@@ -254,5 +254,55 @@ mod widget_stream_extra {
         assert!(rendered2.iter().any(|s| s == "l5"));
         assert!(rendered2.last().is_some_and(|s| s.is_empty()), "expected trailing blank line after finalize");
     }
+
+    #[test]
+    fn widget_reasoning_then_answer_ordering() {
+        let (tx_raw, rx) = channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let config = test_config();
+        let mut w = ChatWidget::new(config.clone(), tx.clone(), None, Vec::new(), false);
+
+        // Reasoning: one completed line then finalize.
+        w.handle_codex_event(Event {
+            id: "ra".into(),
+            msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta: "think1\n".into() }),
+        });
+        let r_commit = super::recv_insert_history(&rx, 200).expect("reasoning history");
+        w.handle_codex_event(Event {
+            id: "ra".into(),
+            msg: EventMsg::AgentReasoning(AgentReasoningEvent { text: String::new() }),
+        });
+        let r_final = super::recv_insert_history(&rx, 200).expect("reasoning finalize");
+
+        // Answer: one completed line then finalize.
+        w.handle_codex_event(Event {
+            id: "ra".into(),
+            msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta: "ans1\n".into() }),
+        });
+        let a_commit = super::recv_insert_history(&rx, 200).expect("answer history");
+        w.handle_codex_event(Event {
+            id: "ra".into(),
+            msg: EventMsg::AgentMessage(AgentMessageEvent { message: String::new() }),
+        });
+        let a_final = super::recv_insert_history(&rx, 200).expect("answer finalize");
+
+        let to_texts = |lines: &Vec<ratatui::text::Line<'static>>| -> Vec<String> {
+            lines
+                .iter()
+                .map(|l| l.spans.iter().map(|s| s.content.clone()).collect::<String>())
+                .collect()
+        };
+        let r_all = [to_texts(&r_commit), to_texts(&r_final)].concat();
+        let a_all = [to_texts(&a_commit), to_texts(&a_final)].concat();
+
+        // Expect headers present and in order: reasoning first, then answer.
+        let r_header_idx = r_all.iter().position(|s| s.contains("thinking")).expect("missing reasoning header");
+        let a_header_idx = a_all.iter().position(|s| s.contains("codex")).expect("missing answer header");
+        assert!(r_all.iter().any(|s| s == "think1"), "missing reasoning content: {:?}", r_all);
+        assert!(a_all.iter().any(|s| s == "ans1"), "missing answer content: {:?}", a_all);
+        // Implicitly, reasoning events happened before answer events if we got here without timeouts.
+        assert_eq!(r_header_idx, 0, "reasoning header should be first in its batch");
+        assert_eq!(a_header_idx, 0, "answer header should be first in its batch");
+    }
 }
 
