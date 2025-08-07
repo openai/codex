@@ -49,9 +49,9 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
 
     match load_auth(&config.codex_home) {
         Ok(Some(auth)) => match auth.mode {
-            AuthMode::ApiKey => {
-                if let Some(api_key) = auth.api_key.as_deref() {
-                    eprintln!("Logged in using an API key - {}", safe_format_key(api_key));
+            AuthMode::ApiKey => match auth.get_token().await {
+                Ok(api_key) => {
+                    eprintln!("Logged in using an API key - {}", safe_format_key(&api_key));
 
                     if let Ok(env_api_key) = env::var(OPENAI_API_KEY_ENV_VAR) {
                         if env_api_key == api_key {
@@ -60,11 +60,13 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
                             );
                         }
                     }
-                } else {
-                    eprintln!("Logged in using an API key");
+                    std::process::exit(0);
                 }
-                std::process::exit(0);
-            }
+                Err(e) => {
+                    eprintln!("Unexpected error retrieving API key: {e}");
+                    std::process::exit(1);
+                }
+            },
             AuthMode::ChatGPT => {
                 eprintln!("Logged in using ChatGPT");
                 std::process::exit(0);
