@@ -104,7 +104,14 @@ impl AuthModeWidget {
             Line::from(vec![
                 Span::raw("> "),
                 Span::styled(
-                    "Sign in with ChatGPT to use Codex as part of your paid plan, or connect an API key for usage-based billing",
+                    "Sign in with ChatGPT to use Codex as part of your paid plan",
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+            ]),
+            Line::from(vec![
+                Span::raw("  "),
+                Span::styled(
+                    "or connect an API key for usage-based billing",
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
             ]),
@@ -156,7 +163,7 @@ impl AuthModeWidget {
         ));
         lines.push(Line::from(""));
         lines.push(
-            Line::from("Press Enter to continue")
+            Line::from("  Press Enter to continue")
                 .style(Style::default().add_modifier(Modifier::DIM)),
         );
         if let Some(err) = &self.error {

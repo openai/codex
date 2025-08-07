@@ -194,14 +194,11 @@ impl HistoryCell {
                     Span::raw(format!(" {cwd_str}")).dim(),
                 ]),
                 Line::from("".dim()),
-                Line::from(
-                    " Describe a task to get started or try one of the following commands:".dim(),
-                ),
+                Line::from(" To get started, describe a task or try one of these commands:".dim()),
                 Line::from("".dim()),
                 Line::from(format!(" /init - {}", SlashCommand::Init.description()).dim()),
                 Line::from(format!(" /status - {}", SlashCommand::Status.description()).dim()),
-                Line::from(format!(" /compact - {}", SlashCommand::Compact.description()).dim()),
-                Line::from(format!(" /new - {}", SlashCommand::New.description()).dim()),
+                Line::from(format!(" /diff - {}", SlashCommand::Diff.description()).dim()),
                 Line::from("".dim()),
             ];
             HistoryCell::WelcomeMessage {
