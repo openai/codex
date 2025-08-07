@@ -1,4 +1,11 @@
-### Using Open Source Models
+# Configuration overview
+
+Codex reads TOML config from ~/.codex/config.toml; see ../codex-rs/config.md for
+ the full reference.
+CLI flags override config (including --config key=value and --profile <name>); o
+therwise values fall back to the file and then built‑in defaults.
+
+## Using Open Source Models
 
 Codex can run fully locally against an OpenAI-compatible OSS host (like Ollama) using the `--oss` flag:
 
@@ -36,7 +43,7 @@ base_url = "http://my-ollama.example.com:11434/v1"
 
 Codex also allows you to use other providers that support the OpenAI Chat Completions (or Responses) API.
 
-To do so, you must first define custom [providers](./config.md#model_providers) in `~/.codex/config.toml`. For example, the provider for a standard Ollama setup would be defined as follows:
+To do so, you must first define custom [providers](../codex-rs/config.md#model_providers) in `~/.codex/config.toml`. For example, the provider for a standard Ollama setup would be defined as follows:
 
 ```toml
 [model_providers.ollama]
@@ -96,8 +103,8 @@ This way, you can specify one command-line argument (.e.g., `--profile o3`, `--p
 
 Codex lets you decide _how much autonomy_ you want to grant the agent. The following options can be configured independently:
 
-- [`approval_policy`](./codex-rs/config.md#approval_policy) determines when you should be prompted to approve whether Codex can execute a command
-- [`sandbox`](./codex-rs/config.md#sandbox) determines the _sandbox policy_ that Codex uses to execute untrusted commands
+- [`approval_policy`](../codex-rs/config.md#approval_policy) determines when you should be prompted to approve whether Codex can execute a command
+- [`sandbox`](../codex-rs/config.md#sandbox) determines the _sandbox policy_ that Codex uses to execute untrusted commands
 
 By default, Codex runs with `--ask-for-approval untrusted` and `--sandbox read-only`, which means that:
 
@@ -128,7 +135,7 @@ Note that when running Linux in a containerized environment such as Docker, sand
 
 ## Model Context Protocol (MCP)
 
-The Codex CLI can be configured to leverage MCP servers by defining an [`mcp_servers`](./codex-rs/config.md#mcp_servers) section in `~/.codex/config.toml`. It is intended to mirror how tools such as Claude and Cursor define `mcpServers` in their respective JSON config files, though the Codex format is slightly different since it uses TOML rather than JSON, e.g.:
+The Codex CLI can be configured to leverage MCP servers by defining an [`mcp_servers`](../codex-rs/config.md#mcp_servers) section in `~/.codex/config.toml`. It is intended to mirror how tools such as Claude and Cursor define `mcpServers` in their respective JSON config files, though the Codex format is slightly different since it uses TOML rather than JSON, e.g.:
 
 ```toml
 # IMPORTANT: the top-level key is `mcp_servers` rather than `mcpServers`.
@@ -157,6 +164,6 @@ Ensure you are running `codex` with `--config disable_response_storage=true` or 
 disable_response_storage = true
 ```
 
-See [the configuration documentation on `disable_response_storage`](./codex-rs/config.md#disable_response_storage) for details.
+See [the configuration documentation on `disable_response_storage`](../codex-rs/config.md#disable_response_storage) for details.
 
 ---
