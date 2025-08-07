@@ -35,6 +35,7 @@ pub(crate) enum ApprovalRequest {
     Exec {
         id: String,
         command: Vec<String>,
+        #[allow(dead_code)]
         cwd: PathBuf,
         reason: Option<String>,
     },
