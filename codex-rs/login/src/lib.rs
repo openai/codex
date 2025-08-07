@@ -52,9 +52,9 @@ impl PartialEq for CodexAuth {
 }
 
 impl CodexAuth {
-    pub fn from_api_key(api_key: String) -> Self {
+    pub fn from_api_key(api_key: &str) -> Self {
         Self {
-            api_key: Some(api_key),
+            api_key: Some(api_key.to_owned()),
             mode: AuthMode::ApiKey,
             auth_file: PathBuf::new(),
             auth_dot_json: Arc::new(Mutex::new(None)),

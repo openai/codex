@@ -93,7 +93,7 @@ async fn includes_session_id_and_model_headers_in_request() {
     let ctrl_c = std::sync::Arc::new(tokio::sync::Notify::new());
     let CodexSpawnOk { codex, .. } = Codex::spawn(
         config,
-        Some(CodexAuth::from_api_key("Test API Key".to_string())),
+        Some(CodexAuth::from_api_key("Test API Key")),
         ctrl_c.clone(),
     )
     .await
@@ -167,7 +167,7 @@ async fn includes_base_instructions_override_in_request() {
     let ctrl_c = std::sync::Arc::new(tokio::sync::Notify::new());
     let CodexSpawnOk { codex, .. } = Codex::spawn(
         config,
-        Some(CodexAuth::from_api_key("Test API Key".to_string())),
+        Some(CodexAuth::from_api_key("Test API Key")),
         ctrl_c.clone(),
     )
     .await
@@ -226,7 +226,7 @@ async fn originator_config_override_is_used() {
     let ctrl_c = std::sync::Arc::new(tokio::sync::Notify::new());
     let CodexSpawnOk { codex, .. } = Codex::spawn(
         config,
-        Some(CodexAuth::from_api_key("Test API Key".to_string())),
+        Some(CodexAuth::from_api_key("Test API Key")),
         ctrl_c.clone(),
     )
     .await
@@ -364,7 +364,7 @@ async fn includes_user_instructions_message_in_request() {
     let ctrl_c = std::sync::Arc::new(tokio::sync::Notify::new());
     let CodexSpawnOk { codex, .. } = Codex::spawn(
         config,
-        Some(CodexAuth::from_api_key("Test API Key".to_string())),
+        Some(CodexAuth::from_api_key("Test API Key")),
         ctrl_c.clone(),
     )
     .await
