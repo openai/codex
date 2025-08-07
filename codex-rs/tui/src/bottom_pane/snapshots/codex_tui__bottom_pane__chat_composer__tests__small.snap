@@ -1,9 +1,10 @@
 ---
 source: tui/src/bottom_pane/chat_composer.rs
+assertion_line: 1034
 expression: terminal.backend()
 ---
-"▌short                                                                                              "
 "▌                                                                                                   "
+"▌short                                                                                              "
 "▌                                                                                                   "
 "▌                                                                                                   "
 "▌                                                                                                   "
