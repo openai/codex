@@ -121,7 +121,9 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             let mut tui_cli = cli.interactive;
             prepend_config_flags(&mut tui_cli.config_overrides, cli.config_overrides);
             let usage = codex_tui::run_main(tui_cli, codex_linux_sandbox_exe).await?;
-            println!("{}", codex_core::protocol::FinalOutput::from(usage));
+            if !usage.is_zero() {
+                println!("{}", codex_core::protocol::FinalOutput::from(usage));
+            }
         }
         Some(Subcommand::Exec(mut exec_cli)) => {
             prepend_config_flags(&mut exec_cli.config_overrides, cli.config_overrides);

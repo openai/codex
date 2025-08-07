@@ -48,4 +48,7 @@ pub(crate) enum AppEvent {
     },
 
     InsertHistory(Vec<Line<'static>>),
+
+    /// Onboarding: result of login_with_chatgpt.
+    OnboardingAuthComplete(Result<(), String>),
 }
