@@ -754,28 +754,6 @@ pub fn find_codex_home() -> std::io::Result<PathBuf> {
     Ok(p)
 }
 
-pub fn resolve_cwd(cwd: Option<PathBuf>) -> std::io::Result<PathBuf> {
-    use std::env;
-
-    match cwd {
-        None => {
-            tracing::info!("cwd not set, using current dir");
-            match env::current_dir() {
-                Ok(p) => Ok(p),
-                Err(e) => Err(e),
-            }
-        }
-        Some(p) if p.is_absolute() => Ok(p.to_path_buf()),
-        Some(p) => {
-            // Resolve relative path against the current working directory.
-            tracing::info!("cwd is relative, resolving against current dir");
-            let mut current = env::current_dir()?;
-            current.push(p);
-            Ok(current)
-        }
-    }
-}
-
 /// Returns the path to the folder where Codex logs are stored. Does not verify
 /// that the directory exists.
 pub fn log_dir(cfg: &Config) -> std::io::Result<PathBuf> {

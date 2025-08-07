@@ -9,7 +9,6 @@ use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
-use codex_core::config::resolve_cwd;
 use codex_core::config_types::SandboxMode;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
@@ -101,7 +100,7 @@ pub async fn run_main(
         model,
         approval_policy,
         sandbox_mode,
-        cwd: cwd.clone(),
+        cwd,
         model_provider: model_provider_override,
         config_profile: cli.config_profile.clone(),
         codex_linux_sandbox_exe,
@@ -160,7 +159,6 @@ pub async fn run_main(
         approval_policy,
         sandbox_mode,
         cli.config_profile.clone(),
-        cwd,
     )?;
 
     let log_dir = codex_core::config::log_dir(&config)?;
@@ -328,10 +326,7 @@ fn determine_repo_trust_state(
     approval_policy_overide: Option<AskForApproval>,
     sandbox_mode_override: Option<SandboxMode>,
     config_profile_override: Option<String>,
-    cwd: Option<PathBuf>,
 ) -> std::io::Result<bool> {
-    let cwd = cwd.map(|p| p.canonicalize().unwrap_or(p));
-    let resolved_cwd = resolve_cwd(cwd)?;
     let config_profile = config_toml.get_config_profile(config_profile_override)?;
 
     if approval_policy_overide.is_some() || sandbox_mode_override.is_some() {
@@ -346,7 +341,7 @@ fn determine_repo_trust_state(
         // if the user has specified either approval policy or sandbox mode in config.toml
         // skip the trust flow
         Ok(false)
-    } else if config_toml.is_cwd_trusted(&resolved_cwd) {
+    } else if config_toml.is_cwd_trusted(&config.cwd) {
         // if the current cwd project is trusted and no config has been set
         // skip the trust flow and set the approval policy and sandbox mode
         config.approval_policy = AskForApproval::OnRequest;
