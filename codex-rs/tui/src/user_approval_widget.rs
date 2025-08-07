@@ -264,7 +264,7 @@ impl UserApprovalWidget<'_> {
                             " codex to run ".into(),
                             cmd_span,
                             " ".into(),
-                            "every time".bold(),
+                            "every time this session".bold(),
                         ]));
                     }
                     ReviewDecision::Denied => {
