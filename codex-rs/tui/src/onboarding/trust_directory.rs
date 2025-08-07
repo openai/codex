@@ -67,11 +67,9 @@ impl WidgetRef for &TrustDirectoryWidget {
             ));
         } else {
             lines.push(Line::from(
-                "  Since this folder is not version controlled, we recommend careful review",
+                "  Since this folder is not version controlled, we recommend requiring",
             ));
-            lines.push(Line::from(
-                "  of all edits and commands before they are run.",
-            ));
+            lines.push(Line::from("  approval of all edits and commands."));
         }
         lines.push(Line::from(""));
 
@@ -106,12 +104,12 @@ impl WidgetRef for &TrustDirectoryWidget {
             lines.push(create_option(
                 0,
                 TrustDirectorySelection::Trust,
-                "Yes, ask me to approve edits and commands",
+                "Allow Codex to work in this folder without asking for approval",
             ));
             lines.push(create_option(
                 1,
                 TrustDirectorySelection::DontTrust,
-                "No, allow Codex to work in this folder without asking",
+                "Require approval of edits and commands",
             ));
         }
         lines.push(Line::from(""));
@@ -160,7 +158,8 @@ impl TrustDirectoryWidget {
     fn handle_trust(&mut self) {
         if let Err(e) = set_project_trusted(&self.codex_home, &self.cwd) {
             tracing::error!("Failed to set project trusted: {e:?}");
-            self.error = Some("Failed to set project trusted".to_string());
+            self.error = Some(e.to_string());
+            // self.error = Some("Failed to set project trusted".to_string());
         }
 
         // Update the in-memory chat config for this session to a more permissive

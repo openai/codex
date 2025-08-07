@@ -12,6 +12,7 @@ use codex_core::config::load_config_as_toml;
 use codex_core::config::resolve_cwd;
 use codex_core::config_types::SandboxMode;
 use codex_core::protocol::AskForApproval;
+use codex_core::protocol::SandboxPolicy;
 use codex_login::load_auth;
 use codex_ollama::DEFAULT_OSS_MODEL;
 use log_layer::TuiLogLayer;
@@ -96,7 +97,7 @@ pub async fn run_main(
     // canonicalize the cwd
     let cwd = cli.cwd.clone().map(|p| p.canonicalize().unwrap_or(p));
 
-    let config = {
+    let mut config = {
         // Load configuration and support CLI overrides.
         let overrides = ConfigOverrides {
             model,
@@ -158,8 +159,13 @@ pub async fn run_main(
 
         config_toml
     };
-    let should_show_trust_screen =
-        should_show_trust_screen(&config_toml, approval_policy, sandbox_mode, cwd)?;
+    let should_show_trust_screen = should_show_trust_screen(
+        &mut config,
+        &config_toml,
+        approval_policy,
+        sandbox_mode,
+        cwd,
+    )?;
 
     let log_dir = codex_core::config::log_dir(&config)?;
     std::fs::create_dir_all(&log_dir)?;
@@ -318,6 +324,7 @@ fn should_show_login_screen(config: &Config) -> bool {
 }
 
 fn should_show_trust_screen(
+    config: &mut Config,
     config_toml: &ConfigToml,
     approval_policy_overide: Option<AskForApproval>,
     sandbox_mode_override: Option<SandboxMode>,
@@ -335,7 +342,10 @@ fn should_show_trust_screen(
         // skip the trust flow
         Ok(false)
     } else if config_toml.is_cwd_trusted(&resolved_cwd) {
-        // if the current cwd project is trusted, skip the trust screen
+        // if the current cwd project is trusted and no config has been set
+        // skip the trust flow and set the approval policy and sandbox mode
+        config.approval_policy = AskForApproval::OnRequest;
+        config.sandbox_policy = SandboxPolicy::new_workspace_write_policy();
         Ok(false)
     } else {
         // if none of the above conditions are met, show the trust screen

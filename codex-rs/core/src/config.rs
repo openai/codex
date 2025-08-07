@@ -221,8 +221,9 @@ pub fn load_config_as_toml(codex_home: &Path) -> std::io::Result<TomlValue> {
 /// Patch `CODEX_HOME/config.toml` project state.
 /// Use with caution.
 pub fn set_project_trusted(codex_home: &Path, project_path: &Path) -> anyhow::Result<()> {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
     // Parse existing config if present; otherwise start a new document.
-    let mut doc = match std::fs::read_to_string(codex_home) {
+    let mut doc = match std::fs::read_to_string(config_path.clone()) {
         Ok(s) => s.parse::<DocumentMut>()?,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => DocumentMut::new(),
         Err(e) => return Err(e.into()),
@@ -238,10 +239,9 @@ pub fn set_project_trusted(codex_home: &Path, project_path: &Path) -> anyhow::Re
 
     // create a tmp_file
     let tmp_file = NamedTempFile::new_in(codex_home)?;
-    std::fs::write(&tmp_file.path(), doc.to_string())?;
+    std::fs::write(tmp_file.path(), doc.to_string())?;
 
     // atomically move the tmp file into config.toml
-    let config_path = codex_home.join(CONFIG_TOML_FILE);
     tmp_file.persist(config_path)?;
 
     Ok(())
@@ -418,7 +418,7 @@ impl ConfigToml {
         }
     }
 
-    pub fn is_cwd_trusted(&self, resolved_cwd: &PathBuf) -> bool {
+    pub fn is_cwd_trusted(&self, resolved_cwd: &Path) -> bool {
         let projects = self.projects.clone().unwrap_or_default();
 
         projects
