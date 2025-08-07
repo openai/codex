@@ -20,6 +20,11 @@ use std::sync::Mutex;
 use std::time::Duration;
 use tokio::process::Command;
 
+pub use crate::token_data::TokenData;
+use crate::token_data::parse_id_token;
+
+mod token_data;
+
 const SOURCE_FOR_PYTHON_SERVER: &str = include_str!("./login_with_chatgpt.py");
 
 const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -182,7 +187,7 @@ pub fn load_auth(codex_home: &Path, include_env_var: bool) -> std::io::Result<Op
     }))
 }
 
-fn get_auth_file(codex_home: &Path) -> PathBuf {
+pub fn get_auth_file(codex_home: &Path) -> PathBuf {
     codex_home.join("auth.json")
 }
 
@@ -332,7 +337,7 @@ async fn update_tokens(
     let mut auth_dot_json = try_read_auth_json(auth_file)?;
 
     let tokens = auth_dot_json.tokens.get_or_insert_with(TokenData::default);
-    tokens.id_token = id_token.to_string();
+    tokens.id_token = parse_id_token(&id_token).map_err(std::io::Error::other)?;
     if let Some(access_token) = access_token {
         tokens.access_token = access_token.to_string();
     }
@@ -403,22 +408,12 @@ pub struct AuthDotJson {
     pub last_refresh: Option<DateTime<Utc>>,
 }
 
-#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Default)]
-pub struct TokenData {
-    /// This is a JWT.
-    pub id_token: String,
-
-    /// This is a JWT.
-    pub access_token: String,
-
-    pub refresh_token: String,
-
-    pub account_id: Option<String>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::token_data::IdTokenInfo;
+    use base64::Engine;
+    use pretty_assertions::assert_eq;
     use tempfile::tempdir;
 
     #[test]
@@ -446,10 +441,35 @@ mod tests {
     }
 
     #[tokio::test]
-    #[expect(clippy::unwrap_used)]
+    #[expect(clippy::expect_used, clippy::unwrap_used)]
     async fn loads_token_data_from_auth_json() {
         let dir = tempdir().unwrap();
         let auth_file = dir.path().join("auth.json");
+        // Create a minimal valid JWT for the id_token field.
+        #[derive(Serialize)]
+        struct Header {
+            alg: &'static str,
+            typ: &'static str,
+        }
+        let header = Header {
+            alg: "none",
+            typ: "JWT",
+        };
+        let payload = serde_json::json!({
+            "email": "user@example.com",
+            "email_verified": true,
+            "https://api.openai.com/auth": {
+                "chatgpt_account_id": "bc3618e3-489d-4d49-9362-1561dc53ba53",
+                "chatgpt_plan_type": "pro",
+                "chatgpt_user_id": "user-12345",
+                "user_id": "user-12345",
+            }
+        });
+        let b64 = |b: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b);
+        let header_b64 = b64(&serde_json::to_vec(&header).unwrap());
+        let payload_b64 = b64(&serde_json::to_vec(&payload).unwrap());
+        let signature_b64 = b64(b"sig");
+        let fake_jwt = format!("{header_b64}.{payload_b64}.{signature_b64}");
         std::fs::write(
             auth_file,
             format!(
@@ -457,30 +477,68 @@ mod tests {
         {{
             "OPENAI_API_KEY": null,
             "tokens": {{
-                "id_token": "test-id-token",
+                "id_token": "{fake_jwt}",
                 "access_token": "test-access-token",
                 "refresh_token": "test-refresh-token"
             }},
-            "last_refresh": "{}"
+            "last_refresh": "2025-08-06T20:41:36.232376Z"
         }}
         "#,
-                Utc::now().to_rfc3339()
             ),
         )
         .unwrap();
 
-        let auth = load_auth(dir.path(), false).unwrap().unwrap();
-        assert_eq!(auth.mode, AuthMode::ChatGPT);
-        assert_eq!(auth.api_key, None);
+        let CodexAuth {
+            api_key,
+            mode,
+            auth_dot_json,
+            auth_file,
+        } = load_auth(dir.path(), false).unwrap().unwrap();
+        assert_eq!(None, api_key);
+        assert_eq!(AuthMode::ChatGPT, mode);
+        assert_eq!(dir.path().join("auth.json"), auth_file);
+
+        let guard = auth_dot_json.lock().unwrap();
+        let auth_dot_json = guard.as_ref().expect("AuthDotJson should exist");
+
         assert_eq!(
-            auth.get_token_data().await.unwrap(),
-            TokenData {
-                id_token: "test-id-token".to_string(),
-                access_token: "test-access-token".to_string(),
-                refresh_token: "test-refresh-token".to_string(),
-                account_id: None,
-            }
-        );
+            &AuthDotJson {
+                openai_api_key: None,
+                tokens: Some(TokenData {
+                    id_token: IdTokenInfo {
+                        email: Some("user@example.com".to_string()),
+                        chatgpt_plan_type: Some("pro".to_string()),
+                    },
+                    access_token: "test-access-token".to_string(),
+                    refresh_token: "test-refresh-token".to_string(),
+                    account_id: None,
+                }),
+                last_refresh: Some(
+                    DateTime::parse_from_rfc3339("2025-08-06T20:41:36.232376Z")
+                        .unwrap()
+                        .with_timezone(&Utc)
+                ),
+            },
+            auth_dot_json
+        )
+    }
+
+    #[test]
+    #[expect(clippy::expect_used, clippy::unwrap_used)]
+    fn id_token_info_handles_missing_fields() {
+        // Payload without email or plan should yield None values.
+        let header = serde_json::json!({"alg": "none", "typ": "JWT"});
+        let payload = serde_json::json!({"sub": "123"});
+        let header_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(&header).unwrap());
+        let payload_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(&payload).unwrap());
+        let signature_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b"sig");
+        let jwt = format!("{header_b64}.{payload_b64}.{signature_b64}");
+
+        let info = parse_id_token(&jwt).expect("should parse");
+        assert!(info.email.is_none());
+        assert!(info.chatgpt_plan_type.is_none());
     }
 
     #[tokio::test]
