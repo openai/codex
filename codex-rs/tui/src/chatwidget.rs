@@ -476,11 +476,9 @@ impl ChatWidget<'_> {
                 ));
             }
             EventMsg::PatchApplyEnd(event) => {
-                self.add_to_history(HistoryCell::new_patch_apply_end(
-                    event.stdout,
-                    event.stderr,
-                    event.success,
-                ));
+                if !event.success {
+                    self.add_to_history(HistoryCell::new_patch_apply_failure(event.stderr));
+                }
             }
             EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                 call_id,

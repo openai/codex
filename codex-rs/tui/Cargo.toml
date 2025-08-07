@@ -36,6 +36,7 @@ codex-login = { path = "../login" }
 codex-ollama = { path = "../ollama" }
 color-eyre = "0.6.3"
 crossterm = { version = "0.28.1", features = ["bracketed-paste"] }
+diffy = "0.4.2"
 image = { version = "^0.25.6", default-features = false, features = ["jpeg"] }
 lazy_static = "1"
 mcp-types = { path = "../mcp-types" }
@@ -72,10 +73,9 @@ unicode-width = "0.1"
 uuid = "1"
 
 
-
 [dev-dependencies]
+chrono = { version = "0.4", features = ["serde"] }
 insta = "1.43.1"
 pretty_assertions = "1"
 rand = "0.8"
-chrono = { version = "0.4", features = ["serde"] }
 vt100 = "0.16.2"

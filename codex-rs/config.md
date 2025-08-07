@@ -275,9 +275,12 @@ sandbox_mode = "workspace-write"
 
 # Extra settings that only apply when `sandbox = "workspace-write"`.
 [sandbox_workspace_write]
-# By default, only the cwd for the Codex session will be writable (and $TMPDIR
-# on macOS), but you can specify additional writable folders in this array.
-writable_roots = ["/tmp"]
+# By default, the cwd for the Codex session will be writable as well as $TMPDIR
+# if set) and /tmp (if it exists). Setting the respective options to `true`
+# will override those defaults.
+exclude_tmpdir_env_var = false
+exclude_slash_tmp = false
+
 # Allow the command being run inside the sandbox to make outbound network
 # requests. Disabled by default.
 network_access = false
