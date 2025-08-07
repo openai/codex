@@ -13,7 +13,6 @@ use codex_core::config::Config;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
-use codex_core::util::is_inside_git_repo;
 use color_eyre::eyre::Result;
 use crossterm::SynchronizedUpdate;
 use crossterm::event::KeyCode;
@@ -71,18 +70,16 @@ pub(crate) struct App<'a> {
 /// deferred until after the Git warning screen is dismissed.
 #[derive(Clone, Debug)]
 pub(crate) struct ChatWidgetArgs {
-    config: Config,
+    pub(crate) config: Config,
     initial_prompt: Option<String>,
     initial_images: Vec<PathBuf>,
     enhanced_keys_supported: bool,
-    pub(crate) trusted: Option<bool>,
 }
 
 impl App<'_> {
     pub(crate) fn new(
         config: Config,
         initial_prompt: Option<String>,
-        skip_git_repo_check: bool,
         initial_images: Vec<std::path::PathBuf>,
     ) -> Self {
         let (app_event_tx, app_event_rx) = channel();
@@ -135,16 +132,14 @@ impl App<'_> {
         }
 
         let show_login_screen = should_show_login_screen(&config);
-        let show_git_warning =
-            !skip_git_repo_check && !is_inside_git_repo(&config.cwd.to_path_buf());
-        let has_trusted_cwd = config.is_cwd_trusted();
-        let app_state = if show_login_screen || show_git_warning {
+        let is_cwd_trusted = config.is_cwd_trusted();
+        tracing::error!("is_cwd_trusted: {is_cwd_trusted}");
+        let app_state = if show_login_screen || !is_cwd_trusted {
             let chat_widget_args = ChatWidgetArgs {
                 config: config.clone(),
                 initial_prompt,
                 initial_images,
                 enhanced_keys_supported,
-                trusted: None,
             };
             AppState::Onboarding {
                 screen: OnboardingScreen::new(OnboardingScreenArgs {
@@ -152,7 +147,7 @@ impl App<'_> {
                     codex_home: config.codex_home.clone(),
                     cwd: config.cwd.clone(),
                     show_login_screen,
-                    show_git_warning,
+                    is_cwd_trusted,
                     chat_widget_args,
                 }),
             }
@@ -163,7 +158,6 @@ impl App<'_> {
                 initial_prompt,
                 initial_images,
                 enhanced_keys_supported,
-                None,
             );
             AppState::Chat {
                 widget: Box::new(chat_widget),
@@ -312,7 +306,6 @@ impl App<'_> {
                             None,
                             Vec::new(),
                             self.enhanced_keys_supported,
-                            None,
                         ));
                         self.app_state = AppState::Chat { widget: new_widget };
                         self.app_event_tx.send(AppEvent::RequestRedraw);
@@ -415,7 +408,6 @@ impl App<'_> {
                     enhanced_keys_supported,
                     initial_images,
                     initial_prompt,
-                    trusted,
                 }) => {
                     tracing::info!("OnboardingComplete");
                     self.app_state = AppState::Chat {
@@ -425,7 +417,6 @@ impl App<'_> {
                             initial_prompt,
                             initial_images,
                             enhanced_keys_supported,
-                            trusted,
                         )),
                     }
                 }

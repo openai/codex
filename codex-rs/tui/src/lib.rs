@@ -227,7 +227,7 @@ fn run_ratatui_app(
     terminal.clear()?;
 
     let Cli { prompt, images, .. } = cli;
-    let mut app = App::new(config.clone(), prompt, cli.skip_git_repo_check, images);
+    let mut app = App::new(config.clone(), prompt, images);
 
     // Bridge log receiver into the AppEvent channel so latest log lines update the UI.
     {
