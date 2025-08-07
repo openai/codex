@@ -28,7 +28,6 @@ use ratatui::widgets::Wrap;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
-use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
 
 /// Request coming from the agent that needs user approval.
@@ -36,6 +35,7 @@ pub(crate) enum ApprovalRequest {
     Exec {
         id: String,
         command: Vec<String>,
+        #[allow(dead_code)]
         cwd: PathBuf,
         reason: Option<String>,
     },
@@ -115,21 +115,18 @@ impl UserApprovalWidget<'_> {
     pub(crate) fn new(approval_request: ApprovalRequest, app_event_tx: AppEventSender) -> Self {
         let confirmation_prompt = match &approval_request {
             ApprovalRequest::Exec {
-                command,
-                cwd,
-                reason,
-                ..
+                command, reason, ..
             } => {
                 let cmd = strip_bash_lc_and_escape(command);
-                // Maybe try to relativize to the cwd of this process first?
-                // Will make cwd_str shorter in the common case.
-                let cwd_str = match relativize_to_home(cwd) {
-                    Some(rel) => format!("~/{}", rel.display()),
-                    None => cwd.display().to_string(),
-                };
+                // Present a single-line summary without cwd: "codex wants to run: <cmd>"
+                let mut cmd_span: Span = cmd.clone().into();
+                cmd_span.style = cmd_span.style.add_modifier(Modifier::DIM);
                 let mut contents: Vec<Line> = vec![
-                    Line::from(vec!["codex".bold().magenta(), " wants to run:".into()]),
-                    Line::from(vec![cwd_str.dim(), "$".into(), format!(" {cmd}").into()]),
+                    Line::from(vec![
+                        "? ".fg(Color::Blue),
+                        "Codex wants to run ".bold(),
+                        cmd_span,
+                    ]),
                     Line::from(""),
                 ];
                 if let Some(reason) = reason {
@@ -243,9 +240,52 @@ impl UserApprovalWidget<'_> {
         match &self.approval_request {
             ApprovalRequest::Exec { command, .. } => {
                 let cmd = strip_bash_lc_and_escape(command);
-                lines.push(Line::from("approval decision"));
-                lines.push(Line::from(format!("$ {cmd}")));
-                lines.push(Line::from(format!("decision: {decision:?}")));
+                let mut cmd_span: Span = cmd.clone().into();
+                cmd_span.style = cmd_span.style.add_modifier(Modifier::DIM);
+
+                // Result line based on decision.
+                match decision {
+                    ReviewDecision::Approved => {
+                        lines.push(Line::from(vec![
+                            "✓ ".fg(Color::Green),
+                            "You ".into(),
+                            "approved".bold(),
+                            " codex to run ".into(),
+                            cmd_span,
+                            " ".into(),
+                            "this time".bold(),
+                        ]));
+                    }
+                    ReviewDecision::ApprovedForSession => {
+                        lines.push(Line::from(vec![
+                            "✓ ".fg(Color::Green),
+                            "You ".into(),
+                            "approved".bold(),
+                            " codex to run ".into(),
+                            cmd_span,
+                            " ".into(),
+                            "every time this session".bold(),
+                        ]));
+                    }
+                    ReviewDecision::Denied => {
+                        lines.push(Line::from(vec![
+                            "✗ ".fg(Color::Red),
+                            "You ".into(),
+                            "did not approve".bold(),
+                            " codex to run ".into(),
+                            cmd_span,
+                        ]));
+                    }
+                    ReviewDecision::Abort => {
+                        lines.push(Line::from(vec![
+                            "✗ ".fg(Color::Red),
+                            "You ".into(),
+                            "canceled".bold(),
+                            " the request to run ".into(),
+                            cmd_span,
+                        ]));
+                    }
+                }
             }
             ApprovalRequest::ApplyPatch { .. } => {
                 lines.push(Line::from(format!("patch approval decision: {decision:?}")));

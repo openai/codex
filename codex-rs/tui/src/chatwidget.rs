@@ -45,7 +45,6 @@ use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
 use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::InputResult;
-use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell::CommandOutput;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::PatchEventType;
@@ -393,17 +392,6 @@ impl ChatWidget<'_> {
                 reason,
             }) => {
                 self.finalize_active_stream();
-                // Log a background summary immediately so the history is chronological.
-                let cmdline = strip_bash_lc_and_escape(&command);
-                let text = format!(
-                    "command requires approval:\n$ {cmdline}{reason}",
-                    reason = reason
-                        .as_ref()
-                        .map(|r| format!("\n{r}"))
-                        .unwrap_or_default()
-                );
-                self.add_to_history(HistoryCell::new_background_event(text));
-
                 let request = ApprovalRequest::Exec {
                     id,
                     command,
