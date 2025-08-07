@@ -61,6 +61,12 @@ impl CodexAuth {
         }
     }
 
+    /// Loads the available auth information from the auth.json or
+    /// OPENAI_API_KEY environment variable.
+    pub fn from_codex_home(codex_home: &Path) -> std::io::Result<Option<CodexAuth>> {
+        load_auth(codex_home, true)
+    }
+
     pub async fn get_token_data(&self) -> Result<TokenData, std::io::Error> {
         #[expect(clippy::unwrap_used)]
         let auth_dot_json = self.auth_dot_json.lock().unwrap().clone();
@@ -152,12 +158,7 @@ impl CodexAuth {
     }
 }
 
-// Loads the available auth information from the auth.json or OPENAI_API_KEY environment variable.
-pub fn load_auth(codex_home: &Path) -> std::io::Result<Option<CodexAuth>> {
-    _load_auth(codex_home, true)
-}
-
-fn _load_auth(codex_home: &Path, include_env_var: bool) -> std::io::Result<Option<CodexAuth>> {
+fn load_auth(codex_home: &Path, include_env_var: bool) -> std::io::Result<Option<CodexAuth>> {
     let auth_file = get_auth_file(codex_home);
 
     let auth_dot_json = try_read_auth_json(&auth_file).ok();
@@ -433,7 +434,7 @@ mod tests {
     fn writes_api_key_and_loads_auth() {
         let dir = tempdir().unwrap();
         login_with_api_key(dir.path(), "sk-test-key").unwrap();
-        let auth = _load_auth(dir.path(), false).unwrap().unwrap();
+        let auth = load_auth(dir.path(), false).unwrap().unwrap();
         assert_eq!(auth.mode, AuthMode::ApiKey);
         assert_eq!(auth.api_key.as_deref(), Some("sk-test-key"));
     }
@@ -446,7 +447,7 @@ mod tests {
         let env_var = std::env::var(OPENAI_API_KEY_ENV_VAR);
 
         if let Ok(env_var) = env_var {
-            let auth = _load_auth(dir.path(), true).unwrap().unwrap();
+            let auth = load_auth(dir.path(), true).unwrap().unwrap();
             assert_eq!(auth.mode, AuthMode::ApiKey);
             assert_eq!(auth.api_key, Some(env_var));
         }
@@ -505,7 +506,7 @@ mod tests {
             mode,
             auth_dot_json,
             auth_file,
-        } = _load_auth(dir.path(), false).unwrap().unwrap();
+        } = load_auth(dir.path(), false).unwrap().unwrap();
         assert_eq!(None, api_key);
         assert_eq!(AuthMode::ChatGPT, mode);
         assert_eq!(dir.path().join("auth.json"), auth_file);
@@ -570,7 +571,7 @@ mod tests {
         )
         .unwrap();
 
-        let auth = _load_auth(dir.path(), false).unwrap().unwrap();
+        let auth = load_auth(dir.path(), false).unwrap().unwrap();
         assert_eq!(auth.mode, AuthMode::ApiKey);
         assert_eq!(auth.api_key, Some("sk-test-key".to_string()));
 

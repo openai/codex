@@ -4,8 +4,8 @@ use codex_common::CliConfigOverrides;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_login::AuthMode;
+use codex_login::CodexAuth;
 use codex_login::OPENAI_API_KEY_ENV_VAR;
-use codex_login::load_auth;
 use codex_login::login_with_api_key;
 use codex_login::login_with_chatgpt;
 use codex_login::logout;
@@ -47,7 +47,7 @@ pub async fn run_login_with_api_key(
 pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
     let config = load_config_or_exit(cli_config_overrides);
 
-    match load_auth(&config.codex_home) {
+    match CodexAuth::from_codex_home(&config.codex_home) {
         Ok(Some(auth)) => match auth.mode {
             AuthMode::ApiKey => match auth.get_token().await {
                 Ok(api_key) => {
