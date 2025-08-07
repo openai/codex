@@ -513,48 +513,48 @@ impl HistoryCell {
         }
     }
 
-    /// Render a user‑friendly plan update with colourful status icons and a
-    /// simple progress indicator so users can follow along.
+    /// Render a user‑friendly plan update styled like a checkbox todo list.
     pub(crate) fn new_plan_update(update: UpdatePlanArgs) -> Self {
         let UpdatePlanArgs { explanation, plan } = update;
 
         let mut lines: Vec<Line<'static>> = Vec::new();
+        // Header with progress summary
+        let total = plan.len();
+        let completed = plan
+            .iter()
+            .filter(|p| matches!(p.status, StepStatus::Completed))
+            .count();
 
-        // Title
-        lines.push(Line::from("plan".magenta().bold()));
+        let width: usize = 10;
+        let filled = if total > 0 {
+            (completed * width + total / 2) / total
+        } else {
+            0
+        };
+        let empty = width.saturating_sub(filled);
 
-        if !plan.is_empty() {
-            // Progress bar – show completed/total with a visual bar
-            let total = plan.len();
-            let completed = plan
-                .iter()
-                .filter(|p| matches!(p.status, StepStatus::Completed))
-                .count();
-            let width: usize = 20;
-            let filled = (completed * width + total / 2) / total;
-            let empty = width.saturating_sub(filled);
-            let mut bar_spans: Vec<Span> = Vec::new();
-            if filled > 0 {
-                bar_spans.push(Span::styled(
-                    "█".repeat(filled),
-                    Style::default().fg(Color::Green),
-                ));
-            }
-            if empty > 0 {
-                bar_spans.push(Span::styled(
-                    "░".repeat(empty),
-                    Style::default().fg(Color::Gray),
-                ));
-            }
-            let progress_prefix = Span::raw("progress [");
-            let progress_suffix = Span::raw("] ");
-            let fraction = Span::raw(format!("{completed}/{total}"));
-            let mut progress_line_spans = vec![progress_prefix];
-            progress_line_spans.extend(bar_spans);
-            progress_line_spans.push(progress_suffix);
-            progress_line_spans.push(fraction);
-            lines.push(Line::from(progress_line_spans));
+        let mut header: Vec<Span> = Vec::new();
+        header.push(Span::raw("📋"));
+        header.push(Span::styled(
+            "Updated",
+            Style::default().add_modifier(Modifier::BOLD).magenta(),
+        ));
+        header.push(Span::raw(" to do list ["));
+        if filled > 0 {
+            header.push(Span::styled(
+                "█".repeat(filled),
+                Style::default().fg(Color::Green),
+            ));
         }
+        if empty > 0 {
+            header.push(Span::styled(
+                "░".repeat(empty),
+                Style::default().fg(Color::Gray),
+            ));
+        }
+        header.push(Span::raw("] "));
+        header.push(Span::raw(format!("{completed}/{total}")));
+        lines.push(Line::from(header));
 
         // Optional explanation/note from the model
         if let Some(expl) = explanation.and_then(|s| {
@@ -567,22 +567,48 @@ impl HistoryCell {
             }
         }
 
-        // Steps (1‑based numbering) with fun, readable status icons
+        // Steps styled as checkbox items
         if plan.is_empty() {
             lines.push(Line::from("(no steps provided)".gray().italic()));
         } else {
             for (idx, PlanItemArg { step, status }) in plan.into_iter().enumerate() {
-                let num = idx + 1;
-                let icon_span: Span = match status {
-                    StepStatus::Completed => Span::from("✓").fg(Color::Green),
-                    StepStatus::InProgress => Span::from("▶").fg(Color::Yellow).bold(),
-                    StepStatus::Pending => Span::from("○").fg(Color::Gray),
+                let (box_span, text_span) = match status {
+                    StepStatus::Completed => (
+                        Span::styled("✔", Style::default().fg(Color::Green)),
+                        Span::styled(
+                            step,
+                            Style::default()
+                                .fg(Color::Gray)
+                                .add_modifier(Modifier::CROSSED_OUT | Modifier::DIM),
+                        ),
+                    ),
+                    StepStatus::InProgress => (
+                        Span::raw("□"),
+                        Span::styled(
+                            step,
+                            Style::default()
+                                .fg(Color::Blue)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                    ),
+                    StepStatus::Pending => (
+                        Span::raw("□"),
+                        Span::styled(
+                            step,
+                            Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
+                        ),
+                    ),
+                };
+                let prefix = if idx == 0 {
+                    Span::raw("  ⎿ ")
+                } else {
+                    Span::raw("    ")
                 };
                 lines.push(Line::from(vec![
-                    format!("{num:>2}. [").into(),
-                    icon_span,
-                    "] ".into(),
-                    step.into(),
+                    prefix,
+                    box_span,
+                    Span::raw(" "),
+                    text_span,
                 ]));
             }
         }
