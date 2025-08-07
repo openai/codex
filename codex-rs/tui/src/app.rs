@@ -416,7 +416,9 @@ impl App<'_> {
                     }
                 }
                 AppEvent::StartFileSearch(query) => {
-                    self.file_search.on_user_query(query);
+                    if !query.is_empty() {
+                        self.file_search.on_user_query(query);
+                    }
                 }
                 AppEvent::FileSearchResult { query, matches } => {
                     if let AppState::Chat { widget } = &mut self.app_state {
