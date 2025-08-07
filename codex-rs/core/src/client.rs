@@ -47,7 +47,7 @@ struct ErrorResponse {
 
 #[derive(Debug, Deserialize)]
 struct Error {
-    code: String,
+    r#type: String,
 }
 
 #[derive(Clone)]
@@ -259,12 +259,12 @@ impl ModelClient {
                     if status == StatusCode::TOO_MANY_REQUESTS {
                         let body = res.json::<ErrorResponse>().await.ok();
                         if let Some(ErrorResponse {
-                            error: Error { code, .. },
+                            error: Error { r#type, .. },
                         }) = body
                         {
-                            if code == "usage_limit_reached" {
+                            if r#type == "usage_limit_reached" {
                                 return Err(CodexErr::UsageLimitReached);
-                            } else if code == "usage_not_included" {
+                            } else if r#type == "usage_not_included" {
                                 return Err(CodexErr::UsageNotIncluded);
                             }
                         }
