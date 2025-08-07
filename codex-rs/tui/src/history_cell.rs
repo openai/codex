@@ -474,27 +474,17 @@ impl HistoryCell {
         lines.push(Line::from("token usage".bold()));
         lines.push(Line::from(vec![
             "  input: ".bold(),
-            usage.input_tokens.to_string().into(),
-        ]));
-        lines.push(Line::from(vec![
-            "  cached input: ".bold(),
-            usage.cached_input_tokens.unwrap_or(0).to_string().into(),
+            usage.non_cached_input().to_string().into(),
+            " ".into(),
+            format!("(+ {} cached)", usage.cached_input()).into(),
         ]));
         lines.push(Line::from(vec![
             "  output: ".bold(),
             usage.output_tokens.to_string().into(),
         ]));
         lines.push(Line::from(vec![
-            "  reasoning output: ".bold(),
-            usage
-                .reasoning_output_tokens
-                .unwrap_or(0)
-                .to_string()
-                .into(),
-        ]));
-        lines.push(Line::from(vec![
             "  total: ".bold(),
-            usage.total_tokens.to_string().into(),
+            usage.blended_total().to_string().into(),
         ]));
 
         lines.push(Line::from(""));
