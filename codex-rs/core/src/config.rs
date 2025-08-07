@@ -22,12 +22,16 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
+use tempfile::NamedTempFile;
 use toml::Value as TomlValue;
+use toml_edit::DocumentMut;
 
 /// Maximum number of bytes of the documentation that will be embedded. Larger
 /// files are *silently truncated* to this size so we do not take up too much of
 /// the context window.
 pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
+
+const CONFIG_TOML_FILE: &str = "config.toml";
 
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
@@ -191,10 +195,28 @@ impl Config {
     }
 }
 
+pub fn load_config_as_toml_with_cli_overrides(
+    codex_home: &Path,
+    cli_overrides: Vec<(String, TomlValue)>,
+) -> std::io::Result<ConfigToml> {
+    let mut root_value = load_config_as_toml(codex_home)?;
+
+    for (path, value) in cli_overrides.into_iter() {
+        apply_toml_override(&mut root_value, &path, value);
+    }
+
+    let cfg: ConfigToml = root_value.try_into().map_err(|e| {
+        tracing::error!("Failed to deserialize overridden config: {e}");
+        std::io::Error::new(std::io::ErrorKind::InvalidData, e)
+    })?;
+
+    Ok(cfg)
+}
+
 /// Read `CODEX_HOME/config.toml` and return it as a generic TOML value. Returns
 /// an empty TOML table when the file does not exist.
-fn load_config_as_toml(codex_home: &Path) -> std::io::Result<TomlValue> {
-    let config_path = codex_home.join("config.toml");
+pub fn load_config_as_toml(codex_home: &Path) -> std::io::Result<TomlValue> {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
     match std::fs::read_to_string(&config_path) {
         Ok(contents) => match toml::from_str::<TomlValue>(&contents) {
             Ok(val) => Ok(val),
@@ -212,6 +234,35 @@ fn load_config_as_toml(codex_home: &Path) -> std::io::Result<TomlValue> {
             Err(e)
         }
     }
+}
+
+/// Patch `CODEX_HOME/config.toml` project state.
+/// Use with caution.
+pub fn set_project_trusted(codex_home: &Path, project_path: &Path) -> anyhow::Result<()> {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    // Parse existing config if present; otherwise start a new document.
+    let mut doc = match std::fs::read_to_string(config_path.clone()) {
+        Ok(s) => s.parse::<DocumentMut>()?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => DocumentMut::new(),
+        Err(e) => return Err(e.into()),
+    };
+
+    // Mark the project as trusted. toml_edit is very good at handling
+    // missing properties
+    let project_key = project_path.to_string_lossy().to_string();
+    doc["projects"][project_key.as_str()]["trust_level"] = toml_edit::value("trusted");
+
+    // ensure codex_home exists
+    std::fs::create_dir_all(codex_home)?;
+
+    // create a tmp_file
+    let tmp_file = NamedTempFile::new_in(codex_home)?;
+    std::fs::write(tmp_file.path(), doc.to_string())?;
+
+    // atomically move the tmp file into config.toml
+    tmp_file.persist(config_path)?;
+
+    Ok(())
 }
 
 /// Apply a single dotted-path override onto a TOML value.
@@ -350,6 +401,13 @@ pub struct ConfigToml {
 
     /// The value for the `originator` header included with Responses API requests.
     pub internal_originator: Option<String>,
+
+    pub projects: Option<HashMap<String, ProjectConfig>>,
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ProjectConfig {
+    pub trust_level: Option<String>,
 }
 
 impl ConfigToml {
@@ -375,6 +433,36 @@ impl ConfigToml {
                 None => SandboxPolicy::new_workspace_write_policy(),
             },
             SandboxMode::DangerFullAccess => SandboxPolicy::DangerFullAccess,
+        }
+    }
+
+    pub fn is_cwd_trusted(&self, resolved_cwd: &Path) -> bool {
+        let projects = self.projects.clone().unwrap_or_default();
+
+        projects
+            .get(&resolved_cwd.to_string_lossy().to_string())
+            .map(|p| p.trust_level.clone().unwrap_or("".to_string()) == "trusted")
+            .unwrap_or(false)
+    }
+
+    pub fn get_config_profile(
+        &self,
+        override_profile: Option<String>,
+    ) -> Result<ConfigProfile, std::io::Error> {
+        let profile = override_profile.or_else(|| self.profile.clone());
+
+        match profile {
+            Some(key) => {
+                if let Some(profile) = self.profiles.get(key.as_str()) {
+                    return Ok(profile.clone());
+                }
+
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("config profile `{key}` not found"),
+                ))
+            }
+            None => Ok(ConfigProfile::default()),
         }
     }
 }
