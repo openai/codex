@@ -83,20 +83,24 @@ mod tests {
 
     #[test]
     fn ascii_basic_indices() {
-        let (idx, _score) = match fuzzy_match("hello", "hl") {
+        let (idx, score) = match fuzzy_match("hello", "hl") {
             Some(v) => v,
             None => panic!("expected a match"),
         };
         assert_eq!(idx, vec![0, 2]);
+        // 'h' at 0, 'l' at 2 -> window 1; start-of-string bonus applies (-100)
+        assert_eq!(score, -99);
     }
 
     #[test]
     fn unicode_dotted_i_istanbul_highlighting() {
-        let (idx, _score) = match fuzzy_match("İstanbul", "is") {
+        let (idx, score) = match fuzzy_match("İstanbul", "is") {
             Some(v) => v,
             None => panic!("expected a match"),
         };
         assert_eq!(idx, vec![0, 1]);
+        // Matches at lowered positions 0 and 2 -> window 1; start-of-string bonus applies
+        assert_eq!(score, -99);
     }
 
     #[test]
@@ -114,6 +118,10 @@ mod tests {
             Some(v) => v,
             None => panic!("expected a match"),
         };
+        // Contiguous window -> 0; start-of-string bonus -> -100
+        assert_eq!(score_a, -100);
+        // Spread over 5 chars for 3-letter needle -> window 2; with bonus -> -98
+        assert_eq!(score_b, -98);
         assert!(score_a < score_b);
     }
 
@@ -127,6 +135,10 @@ mod tests {
             Some(v) => v,
             None => panic!("expected a match"),
         };
+        // Start-of-string contiguous -> window 0; bonus -> -100
+        assert_eq!(score_a, -100);
+        // Non-prefix contiguous -> window 0; no bonus -> 0
+        assert_eq!(score_b, 0);
         assert!(score_a < score_b);
     }
 
@@ -142,20 +154,24 @@ mod tests {
 
     #[test]
     fn case_insensitive_matching_basic() {
-        let (idx, _score) = match fuzzy_match("FooBar", "foO") {
+        let (idx, score) = match fuzzy_match("FooBar", "foO") {
             Some(v) => v,
             None => panic!("expected a match"),
         };
         assert_eq!(idx, vec![0, 1, 2]);
+        // Contiguous prefix match (case-insensitive) -> window 0 with bonus
+        assert_eq!(score, -100);
     }
 
     #[test]
     fn indices_are_deduped_for_multichar_lowercase_expansion() {
         let needle = "\u{0069}\u{0307}"; // "i" + combining dot above
-        let (idx, _score) = match fuzzy_match("İ", needle) {
+        let (idx, score) = match fuzzy_match("İ", needle) {
             Some(v) => v,
             None => panic!("expected a match"),
         };
         assert_eq!(idx, vec![0]);
+        // Lowercasing 'İ' expands to two chars; contiguous prefix -> window 0 with bonus
+        assert_eq!(score, -100);
     }
 }
