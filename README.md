@@ -67,8 +67,10 @@ Or, run with a prompt as input:
 codex "explain this codebase to me"
 ```
 
-That's it - Codex will scaffold a file, run it inside a sandbox, install any
-missing dependencies, and show you the live result. Approve the changes (or run with `--full-auto`) and they'll be committed to your working directory.
+That's it — Codex will scaffold a file, run it inside a sandbox, install any
+missing dependencies, and show you the live result. By default, Codex asks for
+permission before running commands or making changes; run `--full-auto` to
+auto-approve commands.
 
 
 ---
@@ -85,7 +87,7 @@ missing dependencies, and show you the live result. Approve the changes (or run 
 
 
 
-
+---
 
 ## Configuration
 

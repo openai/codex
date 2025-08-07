@@ -13,9 +13,15 @@ Use Codex in two ways: interactively with `codex` (TUI) or non‑interactively w
 Key flags:
 
 - `--model/-m`
-- `--ask-for-approval/-a`
+- `--ask-for-approval/-a` (e.g., `untrusted`, `on-failure`; see [approval_policy](../codex-rs/config.md#approval_policy))
 - `--profile <name>`
 - `--config key=value`
+
+---
+
+## Approvals and sandboxing
+
+Codex can ask before running model‑suggested commands and runs them inside an OS‑level sandbox. See the configuration reference for details on [approval_policy](../codex-rs/config.md#approval_policy) and [sandbox_mode](../codex-rs/config.md#sandbox_mode).
 
 ---
 
@@ -82,5 +88,6 @@ Below are a few bite-size examples you can copy-paste. Replace the text in quote
 | 5   | `codex "Explain what this regex does: ^(?=.*[A-Z]).{8,}$"`                      | Outputs a step-by-step human explanation.                                  |
 | 6   | `codex "Carefully review this repo, and propose 3 high impact well-scoped PRs"` | Suggests impactful PRs in the current codebase.                            |
 | 7   | `codex "Look for vulnerabilities and create a security review report"`          | Finds and explains security bugs.                                          |
+| 8   | `codex "Are there any leftover comments I should clean up?"`                    | Finds and cleans up unnecessary comments.                                              |
 
 ---
