@@ -35,8 +35,6 @@ const BASE_PLACEHOLDER_TEXT: &str = "Ask Codex to do anything";
 /// If the pasted content exceeds this number of characters, replace it with a
 /// placeholder in the UI.
 const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
-/// Background color used for the chat composer area.
-const COMPOSER_BG_COLOR: Color = Color::Black;
 
 /// Result returned when the user interacts with the text area.
 pub enum InputResult {
@@ -743,9 +741,6 @@ impl WidgetRef for &ChatComposer {
         textarea_rect.width = textarea_rect.width.saturating_sub(1);
         textarea_rect.x += 1;
 
-        // Fill only the textarea content region with a subtle background so it
-        // doesn't affect the hint line or popups and remains behind the text.
-        buf.set_style(textarea_rect, Style::default().bg(COMPOSER_BG_COLOR));
         let mut state = self.textarea_state.borrow_mut();
         StatefulWidgetRef::render_ref(&(&self.textarea), textarea_rect, buf, &mut state);
         if self.textarea.text().is_empty() {
