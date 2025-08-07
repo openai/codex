@@ -76,7 +76,6 @@ impl CodexAuth {
     }
 
     pub async fn get_token_data(&self) -> Result<TokenData, std::io::Error> {
-        #[expect(clippy::unwrap_used)]
         let auth_dot_json: Option<AuthDotJson> = self.get_current_auth_json();
         match auth_dot_json {
             Some(AuthDotJson {

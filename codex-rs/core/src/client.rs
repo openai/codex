@@ -265,7 +265,7 @@ impl ModelClient {
                         {
                             if r#type == "usage_limit_reached" {
                                 return Err(CodexErr::UsageLimitReached(UsageLimitReachedError {
-                                    plan_type: auth.map(|a| a.get_plan_type()).flatten(),
+                                    plan_type: auth.and_then(|a| a.get_plan_type()),
                                 }));
                             } else if r#type == "usage_not_included" {
                                 return Err(CodexErr::UsageNotIncluded);
