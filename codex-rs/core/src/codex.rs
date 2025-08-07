@@ -1999,7 +1999,7 @@ async fn handle_container_exec_with_params(
             handle_sandbox_error(
                 turn_diff_tracker,
                 params,
-                &exec_command_context,
+                exec_command_context,
                 error,
                 sandbox_type,
                 sess,
@@ -2019,7 +2019,7 @@ async fn handle_container_exec_with_params(
 async fn handle_sandbox_error(
     turn_diff_tracker: &mut TurnDiffTracker,
     params: ExecParams,
-    exec_command_context: &ExecCommandContext,
+    exec_command_context: ExecCommandContext,
     error: SandboxErr,
     sandbox_type: SandboxType,
     sess: &Session,
