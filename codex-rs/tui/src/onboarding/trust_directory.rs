@@ -167,11 +167,7 @@ impl TrustDirectoryWidget {
         // policy suitable for a trusted workspace.
         if let Ok(mut args) = self.chat_widget_args.lock() {
             args.config.approval_policy = AskForApproval::OnRequest;
-            args.config.sandbox_policy = SandboxPolicy::WorkspaceWrite {
-                writable_roots: vec![self.cwd.clone()],
-                network_access: false,
-                include_default_writable_roots: true,
-            };
+            args.config.sandbox_policy = SandboxPolicy::new_workspace_write_policy();
         }
 
         self.selection = Some(TrustDirectorySelection::Trust);
