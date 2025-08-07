@@ -38,8 +38,9 @@ pub enum AuthMode {
 
 #[derive(Debug, Clone)]
 pub struct CodexAuth {
-    pub api_key: Option<String>,
     pub mode: AuthMode,
+
+    api_key: Option<String>,
     auth_dot_json: Arc<Mutex<Option<AuthDotJson>>>,
     auth_file: PathBuf,
 }
