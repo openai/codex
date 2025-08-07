@@ -62,6 +62,12 @@ pub enum CodexErr {
     #[error("unexpected status {0}: {1}")]
     UnexpectedStatus(StatusCode, String),
 
+    #[error("Usage limit has been reached")]
+    UsageLimitReached,
+
+    #[error("Usage not included with the plan")]
+    UsageNotIncluded,
+
     /// Retry limit exceeded.
     #[error("exceeded retry limit, last status: {0}")]
     RetryLimit(StatusCode),
