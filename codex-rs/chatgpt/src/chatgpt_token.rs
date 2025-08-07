@@ -1,3 +1,4 @@
+use codex_login::CodexAuth;
 use std::path::Path;
 use std::sync::LazyLock;
 use std::sync::RwLock;
@@ -18,7 +19,7 @@ pub fn set_chatgpt_token_data(value: TokenData) {
 
 /// Initialize the ChatGPT token from auth.json file
 pub async fn init_chatgpt_token_from_auth(codex_home: &Path) -> std::io::Result<()> {
-    let auth = codex_login::load_auth(codex_home)?;
+    let auth = CodexAuth::from_codex_home(codex_home)?;
     if let Some(auth) = auth {
         let token_data = auth.get_token_data().await?;
         set_chatgpt_token_data(token_data);
