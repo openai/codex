@@ -194,7 +194,7 @@ impl Config {
 
 /// Read `CODEX_HOME/config.toml` and return it as a generic TOML value. Returns
 /// an empty TOML table when the file does not exist.
-fn load_config_as_toml(codex_home: &Path) -> std::io::Result<TomlValue> {
+pub fn load_config_as_toml(codex_home: &Path) -> std::io::Result<TomlValue> {
     let config_path = codex_home.join("config.toml");
     match std::fs::read_to_string(&config_path) {
         Ok(contents) => match toml::from_str::<TomlValue>(&contents) {

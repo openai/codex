@@ -15,7 +15,6 @@ use codex_core::protocol::AskForApproval;
 use codex_login::load_auth;
 use codex_ollama::DEFAULT_OSS_MODEL;
 use log_layer::TuiLogLayer;
-use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::path::PathBuf;
 use tracing::error;
@@ -97,31 +96,32 @@ pub async fn run_main(
     // canonicalize the cwd
     let cwd = cli.cwd.clone().map(|p| p.canonicalize().unwrap_or(p));
 
-    // Load configuration and support CLI overrides.
-    let overrides = ConfigOverrides {
-        model,
-        approval_policy,
-        sandbox_mode,
-        cwd,
-        model_provider: model_provider_override,
-        config_profile: cli.config_profile.clone(),
-        codex_linux_sandbox_exe,
-        base_instructions: None,
-        include_plan_tool: Some(true),
-        disable_response_storage: cli.oss.then_some(true),
-        show_raw_agent_reasoning: cli.oss.then_some(true),
-    };
-    // Parse `-c` overrides from the CLI.
-    let cli_kv_overrides = match cli.config_overrides.parse_overrides() {
-        Ok(v) => v,
-        #[allow(clippy::print_stderr)]
-        Err(e) => {
-            eprintln!("Error parsing -c overrides: {e}");
-            std::process::exit(1);
-        }
-    };
-
     let config = {
+        // Load configuration and support CLI overrides.
+        let overrides = ConfigOverrides {
+            model,
+            approval_policy,
+            sandbox_mode,
+            cwd: cwd.clone(),
+            model_provider: model_provider_override,
+            config_profile: cli.config_profile.clone(),
+            codex_linux_sandbox_exe,
+            base_instructions: None,
+            include_plan_tool: Some(true),
+            disable_response_storage: cli.oss.then_some(true),
+            show_raw_agent_reasoning: cli.oss.then_some(true),
+        };
+
+        // Parse `-c` overrides from the CLI.
+        let cli_kv_overrides = match cli.config_overrides.parse_overrides() {
+            Ok(v) => v,
+            #[allow(clippy::print_stderr)]
+            Err(e) => {
+                eprintln!("Error parsing -c overrides: {e}");
+                std::process::exit(1);
+            }
+        };
+
         #[allow(clippy::print_stderr)]
         match Config::load_with_cli_overrides(cli_kv_overrides, overrides) {
             Ok(config) => config,
@@ -142,15 +142,23 @@ pub async fn run_main(
             }
         };
 
-        match load_config_as_toml(&codex_home) {
+        let root_value = match load_config_as_toml(&codex_home) {
             Ok(config_toml) => config_toml,
             Err(err) => {
                 eprintln!("Error loading config.toml: {err}");
                 std::process::exit(1);
             }
-        }
+        };
+
+        let config_toml: ConfigToml = root_value.try_into().map_err(|e| {
+            tracing::error!("Failed to deserialize overridden config: {e}");
+            std::io::Error::new(std::io::ErrorKind::InvalidData, e)
+        })?;
+
+        config_toml
     };
-    let should_show_trust_screen = should_show_trust_screen(&config_toml, &overrides, cwd)?;
+    let should_show_trust_screen =
+        should_show_trust_screen(&config_toml, approval_policy, sandbox_mode, cwd)?;
 
     let log_dir = codex_core::config::log_dir(&config)?;
     std::fs::create_dir_all(&log_dir)?;
@@ -232,7 +240,8 @@ pub async fn run_main(
         eprintln!("");
     }
 
-    run_ratatui_app(cli, config, should_show_trust_screen, log_rx).map_err(|err| std::io::Error::other(err.to_string()))
+    run_ratatui_app(cli, config, should_show_trust_screen, log_rx)
+        .map_err(|err| std::io::Error::other(err.to_string()))
 }
 
 fn run_ratatui_app(
@@ -309,14 +318,14 @@ fn should_show_login_screen(config: &Config) -> bool {
 
 fn should_show_trust_screen(
     config_toml: &ConfigToml,
-    config_overrides: &ConfigOverrides,
+    approval_policy_overide: Option<AskForApproval>,
+    sandbox_mode_override: Option<SandboxMode>,
     cwd: Option<PathBuf>,
 ) -> std::io::Result<bool> {
     let cwd = cwd.map(|p| p.canonicalize().unwrap_or(p));
     let resolved_cwd = resolve_cwd(cwd)?;
-    let projects = config_toml.projects.or_else(|| -> HashMap::new());
 
-    if config_overrides.approval_policy.is_some() || config_overrides.sandbox_mode.is_some() {
+    if approval_policy_overide.is_some() || sandbox_mode_override.is_some() {
         // if the user has overridden either approval policy or sandbox mode,
         // skip the trust flow
         Ok(false)
