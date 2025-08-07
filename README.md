@@ -68,7 +68,7 @@ npm install -g @openai/codex  # Alternatively: `brew install codex`
 Then simply run `codex` to get started:
 
 ```shell
-codex  
+codex
 ```
 
 <details>
@@ -84,6 +84,7 @@ Each GitHub Release contains many executables, but in practice, you likely want 
   - arm64: `codex-aarch64-unknown-linux-musl.tar.gz`
 
 Each archive contains a single entry with the platform baked into the name (e.g., `codex-x86_64-unknown-linux-musl`), so you likely want to rename it to `codex` after extracting it.
+
 </details>
 
 ### Using Codex with your ChatGPT plan
@@ -95,6 +96,7 @@ Each archive contains a single entry with the platform baked into the name (e.g.
 After you run `codex` select Sign in with ChatGPT. You'll need a Plus, Pro, or Team ChatGPT account, and will get access to our latest models, including `gpt-5`, at no extra cost to your plan. (Enterprise is coming soon.)
 
 > Important: If you've used the Codex CLI before, you'll need to follow these steps to migrate from usage-based billing with your API key:
+>
 > 1. Update the CLI with `codex update` and ensure `codex --version` is greater than 0.13
 > 2. Ensure that there is no `OPENAI_API_KEY` environment variable set. (Check that `env | grep 'OPENAI_API_KEY'` returns empty)
 > 3. Run `codex login` again
@@ -118,6 +120,7 @@ We always recommend running Codex in its default sandbox that gives you strong g
 When you launch Codex in a new folder, it detects whether the folder is version controlled and recommends one of two levels of autonomy:
 
 #### **1. Read/write**
+
 - Codex can run commands and write files in the workspace without approval.
 - To write files in other folders, access network, update git or perform other actions protected by the sandbox, Codex will need your permission.
 - By default, the workspace includes the current directory, as well as temporary directories like `/tmp`. You can see what directories are in the workspace with the `/status` command. See the docs for how to customize this behavior.
@@ -125,6 +128,7 @@ When you launch Codex in a new folder, it detects whether the folder is version 
 - This is the recommended default for version-controlled folders.
 
 #### **2. Read-only**
+
 - Codex can run read-only commands without approval.
 - To edit files, access network, or perform other actions protected by the sandbox, Codex will need your permission.
 - Advanced: You can manually specify this configuration by running `codex --sandbox read-only --ask-for-approval on-request`
@@ -137,6 +141,7 @@ Codex gives you fine-grained control over the sandbox with the `--sandbox` optio
 #### Can I run without ANY approvals?
 
 Yes, run codex non-interactively with `--ask-for-approval never`. This option works with all `--sandbox` options, so you still have full control over Codex's level of autonomy. It will make its best attempt with whatever contrainsts you provide. For example:
+
 - Use `codex --ask-for-approval never --sandbox read-only` when you are running many agents to answer questions in parallel in the same workspace.
 - Use `codex --ask-for-approval never --sandbox workspace-write` when you want the agent to non-interactively take time to produce the best outcome, with strong guardrails around its behavior.
 - Use `codex --ask-for-approval never --sandbox danger-full-access` to dangerously give the agent full autonomy. Because this disables important safety mechanisms, we recommend against using this unless running Codex in an isolated environment.
