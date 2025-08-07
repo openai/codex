@@ -331,8 +331,9 @@ impl ChatComposer {
     /// - The cursor may be anywhere *inside* the token (including on the
     ///   leading `@`). It does **not** need to be at the end of the line.
     /// - A token is delimited by ASCII whitespace (space, tab, newline).
-    /// - If the token under the cursor starts with `@` and contains at least
-    ///   one additional character, that token (without `@`) is returned.
+    /// - If the token under the cursor starts with `@`, that token is
+    ///   returned without the leading `@`. This includes the case where the
+    ///   token is just "@" (empty query), which is used to trigger a UI hint
     fn current_at_token(textarea: &TextArea) -> Option<String> {
         let cursor_offset = textarea.cursor();
         let text = textarea.text();
@@ -403,14 +404,20 @@ impl ChatComposer {
         };
 
         let left_at = token_left
-            .filter(|t| t.starts_with('@') && t.len() > 1)
+            .filter(|t| t.starts_with('@'))
             .map(|t| t[1..].to_string());
         let right_at = token_right
-            .filter(|t| t.starts_with('@') && t.len() > 1)
+            .filter(|t| t.starts_with('@'))
             .map(|t| t[1..].to_string());
 
         if at_whitespace {
-            return right_at.or(left_at);
+            if right_at.is_some() {
+                return right_at;
+            }
+            if token_left.is_some_and(|t| t == "@") {
+                return None;
+            }
+            return left_at;
         }
         if after_cursor.starts_with('@') {
             return right_at.or(left_at);
@@ -607,16 +614,26 @@ impl ChatComposer {
             return;
         }
 
-        self.app_event_tx
-            .send(AppEvent::StartFileSearch(query.clone()));
+        if !query.is_empty() {
+            self.app_event_tx
+                .send(AppEvent::StartFileSearch(query.clone()));
+        }
 
         match &mut self.active_popup {
             ActivePopup::File(popup) => {
-                popup.set_query(&query);
+                if query.is_empty() {
+                    popup.set_empty_prompt();
+                } else {
+                    popup.set_query(&query);
+                }
             }
             _ => {
                 let mut popup = FileSearchPopup::new();
-                popup.set_query(&query);
+                if query.is_empty() {
+                    popup.set_empty_prompt();
+                } else {
+                    popup.set_query(&query);
+                }
                 self.active_popup = ActivePopup::File(popup);
             }
         }
@@ -773,7 +790,12 @@ mod tests {
             ("@👍", 2, Some("👍".to_string()), "Emoji token"),
             // Invalid cases (should return None)
             ("hello", 2, None, "No @ symbol"),
-            ("@", 1, None, "Only @ symbol"),
+            (
+                "@",
+                1,
+                Some("".to_string()),
+                "Only @ symbol triggers empty query",
+            ),
             ("@ hello", 2, None, "@ followed by space"),
             ("test @ world", 6, None, "@ with spaces around"),
         ];
@@ -807,7 +829,7 @@ mod tests {
                 "Second token",
             ),
             // Edge cases
-            ("@", 0, None, "Only @ symbol"),
+            ("@", 0, Some("".to_string()), "Only @ symbol"),
             ("@a", 2, Some("a".to_string()), "Single character after @"),
             ("", 0, None, "Empty input"),
         ];
