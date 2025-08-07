@@ -16,8 +16,8 @@ This is the home of the **Codex CLI**, which is a coding agent from OpenAI that 
 
 - [Experimental technology disclaimer](#experimental-technology-disclaimer)
 - [Quickstart](#quickstart)
-  - [OpenAI API Users](#openai-api-users)
   - [ChatGPT Plus/Pro Users](#chatgpt-pluspro-users)
+  - [OpenAI API Users](#openai-api-users)
 - [Using Open Source Models](#using-open-source-models)
 - [Why Codex?](#why-codex)
 - [Security model & permissions](#security-model--permissions)
@@ -77,7 +77,7 @@ Or go to the [latest GitHub Release](https://github.com/openai/codex/releases/la
 
 ### ChatGPT Plus/Pro Users
 
-If you have a paid OpenAI account, run the following to start the login process:
+If you have a paid ChatGPT account, run the following to start the login process:
 
 ```
 codex login
@@ -153,7 +153,7 @@ Point Codex at your own OSS host:
   - or CODEX_OSS_PORT (when the host is localhost):
     - CODEX_OSS_PORT=11434 codex --oss
 
-Advanced: you can persist this in your config instead of environment variables by overriding the built-in `oss` provider in `~/.codex/config.toml`:
+Advanced: you can make this persist in your config instead of environment variables by overriding the built-in `oss` provider in `~/.codex/config.toml`:
 
 ```toml
 [model_providers.oss]
@@ -223,8 +223,6 @@ This way, you can specify one command-line argument (.e.g., `--profile o3`, `--p
 </details>
 <br />
 
-
-
 ## Why Codex?
 
 Codex CLI is built for developers who already **live in the terminal** and want
@@ -274,6 +272,23 @@ Note that when running Linux in a containerized environment such as Docker, sand
 
 ---
 
+## Model Context Protocol (MCP)
+
+The Codex CLI can be configured to leverage MCP servers by defining an [`mcp_servers`](./codex-rs/config.md#mcp_servers) section in `~/.codex/config.toml`. It is intended to mirror how tools such as Claude and Cursor define `mcpServers` in their respective JSON config files, though the Codex format is slightly different since it uses TOML rather than JSON, e.g.:
+
+```toml
+# IMPORTANT: the top-level key is `mcp_servers` rather than `mcpServers`.
+[mcp_servers.server-name]
+command = "npx"
+args = ["-y", "mcp-server"]
+env = { "API_KEY" = "value" }
+```
+
+> [!TIP]
+> It is somewhat experimental, but the Codex CLI can also be run as an MCP _server_ via `codex mcp`. If you launch it with an MCP client such as `npx @modelcontextprotocol/inspector codex mcp` and send it a `tools/list` request, you will see that there is only one tool, `codex`, that accepts a grab-bag of inputs, including a catch-all `config` map for anything you might want to override. Feel free to play around with it and provide feedback via GitHub issues.
+
+---
+
 ## System requirements
 
 | Requirement                 | Details                                                         |
@@ -317,21 +332,6 @@ Run Codex head-less in pipelines. Example GitHub Action step:
     export OPENAI_API_KEY="${{ secrets.OPENAI_KEY }}"
     codex exec --full-auto "update CHANGELOG for next release"
 ```
-
-## Model Context Protocol (MCP)
-
-The Codex CLI can be configured to leverage MCP servers by defining an [`mcp_servers`](./codex-rs/config.md#mcp_servers) section in `~/.codex/config.toml`. It is intended to mirror how tools such as Claude and Cursor define `mcpServers` in their respective JSON config files, though the Codex format is slightly different since it uses TOML rather than JSON, e.g.:
-
-```toml
-# IMPORTANT: the top-level key is `mcp_servers` rather than `mcpServers`.
-[mcp_servers.server-name]
-command = "npx"
-args = ["-y", "mcp-server"]
-env = { "API_KEY" = "value" }
-```
-
-> [!TIP]
-> It is somewhat experimental, but the Codex CLI can also be run as an MCP _server_ via `codex mcp`. If you launch it with an MCP client such as `npx @modelcontextprotocol/inspector codex mcp` and send it a `tools/list` request, you will see that there is only one tool, `codex`, that accepts a grab-bag of inputs, including a catch-all `config` map for anything you might want to override. Feel free to play around with it and provide feedback via GitHub issues.
 
 ## Tracing / verbose logging
 
