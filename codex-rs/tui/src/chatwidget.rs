@@ -294,10 +294,13 @@ impl ChatWidget<'_> {
 
                 self.request_redraw();
             }
-            EventMsg::AgentMessage(AgentMessageEvent { message: _ }) => {
-                // Final assistant answer: commit all remaining rows and close with
-                // a blank line. Use the final text if provided, otherwise rely on
-                // streamed deltas already in the builder.
+            EventMsg::AgentMessage(AgentMessageEvent { message }) => {
+                // Final assistant answer. If no deltas were streamed (e.g. when using
+                // chat-completions with aggregation), render the final text now.
+                if self.answer_buffer.is_empty() && self.current_stream.is_none() {
+                    self.begin_stream(StreamKind::Answer);
+                    self.stream_push_and_maybe_commit(&message);
+                }
                 self.finalize_stream(StreamKind::Answer);
                 self.request_redraw();
             }
@@ -315,8 +318,12 @@ impl ChatWidget<'_> {
                 self.stream_push_and_maybe_commit(&delta);
                 self.request_redraw();
             }
-            EventMsg::AgentReasoning(AgentReasoningEvent { text: _ }) => {
-                // Final reasoning: commit remaining rows and close with a blank.
+            EventMsg::AgentReasoning(AgentReasoningEvent { text }) => {
+                // Final reasoning. If no deltas were streamed, render the final text now.
+                if self.reasoning_buffer.is_empty() && self.current_stream.is_none() {
+                    self.begin_stream(StreamKind::Reasoning);
+                    self.stream_push_and_maybe_commit(&text);
+                }
                 self.finalize_stream(StreamKind::Reasoning);
                 self.request_redraw();
             }
@@ -329,8 +336,12 @@ impl ChatWidget<'_> {
                 self.stream_push_and_maybe_commit(&delta);
                 self.request_redraw();
             }
-            EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { text: _ }) => {
-                // Finalize the raw reasoning stream just like the summarized reasoning event.
+            EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { text }) => {
+                // Final raw reasoning content. If no deltas were streamed, render now.
+                if self.reasoning_buffer.is_empty() && self.current_stream.is_none() {
+                    self.begin_stream(StreamKind::Reasoning);
+                    self.stream_push_and_maybe_commit(&text);
+                }
                 self.finalize_stream(StreamKind::Reasoning);
                 self.request_redraw();
             }
