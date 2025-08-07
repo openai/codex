@@ -40,7 +40,6 @@ Below are a few bite-size examples you can copy-paste. Replace the text in quote
 | 5   | `codex "Explain what this regex does: ^(?=.*[A-Z]).{8,}$"`                      | Outputs a step-by-step human explanation.                                  |
 | 6   | `codex "Carefully review this repo, and propose 3 high impact well-scoped PRs"` | Suggests impactful PRs in the current codebase.                            |
 | 7   | `codex "Look for vulnerabilities and create a security review report"`          | Finds and explains security bugs.                                          |
-| 8   | `codex "Are there any leftover comments I should clean up?"`                    | Finds and cleans up unnecessary comments.                                  |
 
 ---
 
