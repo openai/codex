@@ -18,9 +18,9 @@ pub(crate) struct WelcomeWidget {
 impl WidgetRef for &WelcomeWidget {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let line = Line::from(vec![
-            Span::raw("> "),
+            Span::raw(">_ "),
             Span::styled(
-                "Welcome to Codex, OpenAI's coding agent that runs in your terminal",
+                "Welcome to Codex, OpenAI's command-line coding agent",
                 Style::default().add_modifier(Modifier::BOLD),
             ),
         ]);
