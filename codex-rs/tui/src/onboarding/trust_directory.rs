@@ -159,7 +159,7 @@ impl StepStateProvider for TrustDirectoryWidget {
 impl TrustDirectoryWidget {
     fn handle_trust(&mut self) {
         if let Err(e) = set_project_trusted(&self.codex_home, &self.cwd, true) {
-            self.error = Some(format!("Failed to set project trusted"));
+            self.error = Some("Failed to set project trusted".to_string());
             tracing::error!("Failed to set project trusted: {e:?}");
         }
 
