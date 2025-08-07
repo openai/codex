@@ -17,7 +17,7 @@ This is the home of the **Codex CLI**, which is a coding agent from OpenAI that 
 - [Experimental technology disclaimer](#experimental-technology-disclaimer)
 - [Quickstart](#quickstart)
   - [OpenAI API Users](#openai-api-users)
-  - [OpenAI Plus/Pro Users](#openai-pluspro-users)
+  - [ChatGPT Plus/Pro Users](#chatgpt-pluspro-users)
 - [Using Open Source Models](#using-open-source-models)
 - [Why Codex?](#why-codex)
 - [Security model & permissions](#security-model--permissions)
@@ -75,18 +75,7 @@ npm install -g @openai/codex  # Alternatively: `brew install codex`
 
 Or go to the [latest GitHub Release](https://github.com/openai/codex/releases/latest) and download the appropriate binary for your platform.
 
-### OpenAI API Users
-
-Next, set your OpenAI API key as an environment variable:
-
-```shell
-export OPENAI_API_KEY="your-api-key-here"
-```
-
-> [!NOTE]
-> This command sets the key only for your current terminal session. You can add the `export` line to your shell's configuration file (e.g., `~/.zshrc`), but we recommend setting it for the session.
-
-### OpenAI Plus/Pro Users
+### ChatGPT Plus/Pro Users
 
 If you have a paid OpenAI account, run the following to start the login process:
 
@@ -103,6 +92,18 @@ codex login status
 ```
 
 If you encounter problems with the login flow, please comment on <https://github.com/openai/codex/issues/1243>.
+
+
+### OpenAI API Users
+
+Next, set your OpenAI API key as an environment variable:
+
+```shell
+export OPENAI_API_KEY="your-api-key-here"
+```
+
+> [!NOTE]
+> This command sets the key only for your current terminal session. You can add the `export` line to your shell's configuration file (e.g., `~/.zshrc`), but we recommend setting it for the session.
 
 <details>
 <summary><strong>Use <code>--profile</code> to use other models</strong></summary>
