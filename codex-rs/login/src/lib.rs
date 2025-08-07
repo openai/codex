@@ -51,21 +51,6 @@ impl PartialEq for CodexAuth {
 }
 
 impl CodexAuth {
-    pub fn new(
-        api_key: Option<String>,
-        mode: AuthMode,
-        auth_file: PathBuf,
-        auth_dot_json: Option<AuthDotJson>,
-    ) -> Self {
-        let auth_dot_json = Arc::new(Mutex::new(auth_dot_json));
-        Self {
-            api_key,
-            mode,
-            auth_file,
-            auth_dot_json,
-        }
-    }
-
     pub fn from_api_key(api_key: String) -> Self {
         Self {
             api_key: Some(api_key),
@@ -140,6 +125,28 @@ impl CodexAuth {
 
                 token_data.account_id.clone()
             }
+        }
+    }
+
+    /// Consider this private to integration tests.
+    pub fn create_dummy_chatgpt_auth_for_testing() -> Self {
+        let auth_dot_json = AuthDotJson {
+            openai_api_key: None,
+            tokens: Some(TokenData {
+                id_token: Default::default(),
+                access_token: "Access Token".to_string(),
+                refresh_token: "test".to_string(),
+                account_id: Some("account_id".to_string()),
+            }),
+            last_refresh: Some(Utc::now()),
+        };
+
+        let auth_dot_json = Arc::new(Mutex::new(Some(auth_dot_json)));
+        Self {
+            api_key: None,
+            mode: AuthMode::ChatGPT,
+            auth_file: PathBuf::new(),
+            auth_dot_json,
         }
     }
 }
