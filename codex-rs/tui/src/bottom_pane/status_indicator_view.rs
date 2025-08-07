@@ -22,10 +22,6 @@ impl StatusIndicatorView {
     pub fn update_text(&mut self, text: String) {
         self.view.update_text(text);
     }
-
-    pub fn set_token_usage(&mut self, usage: TokenUsage) {
-        self.view.set_token_usage(usage);
-    }
 }
 
 impl BottomPaneView<'_> for StatusIndicatorView {
@@ -44,10 +40,5 @@ impl BottomPaneView<'_> for StatusIndicatorView {
 
     fn render(&self, area: ratatui::layout::Rect, buf: &mut Buffer) {
         self.view.render_ref(area, buf);
-    }
-
-    fn update_token_usage(&mut self, token_usage: TokenUsage) -> ConditionalUpdate {
-        self.set_token_usage(token_usage);
-        ConditionalUpdate::NeedsRedraw
     }
 }

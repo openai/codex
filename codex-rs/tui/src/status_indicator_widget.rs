@@ -45,7 +45,6 @@ pub(crate) struct StatusIndicatorWidget {
     frame_idx: Arc<AtomicUsize>,
     running: Arc<AtomicBool>,
     start_time: Instant,
-    token_count: u64,
     // Keep one sender alive to prevent the channel from closing while the
     // animation thread is still running. The field itself is currently not
     // accessed anywhere, therefore the leading underscore silences the
@@ -83,7 +82,6 @@ impl StatusIndicatorWidget {
             frame_idx,
             running,
             start_time: Instant::now(),
-            token_count: 0,
 
             _app_event_tx: app_event_tx,
         }
@@ -121,11 +119,6 @@ impl StatusIndicatorWidget {
         self.last_target_len = new_len;
         self.base_frame = current_frame;
         self.reveal_len_at_base = shown_now.min(new_len);
-    }
-
-    /// Update the token usage displayed alongside the status indicator.
-    pub(crate) fn set_token_usage(&mut self, usage: TokenUsage) {
-        self.token_count = usage.total_tokens;
     }
 
     /// Reset the animation and start revealing `text` from the beginning.

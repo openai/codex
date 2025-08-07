@@ -291,14 +291,7 @@ impl BottomPane<'_> {
         model_context_window: Option<u64>,
     ) {
         self.composer
-            .set_token_usage(token_usage.clone(), model_context_window);
-
-        if let Some(view) = self.active_view.as_mut() {
-            view.update_token_usage(token_usage.clone());
-        } else if let Some(status) = self.live_status.as_mut() {
-            status.set_token_usage(token_usage.clone());
-        }
-
+            .set_token_usage(token_usage, model_context_window);
         self.request_redraw();
     }
 

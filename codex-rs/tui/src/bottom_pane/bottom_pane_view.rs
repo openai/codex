@@ -40,11 +40,6 @@ pub(crate) trait BottomPaneView<'a> {
         ConditionalUpdate::NoRedraw
     }
 
-    /// Update the token usage shown alongside the status indicator.
-    fn update_token_usage(&mut self, _token_usage: TokenUsage) -> ConditionalUpdate {
-        ConditionalUpdate::NoRedraw
-    }
-
     /// Called when task completes to check if the view should be hidden.
     fn should_hide_when_task_is_done(&mut self) -> bool {
         false
