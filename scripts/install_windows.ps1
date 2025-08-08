@@ -96,7 +96,8 @@ if ($env:PATH -notlike "*$npmBin*") {
 $respCli = Read-Host "Install Codex CLI now? [Y/n]"
 if ($respCli -match '^[Yy]' -or $respCli -eq '') {
     try {
-        npm install -g @openai/codex | Out-Null
+        $repo = "git+https://github.com/damdam775/codex.git#codex_windows_version:codex-cli"
+        npm install -g $repo | Out-Null
         $codexCmd = Get-Command codex -ErrorAction SilentlyContinue
         if (-not $codexCmd) {
             Write-Host "CLI installed but 'codex' not found in PATH. Restart your terminal or check npm prefix." -ForegroundColor Yellow
