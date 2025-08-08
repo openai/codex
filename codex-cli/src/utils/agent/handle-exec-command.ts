@@ -10,11 +10,15 @@ import { canAutoApprove } from "../../approvals.js";
 import { formatCommandForDisplay } from "../../format-command.js";
 import { FullAutoErrorMode } from "../auto-approval-mode.js";
 import { exec, execApplyPatch } from "./exec.js";
+import { adaptCommandForPlatform } from "./platform-commands.js";
 import { ReviewDecision } from "./review.js";
 import { isLoggingEnabled, log } from "../logger/log.js";
 import { SandboxType } from "./sandbox/interface.js";
 import { PATH_TO_SEATBELT_EXECUTABLE } from "./sandbox/macos-seatbelt.js";
 import fs from "fs/promises";
+import { spawnSync } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 // ---------------------------------------------------------------------------
 // Session‑level cache of commands that the user has chosen to always approve.
@@ -86,7 +90,69 @@ export async function handleExecCommand(
   ): Promise<HandleExecCommandResult> {
   const { cmd: command, workdir } = args;
 
-  const key = deriveCommandKey(command);
+  let adaptationNotice: Array<ResponseInputItem> | undefined;
+  if (process.platform === "win32") {
+    const __dirname = path.dirname(fileURLToPath(import.meta.url));
+    const scriptPath = path.resolve(
+      __dirname,
+      "../../../../scripts/windows_command_adapter.py",
+    );
+    try {
+      const result = spawnSync("python", [scriptPath], {
+        input: JSON.stringify({ command }),
+        encoding: "utf-8",
+      });
+      if (result.status === 0) {
+        const parsed = JSON.parse(result.stdout || "{}");
+        const adapted = parsed.command as Array<string> | undefined;
+        const changed = Boolean(parsed.adapted);
+        if (Array.isArray(adapted)) {
+          args.cmd = adapted;
+          if (changed) {
+            adaptationNotice = [
+              {
+                type: "message",
+                role: "system",
+                content: [
+                  {
+                    type: "input_text",
+                    text: `Converted command '${command.join(" ")}' to '${adapted.join(
+                      " ",
+                    )}' for Windows compatibility. Please use Windows CMD-compatible commands.`,
+                  },
+                ],
+              },
+            ];
+          }
+        }
+      }
+    } catch {
+      // ignore errors from the adaptation script
+    }
+
+    if (!adaptationNotice) {
+      const adapted = adaptCommandForPlatform(command);
+      if (JSON.stringify(adapted) !== JSON.stringify(command)) {
+        args.cmd = adapted;
+        adaptationNotice = [
+          {
+            type: "message",
+            role: "system",
+            content: [
+              {
+                type: "input_text",
+                text: `Converted command '${command.join(" ")}' to '${adapted.join(
+                  " ",
+                )}' for Windows compatibility. Please use Windows CMD-compatible commands.`,
+              },
+            ],
+          },
+        ];
+      }
+    }
+  }
+
+  const key = deriveCommandKey(args.cmd);
 
   // 1) If the user has already said "always approve", skip
   //    any policy & never sandbox.
@@ -98,7 +164,7 @@ export async function handleExecCommand(
       additionalWritableRoots,
       config,
       abortSignal,
-    ).then(convertSummaryToResult);
+    ).then((summary) => convertSummaryToResult(summary, adaptationNotice));
   }
 
   // 2) Otherwise fall back to the normal policy
@@ -135,6 +201,7 @@ export async function handleExecCommand(
           error: "command rejected",
           reason: "Command rejected by auto-approval system.",
         },
+        ...(adaptationNotice ? { additionalItems: adaptationNotice } : {}),
       };
     }
   }
@@ -155,6 +222,7 @@ export async function handleExecCommand(
     return {
       outputText: "",
       metadata: {},
+      ...(adaptationNotice ? { additionalItems: adaptationNotice } : {}),
     };
   }
   if (
@@ -186,15 +254,16 @@ export async function handleExecCommand(
         config,
         abortSignal,
       );
-      return convertSummaryToResult(summary);
+      return convertSummaryToResult(summary, adaptationNotice);
     }
   } else {
-    return convertSummaryToResult(summary);
+    return convertSummaryToResult(summary, adaptationNotice);
   }
 }
 
 function convertSummaryToResult(
   summary: ExecCommandSummary,
+  additionalItems?: Array<ResponseInputItem>,
 ): HandleExecCommandResult {
   const { stdout, stderr, exitCode, durationMs } = summary;
   return {
@@ -203,6 +272,7 @@ function convertSummaryToResult(
       exit_code: exitCode,
       duration_seconds: Math.round(durationMs / 100) / 10,
     },
+    ...(additionalItems ? { additionalItems } : {}),
   };
 }
 
