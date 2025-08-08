@@ -276,7 +276,7 @@ impl HistoryCell {
             lines.push(Line::from(vec!["▌ ".cyan(), "Running command".magenta()]));
         }
         for cont in iter {
-            lines.push(Line::from(vec!["".into(), cont.to_string().into()]));
+            lines.push(Line::from(cont.to_string()));
         }
         lines.push(Line::from(""));
 
@@ -304,7 +304,7 @@ impl HistoryCell {
             lines.push(Line::from("⚡ Ran command".magenta()));
         }
         for cont in cmd_lines {
-            lines.push(Line::from(vec!["".into(), cont.to_string().into()]));
+            lines.push(Line::from(cont.to_string()));
         }
 
         let src = if exit_code == 0 { stdout } else { stderr };
