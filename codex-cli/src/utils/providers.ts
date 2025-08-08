@@ -14,7 +14,7 @@ export const providers: Record<
   },
   azure: {
     name: "AzureOpenAI",
-    baseURL: "https://YOUR_PROJECT_NAME.openai.azure.com/openai",
+    baseURL: "https://YOUR_RESOURCE_NAME.openai.azure.com/openai/v1",
     envKey: "AZURE_OPENAI_API_KEY",
   },
   gemini: {

@@ -101,6 +101,7 @@ use crate::shell;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::user_notification::UserNotification;
 use crate::util::backoff;
+use crate::util::backoff_with_floor;
 
 /// The high-level interface to the Codex system.
 /// It operates as a queue pair where you send submissions and receive events.
@@ -1296,7 +1297,14 @@ async fn run_turn(
                 let max_retries = sess.client.get_provider().stream_max_retries();
                 if retries < max_retries {
                     retries += 1;
-                    let delay = backoff(retries);
+                    // If the stream error looks like a provider rate limit, wait
+                    // a bit longer than the standard backoff so we are less likely
+                    // to immediately hit the limit again.
+                    let delay = if is_rate_limit_stream_error(&e) {
+                        backoff_with_floor(retries, Duration::from_secs(6))
+                    } else {
+                        backoff(retries)
+                    };
                     warn!(
                         "stream disconnected - retrying turn ({retries}/{max_retries} in {delay:?})...",
                     );
@@ -1525,7 +1533,11 @@ async fn run_compact_task(
             Err(e) => {
                 if retries < max_retries {
                     retries += 1;
-                    let delay = backoff(retries);
+                    let delay = if is_rate_limit_stream_error(&e) {
+                        backoff_with_floor(retries, Duration::from_secs(6))
+                    } else {
+                        backoff(retries)
+                    };
                     sess.notify_background_event(
                         &sub_id,
                         format!(
@@ -1567,6 +1579,19 @@ async fn run_compact_task(
 
     let mut state = sess.state.lock().unwrap();
     state.history.keep_last_messages(1);
+}
+
+/// Heuristic detector for provider rate limit stream errors. Azure often emits
+/// a `response.failed` SSE event with a message like "Rate limit is exceeded".
+/// Treat those as rate limits so our retry backoff uses a higher minimum delay.
+fn is_rate_limit_stream_error(e: &CodexErr) -> bool {
+    match e {
+        CodexErr::Stream(msg) => {
+            let m = msg.to_lowercase();
+            m.contains("rate limit") || m.contains("too many requests")
+        }
+        _ => false,
+    }
 }
 
 async fn handle_response_item(

@@ -1,21 +1,23 @@
 {
-  "name": "Codex",
-  "build": {
-    "dockerfile": "Dockerfile",
-    "context": "..",
-    "platform": "linux/arm64"
+  "name": "codex",
+  // Force host arch to avoid VS Code adding --platform=linux/arm64
+  "platform": "linux/amd64",
+  "image": "ubuntu:24.04",
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": {},
+    "ghcr.io/devcontainers/features/rust:1": {
+      "profile": "minimal",
+      "version": "latest",
+      "components": "clippy,rustfmt",
+      "targets": "aarch64-unknown-linux-musl"
+    }
   },
-
-  /* Force VS Code to run the container as arm64 in
-     case your host is x86 (or vice-versa). */
-  "runArgs": ["--platform=linux/arm64"],
-
+  "remoteUser": "root",
   "containerEnv": {
-    "RUST_BACKTRACE": "1",
-    "CARGO_TARGET_DIR": "${containerWorkspaceFolder}/codex-rs/target-arm64"
+    "CARGO_TARGET_DIR": "/workspaces/codex/codex-rs/target-arm64"
   },
-
-  "remoteUser": "ubuntu",
+  // Remove if you later add your own CMD/ENTRYPOINT
+  "overrideCommand": true,
   "customizations": {
     "vscode": {
       "settings": {

@@ -34,6 +34,14 @@ pub(crate) fn backoff(attempt: u64) -> Duration {
     Duration::from_millis((base as f64 * jitter) as u64)
 }
 
+/// Backoff with a minimum floor duration. Useful when the upstream signaled a
+/// rate limit and we should wait a bit longer than the standard exponential
+/// schedule to give the provider time to recover.
+pub(crate) fn backoff_with_floor(attempt: u64, floor: Duration) -> Duration {
+    let d = backoff(attempt);
+    if d < floor { floor } else { d }
+}
+
 /// Return `true` if the project folder specified by the `Config` is inside a
 /// Git repository.
 ///

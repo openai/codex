@@ -356,17 +356,17 @@ base_url = "http://localhost:11434/v1"
         let azure_provider_toml = r#"
 name = "Azure"
 base_url = "https://xxxxx.openai.azure.com/openai"
-env_key = "AZURE_OPENAI_API_KEY"
-query_params = { api-version = "2025-04-01-preview" }
+wire_api = "responses"
+query_params = { api-version = "preview" }
         "#;
         let expected_provider = ModelProviderInfo {
             name: "Azure".into(),
             base_url: Some("https://xxxxx.openai.azure.com/openai".into()),
-            env_key: Some("AZURE_OPENAI_API_KEY".into()),
+            env_key: None,
             env_key_instructions: None,
-            wire_api: WireApi::Chat,
+            wire_api: WireApi::Responses,
             query_params: Some(maplit::hashmap! {
-                "api-version".to_string() => "2025-04-01-preview".to_string(),
+                "api-version".to_string() => "preview".to_string(),
             }),
             http_headers: None,
             env_http_headers: None,

@@ -65,15 +65,61 @@ base_url = "https://api.mistral.ai/v1"
 env_key = "MISTRAL_API_KEY"
 ```
 
-Note that Azure requires `api-version` to be passed as a query parameter, so be sure to specify it as part of `query_params` when defining the Azure provider:
+Note that Azure requires `api-version` to be passed as a query parameter, and Azure API keys must be sent in the `api-key` header (not as a Bearer token). To use Azure with the Responses API, define your provider like this:
 
 ```toml
 [model_providers.azure]
-name = "Azure"
-# Make sure you set the appropriate subdomain for this URL.
-base_url = "https://YOUR_PROJECT_NAME.openai.azure.com/openai"
-env_key = "AZURE_OPENAI_API_KEY"  # Or "OPENAI_API_KEY", whichever you use.
-query_params = { api-version = "2025-04-01-preview" }
+name = "Azure OpenAI"
+# Set your resource endpoint; include /openai/v1 for the Responses API
+base_url = "https://YOUR_RESOURCE_NAME.openai.azure.com/openai/v1"
+# Use the Responses API with Azure
+wire_api = "responses"
+# Required: Azure API version; "preview" tracks latest responses preview
+query_params = { api-version = "preview" }
+# Send your Azure key via the `api-key` header
+env_http_headers = { "api-key" = "AZURE_OPENAI_API_KEY" }
+```
+
+Then select it and a model (for example, an o3 deployment) either in your config:
+
+```toml
+model_provider = "azure"
+model = "o3"  # or your deployment name if required
+```
+
+Or via CLI overrides for a quick test:
+
+```sh
+codex \
+  --config 'model_provider="azure"' \
+  --config 'model="o3"' \
+  --config 'model_providers.azure={ name="Azure OpenAI", base_url="https://YOUR_RESOURCE_NAME.openai.azure.com/openai/v1", wire_api="responses", query_params={ api-version="preview" }, env_http_headers={ "api-key"="AZURE_OPENAI_API_KEY" } }'
+```
+
+Azure profile example
+
+Add a profile for easy switching:
+
+```toml
+# Root-level provider definition (appears once in your config)
+[model_providers.azure]
+name = "Azure OpenAI"
+base_url = "https://YOUR_RESOURCE_NAME.openai.azure.com/openai/v1"
+wire_api = "responses"
+query_params = { api-version = "preview" }
+env_http_headers = { "api-key" = "AZURE_OPENAI_API_KEY" }
+
+[profiles.azure-o3]
+model_provider = "azure"
+# Exact Azure deployment name
+model = "o3"
+approval_policy = "on-request"
+```
+
+Use it with:
+
+```sh
+codex --profile azure-o3
 ```
 
 It is also possible to configure a provider to include extra HTTP headers with a request. These can be hardcoded values (`http_headers`) or values read from environment variables (`env_http_headers`):
@@ -149,6 +195,7 @@ approval_policy = "untrusted"
 ```
 
 If you want to be notified whenever a command fails, use "on-failure":
+
 ```toml
 # If the command fails when run in the sandbox, Codex asks for permission to
 # retry the command outside the sandbox.
@@ -156,12 +203,14 @@ approval_policy = "on-failure"
 ```
 
 If you want the model to run until it decides that it needs to ask you for escalated permissions, use "on-request":
+
 ```toml
 # The model decides when to escalate
 approval_policy = "on-request"
 ```
 
 Alternatively, you can have the model run until it is done, and never ask to run a command with escalated permissions:
+
 ```toml
 # User is never prompted: if the command fails, Codex will automatically try
 # something out. Note the `exec` subcommand always uses this mode.
@@ -498,10 +547,12 @@ hide_agent_reasoning = true   # defaults to false
 Surfaces the model’s raw chain-of-thought ("raw reasoning content") when available.
 
 Notes:
+
 - Only takes effect if the selected model/provider actually emits raw reasoning content. Many models do not. When unsupported, this option has no visible effect.
 - Raw reasoning may include intermediate thoughts or sensitive context. Enable only if acceptable for your workflow.
 
 Example:
+
 ```toml
 show_raw_agent_reasoning = true  # defaults to false
 ```
