@@ -1,6 +1,5 @@
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
-use crate::insert_history::word_wrap_lines;
 use crate::slash_command::SlashCommand;
 use crate::text_block::TextBlock;
 use crate::text_formatting::format_and_truncate_tool_result;
@@ -31,6 +30,7 @@ use ratatui::text::Line as RtLine;
 use ratatui::text::Span as RtSpan;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
+use ratatui::widgets::Wrap;
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::PathBuf;
@@ -187,8 +187,11 @@ impl HistoryCell {
     }
 
     pub(crate) fn desired_height(&self, width: u16) -> u16 {
-        let wrapped = word_wrap_lines(&self.plain_lines(), width);
-        wrapped.len() as u16
+        Paragraph::new(Text::from(self.plain_lines()))
+            .wrap(Wrap { trim: false })
+            .line_count(width)
+            .try_into()
+            .unwrap_or(0)
     }
 
     pub(crate) fn new_session_info(
@@ -818,8 +821,9 @@ impl HistoryCell {
 
 impl WidgetRef for &HistoryCell {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        let wrapped = word_wrap_lines(&self.plain_lines(), area.width);
-        Paragraph::new(Text::from(wrapped)).render(area, buf);
+        Paragraph::new(Text::from(self.plain_lines()))
+            .wrap(Wrap { trim: false })
+            .render(area, buf);
     }
 }
 
