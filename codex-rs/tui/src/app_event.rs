@@ -50,6 +50,10 @@ pub(crate) enum AppEvent {
 
     InsertHistory(Vec<Line<'static>>),
 
+    StartCommitAnimation,
+    StopCommitAnimation,
+    CommitTick,
+
     /// Onboarding: result of login_with_chatgpt.
     OnboardingAuthComplete(Result<(), String>),
     OnboardingComplete(ChatWidgetArgs),
