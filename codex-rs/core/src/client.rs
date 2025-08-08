@@ -506,9 +506,7 @@ async fn process_sse<S>(
                 // separately to skip the logging message in the `other` case.
             }
             "response.reasoning_summary_text.done" => {
-                // Ensure the reasoning summary ends with a blank line so it
-                // does not get concatenated with the next output. Emit two
-                // newlines as a final delta to create a visible separator.
+                // End reasoning summary with a blank separator.
                 let event = ResponseEvent::ReasoningSummaryDelta("\n\n".to_string());
                 if tx_event.send(Ok(event)).await.is_err() {
                     return;

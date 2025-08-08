@@ -125,6 +125,13 @@ fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Optio
 }
 
 impl ChatWidget<'_> {
+    fn header_line(kind: StreamKind) -> ratatui::text::Line<'static> {
+        use ratatui::style::Stylize;
+        match kind {
+            StreamKind::Reasoning => ratatui::text::Line::from("thinking".magenta().italic()),
+            StreamKind::Answer => ratatui::text::Line::from("codex".magenta().bold()),
+        }
+    }
     fn line_is_blank(line: &ratatui::text::Line<'_>) -> bool {
         if line.spans.is_empty() {
             return true;
@@ -154,26 +161,10 @@ impl ChatWidget<'_> {
                 StreamKind::Answer => !self.answer_header_emitted,
             };
             if header_needed {
-                use ratatui::style::Stylize;
+                lines.push(Self::header_line(k));
                 match k {
-                    StreamKind::Reasoning => {
-                        lines.push(ratatui::text::Line::from("thinking".magenta().italic()));
-                        self.reasoning_header_emitted = true;
-                        tracing::info!(
-                            target: "chatwidget",
-                            "emit header: thinking (on_commit_tick), current_stream={:?}, reason_hdr={}, answer_hdr={}",
-                            self.current_stream, self.reasoning_header_emitted, self.answer_header_emitted
-                        );
-                    }
-                    StreamKind::Answer => {
-                        lines.push(ratatui::text::Line::from("codex".magenta().bold()));
-                        self.answer_header_emitted = true;
-                        tracing::info!(
-                            target: "chatwidget",
-                            "emit header: codex (on_commit_tick), current_stream={:?}, reason_hdr={}, answer_hdr={}",
-                            self.current_stream, self.reasoning_header_emitted, self.answer_header_emitted
-                        );
-                    }
+                    StreamKind::Reasoning => self.reasoning_header_emitted = true,
+                    StreamKind::Answer => self.answer_header_emitted = true,
                 }
             }
         }
@@ -767,11 +758,6 @@ impl ChatWidget<'_> {
 
 impl ChatWidget<'_> {
     fn begin_stream(&mut self, kind: StreamKind) {
-        tracing::info!(
-            target: "chatwidget",
-            "begin_stream: kind={:?}, current_before={:?}, reason_hdr={}, answer_hdr={}",
-            kind, self.current_stream, self.reasoning_header_emitted, self.answer_header_emitted
-        );
         if let Some(current) = self.current_stream {
             if current != kind {
                 // Synchronously flush the previous stream to keep ordering sane.
@@ -793,27 +779,10 @@ impl ChatWidget<'_> {
                 if !step.history.is_empty() || !prev_header_emitted {
                     let mut lines: Vec<ratatui::text::Line<'static>> = Vec::new();
                     if !prev_header_emitted {
-                        use ratatui::style::Stylize;
+                        lines.push(Self::header_line(current));
                         match current {
-                            StreamKind::Reasoning => {
-                                lines
-                                    .push(ratatui::text::Line::from("thinking".magenta().italic()));
-                                self.reasoning_header_emitted = true;
-                                tracing::info!(
-                                    target: "chatwidget",
-                                    "emit header: thinking (flush prev), current_stream={:?}, reason_hdr={}, answer_hdr={}",
-                                    self.current_stream, self.reasoning_header_emitted, self.answer_header_emitted
-                                );
-                            }
-                            StreamKind::Answer => {
-                                lines.push(ratatui::text::Line::from("codex".magenta().bold()));
-                                self.answer_header_emitted = true;
-                                tracing::info!(
-                                    target: "chatwidget",
-                                    "emit header: codex (flush prev), current_stream={:?}, reason_hdr={}, answer_hdr={}",
-                                    self.current_stream, self.reasoning_header_emitted, self.answer_header_emitted
-                                );
-                            }
+                            StreamKind::Reasoning => self.reasoning_header_emitted = true,
+                            StreamKind::Answer => self.answer_header_emitted = true,
                         }
                     }
                     lines.extend(step.history);
@@ -829,11 +798,6 @@ impl ChatWidget<'_> {
                 }
                 // Reset for new stream
                 self.current_stream = None;
-                tracing::info!(
-                    target: "chatwidget",
-                    "flushed prev stream={:?}; flags remain: reason_hdr={}, answer_hdr={}",
-                    current, self.reasoning_header_emitted, self.answer_header_emitted
-                );
             }
         }
 
@@ -845,14 +809,8 @@ impl ChatWidget<'_> {
             self.current_stream = Some(kind);
             if prev.is_some() {
                 match kind {
-                    StreamKind::Reasoning => {
-                        self.reasoning_header_emitted = false;
-                        tracing::info!(target: "chatwidget", "reset reasoning header flag -> false");
-                    }
-                    StreamKind::Answer => {
-                        self.answer_header_emitted = false;
-                        tracing::info!(target: "chatwidget", "reset answer header flag -> false");
-                    }
+                    StreamKind::Reasoning => self.reasoning_header_emitted = false,
+                    StreamKind::Answer => self.answer_header_emitted = false,
                 }
             }
             // Ensure the waiting status is visible (composer replaced).

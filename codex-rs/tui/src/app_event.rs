@@ -50,11 +50,8 @@ pub(crate) enum AppEvent {
 
     InsertHistory(Vec<Line<'static>>),
 
-    /// Start periodic commit animation ticks.
     StartCommitAnimation,
-    /// Stop periodic commit animation ticks.
     StopCommitAnimation,
-    /// Commit tick: advance history by one queued line if available.
     CommitTick,
 
     /// Onboarding: result of login_with_chatgpt.

@@ -193,7 +193,7 @@ impl App<'_> {
         // redraw is already pending so we can return early.
         if self
             .pending_redraw
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
             .is_err()
         {
             return;
@@ -204,7 +204,7 @@ impl App<'_> {
         thread::spawn(move || {
             thread::sleep(REDRAW_DEBOUNCE);
             tx.send(AppEvent::Redraw);
-            pending_redraw.store(false, Ordering::SeqCst);
+            pending_redraw.store(false, Ordering::Release);
         });
     }
 
@@ -226,10 +226,9 @@ impl App<'_> {
                     std::io::stdout().sync_update(|_| self.draw_next_frame(terminal))??;
                 }
                 AppEvent::StartCommitAnimation => {
-                    // Start a thread if not already running
                     if self
                         .commit_anim_running
-                        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
                         .is_ok()
                     {
                         let tx = self.app_event_tx.clone();
@@ -243,7 +242,7 @@ impl App<'_> {
                     }
                 }
                 AppEvent::StopCommitAnimation => {
-                    self.commit_anim_running.store(false, Ordering::Relaxed);
+                    self.commit_anim_running.store(false, Ordering::Release);
                 }
                 AppEvent::CommitTick => {
                     if let AppState::Chat { widget } = &mut self.app_state {

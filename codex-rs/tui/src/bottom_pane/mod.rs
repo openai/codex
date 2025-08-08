@@ -333,8 +333,6 @@ impl BottomPane<'_> {
         self.composer.on_file_search_result(query, matches);
         self.request_redraw();
     }
-
-    // Live ring removed; lines are committed directly to history when rendered.
 }
 
 impl WidgetRef for &BottomPane<'_> {
