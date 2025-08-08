@@ -280,20 +280,34 @@ pub fn spawn_login_with_chatgpt(codex_home: &Path) -> std::io::Result<SpawnedLog
     if let Some(mut out) = child.stdout.take() {
         let buf = stdout_buf.clone();
         std::thread::spawn(move || {
-            let mut tmp = Vec::new();
-            let _ = std::io::copy(&mut out, &mut tmp);
-            if let Ok(mut b) = buf.lock() {
-                b.extend_from_slice(&tmp);
+            let mut read_buf = [0_u8; 4096];
+            loop {
+                match std::io::Read::read(&mut out, &mut read_buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        if let Ok(mut b) = buf.lock() {
+                            b.extend_from_slice(&read_buf[..n]);
+                        }
+                    }
+                    Err(_) => break,
+                }
             }
         });
     }
     if let Some(mut err) = child.stderr.take() {
         let buf = stderr_buf.clone();
         std::thread::spawn(move || {
-            let mut tmp = Vec::new();
-            let _ = std::io::copy(&mut err, &mut tmp);
-            if let Ok(mut b) = buf.lock() {
-                b.extend_from_slice(&tmp);
+            let mut read_buf = [0_u8; 4096];
+            loop {
+                match std::io::Read::read(&mut err, &mut read_buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        if let Ok(mut b) = buf.lock() {
+                            b.extend_from_slice(&read_buf[..n]);
+                        }
+                    }
+                    Err(_) => break,
+                }
             }
         });
     }
