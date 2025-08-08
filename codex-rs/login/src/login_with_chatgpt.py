@@ -1,6 +1,6 @@
 """Script that spawns a local webserver for retrieving an OpenAI API key.
 
-- Listens on 127.0.0.1:1455
+- Listens on 0.0.0.0:1455
 - Opens http://localhost:1455/auth/callback in the browser
 - If the user successfully navigates the auth flow,
   $CODEX_HOME/auth.json will be written with the API key.
@@ -84,8 +84,9 @@ def main() -> None:
 
     # Spawn server.
     try:
+        # 0.0.0.0 to listen on all hosts in order to allow external access
         httpd = _ApiKeyHTTPServer(
-            ("127.0.0.1", REQUIRED_PORT),
+            ("0.0.0.0", REQUIRED_PORT),
             _ApiKeyHTTPHandler,
             codex_home=codex_home,
             client_id=client_id,
