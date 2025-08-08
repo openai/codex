@@ -9,6 +9,7 @@ use std::fs::OpenOptions;
 use std::fs::remove_file;
 use std::io::Read;
 use std::io::Write;
+use std::io::{self};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
@@ -261,6 +262,30 @@ pub struct SpawnedLogin {
     pub stderr: Arc<Mutex<Vec<u8>>>,
 }
 
+// Helpers for streaming child output into shared buffers
+struct AppendWriter {
+    buf: Arc<Mutex<Vec<u8>>>,
+}
+
+impl Write for AppendWriter {
+    fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+        if let Ok(mut b) = self.buf.lock() {
+            b.extend_from_slice(data);
+        }
+        Ok(data.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn spawn_pipe_reader<R: Read + Send + 'static>(mut reader: R, buf: Arc<Mutex<Vec<u8>>>) {
+    std::thread::spawn(move || {
+        let _ = io::copy(&mut reader, &mut AppendWriter { buf });
+    });
+}
+
 /// Spawn the ChatGPT login Python server as a child process and return a handle to its process.
 pub fn spawn_login_with_chatgpt(codex_home: &Path) -> std::io::Result<SpawnedLogin> {
     let mut cmd = std::process::Command::new("python3");
@@ -277,39 +302,11 @@ pub fn spawn_login_with_chatgpt(codex_home: &Path) -> std::io::Result<SpawnedLog
     let stdout_buf = Arc::new(Mutex::new(Vec::new()));
     let stderr_buf = Arc::new(Mutex::new(Vec::new()));
 
-    if let Some(mut out) = child.stdout.take() {
-        let buf = stdout_buf.clone();
-        std::thread::spawn(move || {
-            let mut read_buf = [0_u8; 4096];
-            loop {
-                match std::io::Read::read(&mut out, &mut read_buf) {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        if let Ok(mut b) = buf.lock() {
-                            b.extend_from_slice(&read_buf[..n]);
-                        }
-                    }
-                    Err(_) => break,
-                }
-            }
-        });
+    if let Some(out) = child.stdout.take() {
+        spawn_pipe_reader(out, stdout_buf.clone());
     }
-    if let Some(mut err) = child.stderr.take() {
-        let buf = stderr_buf.clone();
-        std::thread::spawn(move || {
-            let mut read_buf = [0_u8; 4096];
-            loop {
-                match std::io::Read::read(&mut err, &mut read_buf) {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        if let Ok(mut b) = buf.lock() {
-                            b.extend_from_slice(&read_buf[..n]);
-                        }
-                    }
-                    Err(_) => break,
-                }
-            }
-        });
+    if let Some(err) = child.stderr.take() {
+        spawn_pipe_reader(err, stderr_buf.clone());
     }
 
     Ok(SpawnedLogin {

@@ -41,7 +41,7 @@ pub(crate) enum SignInState {
 /// Used to manage the lifecycle of SpawnedLogin and FrameTicker and ensure they get cleaned up.
 pub(crate) struct ContinueInBrowserState {
     login_child: Option<codex_login::SpawnedLogin>,
-    frame_ticker: Option<FrameTicker>,
+    _frame_ticker: Option<FrameTicker>,
 }
 impl Drop for ContinueInBrowserState {
     fn drop(&mut self) {
@@ -302,7 +302,7 @@ impl AuthModeWidget {
                 self.sign_in_state =
                     SignInState::ChatGptContinueInBrowser(ContinueInBrowserState {
                         login_child: Some(child),
-                        frame_ticker: Some(FrameTicker::new(self.event_tx.clone())),
+                        _frame_ticker: Some(FrameTicker::new(self.event_tx.clone())),
                     });
                 self.event_tx.send(AppEvent::RequestRedraw);
             }
