@@ -129,16 +129,16 @@ impl ChatWidget<'_> {
         if line.spans.is_empty() {
             return true;
         }
-        line.spans
-            .iter()
-            .all(|s| s.content.trim().is_empty())
+        line.spans.iter().all(|s| s.content.trim().is_empty())
     }
     /// Periodic tick to commit at most one queued line to history with a small delay,
     /// animating the output.
     pub(crate) fn on_commit_tick(&mut self) {
         // Choose the active streamer
         let (streamer, kind_opt) = match self.current_stream {
-            Some(StreamKind::Reasoning) => (&mut self.reasoning_streamer, Some(StreamKind::Reasoning)),
+            Some(StreamKind::Reasoning) => {
+                (&mut self.reasoning_streamer, Some(StreamKind::Reasoning))
+            }
             Some(StreamKind::Answer) => (&mut self.answer_streamer, Some(StreamKind::Answer)),
             None => {
                 // No active stream. Nothing to animate.
@@ -776,7 +776,9 @@ impl ChatWidget<'_> {
             if current != kind {
                 // Synchronously flush the previous stream to keep ordering sane.
                 let (collector, streamer) = match current {
-                    StreamKind::Reasoning => (&mut self.reasoning_collector, &mut self.reasoning_streamer),
+                    StreamKind::Reasoning => {
+                        (&mut self.reasoning_collector, &mut self.reasoning_streamer)
+                    }
                     StreamKind::Answer => (&mut self.answer_collector, &mut self.answer_streamer),
                 };
                 let remaining = collector.finalize_and_drain(&self.config);
@@ -794,7 +796,8 @@ impl ChatWidget<'_> {
                         use ratatui::style::Stylize;
                         match current {
                             StreamKind::Reasoning => {
-                                lines.push(ratatui::text::Line::from("thinking".magenta().italic()));
+                                lines
+                                    .push(ratatui::text::Line::from("thinking".magenta().italic()));
                                 self.reasoning_header_emitted = true;
                                 tracing::info!(
                                     target: "chatwidget",

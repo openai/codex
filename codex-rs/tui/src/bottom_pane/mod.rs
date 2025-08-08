@@ -337,7 +337,6 @@ impl BottomPane<'_> {
     // Live ring removed; lines are committed directly to history when rendered.
 }
 
-
 impl WidgetRef for &BottomPane<'_> {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let mut y_offset = 0u16;

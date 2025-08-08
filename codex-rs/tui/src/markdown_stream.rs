@@ -209,7 +209,9 @@ pub(crate) struct RenderedLineStreamer {
 
 impl RenderedLineStreamer {
     pub fn new() -> Self {
-        Self { queue: VecDeque::new() }
+        Self {
+            queue: VecDeque::new(),
+        }
     }
 
     pub fn clear(&mut self) {
@@ -225,7 +227,7 @@ impl RenderedLineStreamer {
     pub fn step(&mut self, _live_max_rows: usize) -> StepResult {
         let mut history = Vec::new();
         // Move exactly one per tick to animate gradual insertion.
-        let burst = 1usize.min(self.queue.len().max(1));
+        let burst = if self.queue.is_empty() { 0 } else { 1 };
         for _ in 0..burst {
             if let Some(l) = self.queue.pop_front() {
                 history.push(l);
@@ -521,7 +523,6 @@ mod tests {
             "utf8/wide-char streaming should equal full render without duplication or truncation"
         );
     }
-
 
     #[test]
     fn empty_fenced_block_is_dropped_and_separator_preserved_before_heading() {
