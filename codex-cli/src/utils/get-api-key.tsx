@@ -60,6 +60,7 @@ interface IDTokenClaims {
     chatgpt_subscription_active_start: string;
     chatgpt_subscription_active_until: string;
     chatgpt_plan_type: string;
+    chatgpt_account_id?: string;
   };
 }
 
@@ -152,6 +153,14 @@ async function maybeRedeemCredits(
             );
             existingJson.tokens.id_token = currentIdToken;
             existingJson.tokens.refresh_token = refreshData.refresh_token;
+            // Preserve the existing account_id if present
+            if (
+              !existingJson.tokens.account_id &&
+              idClaims?.["https://api.openai.com/auth"]?.chatgpt_account_id
+            ) {
+              existingJson.tokens.account_id =
+                idClaims["https://api.openai.com/auth"].chatgpt_account_id;
+            }
             existingJson.last_refresh = new Date().toISOString();
             await fs.writeFile(
               authFile,
@@ -418,13 +427,22 @@ async function handleCallback(
   successUrl.searchParams.set("project_id", project_id);
   successUrl.searchParams.set("plan_type", chatgptPlanType);
 
+  // Extract chatgpt_account_id from ID token claims
+  const chatgptAccountId =
+    idTokenClaims["https://api.openai.com/auth"]?.chatgpt_account_id;
+
   try {
     const home = os.homedir();
     const authDir = path.join(home, ".codex");
     await fs.mkdir(authDir, { recursive: true });
     const authFile = path.join(authDir, "auth.json");
     const authData = {
-      tokens: tokenData,
+      tokens: {
+        id_token: tokenData.id_token,
+        access_token: tokenData.access_token,
+        refresh_token: tokenData.refresh_token,
+        account_id: chatgptAccountId || "",
+      },
       last_refresh: new Date().toISOString(),
       OPENAI_API_KEY: exchanged.access_token,
     };
