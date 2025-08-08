@@ -6,7 +6,7 @@ import { type SupportedModelId, openAiModelInfo } from "./model-info.js";
 import { createOpenAIClient } from "./openai-client.js";
 
 const MODEL_LIST_TIMEOUT_MS = 2_000; // 2 seconds
-export const RECOMMENDED_MODELS: Array<string> = ["o4-mini", "o3"];
+export const RECOMMENDED_MODELS: Array<string> = ["gpt-5", "o4-mini", "o3"];
 
 /**
  * Background model loader / cache.
@@ -46,7 +46,11 @@ async function fetchModels(provider: string): Promise<Array<string>> {
 export async function getAvailableModels(
   provider: string,
 ): Promise<Array<string>> {
-  return fetchModels(provider.toLowerCase());
+  const fetched = await fetchModels(provider.toLowerCase());
+  // Ensure recommended models are always visible/selectable even if the
+  // provider's models.list endpoint omits them or times out.
+  const merged = Array.from(new Set([...RECOMMENDED_MODELS, ...fetched]));
+  return merged;
 }
 
 /**
@@ -57,6 +61,17 @@ export async function isModelSupportedForResponses(
   provider: string,
   model: string | undefined | null,
 ): Promise<boolean> {
+  // If no API key is configured for this provider we cannot reliably check
+  // support – treat as supported to avoid blocking start‑up.
+  try {
+    if (!getApiKey(provider)) {
+      return true;
+    }
+  } catch {
+    // In case getApiKey has side‑effects in certain environments, default to
+    // permissive behaviour.
+    return true;
+  }
   if (
     typeof model !== "string" ||
     model.trim() === "" ||
@@ -76,6 +91,15 @@ export async function isModelSupportedForResponses(
     // If the timeout fired we get an empty list → treat as supported to avoid
     // false negatives.
     if (models.length === 0) {
+      return true;
+    }
+
+    // If the only entries we have are recommended models we injected, treat as
+    // inconclusive and allow.
+    const nonRecommended = models.filter(
+      (m) => !RECOMMENDED_MODELS.includes(m),
+    );
+    if (nonRecommended.length === 0) {
       return true;
     }
 

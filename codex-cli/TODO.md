@@ -1,10 +1,29 @@
 # To do list with go here
-Top to do:
-- Scroll to top
-- 
+Top to do (big)
+
+Top to do (sm)
+- fix slash command formatting
+- improve @ commands
 
 New features
 - render an image preview in ANSI space
+
+
+js```import OpenAI from "openai";
+const openai = new OpenAI();
+
+const response = await openai.responses.create({
+  model: "gpt-5",
+  input: "How much gold would it take to coat the Statue of Liberty in a 1mm layer?",
+  reasoning: {
+    effort: "minimal" // "minimal", "medium", "high"
+  }
+  text: {
+    verbosity: "low" // "low", "medium", "high"
+  }
+});
+
+console.log(response);``
 
 ## Running it
 Using pnpm (recommended):

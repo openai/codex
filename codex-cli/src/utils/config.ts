@@ -43,7 +43,7 @@ if (!isVitest) {
   loadDotenv({ path: USER_WIDE_CONFIG_PATH });
 }
 
-export const DEFAULT_AGENTIC_MODEL = "codex-mini-latest";
+export const DEFAULT_AGENTIC_MODEL = "gpt-5";
 export const DEFAULT_FULL_CONTEXT_MODEL = "gpt-4.1";
 export const DEFAULT_APPROVAL_MODE = AutoApprovalMode.SUGGEST;
 export const DEFAULT_INSTRUCTIONS = "";
@@ -413,10 +413,17 @@ export const loadConfig = (
 
   // Treat empty string ("" or whitespace) as absence so we can fall back to
   // the latest DEFAULT_MODEL.
-  const storedModel =
+  // Treat explicit empty string as "unset" so we can fall back to the current
+  // default. Additionally, migrate users pinned to the legacy default
+  // ("codex-mini-latest") by treating it as unset on load so they pick up the
+  // new default model (e.g. "gpt-5").
+  let storedModel =
     storedConfig.model && storedConfig.model.trim() !== ""
       ? storedConfig.model.trim()
       : undefined;
+  if (storedModel === "codex-mini-latest") {
+    storedModel = undefined;
+  }
 
   const config: AppConfig = {
     model:

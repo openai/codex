@@ -7,6 +7,10 @@ export type ModelInfo = {
 
 export type SupportedModelId = keyof typeof openAiModelInfo;
 export const openAiModelInfo = {
+  "gpt-5": {
+    label: "GPT-5",
+    maxContextLength: 200000,
+  },
   "o1-pro-2025-03-19": {
     label: "o1 Pro (2025-03-19)",
     maxContextLength: 200000,

@@ -75,7 +75,7 @@ const cli = meow(
     --version                       Print version and exit
 
     -h, --help                      Show usage and exit
-    -m, --model <model>             Model to use for completions (default: codex-mini-latest)
+     -m, --model <model>             Model to use for completions (default: gpt-5)
     -p, --provider <provider>       Provider to use for completions (default: openai)
     -i, --image <path>              Path(s) to image files to include as input
     -v, --view <rollout>            Inspect a previously saved rollout instead of starting a session
