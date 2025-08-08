@@ -50,7 +50,6 @@ Run this after the GitHub Release has been created and use
             version,
             "--workflow-url",
             workflow["url"],
-            "--native",
         ]
     )
     stage_release.check_returncode()
