@@ -38,8 +38,9 @@ pub enum AuthMode {
 
 #[derive(Debug, Clone)]
 pub struct CodexAuth {
-    pub api_key: Option<String>,
     pub mode: AuthMode,
+
+    api_key: Option<String>,
     auth_dot_json: Arc<Mutex<Option<AuthDotJson>>>,
     auth_file: PathBuf,
 }
@@ -51,28 +52,19 @@ impl PartialEq for CodexAuth {
 }
 
 impl CodexAuth {
-    pub fn new(
-        api_key: Option<String>,
-        mode: AuthMode,
-        auth_file: PathBuf,
-        auth_dot_json: Option<AuthDotJson>,
-    ) -> Self {
-        let auth_dot_json = Arc::new(Mutex::new(auth_dot_json));
+    pub fn from_api_key(api_key: &str) -> Self {
         Self {
-            api_key,
-            mode,
-            auth_file,
-            auth_dot_json,
-        }
-    }
-
-    pub fn from_api_key(api_key: String) -> Self {
-        Self {
-            api_key: Some(api_key),
+            api_key: Some(api_key.to_owned()),
             mode: AuthMode::ApiKey,
             auth_file: PathBuf::new(),
             auth_dot_json: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Loads the available auth information from the auth.json or
+    /// OPENAI_API_KEY environment variable.
+    pub fn from_codex_home(codex_home: &Path) -> std::io::Result<Option<CodexAuth>> {
+        load_auth(codex_home, true)
     }
 
     pub async fn get_token_data(&self) -> Result<TokenData, std::io::Error> {
@@ -142,10 +134,31 @@ impl CodexAuth {
             }
         }
     }
+
+    /// Consider this private to integration tests.
+    pub fn create_dummy_chatgpt_auth_for_testing() -> Self {
+        let auth_dot_json = AuthDotJson {
+            openai_api_key: None,
+            tokens: Some(TokenData {
+                id_token: Default::default(),
+                access_token: "Access Token".to_string(),
+                refresh_token: "test".to_string(),
+                account_id: Some("account_id".to_string()),
+            }),
+            last_refresh: Some(Utc::now()),
+        };
+
+        let auth_dot_json = Arc::new(Mutex::new(Some(auth_dot_json)));
+        Self {
+            api_key: None,
+            mode: AuthMode::ChatGPT,
+            auth_file: PathBuf::new(),
+            auth_dot_json,
+        }
+    }
 }
 
-// Loads the available auth information from the auth.json or OPENAI_API_KEY environment variable.
-pub fn load_auth(codex_home: &Path, include_env_var: bool) -> std::io::Result<Option<CodexAuth>> {
+fn load_auth(codex_home: &Path, include_env_var: bool) -> std::io::Result<Option<CodexAuth>> {
     let auth_file = get_auth_file(codex_home);
 
     let auth_dot_json = try_read_auth_json(&auth_file).ok();
