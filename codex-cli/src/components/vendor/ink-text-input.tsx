@@ -269,11 +269,14 @@ function TextInput({
             originalValue.slice(cursorOffset, originalValue.length);
           nextCursorOffset++;
         } else {
-          // Handle Enter key: support bash-style line continuation with backslash
-          // -- count consecutive backslashes immediately before cursor
-          // -- only a single trailing backslash at end indicates line continuation
+          // Handle Enter key: support line continuation. Use backslash on
+          // Unix-like systems and caret (^) on Windows.
+          // -- count consecutive continuation characters immediately before cursor
+          // -- only a single trailing continuation char at end indicates continuation
           const isAtEnd = cursorOffset === originalValue.length;
-          const trailingMatch = originalValue.match(/\\+$/);
+          const continuationRegex =
+            process.platform === "win32" ? /\^+$/ : /\\+$/;
+          const trailingMatch = originalValue.match(continuationRegex);
           const trailingCount = trailingMatch ? trailingMatch[0].length : 0;
           if (isAtEnd && trailingCount === 1) {
             nextValue += "\n";

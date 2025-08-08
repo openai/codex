@@ -170,6 +170,7 @@ export type StoredConfig = {
    * terminal output.
    */
   fileOpener?: FileOpenerScheme;
+  allowNoSandbox?: boolean;
 };
 
 // Minimal config written on first run.  An *empty* model string ensures that
@@ -215,6 +216,8 @@ export type AppConfig = {
     };
   };
   fileOpener?: FileOpenerScheme;
+  /** Allow running commands without sandboxing */
+  allowNoSandbox?: boolean;
 };
 
 // Formatting (quiet mode-only).
@@ -439,6 +442,8 @@ export const loadConfig = (
     disableResponseStorage: storedConfig.disableResponseStorage === true,
     reasoningEffort: storedConfig.reasoningEffort,
     fileOpener: storedConfig.fileOpener,
+    allowNoSandbox:
+      storedConfig.allowNoSandbox ?? CODEX_UNSAFE_ALLOW_NO_SANDBOX,
   };
 
   // -----------------------------------------------------------------------
@@ -560,6 +565,7 @@ export const saveConfig = (
     disableResponseStorage: config.disableResponseStorage,
     flexMode: config.flexMode,
     reasoningEffort: config.reasoningEffort,
+    allowNoSandbox: config.allowNoSandbox,
   };
 
   // Add history settings if they exist
