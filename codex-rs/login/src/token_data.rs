@@ -67,6 +67,13 @@ impl PlanType {
             }
         }
     }
+
+    pub fn as_string(&self) -> String {
+        match self {
+            Self::Known(known) => format!("{known:?}").to_lowercase(),
+            Self::Unknown(s) => s.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

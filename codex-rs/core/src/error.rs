@@ -66,12 +66,12 @@ pub enum CodexErr {
     UsageLimitReached(UsageLimitReachedError),
 
     #[error(
-        "To use Codex with your ChatGPT plan, upgrade to Plus: https://openai.com/chatgpt/pricing"
+        "To use Codex with your ChatGPT plan, upgrade to Plus: https://openai.com/chatgpt/pricing."
     )]
     UsageNotIncluded,
 
     #[error(
-        "We’re currently experiencing high demand, which may cause temporary errors. We’re adding capacity in East and West Europe to restore normal service."
+        "We're currently experiencing high demand, which may cause temporary errors. We’re adding capacity in East and West Europe to restore normal service."
     )]
     InternalServerError,
 
@@ -129,12 +129,12 @@ impl std::fmt::Display for UsageLimitReachedError {
         {
             write!(
                 f,
-                "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing), or wait for limits to reset (every 5h and every week)"
+                "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing), or wait for limits to reset (every 5h and every week.)."
             )?;
         } else {
             write!(
                 f,
-                "You've hit usage your usage limit. Limits reset every 5h and every week"
+                "You've hit usage your usage limit. Limits reset every 5h and every week."
             )?;
         }
         Ok(())
@@ -188,7 +188,7 @@ mod tests {
         };
         assert_eq!(
             err.to_string(),
-            "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing), or wait for limits to reset (every 5h and every week)"
+            "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing), or wait for limits to reset (every 5h and every week.)."
         );
     }
 
@@ -197,7 +197,7 @@ mod tests {
         let err = UsageLimitReachedError { plan_type: None };
         assert_eq!(
             err.to_string(),
-            "You've hit usage your usage limit. Limits reset every 5h and every week"
+            "You've hit usage your usage limit. Limits reset every 5h and every week."
         );
     }
 
@@ -208,7 +208,7 @@ mod tests {
         };
         assert_eq!(
             err.to_string(),
-            "You've hit usage your usage limit. Limits reset every 5h and every week"
+            "You've hit usage your usage limit. Limits reset every 5h and every week."
         );
     }
 }

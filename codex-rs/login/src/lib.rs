@@ -130,7 +130,7 @@ impl CodexAuth {
 
     pub fn get_plan_type(&self) -> Option<String> {
         self.get_current_token_data()
-            .and_then(|t| t.id_token.chatgpt_plan_type.clone())
+            .and_then(|t| t.id_token.chatgpt_plan_type.as_ref().map(|p| p.as_string()))
     }
 
     fn get_current_auth_json(&self) -> Option<AuthDotJson> {
