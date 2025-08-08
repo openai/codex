@@ -10,6 +10,7 @@ use crate::should_show_login_screen;
 use crate::slash_command::SlashCommand;
 use crate::tui;
 use codex_core::config::Config;
+use codex_core::config_types::ReasoningEffort;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
@@ -296,6 +297,53 @@ impl App<'_> {
                     AppState::Chat { widget } => widget.update_latest_log(line),
                     AppState::Onboarding { .. } => {}
                 },
+                AppEvent::ShowReasoningSelector(current) => {
+                    if let AppState::Chat { widget } = &mut self.app_state {
+                        widget.show_reasoning_selector(current);
+                    }
+                }
+                AppEvent::DispatchCommandWithArgs { cmd, args } => {
+                    match cmd {
+                        SlashCommand::Reasoning => {
+                            // Parse argument and update session configuration accordingly.
+                            let effort_opt = match args.trim().to_ascii_lowercase().as_str() {
+                                "low" => Some(ReasoningEffort::Low),
+                                "medium" => Some(ReasoningEffort::Medium),
+                                "high" => Some(ReasoningEffort::High),
+                                _ => None,
+                            };
+                            if let Some(effort) = effort_opt {
+                                self.config.model_reasoning_effort = effort;
+                                if let AppState::Chat { widget } = &mut self.app_state {
+                                    widget.set_model_reasoning_effort(effort);
+                                }
+                                // Reconfigure session so backend applies the change immediately.
+                                let op = Op::ConfigureSession {
+                                    provider: self.config.model_provider.clone(),
+                                    model: self.config.model.clone(),
+                                    model_reasoning_effort: effort,
+                                    model_reasoning_summary: self.config.model_reasoning_summary,
+                                    user_instructions: self.config.user_instructions.clone(),
+                                    base_instructions: self.config.base_instructions.clone(),
+                                    approval_policy: self.config.approval_policy,
+                                    sandbox_policy: self.config.sandbox_policy.clone(),
+                                    disable_response_storage: self.config.disable_response_storage,
+                                    notify: self.config.notify.clone(),
+                                    cwd: self.config.cwd.clone(),
+                                    resume_path: self.config.experimental_resume.clone(),
+                                };
+                                self.app_event_tx.send(AppEvent::CodexOp(op));
+                            } else if let AppState::Chat { widget } = &mut self.app_state {
+                                // If invalid argument, show status (acts as a hint of valid values).
+                                widget.add_status_output();
+                            }
+                        }
+                        _ => {
+                            // Fallback to default handler for commands that don't use args.
+                            self.app_event_tx.send(AppEvent::DispatchCommand(cmd));
+                        }
+                    }
+                }
                 AppEvent::DispatchCommand(command) => match command {
                     SlashCommand::New => {
                         // User accepted – switch to chat view.
@@ -356,6 +404,12 @@ impl App<'_> {
                         if let AppState::Chat { widget } = &mut self.app_state {
                             widget.add_status_output();
                         }
+                    }
+                    SlashCommand::Reasoning => {
+                        // Show interactive selector when no argument provided.
+                        self.app_event_tx.send(AppEvent::ShowReasoningSelector(
+                            self.config.model_reasoning_effort,
+                        ));
                     }
                     SlashCommand::Prompts => {
                         if let AppState::Chat { widget } = &mut self.app_state {

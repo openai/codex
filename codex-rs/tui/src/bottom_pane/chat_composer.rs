@@ -260,7 +260,25 @@ impl ChatComposer {
             } => {
                 if let Some(cmd) = popup.selected_command() {
                     // Send command to the app layer.
-                    self.app_event_tx.send(AppEvent::DispatchCommand(*cmd));
+                    // If arguments were provided on the first line after the command,
+                    // forward them for commands that accept parameters (e.g. /reasoning).
+                    let first_line = self.textarea.text().lines().next().unwrap_or("");
+                    let trimmed = first_line.trim_start();
+                    let prefix = format!("/{}", cmd.command());
+                    let args = if let Some(rest) = trimmed.strip_prefix(&prefix) {
+                        rest.trim_start().to_string()
+                    } else {
+                        String::new()
+                    };
+
+                    if matches!(cmd, crate::slash_command::SlashCommand::Reasoning)
+                        && !args.is_empty()
+                    {
+                        self.app_event_tx
+                            .send(AppEvent::DispatchCommandWithArgs { cmd: *cmd, args });
+                    } else {
+                        self.app_event_tx.send(AppEvent::DispatchCommand(*cmd));
+                    }
 
                     // Clear textarea so no residual text remains.
                     self.textarea.set_text("");
