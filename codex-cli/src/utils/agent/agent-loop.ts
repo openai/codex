@@ -1605,6 +1605,18 @@ const dynamicLines: Array<string> = [
   `User: ${userName}`,
   `Workdir: ${workdir}`,
 ];
+if (process.platform === "win32") {
+  const version = os.release();
+  let shell = "CMD";
+  if (process.env["PSModulePath"] && !process.env["PROMPT"]) {
+    shell = "PowerShell";
+  }
+  dynamicLines.push(`Platform: Windows ${version}`);
+  dynamicLines.push(`Shell: ${shell}`);
+  dynamicLines.push(
+    `- Be sure to provide only commands that work in a Windows environment using ${shell}.`,
+  );
+}
 if (spawnSync("rg", ["--version"], { stdio: "ignore" }).status === 0) {
   dynamicLines.push(
     "- Always use rg instead of grep/ls -R because it is much faster and respects gitignore",
