@@ -96,13 +96,7 @@ if ($env:PATH -notlike "*$npmBin*") {
 $respCli = Read-Host "Install Codex CLI now? [Y/n]"
 if ($respCli -match '^[Yy]' -or $respCli -eq '') {
     try {
-        # Force git to use HTTPS for GitHub in case SSH keys are not configured
-        git config --global url."https://github.com/".insteadOf "git@github.com:" | Out-Null
-        $tmp = Join-Path $env:TEMP "codex-cli-install"
-        if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }
-        git clone --depth 1 https://github.com/openai/codex.git $tmp | Out-Null
-        npm install -g (Join-Path $tmp "codex-cli")
-        Remove-Item $tmp -Recurse -Force
+        npm install -g @openai/codex | Out-Null
         $codexCmd = Get-Command codex -ErrorAction SilentlyContinue
         if (-not $codexCmd) {
             Write-Host "CLI installed but 'codex' not found in PATH. Restart your terminal or check npm prefix." -ForegroundColor Yellow
