@@ -118,10 +118,13 @@ fn push_owned_lines<'a>(borrowed: Vec<ratatui::text::Line<'a>>, out: &mut Vec<Li
     }
 }
 
-// Minimal fenced code block splitting. Recognizes ``` and ~~~ fences at the
-// start of a line (allowing leading whitespace). The opening fence may have a
-// language string which we ignore for rendering purposes. The closing fence
-// must be on its own line (ignoring surrounding whitespace).
+// Minimal code block splitting.
+// - Recognizes fenced blocks opened by ``` or ~~~ (allowing leading whitespace).
+//   The opening fence may include a language string which we ignore.
+//   The closing fence must be on its own line (ignoring surrounding whitespace).
+// - Additionally recognizes indented code blocks that begin after a blank line
+//   with a line starting with at least 4 spaces or a tab, and continue for
+//   consecutive lines that are blank or also indented by >= 4 spaces or a tab.
 enum Segment {
     Text(String),
     Code {
@@ -133,10 +136,18 @@ enum Segment {
 fn split_text_and_fences(src: &str) -> Vec<Segment> {
     let mut segments = Vec::new();
     let mut curr_text = String::new();
-    let mut in_code = false;
+    #[derive(Copy, Clone, PartialEq)]
+    enum CodeMode {
+        None,
+        Fenced,
+        Indented,
+    }
+    let mut code_mode = CodeMode::None;
     let mut fence_token = "";
     let mut code_lang: Option<String> = None;
     let mut code_content = String::new();
+    // We intentionally do not require a preceding blank line for indented code blocks,
+    // since streamed model output often omits it. This favors preserving indentation.
 
     for line in src.split_inclusive('\n') {
         let line_no_nl = line.strip_suffix('\n');
@@ -144,7 +155,7 @@ fn split_text_and_fences(src: &str) -> Vec<Segment> {
             Some(l) => l.trim_start(),
             None => line.trim_start(),
         };
-        if !in_code {
+        if code_mode == CodeMode::None {
             let open = if trimmed_start.starts_with("```") {
                 Some("```")
             } else if trimmed_start.starts_with("~~~") {
@@ -167,36 +178,88 @@ fn split_text_and_fences(src: &str) -> Vec<Segment> {
                 } else {
                     Some(lang.to_string())
                 };
-                in_code = true;
+                code_mode = CodeMode::Fenced;
                 code_content.clear();
                 // Do not include the opening fence line in output.
+                continue;
+            }
+            // Check for start of an indented code block: only after a blank line
+            // (or at the beginning), and the line must start with >=4 spaces or a tab.
+            let raw_line = match line_no_nl {
+                Some(l) => l,
+                None => line,
+            };
+            let leading_spaces = raw_line.chars().take_while(|c| *c == ' ').count();
+            let starts_with_tab = raw_line.starts_with('\t');
+            // Consider any line that begins with >=4 spaces or a tab to start an
+            // indented code block. This favors preserving indentation even when a
+            // preceding blank line is omitted (common in streamed model output).
+            let starts_indented_code = (leading_spaces >= 4) || starts_with_tab;
+            if starts_indented_code {
+                // Flush pending text and begin an indented code block.
+                if !curr_text.is_empty() {
+                    segments.push(Segment::Text(curr_text.clone()));
+                    curr_text.clear();
+                }
+                code_mode = CodeMode::Indented;
+                code_content.clear();
+                code_content.push_str(line);
+                // Inside code now; do not treat this line as normal text.
                 continue;
             }
             // Normal text line.
             curr_text.push_str(line);
         } else {
-            // inside code: check for closing fence on its own line
-            let trimmed = match line_no_nl {
-                Some(l) => l.trim(),
-                None => line.trim(),
-            };
-            if trimmed == fence_token {
-                // End code block: emit segment without fences
-                segments.push(Segment::Code {
-                    _lang: code_lang.take(),
-                    content: code_content.clone(),
-                });
-                code_content.clear();
-                in_code = false;
-                fence_token = "";
-                continue;
+            match code_mode {
+                CodeMode::Fenced => {
+                    // inside fenced code: check for closing fence on its own line
+                    let trimmed = match line_no_nl {
+                        Some(l) => l.trim(),
+                        None => line.trim(),
+                    };
+                    if trimmed == fence_token {
+                        // End code block: emit segment without fences
+                        segments.push(Segment::Code {
+                            _lang: code_lang.take(),
+                            content: code_content.clone(),
+                        });
+                        code_content.clear();
+                        code_mode = CodeMode::None;
+                        fence_token = "";
+                        continue;
+                    }
+                    // Accumulate code content exactly as-is.
+                    code_content.push_str(line);
+                }
+                CodeMode::Indented => {
+                    // Continue while the line is blank, or starts with >=4 spaces, or a tab.
+                    let raw_line = match line_no_nl {
+                        Some(l) => l,
+                        None => line,
+                    };
+                    let is_blank = raw_line.trim().is_empty();
+                    let leading_spaces = raw_line.chars().take_while(|c| *c == ' ').count();
+                    let starts_with_tab = raw_line.starts_with('\t');
+                    if is_blank || leading_spaces >= 4 || starts_with_tab {
+                        code_content.push_str(line);
+                    } else {
+                        // Close the indented code block and reprocess this line as normal text.
+                        segments.push(Segment::Code {
+                            _lang: None,
+                            content: code_content.clone(),
+                        });
+                        code_content.clear();
+                        code_mode = CodeMode::None;
+                        // Now handle current line as text.
+                        curr_text.push_str(line);
+                    }
+                }
+                CodeMode::None => unreachable!(),
             }
-            // Accumulate code content exactly as-is.
-            code_content.push_str(line);
         }
     }
 
-    if in_code {
+    if code_mode != CodeMode::None {
         // Unterminated code fence: treat accumulated content as a code segment.
         segments.push(Segment::Code {
             _lang: code_lang.take(),
@@ -315,5 +378,54 @@ mod tests {
         assert!(rendered[0].contains("vscode://file"));
         assert_eq!(rendered[1], "Inside 【F:/x.rs†L2】");
         assert!(matches!(rendered.last(), Some(s) if s.contains("vscode://file")));
+    }
+
+    #[test]
+    fn indented_code_blocks_preserve_leading_whitespace() {
+        let src = "Before\n    code 1\n\tcode with tab\n        code 2\nAfter\n";
+        let cwd = Path::new("/");
+        let mut out = Vec::new();
+        append_markdown_with_opener_and_cwd(src, &mut out, UriBasedFileOpener::None, cwd);
+        let rendered: Vec<String> = out
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.clone())
+                    .collect::<String>()
+            })
+            .collect();
+        assert_eq!(
+            rendered,
+            vec![
+                "Before".to_string(),
+                "    code 1".to_string(),
+                "\tcode with tab".to_string(),
+                "        code 2".to_string(),
+                "After".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn citations_not_rewritten_inside_indented_code_blocks() {
+        let src = "Start 【F:/x.rs†L1】\n\n    Inside 【F:/x.rs†L2】\n\nEnd 【F:/x.rs†L3】\n";
+        let cwd = Path::new("/");
+        let mut out = Vec::new();
+        append_markdown_with_opener_and_cwd(src, &mut out, UriBasedFileOpener::VsCode, cwd);
+        let rendered: Vec<String> = out
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.clone())
+                    .collect::<String>()
+            })
+            .collect();
+        // Expect first and last lines rewritten, and the indented code line present
+        // unchanged (citations inside not rewritten). We do not assert on blank
+        // separator lines since the markdown renderer may normalize them.
+        assert!(rendered.iter().any(|s| s.contains("vscode://file")));
+        assert!(rendered.iter().any(|s| s == "    Inside 【F:/x.rs†L2】"));
     }
 }
