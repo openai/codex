@@ -46,7 +46,7 @@ import { initLogger } from "./utils/logger/log";
 import { isModelSupportedForResponses } from "./utils/model-utils.js";
 import { parseToolCall } from "./utils/parsers";
 import { providers } from "./utils/providers";
-import { onExit, setInkRenderer } from "./utils/terminal";
+import { clearTerminal, onExit, setInkRenderer } from "./utils/terminal";
 import chalk from "chalk";
 import { spawnSync } from "child_process";
 import fs from "fs";
@@ -595,6 +595,13 @@ const approvalPolicy: ApprovalPolicy =
     : cli.flags.autoEdit || cli.flags.approvalMode === "auto-edit"
       ? AutoApprovalMode.AUTO_EDIT
       : config.approvalMode || AutoApprovalMode.SUGGEST;
+
+// Ensure the terminal starts at the top of the viewport on initial load.
+// This clears any existing content and scrollback, then positions the cursor
+// at the home position before Ink begins rendering.
+if (process.stdout.isTTY && process.env["CODEX_QUIET_MODE"] !== "1") {
+  clearTerminal();
+}
 
 const instance = render(
   <App
