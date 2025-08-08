@@ -70,6 +70,8 @@ jobs:
             target: aarch64-unknown-linux-musl
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
 
     steps:
       - uses: actions/checkout@v4
@@ -101,8 +103,13 @@ jobs:
           dest="dist/${{ matrix.target }}"
           mkdir -p "$dest"
 
-          cp target/${{ matrix.target }}/release/codex-exec "$dest/codex-exec-${{ matrix.target }}"
-          cp target/${{ matrix.target }}/release/codex "$dest/codex-${{ matrix.target }}"
+          if [[ "${{ matrix.runner }}" == windows* ]]; then
+            cp target/${{ matrix.target }}/release/codex-exec.exe "$dest/codex-exec-${{ matrix.target }}.exe"
+            cp target/${{ matrix.target }}/release/codex.exe "$dest/codex-${{ matrix.target }}.exe"
+          else
+            cp target/${{ matrix.target }}/release/codex-exec "$dest/codex-exec-${{ matrix.target }}"
+            cp target/${{ matrix.target }}/release/codex "$dest/codex-${{ matrix.target }}"
+          fi
 
         # After https://github.com/openai/codex/pull/1228 is merged and a new
         # release is cut with an artifacts built after that PR, the `-gnu`
