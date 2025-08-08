@@ -1,5 +1,3 @@
-
-
 import type { CommandConfirmation } from "./agent-loop.js";
 import type { ApplyPatchCommand, ApprovalPolicy } from "../../approvals.js";
 import type { AppConfig } from "../config.js";
@@ -10,10 +8,11 @@ import { canAutoApprove } from "../../approvals.js";
 import { formatCommandForDisplay } from "../../format-command.js";
 import { FullAutoErrorMode } from "../auto-approval-mode.js";
 import { exec, execApplyPatch } from "./exec.js";
+import { adaptCommandForPlatform } from "./platform-commands.js";
 import { ReviewDecision } from "./review.js";
-import { isLoggingEnabled, log } from "../logger/log.js";
 import { SandboxType } from "./sandbox/interface.js";
 import { PATH_TO_SEATBELT_EXECUTABLE } from "./sandbox/macos-seatbelt.js";
+import { isLoggingEnabled, log } from "../logger/log.js";
 import fs from "fs/promises";
 
 // ---------------------------------------------------------------------------
@@ -83,22 +82,26 @@ export async function handleExecCommand(
     applyPatch: ApplyPatchCommand | undefined,
   ) => Promise<CommandConfirmation>,
   abortSignal?: AbortSignal,
-  ): Promise<HandleExecCommandResult> {
-  const { cmd: command, workdir } = args;
+): Promise<HandleExecCommandResult> {
+  const { cmd: originalCommand, workdir } = args;
+  const { command, message: adaptationMessage } =
+    adaptCommandForPlatform(originalCommand);
+  const execArgs = { ...args, cmd: command };
 
   const key = deriveCommandKey(command);
 
   // 1) If the user has already said "always approve", skip
   //    any policy & never sandbox.
   if (alwaysApprovedCommands.has(key)) {
-    return execCommand(
-      args,
+    const summary = await execCommand(
+      execArgs,
       /* applyPatch */ undefined,
       /* runInSandbox */ false,
       additionalWritableRoots,
       config,
       abortSignal,
-    ).then(convertSummaryToResult);
+    );
+    return convertSummaryToResult(summary, adaptationMessage);
   }
 
   // 2) Otherwise fall back to the normal policy
@@ -113,7 +116,7 @@ export async function handleExecCommand(
   switch (safety.type) {
     case "ask-user": {
       const review = await askUserPermission(
-        args,
+        execArgs,
         safety.applyPatch,
         getCommandConfirmation,
       );
@@ -141,7 +144,7 @@ export async function handleExecCommand(
 
   const { applyPatch } = safety;
   const summary = await execCommand(
-    args,
+    execArgs,
     applyPatch,
     runInSandbox,
     additionalWritableRoots,
@@ -169,7 +172,7 @@ export async function handleExecCommand(
     config.fullAutoErrorMode === FullAutoErrorMode.ASK_USER
   ) {
     const review = await askUserPermission(
-      args,
+      execArgs,
       safety.applyPatch,
       getCommandConfirmation,
     );
@@ -179,31 +182,42 @@ export async function handleExecCommand(
       // The user has approved the command, so we will run it outside of the
       // sandbox.
       const summary = await execCommand(
-        args,
+        execArgs,
         applyPatch,
         false,
         additionalWritableRoots,
         config,
         abortSignal,
       );
-      return convertSummaryToResult(summary);
+      return convertSummaryToResult(summary, adaptationMessage);
     }
   } else {
-    return convertSummaryToResult(summary);
+    return convertSummaryToResult(summary, adaptationMessage);
   }
 }
 
 function convertSummaryToResult(
   summary: ExecCommandSummary,
+  adaptationMessage?: string,
 ): HandleExecCommandResult {
   const { stdout, stderr, exitCode, durationMs } = summary;
-  return {
+  const result: HandleExecCommandResult = {
     outputText: stdout || stderr,
     metadata: {
       exit_code: exitCode,
       duration_seconds: Math.round(durationMs / 100) / 10,
     },
   };
+  if (adaptationMessage) {
+    result.additionalItems = [
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: adaptationMessage }],
+      },
+    ];
+  }
+  return result;
 }
 
 type ExecCommandSummary = {
@@ -245,8 +259,8 @@ async function execCommand(
       `EXEC running \`${formatCommandForDisplay(
         cmd,
       )}\` in workdir=${workdir} with timeout=${timeout}s`,
-          );
-        }
+    );
+  }
 
   // Note execApplyPatch() and exec() are coded defensively and should not
   // throw. Any internal errors should be mapped to a non-zero value for the
@@ -255,12 +269,12 @@ async function execCommand(
   const execResult =
     applyPatchCommand != null
       ? execApplyPatch(applyPatchCommand.patch, workdir)
-        : await exec(
-            { ...execInput, additionalWritableRoots },
-            await getSandbox(runInSandbox, config.allowNoSandbox ?? false),
-            config,
-            abortSignal,
-          );
+      : await exec(
+          { ...execInput, additionalWritableRoots },
+          await getSandbox(runInSandbox, config.allowNoSandbox ?? false),
+          config,
+          abortSignal,
+        );
   const duration = Date.now() - start;
   const { stdout, stderr, exitCode } = execResult;
 

@@ -1610,6 +1610,13 @@ if (spawnSync("rg", ["--version"], { stdio: "ignore" }).status === 0) {
     "- Always use rg instead of grep/ls -R because it is much faster and respects gitignore",
   );
 }
+if (process.platform === "win32") {
+  const shell = process.env["PROMPT"] ? "CMD" : "PowerShell";
+  dynamicLines.push(`OS: Windows ${os.release()}`);
+  dynamicLines.push(
+    `- Provide only commands that work in a Windows environment using ${shell}`,
+  );
+}
 const dynamicPrefix = dynamicLines.join("\n");
 const prefix = `You are operating as and within the Codex CLI, a terminal-based agentic coding assistant built by OpenAI. It wraps OpenAI models to enable natural language interaction with a local codebase. You are expected to be precise, safe, and helpful.
 

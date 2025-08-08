@@ -3,6 +3,9 @@
  */
 
 import { log } from "../logger/log.js";
+import { spawnSync } from "child_process";
+import path from "path";
+import { fileURLToPath } from "url";
 
 // On Windows, many useful commands are implemented as shell built-ins rather
 // than standalone executables. `COMSPEC` points to the command interpreter
@@ -46,35 +49,60 @@ const OPTION_MAP: Record<string, Record<string, string>> = {
  * @param command The command array to adapt
  * @returns The adapted command array
  */
-export function adaptCommandForPlatform(command: Array<string>): Array<string> {
+export function adaptCommandForPlatform(command: Array<string>): {
+  command: Array<string>;
+  message?: string;
+} {
   // If not on Windows, return the original command
   if (process.platform !== "win32") {
-    return command;
+    return { command };
   }
 
   // Nothing to adapt if the command is empty
   if (command.length === 0) {
-    return command;
+    return { command };
   }
 
+  try {
+    const __filename = fileURLToPath(import.meta.url);
+    const scriptPath = path.join(
+      path.dirname(__filename),
+      "../../scripts/command_validator.py",
+    );
+    const result = spawnSync("python", [scriptPath, JSON.stringify(command)], {
+      encoding: "utf-8",
+    });
+    if (result.status === 0 && result.stdout) {
+      const parsed = JSON.parse(result.stdout.trim());
+      if (Array.isArray(parsed.command)) {
+        return { command: parsed.command, message: parsed.message };
+      }
+    } else if (result.stderr) {
+      log(`command_validator stderr: ${result.stderr}`);
+    }
+  } catch (err) {
+    log(`command_validator failed: ${String(err)}`);
+  }
+
+  // Fallback to simple mapping
   const cmd = command[0];
 
   // Special cases for commands that are Windows shell built-ins.
   if (cmd === "pwd") {
-    log("Adapting command 'pwd' for Windows platform");
-    return [COMSPEC, "/c", "cd"];
+    log("Adapting command 'pwd' for Windows platform (fallback)");
+    return { command: [COMSPEC, "/c", "cd"], message: undefined };
   }
   if (cmd === "env" || cmd === "printenv") {
-    log(`Adapting command '${cmd}' for Windows platform`);
-    return [COMSPEC, "/c", "set"];
+    log(`Adapting command '${cmd}' for Windows platform (fallback)`);
+    return { command: [COMSPEC, "/c", "set"], message: undefined };
   }
 
   // If cmd is undefined or the command doesn't need adaptation, return it as is
   if (!cmd || !COMMAND_MAP[cmd]) {
-    return command;
+    return { command };
   }
 
-  log(`Adapting command '${cmd}' for Windows platform`);
+  log(`Adapting command '${cmd}' for Windows platform (fallback)`);
 
   // Create a new command array with the adapted command
   const adaptedCommand = [...command];
@@ -91,7 +119,7 @@ export function adaptCommandForPlatform(command: Array<string>): Array<string> {
     }
   }
 
-  log(`Adapted command: ${adaptedCommand.join(" ")}`);
+  log(`Adapted command (fallback): ${adaptedCommand.join(" ")}`);
 
-  return adaptedCommand;
+  return { command: adaptedCommand };
 }
