@@ -522,41 +522,6 @@ mod tests {
         );
     }
 
-    #[test]
-    #[ignore]
-    fn finalize_unwraps_markdown_language_fence_in_non_test_builds() {
-        // Document the desired behavior: in non-test builds, finalize should unwrap
-        // an outer ```markdown fence. This test is ignored under cfg(test).
-        let cfg = test_config();
-        let mut c = MarkdownNewlineCollector::new();
-        c.push_delta("```markdown\nHello\n```\n");
-        let out = c.finalize_and_drain(&cfg);
-        let out_str = lines_to_plain_strings(&out);
-        assert_eq!(
-            out_str,
-            vec!["Hello"],
-            "in release, content inside ```markdown should be unwrapped"
-        );
-    }
-
-    #[test]
-    #[ignore]
-    fn unwraps_outer_markdown_on_commit_no_stray_backticks() {
-        let cfg = test_config();
-        // Stream with outer ```markdown wrapper in pieces; ensure that when a newline commits,
-        // we don't leak backticks or the fence line into history.
-        let deltas = vec!["```markdown", "\nHe", "llo\n", "```", "\n"]; // commits on 2nd, 3rd, 5th
-        let streamed = simulate_stream_markdown_for_tests(&deltas, true, &cfg);
-        let texts = lines_to_plain_strings(&streamed);
-        assert!(
-            texts.iter().any(|s| s == "Hello"),
-            "expected Hello committed once: {texts:?}"
-        );
-        assert!(
-            texts.iter().all(|s| !s.contains("```")),
-            "no backticks should appear: {texts:?}"
-        );
-    }
 
     #[test]
     fn empty_fenced_block_is_dropped_and_separator_preserved_before_heading() {
