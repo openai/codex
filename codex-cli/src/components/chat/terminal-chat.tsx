@@ -7,6 +7,7 @@ import type { ResponseItem } from "openai/resources/responses/responses.mjs";
 
 import TerminalChatInput from "./terminal-chat-input.js";
 import TerminalChatPastRollout from "./terminal-chat-past-rollout.js";
+import TerminalChatInputThinking from "./terminal-chat-input-thinking.js";
 import { TerminalChatToolCallCommand } from "./terminal-chat-tool-call-command.js";
 import TerminalMessageHistory from "./terminal-message-history.js";
 import { formatCommandForDisplay } from "../../format-command.js";
@@ -504,83 +505,125 @@ export default function TerminalChat({
           </Box>
         )}
         {overlayMode === "none" && agent && (
-          <TerminalChatInput
-            loading={loading}
-            setItems={setItems}
-            isNew={Boolean(items.length === 0)}
-            setLastResponseId={setLastResponseId}
-            confirmationPrompt={confirmationPrompt}
-            explanation={explanation}
-            submitConfirmation={(
-              decision: ReviewDecision,
-              customDenyMessage?: string,
-            ) =>
-              submitConfirmation({
-                decision,
-                customDenyMessage,
-              })
-            }
-            contextLeftPercent={contextLeftPercent}
-            openOverlay={() => setOverlayMode("history")}
-            openModelOverlay={() => setOverlayMode("model")}
-            openApprovalOverlay={() => setOverlayMode("approval")}
-            openHelpOverlay={() => setOverlayMode("help")}
-            openSessionsOverlay={() => setOverlayMode("sessions")}
-            openDiffOverlay={() => {
-              const { isGitRepo, diff } = getGitDiff();
-              let text: string;
-              if (isGitRepo) {
-                text = diff;
-              } else {
-                text = "`/diff` — _not inside a git repository_";
-              }
-              setItems((prev) => [
-                ...prev,
-                {
-                  id: `diff-${Date.now()}`,
-                  type: "message",
-                  role: "system",
-                  content: [{ type: "input_text", text }],
-                },
-              ]);
-              // Ensure no overlay is shown.
-              setOverlayMode("none");
-            }}
-            onCompact={handleCompact}
-            active={overlayMode === "none"}
-            interruptAgent={() => {
-              if (!agent) {
-                return;
-              }
-              log(
-                "TerminalChat: interruptAgent invoked – calling agent.cancel()",
-              );
-              agent.cancel();
-              setLoading(false);
+          <>
+            {loading && (
+              <>
+                {/* Spacer line between message history and loading indicator */}
+                <Box>
+                  <Text> </Text>
+                </Box>
+                <Box marginBottom={1}>
+                  <TerminalChatInputThinking
+                    onInterrupt={() => {
+                      if (!agent) {
+                        return;
+                      }
+                      log(
+                        "TerminalChat: interruptAgent invoked – calling agent.cancel()",
+                      );
+                      agent.cancel();
+                      setLoading(false);
 
-              // Add a system message to indicate the interruption
-              setItems((prev) => [
-                ...prev,
-                {
-                  id: `interrupt-${Date.now()}`,
-                  type: "message",
-                  role: "system",
-                  content: [
-                    {
-                      type: "input_text",
-                      text: "⏹️  Execution interrupted by user. You can continue typing.",
-                    },
-                  ],
-                },
-              ]);
-            }}
-            submitInput={(inputs) => {
-              agent.run(inputs, lastResponseId || "");
-              return {};
-            }}
-            items={items}
-            thinkingSeconds={thinkingSeconds}
-          />
+                      // Add a system message to indicate the interruption
+                      setItems((prev) => [
+                        ...prev,
+                        {
+                          id: `interrupt-${Date.now()}`,
+                          type: "message",
+                          role: "system",
+                          content: [
+                            {
+                              type: "input_text",
+                              text: "⏹️  Execution interrupted by user. You can continue typing.",
+                            },
+                          ],
+                        },
+                      ]);
+                    }}
+                    active={overlayMode === "none"}
+                    thinkingSeconds={thinkingSeconds}
+                  />
+                </Box>
+              </>
+            )}
+            <TerminalChatInput
+              loading={loading}
+              setItems={setItems}
+              isNew={Boolean(items.length === 0)}
+              setLastResponseId={setLastResponseId}
+              confirmationPrompt={confirmationPrompt}
+              explanation={explanation}
+              submitConfirmation={(
+                decision: ReviewDecision,
+                customDenyMessage?: string,
+              ) =>
+                submitConfirmation({
+                  decision,
+                  customDenyMessage,
+                })
+              }
+              contextLeftPercent={contextLeftPercent}
+              openOverlay={() => setOverlayMode("history")}
+              openModelOverlay={() => setOverlayMode("model")}
+              openApprovalOverlay={() => setOverlayMode("approval")}
+              openHelpOverlay={() => setOverlayMode("help")}
+              openSessionsOverlay={() => setOverlayMode("sessions")}
+              openDiffOverlay={() => {
+                const { isGitRepo, diff } = getGitDiff();
+                let text: string;
+                if (isGitRepo) {
+                  text = diff;
+                } else {
+                  text = "`/diff` — _not inside a git repository_";
+                }
+                setItems((prev) => [
+                  ...prev,
+                  {
+                    id: `diff-${Date.now()}`,
+                    type: "message",
+                    role: "system",
+                    content: [{ type: "input_text", text }],
+                  },
+                ]);
+                // Ensure no overlay is shown.
+                setOverlayMode("none");
+              }}
+              onCompact={handleCompact}
+              active={overlayMode === "none"}
+              interruptAgent={() => {
+                if (!agent) {
+                  return;
+                }
+                log(
+                  "TerminalChat: interruptAgent invoked – calling agent.cancel()",
+                );
+                agent.cancel();
+                setLoading(false);
+
+                // Add a system message to indicate the interruption
+                setItems((prev) => [
+                  ...prev,
+                  {
+                    id: `interrupt-${Date.now()}`,
+                    type: "message",
+                    role: "system",
+                    content: [
+                      {
+                        type: "input_text",
+                        text: "⏹️  Execution interrupted by user. You can continue typing.",
+                      },
+                    ],
+                  },
+                ]);
+              }}
+              submitInput={(inputs) => {
+                agent.run(inputs, lastResponseId || "");
+                return {};
+              }}
+              items={items}
+              thinkingSeconds={thinkingSeconds}
+            />
+          </>
         )}
         {overlayMode === "history" && (
           <HistoryOverlay items={items} onExit={() => setOverlayMode("none")} />

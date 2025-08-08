@@ -2,6 +2,7 @@
 Top to do (big)
 
 Top to do (sm)
+- move the "(  ●   ) 2s  Thinking."
 - fix slash command formatting
 - improve @ commands
 

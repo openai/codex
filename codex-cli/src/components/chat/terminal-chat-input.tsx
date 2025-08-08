@@ -762,53 +762,52 @@ export default function TerminalChatInput({
   return (
     <Box flexDirection="column">
       <Box borderStyle="round">
-        {loading ? (
-          <TerminalChatInputThinking
-            onInterrupt={interruptAgent}
-            active={active}
-            thinkingSeconds={thinkingSeconds}
-          />
-        ) : (
-          <Box paddingX={1}>
-            <MultilineTextEditor
-              ref={editorRef}
-              onChange={(txt: string) => {
-                setDraftInput(txt);
-                if (historyIndex != null) {
-                  setHistoryIndex(null);
-                }
-                setInput(txt);
-              }}
-              key={editorState.key}
-              initialCursorOffset={editorState.initialCursorOffset}
-              initialText={input}
-              height={6}
-              focus={active}
-              onSubmit={(txt) => {
-                // If final token is an @path, replace with filesystem suggestion if available
-                const {
-                  text: replacedText,
-                  suggestion,
-                  wasReplaced,
-                } = getFileSystemSuggestion(txt, true);
-
-                // If we replaced @path token with a directory, don't submit
-                if (wasReplaced && suggestion?.isDirectory) {
-                  applyFsSuggestion(replacedText);
-                  // Update suggestions for the new directory
-                  updateFsSuggestions(replacedText, true);
-                  return;
-                }
-
-                onSubmit(replacedText);
-                setEditorState((s) => ({ key: s.key + 1 }));
-                setInput("");
+        <Box paddingX={1}>
+          <MultilineTextEditor
+            ref={editorRef}
+            onChange={(txt: string) => {
+              setDraftInput(txt);
+              if (historyIndex != null) {
                 setHistoryIndex(null);
-                setDraftInput("");
-              }}
-            />
-          </Box>
-        )}
+              }
+              setInput(txt);
+            }}
+            key={editorState.key}
+            initialCursorOffset={editorState.initialCursorOffset}
+            initialText={input}
+            height={6}
+            focus={active}
+            onSubmit={(txt) => {
+              // If the assistant is currently thinking, keep the composed text
+              // but do not submit a new prompt. Users can interrupt (Esc Esc)
+              // and submit afterwards.
+              if (loading) {
+                return;
+              }
+
+              // If final token is an @path, replace with filesystem suggestion if available
+              const {
+                text: replacedText,
+                suggestion,
+                wasReplaced,
+              } = getFileSystemSuggestion(txt, true);
+
+              // If we replaced @path token with a directory, don't submit
+              if (wasReplaced && suggestion?.isDirectory) {
+                applyFsSuggestion(replacedText);
+                // Update suggestions for the new directory
+                updateFsSuggestions(replacedText, true);
+                return;
+              }
+
+              onSubmit(replacedText);
+              setEditorState((s) => ({ key: s.key + 1 }));
+              setInput("");
+              setHistoryIndex(null);
+              setDraftInput("");
+            }}
+          />
+        </Box>
       </Box>
       {/* Slash command autocomplete suggestions */}
       {input.trim().startsWith("/") && (
