@@ -4,6 +4,11 @@
 
 import { log } from "../logger/log.js";
 
+// On Windows, many useful commands are implemented as shell built-ins rather
+// than standalone executables. `COMSPEC` points to the command interpreter
+// (typically `cmd.exe`) which we use when invoking such built-ins.
+const COMSPEC = process.env["COMSPEC"] || "cmd";
+
 /**
  * Map of Unix commands to their Windows equivalents
  */
@@ -53,6 +58,16 @@ export function adaptCommandForPlatform(command: Array<string>): Array<string> {
   }
 
   const cmd = command[0];
+
+  // Special cases for commands that are Windows shell built-ins.
+  if (cmd === "pwd") {
+    log("Adapting command 'pwd' for Windows platform");
+    return [COMSPEC, "/c", "cd"];
+  }
+  if (cmd === "env" || cmd === "printenv") {
+    log(`Adapting command '${cmd}' for Windows platform`);
+    return [COMSPEC, "/c", "set"];
+  }
 
   // If cmd is undefined or the command doesn't need adaptation, return it as is
   if (!cmd || !COMMAND_MAP[cmd]) {

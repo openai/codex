@@ -104,9 +104,10 @@ const cli = meow(
     --reasoning <effort>      Set the reasoning effort level (low, medium, high) (default: high)
 
   Dangerous options
-    --dangerously-auto-approve-everything
+      --dangerously-auto-approve-everything
                                Skip all confirmation prompts and execute commands without
                                sandboxing. Intended solely for ephemeral local testing.
+      --no-sandbox              Run commands without sandboxing (use with caution).
 
   Experimental options
     -f, --full-context         Launch in "full-context" mode which loads the entire repository
@@ -146,6 +147,10 @@ const cli = meow(
         type: "boolean",
         description:
           "Automatically approve all commands without prompting. This is EXTREMELY DANGEROUS and should only be used in trusted environments.",
+      },
+      noSandbox: {
+        type: "boolean",
+        description: "Run commands without sandboxing",
       },
       autoEdit: {
         type: "boolean",
@@ -285,6 +290,10 @@ let config = loadConfig(undefined, undefined, {
   projectDocPath: cli.flags.projectDoc,
   isFullContext: fullContextMode,
 });
+
+if (cli.flags.noSandbox) {
+  config.allowNoSandbox = true;
+}
 
 // `prompt` can be updated later when the user resumes a previous session
 // via the `--history` flag. Therefore it must be declared with `let` rather

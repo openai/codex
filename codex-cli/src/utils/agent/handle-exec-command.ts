@@ -1,12 +1,14 @@
+
+
 import type { CommandConfirmation } from "./agent-loop.js";
 import type { ApplyPatchCommand, ApprovalPolicy } from "../../approvals.js";
+import type { AppConfig } from "../config.js";
 import type { ExecInput } from "./sandbox/interface.js";
 import type { ResponseInputItem } from "openai/resources/responses/responses.mjs";
 
 import { canAutoApprove } from "../../approvals.js";
 import { formatCommandForDisplay } from "../../format-command.js";
 import { FullAutoErrorMode } from "../auto-approval-mode.js";
-import { CODEX_UNSAFE_ALLOW_NO_SANDBOX, type AppConfig } from "../config.js";
 import { exec, execApplyPatch } from "./exec.js";
 import { ReviewDecision } from "./review.js";
 import { isLoggingEnabled, log } from "../logger/log.js";
@@ -81,7 +83,7 @@ export async function handleExecCommand(
     applyPatch: ApplyPatchCommand | undefined,
   ) => Promise<CommandConfirmation>,
   abortSignal?: AbortSignal,
-): Promise<HandleExecCommandResult> {
+  ): Promise<HandleExecCommandResult> {
   const { cmd: command, workdir } = args;
 
   const key = deriveCommandKey(command);
@@ -243,8 +245,8 @@ async function execCommand(
       `EXEC running \`${formatCommandForDisplay(
         cmd,
       )}\` in workdir=${workdir} with timeout=${timeout}s`,
-    );
-  }
+          );
+        }
 
   // Note execApplyPatch() and exec() are coded defensively and should not
   // throw. Any internal errors should be mapped to a non-zero value for the
@@ -253,12 +255,12 @@ async function execCommand(
   const execResult =
     applyPatchCommand != null
       ? execApplyPatch(applyPatchCommand.patch, workdir)
-      : await exec(
-          { ...execInput, additionalWritableRoots },
-          await getSandbox(runInSandbox),
-          config,
-          abortSignal,
-        );
+        : await exec(
+            { ...execInput, additionalWritableRoots },
+            await getSandbox(runInSandbox, config.allowNoSandbox ?? false),
+            config,
+            abortSignal,
+          );
   const duration = Date.now() - start;
   const { stdout, stderr, exitCode } = execResult;
 
@@ -291,7 +293,10 @@ const isSandboxExecAvailable: Promise<boolean> = fs
     },
   );
 
-async function getSandbox(runInSandbox: boolean): Promise<SandboxType> {
+async function getSandbox(
+  runInSandbox: boolean,
+  allowNoSandbox: boolean,
+): Promise<SandboxType> {
   if (runInSandbox) {
     if (process.platform === "darwin") {
       // On macOS we rely on the system-provided `sandbox-exec` binary to
@@ -313,9 +318,8 @@ async function getSandbox(runInSandbox: boolean): Promise<SandboxType> {
       // using Landlock in a Linux Docker container from a macOS host may not
       // work.
       return SandboxType.LINUX_LANDLOCK;
-    } else if (CODEX_UNSAFE_ALLOW_NO_SANDBOX) {
-      // Allow running without a sandbox if the user has explicitly marked the
-      // environment as already being sufficiently locked-down.
+    } else if (process.platform === "win32" || allowNoSandbox) {
+      // Windows and explicit opt-outs run commands without sandboxing.
       return SandboxType.NONE;
     }
 
