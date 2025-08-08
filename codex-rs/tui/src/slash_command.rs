@@ -18,6 +18,7 @@ pub enum SlashCommand {
     Diff,
     Status,
     Prompts,
+    Help,
     Logout,
     Quit,
     #[cfg(debug_assertions)]
@@ -35,6 +36,7 @@ impl SlashCommand {
             SlashCommand::Diff => "show git diff (including untracked files)",
             SlashCommand::Status => "show current session configuration and token usage",
             SlashCommand::Prompts => "show example prompts",
+            SlashCommand::Help => "show command help",
             SlashCommand::Logout => "log out of Codex",
             #[cfg(debug_assertions)]
             SlashCommand::TestApproval => "test approval request",

@@ -114,6 +114,9 @@ pub(crate) enum HistoryCell {
     /// Output from the `/prompts` command.
     PromptsOutput { view: TextBlock },
 
+    /// Output from the `/help` command.
+    HelpOutput { view: TextBlock },
+
     /// Error event from the backend.
     ErrorEvent { view: TextBlock },
 
@@ -168,6 +171,7 @@ impl HistoryCell {
             | HistoryCell::GitDiffOutput { view }
             | HistoryCell::StatusOutput { view }
             | HistoryCell::PromptsOutput { view }
+            | HistoryCell::HelpOutput { view }
             | HistoryCell::ErrorEvent { view }
             | HistoryCell::SessionInfo { view }
             | HistoryCell::CompletedExecCommand { view }
@@ -632,6 +636,18 @@ impl HistoryCell {
             Line::from(""),
         ];
         HistoryCell::PromptsOutput {
+            view: TextBlock::new(lines),
+        }
+    }
+
+    pub(crate) fn new_help_output(help_text: String) -> Self {
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        lines.push(Line::from("/help".magenta()));
+        for l in help_text.lines() {
+            lines.push(Line::from(l.to_string()));
+        }
+        lines.push(Line::from(""));
+        HistoryCell::HelpOutput {
             view: TextBlock::new(lines),
         }
     }

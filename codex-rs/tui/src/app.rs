@@ -9,6 +9,8 @@ use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
 use crate::should_show_login_screen;
 use crate::slash_command::SlashCommand;
 use crate::tui;
+use clap::CommandFactory;
+use clap::Parser as ClapParser;
 use codex_core::config::Config;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
@@ -355,6 +357,24 @@ impl App<'_> {
                     SlashCommand::Status => {
                         if let AppState::Chat { widget } = &mut self.app_state {
                             widget.add_status_output();
+                        }
+                    }
+                    SlashCommand::Help => {
+                        if let AppState::Chat { widget } = &mut self.app_state {
+                            #[derive(ClapParser, Debug)]
+                            #[command(version)]
+                            struct HelpCli {
+                                #[clap(flatten)]
+                                config_overrides: codex_common::CliConfigOverrides,
+                                #[clap(flatten)]
+                                inner: crate::Cli,
+                            }
+
+                            let mut cmd = HelpCli::command();
+                            let mut buf: Vec<u8> = Vec::new();
+                            let _ = cmd.write_help(&mut buf);
+                            let help_text = String::from_utf8_lossy(&buf).to_string();
+                            widget.add_help_output(help_text);
                         }
                     }
                     SlashCommand::Prompts => {
