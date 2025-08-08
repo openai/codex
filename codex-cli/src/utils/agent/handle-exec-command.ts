@@ -1,5 +1,3 @@
-
-
 import type { CommandConfirmation } from "./agent-loop.js";
 import type { ApplyPatchCommand, ApprovalPolicy } from "../../approvals.js";
 import type { AppConfig } from "../config.js";
@@ -12,9 +10,9 @@ import { FullAutoErrorMode } from "../auto-approval-mode.js";
 import { exec, execApplyPatch } from "./exec.js";
 import { adaptCommandForPlatform } from "./platform-commands.js";
 import { ReviewDecision } from "./review.js";
-import { isLoggingEnabled, log } from "../logger/log.js";
 import { SandboxType } from "./sandbox/interface.js";
 import { PATH_TO_SEATBELT_EXECUTABLE } from "./sandbox/macos-seatbelt.js";
+import { isLoggingEnabled, log } from "../logger/log.js";
 import fs from "fs/promises";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
@@ -87,8 +85,11 @@ export async function handleExecCommand(
     applyPatch: ApplyPatchCommand | undefined,
   ) => Promise<CommandConfirmation>,
   abortSignal?: AbortSignal,
-  ): Promise<HandleExecCommandResult> {
-  const { cmd: command, workdir } = args;
+): Promise<HandleExecCommandResult> {
+  const { cmd: originalCommand, workdir } = args;
+  const { command, message: adaptationMessage } =
+    adaptCommandForPlatform(originalCommand);
+  const execArgs = { ...args, cmd: command };
 
   let adaptationNotice: Array<ResponseInputItem> | undefined;
   if (process.platform === "win32") {
@@ -157,14 +158,19 @@ export async function handleExecCommand(
   // 1) If the user has already said "always approve", skip
   //    any policy & never sandbox.
   if (alwaysApprovedCommands.has(key)) {
-    return execCommand(
-      args,
+    const summary = await execCommand(
+      execArgs,
       /* applyPatch */ undefined,
       /* runInSandbox */ false,
       additionalWritableRoots,
       config,
       abortSignal,
+ ss4po1-codex/add-platform-specific-command-validation
+    );
+    return convertSummaryToResult(summary, adaptationMessage);
+    
     ).then((summary) => convertSummaryToResult(summary, adaptationNotice));
+ codex_windows_version
   }
 
   // 2) Otherwise fall back to the normal policy
@@ -179,7 +185,7 @@ export async function handleExecCommand(
   switch (safety.type) {
     case "ask-user": {
       const review = await askUserPermission(
-        args,
+        execArgs,
         safety.applyPatch,
         getCommandConfirmation,
       );
@@ -208,7 +214,7 @@ export async function handleExecCommand(
 
   const { applyPatch } = safety;
   const summary = await execCommand(
-    args,
+    execArgs,
     applyPatch,
     runInSandbox,
     additionalWritableRoots,
@@ -237,7 +243,7 @@ export async function handleExecCommand(
     config.fullAutoErrorMode === FullAutoErrorMode.ASK_USER
   ) {
     const review = await askUserPermission(
-      args,
+      execArgs,
       safety.applyPatch,
       getCommandConfirmation,
     );
@@ -247,26 +253,37 @@ export async function handleExecCommand(
       // The user has approved the command, so we will run it outside of the
       // sandbox.
       const summary = await execCommand(
-        args,
+        execArgs,
         applyPatch,
         false,
         additionalWritableRoots,
         config,
         abortSignal,
       );
+ ss4po1-codex/add-platform-specific-command-validation
+      return convertSummaryToResult(summary, adaptationMessage);
+    }
+  } else {
+    return convertSummaryToResult(summary, adaptationMessage);
+
       return convertSummaryToResult(summary, adaptationNotice);
     }
   } else {
     return convertSummaryToResult(summary, adaptationNotice);
+ codex_windows_version
   }
 }
 
 function convertSummaryToResult(
   summary: ExecCommandSummary,
+ ss4po1-codex/add-platform-specific-command-validation
+  adaptationMessage?: string,
+
   additionalItems?: Array<ResponseInputItem>,
+ codex_windows_version
 ): HandleExecCommandResult {
   const { stdout, stderr, exitCode, durationMs } = summary;
-  return {
+  const result: HandleExecCommandResult = {
     outputText: stdout || stderr,
     metadata: {
       exit_code: exitCode,
@@ -274,6 +291,16 @@ function convertSummaryToResult(
     },
     ...(additionalItems ? { additionalItems } : {}),
   };
+  if (adaptationMessage) {
+    result.additionalItems = [
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: adaptationMessage }],
+      },
+    ];
+  }
+  return result;
 }
 
 type ExecCommandSummary = {
@@ -315,8 +342,8 @@ async function execCommand(
       `EXEC running \`${formatCommandForDisplay(
         cmd,
       )}\` in workdir=${workdir} with timeout=${timeout}s`,
-          );
-        }
+    );
+  }
 
   // Note execApplyPatch() and exec() are coded defensively and should not
   // throw. Any internal errors should be mapped to a non-zero value for the
@@ -325,12 +352,12 @@ async function execCommand(
   const execResult =
     applyPatchCommand != null
       ? execApplyPatch(applyPatchCommand.patch, workdir)
-        : await exec(
-            { ...execInput, additionalWritableRoots },
-            await getSandbox(runInSandbox, config.allowNoSandbox ?? false),
-            config,
-            abortSignal,
-          );
+      : await exec(
+          { ...execInput, additionalWritableRoots },
+          await getSandbox(runInSandbox, config.allowNoSandbox ?? false),
+          config,
+          abortSignal,
+        );
   const duration = Date.now() - start;
   const { stdout, stderr, exitCode } = execResult;
 
