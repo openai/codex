@@ -39,7 +39,6 @@ pub mod insert_history;
 pub mod live_wrap;
 mod log_layer;
 mod markdown;
-mod markdown_stream;
 pub mod onboarding;
 mod shimmer;
 mod slash_command;
@@ -55,8 +54,6 @@ mod updates;
 use color_eyre::owo_colors::OwoColorize;
 
 pub use cli::Cli;
-
-// (tests access modules directly within the crate)
 
 pub async fn run_main(
     cli: Cli,
