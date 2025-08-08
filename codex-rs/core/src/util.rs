@@ -7,7 +7,7 @@ use tokio::sync::Notify;
 use tracing::debug;
 
 const INITIAL_DELAY_MS: u64 = 200;
-const BACKOFF_FACTOR: f64 = 1.3;
+const BACKOFF_FACTOR: f64 = 2.0;
 
 /// Make a CancellationToken that is fulfilled when SIGINT occurs.
 pub fn notify_on_sigint() -> Arc<Notify> {

@@ -264,14 +264,21 @@ impl HistoryCell {
     pub(crate) fn new_active_exec_command(command: Vec<String>) -> Self {
         let command_escaped = strip_bash_lc_and_escape(&command);
 
-        let lines: Vec<Line<'static>> = vec![
-            Line::from(vec![
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        let mut iter = command_escaped.lines();
+        if let Some(first) = iter.next() {
+            lines.push(Line::from(vec![
                 "▌ ".cyan(),
                 "Running command ".magenta(),
-                command_escaped.into(),
-            ]),
-            Line::from(""),
-        ];
+                first.to_string().into(),
+            ]));
+        } else {
+            lines.push(Line::from(vec!["▌ ".cyan(), "Running command".magenta()]));
+        }
+        for cont in iter {
+            lines.push(Line::from(cont.to_string()));
+        }
+        lines.push(Line::from(""));
 
         HistoryCell::ActiveExecCommand {
             view: TextBlock::new(lines),
@@ -287,10 +294,18 @@ impl HistoryCell {
 
         let mut lines: Vec<Line<'static>> = Vec::new();
         let command_escaped = strip_bash_lc_and_escape(&command);
-        lines.push(Line::from(vec![
-            "⚡ Ran command ".magenta(),
-            command_escaped.into(),
-        ]));
+        let mut cmd_lines = command_escaped.lines();
+        if let Some(first) = cmd_lines.next() {
+            lines.push(Line::from(vec![
+                "⚡ Ran command ".magenta(),
+                first.to_string().into(),
+            ]));
+        } else {
+            lines.push(Line::from("⚡ Ran command".magenta()));
+        }
+        for cont in cmd_lines {
+            lines.push(Line::from(cont.to_string()));
+        }
 
         let src = if exit_code == 0 { stdout } else { stderr };
 
@@ -537,8 +552,8 @@ impl HistoryCell {
                 lines.push(Line::from("  • Signed in with ChatGPT"));
 
                 let info = tokens.id_token;
-                if let Some(email) = info.email {
-                    lines.push(Line::from(vec!["  • Login: ".into(), email.into()]));
+                if let Some(email) = &info.email {
+                    lines.push(Line::from(vec!["  • Login: ".into(), email.clone().into()]));
                 }
 
                 match auth.openai_api_key.as_deref() {
@@ -549,9 +564,8 @@ impl HistoryCell {
                     }
                     _ => {
                         let plan_text = info
-                            .chatgpt_plan_type
-                            .as_deref()
-                            .map(title_case)
+                            .get_chatgpt_plan_type()
+                            .map(|s| title_case(&s))
                             .unwrap_or_else(|| "Unknown".to_string());
                         lines.push(Line::from(vec!["  • Plan: ".into(), plan_text.into()]));
                     }
