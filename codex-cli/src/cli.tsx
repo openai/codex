@@ -69,6 +69,7 @@ const cli = meow(
   `
   Usage
     $ codex [options] <prompt>
+    $ codex login
     $ codex completion <bash|zsh|fish>
 
   Options
@@ -116,6 +117,7 @@ const cli = meow(
   Examples
     $ codex "Write and run a python program that prints ASCII art"
     $ codex -q "fix build issues"
+    $ codex login
     $ codex completion bash
 `,
   {
@@ -254,6 +256,26 @@ complete -c codex -a '(__fish_complete_path)' -d 'file path'`,
   process.exit(0);
 }
 
+// Handle 'login' subcommand to mirror native CLI behaviour on platforms using the JS CLI (e.g. Windows)
+if (cli.input[0] === "login") {
+  const client = {
+    issuer: "https://auth.openai.com",
+    client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
+  };
+  try {
+    // Force the ChatGPT login flow even if OPENAI_API_KEY is already set
+    const key = await fetchApiKey(client.issuer, client.client_id, true);
+    process.env["OPENAI_API_KEY"] = key;
+    // eslint-disable-next-line no-console
+    console.error("Successfully logged in");
+    process.exit(0);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error("Error logging in:", err);
+    process.exit(1);
+  }
+}
+
 // For --help, show help and exit.
 if (cli.flags.help) {
   cli.showHelp();
@@ -339,25 +361,25 @@ if (provider.toLowerCase() !== "openai") {
   }
 }
 
-// Only proceed with OpenAI auth flow if:
-// 1. Provider is OpenAI and no API key is set, or
-// 2. Login flag is explicitly set
-if (provider.toLowerCase() === "openai" && !apiKey) {
-  if (cli.flags.login) {
-    apiKey = await fetchApiKey(client.issuer, client.client_id);
-    try {
-      const home = os.homedir();
-      const authDir = path.join(home, ".codex");
-      const authFile = path.join(authDir, "auth.json");
-      if (fs.existsSync(authFile)) {
-        const data = JSON.parse(fs.readFileSync(authFile, "utf-8"));
-        savedTokens = data.tokens;
-      }
-    } catch {
-      /* ignore */
+// Only proceed with OpenAI auth flow if provider is OpenAI and no API key is set
+// Honour --login to force ChatGPT flow even when OPENAI_API_KEY exists.
+if (provider.toLowerCase() === "openai" && (cli.flags.login || !apiKey)) {
+  apiKey = await fetchApiKey(
+    client.issuer,
+    client.client_id,
+    Boolean(cli.flags.login),
+  );
+  // After a login flow, attempt to refresh savedTokens from auth.json
+  try {
+    const home = os.homedir();
+    const authDir = path.join(home, ".codex");
+    const authFile = path.join(authDir, "auth.json");
+    if (fs.existsSync(authFile)) {
+      const data = JSON.parse(fs.readFileSync(authFile, "utf-8"));
+      savedTokens = data.tokens;
     }
-  } else {
-    apiKey = await fetchApiKey(client.issuer, client.client_id);
+  } catch {
+    /* ignore */
   }
 }
 
