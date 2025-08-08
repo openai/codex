@@ -31,6 +31,7 @@ use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::error::CodexErr;
 use crate::error::Result;
+use crate::error::UsageLimitReachedError;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
@@ -195,7 +196,7 @@ impl ModelClient {
 
             if let Some(auth) = auth.as_ref()
                 && auth.mode == AuthMode::ChatGPT
-                && let Some(account_id) = auth.get_account_id().await
+                && let Some(account_id) = auth.get_account_id()
             {
                 req_builder = req_builder.header("chatgpt-account-id", account_id);
             }
@@ -263,7 +264,9 @@ impl ModelClient {
                         }) = body
                         {
                             if r#type == "usage_limit_reached" {
-                                return Err(CodexErr::UsageLimitReached);
+                                return Err(CodexErr::UsageLimitReached(UsageLimitReachedError {
+                                    plan_type: auth.and_then(|a| a.get_plan_type()),
+                                }));
                             } else if r#type == "usage_not_included" {
                                 return Err(CodexErr::UsageNotIncluded);
                             }
