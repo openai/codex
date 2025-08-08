@@ -191,7 +191,7 @@ impl AuthModeWidget {
                     String::from_utf8(b.clone()).ok().and_then(|s| {
                         s.split_whitespace()
                             .filter(|part| part.starts_with("http"))
-                            .last()
+                            .next_back()
                             .map(|s| s.to_string())
                     })
                 })
