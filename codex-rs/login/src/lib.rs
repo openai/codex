@@ -5,7 +5,6 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::env;
 use std::fs::File;
-use std::fs::OpenOptions as StdOpenOptions;
 use std::fs::OpenOptions;
 use std::fs::remove_file;
 use std::io::Read;
@@ -263,20 +262,9 @@ pub struct SpawnedLogin {
     pub stderr: Arc<Mutex<Vec<u8>>>,
 }
 
-fn ensure_login_script(codex_home: &Path) -> std::io::Result<PathBuf> {
-    // Write the embedded Python script to a file to avoid very long
-    // command-line arguments (Windows error 206).
-    let mut tmp = NamedTempFile::new()?;
-    tmp.write_all(SOURCE_FOR_PYTHON_SERVER.as_bytes())?;
-    tmp.flush()?;
-
-    let (_file, path) = tmp.keep()?;
-    Ok(path)
-}
-
 /// Spawn the ChatGPT login Python server as a child process and return a handle to its process.
 pub fn spawn_login_with_chatgpt(codex_home: &Path) -> std::io::Result<SpawnedLogin> {
-    let script_path = ensure_login_script(codex_home)?;
+    let script_path = write_login_script_to_disk()?;
     let mut cmd = std::process::Command::new("python3");
     cmd.arg(&script_path)
         .env("CODEX_HOME", codex_home)
@@ -328,7 +316,7 @@ pub fn spawn_login_with_chatgpt(codex_home: &Path) -> std::io::Result<SpawnedLog
 /// recorded in memory. Otherwise, the subprocess's output will be sent to the
 /// current process's stdout/stderr.
 pub async fn login_with_chatgpt(codex_home: &Path, capture_output: bool) -> std::io::Result<()> {
-    let script_path = ensure_login_script(codex_home)?;
+    let script_path = write_login_script_to_disk()?;
     let child = Command::new("python3")
         .arg(&script_path)
         .env("CODEX_HOME", codex_home)
@@ -355,6 +343,17 @@ pub async fn login_with_chatgpt(codex_home: &Path, capture_output: bool) -> std:
             "login_with_chatgpt subprocess failed: {stderr}"
         )))
     }
+}
+
+fn write_login_script_to_disk() -> std::io::Result<PathBuf> {
+    // Write the embedded Python script to a file to avoid very long
+    // command-line arguments (Windows error 206).
+    let mut tmp = NamedTempFile::new()?;
+    tmp.write_all(SOURCE_FOR_PYTHON_SERVER.as_bytes())?;
+    tmp.flush()?;
+
+    let (_file, path) = tmp.keep()?;
+    Ok(path)
 }
 
 pub fn login_with_api_key(codex_home: &Path, api_key: &str) -> std::io::Result<()> {
