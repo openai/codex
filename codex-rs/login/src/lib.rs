@@ -1,5 +1,6 @@
 use chrono::DateTime;
 
+use base64::Engine;
 use chrono::Utc;
 use serde::Deserialize;
 use serde::Serialize;
@@ -9,23 +10,20 @@ use std::fs::OpenOptions;
 use std::fs::remove_file;
 use std::io::Read;
 use std::io::Write;
+use std::net::TcpListener;
+use std::net::TcpStream;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::Child;
-use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
-use tokio::process::Command;
 
 pub use crate::token_data::TokenData;
 use crate::token_data::parse_id_token;
 
 mod token_data;
-
-const SOURCE_FOR_PYTHON_SERVER: &str = include_str!("./login_with_chatgpt.py");
 
 const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 pub const OPENAI_API_KEY_ENV_VAR: &str = "OPENAI_API_KEY";
@@ -252,96 +250,250 @@ pub fn logout(codex_home: &Path) -> std::io::Result<bool> {
     }
 }
 
-/// Represents a running login subprocess. The child can be killed by holding
-/// the mutex and calling `kill()`.
-#[derive(Debug, Clone)]
-pub struct SpawnedLogin {
-    pub child: Arc<Mutex<Child>>,
-    pub stdout: Arc<Mutex<Vec<u8>>>,
-    pub stderr: Arc<Mutex<Vec<u8>>>,
+pub async fn login_with_chatgpt(codex_home: &Path) -> std::io::Result<()> {
+    // Run synchronously in async context using blocking task to avoid reimplementing async server.
+    let codex_home = codex_home.to_path_buf();
+    tokio::task::spawn_blocking(move || run_native_login_server(&codex_home, true))
+        .await
+        .map_err(|e| std::io::Error::other(format!("Join error: {e}")))??;
+    Ok(())
 }
 
-/// Spawn the ChatGPT login Python server as a child process and return a handle to its process.
-pub fn spawn_login_with_chatgpt(codex_home: &Path) -> std::io::Result<SpawnedLogin> {
-    let mut cmd = std::process::Command::new("python3");
-    cmd.arg("-c")
-        .arg(SOURCE_FOR_PYTHON_SERVER)
-        .env("CODEX_HOME", codex_home)
-        .env("CODEX_CLIENT_ID", CLIENT_ID)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+// ---------------- Native OAuth server implementation ----------------
 
-    let mut child = cmd.spawn()?;
+const REQUIRED_PORT: u16 = 1455; // must match legacy script for compatibility
+const DEFAULT_ISSUER: &str = "https://auth.openai.com";
 
-    let stdout_buf = Arc::new(Mutex::new(Vec::new()));
-    let stderr_buf = Arc::new(Mutex::new(Vec::new()));
+fn run_native_login_server(codex_home: &Path, open_browser: bool) -> std::io::Result<()> {
+    let client_id = CLIENT_ID;
+    let listener = TcpListener::bind(("127.0.0.1", REQUIRED_PORT))?;
+    listener.set_nonblocking(true)?;
 
-    if let Some(mut out) = child.stdout.take() {
-        let buf = stdout_buf.clone();
-        std::thread::spawn(move || {
-            let mut tmp = Vec::new();
-            let _ = std::io::copy(&mut out, &mut tmp);
-            if let Ok(mut b) = buf.lock() {
-                b.extend_from_slice(&tmp);
-            }
-        });
+    // PKCE (S256)
+    let code_verifier = random_hex(64 * 2); // hex string length
+    let challenge = {
+        use sha2::Digest;
+        use sha2::Sha256;
+        let digest = Sha256::digest(code_verifier.as_bytes());
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest)
+    };
+    let state = random_hex(32);
+
+    let redirect_uri = format!("http://localhost:{REQUIRED_PORT}/auth/callback");
+    let auth_url = format!(
+        "{DEFAULT_ISSUER}/oauth/authorize?{}",
+        url_encode_pairs(&[
+            ("response_type", "code"),
+            ("client_id", client_id),
+            ("redirect_uri", &redirect_uri),
+            ("scope", "openid profile email offline_access"),
+            ("code_challenge", &challenge),
+            ("code_challenge_method", "S256"),
+            ("id_token_add_organizations", "true"),
+            ("codex_cli_simplified_flow", "true"),
+            ("state", &state),
+        ])
+    );
+
+    if open_browser && should_attempt_browser_open() {
+        let _ = webbrowser::open(&auth_url);
     }
-    if let Some(mut err) = child.stderr.take() {
-        let buf = stderr_buf.clone();
-        std::thread::spawn(move || {
-            let mut tmp = Vec::new();
-            let _ = std::io::copy(&mut err, &mut tmp);
-            if let Ok(mut b) = buf.lock() {
-                b.extend_from_slice(&tmp);
-            }
-        });
-    }
+    eprintln!(
+        "Starting local login server on http://localhost:{REQUIRED_PORT}\nIf your browser did not open, navigate to this URL to authenticate:\n\n{auth_url}"
+    );
 
-    Ok(SpawnedLogin {
-        child: Arc::new(Mutex::new(child)),
-        stdout: stdout_buf,
-        stderr: stderr_buf,
-    })
+    let token_endpoint = format!("{DEFAULT_ISSUER}/oauth/token");
+
+    let start = std::time::Instant::now();
+    loop {
+        if start.elapsed() > Duration::from_secs(300) {
+            // 5 min timeout
+            return Err(std::io::Error::other("login timeout"));
+        }
+        match listener.accept() {
+            Ok((stream, _addr)) => {
+                if let Err(e) = handle_connection(
+                    stream,
+                    &state,
+                    &code_verifier,
+                    &redirect_uri,
+                    client_id,
+                    &token_endpoint,
+                    codex_home,
+                ) {
+                    eprintln!("Login handler error: {e}");
+                } else {
+                    // success path writes auth.json then returns
+                    return Ok(());
+                }
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => return Err(e),
+        }
+    }
 }
 
-/// Run `python3 -c {{SOURCE_FOR_PYTHON_SERVER}}` with the CODEX_HOME
-/// environment variable set to the provided `codex_home` path. If the
-/// subprocess exits 0, read the OPENAI_API_KEY property out of
-/// CODEX_HOME/auth.json and return Ok(OPENAI_API_KEY). Otherwise, return Err
-/// with any information from the subprocess.
-///
-/// If `capture_output` is true, the subprocess's output will be captured and
-/// recorded in memory. Otherwise, the subprocess's output will be sent to the
-/// current process's stdout/stderr.
-pub async fn login_with_chatgpt(codex_home: &Path, capture_output: bool) -> std::io::Result<()> {
-    let child = Command::new("python3")
-        .arg("-c")
-        .arg(SOURCE_FOR_PYTHON_SERVER)
-        .env("CODEX_HOME", codex_home)
-        .env("CODEX_CLIENT_ID", CLIENT_ID)
-        .stdin(Stdio::null())
-        .stdout(if capture_output {
-            Stdio::piped()
-        } else {
-            Stdio::inherit()
-        })
-        .stderr(if capture_output {
-            Stdio::piped()
-        } else {
-            Stdio::inherit()
-        })
-        .spawn()?;
-
-    let output = child.wait_with_output().await?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(std::io::Error::other(format!(
-            "login_with_chatgpt subprocess failed: {stderr}"
-        )))
+fn handle_connection(
+    mut stream: TcpStream,
+    state: &str,
+    code_verifier: &str,
+    redirect_uri: &str,
+    client_id: &str,
+    token_endpoint: &str,
+    codex_home: &Path,
+) -> std::io::Result<()> {
+    use std::io::Read as _;
+    let mut buf = [0u8; 8192];
+    let n = stream.read(&mut buf)?;
+    let req = String::from_utf8_lossy(&buf[..n]);
+    let first_line = req.lines().next().unwrap_or("");
+    if !first_line.starts_with("GET ") {
+        return Err(std::io::Error::other("unsupported method"));
     }
+    let path_part = first_line.split_whitespace().nth(1).unwrap_or("/");
+    let url = url::Url::parse(&format!("http://localhost{path_part}"))
+        .map_err(|_| std::io::Error::other("invalid request url"))?;
+    match url.path() {
+        "/auth/callback" => {
+            let query_state = url
+                .query_pairs()
+                .find(|(k, _)| k == "state")
+                .map(|(_, v)| v.to_string())
+                .unwrap_or_default();
+            if query_state != state {
+                send_http(&mut stream, 400, "State mismatch");
+                return Err(std::io::Error::other("state mismatch"));
+            }
+            let code = url
+                .query_pairs()
+                .find(|(k, _)| k == "code")
+                .map(|(_, v)| v.to_string())
+                .ok_or_else(|| std::io::Error::other("missing code"))?;
+            // exchange code
+            let form = [
+                ("grant_type", "authorization_code"),
+                ("code", &code),
+                ("redirect_uri", redirect_uri),
+                ("client_id", client_id),
+                ("code_verifier", code_verifier),
+            ];
+            let body = url_encode_pairs(&form);
+            let token_resp: serde_json::Value = reqwest::blocking::Client::new()
+                .post(token_endpoint)
+                .header("Content-Type", "application/x-www-form-urlencoded")
+                .body(body)
+                .send()
+                .map_err(std::io::Error::other)?
+                .json()
+                .map_err(std::io::Error::other)?;
+
+            // Minimal fields
+            let id_token = token_resp
+                .get("id_token")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| std::io::Error::other("missing id_token"))?
+                .to_string();
+            let access_token = token_resp
+                .get("access_token")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let refresh_token = token_resp
+                .get("refresh_token")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let account_id = extract_account_id(&id_token).unwrap_or_default();
+            let tokens = TokenData {
+                id_token: crate::token_data::parse_id_token(&id_token)
+                    .map_err(std::io::Error::other)?,
+                access_token,
+                refresh_token,
+                account_id: Some(account_id),
+            };
+            let auth_json = AuthDotJson {
+                openai_api_key: None,
+                tokens: Some(tokens),
+                last_refresh: Some(Utc::now()),
+            };
+            write_auth_json(&get_auth_file(codex_home), &auth_json)?;
+            // Serve success page.
+            send_http(
+                &mut stream,
+                200,
+                "<html><body>Success. You may close this window.</body></html>",
+            );
+            Ok(())
+        }
+        "/success" => {
+            send_http(&mut stream, 200, "<html><body>Success.</body></html>");
+            Ok(())
+        }
+        _ => {
+            send_http(&mut stream, 404, "Not Found");
+            Err(std::io::Error::other("not found"))
+        }
+    }
+}
+
+fn send_http(stream: &mut TcpStream, status: u16, body: &str) {
+    let status_text = match status {
+        200 => "OK",
+        400 => "Bad Request",
+        404 => "Not Found",
+        _ => "Error",
+    };
+    let resp = format!(
+        "HTTP/1.1 {status} {status_text}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    let _ = stream.write_all(resp.as_bytes());
+}
+
+fn random_hex(bytes: usize) -> String {
+    use rand::RngCore;
+    let mut b = vec![0u8; bytes];
+    rand::thread_rng().fill_bytes(&mut b);
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+fn url_encode_pairs(pairs: &[(impl AsRef<str>, impl AsRef<str>)]) -> String {
+    pairs
+        .iter()
+        .map(|(k, v)| {
+            format!(
+                "{}={}",
+                urlencoding::encode(k.as_ref()),
+                urlencoding::encode(v.as_ref())
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
+fn extract_account_id(id_token: &str) -> Option<String> {
+    let parts: Vec<&str> = id_token.split('.').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let payload = parts[1];
+    let padded = payload.to_string() + &"=".repeat((4 - payload.len() % 4) % 4);
+    let decoded = base64::engine::general_purpose::URL_SAFE
+        .decode(padded)
+        .ok()?;
+    let v: serde_json::Value = serde_json::from_slice(&decoded).ok()?;
+    v.get("https://api.openai.com/auth")
+        .and_then(|c| c.get("chatgpt_account_id"))
+        .and_then(|s| s.as_str())
+        .map(|s| s.to_string())
+}
+
+fn should_attempt_browser_open() -> bool {
+    // Avoid attempting to open a browser if we detect an SSH session without forwarded GUI.
+    std::env::var("SSH_CONNECTION").is_err() && std::env::var("SSH_TTY").is_err()
 }
 
 pub fn login_with_api_key(codex_home: &Path, api_key: &str) -> std::io::Result<()> {

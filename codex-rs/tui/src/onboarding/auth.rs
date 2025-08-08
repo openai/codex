@@ -38,21 +38,9 @@ pub(crate) enum SignInState {
 }
 
 #[derive(Debug)]
-/// Used to manage the lifecycle of SpawnedLogin and FrameTicker and ensure they get cleaned up.
+/// Holds animation state while waiting for browser-based login.
 pub(crate) struct ContinueInBrowserState {
-    _login_child: Option<codex_login::SpawnedLogin>,
     _frame_ticker: Option<FrameTicker>,
-}
-impl Drop for ContinueInBrowserState {
-    fn drop(&mut self) {
-        if let Some(child) = &self._login_child {
-            if let Ok(mut locked) = child.child.lock() {
-                // Best-effort terminate and reap the child to avoid zombies.
-                let _ = locked.kill();
-                let _ = locked.wait();
-            }
-        }
-    }
 }
 
 impl KeyboardHandler for AuthModeWidget {
@@ -271,22 +259,19 @@ impl AuthModeWidget {
 
     fn start_chatgpt_login(&mut self) {
         self.error = None;
-        match codex_login::spawn_login_with_chatgpt(&self.codex_home) {
-            Ok(child) => {
-                self.spawn_completion_poller(child.clone());
-                self.sign_in_state =
-                    SignInState::ChatGptContinueInBrowser(ContinueInBrowserState {
-                        _login_child: Some(child),
-                        _frame_ticker: Some(FrameTicker::new(self.event_tx.clone())),
-                    });
-                self.event_tx.send(AppEvent::RequestRedraw);
-            }
-            Err(e) => {
-                self.sign_in_state = SignInState::PickMode;
-                self.error = Some(e.to_string());
-                self.event_tx.send(AppEvent::RequestRedraw);
-            }
-        }
+        // Kick off async login flow.
+        let codex_home = self.codex_home.clone();
+        let event_tx = self.event_tx.clone();
+        tokio::spawn(async move {
+            let res = codex_login::login_with_chatgpt(&codex_home).await;
+            event_tx.send(AppEvent::OnboardingAuthComplete(
+                res.map_err(|e| e.to_string()),
+            ));
+        });
+        self.sign_in_state = SignInState::ChatGptContinueInBrowser(ContinueInBrowserState {
+            _frame_ticker: Some(FrameTicker::new(self.event_tx.clone())),
+        });
+        self.event_tx.send(AppEvent::RequestRedraw);
     }
 
     /// TODO: Read/write from the correct hierarchy config overrides + auth json + OPENAI_API_KEY.
@@ -297,41 +282,6 @@ impl AuthModeWidget {
             self.sign_in_state = SignInState::EnvVarFound;
         }
         self.event_tx.send(AppEvent::RequestRedraw);
-    }
-
-    fn spawn_completion_poller(&self, child: codex_login::SpawnedLogin) {
-        let child_arc = child.child.clone();
-        let stderr_buf = child.stderr.clone();
-        let event_tx = self.event_tx.clone();
-        std::thread::spawn(move || {
-            loop {
-                let done = {
-                    if let Ok(mut locked) = child_arc.lock() {
-                        match locked.try_wait() {
-                            Ok(Some(status)) => Some(status.success()),
-                            Ok(None) => None,
-                            Err(_) => Some(false),
-                        }
-                    } else {
-                        Some(false)
-                    }
-                };
-                if let Some(success) = done {
-                    if success {
-                        event_tx.send(AppEvent::OnboardingAuthComplete(Ok(())));
-                    } else {
-                        let err = stderr_buf
-                            .lock()
-                            .ok()
-                            .and_then(|b| String::from_utf8(b.clone()).ok())
-                            .unwrap_or_else(|| "login_with_chatgpt subprocess failed".to_string());
-                        event_tx.send(AppEvent::OnboardingAuthComplete(Err(err)));
-                    }
-                    break;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(250));
-            }
-        });
     }
 
     fn current_frame(&self) -> usize {
