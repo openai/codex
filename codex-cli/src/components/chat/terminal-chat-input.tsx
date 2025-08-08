@@ -110,6 +110,9 @@ export default function TerminalChatInput({
   // Track the caret row across keystrokes
   const prevCursorRow = useRef<number | null>(null);
   const prevCursorWasAtLastRow = useRef<boolean>(false);
+  // Double escape to clear functionality
+  const [awaitingEscapeToClear, setAwaitingEscapeToClear] =
+    useState<boolean>(false);
 
   // --- Helper for updating input, remounting editor, and moving cursor to end ---
   const applyFsSuggestion = useCallback((newInputText: string) => {
@@ -415,6 +418,30 @@ export default function TerminalChatInput({
           const shouldUpdateSelection = _key.tab;
           const targetInput = _key.delete ? input.slice(0, -1) : input + _input;
           updateFsSuggestions(targetInput, shouldUpdateSelection);
+        }
+
+        // Double escape to clear input functionality - only if there's text
+        if (_key.escape && input.trim()) {
+          if (awaitingEscapeToClear) {
+            // Second escape press - clear the input
+            setAwaitingEscapeToClear(false);
+            setInput("");
+            setDraftInput("");
+            setEditorState((s) => ({ key: s.key + 1 }));
+            setFsSuggestions([]);
+            setSelectedCompletion(-1);
+            setHistoryIndex(null);
+          } else {
+            // First escape press - start confirmation timer
+            setAwaitingEscapeToClear(true);
+            setTimeout(() => setAwaitingEscapeToClear(false), 1000);
+          }
+          return; // Don't fall through to other key handling
+        }
+
+        // Any other key press - reset escape state
+        if (awaitingEscapeToClear) {
+          setAwaitingEscapeToClear(false);
         }
       }
 
@@ -830,7 +857,9 @@ export default function TerminalChatInput({
         </Box>
       )}
       <Box paddingX={2} marginBottom={1}>
-        {isNew && !input ? (
+        {awaitingEscapeToClear ? (
+          <Text dimColor>Press Escape again to clear</Text>
+        ) : isNew && !input ? (
           <Text dimColor>
             try:{" "}
             {suggestions.map((m, key) => (

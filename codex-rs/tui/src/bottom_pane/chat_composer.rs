@@ -30,6 +30,8 @@ use crate::bottom_pane::textarea::TextArea;
 use crate::bottom_pane::textarea::TextAreaState;
 use codex_file_search::FileMatch;
 use std::cell::RefCell;
+use std::thread;
+use std::time::Duration;
 
 const BASE_PLACEHOLDER_TEXT: &str = "Ask Codex to do anything";
 /// If the pasted content exceeds this number of characters, replace it with a
@@ -61,6 +63,7 @@ pub(crate) struct ChatComposer {
     pending_pastes: Vec<(String, String)>,
     token_usage_info: Option<TokenUsageInfo>,
     has_focus: bool,
+    awaiting_escape_to_clear: bool,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -91,6 +94,7 @@ impl ChatComposer {
             pending_pastes: Vec::new(),
             token_usage_info: None,
             has_focus: has_input_focus,
+            awaiting_escape_to_clear: false,
         }
     }
 
@@ -520,7 +524,36 @@ impl ChatComposer {
                     (InputResult::Submitted(text), true)
                 }
             }
-            input => self.handle_input_basic(input),
+            // Double escape to clear input functionality - only if there's text
+            KeyEvent {
+                code: KeyCode::Esc, ..
+            } => {
+                if !self.textarea.text().trim().is_empty() {
+                    if self.awaiting_escape_to_clear {
+                        // Second escape press - clear all input state
+                        self.clear_all_input_state();
+                        (InputResult::None, true)
+                    } else {
+                        // First escape press - start confirmation timer
+                        self.awaiting_escape_to_clear = true;
+                        let app_event_tx = self.app_event_tx.clone();
+                        thread::spawn(move || {
+                            thread::sleep(Duration::from_secs(1));
+                            app_event_tx.send(AppEvent::EscapeToClearTimeout);
+                        });
+                        (InputResult::None, true)
+                    }
+                } else {
+                    self.handle_input_basic(key_event)
+                }
+            }
+            input => {
+                // Any other key press - reset escape state
+                if self.awaiting_escape_to_clear {
+                    self.awaiting_escape_to_clear = false;
+                }
+                self.handle_input_basic(input)
+            }
         }
     }
 
@@ -649,6 +682,21 @@ impl ChatComposer {
     fn set_has_focus(&mut self, has_focus: bool) {
         self.has_focus = has_focus;
     }
+
+    /// Clear all input-related state (text, pending pastes, popups, etc.)
+    fn clear_all_input_state(&mut self) {
+        self.textarea.set_text("");
+        self.pending_pastes.clear();
+        self.active_popup = ActivePopup::None;
+        self.dismissed_file_popup_token = None;
+        self.current_file_query = None;
+        self.awaiting_escape_to_clear = false;
+    }
+
+    /// Handle timeout event for double-escape-to-clear functionality
+    pub fn handle_escape_to_clear_timeout(&mut self) {
+        self.awaiting_escape_to_clear = false;
+    }
 }
 
 impl WidgetRef for &ChatComposer {
@@ -670,7 +718,12 @@ impl WidgetRef for &ChatComposer {
             ActivePopup::None => {
                 let bottom_line_rect = popup_rect;
                 let key_hint_style = Style::default().fg(Color::Cyan);
-                let mut hint = if self.ctrl_c_quit_hint {
+                let mut hint = if self.awaiting_escape_to_clear {
+                    vec![
+                        Span::from(" "),
+                        "Press Escape again to clear".set_style(key_hint_style),
+                    ]
+                } else if self.ctrl_c_quit_hint {
                     vec![
                         Span::from(" "),
                         "Ctrl+C again".set_style(key_hint_style),

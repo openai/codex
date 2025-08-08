@@ -252,6 +252,10 @@ impl ChatWidget<'_> {
         self.bottom_pane.handle_paste(text);
     }
 
+    pub(crate) fn handle_escape_to_clear_timeout(&mut self) {
+        self.bottom_pane.handle_escape_to_clear_timeout();
+    }
+
     fn add_to_history(&mut self, cell: HistoryCell) {
         self.app_event_tx
             .send(AppEvent::InsertHistory(cell.plain_lines()));

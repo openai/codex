@@ -433,6 +433,11 @@ impl App<'_> {
                         widget.apply_file_search_result(query, matches);
                     }
                 }
+                AppEvent::EscapeToClearTimeout => {
+                    if let AppState::Chat { widget } = &mut self.app_state {
+                        widget.handle_escape_to_clear_timeout();
+                    }
+                }
             }
         }
         terminal.clear()?;

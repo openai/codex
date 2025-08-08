@@ -50,6 +50,10 @@ pub(crate) enum AppEvent {
 
     InsertHistory(Vec<Line<'static>>),
 
+    /// Timeout event for double-escape-to-clear functionality.
+    /// Sent after 1 second to reset the waiting state if no second escape was pressed.
+    EscapeToClearTimeout,
+
     /// Onboarding: result of login_with_chatgpt.
     OnboardingAuthComplete(Result<(), String>),
     OnboardingComplete(ChatWidgetArgs),
