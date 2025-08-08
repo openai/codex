@@ -154,6 +154,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -168,6 +171,44 @@ jobs:
           # "rust-v0.1.0".
           version="${GITHUB_REF_NAME#rust-v}"
           echo "name=${version}" >> $GITHUB_OUTPUT
+
+      # Setup Node + pnpm similar to ci.yml so we can build the npm package
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.8.1
+          run_install: false
+
+      - name: Get pnpm store directory
+        id: pnpm-cache
+        shell: bash
+        run: |
+          echo "store_path=$(pnpm store path --silent)" >> $GITHUB_OUTPUT
+
+      - name: Setup pnpm cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-cache.outputs.store_path }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
+
+      - name: Stage npm package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TMP_DIR="${RUNNER_TEMP}/npm-stage"
+          python3 codex-cli/scripts/stage_rust_release.py \
+            --release-version "${{ steps.release_name.outputs.name }}" \
+            --tmp "${TMP_DIR}"
+          mkdir -p dist/npm
+          (cd "$TMP_DIR" && zip -r "${GITHUB_WORKSPACE}/dist/npm/codex-npm-${{ steps.release_name.outputs.name }}.zip" .)
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
