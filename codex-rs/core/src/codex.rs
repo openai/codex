@@ -1018,7 +1018,7 @@ async fn submission_loop(
                 };
 
                 // Create a summarization request as user input
-                const SUMMARIZATION_PROMPT: &str = include_str!("../../../SUMMARY.md");
+                const SUMMARIZATION_PROMPT: &str = include_str!("prompt_for_compact_command.md");
 
                 // Attempt to inject input into current task
                 if let Err(items) = sess.inject_input(vec![InputItem::Text {
