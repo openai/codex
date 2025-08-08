@@ -19,6 +19,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
+use tempfile::NamedTempFile;
 use tokio::process::Command;
 
 pub use crate::token_data::TokenData;
@@ -265,15 +266,12 @@ pub struct SpawnedLogin {
 fn ensure_login_script(codex_home: &Path) -> std::io::Result<PathBuf> {
     // Write the embedded Python script to a file to avoid very long
     // command-line arguments (Windows error 206).
-    let script_path = codex_home.join("login_with_chatgpt.py");
-    let mut file = StdOpenOptions::new()
-        .create(true)
-        .truncate(true)
-        .write(true)
-        .open(&script_path)?;
-    file.write_all(SOURCE_FOR_PYTHON_SERVER.as_bytes())?;
-    file.flush()?;
-    Ok(script_path)
+    let mut tmp = NamedTempFile::new()?;
+    tmp.write_all(SOURCE_FOR_PYTHON_SERVER.as_bytes())?;
+    tmp.flush()?;
+
+    let (_file, path) = tmp.keep()?;
+    Ok(path)
 }
 
 /// Spawn the ChatGPT login Python server as a child process and return a handle to its process.
