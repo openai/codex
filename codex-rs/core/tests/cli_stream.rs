@@ -330,30 +330,9 @@ async fn integration_creates_and_checks_session_file() {
         .collect();
     assert_eq!(
         comps.len(),
-        4,
-        "Expected sessions/YYYY/MM/DD/<file>, got {rel:?}"
+        1,
+        "Expected sessions/<file>, got nested path {rel:?}"
     );
-    let year = &comps[0];
-    let month = &comps[1];
-    let day = &comps[2];
-    assert!(
-        year.len() == 4 && year.chars().all(|c| c.is_ascii_digit()),
-        "Year dir not 4-digit numeric: {year}"
-    );
-    assert!(
-        month.len() == 2 && month.chars().all(|c| c.is_ascii_digit()),
-        "Month dir not zero-padded 2-digit numeric: {month}"
-    );
-    assert!(
-        day.len() == 2 && day.chars().all(|c| c.is_ascii_digit()),
-        "Day dir not zero-padded 2-digit numeric: {day}"
-    );
-    if let Ok(m) = month.parse::<u8>() {
-        assert!((1..=12).contains(&m), "Month out of range: {m}");
-    }
-    if let Ok(d) = day.parse::<u8>() {
-        assert!((1..=31).contains(&d), "Day out of range: {d}");
-    }
 
     let content =
         std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("Failed to read session file"));
