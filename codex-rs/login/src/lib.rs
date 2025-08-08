@@ -5,6 +5,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::env;
 use std::fs::File;
+use std::fs::OpenOptions as StdOpenOptions;
 use std::fs::OpenOptions;
 use std::fs::remove_file;
 use std::io::Read;
@@ -261,11 +262,25 @@ pub struct SpawnedLogin {
     pub stderr: Arc<Mutex<Vec<u8>>>,
 }
 
+fn ensure_login_script(codex_home: &Path) -> std::io::Result<PathBuf> {
+    // Write the embedded Python script to a file to avoid very long
+    // command-line arguments (Windows error 206).
+    let script_path = codex_home.join("login_with_chatgpt.py");
+    let mut file = StdOpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&script_path)?;
+    file.write_all(SOURCE_FOR_PYTHON_SERVER.as_bytes())?;
+    file.flush()?;
+    Ok(script_path)
+}
+
 /// Spawn the ChatGPT login Python server as a child process and return a handle to its process.
 pub fn spawn_login_with_chatgpt(codex_home: &Path) -> std::io::Result<SpawnedLogin> {
+    let script_path = ensure_login_script(codex_home)?;
     let mut cmd = std::process::Command::new("python3");
-    cmd.arg("-c")
-        .arg(SOURCE_FOR_PYTHON_SERVER)
+    cmd.arg(&script_path)
         .env("CODEX_HOME", codex_home)
         .env("CODEX_CLIENT_ID", CLIENT_ID)
         .stdin(Stdio::null())
@@ -315,9 +330,9 @@ pub fn spawn_login_with_chatgpt(codex_home: &Path) -> std::io::Result<SpawnedLog
 /// recorded in memory. Otherwise, the subprocess's output will be sent to the
 /// current process's stdout/stderr.
 pub async fn login_with_chatgpt(codex_home: &Path, capture_output: bool) -> std::io::Result<()> {
+    let script_path = ensure_login_script(codex_home)?;
     let child = Command::new("python3")
-        .arg("-c")
-        .arg(SOURCE_FOR_PYTHON_SERVER)
+        .arg(&script_path)
         .env("CODEX_HOME", codex_home)
         .env("CODEX_CLIENT_ID", CLIENT_ID)
         .stdin(Stdio::null())
