@@ -132,7 +132,7 @@ impl std::fmt::Display for UsageLimitReachedError {
         } else {
             write!(
                 f,
-                "You've hit usage your usage limit. Limits reset every 5h and every week."
+                "You've hit your usage limit. Limits reset every 5h and every week."
             )?;
         }
         Ok(())
@@ -195,7 +195,7 @@ mod tests {
         let err = UsageLimitReachedError { plan_type: None };
         assert_eq!(
             err.to_string(),
-            "You've hit usage your usage limit. Limits reset every 5h and every week."
+            "You've hit your usage limit. Limits reset every 5h and every week."
         );
     }
 
@@ -206,7 +206,7 @@ mod tests {
         };
         assert_eq!(
             err.to_string(),
-            "You've hit usage your usage limit. Limits reset every 5h and every week."
+            "You've hit your usage limit. Limits reset every 5h and every week."
         );
     }
 }
