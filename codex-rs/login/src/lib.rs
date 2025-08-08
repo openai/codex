@@ -9,7 +9,6 @@ use std::fs::OpenOptions;
 use std::fs::remove_file;
 use std::io::Read;
 use std::io::Write;
-use std::io::{self};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
@@ -19,6 +18,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
+use tempfile::NamedTempFile;
 use tokio::process::Command;
 
 pub use crate::token_data::TokenData;
@@ -262,35 +262,11 @@ pub struct SpawnedLogin {
     pub stderr: Arc<Mutex<Vec<u8>>>,
 }
 
-// Helpers for streaming child output into shared buffers
-struct AppendWriter {
-    buf: Arc<Mutex<Vec<u8>>>,
-}
-
-impl Write for AppendWriter {
-    fn write(&mut self, data: &[u8]) -> io::Result<usize> {
-        if let Ok(mut b) = self.buf.lock() {
-            b.extend_from_slice(data);
-        }
-        Ok(data.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-fn spawn_pipe_reader<R: Read + Send + 'static>(mut reader: R, buf: Arc<Mutex<Vec<u8>>>) {
-    std::thread::spawn(move || {
-        let _ = io::copy(&mut reader, &mut AppendWriter { buf });
-    });
-}
-
 /// Spawn the ChatGPT login Python server as a child process and return a handle to its process.
 pub fn spawn_login_with_chatgpt(codex_home: &Path) -> std::io::Result<SpawnedLogin> {
+    let script_path = write_login_script_to_disk()?;
     let mut cmd = std::process::Command::new("python3");
-    cmd.arg("-c")
-        .arg(SOURCE_FOR_PYTHON_SERVER)
+    cmd.arg(&script_path)
         .env("CODEX_HOME", codex_home)
         .env("CODEX_CLIENT_ID", CLIENT_ID)
         .stdin(Stdio::null())
@@ -302,11 +278,25 @@ pub fn spawn_login_with_chatgpt(codex_home: &Path) -> std::io::Result<SpawnedLog
     let stdout_buf = Arc::new(Mutex::new(Vec::new()));
     let stderr_buf = Arc::new(Mutex::new(Vec::new()));
 
-    if let Some(out) = child.stdout.take() {
-        spawn_pipe_reader(out, stdout_buf.clone());
+    if let Some(mut out) = child.stdout.take() {
+        let buf = stdout_buf.clone();
+        std::thread::spawn(move || {
+            let mut tmp = Vec::new();
+            let _ = std::io::copy(&mut out, &mut tmp);
+            if let Ok(mut b) = buf.lock() {
+                b.extend_from_slice(&tmp);
+            }
+        });
     }
-    if let Some(err) = child.stderr.take() {
-        spawn_pipe_reader(err, stderr_buf.clone());
+    if let Some(mut err) = child.stderr.take() {
+        let buf = stderr_buf.clone();
+        std::thread::spawn(move || {
+            let mut tmp = Vec::new();
+            let _ = std::io::copy(&mut err, &mut tmp);
+            if let Ok(mut b) = buf.lock() {
+                b.extend_from_slice(&tmp);
+            }
+        });
     }
 
     Ok(SpawnedLogin {
@@ -326,9 +316,9 @@ pub fn spawn_login_with_chatgpt(codex_home: &Path) -> std::io::Result<SpawnedLog
 /// recorded in memory. Otherwise, the subprocess's output will be sent to the
 /// current process's stdout/stderr.
 pub async fn login_with_chatgpt(codex_home: &Path, capture_output: bool) -> std::io::Result<()> {
+    let script_path = write_login_script_to_disk()?;
     let child = Command::new("python3")
-        .arg("-c")
-        .arg(SOURCE_FOR_PYTHON_SERVER)
+        .arg(&script_path)
         .env("CODEX_HOME", codex_home)
         .env("CODEX_CLIENT_ID", CLIENT_ID)
         .stdin(Stdio::null())
@@ -353,6 +343,17 @@ pub async fn login_with_chatgpt(codex_home: &Path, capture_output: bool) -> std:
             "login_with_chatgpt subprocess failed: {stderr}"
         )))
     }
+}
+
+fn write_login_script_to_disk() -> std::io::Result<PathBuf> {
+    // Write the embedded Python script to a file to avoid very long
+    // command-line arguments (Windows error 206).
+    let mut tmp = NamedTempFile::new()?;
+    tmp.write_all(SOURCE_FOR_PYTHON_SERVER.as_bytes())?;
+    tmp.flush()?;
+
+    let (_file, path) = tmp.keep()?;
+    Ok(path)
 }
 
 pub fn login_with_api_key(codex_home: &Path, api_key: &str) -> std::io::Result<()> {
