@@ -290,7 +290,7 @@ impl ChatWidget<'_> {
 
         // Only show text portion in conversation history for now.
         if !text.is_empty() {
-            self.add_to_history(HistoryCell::new_user_prompt(text.clone()));
+            self.add_to_history(HistoryCell::new_user_prompt(&self.config, text.clone()));
         }
     }
 
@@ -657,30 +657,12 @@ impl ChatWidget<'_> {
 
     fn stream_push_and_maybe_commit(&mut self, delta: &str) {
         self.live_builder.push_fragment(delta);
-
-        // Commit overflow rows (small batches) while keeping the last N rows visible.
-        let drained = self
+        // We no longer commit partial rows to history; we keep them only in the
+        // live overlay for a smooth streaming preview. The final, full message
+        // is rendered into history as markdown in `finalize_stream`.
+        let _ = self
             .live_builder
             .drain_commit_ready(self.live_max_rows as usize);
-        if !drained.is_empty() {
-            let mut lines: Vec<ratatui::text::Line<'static>> = Vec::new();
-            if !self.stream_header_emitted {
-                match self.current_stream {
-                    Some(StreamKind::Reasoning) => {
-                        lines.push(ratatui::text::Line::from("thinking".magenta().italic()));
-                    }
-                    Some(StreamKind::Answer) => {
-                        lines.push(ratatui::text::Line::from("codex".magenta().bold()));
-                    }
-                    None => {}
-                }
-                self.stream_header_emitted = true;
-            }
-            for r in drained {
-                lines.push(ratatui::text::Line::from(r.text));
-            }
-            self.app_event_tx.send(AppEvent::InsertHistory(lines));
-        }
 
         // Update the live ring overlay lines (text-only, newest at bottom).
         let rows = self
@@ -698,13 +680,16 @@ impl ChatWidget<'_> {
             // Nothing to do; either already finalized or not the active stream.
             return;
         }
-        // Flush any partial line as a full row, then drain all remaining rows.
+        // Flush any partial line and clear the live builder.
         self.live_builder.end_line();
-        let remaining = self.live_builder.drain_rows();
-        // TODO: Re-add markdown rendering for assistant answers and reasoning.
-        // When finalizing, pass the accumulated text through `markdown::append_markdown`
-        // to build styled `Line<'static>` entries instead of raw plain text lines.
-        if !remaining.is_empty() || !self.stream_header_emitted {
+        let _ = self.live_builder.drain_rows();
+
+        // Build a markdown-rendered block for the full accumulated content.
+        let source = match kind {
+            StreamKind::Answer => &self.answer_buffer,
+            StreamKind::Reasoning => &self.reasoning_buffer,
+        };
+        if !source.is_empty() || !self.stream_header_emitted {
             let mut lines: Vec<ratatui::text::Line<'static>> = Vec::new();
             if !self.stream_header_emitted {
                 match kind {
@@ -717,10 +702,9 @@ impl ChatWidget<'_> {
                 }
                 self.stream_header_emitted = true;
             }
-            for r in remaining {
-                lines.push(ratatui::text::Line::from(r.text));
-            }
-            // Close the block with a blank line for readability.
+            // Append markdown-rendered content using current config (handles citations/links).
+            crate::markdown::append_markdown(source, &mut lines, &self.config);
+            // Close with a blank line for readability.
             lines.push(ratatui::text::Line::from(""));
             self.app_event_tx.send(AppEvent::InsertHistory(lines));
         }
@@ -730,6 +714,10 @@ impl ChatWidget<'_> {
         self.bottom_pane.clear_live_ring();
         self.current_stream = None;
         self.stream_header_emitted = false;
+        // Clear accumulated buffers so the next stream starts fresh.
+        self.answer_buffer.clear();
+        self.reasoning_buffer.clear();
+        self.content_buffer.clear();
     }
 }
 

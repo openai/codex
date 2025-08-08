@@ -250,10 +250,12 @@ impl HistoryCell {
         }
     }
 
-    pub(crate) fn new_user_prompt(message: String) -> Self {
+    pub(crate) fn new_user_prompt(config: &Config, message: String) -> Self {
         let mut lines: Vec<Line<'static>> = Vec::new();
         lines.push(Line::from("user".cyan().bold()));
-        lines.extend(message.lines().map(|l| Line::from(l.to_string())));
+        // Render the user's message using markdown so it matches assistant output
+        // and supports links, emphasis, code blocks, etc.
+        crate::markdown::append_markdown(&message, &mut lines, config);
         lines.push(Line::from(""));
 
         HistoryCell::UserPrompt {
