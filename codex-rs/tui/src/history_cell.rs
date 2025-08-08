@@ -537,8 +537,8 @@ impl HistoryCell {
                 lines.push(Line::from("  • Signed in with ChatGPT"));
 
                 let info = tokens.id_token;
-                if let Some(email) = info.email {
-                    lines.push(Line::from(vec!["  • Login: ".into(), email.into()]));
+                if let Some(email) = &info.email {
+                    lines.push(Line::from(vec!["  • Login: ".into(), email.clone().into()]));
                 }
 
                 match auth.openai_api_key.as_deref() {
@@ -549,9 +549,8 @@ impl HistoryCell {
                     }
                     _ => {
                         let plan_text = info
-                            .chatgpt_plan_type
-                            .as_deref()
-                            .map(title_case)
+                            .get_chatgpt_plan_type()
+                            .map(|s| title_case(&s))
                             .unwrap_or_else(|| "Unknown".to_string());
                         lines.push(Line::from(vec!["  • Plan: ".into(), plan_text.into()]));
                     }

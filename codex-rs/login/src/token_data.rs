@@ -17,6 +17,17 @@ pub struct TokenData {
     pub account_id: Option<String>,
 }
 
+impl TokenData {
+    /// Returns true if this is a plan that should use the traditional
+    /// "metered" billing via an API key.
+    pub(crate) fn is_plan_that_should_use_api_key(&self) -> bool {
+        self.id_token
+            .chatgpt_plan_type
+            .as_ref()
+            .is_none_or(|plan| plan.is_plan_that_should_use_api_key())
+    }
+}
+
 /// Flat subset of useful claims in id_token from auth.json.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
 pub struct IdTokenInfo {
@@ -24,7 +35,50 @@ pub struct IdTokenInfo {
     /// The ChatGPT subscription plan type
     /// (e.g., "free", "plus", "pro", "business", "enterprise", "edu").
     /// (Note: ae has not verified that those are the exact values.)
-    pub chatgpt_plan_type: Option<String>,
+    pub(crate) chatgpt_plan_type: Option<PlanType>,
+}
+
+impl IdTokenInfo {
+    pub fn get_chatgpt_plan_type(&self) -> Option<String> {
+        self.chatgpt_plan_type.as_ref().map(|t| match t {
+            PlanType::Known(plan) => format!("{plan:?}"),
+            PlanType::Unknown(s) => s.clone(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub(crate) enum PlanType {
+    Known(KnownPlan),
+    Unknown(String),
+}
+
+impl PlanType {
+    fn is_plan_that_should_use_api_key(&self) -> bool {
+        match self {
+            Self::Known(known) => {
+                use KnownPlan::*;
+                !matches!(known, Free | Plus | Pro | Team)
+            }
+            Self::Unknown(_) => {
+                // Unknown plans should use the API key.
+                true
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum KnownPlan {
+    Free,
+    Plus,
+    Pro,
+    Team,
+    Business,
+    Enterprise,
+    Edu,
 }
 
 #[derive(Deserialize)]
@@ -38,7 +92,7 @@ struct IdClaims {
 #[derive(Deserialize)]
 struct AuthClaims {
     #[serde(default)]
-    chatgpt_plan_type: Option<String>,
+    chatgpt_plan_type: Option<PlanType>,
 }
 
 #[derive(Debug, Error)]
@@ -112,6 +166,9 @@ mod tests {
 
         let info = parse_id_token(&fake_jwt).expect("should parse");
         assert_eq!(info.email.as_deref(), Some("user@example.com"));
-        assert_eq!(info.chatgpt_plan_type.as_deref(), Some("pro"));
+        assert_eq!(
+            info.chatgpt_plan_type,
+            Some(PlanType::Known(KnownPlan::Pro))
+        );
     }
 }
