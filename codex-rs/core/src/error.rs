@@ -70,9 +70,7 @@ pub enum CodexErr {
     )]
     UsageNotIncluded,
 
-    #[error(
-        "We're currently experiencing high demand, which may cause temporary errors."
-    )]
+    #[error("We're currently experiencing high demand, which may cause temporary errors.")]
     InternalServerError,
 
     /// Retry limit exceeded.
