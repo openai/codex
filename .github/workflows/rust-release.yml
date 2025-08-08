@@ -95,7 +95,7 @@ jobs:
           sudo apt install -y musl-tools pkg-config
 
       - name: Cargo build
-        run: cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-exec --bin codex-linux-sandbox
+        run: cargo build --target ${{ matrix.target }} --release --bin codex
 
       - name: Stage artifacts
         shell: bash
@@ -104,22 +104,10 @@ jobs:
           mkdir -p "$dest"
 
           if [[ "${{ matrix.runner }}" == windows* ]]; then
-            cp target/${{ matrix.target }}/release/codex-exec.exe "$dest/codex-exec-${{ matrix.target }}.exe"
             cp target/${{ matrix.target }}/release/codex.exe "$dest/codex-${{ matrix.target }}.exe"
           else
-            cp target/${{ matrix.target }}/release/codex-exec "$dest/codex-exec-${{ matrix.target }}"
             cp target/${{ matrix.target }}/release/codex "$dest/codex-${{ matrix.target }}"
           fi
-
-        # After https://github.com/openai/codex/pull/1228 is merged and a new
-        # release is cut with an artifacts built after that PR, the `-gnu`
-        # variants can go away as we will only use the `-musl` variants.
-      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'x86_64-unknown-linux-gnu' || matrix.target == 'aarch64-unknown-linux-gnu' || matrix.target == 'aarch64-unknown-linux-musl' }}
-        name: Stage Linux-only artifacts
-        shell: bash
-        run: |
-          dest="dist/${{ matrix.target }}"
-          cp target/${{ matrix.target }}/release/codex-linux-sandbox "$dest/codex-linux-sandbox-${{ matrix.target }}"
 
       - name: Compress artifacts
         shell: bash
@@ -133,7 +121,6 @@ jobs:
           # we publish. The end result is:
           #   codex-<target>.zst          (existing)
           #   codex-<target>.tar.gz       (new)
-          #   ...same naming for codex-exec-* and codex-linux-sandbox-*
 
           # 1. Produce a .tar.gz for every file in the directory *before* we
           #    run `zstd --rm`, because that flag deletes the original files.
