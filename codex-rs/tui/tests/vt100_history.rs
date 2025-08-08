@@ -75,7 +75,7 @@ impl TestScenario {
 }
 
 #[test]
-fn hist_001_basic_insertion_no_wrap() {
+fn basic_insertion_no_wrap() {
     // Screen of 20x6; viewport is the last row (height=1 at y=5)
     let area = Rect::new(0, 5, 20, 1);
     let mut scenario = TestScenario::new(20, 6, area);
@@ -97,7 +97,7 @@ fn hist_001_basic_insertion_no_wrap() {
 }
 
 #[test]
-fn hist_002_long_token_wraps() {
+fn long_token_wraps() {
     let area = Rect::new(0, 5, 20, 1);
     let mut scenario = TestScenario::new(20, 6, area);
 
@@ -130,7 +130,7 @@ fn hist_002_long_token_wraps() {
 }
 
 #[test]
-fn hist_003_emoji_and_cjk() {
+fn emoji_and_cjk() {
     let area = Rect::new(0, 5, 20, 1);
     let mut scenario = TestScenario::new(20, 6, area);
 
@@ -148,7 +148,7 @@ fn hist_003_emoji_and_cjk() {
 }
 
 #[test]
-fn hist_004_mixed_ansi_spans() {
+fn mixed_ansi_spans() {
     let area = Rect::new(0, 5, 20, 1);
     let mut scenario = TestScenario::new(20, 6, area);
 
@@ -162,7 +162,7 @@ fn hist_004_mixed_ansi_spans() {
 }
 
 #[test]
-fn hist_006_cursor_restoration() {
+fn cursor_restoration() {
     let area = Rect::new(0, 5, 20, 1);
     let mut scenario = TestScenario::new(20, 6, area);
 
@@ -182,7 +182,7 @@ fn hist_006_cursor_restoration() {
 }
 
 #[test]
-fn hist_007_word_wrap_no_mid_word_split() {
+fn word_wrap_no_mid_word_split() {
     // Screen of 40x10; viewport is the last row
     let area = Rect::new(0, 9, 40, 1);
     let mut scenario = TestScenario::new(40, 10, area);
@@ -198,7 +198,7 @@ fn hist_007_word_wrap_no_mid_word_split() {
 }
 
 #[test]
-fn hist_008_em_dash_and_space_word_wrap() {
+fn em_dash_and_space_word_wrap() {
     // Repro from report: ensure we break before "inside", not mid-word.
     let area = Rect::new(0, 9, 40, 1);
     let mut scenario = TestScenario::new(40, 10, area);
@@ -214,7 +214,7 @@ fn hist_008_em_dash_and_space_word_wrap() {
 }
 
 #[test]
-fn hist_005_pre_scroll_region_down() {
+fn pre_scroll_region_down() {
     // Viewport not at bottom: y=3 (0-based), height=1
     let area = Rect::new(0, 3, 20, 1);
     let mut scenario = TestScenario::new(20, 6, area);
