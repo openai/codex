@@ -116,7 +116,10 @@ If you prefer to pay-as-you-go, you can still authenticate with your OpenAI API 
 export OPENAI_API_KEY="your-api-key-here"
 ```
 
-> Note: This command only sets the key for your current terminal session, which we recommend. To set it for all future sessions, you can also add the `export` line to your shell's configuration file (e.g., `~/.zshrc`).
+Notes:
+
+- This command only sets the key for your current terminal session, which we recommend. To set it for all future sessions, you can also add the `export` line to your shell's configuration file (e.g., `~/.zshrc`).
+- If you have signed in with ChatGPT, Codex will default to using your ChatGPT credits. If you wish to use your API key, use the `/logout` command to clear your ChatGPT authentication.
 
 ### Choosing Codex's level of autonomy
 
