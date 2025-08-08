@@ -1,4 +1,5 @@
 use crate::diff_render::create_diff_summary;
+use crate::diff_render::render_patch_details;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::slash_command::SlashCommand;
@@ -766,6 +767,13 @@ impl HistoryCell {
         event_type: PatchEventType,
         changes: HashMap<PathBuf, FileChange>,
     ) -> Self {
+        let show_details = matches!(
+            event_type,
+            PatchEventType::ApplyBegin {
+                auto_approved: true
+            } | PatchEventType::ApprovalRequest
+        );
+
         let title = match &event_type {
             PatchEventType::ApprovalRequest => "proposed patch",
             PatchEventType::ApplyBegin {
@@ -784,7 +792,13 @@ impl HistoryCell {
             }
         };
 
-        let lines: Vec<Line<'static>> = create_diff_summary(title, changes);
+        let mut lines: Vec<Line<'static>> = create_diff_summary(title, &changes);
+
+        if show_details {
+            lines.extend(render_patch_details(&changes));
+        }
+
+        lines.push(Line::from(""));
 
         HistoryCell::PendingPatch {
             view: TextBlock::new(lines),
