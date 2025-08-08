@@ -504,16 +504,10 @@ async fn process_sse<S>(
             | "response.in_progress"
             | "response.output_item.added"
             | "response.output_text.done"
-            | "response.reasoning_summary_part.added" => {
-                // Currently, we ignore this event, but we handle it
+            | "response.reasoning_summary_part.added"
+            | "response.reasoning_summary_text.done" => {
+                // Currently, we ignore these events, but we handle them
                 // separately to skip the logging message in the `other` case.
-            }
-            "response.reasoning_summary_text.done" => {
-                // End reasoning summary with a blank separator.
-                let event = ResponseEvent::ReasoningSummaryDelta("\n\n".to_string());
-                if tx_event.send(Ok(event)).await.is_err() {
-                    return;
-                }
             }
             other => debug!(other, "sse event"),
         }
