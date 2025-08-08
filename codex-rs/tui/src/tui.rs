@@ -29,14 +29,36 @@ pub fn init(_config: &Config) -> Result<Tui> {
     // Enable keyboard enhancement flags so modifiers for keys like Enter are disambiguated.
     // chat_composer.rs is using a keyboard event listener to enter for any modified keys
     // to create a new line that require this.
-    execute!(
-        stdout(),
-        PushKeyboardEnhancementFlags(
-            KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-                | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
-                | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
-        )
-    )?;
+    // Try to enable keyboard enhancement, but ignore errors on Windows legacy console
+    // This is a known limitation with Windows terminal compatibility - progressive keyboard
+    // enhancement is not supported on legacy Windows API, but the app works fine without it
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = execute!(
+            stdout(),
+            PushKeyboardEnhancementFlags(
+                KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                    | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+                    | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
+            )
+        );
+    }
+    
+    #[cfg(target_os = "windows")]
+    {
+        // On Windows, try to enable keyboard enhancement but silently ignore failures
+        // This allows the app to work on legacy Windows terminals that don't support
+        // progressive keyboard enhancement
+        let _ = execute!(
+            stdout(),
+            PushKeyboardEnhancementFlags(
+                KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                    | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+                    | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
+            )
+        );
+    }
+    
     set_panic_hook();
 
     // Clear screen and move cursor to top-left before drawing UI
@@ -57,7 +79,20 @@ fn set_panic_hook() {
 
 /// Restore the terminal to its original state
 pub fn restore() -> Result<()> {
-    execute!(stdout(), PopKeyboardEnhancementFlags)?;
+    // Try to pop keyboard enhancement flags, but ignore errors on Windows legacy console
+    // This matches the conditional logic in init() for Windows compatibility
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = execute!(stdout(), PopKeyboardEnhancementFlags);
+    }
+    
+    #[cfg(target_os = "windows")]
+    {
+        // On Windows, try to pop keyboard enhancement but silently ignore failures
+        // for compatibility with legacy terminals
+        let _ = execute!(stdout(), PopKeyboardEnhancementFlags);
+    }
+    
     execute!(stdout(), DisableBracketedPaste)?;
     disable_raw_mode()?;
     Ok(())
