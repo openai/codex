@@ -68,8 +68,7 @@ impl CodexAuth {
     }
 
     pub async fn get_token_data(&self) -> Result<TokenData, std::io::Error> {
-        #[expect(clippy::unwrap_used)]
-        let auth_dot_json = self.auth_dot_json.lock().unwrap().clone();
+        let auth_dot_json: Option<AuthDotJson> = self.get_current_auth_json();
         match auth_dot_json {
             Some(AuthDotJson {
                 tokens: Some(mut tokens),
@@ -124,15 +123,23 @@ impl CodexAuth {
         }
     }
 
-    pub async fn get_account_id(&self) -> Option<String> {
-        match self.mode {
-            AuthMode::ApiKey => None,
-            AuthMode::ChatGPT => {
-                let token_data = self.get_token_data().await.ok()?;
+    pub fn get_account_id(&self) -> Option<String> {
+        self.get_current_token_data()
+            .and_then(|t| t.account_id.clone())
+    }
 
-                token_data.account_id.clone()
-            }
-        }
+    pub fn get_plan_type(&self) -> Option<String> {
+        self.get_current_token_data()
+            .and_then(|t| t.id_token.chatgpt_plan_type.as_ref().map(|p| p.as_string()))
+    }
+
+    fn get_current_auth_json(&self) -> Option<AuthDotJson> {
+        #[expect(clippy::unwrap_used)]
+        self.auth_dot_json.lock().unwrap().clone()
+    }
+
+    fn get_current_token_data(&self) -> Option<TokenData> {
+        self.get_current_auth_json().and_then(|t| t.tokens.clone())
     }
 
     /// Consider this private to integration tests.
