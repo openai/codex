@@ -5,6 +5,7 @@ use ratatui::text::Line;
 
 use crate::app::ChatWidgetArgs;
 use crate::slash_command::SlashCommand;
+use codex_core::config_types::ReasoningEffort;
 
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum AppEvent {
@@ -35,6 +36,13 @@ pub(crate) enum AppEvent {
     /// layer so it can be handled centrally.
     DispatchCommand(SlashCommand),
 
+    /// Dispatch a slash command along with its raw argument string (first line after command).
+    /// Used for commands that accept parameters like `/reasoning high`.
+    DispatchCommandWithArgs {
+        cmd: SlashCommand,
+        args: String,
+    },
+
     /// Kick off an asynchronous file search for the given query (text after
     /// the `@`). Previous searches may be cancelled by the app layer so there
     /// is at most one in-flight search.
@@ -53,4 +61,7 @@ pub(crate) enum AppEvent {
     /// Onboarding: result of login_with_chatgpt.
     OnboardingAuthComplete(Result<(), String>),
     OnboardingComplete(ChatWidgetArgs),
+
+    /// Show a selector for setting the reasoning effort interactively.
+    ShowReasoningSelector(ReasoningEffort),
 }

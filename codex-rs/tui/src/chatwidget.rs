@@ -566,9 +566,26 @@ impl ChatWidget<'_> {
         self.add_to_history(HistoryCell::new_prompts_output());
     }
 
+    /// Update the in-memory config's reasoning effort so status output reflects runtime changes.
+    pub(crate) fn set_model_reasoning_effort(
+        &mut self,
+        effort: codex_core::config_types::ReasoningEffort,
+    ) {
+        self.config.model_reasoning_effort = effort;
+    }
+
     /// Forward file-search results to the bottom pane.
     pub(crate) fn apply_file_search_result(&mut self, query: String, matches: Vec<FileMatch>) {
         self.bottom_pane.on_file_search_result(query, matches);
+    }
+
+    /// Show the interactive selector for reasoning effort.
+    pub(crate) fn show_reasoning_selector(
+        &mut self,
+        current: codex_core::config_types::ReasoningEffort,
+    ) {
+        self.bottom_pane.show_reasoning_selector(current);
+        self.request_redraw();
     }
 
     /// Handle Ctrl-C key press.
