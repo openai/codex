@@ -721,14 +721,7 @@ impl ChatWidget<'_> {
         if !remaining.is_empty() || !self.stream_header_emitted {
             let mut lines: Vec<ratatui::text::Line<'static>> = Vec::new();
             if !self.stream_header_emitted {
-                match kind {
-                    StreamKind::Reasoning => {
-                        lines.push(ratatui::text::Line::from("🧠 thinking".magenta().italic()));
-                    }
-                    StreamKind::Answer => {
-                        lines.push(ratatui::text::Line::from("🤖 codex".magenta().bold()));
-                    }
-                }
+                lines.push(stream_header_line(kind));
                 self.stream_header_emitted = true;
             }
             for r in remaining {
