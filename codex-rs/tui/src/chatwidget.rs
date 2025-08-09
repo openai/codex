@@ -259,6 +259,10 @@ impl ChatWidget<'_> {
     }
 
     fn add_to_history(&mut self, cell: HistoryCell) {
+        if let Some(active) = self.active_history_cell.take() {
+            self.app_event_tx
+                .send(AppEvent::InsertHistory(active.plain_lines()));
+        }
         self.app_event_tx
             .send(AppEvent::InsertHistory(cell.plain_lines()));
     }
@@ -302,6 +306,10 @@ impl ChatWidget<'_> {
 
     pub(crate) fn handle_codex_event(&mut self, event: Event) {
         let Event { id, msg } = event;
+
+        // Keep `active_history_cell` until we explicitly commit it, to avoid
+        // duplicating headers (e.g. for exec begin/end sequences).
+
         match msg {
             EventMsg::SessionConfigured(event) => {
                 self.bottom_pane
@@ -503,9 +511,10 @@ impl ChatWidget<'_> {
                     }
                     _ => vec![],
                 };
-                self.active_history_cell = None;
                 if let Some(cmd) = cmd {
-                    self.add_to_history(HistoryCell::new_completed_exec_command(
+                    // Replace the active running cell with a single finalized
+                    // history entry to avoid duplicating the command header.
+                    let completed = HistoryCell::new_completed_exec_command(
                         cmd.command,
                         parsed_cmd,
                         CommandOutput {
@@ -513,7 +522,9 @@ impl ChatWidget<'_> {
                             stdout,
                             stderr,
                         },
-                    ));
+                    );
+                    self.active_history_cell = None;
+                    self.add_to_history(completed);
                 }
             }
             EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
