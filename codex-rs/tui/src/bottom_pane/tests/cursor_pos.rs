@@ -1,9 +1,3 @@
-use crate::app_event::AppEvent;
-use crate::app_event_sender::AppEventSender;
-use crate::bottom_pane::{BottomPane, BottomPaneParams};
-use ratatui::layout::Rect;
-use ratatui::text::Line;
-use std::sync::mpsc::channel;
 
 #[test]
 fn cursor_pos_accounts_for_live_ring_and_status_spacer() {

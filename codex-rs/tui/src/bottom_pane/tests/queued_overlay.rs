@@ -1,11 +1,3 @@
-use crate::app_event::AppEvent;
-use crate::app_event_sender::AppEventSender;
-use crate::bottom_pane::{BottomPane, BottomPaneParams};
-use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
-use ratatui::text::Line;
-use ratatui::widgets::WidgetRef;
-use std::sync::mpsc::channel;
 
 #[test]
 fn queued_list_renders_below_working_above_composer() {
