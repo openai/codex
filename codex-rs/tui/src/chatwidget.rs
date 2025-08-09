@@ -259,6 +259,10 @@ impl ChatWidget<'_> {
     }
 
     fn add_to_history(&mut self, cell: HistoryCell) {
+        if let Some(active) = self.active_history_cell.take() {
+            self.app_event_tx
+                .send(AppEvent::InsertHistory(active.plain_lines()));
+        }
         self.app_event_tx
             .send(AppEvent::InsertHistory(cell.plain_lines()));
     }
@@ -456,6 +460,9 @@ impl ChatWidget<'_> {
                     vec![]
                 };
                 self.finalize_active_stream();
+                if let Some(cell) = self.active_history_cell.take() {
+                    self.add_to_history(cell);
+                }
                 // Ensure the status indicator is visible while the command runs.
                 self.bottom_pane
                     .update_status_text("running command".to_string());
@@ -503,9 +510,8 @@ impl ChatWidget<'_> {
                     }
                     _ => vec![],
                 };
-                self.active_history_cell = None;
                 if let Some(cmd) = cmd {
-                    self.add_to_history(HistoryCell::new_completed_exec_command(
+                    self.active_history_cell = Some(HistoryCell::new_completed_exec_command(
                         cmd.command,
                         parsed_cmd,
                         CommandOutput {

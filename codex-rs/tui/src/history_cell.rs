@@ -46,6 +46,12 @@ pub(crate) struct CommandOutput {
     pub(crate) stderr: String,
 }
 
+pub(crate) struct ExecCell {
+    command: Vec<String>,
+    parsed: Vec<ParsedCommand>,
+    output: Option<CommandOutput>,
+}
+
 struct FileSummary {
     display_path: String,
     added: usize,
@@ -83,11 +89,8 @@ pub(crate) enum HistoryCell {
     UserPrompt { view: TextBlock },
 
     // AgentMessage and AgentReasoning variants were unused and have been removed.
-    /// An exec tool call that has not finished yet.
-    ActiveExecCommand { view: TextBlock },
-
-    /// Completed exec tool call.
-    CompletedExecCommand { view: TextBlock },
+    /// An exec tool call.
+    ExecCell(ExecCell),
 
     /// An MCP tool call that has not finished yet.
     ActiveMcpToolCall { view: TextBlock },
@@ -124,7 +127,7 @@ pub(crate) enum HistoryCell {
     SessionInfo { view: TextBlock },
 
     /// A pending code patch that is awaiting user approval. Mirrors the
-    /// behaviour of `ActiveExecCommand` so the user sees *what* patch the
+    /// behaviour of `ExecCell` so the user sees *what* patch the
     /// model wants to apply before being prompted to approve or deny it.
     PendingPatch { view: TextBlock },
 
@@ -174,15 +177,18 @@ impl HistoryCell {
             | HistoryCell::PromptsOutput { view }
             | HistoryCell::ErrorEvent { view }
             | HistoryCell::SessionInfo { view }
-            | HistoryCell::CompletedExecCommand { view }
             | HistoryCell::CompletedMcpToolCall { view }
             | HistoryCell::PendingPatch { view }
             | HistoryCell::PlanUpdate { view }
             | HistoryCell::PatchApplyResult { view }
-            | HistoryCell::ActiveExecCommand { view, .. }
             | HistoryCell::ActiveMcpToolCall { view, .. } => {
                 view.lines.iter().map(line_to_static).collect()
             }
+            HistoryCell::ExecCell(ExecCell {
+                command,
+                parsed,
+                output,
+            }) => HistoryCell::exec_command_lines(command, parsed, output.as_ref()),
             HistoryCell::CompletedMcpToolCallWithImageOutput { .. } => vec![
                 Line::from("tool result (image output omitted)"),
                 Line::from(""),
@@ -269,10 +275,7 @@ impl HistoryCell {
         command: Vec<String>,
         parsed: Vec<ParsedCommand>,
     ) -> Self {
-        let lines = HistoryCell::exec_command_lines(&command, &parsed, None);
-        HistoryCell::ActiveExecCommand {
-            view: TextBlock::new(lines),
-        }
+        HistoryCell::new_exec_cell(command, parsed, None)
     }
 
     pub(crate) fn new_completed_exec_command(
@@ -280,10 +283,19 @@ impl HistoryCell {
         parsed: Vec<ParsedCommand>,
         output: CommandOutput,
     ) -> Self {
-        let lines = HistoryCell::exec_command_lines(&command, &parsed, Some(&output));
-        HistoryCell::CompletedExecCommand {
-            view: TextBlock::new(lines),
-        }
+        HistoryCell::new_exec_cell(command, parsed, Some(output))
+    }
+
+    fn new_exec_cell(
+        command: Vec<String>,
+        parsed: Vec<ParsedCommand>,
+        output: Option<CommandOutput>,
+    ) -> Self {
+        HistoryCell::ExecCell(ExecCell {
+            command,
+            parsed,
+            output,
+        })
     }
 
     fn exec_command_lines(
