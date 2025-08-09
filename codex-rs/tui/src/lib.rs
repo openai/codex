@@ -29,6 +29,7 @@ mod bottom_pane;
 mod chatwidget;
 mod citation_regex;
 mod cli;
+mod clipboard_paste;
 mod colors;
 pub mod custom_terminal;
 mod exec_command;
