@@ -18,6 +18,7 @@ members = [
     "protocol",
     "protocol-ts",
     "tui",
+    "codex-telemetry",
 ]
 resolver = "2"
 

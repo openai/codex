@@ -19,6 +19,8 @@ use std::path::PathBuf;
 
 use crate::proto::ProtoCli;
 
+// Telemetry is initialized after Config is loaded in subcommands.
+
 /// Codex CLI
 ///
 /// If no subcommand is specified, options will be forwarded to the interactive CLI.
@@ -143,6 +145,8 @@ fn main() -> anyhow::Result<()> {
 }
 
 async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
+    // Telemetry is initialized within exec/tui subcommands after config is loaded.
+
     let cli = MultitoolCli::parse();
 
     match cli.subcommand {
