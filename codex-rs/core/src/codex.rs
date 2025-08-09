@@ -1018,7 +1018,7 @@ async fn submission_loop(
                 };
 
                 // Create a summarization request as user input
-                const SUMMARIZATION_PROMPT: &str = include_str!("../../../SUMMARY.md");
+                const SUMMARIZATION_PROMPT: &str = include_str!("prompt_for_compact_command.md");
 
                 // Attempt to inject input into current task
                 if let Err(items) = sess.inject_input(vec![InputItem::Text {
@@ -1098,7 +1098,7 @@ async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
     sess.record_conversation_items(&[initial_input_for_turn.clone().into()])
         .await;
 
-    let last_agent_message: Option<String>;
+    let mut last_agent_message: Option<String> = None;
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
     let mut turn_diff_tracker = TurnDiffTracker::new();
@@ -1248,7 +1248,8 @@ async fn run_task(sess: Arc<Session>, sub_id: String, input: Vec<InputItem>) {
                     }),
                 };
                 sess.tx_event.send(event).await.ok();
-                return;
+                // let the user continue the conversation
+                break;
             }
         }
     }
