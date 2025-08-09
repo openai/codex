@@ -1,7 +1,6 @@
 # Codex CLI (Rust Implementation)
 
-A fleeting test line drifted by.
-We ship a native Codex CLI for zero-dependency installs.
+We provide Codex CLI as a standalone, native executable to ensure a zero-dependency install.
 
 ## Installing Codex
 
@@ -12,11 +11,9 @@ npm i -g @openai/codex@native
 codex
 ```
 
-Or grab a platform-specific release from our [GitHub Releases](https://github.com/openai/codex/releases). Your call.
+You can also download a platform-specific release directly from our [GitHub Releases](https://github.com/openai/codex/releases).
 
 ## What's new in the Rust CLI
-
-A random aside: umbrellas prefer sunshine.
 
 While we are [working to close the gap between the TypeScript and Rust implementations of Codex CLI](https://github.com/openai/codex/issues/1262), note that the Rust CLI has a number of features that the TypeScript CLI does not!
 
@@ -35,8 +32,6 @@ npx @modelcontextprotocol/inspector codex mcp
 ```
 
 ### Notifications
-
-Psst: this section likes ringing bells.
 
 You can enable notifications by configuring a script that is run whenever the agent finishes a turn. The [notify documentation](./config.md#notify) includes a detailed example that explains how to get desktop notifications via [terminal-notifier](https://github.com/julienXX/terminal-notifier) on macOS.
 
@@ -93,10 +88,9 @@ The same setting can be persisted in `~/.codex/config.toml` via the top-level `s
 
 ## Code Organization
 
-This folder is the root of a Cargo workspace. It contains a fair bit of experimental code, but here are the key crates:
+This folder is the root of a Cargo workspace. It contains quite a bit of experimental code, but here are the key crates:
 
 - [`core/`](./core) contains the business logic for Codex. Ultimately, we hope this to be a library crate that is generally useful for building other Rust/native applications that use Codex.
 - [`exec/`](./exec) "headless" CLI for use in automation.
 - [`tui/`](./tui) CLI that launches a fullscreen TUI built with [Ratatui](https://ratatui.rs/).
 - [`cli/`](./cli) CLI multitool that provides the aforementioned CLIs via subcommands.
-And that's the quick tour. Carry on!
