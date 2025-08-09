@@ -219,15 +219,6 @@ const MultilineTextEditorInner = (
         return;
       }
 
-      // Common terminals don't send distinct codes for Shift+Enter unless
-      // modifyOtherKeys is enabled. When Ink exposes `key.shift`, treat it
-      // as a newline insert rather than submit.
-      if (key.return && key.shift) {
-        buffer.current.newline();
-        setVersion((v) => v + 1);
-        return;
-      }
-
       // 1a) CSI-u / modifyOtherKeys *mode 2* (Ink strips initial ESC, so we
       //     start with '[') – format: "[<code>;<modifiers>u".
       if (input.startsWith("[") && input.endsWith("u")) {

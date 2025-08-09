@@ -108,10 +108,6 @@ export default function TerminalChatInput({
     key: number;
     initialCursorOffset?: number;
   }>({ key: 0 });
-  // Dynamically grow editor height with newline count (Shift+Enter)
-  const MIN_EDITOR_HEIGHT = 6;
-  const MAX_EDITOR_HEIGHT = 12;
-  const [editorHeight, setEditorHeight] = useState<number>(MIN_EDITOR_HEIGHT);
   // Imperative handle from the multiline editor so we can query caret position
   const editorRef = useRef<MultilineTextEditorHandle | null>(null);
   // Track the caret row across keystrokes
@@ -785,20 +781,11 @@ export default function TerminalChatInput({
                 setHistoryIndex(null);
               }
               setInput(txt);
-              // Grow editor height based on line count within bounds
-              const lines = Math.max(1, txt.split("\n").length);
-              const nextHeight = Math.max(
-                MIN_EDITOR_HEIGHT,
-                Math.min(MAX_EDITOR_HEIGHT, lines),
-              );
-              if (nextHeight !== editorHeight) {
-                setEditorHeight(nextHeight);
-              }
             }}
             key={editorState.key}
             initialCursorOffset={editorState.initialCursorOffset}
             initialText={input}
-            height={editorHeight}
+            height={6}
             focus={active}
             onSubmit={(txt) => {
               // If the assistant is currently thinking, keep the composed text
