@@ -32,6 +32,8 @@ use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
+use codex_telemetry as telemetry;
+use tracing_subscriber::prelude::*;
 
 use crate::cli::Command as ExecCommand;
 use crate::event_processor::CodexStatus;
@@ -114,19 +116,11 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         ),
     };
 
-    // TODO(mbolin): Take a more thoughtful approach to logging.
+    // Build fmt layer (existing logging) to compose with OTEL layer.
     let default_level = "error";
-    let _ = tracing_subscriber::fmt()
-        // Fallback to the `default_level` log filter if the environment
-        // variable is not set _or_ contains an invalid value
-        .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .or_else(|_| EnvFilter::try_new(default_level))
-                .unwrap_or_else(|_| EnvFilter::new(default_level)),
-        )
+    let fmt_layer = tracing_subscriber::fmt::layer()
         .with_ansi(stderr_with_ansi)
-        .with_writer(std::io::stderr)
-        .try_init();
+        .with_writer(std::io::stderr);
 
     let sandbox_mode = if full_auto {
         Some(SandboxMode::WorkspaceWrite)
@@ -329,6 +323,29 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         })
         .await?;
     info!("Sent prompt with event ID: {initial_prompt_task_id}");
+
+    // If stdin is an interactive TTY, watch for EOF (Ctrl+D) and request a graceful shutdown.
+    if std::io::stdin().is_terminal() {
+        let codex_for_eof = codex.clone();
+        tokio::spawn(async move {
+            use tokio::io::{stdin, AsyncReadExt};
+            let mut stdin = stdin();
+            let mut buf = [0u8; 1];
+            loop {
+                match stdin.read(&mut buf).await {
+                    Ok(0) => {
+                        let _ = codex_for_eof.submit(Op::Shutdown).await;
+                        break;
+                    }
+                    Ok(_) => {
+                        // discard any input; exec does not read interactive input
+                        continue;
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+    }
 
     // Run the loop until the task is complete.
     // Track whether a fatal error was reported by the server so we can

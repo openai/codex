@@ -27,6 +27,7 @@ codex-common = { workspace = true, features = [
 codex-core = { workspace = true }
 codex-ollama = { workspace = true }
 codex-protocol = { workspace = true }
+codex-telemetry = { workspace = true, features = ["otel"] }
 owo-colors = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
@@ -40,6 +41,7 @@ tokio = { workspace = true, features = [
 ] }
 tracing = { workspace = true, features = ["log"] }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
+tracing-opentelemetry = { workspace = true }
 ts-rs = { workspace = true, features = [
     "uuid-impl",
     "serde-json-impl",
