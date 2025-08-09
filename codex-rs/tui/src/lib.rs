@@ -31,6 +31,7 @@ mod citation_regex;
 mod cli;
 mod colors;
 pub mod custom_terminal;
+mod diff_render;
 mod exec_command;
 mod file_search;
 mod get_git_diff;
