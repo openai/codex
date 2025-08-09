@@ -160,6 +160,7 @@ impl CodexToolCallParam {
             include_plan_tool,
             disable_response_storage: None,
             show_raw_agent_reasoning: None,
+            theme: None,
         };
 
         let cli_overrides = cli_overrides

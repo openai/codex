@@ -7,6 +7,7 @@ use crate::config_types::SandboxMode;
 use crate::config_types::SandboxWorkspaceWrite;
 use crate::config_types::ShellEnvironmentPolicy;
 use crate::config_types::ShellEnvironmentPolicyToml;
+use crate::config_types::ThemeMode;
 use crate::config_types::Tui;
 use crate::config_types::UriBasedFileOpener;
 use crate::model_family::ModelFamily;
@@ -130,6 +131,9 @@ pub struct Config {
 
     /// Collection of settings that are specific to the TUI.
     pub tui: Tui,
+
+    /// Theme mode for the TUI interface (auto, light, or dark)
+    pub theme: ThemeMode,
 
     /// Path to the `codex-linux-sandbox` executable. This must be set if
     /// [`crate::exec::SandboxType::LinuxSeccomp`] is used. Note that this
@@ -377,6 +381,9 @@ pub struct ConfigToml {
     /// Collection of settings that are specific to the TUI.
     pub tui: Option<Tui>,
 
+    /// Theme mode for the TUI interface (auto, light, or dark)
+    pub theme: Option<ThemeMode>,
+
     /// When set to `true`, `AgentReasoning` events will be hidden from the
     /// UI/output. Defaults to `false`.
     pub hide_agent_reasoning: Option<bool>,
@@ -482,6 +489,7 @@ pub struct ConfigOverrides {
     pub include_plan_tool: Option<bool>,
     pub disable_response_storage: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
+    pub theme: Option<ThemeMode>,
 }
 
 impl Config {
@@ -507,6 +515,7 @@ impl Config {
             include_plan_tool,
             disable_response_storage,
             show_raw_agent_reasoning,
+            theme,
         } = overrides;
 
         let config_profile = match config_profile_key.as_ref().or(cfg.profile.as_ref()) {
@@ -636,6 +645,7 @@ impl Config {
             history,
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
             tui: cfg.tui.unwrap_or_default(),
+            theme: theme.or(cfg.theme).unwrap_or_default(),
             codex_linux_sandbox_exe,
 
             hide_agent_reasoning: cfg.hide_agent_reasoning.unwrap_or(false),
@@ -1014,6 +1024,7 @@ disable_response_storage = true
                 history: History::default(),
                 file_opener: UriBasedFileOpener::VsCode,
                 tui: Tui::default(),
+                theme: ThemeMode::default(),
                 codex_linux_sandbox_exe: None,
                 hide_agent_reasoning: false,
                 show_raw_agent_reasoning: false,
@@ -1065,6 +1076,7 @@ disable_response_storage = true
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
             tui: Tui::default(),
+            theme: ThemeMode::default(),
             codex_linux_sandbox_exe: None,
             hide_agent_reasoning: false,
             show_raw_agent_reasoning: false,
@@ -1131,6 +1143,7 @@ disable_response_storage = true
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
             tui: Tui::default(),
+            theme: ThemeMode::default(),
             codex_linux_sandbox_exe: None,
             hide_agent_reasoning: false,
             show_raw_agent_reasoning: false,

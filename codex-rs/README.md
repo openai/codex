@@ -86,6 +86,36 @@ codex --sandbox danger-full-access
 
 The same setting can be persisted in `~/.codex/config.toml` via the top-level `sandbox_mode = "MODE"` key, e.g. `sandbox_mode = "workspace-write"`.
 
+### Theme Support
+
+Codex supports both light and dark themes with automatic terminal background detection for improved accessibility:
+
+```shell
+# Use automatic theme detection (default)
+codex --theme auto
+
+# Force light theme  
+codex --theme light
+
+# Force dark theme
+codex --theme dark
+```
+
+The theme setting can be configured in `~/.codex/config.toml`:
+
+```toml
+# Theme configuration
+theme = "auto"  # Options: "auto", "light", "dark"
+```
+
+**Auto Detection**: When set to `auto` (default), Codex automatically detects your terminal's background color using:
+- `$COLORFGBG` environment variable (most terminals)
+- iTerm2-specific environment variables (`$TERM_PROGRAM_BACKGROUND`)
+- VS Code integrated terminal detection (`$VSCODE_THEME_KIND`)
+- Fallback to dark theme if detection fails
+
+This ensures optimal contrast and readability regardless of your terminal theme, addressing accessibility issues where hard-coded colors made the interface unreadable on light backgrounds.
+
 ## Code Organization
 
 This folder is the root of a Cargo workspace. It contains quite a bit of experimental code, but here are the key crates:

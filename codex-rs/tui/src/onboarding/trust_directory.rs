@@ -8,7 +8,6 @@ use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::prelude::Widget;
-use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::style::Stylize;
@@ -18,7 +17,8 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
 
-use crate::colors::LIGHT_BLUE;
+use crate::theme::SemanticColor;
+use crate::theme::ThemeManager;
 
 use crate::onboarding::onboarding_screen::KeyboardHandler;
 use crate::onboarding::onboarding_screen::StepStateProvider;
@@ -46,6 +46,7 @@ pub(crate) enum TrustDirectorySelection {
 
 impl WidgetRef for &TrustDirectoryWidget {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
+        let theme = ThemeManager::global();
         let mut lines: Vec<Line> = vec![
             Line::from(vec![
                 Span::raw("> "),
@@ -80,9 +81,9 @@ impl WidgetRef for &TrustDirectoryWidget {
                     Line::from(vec![
                         Span::styled(
                             format!("> {}. ", idx + 1),
-                            Style::default().fg(LIGHT_BLUE).add_modifier(Modifier::DIM),
+                            theme.style_with_modifiers(SemanticColor::Primary, Modifier::DIM),
                         ),
-                        Span::styled(text.to_owned(), Style::default().fg(LIGHT_BLUE)),
+                        Span::styled(text.to_owned(), theme.style(SemanticColor::Primary)),
                     ])
                 } else {
                     Line::from(format!("  {}. {}", idx + 1, text))
@@ -114,7 +115,7 @@ impl WidgetRef for &TrustDirectoryWidget {
         }
         lines.push(Line::from(""));
         if let Some(error) = &self.error {
-            lines.push(Line::from(format!("  {error}")).fg(Color::Red));
+            lines.push(Line::from(format!("  {error}")).style(theme.style(SemanticColor::Error)));
             lines.push(Line::from(""));
         }
         lines.push(Line::from("  Press Enter to continue").add_modifier(Modifier::DIM));

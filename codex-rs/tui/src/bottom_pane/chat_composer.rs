@@ -7,7 +7,6 @@ use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Margin;
 use ratatui::layout::Rect;
-use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::style::Styled;
@@ -28,6 +27,8 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::textarea::TextArea;
 use crate::bottom_pane::textarea::TextAreaState;
+use crate::theme::SemanticColor;
+use crate::theme::ThemeManager;
 use codex_file_search::FileMatch;
 use std::cell::RefCell;
 
@@ -653,6 +654,7 @@ impl ChatComposer {
 
 impl WidgetRef for &ChatComposer {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
+        let theme = ThemeManager::global();
         let popup_height = match &self.active_popup {
             ActivePopup::Command(popup) => popup.calculate_required_height(),
             ActivePopup::File(popup) => popup.calculate_required_height(),
@@ -669,7 +671,7 @@ impl WidgetRef for &ChatComposer {
             }
             ActivePopup::None => {
                 let bottom_line_rect = popup_rect;
-                let key_hint_style = Style::default().fg(Color::Cyan);
+                let key_hint_style = theme.style(SemanticColor::Primary);
                 let mut hint = if self.ctrl_c_quit_hint {
                     vec![
                         Span::from(" "),
@@ -728,10 +730,10 @@ impl WidgetRef for &ChatComposer {
             .border_style(Style::default().dim())
             .borders(Borders::LEFT)
             .border_type(BorderType::QuadrantOutside)
-            .border_style(Style::default().fg(if self.has_focus {
-                Color::Cyan
+            .border_style(theme.style(if self.has_focus {
+                SemanticColor::BorderFocused
             } else {
-                Color::Gray
+                SemanticColor::Border
             }))
             .render_ref(
                 Rect::new(textarea_rect.x, textarea_rect.y, 1, textarea_rect.height),

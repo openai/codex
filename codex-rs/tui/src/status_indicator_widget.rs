@@ -22,6 +22,8 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use crate::theme::SemanticColor;
+use crate::theme::ThemeManager;
 
 // We render the live text using markdown so it visually matches the history
 // cells. Before rendering we strip any ANSI escape sequences to avoid writing
@@ -214,7 +216,8 @@ impl WidgetRef for StatusIndicatorWidget {
         let inner_width = area.width as usize;
 
         let mut spans: Vec<Span<'static>> = Vec::new();
-        spans.push(Span::styled("▌ ", Style::default().fg(Color::Cyan)));
+        let theme = ThemeManager::global();
+        spans.push(Span::styled("▌ ", theme.style(SemanticColor::Primary)));
 
         // Simple dim spinner to the left of the header.
         let spinner_frames = ['·', '•', '●', '•'];
@@ -222,7 +225,7 @@ impl WidgetRef for StatusIndicatorWidget {
         let spinner_ch = spinner_frames[(idx / SPINNER_SLOWDOWN) % spinner_frames.len()];
         spans.push(Span::styled(
             spinner_ch.to_string(),
-            Style::default().fg(Color::DarkGray),
+            theme.style(SemanticColor::TextMuted),
         ));
         spans.push(Span::raw(" "));
 
@@ -235,27 +238,25 @@ impl WidgetRef for StatusIndicatorWidget {
         let bracket_prefix = format!("({elapsed}s • ");
         spans.push(Span::styled(
             bracket_prefix,
-            Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
+            theme.style_with_modifiers(SemanticColor::TextMuted, Modifier::DIM),
         ));
         spans.push(Span::styled(
             "Esc",
-            Style::default()
-                .fg(Color::Gray)
-                .add_modifier(Modifier::DIM | Modifier::BOLD),
+            theme.style_with_modifiers(SemanticColor::TextMuted, Modifier::DIM | Modifier::BOLD),
         ));
         spans.push(Span::styled(
             " to interrupt)",
-            Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
+            theme.style_with_modifiers(SemanticColor::TextMuted, Modifier::DIM),
         ));
         // Add a space and then the log text (not animated by the gradient)
         if !status_prefix.is_empty() {
             spans.push(Span::styled(
                 " ",
-                Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
+                theme.style_with_modifiers(SemanticColor::TextMuted, Modifier::DIM),
             ));
             spans.push(Span::styled(
                 status_prefix,
-                Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
+                theme.style_with_modifiers(SemanticColor::TextMuted, Modifier::DIM),
             ));
         }
 
@@ -281,12 +282,13 @@ impl WidgetRef for StatusIndicatorWidget {
 }
 
 fn color_for_level(level: u8) -> Color {
+    let theme = ThemeManager::global();
     if level < 128 {
-        Color::DarkGray
+        theme.color(SemanticColor::TextDisabled)
     } else if level < 192 {
-        Color::Gray
+        theme.color(SemanticColor::TextMuted)
     } else {
-        Color::White
+        theme.color(SemanticColor::Text)
     }
 }
 

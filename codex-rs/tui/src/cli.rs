@@ -1,7 +1,29 @@
 use clap::Parser;
+use clap::ValueEnum;
 use codex_common::ApprovalModeCliArg;
 use codex_common::CliConfigOverrides;
 use std::path::PathBuf;
+
+/// CLI argument for theme mode selection
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum ThemeModeCliArg {
+    /// Automatically detect based on terminal background
+    Auto,
+    /// Force light theme
+    Light,
+    /// Force dark theme
+    Dark,
+}
+
+impl From<ThemeModeCliArg> for codex_core::config_types::ThemeMode {
+    fn from(arg: ThemeModeCliArg) -> Self {
+        match arg {
+            ThemeModeCliArg::Auto => codex_core::config_types::ThemeMode::Auto,
+            ThemeModeCliArg::Light => codex_core::config_types::ThemeMode::Light,
+            ThemeModeCliArg::Dark => codex_core::config_types::ThemeMode::Dark,
+        }
+    }
+}
 
 #[derive(Parser, Debug)]
 #[command(version)]
@@ -53,6 +75,10 @@ pub struct Cli {
     /// Tell the agent to use the specified directory as its working root.
     #[clap(long = "cd", short = 'C', value_name = "DIR")]
     pub cwd: Option<PathBuf>,
+
+    /// Select the theme mode for the TUI interface
+    #[arg(long = "theme", value_enum)]
+    pub theme: Option<ThemeModeCliArg>,
 
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
