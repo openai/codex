@@ -656,6 +656,11 @@ impl ChatWidget<'_> {
             self.stream_header_emitted = false;
             // Clear any previous live content; we're starting a new stream.
             self.live_builder = RowBuilder::new(self.live_builder.width());
+            self.live_builder.set_width(
+                crossterm::terminal::size()
+                    .map(|(cols, _)| cols.min(80))
+                    .unwrap_or(80) as usize,
+            );
             // Ensure the waiting status is visible (composer replaced).
             self.bottom_pane
                 .update_status_text("waiting for model".to_string());
