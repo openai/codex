@@ -10,6 +10,7 @@ use codex_core::config_types::SandboxMode;
 use codex_core::protocol::AskForApproval;
 use codex_login::load_auth;
 use codex_ollama::DEFAULT_OSS_MODEL;
+use codex_telemetry as telemetry;
 use log_layer::TuiLogLayer;
 use std::fs::OpenOptions;
 use std::path::PathBuf;
@@ -17,7 +18,6 @@ use tracing::error;
 use tracing_appender::non_blocking;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
-use codex_telemetry as telemetry;
 
 mod app;
 mod app_event;
@@ -128,7 +128,10 @@ pub async fn run_main(
     // Build OTEL layer and compose into subscriber.
     let telemetry = telemetry::build_layer(&telemetry::Settings {
         enabled: true,
-        exporter: telemetry::Exporter::OtlpFile { path: PathBuf::new(), rotate_mb: Some(100) },
+        exporter: telemetry::Exporter::OtlpFile {
+            path: PathBuf::new(),
+            rotate_mb: Some(100),
+        },
         service_name: "codex".to_string(),
         service_version: env!("CARGO_PKG_VERSION").to_string(),
         codex_home: Some(config.codex_home.clone()),

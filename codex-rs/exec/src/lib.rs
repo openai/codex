@@ -23,13 +23,13 @@ use codex_core::protocol::Op;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::util::is_inside_git_repo;
 use codex_ollama::DEFAULT_OSS_MODEL;
+use codex_telemetry as telemetry;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
 use event_processor_with_json_output::EventProcessorWithJsonOutput;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
-use codex_telemetry as telemetry;
 use tracing_subscriber::prelude::*;
 
 use crate::event_processor::CodexStatus;
@@ -158,7 +158,10 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     // Build OTEL layer and compose into subscriber.
     let telemetry = telemetry::build_layer(&telemetry::Settings {
         enabled: true,
-        exporter: telemetry::Exporter::OtlpFile { path: PathBuf::new(), rotate_mb: Some(100) },
+        exporter: telemetry::Exporter::OtlpFile {
+            path: PathBuf::new(),
+            rotate_mb: Some(100),
+        },
         service_name: "codex".to_string(),
         service_version: env!("CARGO_PKG_VERSION").to_string(),
         codex_home: Some(config.codex_home.clone()),
@@ -292,7 +295,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     if std::io::stdin().is_terminal() {
         let codex_for_eof = codex.clone();
         tokio::spawn(async move {
-            use tokio::io::{stdin, AsyncReadExt};
+            use tokio::io::AsyncReadExt;
+            use tokio::io::stdin;
             let mut stdin = stdin();
             let mut buf = [0u8; 1];
             loop {
