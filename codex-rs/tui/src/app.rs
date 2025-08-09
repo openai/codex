@@ -30,9 +30,15 @@ use std::sync::mpsc::Receiver;
 use std::sync::mpsc::channel;
 use std::thread;
 use std::time::Duration;
+use std::time::Instant;
 
 /// Time window for debouncing redraw requests.
 const REDRAW_DEBOUNCE: Duration = Duration::from_millis(10);
+/// Minimum time between an initial key press and a subsequent repeat event
+/// for the same key before we consider the repeat as intentional. This helps
+/// avoid processing an immediate Repeat right after Press on some terminals,
+/// which can feel like a double-tap (notably for Backspace/Alt+Backspace).
+const KEY_REPEAT_DEBOUNCE: Duration = Duration::from_millis(120);
 
 /// Top-level application state: which full-screen view is currently active.
 #[allow(clippy::large_enum_variant)]
@@ -64,6 +70,9 @@ pub(crate) struct App<'a> {
     pending_history_lines: Vec<Line<'static>>,
 
     enhanced_keys_supported: bool,
+
+    /// Last key press observed (code + modifiers) and when it occurred.
+    last_keypress: Option<(KeyCode, crossterm::event::KeyModifiers, Instant)>,
 }
 
 /// Aggregate parameters needed to create a `ChatWidget`, as creation may be
@@ -173,6 +182,7 @@ impl App<'_> {
             file_search,
             pending_redraw,
             enhanced_keys_supported,
+            last_keypress: None,
         }
     }
 
@@ -222,6 +232,21 @@ impl App<'_> {
                     std::io::stdout().sync_update(|_| self.draw_next_frame(terminal))??;
                 }
                 AppEvent::KeyEvent(key_event) => {
+                    // Guard: avoid handling an immediate duplicate event for Backspace.
+                    // Some terminals can emit an extra event very quickly after the initial
+                    // press (either as Repeat or even a second Press), which feels like a
+                    // double-tap. Narrow this to Backspace to preserve normal typing elsewhere.
+                    if matches!(key_event.code, KeyCode::Backspace) {
+                        if let Some((code, mods, t0)) = &self.last_keypress {
+                            let same_key = *code == key_event.code && *mods == key_event.modifiers;
+                            let very_soon = t0.elapsed() < KEY_REPEAT_DEBOUNCE;
+                            let is_repeat_or_dup_press = key_event.kind == KeyEventKind::Repeat
+                                || key_event.kind == KeyEventKind::Press;
+                            if same_key && very_soon && is_repeat_or_dup_press {
+                                continue;
+                            }
+                        }
+                    }
                     match key_event {
                         KeyEvent {
                             code: KeyCode::Char('c'),
@@ -292,6 +317,11 @@ impl App<'_> {
                             // Ignore Release key events for now.
                         }
                     };
+                    // Record last Press for debounce comparisons.
+                    if key_event.kind == KeyEventKind::Press {
+                        self.last_keypress =
+                            Some((key_event.code, key_event.modifiers, Instant::now()));
+                    }
                 }
                 AppEvent::Paste(text) => {
                     self.dispatch_paste_event(text);
