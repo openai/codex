@@ -191,7 +191,7 @@ impl AuthModeWidget {
                 .as_ref()
                 .and_then(|child| child.get_login_url())
             {
-                lines.push(Line::from("  Open the following link to authenticate:"));
+                lines.push(Line::from("  If the link doesn't open automatically, open the following link to authenticate:"));
                 lines.push(Line::from(vec![
                     Span::raw("  "),
                     Span::styled(
