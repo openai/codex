@@ -244,16 +244,6 @@ impl WidgetRef for StatusIndicatorWidget {
                 .add_modifier(Modifier::DIM | Modifier::BOLD),
         ));
         spans.push(Span::styled(
-            " or ",
-            Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
-        ));
-        spans.push(Span::styled(
-            "Ctrl C",
-            Style::default()
-                .fg(Color::Gray)
-                .add_modifier(Modifier::DIM | Modifier::BOLD),
-        ));
-        spans.push(Span::styled(
             " to interrupt)",
             Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
         ));
