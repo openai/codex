@@ -33,13 +33,13 @@ export function classifySuccessTitle(
 
   // Tests (vitest / npm test / pnpm test)
   if (/(vitest|\b(pnpm|npm|yarn)\s+(run\s+)?test\b)/.test(lower)) {
-    return "✅ Tests";
+    return "● Tests";
   }
 
   // 1) ripgrep listings: rg --files
   if (/\brg\b/.test(lower) && /--files(\b|=)/.test(lower)) {
     const n = countLines(outputText);
-    return `📁 Listed ${n} ${n === 1 ? "path" : "paths"}`;
+    return `● Listed ${n} ${n === 1 ? "path" : "paths"}`;
   }
 
   // 2) ripgrep search: rg [opts] PATTERN [PATH]
@@ -63,10 +63,10 @@ export function classifySuccessTitle(
       break;
     }
     if (pattern && path) {
-      return `🔍 Searched for "${pattern}" in "${path}"`;
+      return `● Searched for "${pattern}" in "${path}"`;
     }
     if (pattern) {
-      return `🔍 Searched for "${pattern}"`;
+      return `● Searched for "${pattern}"`;
     }
   }
 
@@ -75,7 +75,7 @@ export function classifySuccessTitle(
     const tokens = beforePipe.replace(/\s+/g, " ").trim().split(" ");
     const last = tokens[tokens.length - 1];
     if (last && !last.startsWith("-") && !/['"]\d+,\d+p['"]/.test(last)) {
-      return `📖 Read ${last}`;
+      return `● Read ${last}`;
     }
   }
 
@@ -83,7 +83,7 @@ export function classifySuccessTitle(
   if (/^cat\s+/.test(lower)) {
     const m = beforePipe.match(/^cat\s+([^\s|&;]+)/);
     if (m && m[1]) {
-      return `📖 Read ${m[1]}`;
+      return `● Read ${m[1]}`;
     }
   }
 
@@ -91,16 +91,16 @@ export function classifySuccessTitle(
   if (/^(ls|find)\b/.test(lower)) {
     const n = countLines(outputText);
     if (n > 0) {
-      return `📁 Listed ${n} ${n === 1 ? "path" : "paths"}`;
+      return `● Listed ${n} ${n === 1 ? "path" : "paths"}`;
     }
   }
 
   // 6) Console prints: echo / node -e console.log(...)
   if (/^echo\s+/.test(lower)) {
-    return "📣 Printed output";
+    return "● Printed output";
   }
   if (/\bnode\b\s+-e\b/.test(lower) && /console\.log\s*\(/i.test(cmd)) {
-    return "📣 Printed output";
+    return "● Printed output";
   }
 
   // 6) Generic counters via wc -l pipeline with numeric output
@@ -108,16 +108,16 @@ export function classifySuccessTitle(
     const n = Number((outputText ?? "0").trim());
     // Count kinds by upstream command
     if (/\brg\b/.test(lower) && /--files(\b|=)/.test(lower)) {
-      return `📁 Counted ${n} ${n === 1 ? "path" : "paths"}`;
+      return `● Counted ${n} ${n === 1 ? "path" : "paths"}`;
     }
     if (/\bfind\b/.test(lower) || /\bls\b/.test(lower)) {
-      return `📁 Counted ${n} ${n === 1 ? "entry" : "entries"}`;
+      return `● Counted ${n} ${n === 1 ? "entry" : "entries"}`;
     }
     const pat = beforePipe.match(/rg\s+[^"']*(["'])(.*?)\1/);
     if (/\brg\b/.test(lower) && pat) {
-      return `🔍 Found ${n} ${n === 1 ? "match" : "matches"}`;
+      return `● Found ${n} ${n === 1 ? "match" : "matches"}`;
     }
-    return `📄 Counted ${n} ${n === 1 ? "line" : "lines"}`;
+    return `● Counted ${n} ${n === 1 ? "line" : "lines"}`;
   }
 
   return undefined;
@@ -134,9 +134,9 @@ export function classifyRunningTitle(commandText: string): string | undefined {
     return "⏳ Running tests";
   }
 
-  // rg --files => Listing
+  // rg --files => Listing files
   if (/\brg\b/.test(lower) && /--files(\b|=)/.test(lower)) {
-    return `⏳ Listing ${commandText}`;
+    return `⏳ Listing files`;
   }
 
   // rg pattern path => Searching
@@ -173,12 +173,27 @@ export function classifyRunningTitle(commandText: string): string | undefined {
     (/\bsed\b/.test(lower) && /-n\b/.test(lower) && /p['"]?\b/.test(lower)) ||
     /^cat\s+/.test(lower)
   ) {
-    return `⏳ Reading ${commandText}`;
+    // Prefer extracting the concrete filename so we only show the file being read
+    if (/\bsed\b/.test(lower)) {
+      const tokens = beforePipe.replace(/\s+/g, " ").trim().split(" ");
+      const last = tokens[tokens.length - 1];
+      if (last && !last.startsWith("-") && !/['"]\d+,\d+p['"]/.test(last)) {
+        return `⏳ Reading ${last}`;
+      }
+      return `⏳ Reading`;
+    }
+    if (/^cat\s+/.test(lower)) {
+      const m = beforePipe.match(/^cat\s+([^\s|&;]+)/);
+      if (m && m[1]) {
+        return `⏳ Reading ${m[1]}`;
+      }
+      return `⏳ Reading`;
+    }
   }
 
-  // ls/find => Listing
+  // ls/find => Listing files
   if (/^(ls|find)\b/.test(lower)) {
-    return `⏳ Listing ${commandText}`;
+    return `⏳ Listing files`;
   }
 
   return undefined;
@@ -206,18 +221,18 @@ export function classifyFailureTitle(
 
   // Tests failed
   if (/(vitest|\b(pnpm|npm|yarn)\s+(run\s+)?test\b)/.test(lower)) {
-    return "❌ Tests failed";
+    return "⨯ Tests failed";
   }
 
   // Command not found
   if (/command not found/i.test(out)) {
     const first = beforePipe.split(/\s+/)[0] ?? "command";
-    return `⚠️ Command not found ${first}`;
+    return `⨯ Command not found ${first}`;
   }
 
   // Permission denied
   if (/permission denied/i.test(out)) {
-    return "🚫 Permission denied";
+    return "⨯ Permission denied";
   }
 
   return undefined;

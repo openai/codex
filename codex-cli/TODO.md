@@ -1,10 +1,14 @@
 # To do list with go here
-Top to do (big)
-- fix command rendering
-
-
 Top to do (sm)
-- move the "(  ●   ) 2s  Thinking."
+speed up animation
+group read together
+remove space between > and assistant message
+
+images
+- https://github.com/chjj/tng
+- https://github.com/chjj/blessed
+- https://github.com/atanunq/viu
+
 - fix slash command formatting
 - improve @ commands
 

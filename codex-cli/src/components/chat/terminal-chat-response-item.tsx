@@ -13,7 +13,7 @@ import type { FileOpenerScheme } from "src/utils/config";
 import { useTerminalSize } from "../../hooks/use-terminal-size";
 import { collapseXmlBlocks } from "../../utils/file-tag-utils";
 import { parseToolCall, parseToolCallOutput } from "../../utils/parsers";
-import chalk, { type ForegroundColorName } from "chalk";
+import chalk from "chalk";
 import { Box, Text } from "ink";
 import { parse, setOptions } from "marked";
 import TerminalRenderer from "marked-terminal";
@@ -115,11 +115,6 @@ export function TerminalChatResponseReasoning({
   );
 }
 
-const colorsByRole: Record<string, ForegroundColorName> = {
-  assistant: "magentaBright",
-  user: "blueBright",
-};
-
 function TerminalChatResponseMessage({
   message,
   setOverlayMode,
@@ -164,12 +159,9 @@ function TerminalChatResponseMessage({
 
   if (message.role === "user") {
     return (
-      <Box borderStyle="round">
-        <Box paddingX={1} flexDirection="column">
-          <Text bold color={colorsByRole[message.role] || "gray"}>
-            {message.role}
-          </Text>
-          {contentBody}
+      <Box flexDirection="column">
+        <Box paddingX={1}>
+          <Text color="gray">{contentBody}</Text>
         </Box>
       </Box>
     );
@@ -179,7 +171,7 @@ function TerminalChatResponseMessage({
     <Box flexDirection="column">
       <Box>
         <Text>{"> "}</Text>
-        <Box marginLeft={1}>{contentBody}</Box>
+        <Box>{contentBody}</Box>
       </Box>
     </Box>
   );

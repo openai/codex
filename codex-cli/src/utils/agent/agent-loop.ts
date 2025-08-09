@@ -2,6 +2,7 @@ import type { ReviewDecision } from "./review.js";
 import type { ApplyPatchCommand, ApprovalPolicy } from "../../approvals.js";
 import type { AppConfig } from "../config.js";
 import type { ResponseEvent } from "../responses.js";
+import type { ExecInput } from "./sandbox/interface.js";
 import type {
   ResponseFunctionToolCall,
   ResponseInputItem,
@@ -440,7 +441,7 @@ export class AgentLoop {
       } callId=${callId} args=${rawArguments}`,
     );
 
-    if (args == null) {
+    if (args == null && name !== "update_plan") {
       const outputItem: ResponseInputItem.FunctionCallOutput = {
         type: "function_call_output",
         call_id: item.call_id,
@@ -478,28 +479,58 @@ export class AgentLoop {
         explanation?: string;
         plan: Array<{ step: string; status: StepStatus }>;
       };
-      const parsed = (args ?? {}) as Partial<UpdatePlanArgs>;
+      let parsed: Partial<UpdatePlanArgs> = {};
+      try {
+        parsed = JSON.parse(rawArguments ?? "{}");
+      } catch {
+        parsed = {};
+      }
       const steps = Array.isArray(parsed.plan) ? parsed.plan : [];
       const explanation =
         typeof parsed.explanation === "string" ? parsed.explanation : "";
 
-      const statusToBox: Record<StepStatus, string> = {
-        pending: "[ ]",
-        in_progress: "[~]",
-        completed: "[x]",
+      const statusToMark: Record<StepStatus, string> = {
+        pending: "☐",
+        in_progress: "☐",
+        completed: "✓",
       } as const;
 
+      const BLUE = "\x1b[34m";
+      const GREEN = "\x1b[32m";
+      const STRIKE = "\x1b[9m";
+      const RESET = "\x1b[0m";
+
+      const completedCount = steps.filter(
+        (s) => s?.status === "completed",
+      ).length;
+      const totalCount = steps.length;
+      const progressBar =
+        "█".repeat(Math.max(0, completedCount)) +
+        "░".repeat(Math.max(0, totalCount - completedCount));
+
       const lines: Array<string> = [];
+      const header = `📋 Updated plan [${progressBar}] ${completedCount}/${totalCount}`;
+      lines.push(header);
       if (explanation.trim()) {
         lines.push(explanation.trim());
-        lines.push("");
       }
-      for (const s of steps) {
-        const sym =
-          statusToBox[(s?.status as StepStatus) || "pending"] || "[ ]";
-        const label = typeof s?.step === "string" ? s.step : "";
-        lines.push(`${sym} ${label}`.trim());
-      }
+      steps.forEach((s, idx) => {
+        const status: StepStatus = (s?.status as StepStatus) || "pending";
+        const mark = statusToMark[status] || "☐";
+        const raw = typeof s?.step === "string" ? s.step : "";
+        const indent = idx === 0 ? "   ⎿ " : "     ";
+        let shown = raw;
+        let markShown = mark;
+        if (status === "completed") {
+          // Green checkmark; strikethrough text
+          markShown = `${GREEN}${mark}${RESET}`;
+          shown = `${STRIKE}${raw}${RESET}`;
+        } else if (status === "in_progress") {
+          // Only the current in-progress task is blue; leave others default
+          shown = `${BLUE}${raw}${RESET}`;
+        }
+        lines.push(`${indent}${markShown} ${shown}`);
+      });
       const text = lines.join("\n");
 
       try {
@@ -524,7 +555,7 @@ export class AgentLoop {
         metadata,
         additionalItems: additionalItemsFromExec,
       } = await handleExecCommand(
-        args,
+        args as ExecInput,
         this.config,
         this.approvalPolicy,
         this.additionalWritableRoots,
@@ -863,6 +894,8 @@ export class AgentLoop {
               reasoning.summary = "auto";
             } else if (this.model.startsWith("gpt-5")) {
               reasoning = { effort: "low" } as Reasoning;
+              // Opt-in to reasoning summaries by default
+              (reasoning as unknown as { summary?: string }).summary = "auto";
             }
             if (this.model.startsWith("gpt-4.1")) {
               modelSpecificInstructions = applyPatchToolInstructions;
@@ -1263,6 +1296,8 @@ export class AgentLoop {
                 }
               } else if (this.model.startsWith("gpt-5")) {
                 reasoning = { effort: "low" } as Reasoning;
+                // Opt-in to reasoning summaries by default on retry as well
+                (reasoning as unknown as { summary?: string }).summary = "auto";
               }
 
               const mergedInstructions = [prefix, this.instructions]
@@ -1686,7 +1721,7 @@ export class AgentLoop {
 const prefix = `You are a coding agent running in the Codex CLI, a terminal-based coding assistant. Codex CLI is an open source project led by OpenAI. You are expected to be precise, safe, and helpful.
 
 Your capabilities:
-- Receive user prompts and other context provided by the harness, such as files in the workspace.
+- Receive user prompts and other context provided by the users, such as files in the workspace.
 - Communicate with the user by streaming thinking & responses, and by making & updating plans.
 - Emit function calls to run terminal commands and apply patches. Depending on how this specific run is configured, you can request that these function calls be escalated to the user for approval before running. More on this in the "Sandbox and approvals" section.
 

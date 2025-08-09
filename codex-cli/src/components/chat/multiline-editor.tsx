@@ -211,6 +211,23 @@ const MultilineTextEditorInner = (
         console.log("[MultilineTextEditor] event", { input, key });
       }
 
+      // Fast-path: let Cmd+Enter (meta+return) insert a newline.
+      // Some terminals map the Command key to `meta` in Ink's key object.
+      if (key.return && key.meta) {
+        buffer.current.newline();
+        setVersion((v) => v + 1);
+        return;
+      }
+
+      // Common terminals don't send distinct codes for Shift+Enter unless
+      // modifyOtherKeys is enabled. When Ink exposes `key.shift`, treat it
+      // as a newline insert rather than submit.
+      if (key.return && key.shift) {
+        buffer.current.newline();
+        setVersion((v) => v + 1);
+        return;
+      }
+
       // 1a) CSI-u / modifyOtherKeys *mode 2* (Ink strips initial ESC, so we
       //     start with '[') – format: "[<code>;<modifiers>u".
       if (input.startsWith("[") && input.endsWith("u")) {

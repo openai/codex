@@ -1,7 +1,7 @@
 import { log } from "../../utils/logger/log.js";
-import { Box, Text, useInput, useStdin } from "ink";
-import React, { useState } from "react";
-import { useInterval } from "use-interval";
+import { Box, Text, useInput } from "ink";
+import React, { useEffect, useMemo, useState } from "react";
+import { ANIMATION_CYCLE_MS } from "./animation-config";
 
 // Retaining a single static placeholder text for potential future use.  The
 // more elaborate randomised thinking prompts were removed to streamline the
@@ -10,51 +10,35 @@ import { useInterval } from "use-interval";
 export default function TerminalChatInputThinking({
   onInterrupt,
   active,
-  thinkingSeconds,
+  thinkingSeconds: _thinkingSeconds,
+  title,
 }: {
   onInterrupt: () => void;
   active: boolean;
   thinkingSeconds: number;
+  title?: string;
 }): React.ReactElement {
   const [awaitingConfirm, setAwaitingConfirm] = useState(false);
-  const [dots, setDots] = useState("");
+  const [persistentTitle, setPersistentTitle] = useState<string>("");
+  const [phase, setPhase] = useState<number>(0);
 
-  // Animate the ellipsis
-  useInterval(() => {
-    setDots((prev) => (prev.length < 3 ? prev + "." : ""));
-  }, 500);
-
-  const { stdin, setRawMode } = useStdin();
-
-  React.useEffect(() => {
-    if (!active) {
-      return;
-    }
-
-    setRawMode?.(true);
-
-    const onData = (data: Buffer | string) => {
-      if (awaitingConfirm) {
-        return;
-      }
-
-      const str = Buffer.isBuffer(data) ? data.toString("utf8") : data;
-      if (str === "\x1b\x1b") {
-        log(
-          "raw stdin: received collapsed ESC ESC – starting confirmation timer",
-        );
-        setAwaitingConfirm(true);
-        setTimeout(() => setAwaitingConfirm(false), 1500);
-      }
-    };
-
-    stdin?.on("data", onData);
-    return () => {
-      stdin?.off("data", onData);
-    };
-  }, [stdin, awaitingConfirm, onInterrupt, active, setRawMode]);
+  // Avoid forcing raw-mode globally; rely on Ink's useInput handling with isActive
 
   // No timers required beyond tracking the elapsed seconds supplied via props.
+
+  // Keep last non-empty, non-default (not "Thinking") title visible until a new one arrives
+  useEffect(() => {
+    const incoming = typeof title === "string" ? title.trim() : "";
+    const isDefaultThinking = /^thinking$/i.test(incoming);
+    if (
+      incoming.length > 0 &&
+      !isDefaultThinking &&
+      incoming !== persistentTitle
+    ) {
+      setPersistentTitle(incoming);
+      setPhase(0);
+    }
+  }, [title, persistentTitle]);
 
   useInput(
     (_input, key) => {
@@ -75,48 +59,79 @@ export default function TerminalChatInputThinking({
     { isActive: active },
   );
 
-  // Custom ball animation including the elapsed seconds
-  const ballFrames = [
-    "( ●    )",
-    "(  ●   )",
-    "(   ●  )",
-    "(    ● )",
-    "(     ●)",
-    "(    ● )",
-    "(   ●  )",
-    "(  ●   )",
-    "( ●    )",
-    "(●     )",
-  ];
+  // Animate a sliding shimmer over the title using levels 0..3 (white→dark gray)
+  const animatedNodes = useMemo(() => {
+    const text = (persistentTitle || "Thinking").split("");
+    const n = text.length;
+    // More ranges with darkest in the middle (peak)
+    // Intensities 0 (white) .. 8 (darkest)
+    const kernel = [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8, // ramp up to darkest
+      8,
+      7,
+      6,
+      5,
+      4,
+      3,
+      2,
+      1, // ramp down symmetrically
+    ];
+    const levels = new Array<number>(n).fill(0);
+    const center = phase % Math.max(1, n); // center position moves across text
+    const half = Math.floor(kernel.length / 2);
+    for (let k = 0; k < kernel.length; k += 1) {
+      const idx = (center - half + k + n) % n; // wrap kernel around text
+      levels[idx] = kernel[k] ?? 0;
+    }
 
-  const [frame, setFrame] = useState(0);
+    // Palette from white (0) to very dark gray (8)
+    const palette = [
+      "#FFFFFF", // 0
+      "#EDEDED", // 1
+      "#DBDBDB", // 2
+      "#C9C9C9", // 3
+      "#B7B7B7", // 4
+      "#A5A5A5", // 5
+      "#8F8F8F", // 6
+      "#6F6F6F", // 7
+      "#4A4A4A", // 8 darkest
+    ];
 
-  useInterval(() => {
-    setFrame((idx) => (idx + 1) % ballFrames.length);
-  }, 80);
+    return text.map((ch, i) => {
+      const lvl = levels[i] ?? 0;
+      const color = palette[Math.max(0, Math.min(palette.length - 1, lvl))];
+      return (
+        <Text key={i} color={color}>
+          {ch}
+        </Text>
+      );
+    });
+  }, [persistentTitle, phase]);
 
-  // Preserve the spinner (ball) animation while keeping the elapsed seconds
-  // text static.  We achieve this by rendering the bouncing ball inside the
-  // parentheses and appending the seconds counter *after* the spinner rather
-  // than injecting it directly next to the ball (which caused the counter to
-  // move horizontally together with the ball).
-
-  const frameTemplate = ballFrames[frame] ?? ballFrames[0];
-  const frameWithSeconds = `${frameTemplate} ${thinkingSeconds}s`;
+  useEffect(() => {
+    if (!active) {
+      return;
+    }
+    const textLen = (persistentTitle || "Thinking").length;
+    const cycle = Math.max(1, textLen); // number of positions for a full pass
+    const frameMs = Math.max(16, Math.round(ANIMATION_CYCLE_MS / cycle));
+    const id = setInterval(() => {
+      setPhase((p) => (p + 1) % cycle);
+    }, frameMs);
+    return () => clearInterval(id);
+  }, [active, persistentTitle]);
 
   return (
     <Box flexDirection="column" gap={1}>
-      <Box justifyContent="space-between">
-        <Box gap={2}>
-          <Text>{frameWithSeconds}</Text>
-          <Text>
-            Thinking
-            {dots}
-          </Text>
-        </Box>
-        <Text>
-          Press <Text bold>Esc</Text> twice to interrupt
-        </Text>
+      <Box>
+        <Text>{animatedNodes}</Text>
       </Box>
       {awaitingConfirm && (
         <Text dimColor>

@@ -15,11 +15,14 @@ export interface TerminalHeaderProps {
   agent?: AgentLoop;
   initialImagePaths?: Array<string>;
   flexModeEnabled?: boolean;
+  /** Optional dynamic cursor/indicator to show before the title (e.g. blinking >_) */
+  blinkingIndicator?: string;
 }
 
 const TerminalHeader: React.FC<TerminalHeaderProps> = ({
   terminalRows,
-  version,
+  // keeping version for potential future use; prefix to silence unused warnings
+  version: _version,
   PWD,
   model,
   provider = "openai",
@@ -28,68 +31,90 @@ const TerminalHeader: React.FC<TerminalHeaderProps> = ({
   agent,
   initialImagePaths,
   flexModeEnabled = false,
+  blinkingIndicator,
 }) => {
   return (
     <>
       {terminalRows < 10 ? (
-        // Compact header for small terminal windows
         <Text>
-          ● Codex v{version} - {PWD} - {model} ({provider}) -{" "}
-          <Text color={colorsByPolicy[approvalPolicy]}>{approvalPolicy}</Text>
-          {flexModeEnabled ? " - flex-mode" : ""}
+          You are using <Text bold>OpenAI Codex</Text> in {PWD}
         </Text>
       ) : (
         <>
           <Box borderStyle="round" paddingX={1} width={64}>
+            <Text color="gray">{(blinkingIndicator ?? ">_") + " "}</Text>
             <Text>
-              ● OpenAI <Text bold>Codex</Text>{" "}
-              <Text dimColor>
-                (research preview) <Text color="blueBright">v{version}</Text>
-              </Text>
+              You are using OpenAI <Text bold>Codex</Text> in{" "}
+              <Text color="gray">{PWD}</Text>
             </Text>
           </Box>
           <Box
-            borderStyle="round"
-            borderColor="gray"
             paddingX={1}
             width={64}
             flexDirection="column"
+            marginTop={1}
+            marginBottom={1}
           >
+            <Text dimColor>
+              Describe a task to get started or try one of the following
+              commands:
+            </Text>
+            <Text> </Text>
             <Text>
-              localhost <Text dimColor>session:</Text>{" "}
-              <Text color="magentaBright" dimColor>
-                {agent?.sessionId ?? "<no-session>"}
-              </Text>
+              <Text color="blueBright">/init</Text> - create an AGENTS.md file
+              with instructions for Codex
             </Text>
-            <Text dimColor>
-              <Text color="blueBright">↳</Text> workdir: <Text bold>{PWD}</Text>
+            <Text>
+              <Text color="blueBright">/status</Text> - show current session
+              configuration and token usage
             </Text>
-            <Text dimColor>
-              <Text color="blueBright">↳</Text> model: <Text bold>{model}</Text>
-            </Text>
-            <Text dimColor>
-              <Text color="blueBright">↳</Text> provider:{" "}
-              <Text bold>{provider}</Text>
-            </Text>
-            <Text dimColor>
-              <Text color="blueBright">↳</Text> approval:{" "}
-              <Text bold color={colorsByPolicy[approvalPolicy]}>
-                {approvalPolicy}
-              </Text>
-            </Text>
-            {flexModeEnabled && (
-              <Text dimColor>
-                <Text color="blueBright">↳</Text> flex-mode:{" "}
-                <Text bold>enabled</Text>
-              </Text>
-            )}
-            {initialImagePaths?.map((img, idx) => (
-              <Text key={img ?? idx} color="gray">
-                <Text color="blueBright">↳</Text> image:{" "}
-                <Text bold>{path.basename(img)}</Text>
-              </Text>
-            ))}
           </Box>
+          {false && (
+            <Box
+              borderStyle="round"
+              borderColor="gray"
+              paddingX={1}
+              width={64}
+              flexDirection="column"
+            >
+              <Text>
+                localhost <Text dimColor>session:</Text>{" "}
+                <Text color="magentaBright" dimColor>
+                  {agent?.sessionId ?? "<no-session>"}
+                </Text>
+              </Text>
+              <Text dimColor>
+                <Text color="blueBright">↳</Text> workdir:{" "}
+                <Text bold>{PWD}</Text>
+              </Text>
+              <Text dimColor>
+                <Text color="blueBright">↳</Text> model:{" "}
+                <Text bold>{model}</Text>
+              </Text>
+              <Text dimColor>
+                <Text color="blueBright">↳</Text> provider:{" "}
+                <Text bold>{provider}</Text>
+              </Text>
+              <Text dimColor>
+                <Text color="blueBright">↳</Text> approval:{" "}
+                <Text bold color={colorsByPolicy[approvalPolicy]}>
+                  {approvalPolicy}
+                </Text>
+              </Text>
+              {flexModeEnabled && (
+                <Text dimColor>
+                  <Text color="blueBright">↳</Text> flex-mode:{" "}
+                  <Text bold>enabled</Text>
+                </Text>
+              )}
+              {initialImagePaths?.map((img, idx) => (
+                <Text key={img ?? idx} color="gray">
+                  <Text color="blueBright">↳</Text> image:{" "}
+                  <Text bold>{path.basename(img)}</Text>
+                </Text>
+              ))}
+            </Box>
+          )}
         </>
       )}
     </>

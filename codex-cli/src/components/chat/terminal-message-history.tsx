@@ -14,6 +14,7 @@ import {
   classifyRunningTitle,
   classifySuccessTitle,
   classifyFailureTitle,
+  extractBeforeFirstUnquotedPipe,
 } from "./tools/classify.js";
 import { CommandStatus } from "./tools/command-status.js";
 import { parseToolCall, parseToolCallOutput } from "../../utils/parsers.js";
@@ -182,9 +183,8 @@ const TerminalMessageHistory: React.FC<TerminalMessageHistoryProps> = ({
         }
       }
 
-      // Suppress empty reasoning updates (i.e. items with an empty summary).
-      const msg = it as unknown as { summary?: Array<unknown> };
-      if (msg.summary?.length === 0) {
+      // Suppress all reasoning items from history – thinking indicator shows summaries.
+      if ((it as { type?: string }).type === "reasoning") {
         continue;
       }
 
@@ -210,9 +210,10 @@ const TerminalMessageHistory: React.FC<TerminalMessageHistoryProps> = ({
           d.kind === "command" &&
           d.state === "success" &&
           typeof d.customSuccessTitle === "string" &&
-          d.customSuccessTitle.startsWith("📖 Read ")
+          /^(?:●|📖)\s+Read\s+/.test(d.customSuccessTitle)
         ) {
           const files: Array<string> = [];
+          const seen = new Set<string>();
           let j = i;
           while (
             j < displayItems.length &&
@@ -220,12 +221,16 @@ const TerminalMessageHistory: React.FC<TerminalMessageHistoryProps> = ({
             (displayItems[j] as typeof d).state === "success" &&
             typeof (displayItems[j] as typeof d).customSuccessTitle ===
               "string" &&
-            (displayItems[j] as typeof d).customSuccessTitle!.startsWith(
-              "📖 Read ",
+            /^(?:●|📖)\s+Read\s+/.test(
+              (displayItems[j] as typeof d).customSuccessTitle as string,
             )
           ) {
             const title = (displayItems[j] as typeof d).customSuccessTitle!;
-            files.push(title.replace(/^📖 Read\s+/, ""));
+            const fname = title.replace(/^(?:●|📖)\s+Read\s+/, "");
+            if (!seen.has(fname)) {
+              files.push(fname);
+              seen.add(fname);
+            }
             j += 1;
           }
           items.push({ kind: "read_group", key: d.key, files });
@@ -279,11 +284,7 @@ const TerminalMessageHistory: React.FC<TerminalMessageHistoryProps> = ({
               marginTop={
                 message.type === "message" && message.role === "user" ? 0 : 1
               }
-              marginBottom={
-                message.type === "message" && message.role === "assistant"
-                  ? 1
-                  : 0
-              }
+              marginBottom={0}
             >
               <TerminalChatResponseItem
                 item={message}
@@ -295,10 +296,20 @@ const TerminalMessageHistory: React.FC<TerminalMessageHistoryProps> = ({
           );
         }
 
+        const prev = renderItems[index - 1];
+        const prevIsUserMessage =
+          prev &&
+          (prev as any).kind === "response" &&
+          (prev as any).item?.type === "message" &&
+          (prev as any).item?.role === "user";
         if (d.kind === "list_group") {
           return (
-            <Box key={`${d.key}-${index}`} flexDirection="column" marginTop={1}>
-              <CommandStatus title={`📁 Listed ${d.total} paths`} />
+            <Box
+              key={`${d.key}-${index}`}
+              flexDirection="column"
+              marginTop={prevIsUserMessage ? 0 : 1}
+            >
+              <CommandStatus title={`● Listed ${d.total} paths`} />
             </Box>
           );
         }
@@ -306,9 +317,13 @@ const TerminalMessageHistory: React.FC<TerminalMessageHistoryProps> = ({
         // Render grouped reads
         if (d.kind === "read_group") {
           const n = d.files.length;
-          const header = `📖 Read ${n} ${n === 1 ? "file" : "files"}`;
+          const header = `● Read ${n} ${n === 1 ? "file" : "files"}`;
           return (
-            <Box key={`${d.key}-${index}`} flexDirection="column" marginTop={1}>
+            <Box
+              key={`${d.key}-${index}`}
+              flexDirection="column"
+              marginTop={prevIsUserMessage ? 0 : 1}
+            >
               <CommandStatus title={header} />
               {d.files.map((f, idx) => (
                 <Box
@@ -327,18 +342,20 @@ const TerminalMessageHistory: React.FC<TerminalMessageHistoryProps> = ({
         // Render combined command item with state swapping.
         let title: string;
         if (d.state === "running") {
-          title = d.customRunningTitle ?? `⏳ Running ${d.commandText}`;
+          title = d.customRunningTitle ?? `● Running ${d.commandText}`;
         } else if (d.state === "success") {
-          title = d.customSuccessTitle ?? `⚡ Ran ${d.commandText}`;
+          title = d.customSuccessTitle ?? `● Ran ${d.commandText}`;
         } else if (d.state === "failure") {
           const custom = classifyFailureTitle(d.commandText, d.outputText);
-          title =
-            custom ??
-            `❌ Failed ${d.commandText}${
-              typeof d.exitCode === "number" ? ` (code ${d.exitCode})` : ""
-            }`;
+          if (custom) {
+            title = custom;
+          } else {
+            const beforePipe = extractBeforeFirstUnquotedPipe(d.commandText);
+            const firstWord = beforePipe.trim().split(/\s+/)[0] || beforePipe;
+            title = `⨯ Failed ${firstWord}`;
+          }
         } else {
-          title = `⏹️ Aborted ${d.commandText}`;
+          title = `● Aborted ${d.commandText}`;
         }
         const outputForDisplay =
           d.state !== "running" ? d.outputText : undefined;
@@ -349,6 +366,7 @@ const TerminalMessageHistory: React.FC<TerminalMessageHistoryProps> = ({
             workdir={d.workdir}
             outputText={outputForDisplay}
             fullStdout={fullStdout}
+            marginTop={prevIsUserMessage ? 0 : 1}
           />
         );
       })}

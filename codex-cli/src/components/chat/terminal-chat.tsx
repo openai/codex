@@ -155,6 +155,22 @@ export default function TerminalChat({
     initialApprovalPolicy,
   );
   const [thinkingSeconds, setThinkingSeconds] = useState(0);
+  const [thinkingTitle, setThinkingTitle] = useState<string>("");
+  // Header blinking indicator support (triggered by first user message "blink")
+  const BLINKING = [
+    ">_",
+    ">_",
+    ">_",
+    "-_",
+    ">_",
+    "-_",
+    ">_",
+    ">_",
+    ">_",
+    ">_",
+  ] as const;
+  const [blinkingActive, setBlinkingActive] = useState<boolean>(false);
+  const [blinkFrame, setBlinkFrame] = useState<number>(0);
 
   const handleCompact = async () => {
     setLoading(true);
@@ -255,13 +271,41 @@ export default function TerminalChat({
       onLastResponseId: setLastResponseId,
       onItem: (item) => {
         log(`onItem: ${JSON.stringify(item)}`);
+        // Intercept reasoning summaries: update thinking title instead of rendering in history
+        if ((item as any).type === "reasoning") {
+          // Prefer latest summary headline/text
+          const summaries = (item as any).summary as
+            | Array<{ headline?: string; text?: string }>
+            | undefined;
+          const last =
+            summaries && summaries.length > 0
+              ? summaries[summaries.length - 1]
+              : undefined;
+          const rawTitle =
+            (last?.headline || last?.text || "Thinking").split("\n")[0] ??
+            "Thinking";
+          const cleaned = rawTitle
+            .replace(/\*\*/g, "")
+            .replace(/\s*\.\.\.$/, "")
+            .trim();
+          setThinkingTitle(cleaned);
+          return;
+        }
         setItems((prev) => {
           const updated = uniqueById([...prev, item as ResponseItem]);
           saveRollout(sessionId, updated);
           return updated;
         });
       },
-      onLoading: setLoading,
+      onLoading: (v: boolean) => {
+        setLoading(v);
+        if (v) {
+          setThinkingTitle("Thinking");
+          setThinkingSeconds(0);
+        } else {
+          setThinkingTitle("");
+        }
+      },
       getCommandConfirmation: async (
         command: Array<string>,
         applyPatch: ApplyPatchCommand | undefined,
@@ -456,6 +500,29 @@ export default function TerminalChat({
     (i) => i.type === "message" && i.role === "user",
   ).length;
 
+  // Provide a trigger function for the header blinking animation
+  const triggerBlink = React.useCallback(() => {
+    setBlinkingActive(true);
+    setBlinkFrame(0);
+  }, []);
+
+  // Advance blinking animation frames
+  useEffect(() => {
+    if (!blinkingActive) return;
+    const id = setInterval(() => {
+      setBlinkFrame((f) => {
+        const next = f + 1;
+        if (next >= BLINKING.length) {
+          // stop after one pass
+          setBlinkingActive(false);
+          return BLINKING.length - 1;
+        }
+        return next;
+      });
+    }, 200);
+    return () => clearInterval(id);
+  }, [blinkingActive]);
+
   const contextLeftPercent = useMemo(
     () => calculateContextPercentRemaining(items, model),
     [items, model],
@@ -496,6 +563,7 @@ export default function TerminalChat({
               agent,
               initialImagePaths,
               flexModeEnabled: Boolean(config.flexMode),
+              blinkingIndicator: blinkingActive ? BLINKING[blinkFrame] : ">_",
             }}
             fileOpener={config.fileOpener}
           />
@@ -542,6 +610,7 @@ export default function TerminalChat({
                     }}
                     active={overlayMode === "none"}
                     thinkingSeconds={thinkingSeconds}
+                    title={thinkingTitle}
                   />
                 </Box>
               </>
@@ -549,7 +618,7 @@ export default function TerminalChat({
             <TerminalChatInput
               loading={loading}
               setItems={setItems}
-              isNew={Boolean(items.length === 0)}
+              isNew={userMsgCount === 0}
               setLastResponseId={setLastResponseId}
               confirmationPrompt={confirmationPrompt}
               explanation={explanation}
@@ -622,6 +691,7 @@ export default function TerminalChat({
               }}
               items={items}
               thinkingSeconds={thinkingSeconds}
+              onBlinkTrigger={triggerBlink}
             />
           </>
         )}
