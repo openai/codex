@@ -2,34 +2,50 @@
 
 #[cfg(feature = "otel")]
 mod imp {
-    use std::fs::{File, OpenOptions};
-    use std::io::{BufWriter, Write};
+    use std::fs::File;
+    use std::fs::OpenOptions;
+    use std::io::BufWriter;
+    use std::io::Write;
     use std::path::PathBuf;
     use std::sync::Mutex;
     use std::time::SystemTime;
 
     use opentelemetry::global;
     use opentelemetry::trace::TracerProvider as _;
-    use opentelemetry::{KeyValue, Value};
+    use opentelemetry::KeyValue;
+    use opentelemetry::Value;
     use opentelemetry_otlp as otlp;
     use opentelemetry_otlp::WithExportConfig;
-    use opentelemetry_sdk::export::trace::{ExportResult, SpanData, SpanExporter};
+    use opentelemetry_sdk::export::trace::ExportResult;
+    use opentelemetry_sdk::export::trace::SpanData;
+    use opentelemetry_sdk::export::trace::SpanExporter;
     use opentelemetry_sdk::export::ExportError;
     use opentelemetry_sdk::resource::Resource;
-    use opentelemetry_sdk::trace::{self as sdktrace, TracerProvider};
+    use opentelemetry_sdk::trace::TracerProvider;
+    use opentelemetry_sdk::trace::{self as sdktrace};
     use serde::Serialize;
     use serde_json::json;
     use tracing_opentelemetry::OpenTelemetryLayer;
-    use tracing_subscriber::{layer::SubscriberExt, Registry};
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::Registry;
 
     use std::collections::HashMap;
 
     #[derive(Clone, Debug)]
     pub enum TelemetryExporter {
         None,
-        OtlpFile { path: PathBuf, rotate_mb: Option<u64> },
-        OtlpGrpc { endpoint: String, headers: Vec<(String, String)> },
-        OtlpHttp { endpoint: String, headers: Vec<(String, String)> },
+        OtlpFile {
+            path: PathBuf,
+            rotate_mb: Option<u64>,
+        },
+        OtlpGrpc {
+            endpoint: String,
+            headers: Vec<(String, String)>,
+        },
+        OtlpHttp {
+            endpoint: String,
+            headers: Vec<(String, String)>,
+        },
     }
 
     #[derive(Clone, Debug)]
@@ -52,7 +68,9 @@ mod imp {
     }
 
     fn debug_enabled() -> bool {
-        std::env::var("CODEX_TELEMETRY_DEBUG").map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false)
+        std::env::var("CODEX_TELEMETRY_DEBUG")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
     }
 
     pub fn init_from_settings(settings: &TelemetrySettings) -> Option<TelemetryGuard> {
@@ -72,12 +90,21 @@ mod imp {
         use tracing_subscriber::prelude::*;
         let subscriber = Registry::default().with(if debug_enabled() {
             eprintln!("[codex-telemetry] debug enabled");
-            Some(tracing_subscriber::fmt::layer().with_ansi(true).with_target(true).with_level(true))
-        } else { None });
+            Some(
+                tracing_subscriber::fmt::layer()
+                    .with_ansi(true)
+                    .with_target(true)
+                    .with_level(true),
+            )
+        } else {
+            None
+        });
 
         match &settings.exporter {
             TelemetryExporter::None => {
-                if debug_enabled() { eprintln!("[codex-telemetry] exporter=None"); }
+                if debug_enabled() {
+                    eprintln!("[codex-telemetry] exporter=None");
+                }
                 let provider = provider_builder.build();
                 let tracer = provider.tracer(settings.service_name.clone());
                 let otel_layer = OpenTelemetryLayer::new(tracer);
@@ -88,15 +115,28 @@ mod imp {
                 global::set_tracer_provider(provider.clone());
                 return Some(TelemetryGuard { provider });
             }
-            TelemetryExporter::OtlpFile { path: _ignored, rotate_mb } => {
+            TelemetryExporter::OtlpFile {
+                path: _ignored,
+                rotate_mb,
+            } => {
                 let final_path = determine_traces_file_path(settings.codex_home.as_ref());
-                if debug_enabled() { eprintln!("[codex-telemetry] using OTLP JSON file exporter: {} (rotate_mb={:?})", final_path.display(), rotate_mb); }
+                if debug_enabled() {
+                    eprintln!(
+                        "[codex-telemetry] using OTLP JSON file exporter: {} (rotate_mb={:?})",
+                        final_path.display(),
+                        rotate_mb
+                    );
+                }
                 let mut resource_attributes: Vec<JsonKeyValue> = Vec::new();
                 for (k, v) in resource.iter() {
-                    resource_attributes.push(JsonKeyValue { key: k.as_str().to_string(), value: json_any_from(v.clone()) });
+                    resource_attributes.push(JsonKeyValue {
+                        key: k.as_str().to_string(),
+                        value: json_any_from(v.clone()),
+                    });
                 }
-                let exporter = OtlpJsonFileExporter::new(final_path, *rotate_mb, resource_attributes)
-                    .expect("create OTLP JSON file exporter");
+                let exporter =
+                    OtlpJsonFileExporter::new(final_path, *rotate_mb, resource_attributes)
+                        .expect("create OTLP JSON file exporter");
                 let batch = sdktrace::BatchSpanProcessor::builder(
                     exporter,
                     opentelemetry_sdk::runtime::Tokio,
@@ -108,13 +148,20 @@ mod imp {
                     .with_config(trace_config2);
             }
             TelemetryExporter::OtlpGrpc { endpoint, headers } => {
-                if debug_enabled() { eprintln!("[codex-telemetry] using OTLP gRPC exporter: endpoint={} headers={} pairs", endpoint, headers.len()); }
+                if debug_enabled() {
+                    eprintln!(
+                        "[codex-telemetry] using OTLP gRPC exporter: endpoint={} headers={} pairs",
+                        endpoint,
+                        headers.len()
+                    );
+                }
                 let mut exp = otlp::new_exporter().tonic().with_endpoint(endpoint.clone());
                 if !headers.is_empty() {
                     let mut map = tonic::metadata::MetadataMap::new();
                     for (k, v) in headers {
                         let key = k.parse::<tonic::metadata::MetadataKey<tonic::metadata::Ascii>>();
-                        let val = v.parse::<tonic::metadata::MetadataValue<tonic::metadata::Ascii>>();
+                        let val =
+                            v.parse::<tonic::metadata::MetadataValue<tonic::metadata::Ascii>>();
                         if let (Ok(key), Ok(val)) = (key, val) {
                             let _ = map.insert(key, val);
                         }
@@ -134,7 +181,13 @@ mod imp {
                     .with_config(sdktrace::Config::default().with_resource(resource));
             }
             TelemetryExporter::OtlpHttp { endpoint, headers } => {
-                if debug_enabled() { eprintln!("[codex-telemetry] using OTLP HTTP exporter: endpoint={} headers={} pairs", endpoint, headers.len()); }
+                if debug_enabled() {
+                    eprintln!(
+                        "[codex-telemetry] using OTLP HTTP exporter: endpoint={} headers={} pairs",
+                        endpoint,
+                        headers.len()
+                    );
+                }
                 let mut exp = otlp::new_exporter().http().with_endpoint(endpoint.clone());
                 if !headers.is_empty() {
                     let mut map: HashMap<String, String> = HashMap::new();
@@ -173,10 +226,7 @@ mod imp {
     /// hold onto the Guard for the process lifetime to ensure clean shutdown.
     pub fn build_layer(
         settings: &TelemetrySettings,
-    ) -> Option<(
-        TelemetryGuard,
-        opentelemetry_sdk::trace::Tracer,
-    )> {
+    ) -> Option<(TelemetryGuard, opentelemetry_sdk::trace::Tracer)> {
         if !settings.enabled {
             return None;
         }
@@ -191,20 +241,35 @@ mod imp {
 
         match &settings.exporter {
             TelemetryExporter::None => {
-                if debug_enabled() { eprintln!("[codex-telemetry] build_layer: exporter=None"); }
+                if debug_enabled() {
+                    eprintln!("[codex-telemetry] build_layer: exporter=None");
+                }
                 let provider = provider_builder.build();
                 let tracer = provider.tracer(settings.service_name.clone());
                 return Some((TelemetryGuard { provider }, tracer));
             }
-            TelemetryExporter::OtlpFile { path: _ignored, rotate_mb } => {
+            TelemetryExporter::OtlpFile {
+                path: _ignored,
+                rotate_mb,
+            } => {
                 let final_path = determine_traces_file_path(settings.codex_home.as_ref());
-                if debug_enabled() { eprintln!("[codex-telemetry] build_layer: file exporter at {} (rotate_mb={:?})", final_path.display(), rotate_mb); }
+                if debug_enabled() {
+                    eprintln!(
+                        "[codex-telemetry] build_layer: file exporter at {} (rotate_mb={:?})",
+                        final_path.display(),
+                        rotate_mb
+                    );
+                }
                 let mut resource_attributes: Vec<JsonKeyValue> = Vec::new();
                 for (k, v) in resource.iter() {
-                    resource_attributes.push(JsonKeyValue { key: k.as_str().to_string(), value: json_any_from(v.clone()) });
+                    resource_attributes.push(JsonKeyValue {
+                        key: k.as_str().to_string(),
+                        value: json_any_from(v.clone()),
+                    });
                 }
-                let exporter = OtlpJsonFileExporter::new(final_path, *rotate_mb, resource_attributes)
-                    .expect("create OTLP JSON file exporter");
+                let exporter =
+                    OtlpJsonFileExporter::new(final_path, *rotate_mb, resource_attributes)
+                        .expect("create OTLP JSON file exporter");
                 let batch = sdktrace::BatchSpanProcessor::builder(
                     exporter,
                     opentelemetry_sdk::runtime::Tokio,
@@ -215,13 +280,20 @@ mod imp {
                     .with_config(sdktrace::Config::default().with_resource(resource));
             }
             TelemetryExporter::OtlpGrpc { endpoint, headers } => {
-                if debug_enabled() { eprintln!("[codex-telemetry] build_layer: grpc exporter endpoint={} headers={} pairs", endpoint, headers.len()); }
+                if debug_enabled() {
+                    eprintln!(
+                        "[codex-telemetry] build_layer: grpc exporter endpoint={} headers={} pairs",
+                        endpoint,
+                        headers.len()
+                    );
+                }
                 let mut exp = otlp::new_exporter().tonic().with_endpoint(endpoint.clone());
                 if !headers.is_empty() {
                     let mut map = tonic::metadata::MetadataMap::new();
                     for (k, v) in headers {
                         let key = k.parse::<tonic::metadata::MetadataKey<tonic::metadata::Ascii>>();
-                        let val = v.parse::<tonic::metadata::MetadataValue<tonic::metadata::Ascii>>();
+                        let val =
+                            v.parse::<tonic::metadata::MetadataValue<tonic::metadata::Ascii>>();
                         if let (Ok(key), Ok(val)) = (key, val) {
                             let _ = map.insert(key, val);
                         }
@@ -241,7 +313,13 @@ mod imp {
                     .with_config(sdktrace::Config::default().with_resource(resource));
             }
             TelemetryExporter::OtlpHttp { endpoint, headers } => {
-                if debug_enabled() { eprintln!("[codex-telemetry] build_layer: http exporter endpoint={} headers={} pairs", endpoint, headers.len()); }
+                if debug_enabled() {
+                    eprintln!(
+                        "[codex-telemetry] build_layer: http exporter endpoint={} headers={} pairs",
+                        endpoint,
+                        headers.len()
+                    );
+                }
                 let mut exp = otlp::new_exporter().http().with_endpoint(endpoint.clone());
                 if !headers.is_empty() {
                     let mut map: HashMap<String, String> = HashMap::new();
@@ -296,12 +374,20 @@ mod imp {
     }
     impl std::error::Error for FileExportError {}
     impl ExportError for FileExportError {
-        fn exporter_name(&self) -> &'static str { "otlp-json-file" }
+        fn exporter_name(&self) -> &'static str {
+            "otlp-json-file"
+        }
     }
 
     impl OtlpJsonFileExporter {
-        fn new(path: PathBuf, rotate_mb: Option<u64>, resource_attributes: Vec<JsonKeyValue>) -> std::io::Result<Self> {
-            if debug_enabled() { eprintln!("[codex-telemetry] opening trace file: {}", path.display()); }
+        fn new(
+            path: PathBuf,
+            rotate_mb: Option<u64>,
+            resource_attributes: Vec<JsonKeyValue>,
+        ) -> std::io::Result<Self> {
+            if debug_enabled() {
+                eprintln!("[codex-telemetry] opening trace file: {}", path.display());
+            }
             let file = OpenOptions::new().create(true).append(true).open(&path)?;
             Ok(Self {
                 writer: Mutex::new(BufWriter::new(file)),
@@ -312,19 +398,25 @@ mod imp {
         }
 
         fn maybe_rotate(&self) -> std::io::Result<()> {
-            let Some(limit) = self.rotate_bytes else { return Ok(()); };
+            let Some(limit) = self.rotate_bytes else {
+                return Ok(());
+            };
             let meta = std::fs::metadata(&self.path)?;
             if meta.len() as u64 >= limit {
-                let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-                let rotated = self
-                    .path
-                    .with_extension(format!("json.{}", secs));
+                let secs = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let rotated = self.path.with_extension(format!("json.{}", secs));
                 {
                     let mut w = self.writer.lock().unwrap();
                     w.flush()?;
                 }
                 std::fs::rename(&self.path, rotated)?;
-                let file = OpenOptions::new().create(true).append(true).open(&self.path)?;
+                let file = OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&self.path)?;
                 let mut guard = self.writer.lock().unwrap();
                 *guard = BufWriter::new(file);
             }
@@ -332,12 +424,24 @@ mod imp {
         }
 
         fn write_traces_line(&self, batch: Vec<SpanData>) -> std::io::Result<()> {
-            if debug_enabled() { eprintln!("[codex-telemetry] exporting {} span(s) to {}", batch.len(), self.path.display()); }
+            if debug_enabled() {
+                eprintln!(
+                    "[codex-telemetry] exporting {} span(s) to {}",
+                    batch.len(),
+                    self.path.display()
+                );
+            }
             let spans_json: Vec<JsonSpan> = batch.into_iter().map(span_to_json).collect();
             let traces = TracesData {
                 resourceSpans: vec![JsonResourceSpans {
-                    resource: Some(JsonResource { attributes: self.resource_attributes.clone() }),
-                    scopeSpans: vec![JsonScopeSpans { scope: JsonScope {}, spans: spans_json, schemaUrl: String::new() }],
+                    resource: Some(JsonResource {
+                        attributes: self.resource_attributes.clone(),
+                    }),
+                    scopeSpans: vec![JsonScopeSpans {
+                        scope: JsonScope {},
+                        spans: spans_json,
+                        schemaUrl: String::new(),
+                    }],
                     schemaUrl: String::new(),
                 }],
             };
@@ -350,7 +454,10 @@ mod imp {
     }
 
     impl SpanExporter for OtlpJsonFileExporter {
-        fn export(&mut self, batch: Vec<SpanData>) -> futures_util::future::BoxFuture<'static, ExportResult> {
+        fn export(
+            &mut self,
+            batch: Vec<SpanData>,
+        ) -> futures_util::future::BoxFuture<'static, ExportResult> {
             if batch.is_empty() {
                 return Box::pin(async { Ok(()) });
             }
@@ -476,25 +583,43 @@ mod imp {
 
     // ===== mapping helpers =====
     fn json_kv_from(kv: &KeyValue) -> JsonKeyValue {
-        JsonKeyValue { key: kv.key.as_str().to_string(), value: json_any_from(kv.value.clone()) }
+        JsonKeyValue {
+            key: kv.key.as_str().to_string(),
+            value: json_any_from(kv.value.clone()),
+        }
     }
 
     fn json_any_from(val: Value) -> JsonAnyValue {
         match val {
-            Value::String(s) => JsonAnyValue::StringValue { stringValue: s.to_string() },
+            Value::String(s) => JsonAnyValue::StringValue {
+                stringValue: s.to_string(),
+            },
             Value::Bool(b) => JsonAnyValue::BoolValue { boolValue: b },
             Value::I64(i) => JsonAnyValue::IntValue { intValue: i },
             Value::F64(f) => JsonAnyValue::DoubleValue { doubleValue: f },
-            other => JsonAnyValue::StringValue { stringValue: format!("{other:?}") },
+            other => JsonAnyValue::StringValue {
+                stringValue: format!("{other:?}"),
+            },
         }
     }
 
     fn status_to_json(status: &opentelemetry::trace::Status) -> JsonStatus {
-        use opentelemetry::trace::Status::{Error, Ok, Unset};
+        use opentelemetry::trace::Status::Error;
+        use opentelemetry::trace::Status::Ok;
+        use opentelemetry::trace::Status::Unset;
         match status {
-            Unset => JsonStatus { code: 0, message: String::new() },
-            Ok => JsonStatus { code: 1, message: String::new() },
-            Error { description } => JsonStatus { code: 2, message: description.to_string() },
+            Unset => JsonStatus {
+                code: 0,
+                message: String::new(),
+            },
+            Ok => JsonStatus {
+                code: 1,
+                message: String::new(),
+            },
+            Error { description } => JsonStatus {
+                code: 2,
+                message: description.to_string(),
+            },
         }
     }
 
@@ -506,7 +631,11 @@ mod imp {
         let start = to_unix_nanos(sd.start_time).to_string();
         let end = to_unix_nanos(sd.end_time).to_string();
 
-        let attributes = sd.attributes.iter().map(|kv| json_kv_from(kv)).collect::<Vec<_>>();
+        let attributes = sd
+            .attributes
+            .iter()
+            .map(|kv| json_kv_from(kv))
+            .collect::<Vec<_>>();
 
         let events = sd
             .events
@@ -514,7 +643,11 @@ mod imp {
             .map(|ev| JsonEvent {
                 timeUnixNano: to_unix_nanos(ev.timestamp).to_string(),
                 name: ev.name.to_string(),
-                attributes: ev.attributes.into_iter().map(|kv| json_kv_from(&kv)).collect(),
+                attributes: ev
+                    .attributes
+                    .into_iter()
+                    .map(|kv| json_kv_from(&kv))
+                    .collect(),
                 droppedAttributesCount: 0,
             })
             .collect();
@@ -526,7 +659,11 @@ mod imp {
                 traceId: hex::encode(lnk.span_context.trace_id().to_bytes()),
                 spanId: hex::encode(lnk.span_context.span_id().to_bytes()),
                 traceState: lnk.span_context.trace_state().header(),
-                attributes: lnk.attributes.into_iter().map(|kv| json_kv_from(&kv)).collect(),
+                attributes: lnk
+                    .attributes
+                    .into_iter()
+                    .map(|kv| json_kv_from(&kv))
+                    .collect(),
                 droppedAttributesCount: 0,
                 flags: 0,
             })
@@ -569,17 +706,30 @@ mod imp {
         use rand::RngCore;
         use std::fs;
 
-        let base = if let Some(h) = codex_home { h.clone() } else {
-            if debug_enabled() { eprintln!("[codex-telemetry] WARNING: codex_home not provided; defaulting to current directory"); }
+        let base = if let Some(h) = codex_home {
+            h.clone()
+        } else {
+            if debug_enabled() {
+                eprintln!("[codex-telemetry] WARNING: codex_home not provided; defaulting to current directory");
+            }
             std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
         };
         let traces_dir = base.join("traces");
         match fs::create_dir_all(&traces_dir) {
             Ok(()) => {
-                if debug_enabled() { eprintln!("[codex-telemetry] ensured traces dir exists: {}", traces_dir.display()); }
+                if debug_enabled() {
+                    eprintln!(
+                        "[codex-telemetry] ensured traces dir exists: {}",
+                        traces_dir.display()
+                    );
+                }
             }
             Err(err) => {
-                eprintln!("[codex-telemetry] ERROR: failed to create traces dir {}: {}", traces_dir.display(), err);
+                eprintln!(
+                    "[codex-telemetry] ERROR: failed to create traces dir {}: {}",
+                    traces_dir.display(),
+                    err
+                );
             }
         }
 
@@ -599,14 +749,23 @@ mod imp {
 #[cfg(not(feature = "otel"))]
 mod imp {
     #[derive(Clone, Debug)]
-    pub enum TelemetryExporter { None }
+    pub enum TelemetryExporter {
+        None,
+    }
 
     #[derive(Clone, Debug)]
-    pub struct TelemetrySettings { pub enabled: bool, pub exporter: TelemetryExporter, pub service_name: String, pub service_version: String }
+    pub struct TelemetrySettings {
+        pub enabled: bool,
+        pub exporter: TelemetryExporter,
+        pub service_name: String,
+        pub service_version: String,
+    }
 
     pub struct TelemetryGuard;
 
-    pub fn init_from_settings(_settings: &TelemetrySettings) -> Option<TelemetryGuard> { None }
+    pub fn init_from_settings(_settings: &TelemetrySettings) -> Option<TelemetryGuard> {
+        None
+    }
 
     pub fn make_session_span(_session_id: &str, _model: &str, _provider: &str) -> tracing::Span {
         tracing::Span::none()
@@ -617,4 +776,4 @@ mod imp {
     pub use TelemetrySettings as Settings;
 }
 
-pub use imp::*; 
+pub use imp::*;
