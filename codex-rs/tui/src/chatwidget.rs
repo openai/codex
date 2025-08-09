@@ -65,7 +65,7 @@ pub(crate) struct ChatWidget<'a> {
     app_event_tx: AppEventSender,
     codex_op_tx: UnboundedSender<Op>,
     bottom_pane: BottomPane<'a>,
-    active_history_cell: Option<HistoryCell>,
+    active_exec_cell: Option<HistoryCell>,
     config: Config,
     initial_user_message: Option<UserMessage>,
     total_token_usage: TokenUsage,
@@ -117,7 +117,7 @@ fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Optio
 impl ChatWidget<'_> {
     fn interrupt_running_task(&mut self) {
         if self.bottom_pane.is_task_running() {
-            self.active_history_cell = None;
+            self.active_exec_cell = None;
             self.bottom_pane.clear_ctrl_c_quit_hint();
             self.submit_op(Op::Interrupt);
             self.bottom_pane.set_task_running(false);
@@ -134,7 +134,7 @@ impl ChatWidget<'_> {
     fn layout_areas(&self, area: Rect) -> [Rect; 2] {
         Layout::vertical([
             Constraint::Max(
-                self.active_history_cell
+                self.active_exec_cell
                     .as_ref()
                     .map_or(0, |c| c.desired_height(area.width)),
             ),
@@ -213,7 +213,7 @@ impl ChatWidget<'_> {
                 has_input_focus: true,
                 enhanced_keys_supported,
             }),
-            active_history_cell: None,
+            active_exec_cell: None,
             config,
             initial_user_message: create_initial_user_message(
                 initial_prompt.unwrap_or_default(),
@@ -236,7 +236,7 @@ impl ChatWidget<'_> {
     pub fn desired_height(&self, width: u16) -> u16 {
         self.bottom_pane.desired_height(width)
             + self
-                .active_history_cell
+                .active_exec_cell
                 .as_ref()
                 .map_or(0, |c| c.desired_height(width))
     }
@@ -259,6 +259,7 @@ impl ChatWidget<'_> {
     }
 
     fn add_to_history(&mut self, cell: HistoryCell) {
+        self.flush_active_exec_cell();
         self.app_event_tx
             .send(AppEvent::InsertHistory(cell.plain_lines()));
     }
@@ -302,6 +303,16 @@ impl ChatWidget<'_> {
 
     pub(crate) fn handle_codex_event(&mut self, event: Event) {
         let Event { id, msg } = event;
+
+        match msg {
+            EventMsg::AgentMessageDelta(_)
+            | EventMsg::AgentReasoningDelta(_)
+            | EventMsg::ExecCommandOutputDelta(_) => {}
+            _ => {
+                tracing::info!("handle_codex_event: {:?}", msg);
+            }
+        }
+
         match msg {
             EventMsg::SessionConfigured(event) => {
                 self.bottom_pane
@@ -455,6 +466,8 @@ impl ChatWidget<'_> {
                 } else {
                     vec![]
                 };
+                // TODO: merge this into the active exec call.
+                self.flush_active_exec_cell();
                 self.finalize_active_stream();
                 // Ensure the status indicator is visible while the command runs.
                 self.bottom_pane
@@ -467,8 +480,38 @@ impl ChatWidget<'_> {
                         parsed_cmd: parsed_cmd.clone(),
                     },
                 );
-                self.active_history_cell =
+                self.active_exec_cell =
                     Some(HistoryCell::new_active_exec_command(command, parsed_cmd));
+            }
+            EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+                call_id,
+                exit_code,
+                duration: _,
+                stdout,
+                stderr,
+            }) => {
+                // Compute summary before moving stdout into the history cell.
+                let cmd = self.running_commands.remove(&call_id);
+                let parsed_cmd = match &cmd {
+                    Some(RunningCommand { parsed_cmd, .. }) if self.render_parsed_exec => {
+                        parsed_cmd.clone()
+                    }
+                    _ => vec![],
+                };
+                if let Some(cmd) = cmd {
+                    // Replace the active running cell with the finalized result,
+                    // but keep it as the active cell so it can be merged with
+                    // subsequent commands before being committed.
+                    self.active_exec_cell = Some(HistoryCell::new_completed_exec_command(
+                        cmd.command,
+                        parsed_cmd,
+                        CommandOutput {
+                            exit_code,
+                            stdout,
+                            stderr,
+                        },
+                    ));
+                }
             }
             EventMsg::ExecCommandOutputDelta(_) => {
                 // TODO
@@ -488,40 +531,12 @@ impl ChatWidget<'_> {
                     self.add_to_history(HistoryCell::new_patch_apply_failure(event.stderr));
                 }
             }
-            EventMsg::ExecCommandEnd(ExecCommandEndEvent {
-                call_id,
-                exit_code,
-                duration: _,
-                stdout,
-                stderr,
-            }) => {
-                // Compute summary before moving stdout into the history cell.
-                let cmd = self.running_commands.remove(&call_id);
-                let parsed_cmd = match &cmd {
-                    Some(RunningCommand { parsed_cmd, .. }) if self.render_parsed_exec => {
-                        parsed_cmd.clone()
-                    }
-                    _ => vec![],
-                };
-                self.active_history_cell = None;
-                if let Some(cmd) = cmd {
-                    self.add_to_history(HistoryCell::new_completed_exec_command(
-                        cmd.command,
-                        parsed_cmd,
-                        CommandOutput {
-                            exit_code,
-                            stdout,
-                            stderr,
-                        },
-                    ));
-                }
-            }
             EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
                 call_id: _,
                 invocation,
             }) => {
                 self.finalize_active_stream();
-                self.add_to_history(HistoryCell::new_active_mcp_tool_call(invocation));
+                self.active_exec_cell = Some(HistoryCell::new_active_mcp_tool_call(invocation));
             }
             EventMsg::McpToolCallEnd(McpToolCallEndEvent {
                 call_id: _,
@@ -529,7 +544,7 @@ impl ChatWidget<'_> {
                 invocation,
                 result,
             }) => {
-                self.add_to_history(HistoryCell::new_completed_mcp_tool_call(
+                let completed = HistoryCell::new_completed_mcp_tool_call(
                     80,
                     invocation,
                     duration,
@@ -538,7 +553,8 @@ impl ChatWidget<'_> {
                         .map(|r| r.is_error.unwrap_or(false))
                         .unwrap_or(false),
                     result,
-                ));
+                );
+                self.active_exec_cell = Some(completed);
             }
             EventMsg::GetHistoryEntryResponse(event) => {
                 let codex_core::protocol::GetHistoryEntryResponseEvent {
@@ -693,11 +709,22 @@ impl ChatWidget<'_> {
             // Ensure the waiting status is visible (composer replaced).
             self.bottom_pane
                 .update_status_text("waiting for model".to_string());
+            self.flush_active_exec_cell();
             self.emit_stream_header(kind);
         }
     }
 
+    fn flush_active_exec_cell(&mut self) {
+        if let Some(active) = self.active_exec_cell.take() {
+            tracing::info!("inserting active history cell");
+            self.app_event_tx
+                .send(AppEvent::InsertHistory(active.plain_lines()));
+        }
+    }
+
     fn stream_push_and_maybe_commit(&mut self, delta: &str) {
+        self.flush_active_exec_cell();
+
         self.live_builder.push_fragment(delta);
 
         // Commit overflow rows (small batches) while keeping the last N rows visible.
@@ -779,7 +806,7 @@ impl WidgetRef for &ChatWidget<'_> {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let [active_cell_area, bottom_pane_area] = self.layout_areas(area);
         (&self.bottom_pane).render(bottom_pane_area, buf);
-        if let Some(cell) = &self.active_history_cell {
+        if let Some(cell) = &self.active_exec_cell {
             cell.render_ref(active_cell_area, buf);
         }
     }
