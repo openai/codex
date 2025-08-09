@@ -45,4 +45,9 @@ chrono = { version = "0.4", default-features = false, features = ["std", "clock"
 rand = { version = "0.8", optional = true }
 
 # Always-available deps (small)
-thiserror = "1" 
+thiserror = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tracing-subscriber = { version = "0.3", features = ["registry"] }
+tempfile = "3" 
