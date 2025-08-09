@@ -571,6 +571,14 @@ impl ChatWidget<'_> {
         self.bottom_pane.on_file_search_result(query, matches);
     }
 
+    pub(crate) fn on_esc(&mut self) -> bool {
+        if self.bottom_pane.is_task_running() {
+            self.interrupt_running_task();
+            return true;
+        }
+        false
+    }
+
     /// Handle Ctrl-C key press.
     /// Returns CancellationEvent::Handled if the event was consumed by the UI, or
     /// CancellationEvent::Ignored if the caller should handle it (e.g. exit).

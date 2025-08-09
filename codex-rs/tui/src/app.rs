@@ -242,9 +242,7 @@ impl App<'_> {
                             ..
                         } => match &mut self.app_state {
                             AppState::Chat { widget } => {
-                                if widget.is_task_running() {
-                                    widget.on_ctrl_c();
-                                } else {
+                                if !widget.on_esc() {
                                     self.dispatch_key_event(key_event);
                                 }
                             }
