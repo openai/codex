@@ -629,7 +629,10 @@ impl ChatWidget<'_> {
     }
 
     pub(crate) fn clear_token_usage(&mut self) {
+        // Reset both the aggregated and last-turn usage so the UI
+        // reflects the refreshed context after operations like `/compact`.
         self.total_token_usage = TokenUsage::default();
+        self.last_token_usage = TokenUsage::default();
         self.bottom_pane.set_token_usage(
             self.total_token_usage.clone(),
             self.last_token_usage.clone(),

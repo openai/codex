@@ -1035,6 +1035,56 @@ mod tests {
     }
 
     #[test]
+    fn context_left_updates_when_usage_resets() {
+        use codex_core::protocol::TokenUsage;
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(true, sender, false);
+
+        // Seed token usage: 40 used out of a 100-token context window.
+        let total = TokenUsage {
+            total_tokens: 40,
+            ..Default::default()
+        };
+        let last = TokenUsage {
+            total_tokens: 40,
+            ..Default::default()
+        };
+        composer.set_token_usage(total, last, Some(100));
+
+        // Render and verify footer shows both tokens used and remaining percent.
+        let mut term = Terminal::new(TestBackend::new(80, 6)).expect("terminal");
+        term.draw(|f| f.render_widget_ref(&composer, f.area()))
+            .expect("draw");
+        let dump = format!("{:?}", term.backend());
+        assert!(
+            dump.contains("40 tokens used"),
+            "footer should show tokens used: {dump}"
+        );
+        assert!(
+            dump.contains("60% context left"),
+            "footer should show remaining percent: {dump}"
+        );
+
+        // Reset usage to zero (e.g. after /compact) and ensure footer updates.
+        composer.set_token_usage(TokenUsage::default(), TokenUsage::default(), Some(100));
+        term.draw(|f| f.render_widget_ref(&composer, f.area()))
+            .expect("draw");
+        let dump2 = format!("{:?}", term.backend());
+        assert!(
+            dump2.contains("0 tokens used"),
+            "footer should reflect reset tokens: {dump2}"
+        );
+        assert!(
+            dump2.contains("100% context left"),
+            "footer should reflect full context: {dump2}"
+        );
+    }
+
+    #[test]
     fn slash_init_dispatches_command_and_does_not_submit_literal_text() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
