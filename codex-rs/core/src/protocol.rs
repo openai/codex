@@ -21,6 +21,7 @@ use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::message_history::HistoryEntry;
 use crate::model_provider_info::ModelProviderInfo;
+use crate::num_format::format_with_commas;
 use crate::plan_tool::UpdatePlanArgs;
 
 /// Submission Queue Entry - requests from user
@@ -489,17 +490,20 @@ impl fmt::Display for FinalOutput {
         write!(
             f,
             "Token usage: total={} input={}{} output={}{}",
-            token_usage.blended_total(),
-            token_usage.non_cached_input(),
+            format_with_commas(token_usage.blended_total()),
+            format_with_commas(token_usage.non_cached_input()),
             if token_usage.cached_input() > 0 {
-                format!(" (+ {} cached)", token_usage.cached_input())
+                format!(
+                    " (+ {} cached)",
+                    format_with_commas(token_usage.cached_input())
+                )
             } else {
                 String::new()
             },
-            token_usage.output_tokens,
+            format_with_commas(token_usage.output_tokens),
             token_usage
                 .reasoning_output_tokens
-                .map(|r| format!(" (reasoning {r})"))
+                .map(|r| format!(" (reasoning {})", format_with_commas(r)))
                 .unwrap_or_default()
         )
     }

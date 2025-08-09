@@ -8,6 +8,7 @@ use codex_ansi_escape::ansi_escape_line;
 use codex_common::create_config_summary_entries;
 use codex_common::elapsed::format_duration;
 use codex_core::config::Config;
+use codex_core::num_format::format_with_commas;
 use codex_core::plan_tool::PlanItemArg;
 use codex_core::plan_tool::StepStatus;
 use codex_core::plan_tool::UpdatePlanArgs;
@@ -609,23 +610,23 @@ impl HistoryCell {
         // Input: <input> [+ <cached> cached]
         let mut input_line_spans: Vec<Span<'static>> = vec![
             "  • Input: ".into(),
-            usage.non_cached_input().to_string().into(),
+            format_with_commas(usage.non_cached_input()).into(),
         ];
         if let Some(cached) = usage.cached_input_tokens {
             if cached > 0 {
-                input_line_spans.push(format!(" (+ {cached} cached)").into());
+                input_line_spans.push(format!(" (+ {} cached)", format_with_commas(cached)).into());
             }
         }
         lines.push(Line::from(input_line_spans));
         // Output: <output>
         lines.push(Line::from(vec![
             "  • Output: ".into(),
-            usage.output_tokens.to_string().into(),
+            format_with_commas(usage.output_tokens).into(),
         ]));
         // Total: <total>
         lines.push(Line::from(vec![
             "  • Total: ".into(),
-            usage.blended_total().to_string().into(),
+            format_with_commas(usage.blended_total()).into(),
         ]));
 
         lines.push(Line::from(""));

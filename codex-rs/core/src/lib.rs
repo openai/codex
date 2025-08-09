@@ -35,6 +35,7 @@ pub use model_provider_info::built_in_model_providers;
 pub use model_provider_info::create_oss_provider_with_base_url;
 pub mod model_family;
 mod models;
+pub mod num_format;
 mod openai_model_info;
 mod openai_tools;
 pub mod plan_tool;

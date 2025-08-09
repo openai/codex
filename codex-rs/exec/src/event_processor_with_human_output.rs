@@ -1,6 +1,7 @@
 use codex_common::elapsed::format_duration;
 use codex_common::elapsed::format_elapsed;
 use codex_core::config::Config;
+use codex_core::num_format::format_with_commas;
 use codex_core::plan_tool::UpdatePlanArgs;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
@@ -183,7 +184,11 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 return CodexStatus::InitiateShutdown;
             }
             EventMsg::TokenCount(token_usage) => {
-                ts_println!(self, "tokens used: {}", token_usage.blended_total());
+                ts_println!(
+                    self,
+                    "tokens used: {}",
+                    format_with_commas(token_usage.blended_total())
+                );
             }
             EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
                 if !self.answer_started {
