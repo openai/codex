@@ -141,29 +141,46 @@ function TerminalChatResponseMessage({
     }
   }, [message, setOverlayMode]);
 
+  const contentBody = (
+    <Markdown fileOpener={fileOpener}>
+      {message.content
+        .map(
+          (c) =>
+            c.type === "output_text"
+              ? c.text
+              : c.type === "refusal"
+                ? c.refusal
+                : c.type === "input_text"
+                  ? collapseXmlBlocks(c.text)
+                  : c.type === "input_image"
+                    ? "<Image>"
+                    : c.type === "input_file"
+                      ? c.filename
+                      : "", // unknown content type
+        )
+        .join(" ")}
+    </Markdown>
+  );
+
+  if (message.role === "user") {
+    return (
+      <Box borderStyle="round">
+        <Box paddingX={1} flexDirection="column">
+          <Text bold color={colorsByRole[message.role] || "gray"}>
+            {message.role}
+          </Text>
+          {contentBody}
+        </Box>
+      </Box>
+    );
+  }
+  // Assistant: no top label – prefix content with a single "> " marker
   return (
     <Box flexDirection="column">
-      <Text bold color={colorsByRole[message.role] || "gray"}>
-        {message.role === "assistant" ? "codex" : message.role}
-      </Text>
-      <Markdown fileOpener={fileOpener}>
-        {message.content
-          .map(
-            (c) =>
-              c.type === "output_text"
-                ? c.text
-                : c.type === "refusal"
-                  ? c.refusal
-                  : c.type === "input_text"
-                    ? collapseXmlBlocks(c.text)
-                    : c.type === "input_image"
-                      ? "<Image>"
-                      : c.type === "input_file"
-                        ? c.filename
-                        : "", // unknown content type
-          )
-          .join(" ")}
-      </Markdown>
+      <Box>
+        <Text>{"> "}</Text>
+        <Box marginLeft={1}>{contentBody}</Box>
+      </Box>
     </Box>
   );
 }
@@ -174,17 +191,105 @@ function TerminalChatResponseToolCall({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   message: ResponseFunctionToolCallItem | any;
 }) {
+  // Detect non-shell tool calls (e.g., read_file, searched, listed_files) and render
+  // concise, human-readable summaries for them. Fallback to shell/command layout.
   let workdir: string | undefined;
   let cmdReadableText: string | undefined;
+  let toolName: string | undefined;
+  let toolArgs: Record<string, unknown> | undefined;
+
   if (message.type === "function_call") {
+    // Prefer shell rendering when parseable as a command
     const details = parseToolCall(message);
     workdir = details?.workdir;
     cmdReadableText = details?.cmdReadableText;
+
+    // Also capture generic function info for non-shell tools
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const fn = (message as any).function;
+    if (fn && typeof fn.name === "string") {
+      toolName = fn.name;
+      try {
+        if (typeof fn.arguments === "string" && fn.arguments.length > 0) {
+          toolArgs = JSON.parse(fn.arguments) as Record<string, unknown>;
+        }
+      } catch {
+        toolArgs = undefined;
+      }
+    }
   } else if (message.type === "local_shell_call") {
     const action = message.action;
     workdir = action.working_directory;
     cmdReadableText = formatCommandForDisplay(action.command);
   }
+
+  const renderNonShellTool = (
+    name: string,
+    args: Record<string, unknown> | undefined,
+  ): React.ReactElement => {
+    const lower = name.toLowerCase();
+    const getString = (v: unknown) => (typeof v === "string" ? v : undefined);
+    const pathish =
+      getString(args?.["path"]) ||
+      getString(args?.["file"]) ||
+      getString(args?.["filepath"]) ||
+      getString(args?.["filename"]);
+    const pattern = getString(args?.["pattern"]) || getString(args?.["query"]);
+
+    let summary: string = name;
+    if (lower === "read_file") {
+      summary = pathish ? `read_file ${pathish}` : "read_file";
+    } else if (lower === "searched") {
+      if (pattern && pathish) {
+        summary = `searched "${pattern}" in ${pathish}`;
+      } else if (pattern) {
+        summary = `searched "${pattern}"`;
+      } else if (pathish) {
+        summary = `searched in ${pathish}`;
+      } else {
+        summary = "searched";
+      }
+    } else if (lower === "listed_files") {
+      summary = pathish ? `listed_files ${pathish}` : "listed_files";
+    } else {
+      // Generic fallback: show tool name plus one interesting arg
+      const interestingKeys = [
+        "path",
+        "file",
+        "filepath",
+        "filename",
+        "pattern",
+      ];
+      const kv = interestingKeys
+        .map((k) => {
+          const val = args?.[k as keyof typeof args];
+          return typeof val === "string" && val.length > 0
+            ? `${k}: ${val}`
+            : "";
+        })
+        .find((s) => s);
+      summary = kv ? `${name} ${kv}` : name;
+    }
+    return (
+      <Box flexDirection="column" gap={1}>
+        <Text color="magentaBright" bold>
+          {name}
+        </Text>
+        <Text>{summary}</Text>
+      </Box>
+    );
+  };
+
+  // If this is a non-shell function call we recognize, render the humanized view
+  if (
+    toolName &&
+    (!cmdReadableText ||
+      (toolName !== "container.exec" && toolName !== "shell"))
+  ) {
+    return renderNonShellTool(toolName, toolArgs);
+  }
+
+  // Default: shell command layout
   return (
     <Box flexDirection="column" gap={1}>
       <Text color="magentaBright" bold>

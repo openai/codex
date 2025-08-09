@@ -1,5 +1,7 @@
 # To do list with go here
 Top to do (big)
+- fix command rendering
+
 
 Top to do (sm)
 - move the "(  ●   ) 2s  Thinking."
