@@ -11,7 +11,6 @@ use crate::slash_command::SlashCommand;
 use crate::tui;
 use codex_core::config::Config;
 use codex_core::protocol::Event;
-use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use color_eyre::eyre::Result;
 use crossterm::SynchronizedUpdate;
@@ -381,6 +380,7 @@ impl App<'_> {
                         use std::collections::HashMap;
 
                         use codex_core::protocol::ApplyPatchApprovalRequestEvent;
+                        use codex_core::protocol::EventMsg;
                         use codex_core::protocol::FileChange;
 
                         self.app_event_tx.send(AppEvent::CodexEvent(Event {
