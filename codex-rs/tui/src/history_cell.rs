@@ -3,6 +3,8 @@ use crate::exec_command::strip_bash_lc_and_escape;
 use crate::slash_command::SlashCommand;
 use crate::text_block::TextBlock;
 use crate::text_formatting::format_and_truncate_tool_result;
+use crate::theme::SemanticColor;
+use crate::theme::ThemeManager;
 use base64::Engine;
 use codex_ansi_escape::ansi_escape_line;
 use codex_common::create_config_summary_entries;
@@ -23,7 +25,6 @@ use image::ImageReader;
 use mcp_types::EmbeddedResourceResource;
 use mcp_types::ResourceLink;
 use ratatui::prelude::*;
-use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::text::Line as RtLine;
@@ -455,7 +456,11 @@ impl HistoryCell {
                                 format!("link: {uri}")
                             }
                         };
-                        lines.push(Line::styled(line_text, Style::default().fg(Color::Gray)));
+                        let theme = ThemeManager::global();
+                        lines.push(Line::styled(
+                            line_text,
+                            theme.style(SemanticColor::TextMuted),
+                        ));
                     }
                 }
 
@@ -463,10 +468,13 @@ impl HistoryCell {
             }
             Err(e) => {
                 lines.push(Line::from(vec![
-                    Span::styled(
-                        "Error: ",
-                        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-                    ),
+                    {
+                        let theme = ThemeManager::global();
+                        Span::styled(
+                            "Error: ",
+                            theme.style_with_modifiers(SemanticColor::Error, Modifier::BOLD),
+                        )
+                    },
                     Span::raw(e),
                 ]));
             }
@@ -687,16 +695,22 @@ impl HistoryCell {
         ));
         header.push(Span::raw(" to do list ["));
         if filled > 0 {
-            header.push(Span::styled(
-                "█".repeat(filled),
-                Style::default().fg(Color::Green),
-            ));
+            {
+                let theme = ThemeManager::global();
+                header.push(Span::styled(
+                    "█".repeat(filled),
+                    theme.style(SemanticColor::Success),
+                ));
+            }
         }
         if empty > 0 {
-            header.push(Span::styled(
-                "░".repeat(empty),
-                Style::default().fg(Color::Gray),
-            ));
+            {
+                let theme = ThemeManager::global();
+                header.push(Span::styled(
+                    "░".repeat(empty),
+                    theme.style(SemanticColor::TextMuted),
+                ));
+            }
         }
         header.push(Span::raw("] "));
         header.push(Span::raw(format!("{completed}/{total}")));
@@ -718,30 +732,30 @@ impl HistoryCell {
             lines.push(Line::from("(no steps provided)".gray().italic()));
         } else {
             for (idx, PlanItemArg { step, status }) in plan.into_iter().enumerate() {
+                let theme = ThemeManager::global();
                 let (box_span, text_span) = match status {
                     StepStatus::Completed => (
-                        Span::styled("✔", Style::default().fg(Color::Green)),
+                        Span::styled("✔", theme.style(SemanticColor::Success)),
                         Span::styled(
                             step,
-                            Style::default()
-                                .fg(Color::Gray)
-                                .add_modifier(Modifier::CROSSED_OUT | Modifier::DIM),
+                            theme.style_with_modifiers(
+                                SemanticColor::TextMuted,
+                                Modifier::CROSSED_OUT | Modifier::DIM,
+                            ),
                         ),
                     ),
                     StepStatus::InProgress => (
                         Span::raw("□"),
                         Span::styled(
                             step,
-                            Style::default()
-                                .fg(Color::Blue)
-                                .add_modifier(Modifier::BOLD),
+                            theme.style_with_modifiers(SemanticColor::Info, Modifier::BOLD),
                         ),
                     ),
                     StepStatus::Pending => (
                         Span::raw("□"),
                         Span::styled(
                             step,
-                            Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
+                            theme.style_with_modifiers(SemanticColor::TextMuted, Modifier::DIM),
                         ),
                     ),
                 };
@@ -927,24 +941,28 @@ fn create_diff_summary(title: &str, changes: HashMap<PathBuf, FileChange>) -> Ve
 
     // Header
     let mut header_spans: Vec<RtSpan<'static>> = Vec::new();
-    header_spans.push(RtSpan::styled(
-        title.to_owned(),
-        Style::default()
-            .fg(Color::Magenta)
-            .add_modifier(Modifier::BOLD),
-    ));
+    {
+        let theme = ThemeManager::global();
+        header_spans.push(RtSpan::styled(
+            title.to_owned(),
+            theme.style_with_modifiers(SemanticColor::Header, Modifier::BOLD),
+        ));
+    }
     header_spans.push(RtSpan::raw(" to "));
     header_spans.push(RtSpan::raw(format!("{file_count} {noun} ")));
     header_spans.push(RtSpan::raw("("));
-    header_spans.push(RtSpan::styled(
-        format!("+{total_added}"),
-        Style::default().fg(Color::Green),
-    ));
-    header_spans.push(RtSpan::raw(" "));
-    header_spans.push(RtSpan::styled(
-        format!("-{total_removed}"),
-        Style::default().fg(Color::Red),
-    ));
+    {
+        let theme = ThemeManager::global();
+        header_spans.push(RtSpan::styled(
+            format!("+{total_added}"),
+            theme.style(SemanticColor::DiffAdd),
+        ));
+        header_spans.push(RtSpan::raw(" "));
+        header_spans.push(RtSpan::styled(
+            format!("-{total_removed}"),
+            theme.style(SemanticColor::DiffRemove),
+        ));
+    }
     header_spans.push(RtSpan::raw(")"));
     out.push(RtLine::from(header_spans));
 
@@ -953,15 +971,18 @@ fn create_diff_summary(title: &str, changes: HashMap<PathBuf, FileChange>) -> Ve
         let mut spans: Vec<RtSpan<'static>> = Vec::new();
         spans.push(RtSpan::raw(f.display_path.clone()));
         spans.push(RtSpan::raw(" ("));
-        spans.push(RtSpan::styled(
-            format!("+{}", f.added),
-            Style::default().fg(Color::Green),
-        ));
-        spans.push(RtSpan::raw(" "));
-        spans.push(RtSpan::styled(
-            format!("-{}", f.removed),
-            Style::default().fg(Color::Red),
-        ));
+        {
+            let theme = ThemeManager::global();
+            spans.push(RtSpan::styled(
+                format!("+{}", f.added),
+                theme.style(SemanticColor::DiffAdd),
+            ));
+            spans.push(RtSpan::raw(" "));
+            spans.push(RtSpan::styled(
+                format!("-{}", f.removed),
+                theme.style(SemanticColor::DiffRemove),
+            ));
+        }
         spans.push(RtSpan::raw(")"));
 
         let mut line = RtLine::from(spans);
@@ -986,12 +1007,13 @@ fn format_mcp_invocation<'a>(invocation: McpInvocation) -> Line<'a> {
         })
         .unwrap_or_default();
 
+    let theme = ThemeManager::global();
     let invocation_spans = vec![
-        Span::styled(invocation.server.clone(), Style::default().fg(Color::Blue)),
+        Span::styled(invocation.server.clone(), theme.style(SemanticColor::Tool)),
         Span::raw("."),
-        Span::styled(invocation.tool.clone(), Style::default().fg(Color::Blue)),
+        Span::styled(invocation.tool.clone(), theme.style(SemanticColor::Tool)),
         Span::raw("("),
-        Span::styled(args_str, Style::default().fg(Color::Gray)),
+        Span::styled(args_str, theme.style(SemanticColor::TextMuted)),
         Span::raw(")"),
     ];
     Line::from(invocation_spans)

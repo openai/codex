@@ -10,6 +10,8 @@ use ratatui::text::Span;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use crate::theme::SemanticColor;
+use crate::theme::ThemeManager;
 
 #[derive(Debug)]
 pub(crate) struct FrameTicker {
@@ -74,11 +76,12 @@ pub(crate) fn shimmer_spans(text: &str, frame_idx: usize) -> Vec<Span<'static>> 
 }
 
 fn color_for_level(level: u8) -> Color {
+    let theme = ThemeManager::global();
     if level < 128 {
-        Color::DarkGray
+        theme.color(SemanticColor::TextDisabled)
     } else if level < 192 {
-        Color::Gray
+        theme.color(SemanticColor::TextMuted)
     } else {
-        Color::White
+        theme.color(SemanticColor::Text)
     }
 }

@@ -3,7 +3,6 @@ use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::prelude::Widget;
-use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::text::Line;
@@ -16,12 +15,12 @@ use codex_login::AuthMode;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
-use crate::colors::LIGHT_BLUE;
-use crate::colors::SUCCESS_GREEN;
 use crate::onboarding::onboarding_screen::KeyboardHandler;
 use crate::onboarding::onboarding_screen::StepStateProvider;
 use crate::shimmer::FrameTicker;
 use crate::shimmer::shimmer_spans;
+use crate::theme::SemanticColor;
+use crate::theme::ThemeManager;
 use std::path::PathBuf;
 
 use super::onboarding_screen::StepState;
@@ -100,6 +99,7 @@ pub(crate) struct AuthModeWidget {
 
 impl AuthModeWidget {
     fn render_pick_mode(&self, area: Rect, buf: &mut Buffer) {
+        let theme = ThemeManager::global();
         let mut lines: Vec<Line> = vec![
             Line::from(vec![
                 Span::raw("> "),
@@ -130,9 +130,9 @@ impl AuthModeWidget {
                 Line::from(vec![
                     Span::styled(
                         format!("{} {}. ", caret, idx + 1),
-                        Style::default().fg(LIGHT_BLUE).add_modifier(Modifier::DIM),
+                        theme.style_with_modifiers(SemanticColor::Primary, Modifier::DIM),
                     ),
-                    Span::styled(text.to_owned(), Style::default().fg(LIGHT_BLUE)),
+                    Span::styled(text.to_owned(), theme.style(SemanticColor::Primary)),
                 ])
             } else {
                 Line::from(format!("  {}. {text}", idx + 1))
@@ -140,7 +140,7 @@ impl AuthModeWidget {
 
             let line2 = if is_selected {
                 Line::from(format!("     {description}"))
-                    .style(Style::default().fg(LIGHT_BLUE).add_modifier(Modifier::DIM))
+                    .style(theme.style_with_modifiers(SemanticColor::Primary, Modifier::DIM))
             } else {
                 Line::from(format!("     {description}"))
                     .style(Style::default().add_modifier(Modifier::DIM))
@@ -170,7 +170,7 @@ impl AuthModeWidget {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 err.as_str(),
-                Style::default().fg(Color::Red),
+                theme.style(SemanticColor::Error),
             )));
         }
 
@@ -180,6 +180,7 @@ impl AuthModeWidget {
     }
 
     fn render_continue_in_browser(&self, area: Rect, buf: &mut Buffer) {
+        let theme = ThemeManager::global();
         let idx = self.current_frame();
         let mut spans = vec![Span::from("> ")];
         spans.extend(shimmer_spans("Finish signing in via your browser", idx));
@@ -196,9 +197,7 @@ impl AuthModeWidget {
                     Span::raw("  "),
                     Span::styled(
                         url,
-                        Style::default()
-                            .fg(LIGHT_BLUE)
-                            .add_modifier(Modifier::UNDERLINED),
+                        theme.style_with_modifiers(SemanticColor::Link, Modifier::UNDERLINED),
                     ),
                 ]));
                 lines.push(Line::from(""));
@@ -214,9 +213,10 @@ impl AuthModeWidget {
     }
 
     fn render_chatgpt_success_message(&self, area: Rect, buf: &mut Buffer) {
+        let theme = ThemeManager::global();
         let lines = vec![
             Line::from("✓ Signed in with your ChatGPT account")
-                .style(Style::default().fg(SUCCESS_GREEN)),
+                .style(theme.style(SemanticColor::Success)),
             Line::from(""),
             Line::from("> Before you start:"),
             Line::from(""),
@@ -231,7 +231,7 @@ impl AuthModeWidget {
             .style(Style::default().add_modifier(Modifier::DIM)),
             Line::from(""),
             Line::from("  Codex can make mistakes")
-                .style(Style::default().fg(Color::White)),
+                .style(theme.style(SemanticColor::Text)),
             Line::from("  Review the code it writes and commands it runs")
                 .style(Style::default().add_modifier(Modifier::DIM)),
             Line::from(""),
@@ -245,7 +245,7 @@ impl AuthModeWidget {
             ])
             .style(Style::default().add_modifier(Modifier::DIM)),
             Line::from(""),
-            Line::from("  Press Enter to continue").style(Style::default().fg(LIGHT_BLUE)),
+            Line::from("  Press Enter to continue").style(theme.style(SemanticColor::Primary)),
         ];
 
         Paragraph::new(lines)
@@ -254,9 +254,10 @@ impl AuthModeWidget {
     }
 
     fn render_chatgpt_success(&self, area: Rect, buf: &mut Buffer) {
+        let theme = ThemeManager::global();
         let lines = vec![
             Line::from("✓ Signed in with your ChatGPT account")
-                .style(Style::default().fg(SUCCESS_GREEN)),
+                .style(theme.style(SemanticColor::Success)),
         ];
 
         Paragraph::new(lines)
@@ -265,8 +266,9 @@ impl AuthModeWidget {
     }
 
     fn render_env_var_found(&self, area: Rect, buf: &mut Buffer) {
+        let theme = ThemeManager::global();
         let lines =
-            vec![Line::from("✓ Using OPENAI_API_KEY").style(Style::default().fg(SUCCESS_GREEN))];
+            vec![Line::from("✓ Using OPENAI_API_KEY").style(theme.style(SemanticColor::Success))];
 
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
@@ -274,11 +276,12 @@ impl AuthModeWidget {
     }
 
     fn render_env_var_missing(&self, area: Rect, buf: &mut Buffer) {
+        let theme = ThemeManager::global();
         let lines = vec![
             Line::from(
                 "  To use Codex with the OpenAI API, set OPENAI_API_KEY in your environment",
             )
-            .style(Style::default().fg(Color::Blue)),
+            .style(theme.style(SemanticColor::Info)),
             Line::from(""),
             Line::from("  Press Enter to return")
                 .style(Style::default().add_modifier(Modifier::DIM)),

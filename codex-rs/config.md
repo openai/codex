@@ -520,6 +520,27 @@ This is analogous to `model_context_window`, but for the maximum number of outpu
 
 Maximum number of bytes to read from an `AGENTS.md` file to include in the instructions sent with the first turn of a session. Defaults to 32 KiB.
 
+## theme
+
+Controls the color theme used in the TUI for improved accessibility and readability:
+
+```toml
+# Theme mode: "auto" (default), "light", or "dark"
+theme = "auto"
+```
+
+- **`"auto"`** (default): Automatically detects your terminal's background color and selects the appropriate theme. This provides optimal contrast and readability regardless of your terminal configuration.
+- **`"light"`**: Forces light theme with dark text on light backgrounds.
+- **`"dark"`**: Forces dark theme with light text on dark backgrounds.
+
+**Auto Detection Methods:**
+- `$COLORFGBG` environment variable (supported by most terminals)
+- iTerm2-specific variables (`$TERM_PROGRAM` and `$TERM_PROGRAM_BACKGROUND`)
+- VS Code integrated terminal detection (`$VSCODE_INJECTION` and `$VSCODE_THEME_KIND`)
+- Fallback to dark theme if detection fails
+
+This feature addresses accessibility issues where hard-coded colors made the interface unreadable on light terminal backgrounds. The theme can also be overridden at runtime using the `--theme` CLI flag.
+
 ## tui
 
 Options that are specific to the TUI.

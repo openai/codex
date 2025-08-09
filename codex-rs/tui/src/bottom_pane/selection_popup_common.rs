@@ -1,7 +1,8 @@
+use crate::theme::SemanticColor;
+use crate::theme::ThemeManager;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::prelude::Constraint;
-use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::text::Line;
@@ -35,6 +36,7 @@ pub(crate) fn render_rows(
     state: &ScrollState,
     max_results: usize,
 ) {
+    let theme = ThemeManager::global();
     let mut rows: Vec<Row> = Vec::new();
     if rows_all.is_empty() {
         rows.push(Row::new(vec![Cell::from(Line::from(Span::styled(
@@ -93,21 +95,16 @@ pub(crate) fn render_rows(
                 spans.push(Span::raw("  "));
                 spans.push(Span::styled(
                     desc.clone(),
-                    Style::default()
-                        .fg(Color::DarkGray)
-                        .add_modifier(Modifier::DIM),
+                    theme.style_with_modifiers(SemanticColor::TextMuted, Modifier::DIM),
                 ));
             }
 
             let mut cell = Cell::from(Line::from(spans));
             if Some(i) == state.selected_idx {
-                cell = cell.style(
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
-                );
+                cell =
+                    cell.style(theme.style_with_modifiers(SemanticColor::Warning, Modifier::BOLD));
             } else if *is_current {
-                cell = cell.style(Style::default().fg(Color::Cyan));
+                cell = cell.style(theme.style(SemanticColor::Primary));
             }
             rows.push(Row::new(vec![cell]));
         }
@@ -118,7 +115,7 @@ pub(crate) fn render_rows(
             Block::default()
                 .borders(Borders::LEFT)
                 .border_type(BorderType::QuadrantOutside)
-                .border_style(Style::default().fg(Color::DarkGray)),
+                .border_style(theme.style(SemanticColor::Border)),
         )
         .widths([Constraint::Percentage(100)]);
 

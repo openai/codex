@@ -29,7 +29,6 @@ mod bottom_pane;
 mod chatwidget;
 mod citation_regex;
 mod cli;
-mod colors;
 pub mod custom_terminal;
 mod exec_command;
 mod file_search;
@@ -109,6 +108,7 @@ pub async fn run_main(
         include_plan_tool: Some(true),
         disable_response_storage: cli.oss.then_some(true),
         show_raw_agent_reasoning: cli.oss.then_some(true),
+        theme: cli.theme.map(Into::into),
     };
 
     // Parse `-c` overrides from the CLI.
@@ -253,6 +253,14 @@ fn run_ratatui_app(
     mut log_rx: tokio::sync::mpsc::UnboundedReceiver<String>,
 ) -> color_eyre::Result<codex_core::protocol::TokenUsage> {
     color_eyre::install()?;
+
+    // Initialize the theme system based on config or automatic detection
+    use codex_core::config_types::ThemeMode;
+    match config.theme {
+        ThemeMode::Auto => theme::init_theme_auto(),
+        ThemeMode::Light => theme::ThemeManager::global().set_mode(theme::ThemeMode::Light),
+        ThemeMode::Dark => theme::ThemeManager::global().set_mode(theme::ThemeMode::Dark),
+    }
 
     // Forward panic reports through tracing so they appear in the UI status
     // line, but do not swallow the default/color-eyre panic handler.

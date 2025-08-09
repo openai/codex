@@ -61,6 +61,7 @@ pub(crate) async fn handle_create_conversation(
         include_plan_tool: None,
         disable_response_storage: None,
         show_raw_agent_reasoning: None,
+        theme: None,
     };
 
     let cfg: CodexConfig = match CodexConfig::load_with_cli_overrides(cli_overrides, overrides) {

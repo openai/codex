@@ -29,6 +29,8 @@ use ratatui::widgets::Wrap;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::exec_command::strip_bash_lc_and_escape;
+use crate::theme::SemanticColor;
+use crate::theme::ThemeManager;
 
 /// Request coming from the agent that needs user approval.
 pub(crate) enum ApprovalRequest {
@@ -121,9 +123,10 @@ impl UserApprovalWidget<'_> {
                 // Present a single-line summary without cwd: "codex wants to run: <cmd>"
                 let mut cmd_span: Span = cmd.clone().into();
                 cmd_span.style = cmd_span.style.add_modifier(Modifier::DIM);
+                let theme = ThemeManager::global();
                 let mut contents: Vec<Line> = vec![
                     Line::from(vec![
-                        "? ".fg(Color::Blue),
+                        Span::styled("? ", theme.style(SemanticColor::Info)),
                         "Codex wants to run ".bold(),
                         cmd_span,
                     ]),
@@ -246,8 +249,9 @@ impl UserApprovalWidget<'_> {
                 // Result line based on decision.
                 match decision {
                     ReviewDecision::Approved => {
+                        let theme = ThemeManager::global();
                         lines.push(Line::from(vec![
-                            "✓ ".fg(Color::Green),
+                            Span::styled("✓ ", theme.style(SemanticColor::Success)),
                             "You ".into(),
                             "approved".bold(),
                             " codex to run ".into(),
@@ -257,8 +261,9 @@ impl UserApprovalWidget<'_> {
                         ]));
                     }
                     ReviewDecision::ApprovedForSession => {
+                        let theme = ThemeManager::global();
                         lines.push(Line::from(vec![
-                            "✓ ".fg(Color::Green),
+                            Span::styled("✓ ", theme.style(SemanticColor::Success)),
                             "You ".into(),
                             "approved".bold(),
                             " codex to run ".into(),
@@ -268,8 +273,9 @@ impl UserApprovalWidget<'_> {
                         ]));
                     }
                     ReviewDecision::Denied => {
+                        let theme = ThemeManager::global();
                         lines.push(Line::from(vec![
-                            "✗ ".fg(Color::Red),
+                            Span::styled("✗ ", theme.style(SemanticColor::Error)),
                             "You ".into(),
                             "did not approve".bold(),
                             " codex to run ".into(),
@@ -277,8 +283,9 @@ impl UserApprovalWidget<'_> {
                         ]));
                     }
                     ReviewDecision::Abort => {
+                        let theme = ThemeManager::global();
                         lines.push(Line::from(vec![
-                            "✗ ".fg(Color::Red),
+                            Span::styled("✗ ", theme.style(SemanticColor::Error)),
                             "You ".into(),
                             "canceled".bold(),
                             " the request to run ".into(),
@@ -334,15 +341,16 @@ impl WidgetRef for &UserApprovalWidget<'_> {
             .constraints([Constraint::Length(prompt_height), Constraint::Min(0)])
             .areas(area);
 
+        let theme = ThemeManager::global();
         let lines: Vec<Line> = self
             .select_options
             .iter()
             .enumerate()
             .map(|(idx, opt)| {
                 let style = if idx == self.selected_option {
-                    Style::new().bg(Color::Cyan).fg(Color::Black)
+                    theme.style_with_bg(SemanticColor::Background, SemanticColor::Primary)
                 } else {
-                    Style::new().bg(Color::DarkGray)
+                    theme.style_with_bg(SemanticColor::Text, SemanticColor::Surface)
                 };
                 opt.label.clone().alignment(Alignment::Center).style(style)
             })
@@ -374,12 +382,12 @@ impl WidgetRef for &UserApprovalWidget<'_> {
         }
 
         Line::from(self.select_options[self.selected_option].description)
-            .style(Style::new().italic().fg(Color::DarkGray))
+            .style(theme.style_with_modifiers(SemanticColor::TextMuted, Modifier::ITALIC))
             .render(description_area.inner(Margin::new(1, 0)), buf);
 
         Block::bordered()
             .border_type(BorderType::QuadrantOutside)
-            .border_style(Style::default().fg(Color::Cyan))
+            .border_style(theme.style(SemanticColor::Primary))
             .borders(Borders::LEFT)
             .render_ref(
                 Rect::new(0, response_chunk.y, 1, response_chunk.height),
