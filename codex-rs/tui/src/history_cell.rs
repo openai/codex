@@ -777,12 +777,12 @@ impl HistoryCell {
             PatchEventType::ApprovalRequest => "proposed patch",
             PatchEventType::ApplyBegin {
                 auto_approved: true,
-            } => "✏️ Applying patch",
+            } => "✏️  Applying patch",
             PatchEventType::ApplyBegin {
                 auto_approved: false,
             } => {
                 let lines: Vec<Line<'static>> = vec![
-                    Line::from("✏️ Applying patch".magenta().bold()),
+                    Line::from("✏️  Applying patch".magenta().bold()),
                     Line::from(""),
                 ];
                 return Self::PendingPatch {
