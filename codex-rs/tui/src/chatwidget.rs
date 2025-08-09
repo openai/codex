@@ -306,6 +306,10 @@ impl ChatWidget<'_> {
 
     pub(crate) fn handle_codex_event(&mut self, event: Event) {
         let Event { id, msg } = event;
+
+        // Keep `active_history_cell` until we explicitly commit it, to avoid
+        // duplicating headers (e.g. for exec begin/end sequences).
+
         match msg {
             EventMsg::SessionConfigured(event) => {
                 self.bottom_pane
@@ -460,9 +464,6 @@ impl ChatWidget<'_> {
                     vec![]
                 };
                 self.finalize_active_stream();
-                if let Some(cell) = self.active_history_cell.take() {
-                    self.add_to_history(cell);
-                }
                 // Ensure the status indicator is visible while the command runs.
                 self.bottom_pane
                     .update_status_text("running command".to_string());
@@ -511,7 +512,9 @@ impl ChatWidget<'_> {
                     _ => vec![],
                 };
                 if let Some(cmd) = cmd {
-                    self.active_history_cell = Some(HistoryCell::new_completed_exec_command(
+                    // Replace the active running cell with a single finalized
+                    // history entry to avoid duplicating the command header.
+                    let completed = HistoryCell::new_completed_exec_command(
                         cmd.command,
                         parsed_cmd,
                         CommandOutput {
@@ -519,7 +522,9 @@ impl ChatWidget<'_> {
                             stdout,
                             stderr,
                         },
-                    ));
+                    );
+                    self.active_history_cell = None;
+                    self.add_to_history(completed);
                 }
             }
             EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
