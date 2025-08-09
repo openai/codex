@@ -297,25 +297,24 @@ pub(crate) fn mcp_tool_to_openai_tool(
         input_schema.properties = Some(serde_json::Value::Object(serde_json::Map::new()));
     }
 
-<<<<<<< HEAD
-    // Sanitize JSON Schema to avoid unsupported types for OpenAI tools.
-    // Notably, map `"integer"` -> `"number"` anywhere it appears.
-    let mut params_value = serde_json::to_value(&input_schema)
-        .unwrap_or_else(|_| json!({"type": "object", "properties": {}}));
-    sanitize_schema_types(&mut params_value);
+    // Serialize MCP schema, sanitize unsupported variants, then deserialize
+    // into our internal JsonSchema representation. Notably maps
+    // JSON Schema type "integer" -> "number" to satisfy OpenAI tool schema.
+    let mut serialized_input_schema = serde_json::to_value(input_schema)?;
+    sanitize_schema_types(&mut serialized_input_schema);
+    let input_schema = serde_json::from_value::<JsonSchema>(serialized_input_schema)?;
 
-    // TODO(mbolin): Change the contract of this function to return
-    // ResponsesApiTool.
-    json!({
-        "name": fully_qualified_name,
-        "description": description,
-        "parameters": params_value,
-        "type": "function",
+    Ok(ResponsesApiTool {
+        name: fully_qualified_name,
+        description: description.unwrap_or_default(),
+        strict: false,
+        parameters: input_schema,
     })
 }
 
-/// Recursively walk a JSON Schema and map unsupported type variants to supported ones.
-/// Currently converts `"integer"` to `"number"` anywhere under the schema.
+/// Recursively walk a JSON Schema JSON value and map unsupported type variants
+/// to supported ones. Currently converts `"integer"` to `"number"` anywhere
+/// under the schema so that deserialization into `JsonSchema` succeeds.
 fn sanitize_schema_types(value: &mut JsonValue) {
     match value {
         JsonValue::Object(map) => {
@@ -339,7 +338,8 @@ fn sanitize_schema_types(value: &mut JsonValue) {
                 }
             }
 
-            // Recurse into all other keys (e.g., properties, items, anyOf, oneOf, allOf, etc.).
+            // Recurse into all values so nested schemas (properties, items, anyOf, etc.)
+            // are sanitized as well.
             for (_k, v) in map.iter_mut() {
                 sanitize_schema_types(v);
             }
@@ -350,16 +350,7 @@ fn sanitize_schema_types(value: &mut JsonValue) {
             }
         }
         _ => {}
-=======
-    let serialized_input_schema = serde_json::to_value(input_schema)?;
-    let input_schema = serde_json::from_value::<JsonSchema>(serialized_input_schema)?;
-
-    Ok(ResponsesApiTool {
-        name: fully_qualified_name,
-        description: description.unwrap_or_default(),
-        strict: false,
-        parameters: input_schema,
-    })
+    }
 }
 
 /// Returns a list of OpenAiTools based on the provided config and MCP tools.
@@ -551,6 +542,63 @@ mod tests {
                 strict: false,
             })
         );
+<<<<<<< HEAD
 >>>>>>> aff97ed7 ([core] Separate tools config from openai client (#1858))
+=======
+=======
+    // Sanitize JSON Schema to avoid unsupported types for OpenAI tools.
+    // Notably, map `"integer"` -> `"number"` anywhere it appears.
+    let mut params_value = serde_json::to_value(&input_schema)
+        .unwrap_or_else(|_| json!({"type": "object", "properties": {}}));
+    sanitize_schema_types(&mut params_value);
+
+    // TODO(mbolin): Change the contract of this function to return
+    // ResponsesApiTool.
+    json!({
+        "name": fully_qualified_name,
+        "description": description,
+        "parameters": params_value,
+        "type": "function",
+    })
+}
+
+/// Recursively walk a JSON Schema and map unsupported type variants to supported ones.
+/// Currently converts `"integer"` to `"number"` anywhere under the schema.
+fn sanitize_schema_types(value: &mut JsonValue) {
+    match value {
+        JsonValue::Object(map) => {
+            if let Some(t) = map.get_mut("type") {
+                match t {
+                    JsonValue::String(s) => {
+                        if s == "integer" {
+                            *t = JsonValue::String("number".to_string());
+                        }
+                    }
+                    JsonValue::Array(arr) => {
+                        for v in arr.iter_mut() {
+                            if let JsonValue::String(s) = v {
+                                if s == "integer" {
+                                    *v = JsonValue::String("number".to_string());
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            // Recurse into all other keys (e.g., properties, items, anyOf, oneOf, allOf, etc.).
+            for (_k, v) in map.iter_mut() {
+                sanitize_schema_types(v);
+            }
+        }
+        JsonValue::Array(arr) => {
+            for v in arr.iter_mut() {
+                sanitize_schema_types(v);
+            }
+        }
+        _ => {}
+>>>>>>> 5961590a (core: normalize MCP tool JSON Schema type 'integer' to 'number'\n\nFixes errors converting MCP tools to OpenAI tools where the OpenAI tool schema expects types in {boolean,string,number,array,object}. Some MCP servers emit 'integer'; we now rewrite it to 'number' during conversion.\n\n- Recursively sanitize schemas in mcp_tool_to_openai_tool()\n- Leaves other tooling and schema fields untouched\n\nTest Plan:\n- cargo fmt && cargo clippy --tests\n- cargo build --all-features\n- cargo test --all-features\n\nContext: Naver MCP tools failed with unknown variant 'integer'.)
+>>>>>>> f49f2af2 (core: normalize MCP tool JSON Schema type 'integer' to 'number'\n\nFixes errors converting MCP tools to OpenAI tools where the OpenAI tool schema expects types in {boolean,string,number,array,object}. Some MCP servers emit 'integer'; we now rewrite it to 'number' during conversion.\n\n- Recursively sanitize schemas in mcp_tool_to_openai_tool()\n- Leaves other tooling and schema fields untouched\n\nTest Plan:\n- cargo fmt && cargo clippy --tests\n- cargo build --all-features\n- cargo test --all-features\n\nContext: Naver MCP tools failed with unknown variant 'integer'.)
     }
 }
