@@ -19,6 +19,8 @@ pub(crate) struct TextArea {
     cursor_pos: usize,
     wrap_cache: RefCell<Option<WrapCache>>,
     preferred_col: Option<usize>,
+    /// Stores the most recent killed text (for Ctrl+Y yank).
+    kill_buffer: String,
 }
 
 #[derive(Debug, Clone)]
@@ -40,6 +42,7 @@ impl TextArea {
             cursor_pos: 0,
             wrap_cache: RefCell::new(None),
             preferred_col: None,
+            kill_buffer: String::new(),
         }
     }
 
@@ -279,6 +282,13 @@ impl TextArea {
             } => {
                 self.kill_to_end_of_line();
             }
+            KeyEvent {
+                code: KeyCode::Char('y'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => {
+                self.yank_kill_buffer();
+            }
 
             // Cursor movement
             KeyEvent {
@@ -418,9 +428,16 @@ impl TextArea {
         let eol = self.end_of_current_line();
         if self.cursor_pos == eol {
             if eol < self.text.len() {
+                self.kill_buffer.clear();
+                self.kill_buffer.push('\n');
                 self.replace_range(self.cursor_pos..eol + 1, "");
+            } else {
+                // Nothing to kill
+                self.kill_buffer.clear();
             }
         } else {
+            let killed = self.text[self.cursor_pos..eol].to_string();
+            self.kill_buffer = killed;
             self.replace_range(self.cursor_pos..eol, "");
         }
     }
@@ -429,11 +446,27 @@ impl TextArea {
         let bol = self.beginning_of_current_line();
         if self.cursor_pos == bol {
             if bol > 0 {
+                self.kill_buffer.clear();
+                self.kill_buffer.push('\n');
                 self.replace_range(bol - 1..bol, "");
+            } else {
+                // Nothing to kill
+                self.kill_buffer.clear();
             }
         } else {
+            // Kill from BOL to cursor (excluding newline)
+            let killed = self.text[bol..self.cursor_pos].to_string();
+            self.kill_buffer = killed;
             self.replace_range(bol..self.cursor_pos, "");
         }
+    }
+
+    pub fn yank_kill_buffer(&mut self) {
+        if self.kill_buffer.is_empty() {
+            return;
+        }
+        let buf = self.kill_buffer.clone();
+        self.insert_str(&buf);
     }
 
     /// Move the cursor left by a single grapheme cluster.
@@ -937,6 +970,65 @@ mod tests {
         // Moving down at last line jumps to end
         t.move_cursor_down();
         assert_eq!(t.cursor(), t.text().len());
+    }
+
+    #[test]
+    fn kill_then_yank_with_ctrl_y_basic() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        // Kill to end of line from middle, then yank back
+        let mut t = ta_with("abc\ndef");
+        t.set_cursor(1); // after 'a'
+        // Ctrl-K
+        t.input(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
+        assert_eq!(t.text(), "a\ndef");
+        assert_eq!(t.cursor(), 1);
+        // Move cursor back to where we want to yank
+        t.set_cursor(1);
+        // Ctrl-Y
+        t.input(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL));
+        assert_eq!(t.text(), "abc\ndef");
+        assert_eq!(t.cursor(), 1 + "bc".len());
+    }
+
+    #[test]
+    fn kill_newline_and_yank_newline() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        // Kill at EOL should remove newline; yank should restore it
+        let mut t = ta_with("abc\ndef");
+        t.set_cursor(3); // EOL of first line
+        t.input(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
+        assert_eq!(t.text(), "abcdef");
+        assert_eq!(t.cursor(), 3);
+        // Yank newline back
+        t.input(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL));
+        assert_eq!(t.text(), "abc\ndef");
+        assert_eq!(t.cursor(), 4); // cursor advances by 1 on yank
+    }
+
+    #[test]
+    fn kill_to_bol_and_yank_back() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let mut t = ta_with("hello\nworld");
+        // Put cursor after 'r' in second line
+        let second_start = 6; // index after first '\n'
+        t.set_cursor(second_start + 3);
+        // Ctrl-U -> kill from BOL to cursor ("wor")
+        t.input(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        assert_eq!(t.text(), "hello\nld");
+        assert_eq!(t.cursor(), second_start); // now at BOL
+        // Yank back -> restores "wor"
+        t.input(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL));
+        assert_eq!(t.text(), "hello\nworld");
+        assert_eq!(t.cursor(), second_start + 3);
     }
 
     #[test]
