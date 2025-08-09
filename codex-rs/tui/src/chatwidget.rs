@@ -292,8 +292,9 @@ impl ChatWidget<'_> {
             return;
         }
 
-        let is_running_now = self.bottom_pane.is_task_running() && self.allow_input_while_running;
-        if !is_running_now {
+        let is_task_running = self.bottom_pane.is_task_running();
+        let queue_mode = self.allow_input_while_running && is_task_running;
+        if !queue_mode {
             self.codex_op_tx
                 .send(Op::UserInput { items })
                 .unwrap_or_else(|e| {
@@ -304,7 +305,7 @@ impl ChatWidget<'_> {
         // Persist the text to cross-session message history unless we're
         // queueing while a task is running (in which case we do not append to
         // the visible conversation log immediately to avoid clutter).
-        let is_running = self.bottom_pane.is_task_running();
+        let is_task_running = self.bottom_pane.is_task_running();
         if !text.is_empty() {
             self.codex_op_tx
                 .send(Op::AddToHistory { text: text.clone() })
@@ -312,7 +313,7 @@ impl ChatWidget<'_> {
                     tracing::error!("failed to send AddHistory op: {e}");
                 });
 
-            if !(self.allow_input_while_running && is_running) {
+            if !(self.allow_input_while_running && is_task_running) {
                 // Only show text in history immediately when not queueing.
                 self.add_to_history(HistoryCell::new_user_prompt(text.clone()));
             } else {

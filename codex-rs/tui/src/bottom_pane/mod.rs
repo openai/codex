@@ -111,9 +111,8 @@ impl BottomPane<'_> {
             .as_ref()
             .map(|s| s.desired_height(width))
             .unwrap_or(0);
-        // Optional spacer above the first overlay while streaming and the
-        // No extra spacer above overlay; separation is handled by the live ring
-        // placeholder injected when streaming begins.
+        // No extra spacer is added above the first overlay; separation is
+        // handled by the live ring placeholder that is injected when streaming begins.
         let overlay_status_pad = 0;
         let ring_h = self
             .live_ring
@@ -742,13 +741,7 @@ mod tests {
         );
     }
 
-    // moved to tests/overlay_spacing.rs
-
-    // moved to tests/overlay_spacing.rs
-
-    // moved to tests/queued_overlay.rs
-    // moved to tests/queued_overlay.rs
-    // moved to tests/cursor_pos.rs
+    // heavy UI tests have been moved to dedicated modules below
 
     #[test]
     fn cursor_pos_accounts_for_live_ring_and_status_spacer() {
