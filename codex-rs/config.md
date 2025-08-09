@@ -148,12 +148,20 @@ Determines when the user should be prompted to approve whether Codex can execute
 approval_policy = "untrusted"
 ```
 
+If you want to be notified whenever a command fails, use "on-failure":
 ```toml
 # If the command fails when run in the sandbox, Codex asks for permission to
 # retry the command outside the sandbox.
 approval_policy = "on-failure"
 ```
 
+If you want the model to run until it decides that it needs to ask you for escalated permissions, use "on-request":
+```toml
+# The model decides when to escalate
+approval_policy = "on-request"
+```
+
+Alternatively, you can have the model run until it is done, and never ask to run a command with escalated permissions:
 ```toml
 # User is never prompted: if the command fails, Codex will automatically try
 # something out. Note the `exec` subcommand always uses this mode.
@@ -267,9 +275,12 @@ sandbox_mode = "workspace-write"
 
 # Extra settings that only apply when `sandbox = "workspace-write"`.
 [sandbox_workspace_write]
-# By default, only the cwd for the Codex session will be writable (and $TMPDIR
-# on macOS), but you can specify additional writable folders in this array.
-writable_roots = ["/tmp"]
+# By default, the cwd for the Codex session will be writable as well as $TMPDIR
+# (if set) and /tmp (if it exists). Setting the respective options to `true`
+# will override those defaults.
+exclude_tmpdir_env_var = false
+exclude_slash_tmp = false
+
 # Allow the command being run inside the sandbox to make outbound network
 # requests. Disabled by default.
 network_access = false
@@ -328,12 +339,11 @@ disable_response_storage = true
 
 ## shell_environment_policy
 
-Codex spawns subprocesses (e.g. when executing a `local_shell` tool-call suggested by the assistant). By default it passes **only a minimal core subset** of your environment to those subprocesses to avoid leaking credentials. You can tune this behavior via the **`shell_environment_policy`** block in
-`config.toml`:
+Codex spawns subprocesses (e.g. when executing a `local_shell` tool-call suggested by the assistant). By default it now passes **your full environment** to those subprocesses. You can tune this behavior via the **`shell_environment_policy`** block in `config.toml`:
 
 ```toml
 [shell_environment_policy]
-# inherit can be "core" (default), "all", or "none"
+# inherit can be "all" (default), "core", or "none"
 inherit = "core"
 # set to true to *skip* the filter for `"*KEY*"` and `"*TOKEN*"`
 ignore_default_excludes = false
@@ -347,7 +357,7 @@ include_only = ["PATH", "HOME"]
 
 | Field                     | Type                       | Default | Description                                                                                                                                     |
 | ------------------------- | -------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `inherit`                 | string                     | `core`  | Starting template for the environment:<br>`core` (`HOME`, `PATH`, `USER`, …), `all` (clone full parent env), or `none` (start empty).           |
+| `inherit`                 | string                     | `all`   | Starting template for the environment:<br>`all` (clone full parent env), `core` (`HOME`, `PATH`, `USER`, …), or `none` (start empty).           |
 | `ignore_default_excludes` | boolean                    | `false` | When `false`, Codex removes any var whose **name** contains `KEY`, `SECRET`, or `TOKEN` (case-insensitive) before other rules run.              |
 | `exclude`                 | array&lt;string&gt;        | `[]`    | Case-insensitive glob patterns to drop after the default filter.<br>Examples: `"AWS_*"`, `"AZURE_*"`.                                           |
 | `set`                     | table&lt;string,string&gt; | `{}`    | Explicit key/value overrides or additions – always win over inherited values.                                                                   |

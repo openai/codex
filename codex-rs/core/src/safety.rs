@@ -11,7 +11,7 @@ use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum SafetyCheck {
     AutoApprove { sandbox_type: SandboxType },
     AskUser,
@@ -31,7 +31,7 @@ pub fn assess_patch_safety(
     }
 
     match policy {
-        AskForApproval::OnFailure | AskForApproval::Never => {
+        AskForApproval::OnFailure | AskForApproval::Never | AskForApproval::OnRequest => {
             // Continue to see if this can be auto-approved.
         }
         // TODO(ragona): I'm not sure this is actually correct? I believe in this case
@@ -76,6 +76,7 @@ pub fn assess_command_safety(
     approval_policy: AskForApproval,
     sandbox_policy: &SandboxPolicy,
     approved: &HashSet<Vec<String>>,
+    with_escalated_permissions: bool,
 ) -> SafetyCheck {
     // A command is "trusted" because either:
     // - it belongs to a set of commands we consider "safe" by default, or
@@ -96,12 +97,13 @@ pub fn assess_command_safety(
         };
     }
 
-    assess_safety_for_untrusted_command(approval_policy, sandbox_policy)
+    assess_safety_for_untrusted_command(approval_policy, sandbox_policy, with_escalated_permissions)
 }
 
 pub(crate) fn assess_safety_for_untrusted_command(
     approval_policy: AskForApproval,
     sandbox_policy: &SandboxPolicy,
+    with_escalated_permissions: bool,
 ) -> SafetyCheck {
     use AskForApproval::*;
     use SandboxPolicy::*;
@@ -113,9 +115,23 @@ pub(crate) fn assess_safety_for_untrusted_command(
             // commands.
             SafetyCheck::AskUser
         }
-        (OnFailure, DangerFullAccess) | (Never, DangerFullAccess) => SafetyCheck::AutoApprove {
+        (OnFailure, DangerFullAccess)
+        | (Never, DangerFullAccess)
+        | (OnRequest, DangerFullAccess) => SafetyCheck::AutoApprove {
             sandbox_type: SandboxType::None,
         },
+        (OnRequest, ReadOnly) | (OnRequest, WorkspaceWrite { .. }) => {
+            if with_escalated_permissions {
+                SafetyCheck::AskUser
+            } else {
+                match get_platform_sandbox() {
+                    Some(sandbox_type) => SafetyCheck::AutoApprove { sandbox_type },
+                    // Fall back to asking since the command is untrusted and
+                    // we do not have a sandbox available
+                    None => SafetyCheck::AskUser,
+                }
+            }
+        }
         (Never, ReadOnly)
         | (Never, WorkspaceWrite { .. })
         | (OnFailure, ReadOnly)
@@ -263,5 +279,48 @@ mod tests {
             &[PathBuf::from("..")],
             &cwd,
         ))
+    }
+
+    #[test]
+    fn test_request_escalated_privileges() {
+        // Should not be a trusted command
+        let command = vec!["git commit".to_string()];
+        let approval_policy = AskForApproval::OnRequest;
+        let sandbox_policy = SandboxPolicy::ReadOnly;
+        let approved: HashSet<Vec<String>> = HashSet::new();
+        let request_escalated_privileges = true;
+
+        let safety_check = assess_command_safety(
+            &command,
+            approval_policy,
+            &sandbox_policy,
+            &approved,
+            request_escalated_privileges,
+        );
+
+        assert_eq!(safety_check, SafetyCheck::AskUser);
+    }
+
+    #[test]
+    fn test_request_escalated_privileges_no_sandbox_fallback() {
+        let command = vec!["git".to_string(), "commit".to_string()];
+        let approval_policy = AskForApproval::OnRequest;
+        let sandbox_policy = SandboxPolicy::ReadOnly;
+        let approved: HashSet<Vec<String>> = HashSet::new();
+        let request_escalated_privileges = false;
+
+        let safety_check = assess_command_safety(
+            &command,
+            approval_policy,
+            &sandbox_policy,
+            &approved,
+            request_escalated_privileges,
+        );
+
+        let expected = match get_platform_sandbox() {
+            Some(sandbox_type) => SafetyCheck::AutoApprove { sandbox_type },
+            None => SafetyCheck::AskUser,
+        };
+        assert_eq!(safety_check, expected);
     }
 }

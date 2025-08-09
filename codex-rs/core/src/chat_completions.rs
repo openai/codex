@@ -32,7 +32,6 @@ use crate::util::backoff;
 pub(crate) async fn stream_chat_completions(
     prompt: &Prompt,
     model_family: &ModelFamily,
-    include_plan_tool: bool,
     client: &reqwest::Client,
     provider: &ModelProviderInfo,
 ) -> Result<ResponseStream> {
@@ -42,11 +41,9 @@ pub(crate) async fn stream_chat_completions(
     let full_instructions = prompt.get_full_instructions(model_family);
     messages.push(json!({"role": "system", "content": full_instructions}));
 
-    if let Some(instr) = &prompt.get_formatted_user_instructions() {
-        messages.push(json!({"role": "user", "content": instr}));
-    }
+    let input = prompt.get_formatted_input();
 
-    for item in &prompt.input {
+    for item in &input {
         match item {
             ResponseItem::Message { role, content, .. } => {
                 let mut text = String::new();
@@ -112,8 +109,7 @@ pub(crate) async fn stream_chat_completions(
         }
     }
 
-    let tools_json =
-        create_tools_json_for_chat_completions_api(prompt, model_family, include_plan_tool)?;
+    let tools_json = create_tools_json_for_chat_completions_api(&prompt.tools)?;
     let payload = json!({
         "model": model_family.slug,
         "messages": messages,

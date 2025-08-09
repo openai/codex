@@ -91,7 +91,38 @@ async function processLabel(
   labelConfig: LabelConfig,
 ): Promise<void> {
   const template = labelConfig.getPromptTemplate();
-  const populatedTemplate = await renderPromptTemplate(template, ctx);
+
+  // If this is a review label, prepend explicit PR-diff scoping guidance to
+  // reduce out-of-scope feedback. Do this before rendering so placeholders in
+  // the guidance (e.g., {CODEX_ACTION_GITHUB_EVENT_PATH}) are substituted.
+  const isReview = label.toLowerCase().includes("review");
+  const reviewScopeGuidance = `
+PR Diff Scope
+- Only review changes between the PR's merge-base and head; do not comment on commits or files outside this range.
+- Derive the base/head SHAs from the event JSON at {CODEX_ACTION_GITHUB_EVENT_PATH}, then compute and use the PR diff for all analysis and comments.
+
+Commands to determine scope
+- Resolve SHAs:
+  - BASE_SHA=$(jq -r '.pull_request.base.sha // .pull_request.base.ref' "{CODEX_ACTION_GITHUB_EVENT_PATH}")
+  - HEAD_SHA=$(jq -r '.pull_request.head.sha // .pull_request.head.ref' "{CODEX_ACTION_GITHUB_EVENT_PATH}")
+  - BASE_SHA=$(git rev-parse "$BASE_SHA")
+  - HEAD_SHA=$(git rev-parse "$HEAD_SHA")
+- Prefer triple-dot (merge-base) semantics for PR diffs:
+  - Changed commits: git log --oneline "$BASE_SHA...$HEAD_SHA"
+  - Changed files: git diff --name-status "$BASE_SHA...$HEAD_SHA"
+  - Review hunks: git diff -U0 "$BASE_SHA...$HEAD_SHA"
+
+Review rules
+- Anchor every comment to a file and hunk present in git diff "$BASE_SHA...$HEAD_SHA".
+- If you mention context outside the diff, label it as "Follow-up (outside this PR scope)" and keep it brief (<=2 bullets).
+- Do not critique commits or files not reachable in the PR range (merge-base(base, head) → head).
+`.trim();
+
+  const effectiveTemplate = isReview
+    ? `${reviewScopeGuidance}\n\n${template}`
+    : template;
+
+  const populatedTemplate = await renderPromptTemplate(effectiveTemplate, ctx);
 
   // Always run Codex and post the resulting message as a comment.
   let commentBody = await runCodex(populatedTemplate, ctx);

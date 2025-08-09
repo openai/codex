@@ -145,7 +145,7 @@ async fn summarize_context_three_requests_and_instructions() {
     let ctrl_c = std::sync::Arc::new(tokio::sync::Notify::new());
     let CodexSpawnOk { codex, .. } = Codex::spawn(
         config,
-        Some(CodexAuth::from_api_key("dummy".to_string())),
+        Some(CodexAuth::from_api_key("dummy")),
         ctrl_c.clone(),
     )
     .await

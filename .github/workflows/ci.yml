@@ -44,35 +44,10 @@ jobs:
 
       # Run all tasks using workspace filters
 
-      - name: Check TypeScript code formatting
-        working-directory: codex-cli
-        run: pnpm run format
-
-      - name: Check Markdown and config file formatting
-        run: pnpm run format
-
-      - name: Run tests
-        run: pnpm run test
-
-      - name: Lint
-        run: |
-          pnpm --filter @openai/codex exec -- eslint src tests --ext ts --ext tsx \
-            --report-unused-disable-directives \
-            --rule "no-console:error" \
-            --rule "no-debugger:error" \
-            --max-warnings=-1
-
-      - name: Type-check
-        run: pnpm run typecheck
-
-      - name: Build
-        run: pnpm run build
-
       - name: Ensure staging a release works.
-        working-directory: codex-cli
         env:
           GH_TOKEN: ${{ github.token }}
-        run: pnpm stage-release
+        run: ./codex-cli/scripts/stage_release.sh
 
       - name: Ensure root README.md contains only ASCII and certain Unicode code points
         run: ./scripts/asciicheck.py README.md

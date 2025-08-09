@@ -9,8 +9,8 @@ use serde_json::json;
 
 use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
-use crate::event_processor::create_config_summary_entries;
 use crate::event_processor::handle_last_message;
+use codex_common::create_config_summary_entries;
 
 pub(crate) struct EventProcessorWithJsonOutput {
     last_message_path: Option<PathBuf>,

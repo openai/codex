@@ -53,6 +53,8 @@ async fn test_exec_stdout_stream_events_echo() {
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         timeout_ms: Some(5_000),
         env: HashMap::new(),
+        with_escalated_permissions: None,
+        justification: None,
     };
 
     let ctrl_c = Arc::new(Notify::new());
@@ -103,6 +105,8 @@ async fn test_exec_stderr_stream_events_echo() {
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         timeout_ms: Some(5_000),
         env: HashMap::new(),
+        with_escalated_permissions: None,
+        justification: None,
     };
 
     let ctrl_c = Arc::new(Notify::new());

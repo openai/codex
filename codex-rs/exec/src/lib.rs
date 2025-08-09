@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 pub use cli::Cli;
+use codex_core::BUILT_IN_OSS_MODEL_PROVIDER_ID;
 use codex_core::codex_wrapper::CodexConversation;
 use codex_core::codex_wrapper::{self};
 use codex_core::config::Config;
@@ -21,6 +22,7 @@ use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::util::is_inside_git_repo;
+use codex_ollama::DEFAULT_OSS_MODEL;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
 use event_processor_with_json_output::EventProcessorWithJsonOutput;
 use tracing::debug;
@@ -34,7 +36,8 @@ use crate::event_processor::EventProcessor;
 pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
     let Cli {
         images,
-        model,
+        model: model_cli_arg,
+        oss,
         config_profile,
         full_auto,
         dangerously_bypass_approvals_and_sandbox,
@@ -114,6 +117,23 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         sandbox_mode_cli_arg.map(Into::<SandboxMode>::into)
     };
 
+    // When using `--oss`, let the bootstrapper pick the model (defaulting to
+    // gpt-oss:20b) and ensure it is present locally. Also, force the built‑in
+    // `oss` model provider.
+    let model = if let Some(model) = model_cli_arg {
+        Some(model)
+    } else if oss {
+        Some(DEFAULT_OSS_MODEL.to_owned())
+    } else {
+        None // No model specified, will use the default.
+    };
+
+    let model_provider = if oss {
+        Some(BUILT_IN_OSS_MODEL_PROVIDER_ID.to_string())
+    } else {
+        None // No specific model provider override.
+    };
+
     // Load configuration and determine approval policy
     let overrides = ConfigOverrides {
         model,
@@ -123,10 +143,12 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         approval_policy: Some(AskForApproval::Never),
         sandbox_mode,
         cwd: cwd.map(|p| p.canonicalize().unwrap_or(p)),
-        model_provider: None,
+        model_provider,
         codex_linux_sandbox_exe,
         base_instructions: None,
         include_plan_tool: None,
+        disable_response_storage: oss.then_some(true),
+        show_raw_agent_reasoning: oss.then_some(true),
     };
     // Parse `-c` overrides.
     let cli_kv_overrides = match config_overrides.parse_overrides() {
@@ -148,12 +170,18 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         ))
     };
 
+    if oss {
+        codex_ollama::ensure_oss_ready(&config)
+            .await
+            .map_err(|e| anyhow::anyhow!("OSS setup failed: {e}"))?;
+    }
+
     // Print the effective configuration and prompt so users can see what Codex
     // is using.
     event_processor.print_config_summary(&config, &prompt);
 
-    if !skip_git_repo_check && !is_inside_git_repo(&config) {
-        eprintln!("Not inside a Git repo and --skip-git-repo-check was not specified.");
+    if !skip_git_repo_check && !is_inside_git_repo(&config.cwd.to_path_buf()) {
+        eprintln!("Not inside a trusted directory and --skip-git-repo-check was not specified.");
         std::process::exit(1);
     }
 
@@ -188,8 +216,14 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                     res = codex.next_event() => match res {
                         Ok(event) => {
                             debug!("Received event: {event:?}");
+
+                            let is_shutdown_complete = matches!(event.msg, EventMsg::ShutdownComplete);
                             if let Err(e) = tx.send(event) {
                                 error!("Error sending event: {e:?}");
+                                break;
+                            }
+                            if is_shutdown_complete {
+                                info!("Received shutdown event, exiting event loop.");
                                 break;
                             }
                         },

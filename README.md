@@ -1,11 +1,12 @@
 <h1 align="center">OpenAI Codex CLI</h1>
-<p align="center">Lightweight coding agent that runs in your terminal</p>
 
 <p align="center"><code>npm i -g @openai/codex</code><br />or <code>brew install codex</code></p>
 
-This is the home of the **Codex CLI**, which is a coding agent from OpenAI that runs locally on your computer. If you are looking for the _cloud-based agent_ from OpenAI, **Codex [Web]**, see <https://chatgpt.com/codex>.
+<p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.</br>If you are looking for the <em>cloud-based agent</em> from OpenAI, <strong>Codex Web</strong>, see <a href="https://chatgpt.com/codex">chatgpt.com/codex</a>.</p>
 
-<!-- ![Codex demo GIF using: codex "explain this codebase to me"](./.github/demo.gif) -->
+<p align="center">
+  <img src="./.github/codex-cli-splash.png" alt="Codex CLI splash" width="50%" />
+  </p>
 
 ---
 
@@ -14,21 +15,28 @@ This is the home of the **Codex CLI**, which is a coding agent from OpenAI that 
 
 <!-- Begin ToC -->
 
-- [Experimental technology disclaimer](#experimental-technology-disclaimer)
 - [Quickstart](#quickstart)
-  - [OpenAI API Users](#openai-api-users)
-  - [OpenAI Plus/Pro Users](#openai-pluspro-users)
-- [Why Codex?](#why-codex)
-- [Security model & permissions](#security-model--permissions)
+  - [Installing and running Codex CLI](#installing-and-running-codex-cli)
+  - [Using Codex with your ChatGPT plan](#using-codex-with-your-chatgpt-plan)
+  - [Connecting through VPS or remote](#connecting-through-vps-or-remote)
+  - [Usage-based billing alternative: Use an OpenAI API key](#usage-based-billing-alternative-use-an-openai-api-key)
+  - [Choosing Codex's level of autonomy](#choosing-codexs-level-of-autonomy)
+    - [**1. Read/write**](#1-readwrite)
+    - [**2. Read-only**](#2-read-only)
+    - [**3. Advanced configuration**](#3-advanced-configuration)
+    - [Can I run without ANY approvals?](#can-i-run-without-any-approvals)
+    - [Fine-tuning in `config.toml`](#fine-tuning-in-configtoml)
+  - [Example prompts](#example-prompts)
+- [Running with a prompt as input](#running-with-a-prompt-as-input)
+- [Using Open Source Models](#using-open-source-models)
   - [Platform sandboxing details](#platform-sandboxing-details)
+- [Experimental technology disclaimer](#experimental-technology-disclaimer)
 - [System requirements](#system-requirements)
 - [CLI reference](#cli-reference)
 - [Memory & project docs](#memory--project-docs)
 - [Non-interactive / CI mode](#non-interactive--ci-mode)
 - [Model Context Protocol (MCP)](#model-context-protocol-mcp)
 - [Tracing / verbose logging](#tracing--verbose-logging)
-- [Recipes](#recipes)
-- [Installation](#installation)
   - [DotSlash](#dotslash)
 - [Configuration](#configuration)
 - [FAQ](#faq)
@@ -53,18 +61,9 @@ This is the home of the **Codex CLI**, which is a coding agent from OpenAI that 
 
 ---
 
-## Experimental technology disclaimer
-
-Codex CLI is an experimental project under active development. It is not yet stable, may contain bugs, incomplete features, or undergo breaking changes. We're building it in the open with the community and welcome:
-
-- Bug reports
-- Feature requests
-- Pull requests
-- Good vibes
-
-Help us improve by filing issues or submitting PRs (see the section below for how to contribute)!
-
 ## Quickstart
+
+### Installing and running Codex CLI
 
 Install globally with your preferred package manager:
 
@@ -72,36 +71,160 @@ Install globally with your preferred package manager:
 npm install -g @openai/codex  # Alternatively: `brew install codex`
 ```
 
-Or go to the [latest GitHub Release](https://github.com/openai/codex/releases/latest) and download the appropriate binary for your platform.
+Then simply run `codex` to get started:
 
-### OpenAI API Users
+```shell
+codex
+```
 
-Next, set your OpenAI API key as an environment variable:
+<details>
+<summary>You can also go to the <a href="https://github.com/openai/codex/releases/latest">latest GitHub Release</a> and download the appropriate binary for your platform.</summary>
+
+Each GitHub Release contains many executables, but in practice, you likely want one of these:
+
+- macOS
+  - Apple Silicon/arm64: `codex-aarch64-apple-darwin.tar.gz`
+  - x86_64 (older Mac hardware): `codex-x86_64-apple-darwin.tar.gz`
+- Linux
+  - x86_64: `codex-x86_64-unknown-linux-musl.tar.gz`
+  - arm64: `codex-aarch64-unknown-linux-musl.tar.gz`
+
+Each archive contains a single entry with the platform baked into the name (e.g., `codex-x86_64-unknown-linux-musl`), so you likely want to rename it to `codex` after extracting it.
+
+</details>
+
+### Using Codex with your ChatGPT plan
+
+<p align="center">
+  <img src="./.github/codex-cli-login.png" alt="Codex CLI login" width="50%" />
+  </p>
+
+After you run `codex` select Sign in with ChatGPT. You'll need a Plus, Pro, or Team ChatGPT account, and will get access to our latest models, including `gpt-5`, at no extra cost to your plan. (Enterprise is coming soon.)
+
+> Important: If you've used the Codex CLI before, you'll need to follow these steps to migrate from usage-based billing with your API key:
+>
+> 1. Update the CLI with `codex update` and ensure `codex --version` is greater than 0.13
+> 2. Ensure that there is no `OPENAI_API_KEY` environment variable set. (Check that `env | grep 'OPENAI_API_KEY'` returns empty)
+> 3. Run `codex login` again
+
+If you encounter problems with the login flow, please comment on [this issue](https://github.com/openai/codex/issues/1243).
+
+### Connecting through VPS or remote
+
+If you run Codex on a remote machine (VPS/server) without a local browser, the login helper starts a server on `localhost:1455` on the remote host. To complete login in your local browser, forward that port to your machine before starting the login flow:
+
+```bash
+# From your local machine
+ssh -L 1455:localhost:1455 <user>@<remote-host>
+```
+
+Then, in that SSH session, run `codex` and select "Sign in with ChatGPT". When prompted, open the printed URL (it will be `http://localhost:1455/...`) in your local browser. The traffic will be tunneled to the remote server.
+
+### Usage-based billing alternative: Use an OpenAI API key
+
+If you prefer to pay-as-you-go, you can still authenticate with your OpenAI API key by setting it as an environment variable:
 
 ```shell
 export OPENAI_API_KEY="your-api-key-here"
 ```
 
-> [!NOTE]
-> This command sets the key only for your current terminal session. You can add the `export` line to your shell's configuration file (e.g., `~/.zshrc`), but we recommend setting it for the session.
+Notes:
 
-### OpenAI Plus/Pro Users
+- This command only sets the key for your current terminal session, which we recommend. To set it for all future sessions, you can also add the `export` line to your shell's configuration file (e.g., `~/.zshrc`).
+- If you have signed in with ChatGPT, Codex will default to using your ChatGPT credits. If you wish to use your API key, use the `/logout` command to clear your ChatGPT authentication.
 
-If you have a paid OpenAI account, run the following to start the login process:
+### Choosing Codex's level of autonomy
 
+We always recommend running Codex in its default sandbox that gives you strong guardrails around what the agent can do. The default sandbox prevents it from editing files outside its workspace, or from accessing the network.
+
+When you launch Codex in a new folder, it detects whether the folder is version controlled and recommends one of two levels of autonomy:
+
+#### **1. Read/write**
+
+- Codex can run commands and write files in the workspace without approval.
+- To write files in other folders, access network, update git or perform other actions protected by the sandbox, Codex will need your permission.
+- By default, the workspace includes the current directory, as well as temporary directories like `/tmp`. You can see what directories are in the workspace with the `/status` command. See the docs for how to customize this behavior.
+- Advanced: You can manually specify this configuration by running `codex --sandbox workspace-write --ask-for-approval on-request`
+- This is the recommended default for version-controlled folders.
+
+#### **2. Read-only**
+
+- Codex can run read-only commands without approval.
+- To edit files, access network, or perform other actions protected by the sandbox, Codex will need your permission.
+- Advanced: You can manually specify this configuration by running `codex --sandbox read-only --ask-for-approval on-request`
+- This is the recommended default non-version-controlled folders.
+
+#### **3. Advanced configuration**
+
+Codex gives you fine-grained control over the sandbox with the `--sandbox` option, and over when it requests approval with the `--ask-for-approval` option. Run `codex help` for more on these options.
+
+#### Can I run without ANY approvals?
+
+Yes, run codex non-interactively with `--ask-for-approval never`. This option works with all `--sandbox` options, so you still have full control over Codex's level of autonomy. It will make its best attempt with whatever contrainsts you provide. For example:
+
+- Use `codex --ask-for-approval never --sandbox read-only` when you are running many agents to answer questions in parallel in the same workspace.
+- Use `codex --ask-for-approval never --sandbox workspace-write` when you want the agent to non-interactively take time to produce the best outcome, with strong guardrails around its behavior.
+- Use `codex --ask-for-approval never --sandbox danger-full-access` to dangerously give the agent full autonomy. Because this disables important safety mechanisms, we recommend against using this unless running Codex in an isolated environment.
+
+#### Fine-tuning in `config.toml`
+
+```toml
+# approval mode
+approval_policy = "untrusted"
+sandbox_mode    = "read-only"
+
+# full-auto mode
+approval_policy = "on-request"
+sandbox_mode    = "workspace-write"
+
+# Optional: allow network in workspace-write mode
+[sandbox_workspace_write]
+network_access = true
 ```
-codex login
+
+You can also save presets as **profiles**:
+
+```toml
+[profiles.full_auto]
+approval_policy = "on-request"
+sandbox_mode    = "workspace-write"
+
+[profiles.readonly_quiet]
+approval_policy = "never"
+sandbox_mode    = "read-only"
 ```
 
-If you complete the process successfully, you should have a `~/.codex/auth.json` file that contains the credentials that Codex will use.
+### Example prompts
 
-To verify whether you are currently logged in, run:
+Below are a few bite-size examples you can copy-paste. Replace the text in quotes with your own task. See the [prompting guide](https://github.com/openai/codex/blob/main/codex-cli/examples/prompting_guide.md) for more tips and usage patterns.
 
+| ✨  | What you type                                                                   | What happens                                                               |
+| --- | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| 1   | `codex "Refactor the Dashboard component to React Hooks"`                       | Codex rewrites the class component, runs `npm test`, and shows the diff.   |
+| 2   | `codex "Generate SQL migrations for adding a users table"`                      | Infers your ORM, creates migration files, and runs them in a sandboxed DB. |
+| 3   | `codex "Write unit tests for utils/date.ts"`                                    | Generates tests, executes them, and iterates until they pass.              |
+| 4   | `codex "Bulk-rename *.jpeg -> *.jpg with git mv"`                               | Safely renames files and updates imports/usages.                           |
+| 5   | `codex "Explain what this regex does: ^(?=.*[A-Z]).{8,}$"`                      | Outputs a step-by-step human explanation.                                  |
+| 6   | `codex "Carefully review this repo, and propose 3 high impact well-scoped PRs"` | Suggests impactful PRs in the current codebase.                            |
+| 7   | `codex "Look for vulnerabilities and create a security review report"`          | Finds and explains security bugs.                                          |
+
+## Running with a prompt as input
+
+You can also run Codex CLI with a prompt as input:
+
+```shell
+codex "explain this codebase to me"
 ```
-codex login status
+
+```shell
+codex --full-auto "create the fanciest todo-list app"
 ```
 
-If you encounter problems with the login flow, please comment on <https://github.com/openai/codex/issues/1243>.
+That's it - Codex will scaffold a file, run it inside a sandbox, install any
+missing dependencies, and show you the live result. Approve the changes and
+they'll be committed to your working directory.
+
+## Using Open Source Models
 
 <details>
 <summary><strong>Use <code>--profile</code> to use other models</strong></summary>
@@ -162,67 +285,39 @@ model = "mistral"
 This way, you can specify one command-line argument (.e.g., `--profile o3`, `--profile mistral`) to override multiple settings together.
 
 </details>
-<br />
 
-Run interactively:
+Codex can run fully locally against an OpenAI-compatible OSS host (like Ollama) using the `--oss` flag:
 
-```shell
-codex
+- Interactive UI:
+  - codex --oss
+- Non-interactive (programmatic) mode:
+  - echo "Refactor utils" | codex exec --oss
+
+Model selection when using `--oss`:
+
+- If you omit `-m/--model`, Codex defaults to -m gpt-oss:20b and will verify it exists locally (downloading if needed).
+- To pick a different size, pass one of:
+  - -m "gpt-oss:20b"
+  - -m "gpt-oss:120b"
+
+Point Codex at your own OSS host:
+
+- By default, `--oss` talks to http://localhost:11434/v1.
+- To use a different host, set one of these environment variables before running Codex:
+  - CODEX_OSS_BASE_URL, for example:
+    - CODEX_OSS_BASE_URL="http://my-ollama.example.com:11434/v1" codex --oss -m gpt-oss:20b
+  - or CODEX_OSS_PORT (when the host is localhost):
+    - CODEX_OSS_PORT=11434 codex --oss
+
+Advanced: you can persist this in your config instead of environment variables by overriding the built-in `oss` provider in `~/.codex/config.toml`:
+
+```toml
+[model_providers.oss]
+name = "Open Source"
+base_url = "http://my-ollama.example.com:11434/v1"
 ```
-
-Or, run with a prompt as input (and optionally in `Full Auto` mode):
-
-```shell
-codex "explain this codebase to me"
-```
-
-```shell
-codex --full-auto "create the fanciest todo-list app"
-```
-
-That's it - Codex will scaffold a file, run it inside a sandbox, install any
-missing dependencies, and show you the live result. Approve the changes and
-they'll be committed to your working directory.
 
 ---
-
-## Why Codex?
-
-Codex CLI is built for developers who already **live in the terminal** and want
-ChatGPT-level reasoning **plus** the power to actually run code, manipulate
-files, and iterate - all under version control. In short, it's _chat-driven
-development_ that understands and executes your repo.
-
-- **Zero setup** - bring your OpenAI API key and it just works!
-- **Full auto-approval, while safe + secure** by running network-disabled and directory-sandboxed
-- **Multimodal** - pass in screenshots or diagrams to implement features ✨
-
-And it's **fully open-source** so you can see and contribute to how it develops!
-
----
-
-## Security model & permissions
-
-Codex lets you decide _how much autonomy_ you want to grant the agent. The following options can be configured independently:
-
-- [`approval_policy`](./codex-rs/config.md#approval_policy) determines when you should be prompted to approve whether Codex can execute a command
-- [`sandbox`](./codex-rs/config.md#sandbox) determines the _sandbox policy_ that Codex uses to execute untrusted commands
-
-By default, Codex runs with `--ask-for-approval untrusted` and `--sandbox read-only`, which means that:
-
-- The user is prompted to approve every command not on the set of "trusted" commands built into Codex (`cat`, `ls`, etc.)
-- Approved commands are run outside of a sandbox because user approval implies "trust," in this case.
-
-Running Codex with the `--full-auto` convenience flag changes the configuration to `--ask-for-approval on-failure` and `--sandbox workspace-write`, which means that:
-
-- Codex does not initially ask for user approval before running an individual command.
-- Though when it runs a command, it is run under a sandbox in which:
-  - It can read any file on the system.
-  - It can only write files under the current directory (or the directory specified via `--cd`).
-  - Network requests are completely disabled.
-- Only if the command exits with a non-zero exit code will it ask the user for approval. If granted, it will re-attempt the command outside of the sandbox. (A common case is when Codex cannot `npm install` a dependency because that requires network access.)
-
-Again, these two options can be configured independently. For example, if you want Codex to perform an "exploration" where you are happy for it to read anything it wants but you never want to be prompted, you could run Codex with `--ask-for-approval never` and `--sandbox read-only`.
 
 ### Platform sandboxing details
 
@@ -232,6 +327,19 @@ The mechanism Codex uses to implement the sandbox policy depends on your OS:
 - **Linux** uses a combination of Landlock/seccomp APIs to enforce the `sandbox` configuration.
 
 Note that when running Linux in a containerized environment such as Docker, sandboxing may not work if the host/container configuration does not support the necessary Landlock/seccomp APIs. In such cases, we recommend configuring your Docker container so that it provides the sandbox guarantees you are looking for and then running `codex` with `--sandbox danger-full-access` (or, more simply, the `--dangerously-bypass-approvals-and-sandbox` flag) within your container.
+
+---
+
+## Experimental technology disclaimer
+
+Codex CLI is an experimental project under active development. It is not yet stable, may contain bugs, incomplete features, or undergo breaking changes. We're building it in the open with the community and welcome:
+
+- Bug reports
+- Feature requests
+- Pull requests
+- Good vibes
+
+Help us improve by filing issues or submitting PRs (see the section below for how to contribute)!
 
 ---
 
@@ -309,52 +417,6 @@ By comparison, the non-interactive mode (`codex exec`) defaults to `RUST_LOG=err
 See the Rust documentation on [`RUST_LOG`](https://docs.rs/env_logger/latest/env_logger/#enabling-logging) for more information on the configuration options.
 
 ---
-
-## Recipes
-
-Below are a few bite-size examples you can copy-paste. Replace the text in quotes with your own task. See the [prompting guide](https://github.com/openai/codex/blob/main/codex-cli/examples/prompting_guide.md) for more tips and usage patterns.
-
-| ✨  | What you type                                                                   | What happens                                                               |
-| --- | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| 1   | `codex "Refactor the Dashboard component to React Hooks"`                       | Codex rewrites the class component, runs `npm test`, and shows the diff.   |
-| 2   | `codex "Generate SQL migrations for adding a users table"`                      | Infers your ORM, creates migration files, and runs them in a sandboxed DB. |
-| 3   | `codex "Write unit tests for utils/date.ts"`                                    | Generates tests, executes them, and iterates until they pass.              |
-| 4   | `codex "Bulk-rename *.jpeg -> *.jpg with git mv"`                               | Safely renames files and updates imports/usages.                           |
-| 5   | `codex "Explain what this regex does: ^(?=.*[A-Z]).{8,}$"`                      | Outputs a step-by-step human explanation.                                  |
-| 6   | `codex "Carefully review this repo, and propose 3 high impact well-scoped PRs"` | Suggests impactful PRs in the current codebase.                            |
-| 7   | `codex "Look for vulnerabilities and create a security review report"`          | Finds and explains security bugs.                                          |
-
----
-
-## Installation
-
-<details open>
-<summary><strong>Install Codex CLI using your preferred package manager.</strong></summary>
-
-From `brew` (recommended, downloads only the binary for your platform):
-
-```bash
-brew install codex
-```
-
-From `npm` (generally more readily available, but downloads binaries for all supported platforms):
-
-```bash
-npm i -g @openai/codex
-```
-
-Or go to the [latest GitHub Release](https://github.com/openai/codex/releases/latest) and download the appropriate binary for your platform.
-
-Admittedly, each GitHub Release contains many executables, but in practice, you likely want one of these:
-
-- macOS
-  - Apple Silicon/arm64: `codex-aarch64-apple-darwin.tar.gz`
-  - x86_64 (older Mac hardware): `codex-x86_64-apple-darwin.tar.gz`
-- Linux
-  - x86_64: `codex-x86_64-unknown-linux-musl.tar.gz`
-  - arm64: `codex-aarch64-unknown-linux-musl.tar.gz`
-
-Each archive contains a single entry with the platform baked into the name (e.g., `codex-x86_64-unknown-linux-musl`), so you likely want to rename it to `codex` after extracting it.
 
 ### DotSlash
 

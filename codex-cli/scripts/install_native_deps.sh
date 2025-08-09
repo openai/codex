@@ -2,13 +2,8 @@
 
 # Install native runtime dependencies for codex-cli.
 #
-# By default the script copies the sandbox binaries that are required at
-# runtime. When called with the --full-native flag, it additionally
-# bundles pre-built Rust CLI binaries so that the resulting npm package can run
-# the native implementation when users set CODEX_RUST=1.
-#
 # Usage
-#   install_native_deps.sh [--full-native] [--workflow-url URL] [CODEX_CLI_ROOT]
+#   install_native_deps.sh [--workflow-url URL] [CODEX_CLI_ROOT]
 #
 # The optional RELEASE_ROOT is the path that contains package.json.  Omitting
 # it installs the binaries into the repository's own bin/ folder to support
@@ -21,18 +16,14 @@ set -euo pipefail
 # ------------------
 
 CODEX_CLI_ROOT=""
-INCLUDE_RUST=0
 
 # Until we start publishing stable GitHub releases, we have to grab the binaries
 # from the GitHub Action that created them. Update the URL below to point to the
 # appropriate workflow run:
-WORKFLOW_URL="https://github.com/openai/codex/actions/runs/15981617627"
+WORKFLOW_URL="https://github.com/openai/codex/actions/runs/16840150768" # rust-v0.20.0-alpha.2
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --full-native)
-      INCLUDE_RUST=1
-      ;;
     --workflow-url)
       shift || { echo "--workflow-url requires an argument"; exit 1; }
       if [ -n "$1" ]; then
@@ -81,26 +72,20 @@ trap 'rm -rf "$ARTIFACTS_DIR"' EXIT
 # NB: The GitHub CLI `gh` must be installed and authenticated.
 gh run download --dir "$ARTIFACTS_DIR" --repo openai/codex "$WORKFLOW_ID"
 
-# Decompress the artifacts for Linux sandboxing.
-zstd -d "$ARTIFACTS_DIR/x86_64-unknown-linux-musl/codex-linux-sandbox-x86_64-unknown-linux-musl.zst" \
-     -o "$BIN_DIR/codex-linux-sandbox-x64"
-
-zstd -d "$ARTIFACTS_DIR/aarch64-unknown-linux-musl/codex-linux-sandbox-aarch64-unknown-linux-musl.zst" \
-     -o "$BIN_DIR/codex-linux-sandbox-arm64"
-
-if [[ "$INCLUDE_RUST" -eq 1 ]]; then
-  # x64 Linux
-  zstd -d "$ARTIFACTS_DIR/x86_64-unknown-linux-musl/codex-x86_64-unknown-linux-musl.zst" \
-      -o "$BIN_DIR/codex-x86_64-unknown-linux-musl"
-  # ARM64 Linux
-  zstd -d "$ARTIFACTS_DIR/aarch64-unknown-linux-musl/codex-aarch64-unknown-linux-musl.zst" \
-      -o "$BIN_DIR/codex-aarch64-unknown-linux-musl"
-  # x64 macOS
-  zstd -d "$ARTIFACTS_DIR/x86_64-apple-darwin/codex-x86_64-apple-darwin.zst" \
-      -o "$BIN_DIR/codex-x86_64-apple-darwin"
-  # ARM64 macOS
-  zstd -d "$ARTIFACTS_DIR/aarch64-apple-darwin/codex-aarch64-apple-darwin.zst" \
-      -o "$BIN_DIR/codex-aarch64-apple-darwin"
-fi
+# x64 Linux
+zstd -d "$ARTIFACTS_DIR/x86_64-unknown-linux-musl/codex-x86_64-unknown-linux-musl.zst" \
+    -o "$BIN_DIR/codex-x86_64-unknown-linux-musl"
+# ARM64 Linux
+zstd -d "$ARTIFACTS_DIR/aarch64-unknown-linux-musl/codex-aarch64-unknown-linux-musl.zst" \
+    -o "$BIN_DIR/codex-aarch64-unknown-linux-musl"
+# x64 macOS
+zstd -d "$ARTIFACTS_DIR/x86_64-apple-darwin/codex-x86_64-apple-darwin.zst" \
+    -o "$BIN_DIR/codex-x86_64-apple-darwin"
+# ARM64 macOS
+zstd -d "$ARTIFACTS_DIR/aarch64-apple-darwin/codex-aarch64-apple-darwin.zst" \
+    -o "$BIN_DIR/codex-aarch64-apple-darwin"
+# x64 Windows
+zstd -d "$ARTIFACTS_DIR/x86_64-pc-windows-msvc/codex-x86_64-pc-windows-msvc.exe.zst" \
+    -o "$BIN_DIR/codex-x86_64-pc-windows-msvc.exe"
 
 echo "Installed native dependencies into $BIN_DIR"

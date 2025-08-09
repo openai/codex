@@ -17,6 +17,12 @@ pub struct Cli {
     #[arg(long, short = 'm')]
     pub model: Option<String>,
 
+    /// Convenience flag to select the local open source model provider.
+    /// Equivalent to -c model_provider=oss; verifies a local Ollama server is
+    /// running.
+    #[arg(long = "oss", default_value_t = false)]
+    pub oss: bool,
+
     /// Configuration profile from config.toml to specify default options.
     #[arg(long = "profile", short = 'p')]
     pub config_profile: Option<String>,
@@ -38,6 +44,7 @@ pub struct Cli {
     /// EXTREMELY DANGEROUS. Intended solely for running in environments that are externally sandboxed.
     #[arg(
         long = "dangerously-bypass-approvals-and-sandbox",
+        alias = "yolo",
         default_value_t = false,
         conflicts_with_all = ["approval_policy", "full_auto"]
     )]
@@ -46,10 +53,6 @@ pub struct Cli {
     /// Tell the agent to use the specified directory as its working root.
     #[clap(long = "cd", short = 'C', value_name = "DIR")]
     pub cwd: Option<PathBuf>,
-
-    /// Allow running Codex outside a Git repository.
-    #[arg(long = "skip-git-repo-check", default_value_t = false)]
-    pub skip_git_repo_check: bool,
 
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,

@@ -28,6 +28,8 @@ async fn run_test_cmd(tmp: TempDir, cmd: Vec<&str>, should_be_ok: bool) {
         cwd: tmp.path().to_path_buf(),
         timeout_ms: Some(1000),
         env: HashMap::new(),
+        with_escalated_permissions: None,
+        justification: None,
     };
 
     let ctrl_c = Arc::new(Notify::new());

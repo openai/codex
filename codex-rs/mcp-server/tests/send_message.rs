@@ -18,7 +18,7 @@ use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn test_send_message_success() {
     // Spin up a mock completions server that immediately ends the Codex turn.
     // Two Codex turns hit the mock model (session start + send-user-message). Provide two SSE responses.
@@ -99,13 +99,13 @@ async fn test_send_message_success() {
         response
     );
     // wait for the server to hear the user message
-    sleep(Duration::from_secs(1));
+    sleep(Duration::from_secs(5));
 
     // Ensure the server and tempdir live until end of test
     drop(server);
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn test_send_message_session_not_found() {
     // Start MCP without creating a Codex session
     let codex_home = TempDir::new().expect("tempdir");

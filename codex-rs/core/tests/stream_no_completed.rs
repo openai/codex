@@ -90,7 +90,7 @@ async fn retries_on_early_close() {
         request_max_retries: Some(0),
         stream_max_retries: Some(1),
         stream_idle_timeout_ms: Some(2000),
-        requires_auth: false,
+        requires_openai_auth: false,
     };
 
     let ctrl_c = std::sync::Arc::new(tokio::sync::Notify::new());
@@ -99,7 +99,7 @@ async fn retries_on_early_close() {
     config.model_provider = model_provider;
     let CodexSpawnOk { codex, .. } = Codex::spawn(
         config,
-        Some(CodexAuth::from_api_key("Test API Key".to_string())),
+        Some(CodexAuth::from_api_key("Test API Key")),
         ctrl_c,
     )
     .await

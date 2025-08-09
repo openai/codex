@@ -19,6 +19,9 @@ mod chat_composer_history;
 mod command_popup;
 mod file_search_popup;
 mod live_ring_widget;
+mod popup_consts;
+mod scroll_state;
+mod selection_popup_common;
 mod status_indicator_view;
 mod textarea;
 
@@ -287,11 +290,12 @@ impl BottomPane<'_> {
     /// is forwarded directly to the underlying `ChatComposer`.
     pub(crate) fn set_token_usage(
         &mut self,
-        token_usage: TokenUsage,
+        total_token_usage: TokenUsage,
+        last_token_usage: TokenUsage,
         model_context_window: Option<u64>,
     ) {
         self.composer
-            .set_token_usage(token_usage, model_context_window);
+            .set_token_usage(total_token_usage, last_token_usage, model_context_window);
         self.request_redraw();
     }
 

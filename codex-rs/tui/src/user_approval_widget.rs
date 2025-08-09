@@ -28,7 +28,6 @@ use ratatui::widgets::Wrap;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
-use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
 
 /// Request coming from the agent that needs user approval.
@@ -36,6 +35,7 @@ pub(crate) enum ApprovalRequest {
     Exec {
         id: String,
         command: Vec<String>,
+        #[allow(dead_code)]
         cwd: PathBuf,
         reason: Option<String>,
     },
@@ -47,6 +47,8 @@ pub(crate) enum ApprovalRequest {
 }
 
 /// Options displayed in the *select* mode.
+///
+/// The `key` is matched case-insensitively.
 struct SelectOption {
     label: Line<'static>,
     description: &'static str,
@@ -113,21 +115,18 @@ impl UserApprovalWidget<'_> {
     pub(crate) fn new(approval_request: ApprovalRequest, app_event_tx: AppEventSender) -> Self {
         let confirmation_prompt = match &approval_request {
             ApprovalRequest::Exec {
-                command,
-                cwd,
-                reason,
-                ..
+                command, reason, ..
             } => {
                 let cmd = strip_bash_lc_and_escape(command);
-                // Maybe try to relativize to the cwd of this process first?
-                // Will make cwd_str shorter in the common case.
-                let cwd_str = match relativize_to_home(cwd) {
-                    Some(rel) => format!("~/{}", rel.display()),
-                    None => cwd.display().to_string(),
-                };
+                // Present a single-line summary without cwd: "codex wants to run: <cmd>"
+                let mut cmd_span: Span = cmd.clone().into();
+                cmd_span.style = cmd_span.style.add_modifier(Modifier::DIM);
                 let mut contents: Vec<Line> = vec![
-                    Line::from(vec!["codex".bold().magenta(), " wants to run:".into()]),
-                    Line::from(vec![cwd_str.dim(), "$".into(), format!(" {cmd}").into()]),
+                    Line::from(vec![
+                        "? ".fg(Color::Blue),
+                        "Codex wants to run ".bold(),
+                        cmd_span,
+                    ]),
                     Line::from(""),
                 ];
                 if let Some(reason) = reason {
@@ -187,6 +186,16 @@ impl UserApprovalWidget<'_> {
         }
     }
 
+    /// Normalize a key for comparison.
+    /// - For `KeyCode::Char`, converts to lowercase for case-insensitive matching.
+    /// - Other key codes are returned unchanged.
+    fn normalize_keycode(code: KeyCode) -> KeyCode {
+        match code {
+            KeyCode::Char(c) => KeyCode::Char(c.to_ascii_lowercase()),
+            other => other,
+        }
+    }
+
     /// Handle Ctrl-C pressed by the user while the modal is visible.
     /// Behaves like pressing Escape: abort the request and close the modal.
     pub(crate) fn on_ctrl_c(&mut self) {
@@ -210,7 +219,12 @@ impl UserApprovalWidget<'_> {
                 self.send_decision(ReviewDecision::Abort);
             }
             other => {
-                if let Some(opt) = self.select_options.iter().find(|opt| opt.key == other) {
+                let normalized = Self::normalize_keycode(other);
+                if let Some(opt) = self
+                    .select_options
+                    .iter()
+                    .find(|opt| Self::normalize_keycode(opt.key) == normalized)
+                {
                     self.send_decision(opt.decision);
                 }
             }
@@ -226,9 +240,52 @@ impl UserApprovalWidget<'_> {
         match &self.approval_request {
             ApprovalRequest::Exec { command, .. } => {
                 let cmd = strip_bash_lc_and_escape(command);
-                lines.push(Line::from("approval decision"));
-                lines.push(Line::from(format!("$ {cmd}")));
-                lines.push(Line::from(format!("decision: {decision:?}")));
+                let mut cmd_span: Span = cmd.clone().into();
+                cmd_span.style = cmd_span.style.add_modifier(Modifier::DIM);
+
+                // Result line based on decision.
+                match decision {
+                    ReviewDecision::Approved => {
+                        lines.push(Line::from(vec![
+                            "✓ ".fg(Color::Green),
+                            "You ".into(),
+                            "approved".bold(),
+                            " codex to run ".into(),
+                            cmd_span,
+                            " ".into(),
+                            "this time".bold(),
+                        ]));
+                    }
+                    ReviewDecision::ApprovedForSession => {
+                        lines.push(Line::from(vec![
+                            "✓ ".fg(Color::Green),
+                            "You ".into(),
+                            "approved".bold(),
+                            " codex to run ".into(),
+                            cmd_span,
+                            " ".into(),
+                            "every time this session".bold(),
+                        ]));
+                    }
+                    ReviewDecision::Denied => {
+                        lines.push(Line::from(vec![
+                            "✗ ".fg(Color::Red),
+                            "You ".into(),
+                            "did not approve".bold(),
+                            " codex to run ".into(),
+                            cmd_span,
+                        ]));
+                    }
+                    ReviewDecision::Abort => {
+                        lines.push(Line::from(vec![
+                            "✗ ".fg(Color::Red),
+                            "You ".into(),
+                            "canceled".bold(),
+                            " the request to run ".into(),
+                            cmd_span,
+                        ]));
+                    }
+                }
             }
             ApprovalRequest::ApplyPatch { .. } => {
                 lines.push(Line::from(format!("patch approval decision: {decision:?}")));
@@ -328,5 +385,61 @@ impl WidgetRef for &UserApprovalWidget<'_> {
                 Rect::new(0, response_chunk.y, 1, response_chunk.height),
                 buf,
             );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::KeyCode;
+    use crossterm::event::KeyEvent;
+    use crossterm::event::KeyModifiers;
+    use std::path::PathBuf;
+    use std::sync::mpsc::channel;
+
+    #[test]
+    fn lowercase_shortcut_is_accepted() {
+        let (tx_raw, rx) = channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let req = ApprovalRequest::Exec {
+            id: "1".to_string(),
+            command: vec!["echo".to_string()],
+            cwd: PathBuf::new(),
+            reason: None,
+        };
+        let mut widget = UserApprovalWidget::new(req, tx);
+        widget.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        assert!(widget.is_complete());
+        let events: Vec<AppEvent> = rx.try_iter().collect();
+        assert!(events.iter().any(|e| matches!(
+            e,
+            AppEvent::CodexOp(Op::ExecApproval {
+                decision: ReviewDecision::Approved,
+                ..
+            })
+        )));
+    }
+
+    #[test]
+    fn uppercase_shortcut_is_accepted() {
+        let (tx_raw, rx) = channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let req = ApprovalRequest::Exec {
+            id: "2".to_string(),
+            command: vec!["echo".to_string()],
+            cwd: PathBuf::new(),
+            reason: None,
+        };
+        let mut widget = UserApprovalWidget::new(req, tx);
+        widget.handle_key_event(KeyEvent::new(KeyCode::Char('Y'), KeyModifiers::NONE));
+        assert!(widget.is_complete());
+        let events: Vec<AppEvent> = rx.try_iter().collect();
+        assert!(events.iter().any(|e| matches!(
+            e,
+            AppEvent::CodexOp(Op::ExecApproval {
+                decision: ReviewDecision::Approved,
+                ..
+            })
+        )));
     }
 }
