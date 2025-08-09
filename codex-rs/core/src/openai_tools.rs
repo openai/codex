@@ -1,4 +1,5 @@
 use serde::Serialize;
+use serde_json::Value as JsonValue;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
@@ -154,12 +155,57 @@ fn mcp_tool_to_openai_tool(
         input_schema.properties = Some(serde_json::Value::Object(serde_json::Map::new()));
     }
 
+    // Sanitize JSON Schema to avoid unsupported types for OpenAI tools.
+    // Notably, map `"integer"` -> `"number"` anywhere it appears.
+    let mut params_value = serde_json::to_value(&input_schema)
+        .unwrap_or_else(|_| json!({"type": "object", "properties": {}}));
+    sanitize_schema_types(&mut params_value);
+
     // TODO(mbolin): Change the contract of this function to return
     // ResponsesApiTool.
     json!({
         "name": fully_qualified_name,
         "description": description,
-        "parameters": input_schema,
+        "parameters": params_value,
         "type": "function",
     })
+}
+
+/// Recursively walk a JSON Schema and map unsupported type variants to supported ones.
+/// Currently converts `"integer"` to `"number"` anywhere under the schema.
+fn sanitize_schema_types(value: &mut JsonValue) {
+    match value {
+        JsonValue::Object(map) => {
+            if let Some(t) = map.get_mut("type") {
+                match t {
+                    JsonValue::String(s) => {
+                        if s == "integer" {
+                            *t = JsonValue::String("number".to_string());
+                        }
+                    }
+                    JsonValue::Array(arr) => {
+                        for v in arr.iter_mut() {
+                            if let JsonValue::String(s) = v {
+                                if s == "integer" {
+                                    *v = JsonValue::String("number".to_string());
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            // Recurse into all other keys (e.g., properties, items, anyOf, oneOf, allOf, etc.).
+            for (_k, v) in map.iter_mut() {
+                sanitize_schema_types(v);
+            }
+        }
+        JsonValue::Array(arr) => {
+            for v in arr.iter_mut() {
+                sanitize_schema_types(v);
+            }
+        }
+        _ => {}
+    }
 }
