@@ -29,3 +29,6 @@ mod config_summary;
 pub use config_summary::create_config_summary_entries;
 // Shared fuzzy matcher (used by TUI selection popups and other UI filtering)
 pub mod fuzzy_match;
+
+#[cfg(any(test, feature = "updates"))]
+pub mod updates;

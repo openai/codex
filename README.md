@@ -17,6 +17,7 @@
 
 - [Quickstart](#quickstart)
   - [Installing and running Codex CLI](#installing-and-running-codex-cli)
+  - [Updating](#updating)
   - [Using Codex with your ChatGPT plan](#using-codex-with-your-chatgpt-plan)
   - [Connecting through VPS or remote](#connecting-through-vps-or-remote)
   - [Usage-based billing alternative: Use an OpenAI API key](#usage-based-billing-alternative-use-an-openai-api-key)
@@ -76,6 +77,16 @@ Then simply run `codex` to get started:
 ```shell
 codex
 ```
+
+### Updating
+
+Upgrade an existing installation to the latest release:
+
+```shell
+codex update
+```
+
+The command checks for a newer version and will attempt to upgrade automatically if the CLI was installed via npm or Homebrew.
 
 <details>
 <summary>You can also go to the <a href="https://github.com/openai/codex/releases/latest">latest GitHub Release</a> and download the appropriate binary for your platform.</summary>
@@ -355,11 +366,12 @@ Help us improve by filing issues or submitting PRs (see the section below for ho
 
 ## CLI reference
 
-| Command            | Purpose                            | Example                         |
-| ------------------ | ---------------------------------- | ------------------------------- |
-| `codex`            | Interactive TUI                    | `codex`                         |
-| `codex "..."`      | Initial prompt for interactive TUI | `codex "fix lint errors"`       |
-| `codex exec "..."` | Non-interactive "automation mode"  | `codex exec "explain utils.ts"` |
+| Command            | Purpose                               | Example                         |
+| ------------------ | ------------------------------------- | ------------------------------- |
+| `codex`            | Interactive TUI                       | `codex`                         |
+| `codex "..."`      | Initial prompt for interactive TUI    | `codex "fix lint errors"`       |
+| `codex exec "..."` | Non-interactive "automation mode"     | `codex exec "explain utils.ts"` |
+| `codex update`     | Check for updates and upgrade the CLI | `codex update`                  |
 
 Key flags: `--model/-m`, `--ask-for-approval/-a`.
 

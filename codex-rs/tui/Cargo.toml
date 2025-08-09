@@ -29,6 +29,7 @@ codex-common = { path = "../common", features = [
     "cli",
     "elapsed",
     "sandbox_summary",
+    "updates",
 ] }
 codex-core = { path = "../core" }
 codex-file-search = { path = "../file-search" }
@@ -48,7 +49,6 @@ ratatui = { version = "0.29.0", features = [
 ] }
 ratatui-image = "8.0.0"
 regex-lite = "0.1"
-reqwest = { version = "0.12", features = ["json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 shlex = "1.3.0"

@@ -1,15 +1,15 @@
-#![cfg(any(not(debug_assertions), test))]
-
 use chrono::DateTime;
 use chrono::Duration;
 use chrono::Utc;
+use codex_core::config::Config;
 use serde::Deserialize;
 use serde::Serialize;
 use std::path::Path;
 use std::path::PathBuf;
+use tracing::error;
 
-use codex_core::config::Config;
-
+/// Returns the latest available version string if it is newer than the current
+/// one, otherwise `None`.
 pub fn get_upgrade_version(config: &Config) -> Option<String> {
     let version_file = version_filepath(config);
     let info = read_version_info(&version_file).ok();
@@ -18,13 +18,11 @@ pub fn get_upgrade_version(config: &Config) -> Option<String> {
         None => true,
         Some(info) => info.last_checked_at < Utc::now() - Duration::hours(20),
     } {
-        // Refresh the cached latest version in the background so TUI startup
-        // isn’t blocked by a network call. The UI reads the previously cached
-        // value (if any) for this run; the next run shows the banner if needed.
+        // Refresh in the background; callers can use the cached value for this run.
         tokio::spawn(async move {
             check_for_update(&version_file)
                 .await
-                .inspect_err(|e| tracing::error!("Failed to update version: {e}"))
+                .inspect_err(|e| error!("Failed to update version: {e}"))
         });
     }
 
@@ -62,7 +60,8 @@ fn read_version_info(version_file: &Path) -> anyhow::Result<VersionInfo> {
     Ok(serde_json::from_str(&contents)?)
 }
 
-async fn check_for_update(version_file: &Path) -> anyhow::Result<()> {
+/// Fetches the latest release info and updates the on-disk cache file.
+pub async fn check_for_update(version_file: &Path) -> anyhow::Result<()> {
     let ReleaseInfo {
         tag_name: latest_tag_name,
     } = reqwest::Client::new()
