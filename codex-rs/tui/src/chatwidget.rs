@@ -143,8 +143,8 @@ impl ChatWidget<'_> {
             return;
         }
         let header = match kind {
-            StreamKind::Reasoning => RLine::from("thinking".magenta().italic()),
-            StreamKind::Answer => RLine::from("codex".magenta().bold()),
+            StreamKind::Reasoning => RLine::from("🧠 thinking".magenta().italic()),
+            StreamKind::Answer => RLine::from("🤖 codex".magenta().bold()),
         };
         self.app_event_tx
             .send(AppEvent::InsertHistory(vec![header]));
@@ -675,10 +675,10 @@ impl ChatWidget<'_> {
             if !self.stream_header_emitted {
                 match self.current_stream {
                     Some(StreamKind::Reasoning) => {
-                        lines.push(ratatui::text::Line::from("thinking".magenta().italic()));
+                        lines.push(ratatui::text::Line::from("🧠 thinking".magenta().italic()));
                     }
                     Some(StreamKind::Answer) => {
-                        lines.push(ratatui::text::Line::from("codex".magenta().bold()));
+                        lines.push(ratatui::text::Line::from("🤖 codex".magenta().bold()));
                     }
                     None => {}
                 }
@@ -717,10 +717,10 @@ impl ChatWidget<'_> {
             if !self.stream_header_emitted {
                 match kind {
                     StreamKind::Reasoning => {
-                        lines.push(ratatui::text::Line::from("thinking".magenta().italic()));
+                        lines.push(ratatui::text::Line::from("🧠 thinking".magenta().italic()));
                     }
                     StreamKind::Answer => {
-                        lines.push(ratatui::text::Line::from("codex".magenta().bold()));
+                        lines.push(ratatui::text::Line::from("🤖 codex".magenta().bold()));
                     }
                 }
                 self.stream_header_emitted = true;
