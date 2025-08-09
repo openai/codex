@@ -58,6 +58,7 @@ tree-sitter-bash = "0.25.0"
 uuid = { version = "1", features = ["serde", "v4"] }
 which = "6"
 wildmatch = "2.5.0"
+codex-telemetry = { path = "../codex-telemetry", features = ["otel"] }
 
 
 [target.'cfg(target_os = "linux")'.dependencies]

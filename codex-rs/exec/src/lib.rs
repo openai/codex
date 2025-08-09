@@ -29,6 +29,8 @@ use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
+use codex_telemetry as telemetry;
+use tracing_subscriber::prelude::*;
 
 use crate::cli::Command as ExecCommand;
 use crate::event_processor::CodexStatus;
@@ -105,19 +107,11 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         ),
     };
 
-    // TODO(mbolin): Take a more thoughtful approach to logging.
+    // Build fmt layer (existing logging) to compose with OTEL layer.
     let default_level = "error";
-    let _ = tracing_subscriber::fmt()
-        // Fallback to the `default_level` log filter if the environment
-        // variable is not set _or_ contains an invalid value
-        .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .or_else(|_| EnvFilter::try_new(default_level))
-                .unwrap_or_else(|_| EnvFilter::new(default_level)),
-        )
+    let fmt_layer = tracing_subscriber::fmt::layer()
         .with_ansi(stderr_with_ansi)
-        .with_writer(std::io::stderr)
-        .try_init();
+        .with_writer(std::io::stderr);
 
     let sandbox_mode = if full_auto {
         Some(SandboxMode::WorkspaceWrite)
@@ -173,6 +167,36 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     };
 
     let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides)?;
+
+    // Build OTEL layer and compose into subscriber.
+    let telemetry = telemetry::build_layer(&telemetry::Settings {
+        enabled: true,
+        exporter: telemetry::Exporter::OtlpFile { path: PathBuf::new(), rotate_mb: Some(100) },
+        service_name: "codex".to_string(),
+        service_version: env!("CARGO_PKG_VERSION").to_string(),
+        codex_home: Some(config.codex_home.clone()),
+    });
+    let _telemetry_guard = if let Some((guard, tracer)) = telemetry {
+        let otel_layer = tracing_opentelemetry::OpenTelemetryLayer::new(tracer);
+        // Build env_filter separately and attach via with_filter.
+        let env_filter = EnvFilter::try_from_default_env()
+            .or_else(|_| EnvFilter::try_new(default_level))
+            .unwrap_or_else(|_| EnvFilter::new(default_level));
+        let _ = tracing_subscriber::registry()
+            .with(fmt_layer.with_filter(env_filter))
+            .with(otel_layer)
+            .try_init();
+        Some(guard)
+    } else {
+        let env_filter = EnvFilter::try_from_default_env()
+            .or_else(|_| EnvFilter::try_new(default_level))
+            .unwrap_or_else(|_| EnvFilter::new(default_level));
+        let _ = tracing_subscriber::registry()
+            .with(fmt_layer.with_filter(env_filter))
+            .try_init();
+        None
+    };
+
     let mut event_processor: Box<dyn EventProcessor> = if json_mode {
         Box::new(EventProcessorWithJsonOutput::new(last_message_file.clone()))
     } else {
@@ -290,6 +314,29 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     let items: Vec<InputItem> = vec![InputItem::Text { text: prompt }];
     let initial_prompt_task_id = conversation.submit(Op::UserInput { items }).await?;
     info!("Sent prompt with event ID: {initial_prompt_task_id}");
+
+    // If stdin is an interactive TTY, watch for EOF (Ctrl+D) and request a graceful shutdown.
+    if std::io::stdin().is_terminal() {
+        let codex_for_eof = codex.clone();
+        tokio::spawn(async move {
+            use tokio::io::{stdin, AsyncReadExt};
+            let mut stdin = stdin();
+            let mut buf = [0u8; 1];
+            loop {
+                match stdin.read(&mut buf).await {
+                    Ok(0) => {
+                        let _ = codex_for_eof.submit(Op::Shutdown).await;
+                        break;
+                    }
+                    Ok(_) => {
+                        // discard any input; exec does not read interactive input
+                        continue;
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+    }
 
     // Run the loop until the task is complete.
     while let Some(event) = rx.recv().await {
