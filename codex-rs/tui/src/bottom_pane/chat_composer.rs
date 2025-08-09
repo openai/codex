@@ -90,7 +90,7 @@ impl ChatComposer {
             current_file_query: None,
             pending_pastes: Vec::new(),
             token_usage_info: None,
-            has_focus: has_input_focus,
+            has_focus,
         }
     }
 
@@ -231,8 +231,7 @@ impl ChatComposer {
                 (InputResult::None, true)
             }
             KeyEvent {
-                code: KeyCode::Down,
-                ..
+                code: KeyCode::Down, ..
             } => {
                 popup.move_down();
                 (InputResult::None, true)
@@ -248,7 +247,7 @@ impl ChatComposer {
                         .starts_with(&format!("/{}", cmd.command()));
 
                     if !starts_with_cmd {
-                        self.textarea.set_text(&format!("/{} ", cmd.command()));
+                        self.textarea.set_text(&format!("/{}", cmd.command()));
                     }
                 }
                 (InputResult::None, true)
@@ -290,8 +289,7 @@ impl ChatComposer {
                 (InputResult::None, true)
             }
             KeyEvent {
-                code: KeyCode::Down,
-                ..
+                code: KeyCode::Down, ..
             } => {
                 popup.move_down();
                 (InputResult::None, true)
@@ -342,18 +340,7 @@ impl ChatComposer {
         let cursor_offset = textarea.cursor();
         let text = textarea.text();
 
-        // Adjust the provided byte offset to the nearest valid char boundary at or before it.
-        let mut safe_cursor = cursor_offset.min(text.len());
-        // If we're not on a char boundary, move back to the start of the current char.
-        if safe_cursor < text.len() && !text.is_char_boundary(safe_cursor) {
-            // Find the last valid boundary <= cursor_offset.
-            safe_cursor = text
-                .char_indices()
-                .map(|(i, _)| i)
-                .take_while(|&i| i <= cursor_offset)
-                .last()
-                .unwrap_or(0);
-        }
+        let safe_cursor = Self::find_safe_cursor(text, cursor_offset);
 
         // Split the line around the (now safe) cursor position.
         let before_cursor = &text[..safe_cursor];
@@ -438,8 +425,10 @@ impl ChatComposer {
         let cursor_offset = self.textarea.cursor();
         let text = self.textarea.text();
 
-        let before_cursor = &text[..cursor_offset];
-        let after_cursor = &text[cursor_offset..];
+        let safe_cursor = Self::find_safe_cursor(text, cursor_offset);
+
+        let before_cursor = &text[..safe_cursor];
+        let after_cursor = &text[safe_cursor..];
 
         // Determine token boundaries.
         let start_idx = before_cursor
@@ -453,7 +442,7 @@ impl ChatComposer {
             .find(|(_, c)| c.is_whitespace())
             .map(|(idx, _)| idx)
             .unwrap_or(after_cursor.len());
-        let end_idx = cursor_offset + end_rel_idx;
+        let end_idx = safe_cursor + end_rel_idx;
 
         // Replace the slice `[start_idx, end_idx)` with the chosen path and a trailing space.
         let mut new_text =
@@ -477,8 +466,7 @@ impl ChatComposer {
             // interfering with normal cursor movement.
             // -------------------------------------------------------------
             KeyEvent {
-                code: KeyCode::Up | KeyCode::Down,
-                ..
+                code: KeyCode::Up | KeyCode::Down, ..
             } => {
                 if self
                     .history
@@ -528,8 +516,7 @@ impl ChatComposer {
     fn handle_input_basic(&mut self, input: KeyEvent) -> (InputResult, bool) {
         // Special handling for backspace on placeholders
         if let KeyEvent {
-            code: KeyCode::Backspace,
-            ..
+            code: KeyCode::Backspace, ..
         } = input
         {
             if self.try_remove_placeholder_at_cursor() {
@@ -551,16 +538,15 @@ impl ChatComposer {
     /// Attempts to remove a placeholder if the cursor is at the end of one.
     /// Returns true if a placeholder was removed.
     fn try_remove_placeholder_at_cursor(&mut self) -> bool {
-        let p = self.textarea.cursor();
+        let cursor_offset = self.textarea.cursor();
         let text = self.textarea.text();
+
+        let safe_cursor = Self::find_safe_cursor(text, cursor_offset);
 
         // Find any placeholder that ends at the cursor position
         let placeholder_to_remove = self.pending_pastes.iter().find_map(|(ph, _)| {
-            if p < ph.len() {
-                return None;
-            }
-            let potential_ph_start = p - ph.len();
-            if text[potential_ph_start..p] == *ph {
+            let text_before_cursor = &text[..safe_cursor];
+            if text_before_cursor.ends_with(ph) {
                 Some(ph.clone())
             } else {
                 None
@@ -568,7 +554,8 @@ impl ChatComposer {
         });
 
         if let Some(placeholder) = placeholder_to_remove {
-            self.textarea.replace_range(p - placeholder.len()..p, "");
+            self.textarea
+                .replace_range(safe_cursor - placeholder.len()..safe_cursor, "");
             self.pending_pastes.retain(|(ph, _)| ph != &placeholder);
             true
         } else {
@@ -649,6 +636,20 @@ impl ChatComposer {
     fn set_has_focus(&mut self, has_focus: bool) {
         self.has_focus = has_focus;
     }
+
+    /// Given a byte offset, find the nearest valid char boundary at or before it.
+    fn find_safe_cursor(text: &str, cursor_offset: usize) -> usize {
+        let mut safe_cursor = cursor_offset.min(text.len());
+        if safe_cursor < text.len() && !text.is_char_boundary(safe_cursor) {
+            safe_cursor = text
+                .char_indices()
+                .map(|(i, _)| i)
+                .take_while(|&i| i <= cursor_offset)
+                .last()
+                .unwrap_or(0);
+        }
+        safe_cursor
+    }
 }
 
 impl WidgetRef for &ChatComposer {
@@ -713,7 +714,7 @@ impl WidgetRef for &ChatComposer {
                         };
                         hint.push(Span::from("   "));
                         hint.push(
-                            Span::from(format!("{percent_remaining}% context left"))
+                            Span::from(format!("{}% context left", percent_remaining))
                                 .style(Style::default().add_modifier(Modifier::DIM)),
                         );
                     }
@@ -887,7 +888,6 @@ mod tests {
                 Some("诶".to_string()),
                 "Full-width space between Unicode tokens",
             ),
-            // Tab and newline boundaries
             (
                 "test\t@file",
                 6,
@@ -1259,5 +1259,61 @@ mod tests {
                 (false, 0), // After deleting from end
             ]
         );
+    }
+
+    #[test]
+    fn test_backspace_on_placeholder_after_multibyte_chars() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(true, sender, false);
+
+        // 1. Paste a large content to create a placeholder.
+        let large_paste = "a".repeat(LARGE_PASTE_CHAR_THRESHOLD + 1);
+        composer.handle_paste(large_paste);
+        let placeholder = format!("[Pasted Content {} chars]", 1001);
+        assert_eq!(composer.textarea.text(), placeholder);
+
+        // 2. Insert multi-byte characters before the placeholder.
+        let multibyte_text = "안녕하세요";
+        composer
+            .textarea
+            .set_text(&format!("{}{}", multibyte_text, placeholder));
+
+        // 3. Move cursor to the end and press backspace.
+        composer.textarea.set_cursor(composer.textarea.text().len());
+        composer.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+
+        // 4. Assert that it didn't panic and the placeholder was removed correctly.
+        assert_eq!(composer.textarea.text(), multibyte_text);
+        assert!(composer.pending_pastes.is_empty());
+    }
+
+    #[test]
+    fn test_insert_path_after_multibyte_chars() {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(true, sender, false);
+
+        // 1. Set text with multi-byte chars and an @-token
+        let initial_text = "안녕하세요 @some/path";
+        composer.textarea.set_text(initial_text);
+
+        // 2. Move cursor inside the @-token
+        // "안녕하세요 " is 15 bytes + 1 space = 16 bytes. Cursor at 's'.
+        composer.textarea.set_cursor(17);
+
+        // 3. Call insert_selected_path, simulating a file selection.
+        let new_path = "/new/path/to/file.rs";
+        composer.insert_selected_path(new_path);
+
+        // 4. Assert the replacement was successful and didn't panic.
+        let expected_text = format!("안녕하세요 {} ", new_path);
+        assert_eq!(composer.textarea.text(), expected_text);
+
+        // Check cursor position after insertion
+        let expected_cursor = "안녕하세요 ".len() + new_path.len() + 1;
+        assert_eq!(composer.textarea.cursor(), expected_cursor);
     }
 }
