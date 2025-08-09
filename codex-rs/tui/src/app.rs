@@ -237,8 +237,11 @@ impl App<'_> {
                     // press (either as Repeat or even a second Press), which feels like a
                     // double-tap. Narrow this to Backspace to preserve normal typing elsewhere.
                     if matches!(key_event.code, KeyCode::Backspace) {
-                        if let Some((code, mods, t0)) = &self.last_keypress {
-                            let same_key = *code == key_event.code && *mods == key_event.modifiers;
+                        if let Some((code, _mods, t0)) = &self.last_keypress {
+                            // Consider duplicates regardless of modifier changes since some
+                            // terminals may emit different modifier states back-to-back for
+                            // the same Backspace action.
+                            let same_key = *code == key_event.code;
                             let very_soon = t0.elapsed() < KEY_REPEAT_DEBOUNCE;
                             let is_repeat_or_dup_press = key_event.kind == KeyEventKind::Repeat
                                 || key_event.kind == KeyEventKind::Press;
