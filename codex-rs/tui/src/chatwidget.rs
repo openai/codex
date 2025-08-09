@@ -607,10 +607,6 @@ impl ChatWidget<'_> {
         self.bottom_pane.composer_is_empty()
     }
 
-    pub(crate) fn is_task_running(&self) -> bool {
-        self.bottom_pane.is_task_running()
-    }
-
     /// Forward an `Op` directly to codex.
     pub(crate) fn submit_op(&self, op: Op) {
         if let Err(e) = self.codex_op_tx.send(op) {
