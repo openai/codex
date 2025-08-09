@@ -208,6 +208,8 @@ pub(crate) struct Session {
     client: ModelClient,
     pub(crate) tx_event: Sender<Event>,
     ctrl_c: Arc<Notify>,
+    /// OpenTelemetry span for the lifetime of this session
+    session_span: Mutex<Option<tracing::Span>>,
 
     /// The session's current working directory. All relative paths provided by
     /// the model as well as sandbox policies are resolved against this path
@@ -243,6 +245,12 @@ impl Session {
         path.as_ref()
             .map(PathBuf::from)
             .map_or_else(|| self.cwd.clone(), |p| self.cwd.join(p))
+    }
+
+    pub fn end_session_span(&self) {
+        if let Some(span) = self.session_span.lock().unwrap().take() {
+            drop(span);
+        }
     }
 }
 
@@ -874,6 +882,11 @@ async fn submission_loop(
                     ),
                     tx_event: tx_event.clone(),
                     ctrl_c: Arc::clone(&ctrl_c),
+                    session_span: Mutex::new(Some(codex_telemetry::make_session_span(
+                        &session_id.to_string(),
+                        &model,
+                        &provider.name,
+                    ))),
                     user_instructions,
                     base_instructions,
                     approval_policy,
@@ -1038,7 +1051,9 @@ async fn submission_loop(
 
                 // Gracefully flush and shutdown rollout recorder on session end so tests
                 // that inspect the rollout file do not race with the background writer.
-                if let Some(sess_arc) = sess {
+                if let Some(sess_arc) = sess.as_ref() {
+                    // End the session root span so it is exported before shutdown.
+                    sess_arc.end_session_span();
                     let recorder_opt = sess_arc.rollout.lock().unwrap().take();
                     if let Some(rec) = recorder_opt {
                         if let Err(e) = rec.shutdown().await {

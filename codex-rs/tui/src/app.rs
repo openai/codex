@@ -258,7 +258,8 @@ impl App<'_> {
                             match &mut self.app_state {
                                 AppState::Chat { widget } => {
                                     if widget.composer_is_empty() {
-                                        self.app_event_tx.send(AppEvent::ExitRequest);
+                                        // Request graceful shutdown so spans are ended/flushed before exit.
+                                        self.app_event_tx.send(AppEvent::CodexOp(Op::Shutdown));
                                     } else {
                                         // Treat Ctrl+D as a normal key event when the composer
                                         // is not empty so that it doesn't quit the application
@@ -267,7 +268,7 @@ impl App<'_> {
                                     }
                                 }
                                 AppState::Onboarding { .. } => {
-                                    self.app_event_tx.send(AppEvent::ExitRequest);
+                                    self.app_event_tx.send(AppEvent::CodexOp(Op::Shutdown));
                                 }
                             }
                         }
