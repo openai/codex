@@ -882,6 +882,7 @@ dependencies = [
  "insta",
  "lazy_static",
  "mcp-types",
+ "once_cell",
  "path-clean",
  "pretty_assertions",
  "rand 0.8.5",

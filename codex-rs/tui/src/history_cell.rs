@@ -1,5 +1,6 @@
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
+use crate::insert_history::word_wrap_lines;
 use crate::slash_command::SlashCommand;
 use crate::text_block::TextBlock;
 use crate::text_formatting::format_and_truncate_tool_result;
@@ -30,7 +31,6 @@ use ratatui::text::Line as RtLine;
 use ratatui::text::Span as RtSpan;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
-use ratatui::widgets::Wrap;
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::PathBuf;
@@ -54,20 +54,7 @@ pub(crate) enum PatchEventType {
     ApplyBegin { auto_approved: bool },
 }
 
-fn span_to_static(span: &Span) -> Span<'static> {
-    Span {
-        style: span.style,
-        content: std::borrow::Cow::Owned(span.content.clone().into_owned()),
-    }
-}
-
-fn line_to_static(line: &Line) -> Line<'static> {
-    Line {
-        style: line.style,
-        alignment: line.alignment,
-        spans: line.spans.iter().map(span_to_static).collect(),
-    }
-}
+// Duplicate of helpers in `crate::line_utils`; use the shared versions instead.
 
 /// Represents an event to display in the conversation history. Returns its
 /// `Vec<Line<'static>>` representation to make it easier to display in a
@@ -176,9 +163,11 @@ impl HistoryCell {
             | HistoryCell::PlanUpdate { view }
             | HistoryCell::PatchApplyResult { view }
             | HistoryCell::ActiveExecCommand { view, .. }
-            | HistoryCell::ActiveMcpToolCall { view, .. } => {
-                view.lines.iter().map(line_to_static).collect()
-            }
+            | HistoryCell::ActiveMcpToolCall { view, .. } => view
+                .lines
+                .iter()
+                .map(crate::render::line_utils::line_to_static)
+                .collect(),
             HistoryCell::CompletedMcpToolCallWithImageOutput { .. } => vec![
                 Line::from("tool result (image output omitted)"),
                 Line::from(""),
@@ -187,11 +176,8 @@ impl HistoryCell {
     }
 
     pub(crate) fn desired_height(&self, width: u16) -> u16 {
-        Paragraph::new(Text::from(self.plain_lines()))
-            .wrap(Wrap { trim: false })
-            .line_count(width)
-            .try_into()
-            .unwrap_or(0)
+        let wrapped = word_wrap_lines(&self.plain_lines(), width);
+        wrapped.len() as u16
     }
 
     pub(crate) fn new_session_info(
@@ -723,9 +709,10 @@ impl HistoryCell {
                         Span::styled("✔", Style::default().fg(Color::Green)),
                         Span::styled(
                             step,
+                            // Keep crossed-out, but drop DIM so it's readable
                             Style::default()
                                 .fg(Color::Gray)
-                                .add_modifier(Modifier::CROSSED_OUT | Modifier::DIM),
+                                .add_modifier(Modifier::CROSSED_OUT),
                         ),
                     ),
                     StepStatus::InProgress => (
@@ -739,10 +726,8 @@ impl HistoryCell {
                     ),
                     StepStatus::Pending => (
                         Span::raw("□"),
-                        Span::styled(
-                            step,
-                            Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
-                        ),
+                        // Use plain Gray (no DIM) to improve contrast on dark themes
+                        Span::styled(step, Style::default().fg(Color::Gray)),
                     ),
                 };
                 let prefix = if idx == 0 {
@@ -832,13 +817,39 @@ impl HistoryCell {
             view: TextBlock::new(lines),
         }
     }
+
+    pub(crate) fn new_patch_apply_success(stdout: String) -> Self {
+        let mut lines: Vec<Line<'static>> = Vec::new();
+
+        // Success title
+        lines.push(Line::from("✓ Applied patch".magenta().bold()));
+
+        if !stdout.trim().is_empty() {
+            let mut iter = stdout.lines();
+            for (i, raw) in iter.by_ref().take(TOOL_CALL_MAX_LINES).enumerate() {
+                let prefix = if i == 0 { "  ⎿ " } else { "    " };
+                let s = format!("{prefix}{raw}");
+                lines.push(ansi_escape_line(&s).dim());
+            }
+            let remaining = iter.count();
+            if remaining > 0 {
+                lines.push(Line::from(""));
+                lines.push(Line::from(format!("... +{remaining} lines")).dim());
+            }
+        }
+
+        lines.push(Line::from(""));
+
+        HistoryCell::PatchApplyResult {
+            view: TextBlock::new(lines),
+        }
+    }
 }
 
 impl WidgetRef for &HistoryCell {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        Paragraph::new(Text::from(self.plain_lines()))
-            .wrap(Wrap { trim: false })
-            .render(area, buf);
+        let wrapped = word_wrap_lines(&self.plain_lines(), area.width);
+        Paragraph::new(Text::from(wrapped)).render(area, buf);
     }
 }
 

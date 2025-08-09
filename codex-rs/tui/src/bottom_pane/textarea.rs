@@ -359,8 +359,9 @@ impl TextArea {
             } => {
                 self.move_cursor_to_end_of_line(true);
             }
-            o => {
-                tracing::debug!("Unhandled key event in TextArea: {:?}", o);
+            _o => {
+                #[cfg(feature = "debug-logs")]
+                tracing::debug!("Unhandled key event in TextArea: {:?}", _o);
             }
         }
     }

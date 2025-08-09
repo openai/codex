@@ -90,9 +90,11 @@ pub async fn wait_for_event_with_timeout<F>(
 where
     F: FnMut(&codex_core::protocol::EventMsg) -> bool,
 {
+    use tokio::time::Duration;
     use tokio::time::timeout;
     loop {
-        let ev = timeout(wait_time, codex.next_event())
+        // Allow a bit more time to accommodate async startup work (e.g. config IO, tool discovery)
+        let ev = timeout(wait_time.max(Duration::from_secs(5)), codex.next_event())
             .await
             .expect("timeout waiting for event")
             .expect("stream ended unexpectedly");

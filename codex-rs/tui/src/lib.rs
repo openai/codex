@@ -39,14 +39,26 @@ pub mod insert_history;
 pub mod live_wrap;
 mod log_layer;
 mod markdown;
+mod markdown_stream;
 pub mod onboarding;
+mod render;
+mod session_log;
 mod shimmer;
 mod slash_command;
 mod status_indicator_widget;
+mod streaming;
+#[cfg(all(test, feature = "vt100-tests"))]
+mod test_utils;
 mod text_block;
 mod text_formatting;
 mod tui;
 mod user_approval_widget;
+
+// Internal vt100-based replay tests live as a separate source file to keep them
+// close to the widget code. Include them only when running tests with the
+// explicit feature enabled.
+#[cfg(all(test, feature = "vt100-tests"))]
+mod chatwidget_stream_tests;
 
 #[cfg(not(debug_assertions))]
 mod updates;
@@ -54,6 +66,8 @@ mod updates;
 use color_eyre::owo_colors::OwoColorize;
 
 pub use cli::Cli;
+
+// (tests access modules directly within the crate)
 
 pub async fn run_main(
     cli: Cli,
@@ -265,6 +279,9 @@ fn run_ratatui_app(
     let mut terminal = tui::init(&config)?;
     terminal.clear()?;
 
+    // Initialize high-fidelity session event logging if enabled.
+    session_log::maybe_init(&config);
+
     let Cli { prompt, images, .. } = cli;
     let mut app = App::new(config.clone(), prompt, images, should_show_trust_screen);
 
@@ -282,6 +299,8 @@ fn run_ratatui_app(
     let usage = app.token_usage();
 
     restore();
+    // Mark the end of the recorded session.
+    session_log::log_session_end();
     // ignore error when collecting usage – report underlying error instead
     app_result.map(|_| usage)
 }

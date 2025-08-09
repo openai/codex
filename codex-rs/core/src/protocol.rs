@@ -383,6 +383,8 @@ pub enum EventMsg {
 
     /// Agent reasoning content delta event from agent.
     AgentReasoningRawContentDelta(AgentReasoningRawContentDeltaEvent),
+    /// Signaled when the model begins a new reasoning summary section (e.g., a new titled block).
+    AgentReasoningSectionBreak(AgentReasoningSectionBreakEvent),
 
     /// Ack the client's configure message.
     SessionConfigured(SessionConfiguredEvent),
@@ -529,6 +531,9 @@ pub struct AgentReasoningRawContentEvent {
 pub struct AgentReasoningRawContentDeltaEvent {
     pub delta: String,
 }
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AgentReasoningSectionBreakEvent {}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AgentReasoningDeltaEvent {

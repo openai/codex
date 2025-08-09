@@ -9,7 +9,6 @@ use codex_file_search::FileMatch;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::text::Line;
 use ratatui::widgets::WidgetRef;
 
 mod approval_modal_view;
@@ -18,7 +17,6 @@ mod chat_composer;
 mod chat_composer_history;
 mod command_popup;
 mod file_search_popup;
-mod live_ring_widget;
 mod popup_consts;
 mod scroll_state;
 mod selection_popup_common;
@@ -57,10 +55,6 @@ pub(crate) struct BottomPane<'a> {
     /// not replace the composer; it augments it.
     live_status: Option<StatusIndicatorWidget>,
 
-    /// Optional transient ring shown above the composer. This is a rendering-only
-    /// container used during development before we wire it to ChatWidget events.
-    live_ring: Option<live_ring_widget::LiveRingWidget>,
-
     /// True if the active view is the StatusIndicatorView that replaces the
     /// composer during a running task.
     status_view_active: bool,
@@ -88,7 +82,6 @@ impl BottomPane<'_> {
             is_task_running: false,
             ctrl_c_quit_hint: false,
             live_status: None,
-            live_ring: None,
             status_view_active: false,
         }
     }
@@ -99,26 +92,14 @@ impl BottomPane<'_> {
             .as_ref()
             .map(|s| s.desired_height(width))
             .unwrap_or(0);
-        let ring_h = self
-            .live_ring
-            .as_ref()
-            .map(|r| r.desired_height(width))
-            .unwrap_or(0);
 
         let view_height = if let Some(view) = self.active_view.as_ref() {
-            // Add a single blank spacer line between live ring and status view when active.
-            let spacer = if self.live_ring.is_some() && self.status_view_active {
-                1
-            } else {
-                0
-            };
-            spacer + view.desired_height(width)
+            view.desired_height(width)
         } else {
             self.composer.desired_height(width)
         };
 
         overlay_status_h
-            .saturating_add(ring_h)
             .saturating_add(view_height)
             .saturating_add(Self::BOTTOM_PAD_LINES)
     }
@@ -352,43 +333,11 @@ impl BottomPane<'_> {
         self.composer.on_file_search_result(query, matches);
         self.request_redraw();
     }
-
-    /// Set the rows and cap for the transient live ring overlay.
-    pub(crate) fn set_live_ring_rows(&mut self, max_rows: u16, rows: Vec<Line<'static>>) {
-        let mut w = live_ring_widget::LiveRingWidget::new();
-        w.set_max_rows(max_rows);
-        w.set_rows(rows);
-        self.live_ring = Some(w);
-    }
-
-    pub(crate) fn clear_live_ring(&mut self) {
-        self.live_ring = None;
-    }
-
-    // Removed restart_live_status_with_text – no longer used by the current streaming UI.
 }
 
 impl WidgetRef for &BottomPane<'_> {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let mut y_offset = 0u16;
-        if let Some(ring) = &self.live_ring {
-            let live_h = ring.desired_height(area.width).min(area.height);
-            if live_h > 0 {
-                let live_rect = Rect {
-                    x: area.x,
-                    y: area.y,
-                    width: area.width,
-                    height: live_h,
-                };
-                ring.render_ref(live_rect, buf);
-                y_offset = live_h;
-            }
-        }
-        // Spacer between live ring and status view when active
-        if self.live_ring.is_some() && self.status_view_active && y_offset < area.height {
-            // Leave one empty line
-            y_offset = y_offset.saturating_add(1);
-        }
         if let Some(status) = &self.live_status {
             let live_h = status
                 .desired_height(area.width)
@@ -438,7 +387,6 @@ mod tests {
     use crate::app_event::AppEvent;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
-    use ratatui::text::Line;
     use std::path::PathBuf;
     use std::sync::mpsc::channel;
 
@@ -466,103 +414,7 @@ mod tests {
         assert_eq!(CancellationEvent::Ignored, pane.on_ctrl_c());
     }
 
-    #[test]
-    fn live_ring_renders_above_composer() {
-        let (tx_raw, _rx) = channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let mut pane = BottomPane::new(BottomPaneParams {
-            app_event_tx: tx,
-            has_input_focus: true,
-            enhanced_keys_supported: false,
-        });
-
-        // Provide 4 rows with max_rows=3; only the last 3 should be visible.
-        pane.set_live_ring_rows(
-            3,
-            vec![
-                Line::from("one".to_string()),
-                Line::from("two".to_string()),
-                Line::from("three".to_string()),
-                Line::from("four".to_string()),
-            ],
-        );
-
-        let area = Rect::new(0, 0, 10, 5);
-        let mut buf = Buffer::empty(area);
-        (&pane).render_ref(area, &mut buf);
-
-        // Extract the first 3 rows and assert they contain the last three lines.
-        let mut lines: Vec<String> = Vec::new();
-        for y in 0..3 {
-            let mut s = String::new();
-            for x in 0..area.width {
-                s.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
-            }
-            lines.push(s.trim_end().to_string());
-        }
-        assert_eq!(lines, vec!["two", "three", "four"]);
-    }
-
-    #[test]
-    fn status_indicator_visible_with_live_ring() {
-        let (tx_raw, _rx) = channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let mut pane = BottomPane::new(BottomPaneParams {
-            app_event_tx: tx,
-            has_input_focus: true,
-            enhanced_keys_supported: false,
-        });
-
-        // Simulate task running which replaces composer with the status indicator.
-        pane.set_task_running(true);
-        pane.update_status_text("waiting for model".to_string());
-
-        // Provide 2 rows in the live ring (e.g., streaming CoT) and ensure the
-        // status indicator remains visible below them.
-        pane.set_live_ring_rows(
-            2,
-            vec![
-                Line::from("cot1".to_string()),
-                Line::from("cot2".to_string()),
-            ],
-        );
-
-        // Allow some frames so the dot animation is present.
-        std::thread::sleep(std::time::Duration::from_millis(120));
-
-        // Height should include both ring rows, 1 spacer, and the 1-line status.
-        let area = Rect::new(0, 0, 30, 4);
-        let mut buf = Buffer::empty(area);
-        (&pane).render_ref(area, &mut buf);
-
-        // Top two rows are the live ring.
-        let mut r0 = String::new();
-        let mut r1 = String::new();
-        for x in 0..area.width {
-            r0.push(buf[(x, 0)].symbol().chars().next().unwrap_or(' '));
-            r1.push(buf[(x, 1)].symbol().chars().next().unwrap_or(' '));
-        }
-        assert!(r0.contains("cot1"), "expected first live row: {r0:?}");
-        assert!(r1.contains("cot2"), "expected second live row: {r1:?}");
-
-        // Row 2 is the spacer (blank)
-        let mut r2 = String::new();
-        for x in 0..area.width {
-            r2.push(buf[(x, 2)].symbol().chars().next().unwrap_or(' '));
-        }
-        assert!(r2.trim().is_empty(), "expected blank spacer line: {r2:?}");
-
-        // Bottom row is the status line; it should contain the left bar and "Working".
-        let mut r3 = String::new();
-        for x in 0..area.width {
-            r3.push(buf[(x, 3)].symbol().chars().next().unwrap_or(' '));
-        }
-        assert_eq!(buf[(0, 3)].symbol().chars().next().unwrap_or(' '), '▌');
-        assert!(
-            r3.contains("Working"),
-            "expected Working header in status line: {r3:?}"
-        );
-    }
+    // live ring removed; related tests deleted.
 
     #[test]
     fn overlay_not_shown_above_approval_modal() {

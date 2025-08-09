@@ -1,0 +1,749 @@
+{"ts":"2025-08-09T00:33:37.352Z","dir":"meta","kind":"session_start","cwd":"/Users/easong/code/codex/codex-rs","model":"gpt-5","model_provider_id":"openai","model_provider_name":"OpenAI"}
+{"ts":"2025-08-09T00:33:37.353Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:37.354Z","dir":"to_tui","kind":"log_line","line":"[INFO codex_core::codex] resume_path: None"}
+{"ts":"2025-08-09T00:33:37.364Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:37.372Z","dir":"to_tui","kind":"codex_event","payload":{"id":"0","msg":{"type":"session_configured","session_id":"0dea4b6a-a74c-4a16-9a41-a61789a2d866","model":"gpt-5","history_log_id":2532619,"history_entry_count":296}}}
+{"ts":"2025-08-09T00:33:37.372Z","dir":"to_tui","kind":"insert_history","lines":9}
+{"ts":"2025-08-09T00:33:37.372Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:37.372Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:37.382Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:44.938Z","dir":"to_tui","kind":"key_event","event":"KeyEvent { code: Up, modifiers: KeyModifiers(0x0), kind: Press, state: KeyEventState(0x0) }"}
+{"ts":"2025-08-09T00:33:44.939Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:44.939Z","dir":"from_tui","kind":"op","payload":{"type":"get_history_entry_request","offset":295,"log_id":2532619}}
+{"ts":"2025-08-09T00:33:44.940Z","dir":"to_tui","kind":"codex_event","payload":{"id":"1","msg":{"type":"get_history_entry_response","offset":295,"log_id":2532619,"entry":{"session_id":"43172551-322c-494f-ba72-9a9a272e33f2","ts":1754699532,"text":"hello"}}}}
+{"ts":"2025-08-09T00:33:44.940Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:44.952Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:45.000Z","dir":"to_tui","kind":"key_event","event":"KeyEvent { code: Up, modifiers: KeyModifiers(0x0), kind: Release, state: KeyEventState(0x0) }"}
+{"ts":"2025-08-09T00:33:45.425Z","dir":"to_tui","kind":"key_event","event":"KeyEvent { code: Down, modifiers: KeyModifiers(0x0), kind: Press, state: KeyEventState(0x0) }"}
+{"ts":"2025-08-09T00:33:45.425Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:45.437Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:45.528Z","dir":"to_tui","kind":"key_event","event":"KeyEvent { code: Down, modifiers: KeyModifiers(0x0), kind: Release, state: KeyEventState(0x0) }"}
+{"ts":"2025-08-09T00:33:45.723Z","dir":"to_tui","kind":"key_event","event":"KeyEvent { code: Up, modifiers: KeyModifiers(0x0), kind: Press, state: KeyEventState(0x0) }"}
+{"ts":"2025-08-09T00:33:45.723Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:45.736Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:45.783Z","dir":"to_tui","kind":"key_event","event":"KeyEvent { code: Up, modifiers: KeyModifiers(0x0), kind: Release, state: KeyEventState(0x0) }"}
+{"ts":"2025-08-09T00:33:46.532Z","dir":"to_tui","kind":"key_event","event":"KeyEvent { code: Down, modifiers: KeyModifiers(0x0), kind: Press, state: KeyEventState(0x0) }"}
+{"ts":"2025-08-09T00:33:46.532Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:46.544Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:46.631Z","dir":"to_tui","kind":"key_event","event":"KeyEvent { code: Down, modifiers: KeyModifiers(0x0), kind: Release, state: KeyEventState(0x0) }"}
+{"ts":"2025-08-09T00:33:46.771Z","dir":"to_tui","kind":"key_event","event":"KeyEvent { code: Up, modifiers: KeyModifiers(0x0), kind: Press, state: KeyEventState(0x0) }"}
+{"ts":"2025-08-09T00:33:46.771Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:46.784Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:46.878Z","dir":"to_tui","kind":"key_event","event":"KeyEvent { code: Up, modifiers: KeyModifiers(0x0), kind: Release, state: KeyEventState(0x0) }"}
+{"ts":"2025-08-09T00:33:48.169Z","dir":"to_tui","kind":"key_event","event":"KeyEvent { code: Down, modifiers: KeyModifiers(0x0), kind: Press, state: KeyEventState(0x0) }"}
+{"ts":"2025-08-09T00:33:48.170Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:48.182Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:48.260Z","dir":"to_tui","kind":"key_event","event":"KeyEvent { code: Down, modifiers: KeyModifiers(0x0), kind: Release, state: KeyEventState(0x0) }"}
+{"ts":"2025-08-09T00:33:48.968Z","dir":"to_tui","kind":"key_event","event":"KeyEvent { code: Up, modifiers: KeyModifiers(0x0), kind: Press, state: KeyEventState(0x0) }"}
+{"ts":"2025-08-09T00:33:48.968Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:48.980Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:49.079Z","dir":"to_tui","kind":"key_event","event":"KeyEvent { code: Up, modifiers: KeyModifiers(0x0), kind: Release, state: KeyEventState(0x0) }"}
+{"ts":"2025-08-09T00:33:49.280Z","dir":"to_tui","kind":"key_event","event":"KeyEvent { code: Enter, modifiers: KeyModifiers(0x0), kind: Press, state: KeyEventState(0x0) }"}
+{"ts":"2025-08-09T00:33:49.280Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:49.280Z","dir":"to_tui","kind":"insert_history","lines":3}
+{"ts":"2025-08-09T00:33:49.280Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:49.281Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"task_started"}}}
+{"ts":"2025-08-09T00:33:49.281Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:49.281Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:49.281Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:49.292Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:49.383Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:49.486Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:49.495Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:49.589Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:49.602Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:49.694Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:49.705Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:49.794Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:49.807Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:49.898Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:49.911Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:50.003Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:50.015Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:50.107Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:50.120Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:50.212Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:50.225Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:50.313Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:50.325Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:50.415Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:50.428Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:50.516Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:50.527Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:50.621Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:50.634Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:50.726Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:50.738Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:50.831Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:50.844Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:50.936Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:50.949Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:51.041Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:51.054Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:51.146Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:51.158Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:51.249Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:51.262Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:51.355Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:51.366Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:51.456Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:51.468Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:51.556Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:51.569Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:51.661Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:51.673Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:51.764Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:51.776Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:51.868Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:51.880Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:51.970Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:51.983Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:52.075Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:52.087Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:52.179Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:52.192Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:52.284Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:52.296Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:52.388Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:52.400Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:52.493Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:52.505Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:52.598Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:52.611Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:52.703Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:52.715Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:52.807Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:52.819Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:52.909Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:52.922Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:53.012Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.024Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:53.029Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_section_break"}}}
+{"ts":"2025-08-09T00:33:53.029Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":"**Respond"}}}
+{"ts":"2025-08-09T00:33:53.029Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.030Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":"ing"}}}
+{"ts":"2025-08-09T00:33:53.030Z","dir":"to_tui","kind":"insert_history","lines":1}
+{"ts":"2025-08-09T00:33:53.030Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.030Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.030Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.041Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:53.061Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" to"}}}
+{"ts":"2025-08-09T00:33:53.061Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" user"}}}
+{"ts":"2025-08-09T00:33:53.061Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" greeting"}}}
+{"ts":"2025-08-09T00:33:53.090Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":"**\n\nI"}}}
+{"ts":"2025-08-09T00:33:53.114Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.114Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.114Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.116Z","dir":"to_tui","kind":"app_event","variant":"StartCommitAnimation"}
+{"ts":"2025-08-09T00:33:53.116Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.118Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.123Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" need"}}}
+{"ts":"2025-08-09T00:33:53.123Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" to"}}}
+{"ts":"2025-08-09T00:33:53.123Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.123Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" reply"}}}
+{"ts":"2025-08-09T00:33:53.123Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.123Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.128Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:53.157Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" to"}}}
+{"ts":"2025-08-09T00:33:53.158Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" the"}}}
+{"ts":"2025-08-09T00:33:53.158Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" user's"}}}
+{"ts":"2025-08-09T00:33:53.158Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.158Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.158Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.167Z","dir":"to_tui","kind":"app_event","variant":"CommitTick"}
+{"ts":"2025-08-09T00:33:53.167Z","dir":"to_tui","kind":"insert_history","lines":1}
+{"ts":"2025-08-09T00:33:53.167Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.170Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:53.220Z","dir":"to_tui","kind":"app_event","variant":"CommitTick"}
+{"ts":"2025-08-09T00:33:53.220Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.221Z","dir":"to_tui","kind":"insert_history","lines":1}
+{"ts":"2025-08-09T00:33:53.221Z","dir":"to_tui","kind":"app_event","variant":"StopCommitAnimation"}
+{"ts":"2025-08-09T00:33:53.221Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.229Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" greeting"}}}
+{"ts":"2025-08-09T00:33:53.229Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" in"}}}
+{"ts":"2025-08-09T00:33:53.229Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" a"}}}
+{"ts":"2025-08-09T00:33:53.229Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.229Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.230Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.233Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:53.272Z","dir":"to_tui","kind":"app_event","variant":"CommitTick"}
+{"ts":"2025-08-09T00:33:53.296Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" concise"}}}
+{"ts":"2025-08-09T00:33:53.297Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" way"}}}
+{"ts":"2025-08-09T00:33:53.297Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":"."}}}
+{"ts":"2025-08-09T00:33:53.314Z","dir":"to_tui","kind":"app_event","variant":"StopCommitAnimation"}
+{"ts":"2025-08-09T00:33:53.314Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.314Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.314Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.324Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.327Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:53.332Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" I"}}}
+{"ts":"2025-08-09T00:33:53.332Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" don"}}}
+{"ts":"2025-08-09T00:33:53.332Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":"’t"}}}
+{"ts":"2025-08-09T00:33:53.332Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.332Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.332Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.345Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:53.382Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" need"}}}
+{"ts":"2025-08-09T00:33:53.382Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" to"}}}
+{"ts":"2025-08-09T00:33:53.382Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.382Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" run"}}}
+{"ts":"2025-08-09T00:33:53.382Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.382Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.395Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:53.420Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" any"}}}
+{"ts":"2025-08-09T00:33:53.420Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" tools"}}}
+{"ts":"2025-08-09T00:33:53.420Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.420Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" here"}}}
+{"ts":"2025-08-09T00:33:53.420Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.420Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.429Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.433Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:53.449Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":";"}}}
+{"ts":"2025-08-09T00:33:53.449Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" the"}}}
+{"ts":"2025-08-09T00:33:53.449Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" goal"}}}
+{"ts":"2025-08-09T00:33:53.449Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.449Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.449Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.461Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:53.534Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.546Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:53.548Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" is"}}}
+{"ts":"2025-08-09T00:33:53.548Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" to"}}}
+{"ts":"2025-08-09T00:33:53.548Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" keep"}}}
+{"ts":"2025-08-09T00:33:53.548Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.548Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.548Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.560Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:53.636Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.644Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" the"}}}
+{"ts":"2025-08-09T00:33:53.644Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" conversation"}}}
+{"ts":"2025-08-09T00:33:53.644Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.644Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" friendly"}}}
+{"ts":"2025-08-09T00:33:53.645Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.645Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.649Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:53.703Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":"."}}}
+{"ts":"2025-08-09T00:33:53.703Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" I"}}}
+{"ts":"2025-08-09T00:33:53.703Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" should"}}}
+{"ts":"2025-08-09T00:33:53.703Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.703Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.703Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.716Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:53.736Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" ask"}}}
+{"ts":"2025-08-09T00:33:53.736Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" how"}}}
+{"ts":"2025-08-09T00:33:53.736Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" I"}}}
+{"ts":"2025-08-09T00:33:53.736Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.736Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.736Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.741Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.749Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:53.759Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" can"}}}
+{"ts":"2025-08-09T00:33:53.759Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" help"}}}
+{"ts":"2025-08-09T00:33:53.759Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" and"}}}
+{"ts":"2025-08-09T00:33:53.759Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.759Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.759Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.771Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:53.800Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" mention"}}}
+{"ts":"2025-08-09T00:33:53.800Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" that"}}}
+{"ts":"2025-08-09T00:33:53.800Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" I"}}}
+{"ts":"2025-08-09T00:33:53.800Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.800Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.800Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.813Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:53.828Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" can"}}}
+{"ts":"2025-08-09T00:33:53.828Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" assist"}}}
+{"ts":"2025-08-09T00:33:53.828Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" with"}}}
+{"ts":"2025-08-09T00:33:53.828Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.828Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.828Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.840Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:53.846Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.859Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:53.875Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" tasks"}}}
+{"ts":"2025-08-09T00:33:53.875Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" related"}}}
+{"ts":"2025-08-09T00:33:53.875Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" to"}}}
+{"ts":"2025-08-09T00:33:53.875Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.875Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.875Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.887Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:53.899Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" the"}}}
+{"ts":"2025-08-09T00:33:53.899Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" Rust"}}}
+{"ts":"2025-08-09T00:33:53.899Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.899Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" cod"}}}
+{"ts":"2025-08-09T00:33:53.900Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.900Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.911Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:53.943Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":"ex"}}}
+{"ts":"2025-08-09T00:33:53.943Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":"-r"}}}
+{"ts":"2025-08-09T00:33:53.943Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":"s"}}}
+{"ts":"2025-08-09T00:33:53.943Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.943Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.943Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.948Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.956Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:53.967Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" repository"}}}
+{"ts":"2025-08-09T00:33:53.967Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":"."}}}
+{"ts":"2025-08-09T00:33:53.967Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" Keeping"}}}
+{"ts":"2025-08-09T00:33:53.967Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.967Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.967Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:53.978Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:54.048Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" it"}}}
+{"ts":"2025-08-09T00:33:54.048Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" straightforward"}}}
+{"ts":"2025-08-09T00:33:54.049Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" without"}}}
+{"ts":"2025-08-09T00:33:54.049Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.049Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.049Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.051Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.061Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:54.105Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" heavy"}}}
+{"ts":"2025-08-09T00:33:54.105Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" formatting"}}}
+{"ts":"2025-08-09T00:33:54.105Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" is"}}}
+{"ts":"2025-08-09T00:33:54.105Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.105Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.106Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.116Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:54.151Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" key"}}}
+{"ts":"2025-08-09T00:33:54.151Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":","}}}
+{"ts":"2025-08-09T00:33:54.151Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" so"}}}
+{"ts":"2025-08-09T00:33:54.151Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.151Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.151Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.155Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.163Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:54.215Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" I'll"}}}
+{"ts":"2025-08-09T00:33:54.215Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" stick"}}}
+{"ts":"2025-08-09T00:33:54.215Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" to"}}}
+{"ts":"2025-08-09T00:33:54.215Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.215Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.215Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.227Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:54.237Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" a"}}}
+{"ts":"2025-08-09T00:33:54.238Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" friendly"}}}
+{"ts":"2025-08-09T00:33:54.238Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" tone"}}}
+{"ts":"2025-08-09T00:33:54.238Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.238Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.238Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.251Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:54.259Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.271Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:54.273Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" and"}}}
+{"ts":"2025-08-09T00:33:54.273Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" avoid"}}}
+{"ts":"2025-08-09T00:33:54.273Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.273Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" unnecessary"}}}
+{"ts":"2025-08-09T00:33:54.273Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.273Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.285Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:54.308Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" details"}}}
+{"ts":"2025-08-09T00:33:54.308Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":"."}}}
+{"ts":"2025-08-09T00:33:54.308Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" Al"}}}
+{"ts":"2025-08-09T00:33:54.308Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.308Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.308Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.321Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:54.334Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":"right"}}}
+{"ts":"2025-08-09T00:33:54.334Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":","}}}
+{"ts":"2025-08-09T00:33:54.334Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" let's"}}}
+{"ts":"2025-08-09T00:33:54.334Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.334Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.334Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.346Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:54.362Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.368Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":" proceed"}}}
+{"ts":"2025-08-09T00:33:54.369Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.374Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:54.383Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning_delta","delta":"!"}}}
+{"ts":"2025-08-09T00:33:54.383Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_reasoning","text":"**Responding to user greeting**\n\nI need to reply to the user's greeting in a concise way. I don’t need to run any tools here; the goal is to keep the conversation friendly. I should ask how I can help and mention that I can assist with tasks related to the Rust codex-rs repository. Keeping it straightforward without heavy formatting is key, so I'll stick to a friendly tone and avoid unnecessary details. Alright, let's proceed!"}}}
+{"ts":"2025-08-09T00:33:54.383Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_message_delta","delta":"Hi"}}}
+{"ts":"2025-08-09T00:33:54.383Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.383Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_message_delta","delta":"!"}}}
+{"ts":"2025-08-09T00:33:54.383Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_message_delta","delta":" How"}}}
+{"ts":"2025-08-09T00:33:54.383Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_message_delta","delta":" can"}}}
+{"ts":"2025-08-09T00:33:54.383Z","dir":"to_tui","kind":"app_event","variant":"StartCommitAnimation"}
+{"ts":"2025-08-09T00:33:54.383Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.383Z","dir":"to_tui","kind":"insert_history","lines":2}
+{"ts":"2025-08-09T00:33:54.383Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.383Z","dir":"to_tui","kind":"insert_history","lines":1}
+{"ts":"2025-08-09T00:33:54.384Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.384Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.384Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.384Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.384Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.384Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.388Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_message_delta","delta":" I"}}}
+{"ts":"2025-08-09T00:33:54.388Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_message_delta","delta":" help"}}}
+{"ts":"2025-08-09T00:33:54.388Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.388Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.396Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_message_delta","delta":" with"}}}
+{"ts":"2025-08-09T00:33:54.396Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_message_delta","delta":" cod"}}}
+{"ts":"2025-08-09T00:33:54.396Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.396Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.396Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:54.398Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_message_delta","delta":"ex"}}}
+{"ts":"2025-08-09T00:33:54.400Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_message_delta","delta":"-r"}}}
+{"ts":"2025-08-09T00:33:54.403Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_message_delta","delta":"s"}}}
+{"ts":"2025-08-09T00:33:54.408Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_message_delta","delta":" or"}}}
+{"ts":"2025-08-09T00:33:54.413Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_message_delta","delta":" anything"}}}
+{"ts":"2025-08-09T00:33:54.413Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_message_delta","delta":" else"}}}
+{"ts":"2025-08-09T00:33:54.424Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_message_delta","delta":" today"}}}
+{"ts":"2025-08-09T00:33:54.425Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_message_delta","delta":"?"}}}
+{"ts":"2025-08-09T00:33:54.426Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.426Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.426Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.426Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.426Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.426Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.426Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.426Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.436Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:54.436Z","dir":"to_tui","kind":"app_event","variant":"CommitTick"}
+{"ts":"2025-08-09T00:33:54.437Z","dir":"to_tui","kind":"app_event","variant":"StopCommitAnimation"}
+{"ts":"2025-08-09T00:33:54.462Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.475Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:54.490Z","dir":"to_tui","kind":"app_event","variant":"CommitTick"}
+{"ts":"2025-08-09T00:33:54.567Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.580Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:54.671Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.684Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:54.776Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.788Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:54.880Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.890Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:54.981Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:54.994Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:55.086Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:55.098Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:55.190Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:55.203Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:55.295Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:55.308Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:55.397Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:55.407Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:55.502Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:55.513Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:55.605Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:55.616Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:55.706Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:55.719Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:55.811Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:55.823Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:55.915Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:55.927Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:56.019Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:56.030Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:56.124Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:56.136Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:56.228Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:56.240Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:56.331Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:56.343Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:56.434Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:56.446Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:56.538Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:56.548Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:56.642Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:56.654Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:56.744Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:56.756Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:56.848Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:56.861Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:56.953Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:56.964Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:57.057Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:57.070Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:57.161Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:57.173Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:57.263Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:57.276Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:57.366Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:57.379Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:57.469Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:57.480Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:57.573Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:57.584Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:57.678Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:57.691Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:57.778Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:57.791Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:57.883Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:57.896Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:57.988Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:57.999Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:58.091Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:58.103Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:58.196Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:58.209Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:58.300Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:58.311Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:58.406Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:58.416Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:58.507Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:58.520Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:58.611Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:58.623Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:58.714Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:58.725Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:58.814Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:58.827Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:58.918Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:58.928Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:59.021Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:59.033Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:59.125Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:59.137Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:59.230Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:59.242Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:59.336Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:59.348Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:59.439Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:59.450Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:59.541Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:59.554Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:59.646Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:59.657Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:59.751Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:59.762Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:59.855Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:59.866Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:33:59.957Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:33:59.969Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:00.061Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:00.073Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:00.166Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:00.176Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:00.267Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:00.279Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:00.373Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:00.384Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:00.478Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:00.490Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:00.580Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:00.591Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:00.685Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:00.696Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:00.790Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:00.803Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:00.894Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:00.907Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:01.000Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:01.012Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:01.105Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:01.117Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:01.206Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:01.218Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:01.310Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:01.323Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:01.415Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:01.428Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:01.520Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:01.533Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:01.625Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:01.637Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:01.730Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:01.740Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:01.833Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:01.845Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:01.937Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:01.950Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:02.040Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:02.052Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:02.143Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:02.156Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:02.248Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:02.260Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:02.349Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:02.361Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:02.454Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:02.467Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:02.556Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:02.568Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:02.657Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:02.670Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:02.759Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:02.774Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:02.868Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:02.881Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:02.972Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:02.984Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:03.075Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:03.087Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:03.178Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:03.191Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:03.280Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:03.292Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:03.383Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:03.395Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:03.488Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:03.500Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:03.592Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:03.604Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:03.694Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:03.718Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:03.811Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:03.821Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:03.913Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:03.926Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:04.018Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:04.031Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:04.119Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:04.131Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:04.223Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:04.234Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:04.327Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:04.337Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:04.430Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:04.442Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:04.530Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:04.542Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:04.635Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:04.646Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:04.738Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:04.750Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:04.766Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"agent_message","message":"Hi! How can I help with codex-rs or anything else today?"}}}
+{"ts":"2025-08-09T00:34:04.766Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:04.774Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"token_count","input_tokens":6032,"cached_input_tokens":5537,"output_tokens":86,"reasoning_output_tokens":64,"total_tokens":6118}}}
+{"ts":"2025-08-09T00:34:04.774Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:04.774Z","dir":"to_tui","kind":"codex_event","payload":{"id":"2","msg":{"type":"task_complete","last_agent_message":"Hi! How can I help with codex-rs or anything else today?"}}}
+{"ts":"2025-08-09T00:34:04.774Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:04.777Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:34:04.843Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:34:04.854Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:36:14.897Z","dir":"to_tui","kind":"key_event","event":"KeyEvent { code: Char('c'), modifiers: KeyModifiers(0x0), kind: Release, state: KeyEventState(0x0) }"}
+{"ts":"2025-08-09T00:44:02.730Z","dir":"to_tui","kind":"key_event","event":"KeyEvent { code: Char('c'), modifiers: KeyModifiers(CONTROL), kind: Press, state: KeyEventState(0x0) }"}
+{"ts":"2025-08-09T00:44:02.730Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+{"ts":"2025-08-09T00:44:02.742Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
+{"ts":"2025-08-09T00:44:02.743Z","dir":"to_tui","kind":"key_event","event":"KeyEvent { code: Char('c'), modifiers: KeyModifiers(CONTROL), kind: Release, state: KeyEventState(0x0) }"}
+{"ts":"2025-08-09T00:44:02.873Z","dir":"to_tui","kind":"key_event","event":"KeyEvent { code: Char('c'), modifiers: KeyModifiers(CONTROL), kind: Press, state: KeyEventState(0x0) }"}
+{"ts":"2025-08-09T00:44:02.873Z","dir":"from_tui","kind":"op","payload":{"type":"shutdown"}}
+{"ts":"2025-08-09T00:44:02.874Z","dir":"to_tui","kind":"log_line","line":"[INFO codex_core::codex] Shutting down Codex instance"}
+{"ts":"2025-08-09T00:44:02.874Z","dir":"to_tui","kind":"codex_event","payload":{"id":"4","msg":{"type":"shutdown_complete"}}}
+{"ts":"2025-08-09T00:44:02.874Z","dir":"to_tui","kind":"app_event","variant":"ExitRequest"}
+{"ts":"2025-08-09T00:44:02.874Z","dir":"meta","kind":"session_end"}
+{"ts":"2025-08-09T00:44:02.874Z","dir":"to_tui","kind":"log_line","line":"[INFO codex_core::codex] Aborting existing session"}
+{"ts":"2025-08-09T00:44:02.874Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.875Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.875Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.875Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.875Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.875Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.875Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.875Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.875Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.875Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.875Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.876Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.876Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.876Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.876Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.876Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.876Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.876Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.876Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.876Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.876Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.876Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.876Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.876Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.876Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.877Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.877Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.877Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.877Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.877Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.877Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.877Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.877Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.877Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.877Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.877Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.877Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.877Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.877Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.877Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.877Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.877Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.878Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.878Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.878Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.878Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.878Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.878Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.878Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.878Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.878Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.878Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.878Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.878Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.878Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.878Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.878Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.878Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.878Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.878Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.878Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.879Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.879Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.879Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.879Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.879Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.879Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.879Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.879Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.879Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.879Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.879Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.879Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.879Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.879Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.879Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.879Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.879Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.879Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.879Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.879Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.879Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.879Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.879Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.879Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.879Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.879Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.879Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.879Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.879Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.879Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.879Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.879Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.879Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.879Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.879Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.879Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.879Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.879Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.879Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.879Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.879Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.879Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.880Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.880Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.880Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.880Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.880Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.880Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.880Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.880Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.880Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.880Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.880Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.880Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.880Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.880Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.880Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.880Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.880Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.880Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.880Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.880Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.880Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.880Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
+{"ts":"2025-08-09T00:44:02.880Z","dir":"to_tui","kind":"log_line","line":"[ERROR codex_tui::app_event_sender] failed to send event: sending on a closed channel"}
