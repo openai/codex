@@ -178,28 +178,69 @@ impl TextArea {
         self.end_of_line(self.cursor_pos)
     }
 
+    fn is_word(c: char) -> bool {
+        c.is_alphanumeric() || c == '_'
+    }
+
     pub(crate) fn beginning_of_previous_word(&self) -> usize {
-        if let Some(first_non_ws) = self.text[..self.cursor_pos].rfind(|c: char| !c.is_whitespace())
-        {
-            self.text[..first_non_ws]
-                .rfind(|c: char| c.is_whitespace())
-                .map(|i| i + 1)
-                .unwrap_or(0)
-        } else {
-            0
+        let s = &self.text;
+        let upto = self.cursor_pos.min(s.len());
+        let left = &s[..upto];
+
+        // Trim whitespace left of the cursor: find last non-ws and move to its end.
+        let end = match left.rfind(|c: char| !c.is_whitespace()) {
+            None => return 0,
+            Some(i) => i + left[i..].chars().next().map_or(0, |ch| ch.len_utf8()),
+        };
+
+        // Walk back across the run (word or punctuation).
+        let mut it = left[..end].char_indices().rev();
+        let (mut start, first_ch) = match it.next() {
+            Some(p) => p,
+            None => return 0,
+        };
+        let want_word = Self::is_word(first_ch);
+
+        for (idx, ch) in it {
+            if ch.is_whitespace() || Self::is_word(ch) != want_word {
+                break;
+            }
+            start = idx;
         }
+        start
     }
 
     pub(crate) fn end_of_next_word(&self) -> usize {
-        let Some(first_non_ws) = self.text[self.cursor_pos..].find(|c: char| !c.is_whitespace())
-        else {
-            return self.text.len();
-        };
-        let word_start = self.cursor_pos + first_non_ws;
-        match self.text[word_start..].find(|c: char| c.is_whitespace()) {
-            Some(rel_idx) => word_start + rel_idx,
-            None => self.text.len(),
+        let s = &self.text;
+        let mut i = self.cursor_pos.min(s.len());
+
+        // Skip leading whitespace to the right of cursor
+        for ch in s[i..].chars() {
+            if ch.is_whitespace() {
+                i += ch.len_utf8();
+            } else {
+                break;
+            }
         }
+        if i >= s.len() {
+            return s.len();
+        }
+
+        // Determine category at i and walk right until boundary
+        let mut iter = s[i..].char_indices();
+        let (off, first_ch) = match iter.next() {
+            Some(p) => p,
+            None => return s.len(),
+        };
+        let mut end = i + off + first_ch.len_utf8();
+        let target_is_word = Self::is_word(first_ch);
+        for (_off, ch) in iter {
+            if ch.is_whitespace() || Self::is_word(ch) != target_is_word {
+                break;
+            }
+            end += ch.len_utf8();
+        }
+        end
     }
 
     pub fn input(&mut self, event: KeyEvent) {
@@ -1334,5 +1375,69 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn emacs_word_boundaries_navigation() {
+        // Mix words and punctuation runs
+        let mut t = ta_with("alpha.beta  foo--bar   !!!baz qux");
+
+        // 1) From end of "beta", beginning_of_previous_word stops at start of "beta" (not before '.')
+        let end_beta = t.text().find("alpha.beta").unwrap() + "alpha.beta".len();
+        let start_beta = t.text().find("beta").unwrap();
+        t.set_cursor(end_beta);
+        assert_eq!(t.beginning_of_previous_word(), start_beta);
+
+        // 2) From after '.', beginning_of_previous_word selects only the '.' run
+        let after_dot = t.text().find("alpha.").unwrap() + "alpha.".len();
+        t.set_cursor(after_dot);
+        assert_eq!(t.beginning_of_previous_word(), after_dot - 1);
+
+        // 3) From end of "bar", beginning_of_previous_word stops at start of "bar" (skips over "--")
+        let end_bar = t.text().find("foo--bar").unwrap() + "foo--bar".len();
+        let start_bar = t.text().find("bar").unwrap();
+        t.set_cursor(end_bar);
+        assert_eq!(t.beginning_of_previous_word(), start_bar);
+
+        // 4) From start of "baz", beginning_of_previous_word jumps to the start of the preceding punctuation run
+        let start_baz = t.text().find("baz").unwrap();
+        let excl_start = t.text().find("!!!").unwrap();
+        t.set_cursor(start_baz);
+        assert_eq!(t.beginning_of_previous_word(), excl_start);
+
+        // 5) end_of_next_word from the beginning of a punctuation run moves just past that run
+        t.set_cursor(excl_start);
+        assert_eq!(t.end_of_next_word(), excl_start + "!!!".len());
+    }
+
+    #[test]
+    fn emacs_alt_backspace_deletes_word_or_punct_runs() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        // Case A: "alpha.beta" -> delete "beta", then delete '.'
+        let mut t = ta_with("alpha.beta");
+        t.set_cursor(t.text().len());
+        t.input(KeyEvent::new(KeyCode::Backspace, KeyModifiers::ALT));
+        assert_eq!(t.text(), "alpha.");
+        t.input(KeyEvent::new(KeyCode::Backspace, KeyModifiers::ALT));
+        assert_eq!(t.text(), "alpha");
+
+        // Case B: "foo--bar" -> delete "bar", then delete "--"
+        let mut t = ta_with("foo--bar");
+        t.set_cursor(t.text().len());
+        t.input(KeyEvent::new(KeyCode::Backspace, KeyModifiers::ALT));
+        assert_eq!(t.text(), "foo--");
+        t.input(KeyEvent::new(KeyCode::Backspace, KeyModifiers::ALT));
+        assert_eq!(t.text(), "foo");
+
+        // Case C: "!!!wow" -> delete "wow", then delete "!!!"
+        let mut t = ta_with("!!!wow");
+        t.set_cursor(t.text().len());
+        t.input(KeyEvent::new(KeyCode::Backspace, KeyModifiers::ALT));
+        assert_eq!(t.text(), "!!!");
+        t.input(KeyEvent::new(KeyCode::Backspace, KeyModifiers::ALT));
+        assert_eq!(t.text(), "");
     }
 }
