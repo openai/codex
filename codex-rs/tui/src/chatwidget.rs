@@ -52,6 +52,7 @@ use crate::live_wrap::RowBuilder;
 use crate::user_approval_widget::ApprovalRequest;
 use codex_file_search::FileMatch;
 use ratatui::style::Stylize;
+use ratatui::text::Line as RLine;
 
 struct RunningCommand {
     command: Vec<String>,
@@ -138,17 +139,22 @@ impl ChatWidget<'_> {
         .areas(area)
     }
     fn emit_stream_header(&mut self, kind: StreamKind) {
-        use ratatui::text::Line as RLine;
         if self.stream_header_emitted {
             return;
         }
-        let header = match kind {
-            StreamKind::Reasoning => RLine::from("🧠 thinking".magenta().italic()),
-            StreamKind::Answer => RLine::from("🤖 codex".magenta().bold()),
-        };
+        let header = stream_header_line(kind);
         self.app_event_tx
             .send(AppEvent::InsertHistory(vec![header]));
         self.stream_header_emitted = true;
+    }
+
+    #[cfg(test)]
+    fn line_to_string(line: &ratatui::text::Line<'_>) -> String {
+        line.spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect::<Vec<_>>()
+            .join("")
     }
     fn finalize_active_stream(&mut self) {
         if let Some(kind) = self.current_stream {
@@ -675,10 +681,10 @@ impl ChatWidget<'_> {
             if !self.stream_header_emitted {
                 match self.current_stream {
                     Some(StreamKind::Reasoning) => {
-                        lines.push(ratatui::text::Line::from("🧠 thinking".magenta().italic()));
+                        lines.push(stream_header_line(StreamKind::Reasoning));
                     }
                     Some(StreamKind::Answer) => {
-                        lines.push(ratatui::text::Line::from("🤖 codex".magenta().bold()));
+                        lines.push(stream_header_line(StreamKind::Answer));
                     }
                     None => {}
                 }
@@ -738,6 +744,28 @@ impl ChatWidget<'_> {
         self.bottom_pane.clear_live_ring();
         self.current_stream = None;
         self.stream_header_emitted = false;
+    }
+}
+
+fn stream_header_line(kind: StreamKind) -> RLine<'static> {
+    match kind {
+        StreamKind::Reasoning => RLine::from("🧠 thinking".magenta().italic()),
+        StreamKind::Answer => RLine::from("🤖 codex".magenta().bold()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stream_header_uses_emojis() {
+        let th = stream_header_line(StreamKind::Reasoning);
+        let ah = stream_header_line(StreamKind::Answer);
+        let t = ChatWidget::line_to_string(&th);
+        let a = ChatWidget::line_to_string(&ah);
+        assert!(t.contains("🧠 thinking"));
+        assert!(a.contains("🤖 codex"));
     }
 }
 

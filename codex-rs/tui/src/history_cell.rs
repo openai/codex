@@ -996,3 +996,19 @@ fn format_mcp_invocation<'a>(invocation: McpInvocation) -> Line<'a> {
     ];
     Line::from(invocation_spans)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn user_label_has_person_emoji() {
+        let cell = HistoryCell::new_user_prompt("Hello".to_string());
+        let lines = cell.plain_lines();
+        let mut header = String::new();
+        for s in &lines[0].spans {
+            header.push_str(s.content.as_ref());
+        }
+        assert!(header.contains("👤 user"));
+    }
+}
