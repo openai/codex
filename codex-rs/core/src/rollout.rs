@@ -23,8 +23,7 @@ use crate::config::Config;
 use crate::git_info::GitInfo;
 use crate::git_info::collect_git_info;
 use crate::models::ResponseItem;
-
-const SESSIONS_SUBDIR: &str = "sessions";
+use crate::session_manager::SESSIONS_SUBDIR;
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct SessionMeta {
