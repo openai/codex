@@ -18,6 +18,7 @@
 - [Quickstart](#quickstart)
   - [Installing and running Codex CLI](#installing-and-running-codex-cli)
   - [Using Codex with your ChatGPT plan](#using-codex-with-your-chatgpt-plan)
+  - [Connecting through VPS or remote](#connecting-through-vps-or-remote)
   - [Usage-based billing alternative: Use an OpenAI API key](#usage-based-billing-alternative-use-an-openai-api-key)
   - [Choosing Codex's level of autonomy](#choosing-codexs-level-of-autonomy)
     - [**1. Read/write**](#1-readwrite)
@@ -108,6 +109,17 @@ After you run `codex` select Sign in with ChatGPT. You'll need a Plus, Pro, or T
 
 If you encounter problems with the login flow, please comment on [this issue](https://github.com/openai/codex/issues/1243).
 
+### Connecting through VPS or remote
+
+If you run Codex on a remote machine (VPS/server) without a local browser, the login helper starts a server on `localhost:1455` on the remote host. To complete login in your local browser, forward that port to your machine before starting the login flow:
+
+```bash
+# From your local machine
+ssh -L 1455:localhost:1455 <user>@<remote-host>
+```
+
+Then, in that SSH session, run `codex` and select "Sign in with ChatGPT". When prompted, open the printed URL (it will be `http://localhost:1455/...`) in your local browser. The traffic will be tunneled to the remote server.
+
 ### Usage-based billing alternative: Use an OpenAI API key
 
 If you prefer to pay-as-you-go, you can still authenticate with your OpenAI API key by setting it as an environment variable:
@@ -116,7 +128,10 @@ If you prefer to pay-as-you-go, you can still authenticate with your OpenAI API 
 export OPENAI_API_KEY="your-api-key-here"
 ```
 
-> Note: This command only sets the key for your current terminal session, which we recommend. To set it for all future sessions, you can also add the `export` line to your shell's configuration file (e.g., `~/.zshrc`).
+Notes:
+
+- This command only sets the key for your current terminal session, which we recommend. To set it for all future sessions, you can also add the `export` line to your shell's configuration file (e.g., `~/.zshrc`).
+- If you have signed in with ChatGPT, Codex will default to using your ChatGPT credits. If you wish to use your API key, use the `/logout` command to clear your ChatGPT authentication.
 
 ### Choosing Codex's level of autonomy
 

@@ -44,6 +44,15 @@ DEFAULT_ISSUER = "https://auth.openai.com"
 
 EXIT_CODE_WHEN_ADDRESS_ALREADY_IN_USE = 13
 
+CA_CONTEXT = None
+try:
+    import ssl
+    import certifi as _certifi
+
+    CA_CONTEXT = ssl.create_default_context(cafile=_certifi.where())
+except Exception:
+    pass
+
 
 @dataclass
 class TokenData:
@@ -255,7 +264,8 @@ class _ApiKeyHTTPHandler(http.server.BaseHTTPRequestHandler):
                 data=exchange_data,
                 method="POST",
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
-            )
+            ),
+            context=CA_CONTEXT,
         ) as resp:
             exchange_payload = json.loads(resp.read().decode())
             exchanged_access_token = exchange_payload["access_token"]
@@ -326,7 +336,8 @@ class _ApiKeyHTTPHandler(http.server.BaseHTTPRequestHandler):
                 data=data,
                 method="POST",
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
-            )
+            ),
+            context=CA_CONTEXT,
         ) as resp:
             payload = json.loads(resp.read().decode())
 
@@ -506,7 +517,7 @@ def maybe_redeem_credits(
                 headers={"Content-Type": "application/json"},
             )
 
-            with urllib.request.urlopen(req) as resp:
+            with urllib.request.urlopen(req, context=CA_CONTEXT) as resp:
                 refresh_data = json.loads(resp.read().decode())
                 new_id_token = refresh_data.get("id_token")
                 new_id_claims = parse_id_token_claims(new_id_token or "")
@@ -596,7 +607,7 @@ def maybe_redeem_credits(
             headers={"Content-Type": "application/json"},
         )
 
-        with urllib.request.urlopen(req) as resp:
+        with urllib.request.urlopen(req, context=CA_CONTEXT) as resp:
             redeem_data = json.loads(resp.read().decode())
 
         granted = redeem_data.get("granted_chatgpt_subscriber_api_credits", 0)
