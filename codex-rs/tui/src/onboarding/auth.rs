@@ -186,16 +186,11 @@ impl AuthModeWidget {
         let mut lines = vec![Line::from(spans), Line::from("")];
 
         if let SignInState::ChatGptContinueInBrowser(state) = &self.sign_in_state {
-            if let Some(url) = state.login_child.as_ref().and_then(|child| {
-                child.stderr.lock().ok().and_then(|b| {
-                    String::from_utf8(b.clone()).ok().and_then(|s| {
-                        s.split_whitespace()
-                            .filter(|part| part.starts_with("http"))
-                            .next_back()
-                            .map(|s| s.to_string())
-                    })
-                })
-            }) {
+            if let Some(url) = state
+                .login_child
+                .as_ref()
+                .and_then(|child| child.get_login_url())
+            {
                 lines.push(Line::from("  Open the following link to authenticate:"));
                 lines.push(Line::from(vec![
                     Span::raw("  "),

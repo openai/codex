@@ -262,6 +262,26 @@ pub struct SpawnedLogin {
     pub stderr: Arc<Mutex<Vec<u8>>>,
 }
 
+impl SpawnedLogin {
+    /// Returns the login URL, if one has been emitted by the login subprocess.
+    ///
+    /// The Python helper prints the URL to stderr; we capture it and extract
+    /// the last whitespace-separated token that starts with "http".
+    pub fn get_login_url(&self) -> Option<String> {
+        self.stderr
+            .lock()
+            .ok()
+            .and_then(|buffer| String::from_utf8(buffer.clone()).ok())
+            .and_then(|output| {
+                output
+                    .split_whitespace()
+                    .filter(|part| part.starts_with("http"))
+                    .next_back()
+                    .map(|s| s.to_string())
+            })
+    }
+}
+
 // Helpers for streaming child output into shared buffers
 struct AppendWriter {
     buf: Arc<Mutex<Vec<u8>>>,
