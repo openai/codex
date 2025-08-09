@@ -1,18 +1,14 @@
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use codex_core::Codex;
 use codex_core::codex_wrapper::init_codex;
 use codex_core::config::Config as CodexConfig;
 use codex_core::config::ConfigOverrides;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::SessionConfiguredEvent;
 use mcp_types::RequestId;
-use tokio::sync::Mutex;
-use uuid::Uuid;
 
-use crate::conversation_loop::run_conversation_loop;
+use crate::conversation_loop::Conversation;
 use crate::json_to_toml::json_to_toml;
 use crate::mcp_protocol::ConversationCreateArgs;
 use crate::mcp_protocol::ConversationCreateResult;
@@ -123,24 +119,17 @@ pub(crate) async fn handle_create_conversation(
     let session_id = codex_conversation.session_id;
     let codex_arc = Arc::new(codex_conversation.codex);
 
-    // Store session for future calls
-    insert_session(
-        session_id,
-        codex_arc.clone(),
-        message_processor.session_map(),
-    )
-    .await;
-    // Run the conversation loop in the background so this request can return immediately.
+    // Construct conversation and start its loop, store it, then reply with id and model
     let outgoing = message_processor.outgoing();
-    let spawn_id = id.clone();
-    tokio::spawn(async move {
-        run_conversation_loop(codex_arc.clone(), outgoing, spawn_id).await;
-    });
-
-    // Reply with the new conversation id and effective model
+    let conversation = Conversation::new(codex_arc.clone(), outgoing, id.clone(), session_id);
+    let conv_map = message_processor.conversation_map();
+    {
+        let mut guard = conv_map.lock().await;
+        guard.insert(session_id, conversation);
+    }
     message_processor
         .send_response_with_optional_error(
-            id,
+            id.clone(),
             Some(ToolCallResponseResult::ConversationCreate(
                 ConversationCreateResult::Ok {
                     conversation_id: ConversationId(session_id),
@@ -150,13 +139,4 @@ pub(crate) async fn handle_create_conversation(
             Some(false),
         )
         .await;
-}
-
-async fn insert_session(
-    session_id: Uuid,
-    codex: Arc<Codex>,
-    session_map: Arc<Mutex<HashMap<Uuid, Arc<Codex>>>>,
-) {
-    let mut guard = session_map.lock().await;
-    guard.insert(session_id, codex);
 }

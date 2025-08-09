@@ -1,8 +1,6 @@
 #![cfg(unix)]
 // Support code lives in the `mcp_test_support` crate under tests/common.
 
-use std::path::Path;
-
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_mcp_server::CodexToolCallParam;
 use mcp_types::JSONRPCResponse;
@@ -12,6 +10,7 @@ use tempfile::TempDir;
 use tokio::time::timeout;
 
 use mcp_test_support::McpProcess;
+use mcp_test_support::create_config_toml;
 use mcp_test_support::create_mock_chat_completions_server;
 use mcp_test_support::create_shell_sse_response;
 
@@ -66,7 +65,7 @@ async fn shell_command_interruption() -> anyhow::Result<()> {
 
     // Create Codex configuration
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), server.uri())?;
+    create_config_toml(codex_home.path(), &server.uri())?;
     let mut mcp_process = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp_process.initialize()).await??;
 
@@ -149,29 +148,4 @@ async fn shell_command_interruption() -> anyhow::Result<()> {
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-fn create_config_toml(codex_home: &Path, server_uri: String) -> std::io::Result<()> {
-    let config_toml = codex_home.join("config.toml");
-    std::fs::write(
-        config_toml,
-        format!(
-            r#"
-model = "mock-model"
-approval_policy = "never"
-sandbox_mode = "danger-full-access"
-
-model_provider = "mock_provider"
-
-[model_providers.mock_provider]
-name = "Mock provider for test"
-base_url = "{server_uri}/v1"
-wire_api = "chat"
-request_max_retries = 0
-stream_max_retries = 0
-"#
-        ),
-    )
-}
+// Helpers are provided by tests/common
