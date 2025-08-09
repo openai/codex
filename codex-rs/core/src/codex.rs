@@ -291,6 +291,12 @@ impl TurnContext {
             .map(PathBuf::from)
             .map_or_else(|| self.cwd.clone(), |p| self.cwd.join(p))
     }
+
+    pub fn end_session_span(&self) {
+        if let Some(span) = self.session_span.lock().unwrap().take() {
+            drop(span);
+        }
+    }
 }
 
 /// Configure the model session.

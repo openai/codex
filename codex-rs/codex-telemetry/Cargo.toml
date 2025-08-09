@@ -1,0 +1,48 @@
+[package]
+name = "codex-telemetry"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+# Compile-time gate for telemetry; disabled by default.
+# Downstream crates can enable via `features = ["otel"]`.
+default = []
+otel = [
+  "dep:tracing-subscriber",
+  "dep:tracing-opentelemetry",
+  "dep:opentelemetry",
+  "dep:opentelemetry_sdk",
+  "dep:opentelemetry-otlp",
+  "dep:opentelemetry-proto",
+  "dep:prost",
+  "dep:tokio",
+  "dep:tonic",
+  "dep:futures-util",
+  "dep:serde",
+  "dep:serde_json",
+  "dep:hex",
+  "dep:chrono",
+  "dep:rand",
+]
+
+[dependencies]
+# Optional to keep build lean unless feature enabled
+tracing = { version = "0.1" }
+tracing-subscriber = { version = "0.3", features = ["registry", "fmt"], optional = true }
+tracing-opentelemetry = { version = "0.27", optional = true }
+opentelemetry = { version = "0.26", features = ["trace"], optional = true }
+opentelemetry_sdk = { version = "0.26", features = ["trace", "rt-tokio"], optional = true }
+opentelemetry-otlp = { version = "0.26", features = ["tonic", "http-proto"], optional = true }
+opentelemetry-proto = { version = "0.26", features = ["gen-tonic"], optional = true }
+prost = { version = "0.13", optional = true }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"], optional = true }
+tonic = { version = "0.12", optional = true }
+futures-util = { version = "0.3", optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+hex = { version = "0.4", optional = true }
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"], optional = true }
+rand = { version = "0.8", optional = true }
+
+# Always-available deps (small)
+thiserror = "1" 

@@ -23,6 +23,7 @@ members = [
     "responses-api-proxy",
     "tui",
     "utils/readiness",
+    "codex-telemetry",
 ]
 resolver = "2"
 
