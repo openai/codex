@@ -252,7 +252,15 @@ impl ChatWidget<'_> {
         self.bottom_pane.handle_paste(text);
     }
 
+    fn flush_active_history_cell(&mut self) {
+        if let Some(cell) = self.active_history_cell.take() {
+            self.app_event_tx
+                .send(AppEvent::InsertHistory(cell.plain_lines()));
+        }
+    }
+
     fn add_to_history(&mut self, cell: HistoryCell) {
+        self.flush_active_history_cell();
         self.app_event_tx
             .send(AppEvent::InsertHistory(cell.plain_lines()));
     }
@@ -444,6 +452,7 @@ impl ChatWidget<'_> {
                 cwd,
             }) => {
                 self.finalize_active_stream();
+                self.flush_active_history_cell();
                 // Ensure the status indicator is visible while the command runs.
                 self.bottom_pane
                     .update_status_text("running command".to_string());
@@ -482,16 +491,20 @@ impl ChatWidget<'_> {
                 stderr,
             }) => {
                 // Compute summary before moving stdout into the history cell.
-                let cmd = self.running_commands.remove(&call_id);
-                self.active_history_cell = None;
-                self.add_to_history(HistoryCell::new_completed_exec_command(
-                    cmd.map(|cmd| cmd.command).unwrap_or_else(|| vec![call_id]),
-                    CommandOutput {
-                        exit_code,
-                        stdout,
-                        stderr,
-                    },
-                ));
+                let _ = self.running_commands.remove(&call_id);
+                let output = CommandOutput {
+                    exit_code,
+                    stdout,
+                    stderr,
+                };
+                if let Some(cell) = self.active_history_cell.take() {
+                    self.active_history_cell = Some(cell.with_exec_output(output));
+                } else {
+                    self.active_history_cell = Some(HistoryCell::new_completed_exec_command(
+                        vec![call_id],
+                        output,
+                    ));
+                }
             }
             EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
                 call_id: _,
