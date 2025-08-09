@@ -182,7 +182,11 @@ jobs:
             --release-version "${{ steps.release_name.outputs.name }}" \
             --tmp "${TMP_DIR}"
           mkdir -p dist/npm
-          (cd "$TMP_DIR" && zip -r "${GITHUB_WORKSPACE}/dist/npm/codex-npm-${{ steps.release_name.outputs.name }}.zip" .)
+          # Produce an npm-ready tarball using `npm pack` and store it in dist/npm.
+          # We then rename it to a stable name used by our publishing script.
+          (cd "$TMP_DIR" && npm pack --pack-destination "${GITHUB_WORKSPACE}/dist/npm")
+          mv "${GITHUB_WORKSPACE}"/dist/npm/*.tgz \
+             "${GITHUB_WORKSPACE}/dist/npm/codex-npm-${{ steps.release_name.outputs.name }}.tgz"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
