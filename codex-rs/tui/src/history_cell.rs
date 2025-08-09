@@ -35,6 +35,7 @@ use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::PathBuf;
 use std::time::Duration;
+use textwrap::Options;
 use tracing::error;
 
 pub(crate) struct CommandOutput {
@@ -253,7 +254,15 @@ impl HistoryCell {
     pub(crate) fn new_user_prompt(message: String) -> Self {
         let mut lines: Vec<Line<'static>> = Vec::new();
         lines.push(Line::from("user".cyan().bold()));
-        lines.extend(message.lines().map(|l| Line::from(l.to_string())));
+        let width = 80;
+        lines.extend(
+            textwrap::wrap(
+                &message,
+                Options::new(width).wrap_algorithm(textwrap::WrapAlgorithm::FirstFit),
+            )
+            .iter()
+            .map(|l| Line::from(l.to_string())),
+        );
         lines.push(Line::from(""));
 
         HistoryCell::UserPrompt {
