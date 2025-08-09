@@ -367,11 +367,7 @@ Key flags: `--model/-m`, `--ask-for-approval/-a`.
 
 ## Memory & project docs
 
-You can give Codex extra instructions and guidance using `AGENTS.md` files. Codex looks for `AGENTS.md` files in the following places, and merges them top-down:
-
-1. `~/.codex/AGENTS.md` - personal global guidance
-2. `AGENTS.md` at repo root - shared project notes
-3. `AGENTS.md` in the current working directory - sub-folder/feature specifics
+You can provide Codex with additional instructions by adding an `AGENTS.md` file. Codex first checks your current working directory, and if no file is found, it searches upward through parent directories until it reaches the root of your Git repository.
 
 ---
 
