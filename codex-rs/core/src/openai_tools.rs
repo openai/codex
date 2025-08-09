@@ -1,5 +1,6 @@
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::Value as JsonValue;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -296,7 +297,11 @@ pub(crate) fn mcp_tool_to_openai_tool(
         input_schema.properties = Some(serde_json::Value::Object(serde_json::Map::new()));
     }
 
-    let serialized_input_schema = serde_json::to_value(input_schema)?;
+    // Serialize MCP schema, sanitize unsupported variants, then deserialize
+    // into our internal JsonSchema representation. Notably maps
+    // JSON Schema type "integer" -> "number" to satisfy OpenAI tool schema.
+    let mut serialized_input_schema = serde_json::to_value(input_schema)?;
+    sanitize_schema_types(&mut serialized_input_schema);
     let input_schema = serde_json::from_value::<JsonSchema>(serialized_input_schema)?;
 
     Ok(ResponsesApiTool {
@@ -305,6 +310,47 @@ pub(crate) fn mcp_tool_to_openai_tool(
         strict: false,
         parameters: input_schema,
     })
+}
+
+/// Recursively walk a JSON Schema JSON value and map unsupported type variants
+/// to supported ones. Currently converts `"integer"` to `"number"` anywhere
+/// under the schema so that deserialization into `JsonSchema` succeeds.
+fn sanitize_schema_types(value: &mut JsonValue) {
+    match value {
+        JsonValue::Object(map) => {
+            if let Some(t) = map.get_mut("type") {
+                match t {
+                    JsonValue::String(s) => {
+                        if s == "integer" {
+                            *t = JsonValue::String("number".to_string());
+                        }
+                    }
+                    JsonValue::Array(arr) => {
+                        for v in arr.iter_mut() {
+                            if let JsonValue::String(s) = v {
+                                if s == "integer" {
+                                    *v = JsonValue::String("number".to_string());
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            // Recurse into all values so nested schemas (properties, items, anyOf, etc.)
+            // are sanitized as well.
+            for (_k, v) in map.iter_mut() {
+                sanitize_schema_types(v);
+            }
+        }
+        JsonValue::Array(arr) => {
+            for v in arr.iter_mut() {
+                sanitize_schema_types(v);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Returns a list of OpenAiTools based on the provided config and MCP tools.
