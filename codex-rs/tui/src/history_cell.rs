@@ -133,7 +133,7 @@ pub(crate) enum HistoryCell {
     PatchApplyResult { view: TextBlock },
 }
 
-const TOOL_CALL_MAX_LINES: usize = 3;
+const TOOL_CALL_MAX_LINES: usize = 5;
 
 fn title_case(s: &str) -> String {
     if s.is_empty() {
@@ -192,6 +192,48 @@ impl HistoryCell {
             .line_count(width)
             .try_into()
             .unwrap_or(0)
+    }
+
+    fn output_lines(src: &str) -> Vec<Line<'static>> {
+        let lines: Vec<&str> = src.lines().collect();
+        let total = lines.len();
+        let limit = TOOL_CALL_MAX_LINES;
+
+        let mut out = Vec::new();
+
+        let head_end = total.min(limit);
+        for (i, raw) in lines[..head_end].iter().enumerate() {
+            let mut line = ansi_escape_line(raw);
+            let prefix = if i == 0 { "  ⎿ " } else { "    " };
+            line.spans.insert(0, prefix.into());
+            line.spans.iter_mut().for_each(|span| {
+                span.style = span.style.add_modifier(Modifier::DIM);
+            });
+            out.push(line);
+        }
+
+        // If we will ellipsize less than the limit, just show it.
+        let show_ellipsis = total > 2 * limit;
+        if show_ellipsis {
+            let omitted = total - 2 * limit;
+            out.push(Line::from(format!("… +{omitted} lines")));
+        }
+
+        let tail_start = if show_ellipsis {
+            total - limit
+        } else {
+            head_end
+        };
+        for raw in lines[tail_start..].iter() {
+            let mut line = ansi_escape_line(raw);
+            line.spans.insert(0, "    ".into());
+            line.spans.iter_mut().for_each(|span| {
+                span.style = span.style.add_modifier(Modifier::DIM);
+            });
+            out.push(line);
+        }
+
+        out
     }
 
     pub(crate) fn new_session_info(
@@ -308,27 +350,7 @@ impl HistoryCell {
         }
 
         let src = if exit_code == 0 { stdout } else { stderr };
-
-        let mut lines_iter = src.lines();
-        for (idx, raw) in lines_iter.by_ref().take(TOOL_CALL_MAX_LINES).enumerate() {
-            let mut line = ansi_escape_line(raw);
-            let prefix = if idx == 0 { "  ⎿ " } else { "    " };
-            line.spans.insert(0, prefix.into());
-            line.spans.iter_mut().for_each(|span| {
-                span.style = span.style.add_modifier(Modifier::DIM);
-            });
-            lines.push(line);
-        }
-        let remaining = lines_iter.count();
-        if remaining > 0 {
-            let mut more = Line::from(format!("... +{remaining} lines"));
-            // Continuation/ellipsis is treated as a subsequent line for prefixing
-            more.spans.insert(0, "    ".into());
-            more.spans.iter_mut().for_each(|span| {
-                span.style = span.style.add_modifier(Modifier::DIM);
-            });
-            lines.push(more);
-        }
+        lines.extend(Self::output_lines(&src));
         lines.push(Line::from(""));
 
         HistoryCell::CompletedExecCommand {
@@ -813,17 +835,7 @@ impl HistoryCell {
         lines.push(Line::from("✘ Failed to apply patch".magenta().bold()));
 
         if !stderr.trim().is_empty() {
-            let mut iter = stderr.lines();
-            for (i, raw) in iter.by_ref().take(TOOL_CALL_MAX_LINES).enumerate() {
-                let prefix = if i == 0 { "  ⎿ " } else { "    " };
-                let s = format!("{prefix}{raw}");
-                lines.push(ansi_escape_line(&s).dim());
-            }
-            let remaining = iter.count();
-            if remaining > 0 {
-                lines.push(Line::from(""));
-                lines.push(Line::from(format!("... +{remaining} lines")).dim());
-            }
+            lines.extend(Self::output_lines(&stderr));
         }
 
         lines.push(Line::from(""));
