@@ -237,6 +237,22 @@ impl App<'_> {
                             }
                         },
                         KeyEvent {
+                            code: KeyCode::Esc,
+                            kind: KeyEventKind::Press,
+                            ..
+                        } => match &mut self.app_state {
+                            AppState::Chat { widget } => {
+                                if widget.is_task_running() {
+                                    widget.on_ctrl_c();
+                                } else {
+                                    self.dispatch_key_event(key_event);
+                                }
+                            }
+                            AppState::Onboarding { .. } => {
+                                self.dispatch_key_event(key_event);
+                            }
+                        },
+                        KeyEvent {
                             code: KeyCode::Char('z'),
                             modifiers: crossterm::event::KeyModifiers::CONTROL,
                             kind: KeyEventKind::Press,

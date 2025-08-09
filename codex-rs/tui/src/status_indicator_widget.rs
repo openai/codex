@@ -231,10 +231,20 @@ impl WidgetRef for StatusIndicatorWidget {
         spans.extend(animated_spans);
         // Space between header and bracket block
         spans.push(Span::raw(" "));
-        // Non-animated, dim bracket content, with only "Ctrl c" bold
+        // Non-animated, dim bracket content, with keys bold
         let bracket_prefix = format!("({elapsed}s • ");
         spans.push(Span::styled(
             bracket_prefix,
+            Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
+        ));
+        spans.push(Span::styled(
+            "Esc",
+            Style::default()
+                .fg(Color::Gray)
+                .add_modifier(Modifier::DIM | Modifier::BOLD),
+        ));
+        spans.push(Span::styled(
+            " or ",
             Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
         ));
         spans.push(Span::styled(
