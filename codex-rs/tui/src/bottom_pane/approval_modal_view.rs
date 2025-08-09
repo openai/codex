@@ -100,6 +100,7 @@ mod tests {
             app_event_tx: AppEventSender::new(tx_raw2),
             has_input_focus: true,
             enhanced_keys_supported: false,
+            allow_input_while_running: false,
         });
         assert_eq!(CancellationEvent::Handled, view.on_ctrl_c(&mut pane));
         assert!(view.queue.is_empty());

@@ -79,6 +79,9 @@ pub(crate) struct ChatWidget<'a> {
     current_stream: Option<StreamKind>,
     stream_header_emitted: bool,
     live_max_rows: u16,
+    allow_input_while_running: bool,
+    queued_count: usize,
+    queued_messages: Vec<String>,
 }
 
 struct UserMessage {
@@ -110,6 +113,7 @@ fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Optio
 }
 
 impl ChatWidget<'_> {
+    const MAX_QUEUED_DISPLAY: usize = 3;
     fn interrupt_running_task(&mut self) {
         if self.bottom_pane.is_task_running() {
             self.active_history_cell = None;
@@ -146,6 +150,7 @@ impl ChatWidget<'_> {
             StreamKind::Reasoning => RLine::from("thinking".magenta().italic()),
             StreamKind::Answer => RLine::from("codex".magenta().bold()),
         };
+        // Insert only the stream header; spacing is handled by overlays.
         self.app_event_tx
             .send(AppEvent::InsertHistory(vec![header]));
         self.stream_header_emitted = true;
@@ -207,6 +212,7 @@ impl ChatWidget<'_> {
                 app_event_tx,
                 has_input_focus: true,
                 enhanced_keys_supported,
+                allow_input_while_running: true,
             }),
             active_history_cell: None,
             config,
@@ -224,6 +230,9 @@ impl ChatWidget<'_> {
             current_stream: None,
             stream_header_emitted: false,
             live_max_rows: 3,
+            allow_input_while_running: true,
+            queued_count: 0,
+            queued_messages: Vec::new(),
         }
     }
 
@@ -242,7 +251,17 @@ impl ChatWidget<'_> {
 
         match self.bottom_pane.handle_key_event(key_event) {
             InputResult::Submitted(text) => {
+                let is_running = self.bottom_pane.is_task_running();
                 self.submit_user_message(text.into());
+                if self.allow_input_while_running && is_running {
+                    self.queued_count = self.queued_count.saturating_add(1);
+                    self.bottom_pane.update_status_text(format!(
+                        "waiting for model — queued {}",
+                        self.queued_count
+                    ));
+                    // Update queued list overlay
+                    self.update_queued_list_overlay();
+                }
             }
             InputResult::None => {}
         }
@@ -273,25 +292,84 @@ impl ChatWidget<'_> {
             return;
         }
 
-        self.codex_op_tx
-            .send(Op::UserInput { items })
-            .unwrap_or_else(|e| {
-                tracing::error!("failed to send message: {e}");
-            });
+        let is_running_now = self.bottom_pane.is_task_running() && self.allow_input_while_running;
+        if !is_running_now {
+            self.codex_op_tx
+                .send(Op::UserInput { items })
+                .unwrap_or_else(|e| {
+                    tracing::error!("failed to send message: {e}");
+                });
+        }
 
-        // Persist the text to cross-session message history.
+        // Persist the text to cross-session message history unless we're
+        // queueing while a task is running (in which case we do not append to
+        // the visible conversation log immediately to avoid clutter).
+        let is_running = self.bottom_pane.is_task_running();
         if !text.is_empty() {
             self.codex_op_tx
                 .send(Op::AddToHistory { text: text.clone() })
                 .unwrap_or_else(|e| {
                     tracing::error!("failed to send AddHistory op: {e}");
                 });
-        }
 
-        // Only show text portion in conversation history for now.
-        if !text.is_empty() {
-            self.add_to_history(HistoryCell::new_user_prompt(text.clone()));
+            if !(self.allow_input_while_running && is_running) {
+                // Only show text in history immediately when not queueing.
+                self.add_to_history(HistoryCell::new_user_prompt(text.clone()));
+            } else {
+                // Queue locally for overlay display.
+                self.queued_messages.push(text.clone());
+            }
         }
+    }
+
+    fn update_queued_list_overlay(&mut self) {
+        if self.queued_messages.is_empty() {
+            self.bottom_pane.clear_queued_list();
+            return;
+        }
+        use ratatui::style::{Color, Modifier, Style};
+        use ratatui::text::{Line as RtLine, Span as RtSpan};
+
+        let mut rows: Vec<RtLine<'static>> = Vec::new();
+        let total = self.queued_messages.len();
+        let display = total.min(Self::MAX_QUEUED_DISPLAY);
+        let hidden = total.saturating_sub(display);
+
+        for (idx, msg) in self.queued_messages.iter().take(display).enumerate() {
+            let mut spans: Vec<RtSpan<'static>> = Vec::new();
+            let prefix = if idx == 0 { "  ⎿ " } else { "    " };
+            spans.push(RtSpan::styled(
+                prefix.to_string(),
+                Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
+            ));
+            // Hourglass icon before each queued message
+            spans.push(RtSpan::styled(
+                "⏳ ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ));
+            spans.push(RtSpan::styled(
+                msg.clone(),
+                Style::default().fg(Color::Gray),
+            ));
+            rows.push(RtLine::from(spans));
+        }
+        if hidden > 0 {
+            rows.push(RtLine::from(vec![
+                RtSpan::styled(
+                    "    ",
+                    Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
+                ),
+                RtSpan::styled(
+                    format!("… +{} more", hidden),
+                    Style::default()
+                        .fg(Color::Gray)
+                        .add_modifier(Modifier::ITALIC),
+                ),
+            ]));
+        }
+        self.bottom_pane.set_queued_list_rows(rows);
     }
 
     pub(crate) fn handle_codex_event(&mut self, event: Event) {
@@ -352,18 +430,57 @@ impl ChatWidget<'_> {
                 self.request_redraw();
             }
             EventMsg::TaskStarted => {
+                // Ensure any active streamed content is finalized so there's a
+                // blank line separating it from the "Working" overlay.
+                // Do not enable the top spacer here; only enable it when
+                // a stream actually begins so we don't add extra blank lines
+                // while merely waiting for the model.
+                self.finalize_active_stream();
                 self.bottom_pane.clear_ctrl_c_quit_hint();
                 self.bottom_pane.set_task_running(true);
-                // Replace composer with single-line spinner while waiting.
-                self.bottom_pane
-                    .update_status_text("waiting for model".to_string());
+                // Show status and keep queued overlay visible while remaining items exist.
+                let remaining = self.queued_messages.len();
+                if remaining > 0 {
+                    self.bottom_pane
+                        .update_status_text(format!("waiting for model — queued {}", remaining));
+                    self.update_queued_list_overlay();
+                } else {
+                    self.bottom_pane
+                        .update_status_text("waiting for model".to_string());
+                }
                 self.request_redraw();
             }
             EventMsg::TaskComplete(TaskCompleteEvent {
                 last_agent_message: _,
             }) => {
                 self.bottom_pane.set_task_running(false);
-                self.bottom_pane.clear_live_ring();
+                if !self.queued_messages.is_empty() {
+                    // Pop next message and send as a single turn.
+                    let next_msg = self.queued_messages.remove(0);
+                    if !next_msg.is_empty() {
+                        self.add_to_history(HistoryCell::new_user_prompt(next_msg.clone()));
+                        self.codex_op_tx
+                            .send(Op::UserInput {
+                                items: vec![InputItem::Text { text: next_msg }],
+                            })
+                            .unwrap_or_else(|e| {
+                                tracing::error!("failed to send next queued message: {e}")
+                            });
+                    }
+                    // Update overlay for remaining items.
+                    let remaining = self.queued_messages.len();
+                    if remaining > 0 {
+                        self.update_queued_list_overlay();
+                        self.bottom_pane.update_status_text(format!(
+                            "waiting for model — queued {}",
+                            remaining
+                        ));
+                    } else {
+                        self.bottom_pane.clear_queued_list();
+                    }
+                } else {
+                    self.bottom_pane.clear_live_ring();
+                }
                 self.request_redraw();
             }
             EventMsg::TokenCount(token_usage) => {
@@ -376,6 +493,9 @@ impl ChatWidget<'_> {
                 );
             }
             EventMsg::Error(ErrorEvent { message }) => {
+                // Ensure any active stream is finalized so there's a blank line
+                // separating streamed content from the error message (e.g. Turn interrupted).
+                self.finalize_active_stream();
                 self.add_to_history(HistoryCell::new_error_event(message.clone()));
                 self.bottom_pane.set_task_running(false);
                 self.bottom_pane.clear_live_ring();

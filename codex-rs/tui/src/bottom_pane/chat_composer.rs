@@ -61,6 +61,8 @@ pub(crate) struct ChatComposer {
     pending_pastes: Vec<(String, String)>,
     token_usage_info: Option<TokenUsageInfo>,
     has_focus: bool,
+    /// True when Enter will queue instead of send (task running).
+    queue_mode: bool,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -91,6 +93,7 @@ impl ChatComposer {
             pending_pastes: Vec::new(),
             token_usage_info: None,
             has_focus: has_input_focus,
+            queue_mode: false,
         }
     }
 
@@ -649,6 +652,10 @@ impl ChatComposer {
     fn set_has_focus(&mut self, has_focus: bool) {
         self.has_focus = has_focus;
     }
+
+    pub(crate) fn set_queue_mode(&mut self, enabled: bool) {
+        self.queue_mode = enabled;
+    }
 }
 
 impl WidgetRef for &ChatComposer {
@@ -685,7 +692,11 @@ impl WidgetRef for &ChatComposer {
                     vec![
                         Span::from(" "),
                         "⏎".set_style(key_hint_style),
-                        Span::from(" send   "),
+                        Span::from(if self.queue_mode {
+                            " queue   "
+                        } else {
+                            " send   "
+                        }),
                         newline_hint_key.set_style(key_hint_style),
                         Span::from(" newline   "),
                         "Ctrl+C".set_style(key_hint_style),

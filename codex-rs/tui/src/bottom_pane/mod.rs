@@ -20,6 +20,7 @@ mod command_popup;
 mod file_search_popup;
 mod live_ring_widget;
 mod popup_consts;
+mod queued_list_widget;
 mod scroll_state;
 mod selection_popup_common;
 mod status_indicator_view;
@@ -61,15 +62,24 @@ pub(crate) struct BottomPane<'a> {
     /// container used during development before we wire it to ChatWidget events.
     live_ring: Option<live_ring_widget::LiveRingWidget>,
 
+    /// Optional list of queued user messages displayed between the working
+    /// status and the composer while a task is running.
+    queued_list: Option<queued_list_widget::QueuedListWidget>,
+
     /// True if the active view is the StatusIndicatorView that replaces the
     /// composer during a running task.
     status_view_active: bool,
+
+    /// When true, keep the composer interactive while a task is running and
+    /// show status as an overlay instead of replacing the composer.
+    allow_input_while_running: bool,
 }
 
 pub(crate) struct BottomPaneParams {
     pub(crate) app_event_tx: AppEventSender,
     pub(crate) has_input_focus: bool,
     pub(crate) enhanced_keys_supported: bool,
+    pub(crate) allow_input_while_running: bool,
 }
 
 impl BottomPane<'_> {
@@ -89,7 +99,9 @@ impl BottomPane<'_> {
             ctrl_c_quit_hint: false,
             live_status: None,
             live_ring: None,
+            queued_list: None,
             status_view_active: false,
+            allow_input_while_running: params.allow_input_while_running,
         }
     }
 
@@ -99,6 +111,10 @@ impl BottomPane<'_> {
             .as_ref()
             .map(|s| s.desired_height(width))
             .unwrap_or(0);
+        // Optional spacer above the first overlay while streaming and the
+        // No extra spacer above overlay; separation is handled by the live ring
+        // placeholder injected when streaming begins.
+        let overlay_status_pad = 0;
         let ring_h = self
             .live_ring
             .as_ref()
@@ -117,8 +133,38 @@ impl BottomPane<'_> {
             self.composer.desired_height(width)
         };
 
+        let queued_h = self
+            .queued_list
+            .as_ref()
+            .map(|q| q.desired_height(width))
+            .unwrap_or(0);
+
+        // Spacer line below overlay (status + queued) before the composer when allowed
+        let overlay_status_pad_bottom = if self.allow_input_while_running
+            && self.active_view.is_none()
+            && (self.live_status.is_some() || self.queued_list.is_some())
+        {
+            1
+        } else {
+            0
+        };
+
         overlay_status_h
+            .saturating_add(overlay_status_pad)
             .saturating_add(ring_h)
+            // Spacer between ring and overlay status when both are visible
+            .saturating_add(
+                if self.live_ring.is_some()
+                    && self.live_status.is_some()
+                    && self.active_view.is_none()
+                {
+                    1
+                } else {
+                    0
+                },
+            )
+            .saturating_add(queued_h)
+            .saturating_add(overlay_status_pad_bottom)
             .saturating_add(view_height)
             .saturating_add(Self::BOTTOM_PAD_LINES)
     }
@@ -129,10 +175,76 @@ impl BottomPane<'_> {
         // In these states the textarea is not interactable, so we should not
         // show its caret.
         if self.active_view.is_some() {
-            None
-        } else {
-            self.composer.cursor_pos(area)
+            return None;
         }
+
+        // Mirror render_ref overlay layout to offset the cursor Y position by
+        // the height of any live overlays rendered above the composer.
+        let mut y_offset = 0u16;
+        // No top spacer to mirror.
+        if let Some(ring) = &self.live_ring {
+            let live_h = ring.desired_height(area.width).min(area.height);
+            if live_h > 0 {
+                y_offset = live_h;
+            }
+        }
+        if self.live_ring.is_some() && self.status_view_active && y_offset < area.height {
+            // Spacer line between live ring and status view
+            y_offset = y_offset.saturating_add(1);
+        }
+        // Spacer between live ring and overlay status (when no modal view)
+        if self.live_ring.is_some()
+            && self.live_status.is_some()
+            && self.active_view.is_none()
+            && y_offset < area.height
+        {
+            y_offset = y_offset.saturating_add(1);
+        }
+        if let Some(status) = &self.live_status {
+            // No additional spacer required.
+            let live_h = status
+                .desired_height(area.width)
+                .min(area.height.saturating_sub(y_offset));
+            if live_h > 0 {
+                y_offset = y_offset.saturating_add(live_h);
+            }
+        }
+
+        if let Some(q) = &self.queued_list {
+            let live_h = q
+                .desired_height(area.width)
+                .min(area.height.saturating_sub(y_offset));
+            if live_h > 0 {
+                y_offset = y_offset.saturating_add(live_h);
+            }
+        }
+
+        // Account for spacer between overlay and composer in cursor calculations.
+        if self.allow_input_while_running
+            && self.active_view.is_none()
+            && (self.live_status.is_some() || self.queued_list.is_some())
+        {
+            y_offset = y_offset.saturating_add(1);
+        }
+
+        // Compute composer rect after overlays, then translate the cursor pos.
+        let avail = area.height.saturating_sub(y_offset);
+        if avail == 0 {
+            return None;
+        }
+        let pad = BottomPane::BOTTOM_PAD_LINES.min(avail.saturating_sub(1));
+        let composer_rect = Rect {
+            x: area.x,
+            y: area.y + y_offset,
+            width: area.width,
+            height: avail - pad,
+        };
+
+        let (x, y) = match self.composer.cursor_pos(composer_rect) {
+            Some((x, y)) => (x, y),
+            None => return None,
+        };
+        Some((x, y))
     }
 
     /// Forward a key event to the active view or the composer.
@@ -200,36 +312,37 @@ impl BottomPane<'_> {
     /// the StatusIndicatorView so the input pane shows a single-line status
     /// like: `▌ Working waiting for model`.
     pub(crate) fn update_status_text(&mut self, text: String) {
-        let mut handled_by_view = false;
-        if let Some(view) = self.active_view.as_mut() {
-            if matches!(
-                view.update_status_text(text.clone()),
-                bottom_pane_view::ConditionalUpdate::NeedsRedraw
-            ) {
-                handled_by_view = true;
-            }
-        } else {
-            let mut v = StatusIndicatorView::new(self.app_event_tx.clone());
-            v.update_text(text.clone());
-            self.active_view = Some(Box::new(v));
-            self.status_view_active = true;
-            handled_by_view = true;
-        }
-
-        // Fallback: if the current active view did not consume status updates
-        // and no modal view is active, present an overlay above the composer.
-        // If a modal is active, do NOT render the overlay to avoid drawing
-        // over the dialog.
-        if !handled_by_view && self.active_view.is_none() {
+        // If we allow input while running and no modal view is active, prefer
+        // the overlay status above the composer. This keeps the composer
+        // interactive. Otherwise, fall back to the status view that replaces
+        // the composer.
+        if self.allow_input_while_running && self.active_view.is_none() {
             if self.live_status.is_none() {
                 self.live_status = Some(StatusIndicatorWidget::new(self.app_event_tx.clone()));
             }
             if let Some(status) = &mut self.live_status {
                 status.update_text(text);
             }
-        } else if !handled_by_view {
-            // Ensure any previous overlay is cleared when a modal becomes active.
-            self.live_status = None;
+        } else {
+            let mut handled_by_view = false;
+            if let Some(view) = self.active_view.as_mut() {
+                if matches!(
+                    view.update_status_text(text.clone()),
+                    bottom_pane_view::ConditionalUpdate::NeedsRedraw
+                ) {
+                    handled_by_view = true;
+                }
+            } else {
+                let mut v = StatusIndicatorView::new(self.app_event_tx.clone());
+                v.update_text(text.clone());
+                self.active_view = Some(Box::new(v));
+                self.status_view_active = true;
+                handled_by_view = true;
+            }
+            if !handled_by_view {
+                // Ensure any previous overlay is cleared when a modal becomes active.
+                self.live_status = None;
+            }
         }
         self.request_redraw();
     }
@@ -258,15 +371,25 @@ impl BottomPane<'_> {
         self.is_task_running = running;
 
         if running {
-            if self.active_view.is_none() {
-                self.active_view = Some(Box::new(StatusIndicatorView::new(
-                    self.app_event_tx.clone(),
-                )));
-                self.status_view_active = true;
+            if !self.allow_input_while_running {
+                if self.active_view.is_none() {
+                    self.active_view = Some(Box::new(StatusIndicatorView::new(
+                        self.app_event_tx.clone(),
+                    )));
+                    self.status_view_active = true;
+                }
+            } else {
+                // Ensure we use overlay status while running if allowed.
+                if self.live_status.is_none() {
+                    self.live_status = Some(StatusIndicatorWidget::new(self.app_event_tx.clone()));
+                }
+                // Composer remains visible; switch footer to queue mode.
+                self.composer.set_queue_mode(true);
             }
             self.request_redraw();
         } else {
             self.live_status = None;
+            self.composer.set_queue_mode(false);
             // Drop the status view when a task completes, but keep other
             // modal views (e.g. approval dialogs).
             if let Some(mut view) = self.active_view.take() {
@@ -366,11 +489,27 @@ impl BottomPane<'_> {
     }
 
     // Removed restart_live_status_with_text – no longer used by the current streaming UI.
+
+    /// Replace the queued messages list overlay with the provided rows.
+    pub(crate) fn set_queued_list_rows(&mut self, rows: Vec<Line<'static>>) {
+        let mut w = queued_list_widget::QueuedListWidget::new();
+        w.set_rows(rows);
+        self.queued_list = Some(w);
+        self.request_redraw();
+    }
+
+    pub(crate) fn clear_queued_list(&mut self) {
+        self.queued_list = None;
+        self.request_redraw();
+    }
+
+    // No dedicated top spacer; the live ring placeholder is used instead.
 }
 
 impl WidgetRef for &BottomPane<'_> {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let mut y_offset = 0u16;
+        // No top spacer; the live ring placeholder provides separation.
         if let Some(ring) = &self.live_ring {
             let live_h = ring.desired_height(area.width).min(area.height);
             if live_h > 0 {
@@ -389,6 +528,16 @@ impl WidgetRef for &BottomPane<'_> {
             // Leave one empty line
             y_offset = y_offset.saturating_add(1);
         }
+        // If both live ring and overlay status are visible (no modal view),
+        // insert a blank spacer line between them so "Working" is not tight
+        // against streamed text.
+        if self.live_ring.is_some()
+            && self.live_status.is_some()
+            && self.active_view.is_none()
+            && y_offset < area.height
+        {
+            y_offset = y_offset.saturating_add(1);
+        }
         if let Some(status) = &self.live_status {
             let live_h = status
                 .desired_height(area.width)
@@ -403,6 +552,32 @@ impl WidgetRef for &BottomPane<'_> {
                 status.render_ref(live_rect, buf);
                 y_offset = y_offset.saturating_add(live_h);
             }
+        }
+
+        // Render queued messages list below the working status overlay.
+        if let Some(q) = &self.queued_list {
+            let live_h = q
+                .desired_height(area.width)
+                .min(area.height.saturating_sub(y_offset));
+            if live_h > 0 {
+                let live_rect = Rect {
+                    x: area.x,
+                    y: area.y + y_offset,
+                    width: area.width,
+                    height: live_h,
+                };
+                q.render_ref(live_rect, buf);
+                y_offset = y_offset.saturating_add(live_h);
+            }
+        }
+
+        // Spacer line between overlay (status + queued) and composer when input is allowed.
+        if self.allow_input_while_running
+            && self.active_view.is_none()
+            && (self.live_status.is_some() || self.queued_list.is_some())
+            && y_offset < area.height
+        {
+            y_offset = y_offset.saturating_add(1);
         }
 
         if let Some(view) = &self.active_view {
@@ -459,6 +634,7 @@ mod tests {
             app_event_tx: tx,
             has_input_focus: true,
             enhanced_keys_supported: false,
+            allow_input_while_running: false,
         });
         pane.push_approval_request(exec_request());
         assert_eq!(CancellationEvent::Handled, pane.on_ctrl_c());
@@ -474,6 +650,7 @@ mod tests {
             app_event_tx: tx,
             has_input_focus: true,
             enhanced_keys_supported: false,
+            allow_input_while_running: false,
         });
 
         // Provide 4 rows with max_rows=3; only the last 3 should be visible.
@@ -511,6 +688,7 @@ mod tests {
             app_event_tx: tx,
             has_input_focus: true,
             enhanced_keys_supported: false,
+            allow_input_while_running: false,
         });
 
         // Simulate task running which replaces composer with the status indicator.
@@ -572,6 +750,7 @@ mod tests {
             app_event_tx: tx,
             has_input_focus: true,
             enhanced_keys_supported: false,
+            allow_input_while_running: false,
         });
 
         // Create an approval modal (active view).
@@ -602,6 +781,7 @@ mod tests {
             app_event_tx: tx.clone(),
             has_input_focus: true,
             enhanced_keys_supported: false,
+            allow_input_while_running: false,
         });
 
         // Start a running task so the status indicator replaces the composer.
@@ -652,6 +832,7 @@ mod tests {
             app_event_tx: tx,
             has_input_focus: true,
             enhanced_keys_supported: false,
+            allow_input_while_running: false,
         });
 
         // Begin a task: show initial status.
@@ -688,6 +869,7 @@ mod tests {
             app_event_tx: tx,
             has_input_focus: true,
             enhanced_keys_supported: false,
+            allow_input_while_running: false,
         });
 
         // Activate spinner (status view replaces composer) with no live ring.
@@ -740,6 +922,7 @@ mod tests {
             app_event_tx: tx,
             has_input_focus: true,
             enhanced_keys_supported: false,
+            allow_input_while_running: false,
         });
 
         pane.set_task_running(true);
