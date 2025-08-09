@@ -247,7 +247,7 @@ impl UserApprovalWidget<'_> {
                 match decision {
                     ReviewDecision::Approved => {
                         lines.push(Line::from(vec![
-                            "✓ ".fg(Color::Green),
+                            "✔ ".fg(Color::Green),
                             "You ".into(),
                             "approved".bold(),
                             " codex to run ".into(),
@@ -258,7 +258,7 @@ impl UserApprovalWidget<'_> {
                     }
                     ReviewDecision::ApprovedForSession => {
                         lines.push(Line::from(vec![
-                            "✓ ".fg(Color::Green),
+                            "✔ ".fg(Color::Green),
                             "You ".into(),
                             "approved".bold(),
                             " codex to run ".into(),

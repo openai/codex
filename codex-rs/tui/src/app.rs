@@ -261,6 +261,16 @@ impl App<'_> {
                             }
                         }
                         KeyEvent {
+                            code: KeyCode::Char('r'),
+                            modifiers: crossterm::event::KeyModifiers::CONTROL,
+                            kind: KeyEventKind::Press,
+                            ..
+                        } => {
+                            if let AppState::Chat { widget } = &mut self.app_state {
+                                widget.on_ctrl_r();
+                            }
+                        }
+                        KeyEvent {
                             code: KeyCode::Char('d'),
                             modifiers: crossterm::event::KeyModifiers::CONTROL,
                             kind: KeyEventKind::Press,

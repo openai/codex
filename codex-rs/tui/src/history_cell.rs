@@ -1,3 +1,4 @@
+use crate::colors::LIGHT_BLUE;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::slash_command::SlashCommand;
@@ -8,6 +9,7 @@ use codex_ansi_escape::ansi_escape_line;
 use codex_common::create_config_summary_entries;
 use codex_common::elapsed::format_duration;
 use codex_core::config::Config;
+use codex_core::parse_command::ParsedCommand;
 use codex_core::plan_tool::PlanItemArg;
 use codex_core::plan_tool::StepStatus;
 use codex_core::plan_tool::UpdatePlanArgs;
@@ -32,6 +34,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::io::Cursor;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -160,6 +163,7 @@ impl HistoryCell {
     /// Return a cloned, plain representation of the cell's lines suitable for
     /// one‑shot insertion into the terminal scrollback. Image cells are
     /// represented with a simple placeholder for now.
+    /// These lines are also rendered directly by ratatui wrapped in a Paragraph.
     pub(crate) fn plain_lines(&self) -> Vec<Line<'static>> {
         match self {
             HistoryCell::WelcomeMessage { view }
@@ -261,79 +265,323 @@ impl HistoryCell {
         }
     }
 
-    pub(crate) fn new_active_exec_command(command: Vec<String>) -> Self {
-        let command_escaped = strip_bash_lc_and_escape(&command);
-
-        let mut lines: Vec<Line<'static>> = Vec::new();
-        let mut iter = command_escaped.lines();
-        if let Some(first) = iter.next() {
-            lines.push(Line::from(vec![
-                "▌ ".cyan(),
-                "Running command ".magenta(),
-                first.to_string().into(),
-            ]));
-        } else {
-            lines.push(Line::from(vec!["▌ ".cyan(), "Running command".magenta()]));
-        }
-        for cont in iter {
-            lines.push(Line::from(cont.to_string()));
-        }
-        lines.push(Line::from(""));
-
+    pub(crate) fn new_active_exec_command(
+        command: Vec<String>,
+        parsed: Vec<ParsedCommand>,
+    ) -> Self {
+        let lines = HistoryCell::exec_command_lines(&command, &parsed, None);
         HistoryCell::ActiveExecCommand {
             view: TextBlock::new(lines),
         }
     }
 
-    pub(crate) fn new_completed_exec_command(command: Vec<String>, output: CommandOutput) -> Self {
-        let CommandOutput {
-            exit_code,
-            stdout,
-            stderr,
-        } = output;
+    pub(crate) fn new_completed_exec_command(
+        command: Vec<String>,
+        parsed: Vec<ParsedCommand>,
+        output: CommandOutput,
+    ) -> Self {
+        let lines = HistoryCell::exec_command_lines(&command, &parsed, Some(&output));
+        HistoryCell::CompletedExecCommand {
+            view: TextBlock::new(lines),
+        }
+    }
 
+    fn exec_command_lines(
+        command: &[String],
+        parsed: &[ParsedCommand],
+        output: Option<&CommandOutput>,
+    ) -> Vec<Line<'static>> {
+        let all = |pred: fn(&ParsedCommand) -> bool| -> bool {
+            !parsed.is_empty() && parsed.iter().all(&pred)
+        };
+
+        // Only render a typed cell if all of the parsed commands are of the same type.
+        match () {
+            _ if all(|c| matches!(c, ParsedCommand::Read { .. })) => {
+                HistoryCell::new_read_command(parsed, output)
+            }
+            _ if all(|c| matches!(c, ParsedCommand::Ls { .. })) => {
+                HistoryCell::new_list_command(parsed, output)
+            }
+            _ if all(|c| matches!(c, ParsedCommand::Search { .. })) => {
+                HistoryCell::new_search_command(parsed, output)
+            }
+            _ if all(|c| matches!(c, ParsedCommand::Format { .. })) => {
+                HistoryCell::new_format_command(parsed, output)
+            }
+            _ if all(|c| matches!(c, ParsedCommand::Lint { .. })) => {
+                HistoryCell::new_lint_command(parsed, output)
+            }
+            _ if all(|c| matches!(c, ParsedCommand::Test { .. })) => {
+                HistoryCell::new_test_command(parsed, output)
+            }
+            _ => HistoryCell::new_exec_command_generic(command, output),
+        }
+    }
+
+    fn new_read_command(
+        read_commands: &[ParsedCommand],
+        output: Option<&CommandOutput>,
+    ) -> Vec<Line<'static>> {
+        let file_names: HashSet<&String> = read_commands
+            .iter()
+            .flat_map(|c| match c {
+                ParsedCommand::Read { name, .. } => Some(name),
+                _ => None,
+            })
+            .collect();
+
+        let mut lines: Vec<Line> = vec![Line::from("📖 Reading")];
+
+        for name in file_names {
+            lines.push(Line::from(vec![
+                Span::styled("  L ", Style::default().fg(Color::Gray)),
+                Span::styled(name.clone(), Style::default().fg(LIGHT_BLUE)),
+            ]));
+        }
+        lines.extend(output_lines(output, true, false));
+        lines.push(Line::from(""));
+
+        lines
+    }
+
+    fn new_list_command(
+        list_commands: &[ParsedCommand],
+        output: Option<&CommandOutput>,
+    ) -> Vec<Line<'static>> {
+        let paths: HashSet<String> = list_commands
+            .iter()
+            .flat_map(|c| match c {
+                ParsedCommand::Ls { path, cmd } => match path {
+                    Some(p) => Some(p.clone()),
+                    None => Some(cmd.join(" ")),
+                },
+                _ => None,
+            })
+            .collect();
+
+        let mut lines: Vec<Line> = vec![Line::from("📂 Listing")];
+
+        match paths.len() {
+            0 => {}
+            _ => {
+                for name in paths {
+                    lines.push(Line::from(vec![
+                        Span::styled("  L ", Style::default().fg(Color::Gray)),
+                        Span::styled(name, Style::default().fg(LIGHT_BLUE)),
+                    ]));
+                }
+            }
+        }
+
+        lines.extend(output_lines(output, true, false));
+        lines.push(Line::from(""));
+
+        lines
+    }
+
+    fn new_search_command(
+        search_commands: &[ParsedCommand],
+        output: Option<&CommandOutput>,
+    ) -> Vec<Line<'static>> {
+        let file_names: HashSet<&String> = search_commands
+            .iter()
+            .flat_map(|c| match c {
+                ParsedCommand::Read { name, .. } => Some(name),
+                _ => None,
+            })
+            .collect();
+
+        let mut lines: Vec<Line> = vec![Line::from("🔎 Searching")];
+
+        match file_names.len() {
+            0 => {
+                // We couldn't extract names from the cmd so display the raw cmd.
+                for cmd in search_commands {
+                    if let ParsedCommand::Search { cmd, .. } = cmd {
+                        lines.push(Line::from(vec![
+                            Span::styled("  L ", Style::default().fg(Color::Gray)),
+                            Span::styled(cmd.join(" "), Style::default().fg(LIGHT_BLUE)),
+                        ]));
+                    }
+                }
+            }
+            _ => {
+                for name in file_names {
+                    lines.push(Line::from(vec![
+                        Span::styled("  L ", Style::default().fg(Color::Gray)),
+                        Span::styled(name.clone(), Style::default().fg(LIGHT_BLUE)),
+                    ]));
+                }
+            }
+        }
+        lines.extend(output_lines(output, true, false));
+        lines.push(Line::from(""));
+
+        lines
+    }
+
+    fn new_format_command(
+        format_commands: &[ParsedCommand],
+        output: Option<&CommandOutput>,
+    ) -> Vec<Line<'static>> {
+        use std::collections::BTreeSet;
+        let mut tools: BTreeSet<String> = BTreeSet::new();
+        let mut targets: BTreeSet<String> = BTreeSet::new();
+        for c in format_commands {
+            if let ParsedCommand::Format {
+                tool, targets: t, ..
+            } = c
+            {
+                if let Some(tool) = tool {
+                    tools.insert(tool.clone());
+                }
+                if let Some(t) = t {
+                    for it in t {
+                        targets.insert(it.clone());
+                    }
+                }
+            }
+        }
+
+        let mut lines: Vec<Line> = vec![Line::from("✨ Formatting")];
+
+        if !tools.is_empty() {
+            let mut first = true;
+            for tool in tools {
+                let prefix = if first { "  ⎿ " } else { "    " };
+                first = false;
+                lines.push(Line::from(vec![prefix.into(), tool.magenta()]));
+            }
+        }
+
+        for name in targets {
+            lines.push(Line::from(vec![
+                Span::styled("    ", Style::default().fg(Color::Gray)),
+                Span::styled(name, Style::default().fg(LIGHT_BLUE)),
+            ]));
+        }
+        lines.extend(output_lines(output, true, false));
+        lines.push(Line::from(""));
+
+        lines
+    }
+
+    fn new_lint_command(
+        lint_commands: &[ParsedCommand],
+        output: Option<&CommandOutput>,
+    ) -> Vec<Line<'static>> {
+        use std::collections::BTreeSet;
+        let mut tools: BTreeSet<String> = BTreeSet::new();
+        let mut targets: BTreeSet<String> = BTreeSet::new();
+        for c in lint_commands {
+            if let ParsedCommand::Lint {
+                tool, targets: t, ..
+            } = c
+            {
+                if let Some(tool) = tool {
+                    tools.insert(tool.clone());
+                }
+                if let Some(t) = t {
+                    for it in t {
+                        targets.insert(it.clone());
+                    }
+                }
+            }
+        }
+
+        let mut lines: Vec<Line> = vec![Line::from("🧹 Linting")];
+
+        if !tools.is_empty() {
+            let mut first = true;
+            for tool in tools {
+                let prefix = if first { "  ⎿ " } else { "    " };
+                first = false;
+                lines.push(Line::from(vec![
+                    prefix.into(),
+                    "Tool: ".into(),
+                    tool.magenta(),
+                ]));
+            }
+        }
+
+        for name in targets {
+            lines.push(Line::from(vec![
+                Span::styled("    ", Style::default().fg(Color::Gray)),
+                Span::styled(name, Style::default().fg(LIGHT_BLUE)),
+            ]));
+        }
+        lines.extend(output_lines(output, true, false));
+        lines.push(Line::from(""));
+
+        lines
+    }
+
+    fn new_test_command(
+        test_commands: &[ParsedCommand],
+        output: Option<&CommandOutput>,
+    ) -> Vec<Line<'static>> {
+        use std::collections::BTreeSet;
+        let mut cmds: BTreeSet<String> = BTreeSet::new();
+        for c in test_commands {
+            if let ParsedCommand::Test { cmd, .. } = c {
+                cmds.insert(cmd.join(" "));
+            }
+        }
+
+        if cmds.is_empty() {
+            for c in test_commands {
+                if let ParsedCommand::Test { cmd, .. } = c {
+                    cmds.insert(cmd.join(" "));
+                }
+            }
+        }
+        let mut lines: Vec<Line> = vec![Line::from("🧪 Testing")];
+
+        let mut first = true;
+        for f in cmds.into_iter().take(10) {
+            if first {
+                lines.push(Line::from(vec![
+                    "  ⎿ ".into(),
+                    Span::styled(f, Style::default().fg(LIGHT_BLUE)),
+                ]));
+                first = false;
+            } else {
+                lines.push(Line::from(vec![
+                    Span::styled("    ", Style::default().fg(Color::Gray)),
+                    Span::styled(f, Style::default().fg(LIGHT_BLUE)),
+                ]));
+            }
+        }
+        lines.extend(output_lines(output, true, false));
+
+        lines.push(Line::from(""));
+
+        lines
+    }
+
+    fn new_exec_command_generic(
+        command: &[String],
+        output: Option<&CommandOutput>,
+    ) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = Vec::new();
-        let command_escaped = strip_bash_lc_and_escape(&command);
+        let command_escaped = strip_bash_lc_and_escape(command);
         let mut cmd_lines = command_escaped.lines();
         if let Some(first) = cmd_lines.next() {
             lines.push(Line::from(vec![
-                "⚡ Ran command ".magenta(),
+                "⚡ Running ".to_string().magenta(),
                 first.to_string().into(),
             ]));
         } else {
-            lines.push(Line::from("⚡ Ran command".magenta()));
+            lines.push(Line::from("⚡ Running".to_string().magenta()));
         }
         for cont in cmd_lines {
             lines.push(Line::from(cont.to_string()));
         }
 
-        let src = if exit_code == 0 { stdout } else { stderr };
+        lines.extend(output_lines(output, false, true));
 
-        let mut lines_iter = src.lines();
-        for (idx, raw) in lines_iter.by_ref().take(TOOL_CALL_MAX_LINES).enumerate() {
-            let mut line = ansi_escape_line(raw);
-            let prefix = if idx == 0 { "  ⎿ " } else { "    " };
-            line.spans.insert(0, prefix.into());
-            line.spans.iter_mut().for_each(|span| {
-                span.style = span.style.add_modifier(Modifier::DIM);
-            });
-            lines.push(line);
-        }
-        let remaining = lines_iter.count();
-        if remaining > 0 {
-            let mut more = Line::from(format!("... +{remaining} lines"));
-            // Continuation/ellipsis is treated as a subsequent line for prefixing
-            more.spans.insert(0, "    ".into());
-            more.spans.iter_mut().for_each(|span| {
-                span.style = span.style.add_modifier(Modifier::DIM);
-            });
-            lines.push(more);
-        }
-        lines.push(Line::from(""));
-
-        HistoryCell::CompletedExecCommand {
-            view: TextBlock::new(lines),
-        }
+        lines
     }
 
     pub(crate) fn new_active_mcp_tool_call(invocation: McpInvocation) -> Self {
@@ -840,6 +1088,51 @@ impl WidgetRef for &HistoryCell {
             .wrap(Wrap { trim: false })
             .render(area, buf);
     }
+}
+
+fn output_lines(
+    output: Option<&CommandOutput>,
+    only_err: bool,
+    include_angle_pipe: bool,
+) -> Vec<Line<'static>> {
+    let CommandOutput {
+        exit_code,
+        stdout,
+        stderr,
+    } = match output {
+        Some(output) if only_err && output.exit_code == 0 => return vec![],
+        Some(output) => output,
+        None => return vec![],
+    };
+
+    let src = if *exit_code == 0 { stdout } else { stderr };
+    let mut out: Vec<Line<'static>> = Vec::new();
+    let mut lines_iter = src.lines();
+    for (idx, raw) in lines_iter.by_ref().take(TOOL_CALL_MAX_LINES).enumerate() {
+        let mut line = ansi_escape_line(raw);
+        let prefix = if idx == 0 && include_angle_pipe {
+            "  ⎿ "
+        } else {
+            "    "
+        };
+        line.spans.insert(0, prefix.into());
+        line.spans.iter_mut().for_each(|span| {
+            span.style = span.style.add_modifier(Modifier::DIM);
+        });
+        out.push(line);
+    }
+    let remaining = lines_iter.count();
+    if remaining > 0 {
+        let mut more = Line::from(format!("… +{remaining} lines"));
+        // Continuation/ellipsis is treated as a subsequent line for prefixing
+        more.spans.insert(0, "    ".into());
+        more.spans.iter_mut().for_each(|span| {
+            span.style = span.style.add_modifier(Modifier::DIM);
+        });
+        out.push(more);
+    }
+    out.push(Line::from(""));
+    out
 }
 
 fn create_diff_summary(title: &str, changes: HashMap<PathBuf, FileChange>) -> Vec<RtLine<'static>> {

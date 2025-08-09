@@ -65,6 +65,7 @@ use crate::models::ResponseItem;
 use crate::models::ShellToolCallParams;
 use crate::openai_tools::ToolsConfig;
 use crate::openai_tools::get_openai_tools;
+use crate::parse_command::parse_command;
 use crate::plan_tool::handle_update_plan;
 use crate::project_doc::get_user_instructions;
 use crate::protocol::AgentMessageDeltaEvent;
@@ -402,6 +403,7 @@ impl Session {
                 call_id,
                 command: command_for_display.clone(),
                 cwd,
+                parsed_cmd: parse_command(&command_for_display),
             }),
         };
         let event = Event {
