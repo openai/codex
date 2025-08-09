@@ -842,6 +842,64 @@ impl WidgetRef for &HistoryCell {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_core::protocol::FileChange;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    #[test]
+    fn applying_patch_title_spacing_auto_approved() {
+        let mut changes = HashMap::new();
+        changes.insert(
+            PathBuf::from("foo.txt"),
+            FileChange::Add {
+                content: "line1\nline2\n".into(),
+            },
+        );
+
+        let cell = HistoryCell::new_patch_event(
+            PatchEventType::ApplyBegin { auto_approved: true },
+            changes,
+        );
+
+        let lines = cell.plain_lines();
+        assert!(!lines.is_empty());
+        let first_line = &lines[0];
+        assert!(
+            !first_line.spans.is_empty(),
+            "header line should have at least one span"
+        );
+        let title = first_line.spans[0].content.clone().into_owned();
+        assert_eq!(title, "✏️  Applying patch");
+    }
+
+    #[test]
+    fn applying_patch_title_spacing_manual() {
+        let mut changes = HashMap::new();
+        changes.insert(
+            PathBuf::from("bar.txt"),
+            FileChange::Add {
+                content: "hello\n".into(),
+            },
+        );
+
+        let cell = HistoryCell::new_patch_event(
+            PatchEventType::ApplyBegin { auto_approved: false },
+            changes,
+        );
+
+        let lines = cell.plain_lines();
+        assert!(
+            !lines.is_empty(),
+            "manual path should include a title line"
+        );
+        let title = lines[0].spans[0].content.clone().into_owned();
+        assert_eq!(title, "✏️  Applying patch");
+    }
+}
+
 fn create_diff_summary(title: &str, changes: HashMap<PathBuf, FileChange>) -> Vec<RtLine<'static>> {
     let mut files: Vec<FileSummary> = Vec::new();
 
