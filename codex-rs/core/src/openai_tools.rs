@@ -1,5 +1,6 @@
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::Value as JsonValue;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -81,7 +82,14 @@ pub(crate) enum JsonSchema {
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
     },
+    /// JSON Schema uses both `number` and `integer`. Some MCP servers
+    /// (e.g. Python/Pydantic) frequently emit `integer`. Accept both.
     Number {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+    },
+    #[serde(rename = "integer")]
+    Integer {
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
     },
@@ -296,7 +304,10 @@ pub(crate) fn mcp_tool_to_openai_tool(
         input_schema.properties = Some(serde_json::Value::Object(serde_json::Map::new()));
     }
 
-    let serialized_input_schema = serde_json::to_value(input_schema)?;
+    // Serialize the MCP input schema to a generic JSON value that we can
+    // normalize to the subset supported by our JsonSchema enum.
+    let mut serialized_input_schema = serde_json::to_value(input_schema)?;
+    normalize_json_schema(&mut serialized_input_schema);
     let input_schema = serde_json::from_value::<JsonSchema>(serialized_input_schema)?;
 
     Ok(ResponsesApiTool {
@@ -305,6 +316,110 @@ pub(crate) fn mcp_tool_to_openai_tool(
         strict: false,
         parameters: input_schema,
     })
+}
+
+/// Normalize an arbitrary JSON Schema-ish value into a form compatible with our
+/// limited JsonSchema enum.
+///
+/// - Collapses anyOf/oneOf with nullables into a single non-null type.
+/// - Converts `{"type": ["string", "null"]}` style unions to a single non-null type.
+/// - Maps `integer` to `number` when feasible, or accepts it via our enum.
+/// - Recurses into `properties` and `items`.
+fn normalize_json_schema(v: &mut JsonValue) {
+    match v {
+        JsonValue::Object(map) => {
+            // Handle anyOf / oneOf by selecting the first non-null schema.
+            if let Some(arr) = map.get_mut("anyOf").and_then(|v| v.as_array_mut()) {
+                if let Some(mut chosen) = pick_non_null_schema(arr) {
+                    normalize_json_schema(&mut chosen);
+                    // Replace the entire object with the chosen schema, but
+                    // preserve description if present on the parent.
+                    let parent_desc = map.get("description").cloned();
+                    *v = chosen;
+                    if let JsonValue::Object(new_map) = v {
+                        if let Some(desc) = parent_desc {
+                            new_map.entry("description").or_insert(desc);
+                        }
+                    }
+                    return;
+                }
+            }
+            if let Some(arr) = map.get_mut("oneOf").and_then(|v| v.as_array_mut()) {
+                if let Some(mut chosen) = pick_non_null_schema(arr) {
+                    normalize_json_schema(&mut chosen);
+                    let parent_desc = map.get("description").cloned();
+                    *v = chosen;
+                    if let JsonValue::Object(new_map) = v {
+                        if let Some(desc) = parent_desc {
+                            new_map.entry("description").or_insert(desc);
+                        }
+                    }
+                    return;
+                }
+            }
+
+            // Normalize `type: ["string", "null"]` into `type: "string"`.
+            if let Some(ty_val) = map.get_mut("type") {
+                if let Some(arr) = ty_val.as_array() {
+                    // Choose the first non-null type in the array.
+                    if let Some(non_null) = arr
+                        .iter()
+                        .find(|v| v.as_str().map(|s| s != "null").unwrap_or(false))
+                        .cloned()
+                    {
+                        *ty_val = non_null;
+                    }
+                }
+            }
+
+            // Map integer -> number at this stage to be generous with inputs.
+            if let Some(JsonValue::String(s)) = map.get_mut("type") {
+                if s == "integer" {
+                    *s = "number".to_string();
+                }
+            }
+
+            // Recurse into properties
+            if let Some(props) = map.get_mut("properties").and_then(|v| v.as_object_mut()) {
+                for (_k, v) in props.iter_mut() {
+                    normalize_json_schema(v);
+                }
+            }
+
+            // Recurse into items
+            if let Some(items) = map.get_mut("items") {
+                normalize_json_schema(items);
+            }
+
+            // If this looks like an object schema (has properties) but no type, assume object.
+            let has_properties = map.get("properties").map(|v| !v.is_null()).unwrap_or(false);
+            if has_properties && !map.contains_key("type") {
+                map.insert("type".to_string(), JsonValue::String("object".to_string()));
+            }
+        }
+        JsonValue::Array(arr) => {
+            for v in arr.iter_mut() {
+                normalize_json_schema(v);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn pick_non_null_schema(arr: &mut Vec<JsonValue>) -> Option<JsonValue> {
+    // Prefer the first schema with type != null; otherwise fall back to first.
+    if let Some(idx) = arr.iter().position(|v| match v {
+        JsonValue::Object(m) => match m.get("type") {
+            Some(JsonValue::String(s)) => s != "null",
+            Some(JsonValue::Array(a)) => a.iter().any(|t| t.as_str() != Some("null")),
+            _ => true, // If no type, consider it acceptable
+        },
+        _ => true,
+    }) {
+        Some(arr.remove(idx))
+    } else {
+        arr.first().cloned()
+    }
 }
 
 /// Returns a list of OpenAiTools based on the provided config and MCP tools.
